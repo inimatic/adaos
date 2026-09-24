@@ -47,6 +47,12 @@ is intentionally retained as a negative finding. It says the current system
 has proved explicit identity and fail-closed selection, but has not yet proved
 the evolutionary cost benefit expected from a mature reusable inventory.
 
+Post-benchmark note, 2026-09-24: the Gmail CBS reuse proof added the first
+independently reused local provider contract and a second consumer. This new
+evidence does not retroactively change the frozen benchmark or its negative
+result. It supplies the inventory needed for a new matched sample; that rerun
+must preserve the original baseline and report both results.
+
 ## Historical CBS5 telemetry
 
 The bundle also consumes the retained immutable CBS5 Flowboard telemetry

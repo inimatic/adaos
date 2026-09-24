@@ -15,17 +15,19 @@ The checklist below continues to distinguish that bounded proof from later
 provider generalization and the remaining `should`, `could`, and `deferred`
 work.
 
-Post-checkpoint provider debt: the stage-one Gmail proof now has a bounded
-Core-owned OAuth/REST adapter, a typed skill SDK, conditional Builder authoring
-guidance, release-derived connected-account setup, and a strict compact native
-provider compiler. The compiler can emit a package-neutral contract and binding
-definition plus an exact package delivery without duplicating tool schemas. It
-deliberately does not by itself change the roadmap's registry/reuse status: a
-curated portable mail contract, local registry reference, independently
-delivered reusable binding, resolver selection, and explicit second-consumer
-account attachment remain open before the reuse proof. The first consumer's
-exact result and qualification boundary are recorded in
+Post-checkpoint provider progress: the bounded Core-owned Gmail OAuth/REST
+adapter now delivers a package-neutral mail contract and binding definition in
+an independently published native provider package. Builder created a distinct
+Inbox Triage consumer, release admission resolved both requirements against the
+installed package, and an explicit second-Application attachment reused the
+Core-owned account credential without exposing or copying secrets. Exact facts,
+the Core authorization gap found by the proof, telemetry, and remaining latency
+and identity-selection defects are recorded in
+[Gmail CBS Reuse And Builder Beta Proof](gmail-cbs-reuse-builder-proof-2026-09-24.md).
+The earlier single-consumer boundary remains in
 [Gmail Mail Client: Stage-One CBS Beta Proof](gmail-mail-client-cbs-beta-proof-2026-09-24.md).
+This closes the local two-consumer reuse proof, not federated registry naming,
+automatic contract extraction, or universal provider portability.
 
 ## Outcome
 

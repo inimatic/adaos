@@ -216,9 +216,14 @@ Skills that construct or inspect Builder handoffs should be updated to preserve
 `cbs_compilation` and `cbs_compilation_digest`; skills that only invoke stable
 Builder SDK operations remain compatible.
 
-The Gmail provider work does not yet close reusable capability authoring. The
-first beta intentionally binds one Application to one exact Core provider. A
-subsequent reuse proof must extract a package-independent mail contract, admit
-it into a local registry, let Builder select it by contract reference, and add
-an explicit second-Application attachment/consent operation for the existing
-provider-owned account credential.
+The local Gmail reuse proof is now complete in bounded beta form. The provider
+package delivers a package-independent mail contract and binding definition;
+Builder selected that exact installed delivery for the distinct Inbox Triage
+consumer, native release admission passed, and explicit attachment reused the
+provider-owned account credential without copying secrets. See
+[Gmail CBS Reuse And Builder Beta Proof](../architecture/gmail-cbs-reuse-builder-proof-2026-09-24.md).
+
+This does not yet provide a federated registry, automatic extraction/refinement,
+or a compact general authoring DSL. Builder should continue to emit a semantic
+requirement first and treat the selected package as release materialization,
+not Application identity.

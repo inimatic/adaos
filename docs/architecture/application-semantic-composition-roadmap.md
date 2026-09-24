@@ -236,7 +236,7 @@ Current integration assessment:
 | `ASC4` | specified | resolution plan, lock/access/placement integration and fault proof |
 | `ASC5` | not started | uncontaminated full semantic Application creation proof |
 | `ASC6` | not started | two installed-Application evolution cycles with state/access preservation |
-| `ASC7` | specified | governed extraction and two-consumer reuse proof |
+| `ASC7` | partial | local two-consumer reuse passed; governed extraction, fallback/rollback and federated discovery remain |
 | `ASC8` | partial | current Applications UX plus semantic explanation/control completion |
 | `ASC9` | deferred | local migration, shadow comparison and compatibility retirement |
 
@@ -381,6 +381,16 @@ telemetry. Automation, provider delivery, Trial, permissions/setup review,
 Beta/workspace activation and Stable promotion are still open, so `ASC5`
 remains incomplete.
 
+Second proof checkpoint (2026-09-24): Builder created and published the
+distinct `inbox_triage@0.1.4` consumer. Native release admission resolved its
+package-neutral `mail.messages.manage` requirement to the independently
+published `gmail_cbs_cleanroom_skill@0.1.4` delivery, Applications displayed
+the derived permissions, and explicit attachment reused the existing
+Core-owned Gmail credential. Application source required chat corrections but
+no low-level engineering edit. The exact result and remaining one-shot
+reliability gaps are recorded in
+[Gmail CBS Reuse And Builder Beta Proof](gmail-cbs-reuse-builder-proof-2026-09-24.md).
+
 ### ASC6. Installed Application Evolution
 
 **Outcome:** Builder evolves the installed Application while preserving its
@@ -403,15 +413,15 @@ complete before/after access and lock evidence.
 **Outcome:** reusable behavior can leave an Application without coupling
 consumer identity to the original source tree.
 
-- [ ] Detect a repeated or independently useful Application-local candidate.
-- [ ] Decide whether to reuse, refine, fork, compose, or reject an existing
+- [x] Detect a repeated or independently useful Application-local candidate.
+- [x] Decide whether to reuse, refine, fork, compose, or reject an existing
   capability contract.
-- [ ] Establish package ownership, trust domain, compatibility, versioning,
+- [x] Establish package ownership, trust domain, compatibility, versioning,
   deprecation, support, and evidence policy.
-- [ ] Extract the binding and conformance suite without moving the Application's
+- [x] Extract the binding and conformance suite without moving the Application's
   state or credentials into the package.
-- [ ] Publish the package through the existing artifact pipeline.
-- [ ] Resolve the original and one independent consumer against it.
+- [x] Publish the package through the existing artifact pipeline.
+- [x] Resolve the original and one independent consumer against it.
 - [ ] Retain a reviewed fallback until both consumers pass substitution and
   rollback evidence.
 
