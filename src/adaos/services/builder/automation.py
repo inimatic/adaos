@@ -12301,6 +12301,67 @@ class BuilderAutomationService:
                 "ticket_ids": ticket_ids,
             },
         }
+        if object_type == "scenario":
+            from adaos.services.applications.cbs import ApplicationCBSService
+            from adaos.services.applications.cbs_admission import (
+                NativeApplicationCBSAdmissionService,
+            )
+            from adaos.services.artifact_pipeline.channels import ReleaseRepository
+            from adaos.services.artifact_pipeline.packages import (
+                ContentAddressedPackageStore,
+            )
+
+            application_ref = f"scenario:{object_id}"
+            cbs_service = ApplicationCBSService(self.state_dir)
+            compilation = cbs_service.inspect(application_ref)
+            if compilation is not None:
+                release_digest = str(
+                    receipt["trial"].get("release_digest") or ""
+                ).strip()
+                if not release_digest:
+                    raise RuntimeError(
+                        "Builder Trial has no exact release digest for CBS admission"
+                    )
+                artifact_root = self.state_dir / "artifact_pipeline"
+                release_plan = ReleaseRepository(
+                    artifact_root / "release-cache"
+                ).get_release(object_id, release_digest)
+                admission = NativeApplicationCBSAdmissionService(
+                    self.state_dir
+                ).admit(
+                    application_ref=application_ref,
+                    compilation=compilation,
+                    release_plan=release_plan,
+                    package_store=ContentAddressedPackageStore(
+                        artifact_root / "packages"
+                    ),
+                    workspace_ref=f"trial:{candidate_id}",
+                    evidence_context={
+                        "candidate_id": candidate_id,
+                        "task_id": str(session.get("current_task_id") or "").strip(),
+                        "source": "builder.aprobation_trial",
+                    },
+                )
+                receipt["cbs_admission"] = {
+                    "status": admission["status"],
+                    "admission_digest": admission["admission_digest"],
+                    "compilation_digest": admission["compilation_digest"],
+                    "project_release_digest": admission["project_release_digest"],
+                    "requirements_total": admission["requirements_total"],
+                    "requirements_resolved": admission["requirements_resolved"],
+                    "plan_digests": [
+                        item["plan_digest"] for item in admission["plans"]
+                    ],
+                }
+                if admission["status"] != "admitted":
+                    unresolved = ", ".join(
+                        str(item.get("requirement_ref") or "unknown")
+                        for item in admission.get("unresolved") or []
+                    )
+                    raise RuntimeError(
+                        "Builder Trial CBS production admission is unresolved: "
+                        + (unresolved or "unknown requirement")
+                    )
         if not record_update:
             return receipt
         component_update = self._record_component_update(session, receipt)

@@ -76,12 +76,19 @@ def inspect_application_cbs(
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
     try:
-        compilation = _service(ctx).inspect(application_ref)
+        service = _service(ctx)
+        compilation = service.inspect(application_ref)
+        admission = service.inspect_admission(application_ref)
     except (ApplicationCBSConflict, BuilderWorkflowError, OSError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if compilation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CBS compilation not found")
-    return {"ok": True, "compilation": compilation, "activation_performed": False}
+    return {
+        "ok": True,
+        "compilation": compilation,
+        "admission": admission,
+        "activation_performed": False,
+    }
 
 
 @router.post("/v1/applications/{application_ref}/cbs/semantic-viability")

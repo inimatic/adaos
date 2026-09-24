@@ -20,13 +20,16 @@ RecordT = TypeVar("RecordT", bound=CanonicalRecord)
 
 def _identity(record: CanonicalRecord) -> tuple[str, str]:
     value = record.to_dict()
+    # Prefer the record's own stable identity over references to records it
+    # depends on.  BindingDefinition, for example, contains capability_ref but
+    # must never collide with the CapabilityContract it realizes.
     for field in (
-        "capability_ref",
-        "state_contract_ref",
         "binding_definition_ref",
         "claim_ref",
         "profile_ref",
         "requirement_ref",
+        "state_contract_ref",
+        "capability_ref",
     ):
         if field in value:
             suffix = str(value.get("version") or value.get("claim_kind") or "1")

@@ -20,6 +20,9 @@ from adaos.services.capability_binding_state import (
     SemanticResolver,
     explain_evidence_assessment,
 )
+from adaos.services.applications.cbs_admission import (
+    NativeApplicationCBSAdmissionService,
+)
 
 
 class ApplicationCBSConflict(ValueError):
@@ -142,6 +145,13 @@ class ApplicationCBSService:
                 str(item["semantic_revision_digest"]),
                 str(item["compilation_digest"]),
             ),
+        )
+
+    def inspect_admission(self, application_ref: str) -> dict[str, Any] | None:
+        """Return the latest exact release admission, when one exists."""
+
+        return NativeApplicationCBSAdmissionService(self.state_dir).inspect(
+            application_ref
         )
 
     def semantic_viability(
@@ -283,6 +293,7 @@ class ApplicationCBSService:
         """
 
         compilation = self.inspect(application_ref)
+        admission = self.inspect_admission(application_ref)
         selection = dict(runtime_selection or {})
         development = dict(local_development or {})
         trial = (
@@ -295,6 +306,7 @@ class ApplicationCBSService:
             if isinstance(development.get("publication"), Mapping)
             else {}
         )
+        matching_admission = False
         if compilation is None:
             requirement = {
                 "status": "not_compiled",
@@ -311,31 +323,77 @@ class ApplicationCBSService:
                 "summary": f"{len(requirements)} semantic requirements compiled",
                 "count": len(requirements),
             }
-            viability = (
-                dict(compilation.get("viability"))
-                if isinstance(compilation.get("viability"), Mapping)
-                else {}
+            matching_admission = bool(
+                admission
+                and admission.get("compilation_digest")
+                == compilation.get("compilation_digest")
+                and (
+                    not selection.get("release_digest")
+                    or admission.get("project_release_digest")
+                    == selection.get("release_digest")
+                )
             )
-            resolution_status = str(viability.get("production") or "unresolved")
+            resolution_status = (
+                str(admission.get("status") or "unresolved")
+                if matching_admission and admission is not None
+                else "unresolved"
+            )
             semantic_revision_digest = compilation.get("semantic_revision_digest")
             compilation_digest = compilation.get("compilation_digest")
 
         resolution_admitted = resolution_status in {"accepted", "admitted", "resolved"}
+        admitted_resolutions = (
+            list(admission.get("resolutions") or [])
+            if resolution_admitted and admission is not None
+            else []
+        )
         resolution = {
             "status": "admitted" if resolution_admitted else resolution_status,
             "summary": (
-                "Exact production resolution admitted"
+                f"{len(admitted_resolutions)} exact production resolutions admitted"
                 if resolution_admitted
                 else "Production resolution is not admitted"
             ),
+            "admission_digest": (
+                admission.get("admission_digest")
+                if resolution_admitted and admission is not None
+                else None
+            ),
+            "project_release_digest": (
+                admission.get("project_release_digest")
+                if resolution_admitted and admission is not None
+                else None
+            ),
+            "requirements_resolved": (
+                admission.get("requirements_resolved")
+                if matching_admission and admission is not None
+                else 0
+            ),
+            "requirements_total": (
+                admission.get("requirements_total")
+                if matching_admission and admission is not None
+                else requirement["count"]
+            ),
         }
+        admitted_plans = (
+            list(admission.get("plans") or [])
+            if resolution_admitted and admission is not None
+            else []
+        )
         plan = {
-            "status": "not_created" if not resolution_admitted else "not_observed",
+            "status": (
+                "not_created"
+                if not resolution_admitted
+                else "ready"
+                if len(admitted_plans) == len(admitted_resolutions)
+                else "incomplete"
+            ),
             "summary": (
                 "ResolutionPlan awaits an admitted production resolution"
                 if not resolution_admitted
-                else "No exact ResolutionPlan is attached to this projection"
+                else f"{len(admitted_plans)} exact candidate plans are ready"
             ),
+            "plan_digests": [item.get("plan_digest") for item in admitted_plans],
         }
 
         source = str(selection.get("source") or "")
@@ -382,6 +440,11 @@ class ApplicationCBSService:
             ),
             "semantic_revision_digest": semantic_revision_digest,
             "compilation_digest": compilation_digest,
+            "admission_digest": (
+                admission.get("admission_digest")
+                if matching_admission and admission is not None
+                else None
+            ),
             "requirement": requirement,
             "resolution": resolution,
             "plan": plan,
