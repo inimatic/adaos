@@ -8214,6 +8214,144 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
 
 
+def test_worker_skips_candidate_already_absorbed_by_refreshed_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.absorbed-candidate"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "webui.json"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    contract = {"schema": "adaos.builder.continuation_contract.v1"}
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "skill", "id": "demo"},
+                "forge": {"source_snapshot": {"digest": "sha256:old"}},
+                "realize_request": {"artifacts": {"continuation_contract": contract}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, _task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.absorbed",
+                    "message": "Codex token budget exceeded: observed 10 of 5 model tokens.",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"source_snapshot": {"digest": "sha256:new"}},
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": contract,
+                "continuation_checkpoint": {
+                    "mode": "validate_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": "failure.absorbed",
+                    "continuation_contract": contract,
+                },
+            }
+        },
+    }
+
+    assert worker._restore_continuation_candidate(assignment, workspace) is None
+    assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
+
+
+def test_worker_rejects_divergent_candidate_after_snapshot_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.divergent-candidate"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "webui.json"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text("baseline", encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text("candidate", encoding="utf-8")
+    contract = {"schema": "adaos.builder.continuation_contract.v1"}
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "skill", "id": "demo"},
+                "forge": {"source_snapshot": {"digest": "sha256:old"}},
+                "realize_request": {"artifacts": {"continuation_contract": contract}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, _task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.divergent",
+                    "message": "Codex token budget exceeded: observed 10 of 5 model tokens.",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text("different", encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"source_snapshot": {"digest": "sha256:new"}},
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": contract,
+                "continuation_checkpoint": {
+                    "mode": "validate_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": "failure.divergent",
+                    "continuation_contract": contract,
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="source snapshot is stale"):
+        worker._restore_continuation_candidate(assignment, workspace)
+
+
 @pytest.mark.parametrize(
     "continuation_reason",
     [

@@ -6843,7 +6843,21 @@ class LocalSkillFactoryWorker:
         )
         previous_digest = str(previous_snapshot.get("digest") or "").strip()
         current_digest = str(current_snapshot.get("digest") or "").strip()
+        changed_paths = self._changed_from_baseline(previous_workspace)
+        if not changed_paths:
+            # There is no candidate to preserve.  This also covers a source
+            # snapshot refresh that happened after a discovery-only turn.
+            return None
         if not previous_digest or previous_digest != current_digest:
+            if self._candidate_paths_match_workspace(
+                previous_workspace,
+                workspace,
+                changed_paths,
+            ):
+                # The candidate was already absorbed into the newly captured
+                # immutable source snapshot.  Reapplying it is unnecessary;
+                # unrelated Core changes must not strand the next chat turn.
+                return None
             raise ValueError("continuation candidate source snapshot is stale")
         expected_snapshot_digest = str(
             checkpoint.get("source_snapshot_digest") or ""
@@ -6853,13 +6867,6 @@ class LocalSkillFactoryWorker:
                 "continuation checkpoint source snapshot identity does not match"
             )
 
-        changed_paths = self._changed_from_baseline(previous_workspace)
-        if not changed_paths:
-            # A live token guard can stop Codex during source discovery, before
-            # the first edit. There is no candidate to preserve in that case;
-            # continue with the newly submitted bounded turn instead of
-            # converting a recoverable budget stop into another failed task.
-            return None
         expected_source_paths = {
             str(item).replace("\\", "/").strip("/")
             for item in checkpoint.get("source_changed_paths") or []
@@ -6979,6 +6986,48 @@ class LocalSkillFactoryWorker:
             ),
             "restored_at": _now_iso(),
         }
+
+    @staticmethod
+    def _candidate_paths_match_workspace(
+        candidate_workspace: Path,
+        current_workspace: Path,
+        changed_paths: Sequence[str],
+    ) -> bool:
+        """Return true only when a preserved candidate is already materialized."""
+
+        candidate_root = candidate_workspace.resolve()
+        current_root = current_workspace.resolve()
+        for changed_path in changed_paths:
+            parts = [
+                part
+                for part in str(changed_path).replace("\\", "/").split("/")
+                if part
+            ]
+            if not parts or any(part in {"..", ".git"} for part in parts):
+                return False
+            candidate = candidate_root.joinpath(*parts)
+            current = current_root.joinpath(*parts)
+            if candidate.resolve(strict=False) != candidate_root and (
+                candidate_root not in candidate.resolve(strict=False).parents
+            ):
+                return False
+            if current.resolve(strict=False) != current_root and (
+                current_root not in current.resolve(strict=False).parents
+            ):
+                return False
+            if candidate.is_symlink() or current.is_symlink():
+                return False
+            candidate_exists = candidate.exists()
+            current_exists = current.exists()
+            if candidate_exists != current_exists:
+                return False
+            if not candidate_exists:
+                continue
+            if not candidate.is_file() or not current.is_file():
+                return False
+            if candidate.read_bytes() != current.read_bytes():
+                return False
+        return True
 
     def _companion_skill_ids(self, assignment: Mapping[str, Any]) -> list[str]:
         request = dict(assignment.get("realize_request") or {})
