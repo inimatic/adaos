@@ -2026,7 +2026,9 @@ def test_application_setup_surface_is_release_owned_and_secret_free(
                 "values": {},
             }
         ],
+        "providers": [],
     }
+    assert surface["provider_configuration"] == []
     assert "credential_reference" not in str(surface)
     assert "top-secret" not in str(surface)
 
@@ -2163,3 +2165,80 @@ def test_application_setup_credential_uses_vault_and_never_returns_secret(
 
     assert removed["credential"]["present"] is False
     assert vault.values == {}
+
+
+def test_application_setup_configures_release_declared_provider_without_secret_echo(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    digest, release, model = _setup_release_fixture()
+    release.setup_contract = compile_setup_contract(
+        application_id="app_weather",
+        release_digest=digest,
+        component_manifests={},
+        connected_accounts=[
+            {
+                "id": "google.gmail",
+                "title": "Gmail account",
+                "purpose": "Manage mail",
+                "required": True,
+                "scopes": ["gmail.modify"],
+            }
+        ],
+        placement_required=False,
+    )
+    _admit_setup_test_surface(monkeypatch, tmp_path, release, model, digest)
+
+    class Vault:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+
+        def get(self, key: str, *, default=None):
+            return self.values.get(key, default)
+
+        def put(self, key: str, value: str, *, meta=None) -> None:
+            self.values[key] = value
+
+        def delete(self, key: str) -> None:
+            self.values.pop(key, None)
+
+    vault = Vault()
+    monkeypatch.setattr(
+        applications,
+        "require_ctx",
+        lambda *_args: SimpleNamespace(credential_vault=vault),
+    )
+    monkeypatch.setattr(
+        applications, "_mutation_identity", lambda *_args, **_kwargs: ()
+    )
+
+    missing = applications.get_application_setup(
+        "app_weather", release_digest=digest
+    )
+    assert missing["provider_configuration"][0]["status"] == "missing"
+    assert missing["editors"]["providers"][0]["provider_id"] == "google.gmail"
+    assert missing["editors"]["providers"][0]["values"] == {}
+    assert next(
+        item
+        for item in missing["state"]["requirements"]
+        if item["kind"] == "provider_configuration"
+    )["action"] == "configure_provider"
+
+    updated = applications.update_provider_configuration(
+        "app_weather",
+        "google.gmail",
+        {"client_id": "client-id", "client_secret": "client-secret"},
+        release_digest=digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.apply",
+    )
+
+    assert updated["provider_configuration"]["status"] == "ready"
+    assert updated["provider_configuration"]["revision"] == 1
+    assert "client-secret" not in repr(updated)
+    assert vault.values == {
+        "provider:google.oauth:client_id": "client-id",
+        "provider:google.oauth:client_secret": "client-secret",
+    }

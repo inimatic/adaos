@@ -84,7 +84,8 @@ class _StubSdk:
             "contract": {},
             "state": {},
             "configuration": [],
-            "editors": {"settings": [], "credentials": []},
+            "provider_configuration": [],
+            "editors": {"settings": [], "credentials": [], "providers": []},
         }
 
     def update_application_configuration(self, *args, **kwargs):
@@ -203,6 +204,17 @@ class _StubSdk:
             },
         }
 
+    def update_provider_configuration(self, *args, **kwargs):
+        self.calls.append(("update_provider_configuration", args, kwargs))
+        return {
+            "provider_configuration": {
+                "provider_id": args[1],
+                "status": "ready",
+                "revision": kwargs["expected_revision"] + 1,
+                "present_fields": sorted(args[2]),
+            }
+        }
+
     def get_users_access_surface(self, *args, **kwargs):
         self.calls.append(("get_users_access_surface", args, kwargs))
         return {
@@ -275,6 +287,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.setup.show",
         "applications.setup.configure",
         "applications.setup.credential",
+        "applications.setup.provider",
         "applications.set_home_pin",
         "applications.reorder_home",
         "applications.update_settings",
@@ -655,6 +668,21 @@ def test_applications_plane_exposes_release_owned_setup_without_secret_echo(
         },
         dry_run=False,
     )
+    provider = handlers["applications.setup.provider"](
+        {
+            "application_id": "app_recipes",
+            "release_digest": digest,
+            "provider_id": "google.gmail",
+            "values": {
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+            },
+            "expected_revision": 4,
+            "webspace_id": "desktop",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
 
     assert shown["setup"]["available"] is True
     contract = {item.id: item for item in applications_plane.contracts()}[
@@ -676,7 +704,14 @@ def test_applications_plane_exposes_release_owned_setup_without_secret_echo(
         "revision": 4,
     }
     assert "secret-value" not in repr(credential)
-    assert stub.calls[-1][0] == "update_application_credential"
+    assert provider["provider_configuration"] == {
+        "provider_id": "google.gmail",
+        "status": "ready",
+        "revision": 5,
+        "present_fields": ["client_id", "client_secret"],
+    }
+    assert "client-secret" not in repr(provider)
+    assert stub.calls[-1][0] == "update_provider_configuration"
 
 
 def test_applications_plane_exposes_explicit_home_pin_mutation(monkeypatch) -> None:

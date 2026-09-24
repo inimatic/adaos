@@ -772,6 +772,46 @@ def contracts() -> list[RootMcpToolContract]:
         ],
         additional_properties=False,
     )
+    provider_setup_editor = schema_object(
+        properties={
+            "id": {"type": "string", "minLength": 1},
+            "application_id": {"type": "string"},
+            "release_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+            },
+            "provider_id": {"type": "string", "minLength": 1},
+            "expected_revision": {"type": "integer", "minimum": 0},
+            "fields": {
+                "type": "array",
+                "items": dynamic_form_field,
+                "maxItems": 32,
+            },
+            "values": {"type": "object"},
+            "present_fields": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "missing_fields": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "supported": {"type": "boolean"},
+        },
+        required=[
+            "id",
+            "application_id",
+            "release_digest",
+            "provider_id",
+            "expected_revision",
+            "fields",
+            "values",
+            "present_fields",
+            "missing_fields",
+            "supported",
+        ],
+        additional_properties=False,
+    )
     setup_surface = schema_object(
         properties={
             "schema": {"const": "adaos.application.setup_surface.v1"},
@@ -788,6 +828,10 @@ def contracts() -> list[RootMcpToolContract]:
                 "type": "array",
                 "items": {"type": "object"},
             },
+            "provider_configuration": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
             "editors": schema_object(
                 properties={
                     "settings": {
@@ -800,8 +844,13 @@ def contracts() -> list[RootMcpToolContract]:
                         "items": setup_editor,
                         "maxItems": 200,
                     },
+                    "providers": {
+                        "type": "array",
+                        "items": provider_setup_editor,
+                        "maxItems": 32,
+                    },
                 },
-                required=["settings", "credentials"],
+                required=["settings", "credentials", "providers"],
             ),
         },
         required=[
@@ -810,6 +859,7 @@ def contracts() -> list[RootMcpToolContract]:
             "release_digest",
             "available",
             "configuration",
+            "provider_configuration",
             "editors",
         ],
     )
@@ -1514,6 +1564,47 @@ def contracts() -> list[RootMcpToolContract]:
                 **published,
                 "handler": "applications_setup_credential",
                 "sensitive_input_paths": ["value"],
+            },
+        ),
+        RootMcpToolContract(
+            id="applications.setup.provider",
+            title="Configure external provider",
+            surface=RootMcpSurface.OPERATIONS,
+            summary=(
+                "Configure one release-declared node provider. Secret values "
+                "are written only to the node vault and are never returned."
+            ),
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "provider_id": {"type": "string", "minLength": 1},
+                    "values": {"type": "object"},
+                    "expected_revision": {"type": "integer", "minimum": 0},
+                    "webspace_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    },
+                },
+                required=[
+                    "application_id",
+                    "release_digest",
+                    "provider_id",
+                    "values",
+                    "expected_revision",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={
+                **published,
+                "handler": "applications_setup_provider",
+                "sensitive_input_paths": ["values.client_secret"],
             },
         ),
         RootMcpToolContract(
@@ -2961,6 +3052,33 @@ def _handle_setup_credential(
     )
 
 
+def _handle_setup_provider(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_configure_provider": True,
+            "application_id": _application_id(arguments),
+            "provider_id": str(arguments.get("provider_id") or ""),
+            "field_names": sorted(
+                str(key) for key in (arguments.get("values") or {})
+            ),
+            "expected_revision": int(arguments.get("expected_revision") or 0),
+        }
+    actor_ref, subnet_ref = _context(arguments)
+    return _sdk().update_provider_configuration(
+        _application_id(arguments),
+        str(arguments.get("provider_id") or ""),
+        dict(arguments.get("values") or {}),
+        release_digest=str(arguments.get("release_digest") or ""),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability="applications.apply",
+        webspace_id=_webspace_id(arguments),
+    )
+
+
 def _handle_set_home_pin(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {
@@ -4002,6 +4120,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.setup.show": _handle_setup_show,
         "applications.setup.configure": _handle_setup_configure,
         "applications.setup.credential": _handle_setup_credential,
+        "applications.setup.provider": _handle_setup_provider,
         "applications.set_home_pin": _handle_set_home_pin,
         "applications.reorder_home": _handle_reorder_home,
         "applications.update_settings": _handle_update_settings,

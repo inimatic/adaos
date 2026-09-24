@@ -31,13 +31,13 @@
         "required": ["requirement_id", "kind", "title", "required", "status", "action"],
         "properties": {
           "requirement_id": { "type": "string", "minLength": 1, "maxLength": 300 },
-          "kind": { "enum": ["setting", "credential", "connected_account", "permission", "placement", "verification"] },
+          "kind": { "enum": ["setting", "credential", "provider_configuration", "connected_account", "permission", "placement", "verification"] },
           "component_ref": { "$ref": "#/$defs/componentRef" },
           "title": { "type": "string", "minLength": 1, "maxLength": 160 },
           "detail": { "type": "string", "maxLength": 1000 },
           "required": { "type": "boolean" },
           "status": { "enum": ["ready", "missing", "pending", "denied", "invalid", "expired", "revoked", "failed", "unknown", "not_applicable"] },
-          "action": { "enum": ["configure", "provide_secret", "connect_account", "review_access", "manage_placement", "retry_validation", "none"] }
+          "action": { "enum": ["configure", "provide_secret", "configure_provider", "connect_account", "review_access", "manage_placement", "retry_validation", "none"] }
         }
       }
     },

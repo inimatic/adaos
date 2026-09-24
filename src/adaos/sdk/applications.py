@@ -46,6 +46,7 @@ from adaos.services.project_deployment import (
     ProjectDeploymentStore,
     ProjectDeploymentStoreError,
 )
+from adaos.services.providers.configuration import ProviderConfigurationService
 
 
 def _state_dir() -> Path:
@@ -1924,7 +1925,8 @@ def get_application_setup(
             "contract": None,
             "state": None,
             "configuration": [],
-            "editors": {"settings": [], "credentials": []},
+            "provider_configuration": [],
+            "editors": {"settings": [], "credentials": [], "providers": []},
         }
     configuration, values, credential_presence = _setup_configuration_rows(
         application_id,
@@ -1949,6 +1951,21 @@ def get_application_setup(
         for item in sections.get("connected_accounts") or ()
         if isinstance(item, Mapping)
     }
+    ctx = require_ctx("sdk.applications")
+    vault = getattr(ctx, "credential_vault", None)
+    provider_configuration: list[dict[str, Any]] = []
+    provider_configuration_status: dict[str, str] = {}
+    if vault is not None:
+        provider_service = ProviderConfigurationService(_state_dir(), vault)
+        for account in contract.payload.get("connected_accounts") or ():
+            provider_id = str(account.get("id") or "").strip().lower()
+            if not provider_id:
+                continue
+            provider_state = provider_service.inspect(provider_id)
+            provider_configuration.append(provider_state)
+            provider_configuration_status[provider_id] = str(
+                provider_state.get("status") or "unknown"
+            )
     permission_status = {
         str(item.get("id") or ""): (
             "ready" if bool(model.get("installed")) else "pending"
@@ -2001,6 +2018,7 @@ def get_application_setup(
         channel=channel,
         configuration=values,
         credential_presence=credential_presence,
+        provider_configuration_status=provider_configuration_status,
         connected_account_status=account_status,
         permission_status=permission_status,
         placement_status=placement_status,
@@ -2012,6 +2030,28 @@ def get_application_setup(
         projection,
         expected_revision=int((current or {}).get("revision") or 0),
     )
+    editors = _setup_form_editors(
+        application_id,
+        str(release.release_digest or ""),
+        contract,
+        configuration,
+    )
+    editors["providers"] = [
+        {
+            "id": str(item["provider_id"]),
+            "application_id": application_id,
+            "release_digest": str(release.release_digest or ""),
+            "provider_id": str(item["provider_id"]),
+            "expected_revision": int(item.get("revision") or 0),
+            "fields": deepcopy(list(item.get("fields") or [])),
+            "values": {},
+            "present_fields": list(item.get("present_fields") or []),
+            "missing_fields": list(item.get("missing_fields") or []),
+            "supported": bool(item.get("supported")),
+        }
+        for item in provider_configuration
+        if bool(item.get("supported"))
+    ]
     return {
         "schema": "adaos.application.setup_surface.v1",
         "application_id": application_id,
@@ -2021,11 +2061,60 @@ def get_application_setup(
         "contract": contract.to_dict(),
         "state": state,
         "configuration": configuration,
-        "editors": _setup_form_editors(
+        "provider_configuration": provider_configuration,
+        "editors": editors,
+    }
+
+
+def update_provider_configuration(
+    application_id: str,
+    provider_id: str,
+    values: Mapping[str, Any],
+    *,
+    release_digest: str,
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Configure a declared node provider without returning credential values."""
+
+    _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        f"provider-configuration:{provider_id}:{expected_revision}",
+        required_capability="applications.apply",
+    )
+    _, release, _channel = _application_setup_target(
+        application_id,
+        release_digest=release_digest,
+        webspace_id=webspace_id,
+    )
+    contract = release.setup_contract
+    declared = {
+        str(item.get("id") or "").strip().lower()
+        for item in (contract.payload.get("connected_accounts") if contract else ()) or ()
+    }
+    normalized_provider = str(provider_id or "").strip().lower()
+    if normalized_provider not in declared:
+        raise ValueError("Provider is not declared by the exact Application release")
+    ctx = require_ctx("sdk.applications")
+    vault = getattr(ctx, "credential_vault", None)
+    if vault is None:
+        raise PermissionError("Node credential vault is unavailable")
+    state = ProviderConfigurationService(_state_dir(), vault).configure(
+        normalized_provider,
+        values,
+        expected_revision=expected_revision,
+    )
+    return {
+        "provider_configuration": state,
+        "setup": get_application_setup(
             application_id,
-            str(release.release_digest or ""),
-            contract,
-            configuration,
+            release_digest=release.release_digest,
+            webspace_id=webspace_id,
         ),
     }
 
@@ -4064,6 +4153,7 @@ __all__ = [
     "triage_development_report",
     "update_application_configuration",
     "update_application_credential",
+    "update_provider_configuration",
     "verify_application_release",
     "verify_development_report_release",
 ]

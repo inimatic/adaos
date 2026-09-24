@@ -143,6 +143,7 @@ def project_setup_state(
     channel: str,
     configuration: Mapping[str, Mapping[str, Any]] | None = None,
     credential_presence: Mapping[str, Sequence[str]] | None = None,
+    provider_configuration_status: Mapping[str, str] | None = None,
     connected_account_status: Mapping[str, str] | None = None,
     permission_status: Mapping[str, str] | None = None,
     placement_status: str = "unknown",
@@ -150,6 +151,7 @@ def project_setup_state(
 ) -> dict[str, Any]:
     configuration = configuration or {}
     credential_presence = credential_presence or {}
+    provider_configuration_status = provider_configuration_status or {}
     connected_account_status = connected_account_status or {}
     permission_status = permission_status or {}
     verification_status = verification_status or {}
@@ -192,6 +194,24 @@ def project_setup_state(
             )
 
     for account in contract.payload["connected_accounts"]:
+        provider_status = _status(
+            provider_configuration_status.get(account["id"]),
+            default="not_applicable",
+        )
+        if provider_status != "not_applicable":
+            requirements.append(
+                {
+                    "requirement_id": f"provider_configuration:{account['id']}",
+                    "kind": "provider_configuration",
+                    "title": f"{account['title']} provider",
+                    "detail": "The node provider must be configured before an account can be connected.",
+                    "required": account["required"],
+                    "status": provider_status,
+                    "action": (
+                        "none" if provider_status in _READY else "configure_provider"
+                    ),
+                }
+            )
         status = _status(connected_account_status.get(account["id"]), default="missing")
         requirements.append(
             {
