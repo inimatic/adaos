@@ -930,6 +930,38 @@ def test_prototype_execution_budget_has_room_for_full_manifest_revisions() -> No
     assert automation_module._prototype_execution_budget(explicit) == explicit
 
 
+def test_followup_restores_default_budget_for_legacy_session(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    legacy = service.get_session("scenario", "recipes")
+    assert legacy is not None
+    legacy.pop("execution_budget", None)
+    service._save_session(legacy)
+
+    followed = service.submit_turn(
+        text="Continue the same accepted implementation.",
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+    )
+
+    expected = automation_module._prototype_execution_budget(None)
+    assert followed["session"]["execution_budget"] == expected
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
+    assert task["max_attempts"] == expected["max_attempts"]
+    assert task["timeout_seconds"] == expected["max_wall_seconds"]
+    assert task["realize_request"]["artifacts"]["execution_budget"] == expected
+
+
 def test_explicit_context_budget_is_a_hard_limit_with_diagnostics() -> None:
     assert _context_budget_window(
         {"max_model_tokens": 12_000, "max_context_tokens": 8_000}

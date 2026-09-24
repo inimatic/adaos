@@ -4625,6 +4625,14 @@ class BuilderAutomationService:
             transition_token = str(workflow_transition or "").strip() or None
             if transition_token == "return_to_prototype" and execution_budget is None:
                 execution_budget = _prototype_execution_budget(None)
+            if execution_budget is None and not (
+                isinstance(session.get("execution_budget"), Mapping)
+                and session.get("execution_budget")
+            ):
+                # Sessions created before execution budgets became mandatory must
+                # not silently fall back to the executor's small legacy limits on
+                # their first chat-driven continuation.
+                execution_budget = _prototype_execution_budget(None)
             if isinstance(execution_budget, Mapping):
                 previous_budget = (
                     dict(session.get("execution_budget"))
