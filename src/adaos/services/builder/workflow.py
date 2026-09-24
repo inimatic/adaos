@@ -7516,6 +7516,13 @@ class BuilderWorkflowService:
                     "acceptance": None,
                 }
             )
+            if bool(metadata.get("prototype_acceptance_required")):
+                # Strict acceptance is monotonic for the active Change. Once a
+                # Prototype carries authority-bearing contracts (for example a
+                # CBS intent), later revisions must not silently fall back to
+                # compatibility admission merely because the original empty
+                # scaffold did not require an acceptance receipt.
+                prototype["acceptance_required"] = True
             invalidate_delivery("prototype_revision_recorded")
             current = workflow.get("change_set")
             if isinstance(current, dict) and current.get("gate") == "prototype":

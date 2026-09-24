@@ -569,6 +569,72 @@ def test_materialize_resources_stamps_authoritative_revision_identity(monkeypatc
     assert result["webui_digest"] == captured[0]["webui_digest"]
 
 
+def test_carry_forward_resources_preserves_records_and_rebinds_revision(
+    monkeypatch,
+) -> None:
+    captured: list[dict] = []
+
+    class _PrototypeService:
+        def snapshot(self, resource_type):
+            assert resource_type == "prototype.messages"
+            return {
+                "project_ref": "scenario:mail",
+                "records": [{"id": "m1", "subject": "Retained", "revision": 4}],
+            }
+
+        def materialize(self, payload):
+            captured.append(copy.deepcopy(dict(payload)))
+            return {
+                "duplicate": False,
+                "state": {
+                    "resource_type": payload["resource_definition"]["resource_type"],
+                    "bundle_digest": "sha256:" + "c" * 64,
+                    "generation": 1,
+                },
+            }
+
+    monkeypatch.setattr(
+        developer_prototypes,
+        "PrototypeResourceService",
+        _PrototypeService,
+    )
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "widgets": [
+                            {
+                                "id": "messages",
+                                "type": "ui.list",
+                                "inputs": {"itemIdKey": "id", "titleKey": "subject"},
+                                "dataSource": {
+                                    "kind": "resourceQuery",
+                                    "resourceType": "prototype.messages",
+                                    "query": {},
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+
+    result = developer_prototypes.carry_forward_resources(
+        project_ref="scenario:mail",
+        change_id="change-2",
+        revision="006",
+        webui=webui,
+    )
+
+    assert result is not None
+    assert captured[0]["revision"] == "006"
+    assert captured[0]["change_id"] == "change-2"
+    assert captured[0]["data_definition"]["seed"][0]["subject"] == "Retained"
+
+
 def test_derive_generic_record_resource_spec_without_board() -> None:
     webui = {
         "schema": "adaos.webui.v1",

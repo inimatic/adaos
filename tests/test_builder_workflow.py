@@ -2287,6 +2287,42 @@ def test_prototype_revision_is_recorded_without_approving_issues(
     assert recorded["history"][-1]["action"] == "prototype_revision_recorded"
 
 
+def test_prototype_revision_can_monotonically_require_strict_acceptance(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    (root / "ui_revisions" / "005.json").write_text("{}", encoding="utf-8")
+    (root / "ui_revisions" / "current.txt").write_text("005\n", encoding="utf-8")
+
+    recorded = service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={
+            "object_type": "scenario",
+            "revision": "005",
+            "prototype_acceptance_required": True,
+        },
+    )["workflow"]
+
+    assert recorded["prototype"]["acceptance_required"] is True
+
+    (root / "ui_revisions" / "006.json").write_text("{}", encoding="utf-8")
+    (root / "ui_revisions" / "current.txt").write_text("006\n", encoding="utf-8")
+    later = service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={
+            "object_type": "scenario",
+            "revision": "006",
+            "prototype_acceptance_required": False,
+        },
+    )["workflow"]
+
+    assert later["prototype"]["acceptance_required"] is True
+
+
 def test_prototype_revision_cannot_be_recorded_during_automation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

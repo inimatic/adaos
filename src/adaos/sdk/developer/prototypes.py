@@ -645,6 +645,62 @@ def materialize_resources(
     }
 
 
+def carry_forward_resources(
+    *,
+    project_ref: str,
+    change_id: str,
+    revision: str,
+    webui: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Rebind current bounded Prototype records to a metadata-only revision.
+
+    The new WebUI remains authoritative for schemas and operations. Existing
+    records are only reused when every referenced Prototype resource belongs
+    to the same Project and validates against the newly derived definitions.
+    """
+
+    resource_types = sorted(
+        {
+            str(data_source.get("resourceType") or "").strip()
+            for _, data_source in _resource_query_widgets(webui)
+            if str(data_source.get("resourceType") or "").strip()
+        }
+    )
+    if not resource_types:
+        return None
+    service = PrototypeResourceService()
+    expected_project_ref = str(project_ref).strip()
+    resources: list[dict[str, Any]] = []
+    for resource_type in resource_types:
+        state = service.snapshot(resource_type)
+        if not isinstance(state, Mapping):
+            raise ValueError(
+                f"cannot carry forward missing Prototype resource {resource_type}"
+            )
+        if str(state.get("project_ref") or "").strip() != expected_project_ref:
+            raise ValueError(
+                f"cannot carry forward Prototype resource {resource_type} from another Project"
+            )
+        records = [
+            copy.deepcopy(dict(item))
+            for item in state.get("records") or []
+            if isinstance(item, Mapping)
+        ]
+        resources.append(
+            {
+                "resource_type": resource_type,
+                "records": records,
+            }
+        )
+    return materialize_resources(
+        project_ref=expected_project_ref,
+        change_id=change_id,
+        revision=revision,
+        webui=webui,
+        resources=derive_resource_specs(webui, resources),
+    )
+
+
 def validate_resource_spec(
     webui: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
@@ -665,6 +721,7 @@ __all__ = [
     "derive_record_resource_spec",
     "derive_resource_spec",
     "derive_resource_specs",
+    "carry_forward_resources",
     "materialize_resources",
     "validate_resource_spec",
 ]
