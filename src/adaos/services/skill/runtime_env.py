@@ -161,7 +161,11 @@ class SkillRuntimeEnvironment:
         return _is_runtime_bucket_name(value)
 
     def runtime_bucket_root(self, version: str) -> Path:
-        return (self._runtime_root / self.runtime_bucket(version)).resolve()
+        # PathProvider and TrialPaths already supply an absolute, normalized
+        # skills root.  Resolving every derived bucket performed filesystem
+        # realpath work on the API event loop during runtime-status scans,
+        # which is unnecessary for this purely lexical child path.
+        return self._runtime_root / self.runtime_bucket(version)
 
     def version_root(self, version: str) -> Path:
         return self.runtime_bucket_root(version)
@@ -383,7 +387,6 @@ class SkillRuntimeEnvironment:
         """
 
         self.ensure_base()
-        version_root = self.version_root(version)
         slots_root = self.slots_root(version)
         slots_root.mkdir(parents=True, exist_ok=True)
         self.ensure_bucket_dirs(version)

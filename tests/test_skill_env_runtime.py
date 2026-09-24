@@ -171,6 +171,20 @@ def test_patch_versions_share_minor_runtime_bucket() -> None:
     assert env.version_root("1.0.0").name == "v1.0"
 
 
+def test_version_root_does_not_resolve_filesystem_on_status_hot_path(
+    monkeypatch, tmp_path: Path
+) -> None:
+    skills_root = tmp_path.resolve() / "skills"
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="status_skill")
+
+    def fail_resolve(*_args, **_kwargs):
+        raise AssertionError("version_root must not perform filesystem realpath work")
+
+    monkeypatch.setattr(Path, "resolve", fail_resolve)
+
+    assert env.version_root("1.2.3") == skills_root / ".runtime" / "status_skill" / "v1.2"
+
+
 def test_preferred_activation_slot_skips_stale_patch_slot(tmp_path: Path) -> None:
     mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
     env = SkillRuntimeEnvironment(skills_root=tmp_path / "skills", skill_name="stale_patch_skill")
