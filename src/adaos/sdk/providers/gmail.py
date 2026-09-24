@@ -126,6 +126,33 @@ def list_messages(
     )
 
 
+def list_message_summaries(
+    *,
+    query: str = "",
+    label_ids: Iterable[str] = (),
+    page_token: str = "",
+    max_results: int = 20,
+    account_id: str = GOOGLE_GMAIL_PROVIDER_ID,
+) -> dict[str, Any]:
+    """List messages with bounded metadata fetched inside the Core provider.
+
+    Prefer this operation for first-paint collections. It avoids a consumer-side
+    sequence of one ``list_messages`` call followed by one ``get_message`` call
+    per result while preserving the same Core-owned credential boundary.
+    """
+
+    return _execute(
+        "list_message_summaries",
+        account_id=account_id,
+        arguments={
+            "query": query,
+            "label_ids": list(label_ids),
+            "page_token": page_token,
+            "max_results": max_results,
+        },
+    )
+
+
 def get_message(
     message_id: str,
     *,
@@ -195,6 +222,7 @@ __all__ = [
     "connection_status",
     "get_message",
     "list_labels",
+    "list_message_summaries",
     "list_messages",
     "modify_message",
     "reusable_connections",

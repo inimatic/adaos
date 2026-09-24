@@ -486,6 +486,101 @@ def test_provider_exposes_only_fixed_gmail_operations_and_never_retries_a_send(
     assert len(transport.calls) == 1
 
 
+def test_provider_lists_bounded_message_summaries_inside_one_operation(
+    tmp_path: Path,
+) -> None:
+    provider, _vault, transport, release, _result = _connect(tmp_path)
+    transport.calls.clear()
+    transport.responses.extend(
+        [
+            FakeResponse(
+                200,
+                {
+                    "messages": [
+                        {"id": "message-1", "threadId": "thread-1"},
+                        {"id": "message-2", "threadId": "thread-2"},
+                    ],
+                    "nextPageToken": "next-page",
+                },
+            ),
+            FakeResponse(
+                200,
+                {"id": "message-1", "threadId": "thread-1", "payload": {}},
+            ),
+            FakeResponse(
+                200,
+                {"id": "message-2", "threadId": "thread-2", "payload": {}},
+            ),
+        ]
+    )
+
+    result = provider.execute(
+        "list_message_summaries",
+        application_id="gmail_mail_client",
+        release_digest=release.release_digest,
+        subject_ref="user:owner",
+        arguments={
+            "query": "is:unread",
+            "label_ids": ["INBOX"],
+            "max_results": 2,
+        },
+    )
+
+    assert result["operation"] == "list_message_summaries"
+    assert {item["id"] for item in result["result"]["messages"]} == {
+        "message-1",
+        "message-2",
+    }
+    assert result["result"]["nextPageToken"] == "next-page"
+    assert len(transport.calls) == 3
+    assert transport.calls[0][1] == f"{GMAIL_API_ORIGIN}/gmail/v1/users/me/messages"
+    assert transport.calls[0][2]["params"] == {
+        "maxResults": 2,
+        "q": "is:unread",
+        "labelIds": ["INBOX"],
+    }
+    assert {call[2]["params"]["format"] for call in transport.calls[1:]} == {
+        "metadata"
+    }
+    assert all(
+        call[2]["headers"]["Authorization"] == "Bearer access-secret"
+        for call in transport.calls
+    )
+    assert "access-secret" not in json.dumps(result)
+
+
+def test_sdk_projects_message_summary_arguments_to_the_bounded_operation(
+    monkeypatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(
+        gmail_sdk,
+        "_execute",
+        lambda operation, **kwargs: calls.append((operation, kwargs)) or {"ok": True},
+    )
+
+    assert gmail_sdk.list_message_summaries(
+        query="older:7d",
+        label_ids=("INBOX",),
+        page_token="page-2",
+        max_results=7,
+    ) == {"ok": True}
+    assert calls == [
+        (
+            "list_message_summaries",
+            {
+                "account_id": "google.gmail",
+                "arguments": {
+                    "query": "older:7d",
+                    "label_ids": ["INBOX"],
+                    "page_token": "page-2",
+                    "max_results": 7,
+                },
+            },
+        )
+    ]
+
+
 def test_sdk_accepts_trusted_user_subject_for_a_session_caller(monkeypatch) -> None:
     provider = object()
     application = {

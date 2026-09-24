@@ -9,6 +9,7 @@ than one Application without copying credentials into either package.
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -50,6 +51,7 @@ _OPERATIONS = frozenset(
         "connection_status",
         "get_message",
         "list_labels",
+        "list_message_summaries",
         "list_messages",
         "modify_message",
         "send_message",
@@ -935,12 +937,75 @@ class GoogleGmailProvider:
             "Authorization": f"Bearer {credential['access_token']}",
             "Accept": "application/json",
         }
-        response = self._transport_request(
+        if op == "list_message_summaries":
+            max_results = int(args.get("max_results") or 20)
+            if not 1 <= max_results <= 20:
+                raise GoogleGmailProviderError("gmail_page_size_invalid")
+            list_params: dict[str, Any] = {"maxResults": max_results}
+            if _text(args.get("query")):
+                list_params["q"] = _text(args["query"])[:1000]
+            labels = self._label_ids(args.get("label_ids"))
+            if labels:
+                list_params["labelIds"] = labels
+            if _text(args.get("page_token")):
+                list_params["pageToken"] = _text(args["page_token"])[:2048]
+            listed = self._authorized_json_request(
+                "GET",
+                f"{GMAIL_API_ORIGIN}/gmail/v1/users/me/messages",
+                headers=headers,
+                params=list_params,
+            )
+            message_ids = [
+                self._message_id(str(item.get("id") or ""))
+                for item in (listed.get("messages") or [])[:max_results]
+                if isinstance(item, Mapping)
+            ]
+
+            def fetch_summary(message_id: str) -> dict[str, Any]:
+                return self._authorized_json_request(
+                    "GET",
+                    f"{GMAIL_API_ORIGIN}/gmail/v1/users/me/messages/{quote(message_id, safe='')}",
+                    headers=headers,
+                    params={"format": "metadata"},
+                )
+
+            if message_ids:
+                # Gmail's list endpoint returns only ids. Fetch bounded metadata
+                # concurrently inside the trusted provider so a consumer does
+                # not create an N+1 sequence across the SDK/tool boundary.
+                with ThreadPoolExecutor(max_workers=min(8, len(message_ids))) as pool:
+                    messages = list(pool.map(fetch_summary, message_ids))
+            else:
+                messages = []
+            payload = {"messages": messages}
+            if _text(listed.get("nextPageToken")):
+                payload["nextPageToken"] = _text(listed["nextPageToken"])[:2048]
+            return GmailOperationResult(op, payload).to_dict()
+
+        payload = self._authorized_json_request(
             method,
             url,
             params=params,
             json=body,
             headers=headers,
+        )
+        return GmailOperationResult(op, payload).to_dict()
+
+    def _authorized_json_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        params: Mapping[str, Any] | None = None,
+        json: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = self._transport_request(
+            method,
+            url,
+            params=params,
+            json=json,
+            headers=dict(headers),
             timeout=(5.0, 20.0),
         )
         status = int(getattr(response, "status_code", 0) or 0)
@@ -956,8 +1021,7 @@ class GoogleGmailProvider:
             )
         if not 200 <= status < 300:
             raise GoogleGmailProviderError("gmail_request_failed", status_code=status)
-        payload = _safe_json(response, error_code="gmail_response_invalid")
-        return GmailOperationResult(op, payload).to_dict()
+        return _safe_json(response, error_code="gmail_response_invalid")
 
 
 __all__ = [
