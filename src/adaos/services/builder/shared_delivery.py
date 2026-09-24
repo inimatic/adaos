@@ -68,6 +68,17 @@ def shared_delivery_interface(
             manifest_bytes = archive.read(manifest_info)
             package_manifest_bytes = archive.read(package_manifest_info)
             handler_bytes = archive.read("handlers/main.py")
+            try:
+                provider_contract_info = archive.getinfo(
+                    "contracts/provider.cbs.yaml"
+                )
+                provider_contract_bytes = (
+                    archive.read(provider_contract_info)
+                    if provider_contract_info.file_size <= 512_000
+                    else None
+                )
+            except KeyError:
+                provider_contract_bytes = None
     except (KeyError, OSError, zipfile.BadZipFile):
         return None
     if len(handler_bytes) > 2_000_000:
@@ -143,6 +154,62 @@ def shared_delivery_interface(
         if key in manifest
     }
     public_manifest["tools"] = tools
+    provider_identity: dict[str, Any] | None = None
+    operation_bindings: list[dict[str, Any]] = []
+    if provider_contract_bytes is not None:
+        try:
+            provider_contract = yaml.safe_load(
+                provider_contract_bytes.decode("utf-8")
+            )
+        except (UnicodeError, yaml.YAMLError):
+            provider_contract = None
+        if isinstance(provider_contract, Mapping):
+            capability = provider_contract.get("capability")
+            binding = provider_contract.get("binding")
+            if isinstance(capability, Mapping) and isinstance(binding, Mapping):
+                provider_identity = {
+                    "capability_ref": str(capability.get("ref") or "").strip(),
+                    "capability_version": str(
+                        capability.get("version") or ""
+                    ).strip(),
+                    "binding_definition_ref": str(
+                        binding.get("ref") or ""
+                    ).strip(),
+                    "binding_version": str(binding.get("version") or "").strip(),
+                }
+                tools_by_name = {
+                    str(item.get("name") or "").strip(): item for item in tools
+                }
+                for raw_operation in capability.get("operations") or ():
+                    if not isinstance(raw_operation, Mapping):
+                        continue
+                    operation_id = str(
+                        raw_operation.get("operation_id") or ""
+                    ).strip()
+                    tool_name = str(raw_operation.get("tool") or "").strip()
+                    tool = tools_by_name.get(tool_name)
+                    if not operation_id or tool is None:
+                        continue
+                    guarantees = tool.get("behavioral_guarantees")
+                    operation_bindings.append(
+                        {
+                            "operation_id": operation_id,
+                            "tool": tool_name,
+                            "semantic_mapping_authority": (
+                                "verified_provider_authoring_contract"
+                            ),
+                            "delivery_guarantees": (
+                                copy.deepcopy(dict(guarantees))
+                                if isinstance(guarantees, Mapping)
+                                else {}
+                            ),
+                            "guarantee_authority": (
+                                "verified_skill_manifest"
+                                if isinstance(guarantees, Mapping)
+                                else None
+                            ),
+                        }
+                    )
     interface: dict[str, Any] = {
         "schema": "adaos.builder.shared_delivery_interface.v1",
         "authority": "content_addressed_package_archive",
@@ -152,6 +219,8 @@ def shared_delivery_interface(
         "package_manifest_digest": "sha256:"
         + hashlib.sha256(package_manifest_bytes).hexdigest(),
         "public_manifest": public_manifest,
+        "provider_identity": provider_identity,
+        "operation_bindings": operation_bindings,
         "entry_symbols": sorted(entry_symbols, key=lambda item: item["name"]),
         "consumer_test_seam": {
             "mode": "mock_exported_tool_boundary",

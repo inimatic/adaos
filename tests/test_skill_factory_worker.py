@@ -9311,6 +9311,29 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
             "def portable_list_messages(query=''): pass\n",
         )
         archive.writestr(
+            "contracts/provider.cbs.yaml",
+            yaml.safe_dump(
+                {
+                    "schema": "adaos.cbs.provider_authoring.v1",
+                    "capability": {
+                        "ref": capability.capability_ref,
+                        "version": capability.version,
+                        "operations": [
+                            {
+                                "operation_id": "list_messages",
+                                "tool": "portable_list_messages",
+                            }
+                        ],
+                    },
+                    "binding": {
+                        "ref": binding.binding_definition_ref,
+                        "version": binding.to_dict()["version"],
+                    },
+                },
+                sort_keys=False,
+            ),
+        )
+        archive.writestr(
             ".adaos/package-manifest.json",
             json.dumps(package_manifest, sort_keys=True, separators=(",", ":")),
         )
@@ -9432,20 +9455,37 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     assert interface["archive_digest_verified"] is True
     assert interface["registry_ref"].startswith("package-registry://skill/")
     assert interface["compiler_view"]["package"] == delivery.to_dict()["package"]
-    assert interface["compiler_view"]["tools"] == shared_manifest["tools"]
+    assert interface["compiler_view"]["tools"] == [
+        {
+            key: value
+            for key, value in tool.items()
+            if key != "behavioral_guarantees"
+        }
+        for tool in shared_manifest["tools"]
+    ]
     portable_list = next(
         item
         for item in interface["compiler_view"]["tools"]
         if item["name"] == "portable_list_messages"
     )
-    assert portable_list["behavioral_guarantees"] == {
-        "collection_projection": "summary_only",
-        "detail_loading": "on_demand",
-        "provider_fetch_strategy": "batch",
-        "max_provider_round_trips": 2,
-        "max_items": 25,
-        "evidence_refs": ["tests/test_provider.py::test_batch"],
+    assert "behavioral_guarantees" not in portable_list
+    assert interface["compiler_view"]["provider_identity"] == {
+        "capability_ref": capability.capability_ref,
+        "capability_version": capability.version,
+        "binding_definition_ref": binding.binding_definition_ref,
+        "binding_version": binding.to_dict()["version"],
     }
+    assert interface["compiler_view"]["operation_bindings"] == [
+        {
+            "operation_id": "list_messages",
+            "tool": "portable_list_messages",
+            "semantic_mapping_authority": "verified_provider_authoring_contract",
+            "delivery_guarantees": shared_manifest["tools"][2][
+                "behavioral_guarantees"
+            ],
+            "guarantee_authority": "verified_skill_manifest",
+        }
+    ]
     assert {item["name"] for item in interface["compiler_view"]["entry_symbols"]} == {
         "reusable_connections",
         "attach_reusable_connection",
@@ -9466,6 +9506,7 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     assert "application-specific presentation adapters" in prompt
     assert "shared component" in prompt
     assert "delivery_interfaces[].compiler_view" in prompt
+    assert "operation_bindings[].delivery_guarantees" in prompt
     assert "SHA-256-verified" in prompt
     from adaos.services.builder.shared_delivery import shared_delivery_effect_checks
 
