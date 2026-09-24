@@ -108,9 +108,13 @@ _UNCHANGED_RETRY_INSTRUCTION = (
 _DEFAULT_PROTOTYPE_EXECUTION_BUDGET = {
     "schema": "adaos.builder.execution_budget.v1",
     "source": "builder.prototype.default",
-    "max_model_tokens": 2_000_000,
-    "max_billable_tokens": 20_000_000,
-    "max_wall_seconds": 10_800,
+    "max_model_tokens": 20_000_000,
+    "max_billable_tokens": 320_000_000,
+    "max_context_tokens": 32_000,
+    "max_wall_seconds": 21_600,
+    "max_attempts": 64,
+    "max_human_interventions": 16,
+    "max_changed_files": 512,
     "token_budget_metric": "fresh_plus_output",
 }
 
@@ -138,7 +142,7 @@ def _prototype_execution_budget(
 ) -> dict[str, Any]:
     """Use a larger default for full Prototype revisions without overriding callers."""
 
-    if isinstance(value, Mapping):
+    if isinstance(value, Mapping) and value:
         return dict(value)
     return dict(_DEFAULT_PROTOTYPE_EXECUTION_BUDGET)
 
@@ -2322,7 +2326,9 @@ class BuilderAutomationService:
             external_links["development_ticket_id"] = external_ticket_ids[0]
             external_links["development_ticket_ids"] = external_ticket_ids
             external_links["development_ticket_history_ids"] = external_ticket_ids
-        admitted_execution_budget = _admitted_execution_budget(execution_budget)
+        admitted_execution_budget = _admitted_execution_budget(
+            _prototype_execution_budget(execution_budget)
+        )
         admitted_agent_profile = (
             dict(agent_profile) if isinstance(agent_profile, Mapping) else None
         )

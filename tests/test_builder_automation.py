@@ -916,11 +916,16 @@ def test_prototype_execution_budget_has_room_for_full_manifest_revisions() -> No
     assert default == {
         "schema": "adaos.builder.execution_budget.v1",
         "source": "builder.prototype.default",
-        "max_model_tokens": 2_000_000,
-        "max_billable_tokens": 20_000_000,
-        "max_wall_seconds": 10_800,
+        "max_model_tokens": 20_000_000,
+        "max_billable_tokens": 320_000_000,
+        "max_context_tokens": 32_000,
+        "max_wall_seconds": 21_600,
+        "max_attempts": 64,
+        "max_human_interventions": 16,
+        "max_changed_files": 512,
         "token_budget_metric": "fresh_plus_output",
     }
+    assert automation_module._prototype_execution_budget({}) == default
     explicit = {"max_model_tokens": 3_000_000, "max_wall_seconds": 12_000}
     assert automation_module._prototype_execution_budget(explicit) == explicit
 
