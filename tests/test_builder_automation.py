@@ -8837,6 +8837,66 @@ def test_aprobation_decision_rejects_stale_reviewed_candidate(
     assert persisted["completion_readiness"]["aprobation"]["trial"]["status"] == "trial"
 
 
+def test_aprobation_decision_recovers_canonical_trial_without_dev_ticket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import lifecycle
+
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.mail_reader",
+            "object_type": "scenario",
+            "object_id": "mail_reader",
+            "status": "completed",
+            "completion_readiness": {"ok": True},
+        }
+    )
+    receipt = {
+        "ok": True,
+        "mode": "immutable_candidate_trial_workspace",
+        "trial": {
+            "status": "trial",
+            "candidate_id": "candidate.mail-reader",
+            "candidate_digest": "sha256:" + "2" * 64,
+            "release_digest": "sha256:" + "3" * 64,
+            "version": "0.1.0",
+        },
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_ensure_governed_aprobation_trial",
+        lambda self, session, current, record_update=True: dict(receipt),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "decide_trial",
+        lambda *args, **kwargs: pytest.fail(
+            "the recovered receipt must still enforce the reviewed digest"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="candidate digest changed"):
+        service.decide_aprobation(
+            object_type="scenario",
+            object_id="mail_reader",
+            decision="accept",
+            actor="user:owner",
+            expected_candidate_id="candidate.mail-reader",
+            expected_candidate_digest="sha256:" + "9" * 64,
+        )
+
+    persisted = service.get_session("scenario", "mail_reader")
+    assert persisted["completion_readiness"]["aprobation"] == receipt
+
+
 def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

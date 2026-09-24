@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -737,6 +738,7 @@ class WorkspaceActivationManager:
         plan: ReleasePlan,
         slot_id: str,
         verified_packages: tuple[ArtifactPackageRef, ...],
+        shared_rebinding_evidence: tuple[Mapping[str, Any], ...] = (),
     ) -> dict[str, Any]:
         expected = {item.key: item for item in plan.packages}
         verified = {item.key: item for item in verified_packages}
@@ -779,6 +781,9 @@ class WorkspaceActivationManager:
                 for package in sorted(verified_packages, key=lambda item: item.key)
             ],
             "workflow_admission": workflow_admission,
+            "shared_skill_rebindings": [
+                copy.deepcopy(dict(item)) for item in shared_rebinding_evidence
+            ],
         }
         record = {
             **unsigned,
@@ -825,6 +830,18 @@ class WorkspaceActivationManager:
                 )
             verified.append(observed.ref)
         current = self.load_lock()
+        unresolved_conflicts, shared_rebinding_evidence = (
+            unresolved_shared_skill_conflicts(plan, current, self.package_store)
+        )
+        if unresolved_conflicts:
+            summary = "; ".join(
+                f"{item['skill']} used by {', '.join(item['active_consumers'])}"
+                for item in unresolved_conflicts
+            )
+            raise ActivationError(
+                "release admission would replace a shared active skill without "
+                "contract-preserving rebinding evidence: " + summary
+            )
         desired = self._desired_lock(
             current=current,
             plan=plan,
@@ -832,6 +849,7 @@ class WorkspaceActivationManager:
             audience=audience,
             data_mode=data_mode,
             data_ref=data_ref,
+            shared_rebinding_evidence=tuple(shared_rebinding_evidence),
             updated_at=desired_lock_updated_at,
         )
         return self._release_admission_record(
@@ -840,6 +858,7 @@ class WorkspaceActivationManager:
             plan=plan,
             slot_id=slot_id,
             verified_packages=tuple(verified),
+            shared_rebinding_evidence=tuple(shared_rebinding_evidence),
         )
 
     def validate_release_admission(
@@ -1607,6 +1626,7 @@ class WorkspaceActivationManager:
                 plan=plan,
                 slot_id=slot_id,
                 verified_packages=tuple(verified_package_refs),
+                shared_rebinding_evidence=tuple(shared_rebinding_evidence),
             )
             operation["publication_admission"] = release_admission
             workflow_plan = release_admission["workflow_admission"]

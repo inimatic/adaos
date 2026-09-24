@@ -791,6 +791,14 @@ def test_contract_preserving_shared_provider_upgrade_rebinds_active_consumers(
         idempotency_key="consumer-one-v1",
         slot_id="consumer_one",
     )
+    admission = manager.admit_release_candidate(
+        second_plan,
+        slot_id="consumer_two",
+    )
+    assert admission["status"] == "admitted"
+    assert admission["shared_skill_rebindings"][0]["active_consumers"] == [
+        "scenario:consumer_one"
+    ]
     result = _activate(
         manager,
         second_plan,

@@ -59,6 +59,65 @@
       }
     },
     "workflow_admission": { "$ref": "workflow.admission.v1.schema.json" },
+    "shared_skill_rebindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "schema",
+          "status",
+          "skill_ref",
+          "active_package_digest",
+          "candidate_package_digest",
+          "active_consumers",
+          "contract_fingerprint",
+          "policy",
+          "evidence_digest"
+        ],
+        "properties": {
+          "schema": {
+            "const": "adaos.artifact.contract_preserving_rebinding.v1"
+          },
+          "status": { "const": "admissible" },
+          "skill_ref": { "type": "string", "pattern": "^skill:[^\\s]+$" },
+          "active_package_digest": { "$ref": "#/$defs/digest" },
+          "candidate_package_digest": { "$ref": "#/$defs/digest" },
+          "active_consumers": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+          },
+          "contract_fingerprint": {
+            "type": "object",
+            "required": ["contract_members", "entrypoints"],
+            "properties": {
+              "contract_members": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": { "$ref": "#/$defs/digest" }
+              },
+              "entrypoints": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": { "type": "string" }
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "policy": {
+            "const": "exact_capability_binding_and_entrypoint_equivalence"
+          },
+          "evidence_digest": { "$ref": "#/$defs/digest" }
+        },
+        "additionalProperties": false
+      }
+    },
     "admission_digest": { "$ref": "#/$defs/digest" },
     "status": { "const": "admitted" }
   },

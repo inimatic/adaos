@@ -6878,6 +6878,25 @@ class BuilderAutomationService:
                 if isinstance(readiness.get("aprobation"), Mapping)
                 else {}
             )
+            if not bool(aprobation.get("ok")):
+                # A Trial can be entered through the canonical Builder
+                # lifecycle without originating from a Dev Ticket.  Those
+                # projects still need the same immutable Candidate receipt
+                # before a desktop decision is accepted.  Reconstruct it
+                # from the canonical Trial rather than treating the missing
+                # ticket-specific projection as a missing RuntimeSelection.
+                try:
+                    aprobation = self._ensure_governed_aprobation_trial(
+                        current,
+                        aprobation,
+                        record_update=False,
+                    )
+                except RuntimeError:
+                    aprobation = {}
+                if bool(aprobation.get("ok")):
+                    readiness["aprobation"] = aprobation
+                    current["completion_readiness"] = readiness
+                    current = self._save_session(current)
             trial = (
                 dict(aprobation.get("trial"))
                 if isinstance(aprobation.get("trial"), Mapping)
