@@ -353,7 +353,8 @@
         "reconnect": ["gmail_account_not_connected", "gmail_reconnect_required"],
         "permission": ["gmail_permission_denied", "gmail_required_scope_missing"],
         "retryable": ["gmail_provider_unavailable"],
-        "rule": "Return {ok:false,error,message} from the owned tool or raise a bounded error. Never return a successful mutation after provider failure and never include response bodies, tokens or OAuth codes in logs/errors."
+        "read_projection_rule": "A tool used as a browser dataSource must convert expected provider lifecycle errors into a successful bounded projection: connection_status returns {ok:true,items:[{id:'google.gmail',status:'disconnected|auth_required|permission_denied|offline|provider_error',least_privilege_note:string}]}; list_labels, list_messages and get_message return {ok:true,items:[],status:<the same lifecycle state>,notice:string}. Do not retain ok:false when adding items. This lets the accepted setup/authorization/offline UI settle without treating an expected state as a transport failure.",
+        "rule": "Mutations, invalid input and unexpected provider failures return {ok:false,error,message} or raise a bounded error. Never return a successful mutation after provider failure and never include response bodies, tokens or OAuth codes in logs/errors."
       },
       "tests": [
         "mock the typed SDK facade; package tests perform no external network calls",

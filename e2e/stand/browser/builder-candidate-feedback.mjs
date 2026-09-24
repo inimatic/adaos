@@ -39,6 +39,7 @@ for (const [key, value] of Object.entries({
   space_kind: spaceKind,
   expected_scenario_id: scenario,
   try_local_hub: '1',
+  runtime_debug: '1',
 })) url.searchParams.set(key, value)
 
 const report = {
@@ -121,7 +122,7 @@ function boundedToolFailureDiagnostic(request, response, bodyText) {
       detail.technical_detail,
     ].filter(layer => layer && typeof layer === 'object')
     for (const layer of layers) {
-      for (const key of ['error', 'reason', 'message', 'permission_id', 'application_id', 'retryable']) {
+      for (const key of ['ok', 'status', 'error', 'reason', 'message', 'permission_id', 'application_id', 'retryable']) {
         if (diagnostic[key] === undefined && ['string', 'boolean', 'number'].includes(typeof layer[key])) {
           diagnostic[key] = typeof layer[key] === 'string'
             ? layer[key].slice(0, 2048)
@@ -250,17 +251,47 @@ try {
       page_errors: [],
       console_errors: [],
       request_failures: [],
+      tool_calls: [],
       hard_failures: [],
       warnings: [],
     }
     report.samples.push(sample)
     const responseDiagnosticTasks = []
+    const toolRequestStartedAt = new WeakMap()
+    page.on('request', request => {
+      try {
+        if (new URL(request.url()).pathname === '/api/tools/call') {
+          toolRequestStartedAt.set(request, Date.now())
+        }
+      } catch {}
+    })
     page.on('pageerror', error => sample.page_errors.push(String(error.message || error)))
     page.on('console', message => {
       if (message.type() === 'error') sample.console_errors.push(message.text())
     })
     page.on('response', response => {
       const request = response.request()
+      let target
+      try {
+        target = new URL(response.url())
+      } catch {
+        return
+      }
+      if (target.pathname === '/api/tools/call') {
+        const startedAt = toolRequestStartedAt.get(request)
+        responseDiagnosticTasks.push(
+          response.text()
+            .then(bodyText => {
+              const diagnostic = boundedToolFailureDiagnostic(request, response, bodyText)
+              sample.tool_calls.push({
+                ...diagnostic,
+                http_status: response.status(),
+                duration_ms: startedAt ? Date.now() - startedAt : null,
+              })
+            })
+            .catch(() => {}),
+        )
+      }
       if (response.status() < 400 || !['document', 'fetch', 'xhr'].includes(request.resourceType())) return
       const failure = {
         method: request.method(),
@@ -268,7 +299,6 @@ try {
         url: response.url(),
       }
       sample.request_failures.push(failure)
-      const target = new URL(response.url())
       if (target.pathname === '/api/tools/call') {
         responseDiagnosticTasks.push(
           response.text()
@@ -621,6 +651,20 @@ try {
         }
       }, blockingTextPatterns.map(pattern => pattern.source))
       sample.diagnostics = diagnostics
+      sample.runtime_debug = await page.evaluate(() => {
+        const events = window.__ADAOS_RUNTIME_DEBUG__?.get?.()
+        if (!Array.isArray(events)) return []
+        return events
+          .filter(event => String(event?.kind || '').startsWith('page_data.'))
+          .slice(-160)
+          .map(event => ({
+            seq: event.seq,
+            ts: event.ts,
+            level: event.level,
+            kind: event.kind,
+            details: event.details,
+          }))
+      })
       if (diagnostics.current_scenario !== scenario) {
         sample.hard_failures.push(`Expected scenario ${scenario}, got ${diagnostics.current_scenario || 'none'}`)
       }

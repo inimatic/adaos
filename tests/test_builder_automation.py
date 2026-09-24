@@ -6980,6 +6980,46 @@ def test_session_store_rejects_stale_commit_ready_after_terminal_readiness(
     assert stale_projection["status"] == "completed"
 
 
+def test_session_store_rejects_stale_task_head_after_browser_repair_submission(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    original = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "iteration": 2,
+        "current_task_id": "task.browser-source",
+        "task_history": ["task.initial", "task.browser-source"],
+        "status": "commit_ready",
+        "updated_at": "2026-09-24T07:03:27+00:00",
+    }
+    service._save_session(original)
+    repair = {
+        **original,
+        "iteration": 3,
+        "current_task_id": "task.browser-repair",
+        "task_history": [
+            "task.initial",
+            "task.browser-source",
+            "task.browser-repair",
+        ],
+        "status": "in_progress",
+        "updated_at": "2026-09-24T07:04:03+00:00",
+    }
+    service._save_session(repair)
+
+    stale_projection = dict(original)
+    service._save_session(stale_projection)
+
+    persisted = service.get_session("scenario", "recipes")
+    assert persisted is not None
+    assert persisted["iteration"] == 3
+    assert persisted["current_task_id"] == "task.browser-repair"
+    assert stale_projection["current_task_id"] == "task.browser-repair"
+
+
 def test_session_store_allows_first_finalization_of_validated_task(
     tmp_path: Path,
 ) -> None:

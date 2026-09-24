@@ -1161,8 +1161,49 @@ def _prefer_persisted_session(
         return False
     previous_task = str(previous.get("current_task_id") or "").strip()
     incoming_task = str(incoming.get("current_task_id") or "").strip()
-    if not previous_task or previous_task != incoming_task:
+    if not previous_task:
         return False
+    if previous_task != incoming_task:
+        # A browser-feedback repair is submitted and may even finish inside the
+        # durable worker while an API reader still owns an older, hydrated
+        # session value.  The file mutation lock serializes replacement but it
+        # cannot by itself stop that older process from replacing the newer
+        # task head afterwards.  Fence task identity by the durable Automation
+        # iteration and, for compatibility records without a trustworthy
+        # iteration, by retained task lineage and timestamp.
+        try:
+            previous_iteration = int(previous.get("iteration") or 0)
+        except (TypeError, ValueError):
+            previous_iteration = 0
+        try:
+            incoming_iteration = int(incoming.get("iteration") or 0)
+        except (TypeError, ValueError):
+            incoming_iteration = 0
+        if previous_iteration != incoming_iteration:
+            return previous_iteration > incoming_iteration
+
+        previous_history = {
+            str(item).strip()
+            for item in previous.get("task_history") or []
+            if str(item).strip()
+        }
+        incoming_history = {
+            str(item).strip()
+            for item in incoming.get("task_history") or []
+            if str(item).strip()
+        }
+        if incoming_task in previous_history and previous_task not in incoming_history:
+            return True
+        if previous_task in incoming_history and incoming_task not in previous_history:
+            return False
+
+        previous_updated = str(previous.get("updated_at") or "").strip()
+        incoming_updated = str(incoming.get("updated_at") or "").strip()
+        return bool(
+            previous_updated
+            and incoming_updated
+            and previous_updated > incoming_updated
+        )
 
     previous_status = str(previous.get("status") or "starting").strip() or "starting"
     incoming_status = str(incoming.get("status") or "starting").strip() or "starting"

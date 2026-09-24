@@ -143,6 +143,11 @@ def test_google_gmail_contract_is_loaded_only_for_relevant_automation_context():
     assert "gmail_account_not_connected" in contract["sdk"]["success_envelopes"][
         "connection_status"
     ]["missing"]
+    assert "Do not retain ok:false when adding items" in contract[
+        "failure_contract"
+    ]["read_projection_rule"]
+    assert "list_messages" in contract["failure_contract"]["read_projection_rule"]
+    assert "successful mutation" in contract["failure_contract"]["rule"]
     schemas = contract["sdk"]["response_schemas"]
     examples = contract["sdk"]["synthetic_examples"]
     jsonschema.Draft202012Validator(schemas["connection_status"]).validate(
