@@ -466,6 +466,25 @@ def test_hub_peer_is_not_reusable_with_live_channels(monkeypatch) -> None:
         asyncio.run(peer.close())
 
 
+def test_connected_peer_waits_for_datachannel_grace_before_stale_prune(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+
+    async def send_ice_cb(candidate: dict[str, object]) -> None:
+        return None
+
+    peer = peer_mod.HubPeer("browser-negotiating", "default", send_ice_cb)
+    peer.pc.connectionState = "connected"
+    peer._created_at = 100.0
+    peer._last_activity_at = 100.0
+    peer._last_state_change_at = 100.0
+
+    try:
+        assert peer.is_stale(now_ts=124.0) is False
+        assert peer.is_stale(now_ts=131.0) is True
+    finally:
+        asyncio.run(peer.close())
+
+
 def test_hub_peer_handle_offer_returns_final_local_description(monkeypatch) -> None:
     peer_mod = _load_peer_module(monkeypatch)
 

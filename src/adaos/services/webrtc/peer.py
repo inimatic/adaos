@@ -54,10 +54,31 @@ _media_relay = MediaRelay()
 _REUSABLE_CONNECTION_STATES = {"new", "connecting", "connected"}
 _TERMINAL_CONNECTION_STATES = {"failed", "closed", "disconnected"}
 _LIVE_CHANNEL_STATES = {"connecting", "open"}
-_STUCK_PEER_GRACE_SECONDS = 5.0
 _REPLACE_CLOSE_TIMEOUT_SECONDS = 1.5
 _PENDING_REMOTE_ICE_TTL_SECONDS = 10.0
 _PENDING_REMOTE_ICE_MAX_PER_GENERATION = 32
+
+
+def _env_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(max_value, value))
+
+
+# Browser waits CONNECT_TIMEOUT_MS plus CONNECTED_DATA_CHANNEL_GRACE_MS before
+# giving up on SCTP/datachannels. Keep server-side snapshot pruning above that
+# window so reliability polling cannot kill an otherwise connected peer first.
+_STUCK_PEER_GRACE_SECONDS = _env_float(
+    "ADAOS_WEBRTC_STUCK_PEER_GRACE_SECONDS",
+    30.0,
+    min_value=5.0,
+    max_value=120.0,
+)
 
 STUN_CONFIG = RTCConfiguration(
     iceServers=[
