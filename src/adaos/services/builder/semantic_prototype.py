@@ -2521,6 +2521,76 @@ def _normalize_relationship_identity_literals(
                 normalize(predicate, f'$.views[{index}].scope_filters[{filter_index}].value')
 
 
+def _merge_candidate_automation_requirements(
+    candidate: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Merge compatible repeated authoring declarations into one obligation.
+
+    The canonical semantic document still requires one Automation obligation per
+    accepted requirement. Model authoring may repeat the same requirement while
+    describing distinct disclosure or acceptance details. Joining those details
+    is lossless and produces the stricter conjunction; conflicting reason classes
+    remain an error because Core cannot infer which authority boundary applies.
+    """
+
+    merged: list[dict[str, Any]] = []
+    by_requirement: dict[str, tuple[int, dict[str, Any]]] = {}
+    normalizations: list[dict[str, str]] = []
+    for source_index, raw_item in enumerate(candidate.get("automation_requirements") or []):
+        item = copy.deepcopy(dict(raw_item))
+        requirement_ref = str(item["requirement_ref"])
+        existing_entry = by_requirement.get(requirement_ref)
+        if existing_entry is None:
+            target_index = len(merged)
+            merged.append(item)
+            by_requirement[requirement_ref] = (target_index, item)
+            continue
+
+        target_index, existing = existing_entry
+        if str(existing["reason"]) != str(item["reason"]):
+            _fail(
+                f"duplicate automation requirement {requirement_ref!r} has "
+                "conflicting reason classes"
+            )
+
+        for locale, text in item["disclosure"].items():
+            previous = str(existing["disclosure"].get(locale) or "").strip()
+            addition = str(text).strip()
+            if addition and addition not in previous:
+                combined = "\n\n".join(value for value in (previous, addition) if value)
+                if len(combined) > 500:
+                    _fail(
+                        f"merged automation disclosure for {requirement_ref!r} "
+                        f"exceeds the locale limit for {locale!r}"
+                    )
+                existing["disclosure"][locale] = combined
+
+        previous_acceptance = str(existing["acceptance"]).strip()
+        addition_acceptance = str(item["acceptance"]).strip()
+        if addition_acceptance and addition_acceptance not in previous_acceptance:
+            combined_acceptance = "\n\n".join(
+                value for value in (previous_acceptance, addition_acceptance) if value
+            )
+            if len(combined_acceptance) > 1000:
+                _fail(
+                    f"merged automation acceptance for {requirement_ref!r} "
+                    "exceeds the contract limit"
+                )
+            existing["acceptance"] = combined_acceptance
+
+        normalizations.append(
+            {
+                "kind": "duplicate_automation_requirement_merged",
+                "from": f"$.automation_requirements[{source_index}]",
+                "to": f"$.automation_requirements[{target_index}]",
+                "target": requirement_ref,
+            }
+        )
+
+    candidate["automation_requirements"] = merged
+    return normalizations
+
+
 def _canonicalize_semantic_prototype_candidate_v2(
     value: Mapping[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
@@ -2550,6 +2620,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
         suffix = f" at {path}" if path else ""
         _fail(f"{exc.message}{suffix}")
 
+    normalizations = _merge_candidate_automation_requirements(candidate)
     resources = [dict(item) for item in candidate.get("resources") or []]
     _validate_candidate_bounds(candidate)
     if not resources:
@@ -2563,7 +2634,6 @@ def _canonicalize_semantic_prototype_candidate_v2(
     raw_views = [dict(item) for item in candidate.get("views") or []]
     raw_commands = [dict(item) for item in candidate.get("commands") or []]
     raw_states = [dict(item) for item in candidate.get("representative_states") or []]
-    normalizations: list[dict[str, str]] = []
     normalized_resources: list[dict[str, Any]] = []
     normalized_views: list[dict[str, Any]] = []
     normalized_commands: list[dict[str, Any]] = []

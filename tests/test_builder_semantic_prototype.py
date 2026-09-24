@@ -3324,7 +3324,7 @@ def test_semantic_v2_preserves_automation_obligation_without_claiming_implementa
     assert replay["automation_requirements"][0]["statement"] == obligation["statement"]
 
 
-@pytest.mark.parametrize("invalid", ["missing_binding", "duplicate", "ui_operation", "hidden_evidence"])
+@pytest.mark.parametrize("invalid", ["missing_binding", "ui_operation", "hidden_evidence"])
 def test_semantic_v2_does_not_allow_unbound_or_ui_deferrals(invalid: str) -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)
@@ -3336,8 +3336,6 @@ def test_semantic_v2_does_not_allow_unbound_or_ui_deferrals(invalid: str) -> Non
     binding["semantic_refs"] = [{"kind": "view", "id": candidate["views"][0]["id"]}]
     if invalid == "missing_binding":
         candidate["automation_requirements"][0]["requirement_ref"] = "job:missing"
-    elif invalid == "duplicate":
-        candidate["automation_requirements"] *= 2
     elif invalid == "hidden_evidence":
         binding["semantic_refs"] = [{"kind": "resource", "id": candidate["resources"][0]["id"]}]
     with pytest.raises(BuilderWorkflowError, match="automation[_ ]requirement") as caught:
@@ -3346,3 +3344,49 @@ def test_semantic_v2_does_not_allow_unbound_or_ui_deferrals(invalid: str) -> Non
         assert caught.value.findings[0]["code"] == "requirement.automation_reference_ineligible"
         assert "Eligible refs:" in caught.value.findings[0]["detail"]
         assert "statement" not in str(caught.value)
+
+
+def test_semantic_v2_merges_compatible_duplicate_automation_requirements() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    ref = brief["principal_jobs"][0]["id"]
+    first = _automation_requirement(ref)
+    second = _automation_requirement(ref)
+    second["disclosure"] = {
+        "en": "A second constraint remains visible.",
+        "ru": "Второе ограничение остается видимым.",
+    }
+    second["acceptance"] = "The second constraint is also verified."
+    candidate["automation_requirements"] = [first, second]
+    binding = next(
+        item for item in candidate["requirement_bindings"]
+        if item["requirement_ref"] == ref
+    )
+    binding["semantic_refs"] = [
+        {"kind": "view", "id": candidate["views"][0]["id"]}
+    ]
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    assert len(result["automation_requirements"]) == 1
+    obligation = result["automation_requirements"][0]
+    assert "The rule is illustrated" in obligation["disclosure"]["en"]
+    assert "A second constraint" in obligation["disclosure"]["en"]
+    assert "The second constraint is also verified" in obligation["acceptance"]
+    assert any(
+        item["kind"] == "duplicate_automation_requirement_merged"
+        for item in result["normalizations"]
+    )
+
+
+def test_semantic_v2_rejects_duplicate_automation_reason_conflict() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    ref = brief["principal_jobs"][0]["id"]
+    first = _automation_requirement(ref)
+    second = _automation_requirement(ref)
+    second["reason"] = "external_integration"
+    candidate["automation_requirements"] = [first, second]
+
+    with pytest.raises(BuilderWorkflowError, match="conflicting reason classes"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
