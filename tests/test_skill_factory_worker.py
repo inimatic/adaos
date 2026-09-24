@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9056,6 +9058,91 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
         authority_requirements=("providers.google.gmail",),
         conformance_obligations=("capability_conformance",),
     )
+    shared_manifest = {
+        "name": "gmail_provider_skill",
+        "version": "1.2.3",
+        "description": "Reusable Gmail provider.",
+        "capabilities": ["providers.google.gmail", "workspace.read"],
+        "exports": {
+            "tools": [
+                "reusable_connections",
+                "attach_reusable_connection",
+                "portable_list_messages",
+            ]
+        },
+        "tools": [
+            {
+                "name": "reusable_connections",
+                "entry": "handlers.main:reusable_connections",
+                "side_effects": "none",
+                "permissions": ["workspace.read", "providers.google.gmail"],
+                "input_schema": {"type": "object", "additionalProperties": False},
+                "output_schema": {
+                    "type": "object",
+                    "required": ["ok", "accounts"],
+                    "properties": {
+                        "ok": {"type": "boolean"},
+                        "accounts": {"type": "array", "items": {"type": "object"}},
+                    },
+                },
+            },
+            {
+                "name": "attach_reusable_connection",
+                "entry": "handlers.main:attach_reusable_connection",
+                "side_effects": "local_write",
+                "permissions": ["workspace.write", "providers.google.gmail"],
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"account_id": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                "output_schema": {
+                    "type": "object",
+                    "required": ["ok", "attached"],
+                    "properties": {
+                        "ok": {"type": "boolean"},
+                        "attached": {"type": "boolean"},
+                    },
+                },
+            },
+            {
+                "name": "portable_list_messages",
+                "entry": "handlers.main:portable_list_messages",
+                "side_effects": "none",
+                "permissions": ["workspace.read", "providers.google.gmail"],
+                "input_schema": {"type": "object", "additionalProperties": False},
+                "output_schema": {
+                    "type": "object",
+                    "required": ["ok"],
+                    "properties": {"ok": {"type": "boolean"}},
+                },
+            },
+        ],
+    }
+    package_manifest = {
+        "schema": "adaos.artifact.package_manifest.v1",
+        "kind": "skill",
+        "artifact_id": "gmail_provider_skill",
+        "version": "1.2.3",
+    }
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "skill.yaml",
+            yaml.safe_dump(shared_manifest, sort_keys=False, allow_unicode=True),
+        )
+        archive.writestr(
+            "handlers/main.py",
+            "def reusable_connections(): pass\n"
+            "def attach_reusable_connection(account_id='google.gmail'): pass\n"
+            "def portable_list_messages(query=''): pass\n",
+        )
+        archive.writestr(
+            ".adaos/package-manifest.json",
+            json.dumps(package_manifest, sort_keys=True, separators=(",", ":")),
+        )
+    archive_bytes = archive_buffer.getvalue()
+    archive_digest = hashlib.sha256(archive_bytes).hexdigest()
     delivery = BindingDelivery.create(
         binding_definition_ref=binding.binding_definition_ref,
         binding_definition_digest=binding.digest,
@@ -9064,10 +9151,18 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
             "kind": "skill",
             "id": "gmail_provider_skill",
             "version": "1.2.3",
-            "digest": "sha256:" + "a" * 64,
+            "digest": "sha256:" + archive_digest,
         },
         physical_member="handlers/main.py",
     )
+    archive_path = (
+        tmp_path
+        / "state/artifact_pipeline/packages/sha256"
+        / archive_digest[:2]
+        / f"{archive_digest}.zip"
+    )
+    archive_path.parent.mkdir(parents=True)
+    archive_path.write_bytes(archive_bytes)
     catalog = PortableContractCatalog(
         tmp_path / "state/capability-binding-state/portable"
     )
@@ -9110,16 +9205,26 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     reuse = bindings["portable_contract_reuse"]
     assert reuse["requirements"][0]["selected_digest"] == capability.digest
     assert reuse["requirements"][0]["contract"] == capability.to_dict()
-    assert reuse["requirements"][0]["reusable_bindings"] == [
-        {
-            "binding_definition": binding.to_dict(),
-            "deliveries": [delivery.to_dict()],
-        }
-    ]
+    reusable = reuse["requirements"][0]["reusable_bindings"]
+    assert reusable[0]["binding_definition"] == binding.to_dict()
+    assert reusable[0]["deliveries"] == [delivery.to_dict()]
+    interface = reusable[0]["delivery_interfaces"][0]
+    assert interface["archive_digest_verified"] is True
+    assert interface["package"] == delivery.to_dict()["package"]
+    assert interface["public_manifest"]["tools"] == shared_manifest["tools"]
+    assert {item["name"] for item in interface["entry_symbols"]} == {
+        "reusable_connections",
+        "attach_reusable_connection",
+        "portable_list_messages",
+    }
+    assert interface["consumer_test_seam"]["mode"] == "mock_exported_tool_boundary"
+    assert interface["interface_digest"].startswith("sha256:")
     prompt = (tmp_path / "input/task.md").read_text(encoding="utf-8")
     assert "installed canonical authority" in prompt
     assert "application-specific presentation adapters" in prompt
     assert "shared component" in prompt
+    assert "delivery_interfaces" in prompt
+    assert "SHA-256-verified" in prompt
 
 
 def test_worker_does_not_admit_attachment_bindings_from_system_context(

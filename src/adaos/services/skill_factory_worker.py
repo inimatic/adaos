@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import time
 import traceback
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,7 +70,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.11.2"
+RUNNER_VERSION = "adaos-local-codex-worker/0.11.3"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -4225,6 +4226,141 @@ class LocalSkillFactoryWorker:
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.factory = SkillFactoryService(state_dir=self.state_dir)
 
+    def _shared_delivery_interface(
+        self, delivery: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """Load the public interface from an exact content-addressed skill package."""
+
+        package = delivery.get("package")
+        if not isinstance(package, Mapping) or package.get("kind") != "skill":
+            return None
+        package_digest = str(package.get("digest") or "").strip().lower()
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", package_digest):
+            return None
+        digest_hex = package_digest.removeprefix("sha256:")
+        archive_path = (
+            self.state_dir
+            / "artifact_pipeline"
+            / "packages"
+            / "sha256"
+            / digest_hex[:2]
+            / f"{digest_hex}.zip"
+        )
+        try:
+            archive_bytes = archive_path.read_bytes()
+        except OSError:
+            return None
+        if hashlib.sha256(archive_bytes).hexdigest() != digest_hex:
+            return None
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                manifest_info = archive.getinfo("skill.yaml")
+                package_manifest_info = archive.getinfo(".adaos/package-manifest.json")
+                if manifest_info.file_size > 512_000 or package_manifest_info.file_size > 512_000:
+                    return None
+                manifest_bytes = archive.read(manifest_info)
+                package_manifest_bytes = archive.read(package_manifest_info)
+                handler_bytes = archive.read("handlers/main.py")
+        except (KeyError, OSError, zipfile.BadZipFile):
+            return None
+        if len(handler_bytes) > 2_000_000:
+            return None
+        try:
+            manifest = yaml.safe_load(manifest_bytes.decode("utf-8"))
+            package_manifest = json.loads(package_manifest_bytes.decode("utf-8"))
+            handler_tree = ast.parse(handler_bytes.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError, yaml.YAMLError, SyntaxError):
+            return None
+        if not isinstance(manifest, Mapping) or not isinstance(package_manifest, Mapping):
+            return None
+        expected_id = str(package.get("id") or "").strip()
+        expected_version = str(package.get("version") or "").strip()
+        if (
+            str(manifest.get("name") or "").strip() != expected_id
+            or str(manifest.get("version") or "").strip() != expected_version
+            or str(package_manifest.get("artifact_id") or "").strip() != expected_id
+            or str(package_manifest.get("version") or "").strip() != expected_version
+        ):
+            return None
+        exports = manifest.get("exports")
+        if not isinstance(exports, Mapping):
+            exports = {}
+        exported = {
+            str(name).strip()
+            for name in exports.get("tools") or []
+            if str(name).strip()
+        }
+        tools = [
+            dict(tool)
+            for tool in manifest.get("tools") or []
+            if isinstance(tool, Mapping) and str(tool.get("name") or "").strip() in exported
+        ]
+        entry_symbols: list[dict[str, Any]] = []
+        for node in handler_tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name not in exported:
+                continue
+            parameters = [
+                item.arg
+                for item in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+                if item.arg not in {"self", "cls"}
+            ]
+            if node.args.vararg is not None:
+                parameters.append(f"*{node.args.vararg.arg}")
+            if node.args.kwarg is not None:
+                parameters.append(f"**{node.args.kwarg.arg}")
+            entry_symbols.append(
+                {
+                    "name": node.name,
+                    "async": isinstance(node, ast.AsyncFunctionDef),
+                    "parameters": parameters,
+                }
+            )
+        public_manifest = {
+            key: copy.deepcopy(manifest[key])
+            for key in (
+                "name",
+                "version",
+                "description",
+                "default_tool",
+                "dependencies",
+                "capabilities",
+                "exports",
+                "data_routes",
+                "data_lifecycle",
+            )
+            if key in manifest
+        }
+        public_manifest["tools"] = tools
+        interface: dict[str, Any] = {
+            "schema": "adaos.builder.shared_delivery_interface.v1",
+            "authority": "content_addressed_package_archive",
+            "package": dict(package),
+            "archive_digest_verified": True,
+            "skill_manifest_digest": "sha256:"
+            + hashlib.sha256(manifest_bytes).hexdigest(),
+            "package_manifest_digest": "sha256:"
+            + hashlib.sha256(package_manifest_bytes).hexdigest(),
+            "public_manifest": public_manifest,
+            "entry_symbols": sorted(entry_symbols, key=lambda item: item["name"]),
+            "consumer_test_seam": {
+                "mode": "mock_exported_tool_boundary",
+                "instruction": (
+                    "Consumer tests must fake exported tool replies using these exact "
+                    "input/output schemas. Do not import, copy, or modify provider source."
+                ),
+                "provider_conformance_owner": expected_id,
+            },
+        }
+        interface["interface_digest"] = "sha256:" + hashlib.sha256(
+            json.dumps(
+                interface,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return interface
+
     def _portable_contract_reuse_bundle(
         self, webui: Mapping[str, Any]
     ) -> dict[str, Any] | None:
@@ -4256,12 +4392,19 @@ class LocalSkillFactoryWorker:
                 selected.capability_ref, selected.version
             ):
                 deliveries = catalog.deliveries_for_binding(binding.digest)
-                reusable_bindings.append(
-                    {
-                        "binding_definition": binding.to_dict(),
-                        "deliveries": [item.to_dict() for item in deliveries],
-                    }
-                )
+                delivery_values = [item.to_dict() for item in deliveries]
+                reusable_binding: dict[str, Any] = {
+                    "binding_definition": binding.to_dict(),
+                    "deliveries": delivery_values,
+                }
+                delivery_interfaces = [
+                    interface
+                    for item in delivery_values
+                    if (interface := self._shared_delivery_interface(item)) is not None
+                ]
+                if delivery_interfaces:
+                    reusable_binding["delivery_interfaces"] = delivery_interfaces
+                reusable_bindings.append(reusable_binding)
             requirements.append(
                 {
                     "requirement_id": str(requirement["id"]),
@@ -8253,9 +8396,13 @@ conform to its exact schemas, errors and semantics so compilation reproduces
 its digest. When `reusable_bindings[].deliveries` contains the shared component
 selected by the Project, call that component's exported tools from the accepted
 scenario and do not create, copy or edit a second provider implementation. Keep
-application-specific presentation adapters outside that semantic mapping. Do
-not overwrite the catalog, silently redefine the identity, or bump a major
-version that no longer satisfies the accepted semantic Application.
+application-specific presentation adapters outside that semantic mapping.
+`delivery_interfaces` is a SHA-256-verified read-only projection of the selected
+package's public manifest, exact tool schemas and exported entry signatures. Use
+its `consumer_test_seam` for hermetic consumer tests; do not request or copy the
+provider implementation. Do not overwrite the catalog, silently redefine the
+identity, or bump a major version that no longer satisfies the accepted semantic
+Application.
 """
             if portable_contract_reuse_present
             else ""
