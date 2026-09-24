@@ -192,6 +192,58 @@ def test_source_recovery_plan_reports_dev_ahead_without_requiring_review(tmp_pat
     assert plan["requires_review"] is False
     assert plan["components"][0]["classification"] == "dev_ahead"
     assert plan["components"][0]["recommended_action"] == "use_existing_dev_source"
+    assert plan["components"][0]["admissible_decisions"] == [
+        "keep_dev",
+        "reset_to_locked",
+    ]
+
+
+def test_invalid_workspace_materialization_does_not_block_valid_dev_ahead() -> None:
+    classification = BuilderSourceRecoveryService._classification(
+        package_available=True,
+        workspace={"present": True, "valid": False},
+        dev={"present": True, "valid": True, "matches_locked_package": False},
+    )
+
+    assert classification == (
+        "dev_ahead_workspace_invalid",
+        "use_existing_dev_source",
+        True,
+    )
+    assert BuilderSourceRecoveryService._admissible_decisions(
+        classification[0],
+        editable=True,
+        workspace_present=True,
+        dev_present=True,
+    ) == ["keep_dev", "reset_to_locked"]
+
+
+def test_reviewed_recovery_can_snapshot_and_reset_misrouted_dev_source(
+    tmp_path: Path,
+) -> None:
+    service, _, _, scenario_source, _ = _fixture(tmp_path)
+    dev_scenario = service.dev_scenarios_root / "demo_scene"
+    shutil.copytree(scenario_source, dev_scenario)
+    (dev_scenario / "webui.json").write_text(
+        '{"title":"misrouted application"}\n', encoding="utf-8"
+    )
+    (service.dev_projects_root / "demo_project").mkdir(parents=True)
+    plan = service.plan(kind="scenario", artifact_id="demo_scene")
+
+    receipt = service.apply(
+        kind="scenario",
+        artifact_id="demo_scene",
+        expected_plan_digest=plan["plan_digest"],
+        decisions={"scenario:demo_scene": "reset_to_locked"},
+        actor="user:recovery",
+    )
+
+    assert receipt["status"] == "applied_to_dev"
+    assert receipt["decisions"]["scenario:demo_scene"] == "reset_to_locked"
+    assert receipt["evidence_refs"][0]["source"] == "dev"
+    assert json.loads((dev_scenario / "webui.json").read_text(encoding="utf-8")) == (
+        json.loads((scenario_source / "webui.json").read_text(encoding="utf-8"))
+    )
 
 
 def test_workspace_materialization_fails_closed_on_locked_workspace_drift(tmp_path: Path) -> None:
@@ -249,6 +301,8 @@ def test_reviewed_recovery_preserves_evidence_materializes_owned_source_and_plan
         "skill:demo_skill": "read_only",
     }
     assert len(receipt["evidence_refs"]) == 1
+    assert receipt["change_route"] == "automation_direct"
+    assert receipt["workflow_target_ref"] == "scenario:demo_scene"
     assert receipt["evidence_refs"][0]["source"] == "workspace"
     assert dev_scenario.joinpath("webui.json").read_text(encoding="utf-8") == (
         '{"title":"reviewed workspace edit"}\n'
@@ -259,7 +313,7 @@ def test_reviewed_recovery_preserves_evidence_materializes_owned_source_and_plan
     assert project["components"]["dependencies"][0]["ref"] == "skill:demo_skill"
     assert not (service.dev_skills_root / "demo_skill").exists()
     assert (service.workspace_root / ".adaos" / "workspace.lock.json").read_bytes() == lock_before
-    assert (service.dev_projects_root / "demo_project" / "prompt_state.json").is_file()
+    assert (service.dev_scenarios_root / "demo_scene" / "prompt_state.json").is_file()
 
     repeated = service.apply(
         kind="project",

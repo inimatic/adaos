@@ -180,7 +180,13 @@ class BuilderSourceRecoveryService:
         dev_base = dev.get("matches_locked_package") is True
 
         if workspace_present and not workspace_valid:
-            return "workspace_source_invalid", "review_workspace_source", True
+            if dev_present and dev_valid:
+                return (
+                    "dev_ahead_workspace_invalid",
+                    "use_existing_dev_source",
+                    True,
+                )
+            return "workspace_source_invalid", "reset_to_locked", True
         if dev_present and not dev_valid:
             return "dev_source_invalid", "review_dev_source", True
         if not workspace_present and not dev_present:
@@ -213,12 +219,21 @@ class BuilderSourceRecoveryService:
     ) -> list[str]:
         if not editable:
             return ["read_only"]
-        if classification in {"package_missing", "workspace_source_invalid", "dev_source_invalid"}:
+        if classification in {"package_missing", "dev_source_invalid"}:
             return []
+        if classification == "workspace_source_invalid":
+            return ["reset_to_locked"]
         if classification in {"unmaterialized", "needs_dev_materialization"}:
             return ["reset_to_locked"]
-        if classification in {"workspace_missing", "dev_ahead_workspace_missing", "dev_ahead"}:
+        if classification in {"workspace_missing", "dev_ahead_workspace_missing"}:
             return ["keep_dev"]
+        if classification in {"dev_ahead", "dev_ahead_workspace_invalid"}:
+            # The usual path preserves DEV work. An explicit reviewed reset is
+            # nevertheless required for recovery from a misrouted change. The
+            # apply path snapshots the ahead tree as immutable evidence before
+            # atomically switching to the locked package, so this remains
+            # recoverable and cannot silently discard source.
+            return ["keep_dev", "reset_to_locked"]
         if classification == "clean":
             return ["keep_dev"] if dev_present else ["reset_to_locked"]
         if classification == "converged_unpublished":
@@ -383,7 +398,6 @@ class BuilderSourceRecoveryService:
 
         blocked_classes = {
             "package_missing",
-            "workspace_source_invalid",
             "dev_source_invalid",
             "three_way_conflict",
         }
@@ -737,6 +751,7 @@ class BuilderSourceRecoveryService:
             created_project_root: Path | None = None
             created_project_manifest: Path | None = None
             project_manifest: dict[str, Any] | None = None
+            current_project: dict[str, Any] | None = None
             project_root = Path(self.dev_projects_root).expanduser().resolve() / owner_project_id
             project_manifest_path = project_root / "project.yaml"
             try:
@@ -774,6 +789,7 @@ class BuilderSourceRecoveryService:
                         release_plan,
                         actor=actor_token,
                     )
+                    current_project = project_manifest
 
                 for component in plan.get("components") or []:
                     if not isinstance(component, Mapping):
@@ -909,6 +925,36 @@ class BuilderSourceRecoveryService:
                         start=1,
                     )
                 ]
+                workflow_target_ref = ""
+                if current_project is not None:
+                    owned_components = [
+                        dict(item)
+                        for item in current_project["components"]["owned"]
+                        if isinstance(item, Mapping)
+                    ]
+                    primary_component = next(
+                        (
+                            item
+                            for item in owned_components
+                            if str(item.get("role") or "") == "primary"
+                        ),
+                        owned_components[0] if owned_components else None,
+                    )
+                    workflow_target_ref = str(
+                        (primary_component or {}).get("ref") or ""
+                    ).strip()
+                workflow_kind, separator, workflow_object_id = (
+                    workflow_target_ref.partition(":")
+                )
+                if (
+                    separator != ":"
+                    or workflow_kind not in {"scenario", "skill"}
+                    or not workflow_object_id
+                ):
+                    raise ValueError(
+                        "recovered Project has no usable primary workflow component"
+                    )
+
                 workflow = BuilderWorkflowService(
                     dev_skills_root=self.dev_skills_root,
                     dev_scenarios_root=self.dev_scenarios_root,
@@ -917,8 +963,8 @@ class BuilderSourceRecoveryService:
                     state_dir=self.state_dir,
                     require_active_builder_package=False,
                 ).transition(
-                    "project",
-                    owner_project_id,
+                    workflow_kind,
+                    workflow_object_id,
                     "plan_change_set",
                     actor=actor_token,
                     metadata={
@@ -927,6 +973,11 @@ class BuilderSourceRecoveryService:
                             "Validate and publish development source recovered from "
                             f"WorkspaceLock using plan {expected}."
                         ),
+                        # Recovery starts from an immutable installed package,
+                        # not from a newly authored executable Prototype. Mark
+                        # that authority explicitly so Automation admission does
+                        # not invent a missing Prototype revision.
+                        "route": "automation_direct",
                         "issues": issue_rows,
                         "parallel": True,
                         "source_message_ids": [],
@@ -965,8 +1016,12 @@ class BuilderSourceRecoveryService:
                         ),
                     },
                     "change_id": change_id,
+                    "workflow_target_ref": workflow_target_ref,
                     "change_status": (
                         workflow.get("workflow", {}).get("change", {}).get("status")
+                    ),
+                    "change_route": (
+                        workflow.get("workflow", {}).get("change", {}).get("route")
                     ),
                     "status": "applied_to_dev",
                     "next_required": [
