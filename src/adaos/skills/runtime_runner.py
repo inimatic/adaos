@@ -8,6 +8,7 @@ import importlib.util
 import os
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -17,6 +18,7 @@ from adaos.services.logging import configure_skill_module_logging
 _SKILL_SOURCE_SNAPSHOTS: dict[str, int] = {}
 _MODULE_LOAD_LOCK = threading.RLock()
 _MODULE_LOAD_COMPLETE = "__adaos_runtime_load_complete__"
+_MODULE_LOAD_SLOW_SECONDS = 0.25
 
 
 @contextmanager
@@ -76,7 +78,10 @@ def execute_tool(
     # first calls must therefore not observe that half-initialized module.
     # Keep execution outside this lock; only source snapshotting and import are
     # serialized.
+    lock_started = time.perf_counter()
     with _MODULE_LOAD_LOCK:
+        lock_wait_seconds = time.perf_counter() - lock_started
+        load_started = time.perf_counter()
         # Skill handlers commonly import sibling packages by their short name
         # (for example ``from research.manager import ...``). Keep the active
         # skill first and evict a same-named package left by another skill before
@@ -90,6 +95,17 @@ def execute_tool(
         _bind_owned_namespace_packages(skill_path)
         module_name = module or "handlers.main"
         mod = _load_skill_module(skill_path, module_name)
+        load_seconds = time.perf_counter() - load_started
+    if lock_wait_seconds >= _MODULE_LOAD_SLOW_SECONDS or load_seconds >= _MODULE_LOAD_SLOW_SECONDS:
+        import logging
+
+        logging.getLogger("adaos.skill.runtime_runner").warning(
+            "skill handler resolution slow skill=%s module=%s lock_wait_ms=%.1f load_ms=%.1f",
+            skill_path.name,
+            module_name,
+            lock_wait_seconds * 1000.0,
+            load_seconds * 1000.0,
+        )
     func = getattr(mod, attr)
     if not callable(func):
         raise TypeError(f"attribute '{attr}' from module '{module_name}' is not callable")
@@ -102,14 +118,32 @@ def execute_tool(
         io_meta = None
 
     if io_meta is not None and isinstance(meta, Mapping):
-        with io_meta(meta):
+        def _invoke() -> Any:
+            with io_meta(meta):
+                if _should_expand_keywords(func, mapping):
+                    return func(**_keyword_payload(func, mapping))
+                return func(mapping)
+    else:
+        def _invoke() -> Any:
             if _should_expand_keywords(func, mapping):
                 return func(**_keyword_payload(func, mapping))
             return func(mapping)
 
-    if _should_expand_keywords(func, mapping):
-        return func(**_keyword_payload(func, mapping))
-    return func(mapping)
+    invoke_started = time.perf_counter()
+    try:
+        return _invoke()
+    finally:
+        invoke_seconds = time.perf_counter() - invoke_started
+        if invoke_seconds >= _MODULE_LOAD_SLOW_SECONDS:
+            import logging
+
+            logging.getLogger("adaos.skill.runtime_runner").warning(
+                "skill handler execution slow skill=%s module=%s attr=%s invoke_ms=%.1f",
+                skill_path.name,
+                module_name,
+                attr,
+                invoke_seconds * 1000.0,
+            )
 
 
 def _keyword_payload(func, payload: Mapping[str, Any]) -> dict[str, Any]:

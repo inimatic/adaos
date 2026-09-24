@@ -215,6 +215,27 @@ owner quarantine.
   useful for stress tests, but can turn legitimate first-sync/recovery updates
   into a reset loop.
 
+### Thread-affine Yjs diagnostics
+
+Runtime diagnostics must never borrow another thread's live Python frames or
+task tracebacks. A frame can retain a `y_py.YDoc`/`YMap`; releasing that frame
+later from the diagnostic worker violates the native object's thread affinity
+and surfaces as an apparently unrelated `YDoc ... dropped on another thread`
+exception.
+
+The bootstrap status watchdog, boot hang watcher, loop-lag sampler, and NATS
+transport snapshot therefore cross thread boundaries with copied scalar task
+state and faulthandler-rendered stack text only. Calls to
+`sys._current_frames()`, `Task.get_stack()`, `Task.exception()`, and inspection
+of `frame.f_locals` are forbidden in those paths. An AST regression test keeps
+the bootstrap modules on that contract.
+
+Local Windows verification on 2026-09-24 exercised active `desktop`,
+`desktop-dev`, and `desktop-dev-dev` Yjs rooms, room eviction/snapshot writes,
+status reporting, and repeated Drive Application calls for more than the
+previous recurrence window. No new thread-affinity exception was emitted; the
+remaining matches in retained logs predate this fix.
+
 The browser must treat `inbound_yws_update_payload_blocked` as a hard local
 document reset signal. A normal provider reconnect can resend the same poisoned
 in-memory `Y.Doc`; the safe first implementation is a throttled page reload

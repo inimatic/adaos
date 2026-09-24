@@ -598,27 +598,18 @@ class BootstrapBootCoordinator:
                                 tasks.sort(key=lambda t: (0 if t is asyncio.current_task() else 1, t.get_name()))
                                 lines: list[str] = []
                                 for t in tasks[:dump_top]:
-                                    frames = None
-                                    top = None
                                     try:
-                                        frames = t.get_stack(limit=1)
-                                        top = frames[-1] if frames else None
-                                        loc = None
-                                        if top is not None:
-                                            try:
-                                                loc = f"{top.f_code.co_filename}:{top.f_lineno}"
-                                            except Exception:
-                                                loc = None
-                                        lines.append(f"- task={t.get_name()} done={t.done()} cancelled={t.cancelled()} at={loc}")
+                                        # Keep the in-loop diagnostic on plain
+                                        # task metadata. Live task frames can
+                                        # retain y_py locals past their owner
+                                        # lifetime and are not needed because
+                                        # the external watchdog captures the
+                                        # loop stack through faulthandler.
+                                        lines.append(
+                                            f"- task={t.get_name()} done={t.done()} cancelled={t.cancelled()}"
+                                        )
                                     except Exception:
                                         continue
-                                    finally:
-                                        # Do not keep frame objects in the lag
-                                        # monitor coroutine. Frames can retain
-                                        # y_py locals and later release them from
-                                        # an unrelated thread during GC.
-                                        del top
-                                        del frames
                                 del tasks
                                 try:
                                     backlog_fn = getattr(core_bus, "backlog_snapshot", None)
@@ -700,20 +691,15 @@ class BootstrapBootCoordinator:
         except Exception:
             pass
 
-        # Optional: hang watchdog (thread-based) to capture the main thread stack during prolonged
-        # event loop stalls. This catches cases where asyncio tasks show "await" positions only.
+        # Optional: hang watchdog (thread-based) to capture a plain-text main
+        # thread stack during prolonged event-loop stalls.
         try:
-            # Keep thread-based frame capture behind an explicit unsafe opt-in.
             if operations.loop_hang_watchdog_enabled_from_env():
                 try:
                     import threading as _threading
-                    import sys as _sys
-                    import traceback as _traceback
                 except Exception:
                     _threading = None  # type: ignore[assignment]
-                    _sys = None  # type: ignore[assignment]
-                    _traceback = None  # type: ignore[assignment]
-                if _threading and _sys and _traceback:
+                if _threading:
                     try:
                         hang_ms = float(
                             os.getenv("ADAOS_LOOP_HANG_MS")
@@ -762,26 +748,6 @@ class BootstrapBootCoordinator:
                             return False
                         return False
 
-                    def _safe_thread_stack(frame: Any, *, limit: int) -> tuple[str | None, str | None]:
-                        try:
-                            frames: list[str] = []
-                            cur = frame
-                            remaining = max(1, int(limit))
-                            while cur is not None and remaining > 0:
-                                code = getattr(cur, "f_code", None)
-                                filename = str(getattr(code, "co_filename", "") or "")
-                                func = str(getattr(code, "co_name", "") or "")
-                                lineno = int(getattr(cur, "f_lineno", 0) or 0)
-                                norm = filename.replace("\\", "/")
-                                if "y_py" in norm or "site-packages/y_py" in norm:
-                                    return None, "y_py_frame"
-                                frames.append(f'  File "{filename}", line {lineno}, in {func}')
-                                cur = getattr(cur, "f_back", None)
-                                remaining -= 1
-                            return "\n".join(reversed(frames)), None
-                        except Exception as exc:
-                            return None, f"{type(exc).__name__}: {exc}"
-
                     def _watch() -> None:
                         last_dump = 0.0
                         while True:
@@ -794,21 +760,13 @@ class BootstrapBootCoordinator:
                                 continue
                             last_dump = now
                             try:
-                                fr = _sys._current_frames().get(main_tid)  # type: ignore[attr-defined]
-                                if fr is None:
+                                from adaos.services.runtime_event_loop_watchdog import thread_stack_text
+
+                                st = thread_stack_text(main_tid, limit=stack_limit)
+                                if not st:
                                     print(f"[diag] event loop hang {dt_ms:.0f}ms (no frame)")
                                     diag_log.warning("event loop hang dt_ms=%.0f frame=none", dt_ms)
                                     continue
-                                st, stack_error = _safe_thread_stack(fr, limit=stack_limit)
-                                if stack_error:
-                                    print(f"[diag] event loop hang {dt_ms:.0f}ms stack unavailable: {stack_error}")
-                                    diag_log.warning(
-                                        "event loop hang dt_ms=%.0f stack_unavailable=%s",
-                                        dt_ms,
-                                        stack_error,
-                                    )
-                                    continue
-                                st = st or ""
                                 if _is_idle_event_loop_wait(st):
                                     diag_log.debug("event loop hang suppressed idle wait dt_ms=%.0f", dt_ms)
                                     continue

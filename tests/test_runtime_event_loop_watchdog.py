@@ -89,6 +89,21 @@ def test_stack_sampling_parses_faulthandler_without_live_frame_access(monkeypatc
     ]
 
 
+def test_thread_stack_text_formats_plain_parsed_frames(monkeypatch) -> None:
+    monkeypatch.setattr(
+        watchdog_module,
+        "_stack_frames",
+        lambda _thread_id, *, limit: [
+            {"filename": "owner.py", "lineno": 17, "function": "mutate"},
+            {"filename": "loop.py", "lineno": 29, "function": "run"},
+        ][:limit],
+    )
+
+    assert watchdog_module.thread_stack_text(123, limit=1) == (
+        '  File "owner.py", line 17, in mutate'
+    )
+
+
 def test_watchdog_acks_responsive_loop_without_stall(monkeypatch) -> None:
     probe_recorded = threading.Event()
     probes: list[dict] = []

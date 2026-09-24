@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -150,25 +149,6 @@ class BootstrapStatusWatchdogService:
                     except Exception:
                         return False
 
-                def _safe_thread_stack(frame: Any, *, limit: int) -> tuple[str | None, str | None]:
-                    try:
-                        frames: list[str] = []
-                        current = frame
-                        remaining = max(1, int(limit))
-                        while current is not None and remaining > 0:
-                            filename = str(getattr(getattr(current, "f_code", None), "co_filename", "") or "")
-                            func = str(getattr(getattr(current, "f_code", None), "co_name", "") or "")
-                            lineno = int(getattr(current, "f_lineno", 0) or 0)
-                            normalized = filename.replace("\\", "/")
-                            if "y_py" in normalized or "site-packages/y_py" in normalized:
-                                return None, "y_py_frame"
-                            frames.append(f'  File "{filename}", line {lineno}, in {func}')
-                            current = getattr(current, "f_back", None)
-                            remaining -= 1
-                        return "\n".join(reversed(frames)), None
-                    except Exception as exc:
-                        return None, f"{type(exc).__name__}: {exc}"
-
                 def _run_report() -> Any:
                     try:
                         return self._report_control(self.config)
@@ -188,24 +168,16 @@ class BootstrapStatusWatchdogService:
                             continue
                         done_box["dumped"] = True
                         try:
-                            frame = sys._current_frames().get(main_tid)  # type: ignore[attr-defined]
-                            if frame is None:
+                            from adaos.services.runtime_event_loop_watchdog import thread_stack_text
+
+                            stack = thread_stack_text(main_tid, limit=40)
+                            if not stack:
                                 self._log.warning(
                                     "control lifecycle await resume delayed lag_s=%.3f main_frame=missing trigger=%s",
                                     lag_s,
                                     trigger,
                                 )
                                 return
-                            stack, stack_error = _safe_thread_stack(frame, limit=40)
-                            if stack_error:
-                                self._log.warning(
-                                    "control lifecycle await resume delayed lag_s=%.3f trigger=%s stack_unavailable=%s",
-                                    lag_s,
-                                    trigger,
-                                    stack_error,
-                                )
-                                return
-                            stack = stack or ""
                             if _is_idle_event_loop_stack(stack):
                                 self._log.debug(
                                     "control lifecycle await resume delayed but main loop idle lag_s=%.3f trigger=%s",

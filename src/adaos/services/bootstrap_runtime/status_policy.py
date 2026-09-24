@@ -116,12 +116,9 @@ def _env_truthy(value: Any, *, default: bool = False) -> bool:
 
 
 def _loop_hang_watchdog_enabled_from_env() -> bool:
-    if not _env_truthy(os.getenv("ADAOS_LOOP_HANG_WATCHDOG"), default=False):
-        return False
-    # The watchdog samples another thread's frame chain via sys._current_frames().
-    # Frame references can hold y_py YDoc/YMap locals and drop them on the
-    # watchdog thread, which trips PyO3's thread-affinity guard on Windows.
-    return _env_truthy(os.getenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE"), default=False)
+    # Stack capture is faulthandler-based and crosses the thread boundary as
+    # plain text. It is therefore safe for thread-affine y_py objects.
+    return _env_truthy(os.getenv("ADAOS_LOOP_HANG_WATCHDOG"), default=False)
 
 
 def _hub_channel_console_trace_enabled() -> bool:

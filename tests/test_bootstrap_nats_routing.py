@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import base64
+import inspect
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,10 +12,13 @@ import pytest
 
 from adaos.services import bootstrap as bootstrap_mod
 from adaos.services.bootstrap_runtime import HubRouteProxyPolicy, NatsBridgePolicy
+from adaos.services.bootstrap_runtime import boot_sequence as _boot_sequence
 from adaos.services.bootstrap_runtime import hub_route_proxy as _hub_route_proxy
 from adaos.services.bootstrap_runtime import nats_bridge as _nats_bridge
+from adaos.services.bootstrap_runtime import nats_transport_runtime as _nats_transport_runtime
 from adaos.services.bootstrap_runtime import route_tunnel_runtime as _route_tunnel_runtime
 from adaos.services.bootstrap_runtime import status_policy as _status_policy
+from adaos.services.bootstrap_runtime import status_watchdog as _status_watchdog
 from adaos.services.bootstrap_runtime import transport_cleanup as _transport_cleanup
 from adaos.services.bootstrap_runtime.nats_transport_runtime import _sidecar_tail_summary
 from adaos.services.system_model import service as system_model_service
@@ -66,15 +71,35 @@ def test_nats_url_does_not_need_public_ws_refresh_for_local_or_ws_url() -> None:
     assert _nats_bridge._nats_url_needs_public_ws_refresh("wss://nats.inimatic.com/nats") is False
 
 
-def test_loop_hang_watchdog_requires_explicit_unsafe_opt_in(monkeypatch) -> None:
+def test_loop_hang_watchdog_uses_single_explicit_opt_in(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_LOOP_HANG_WATCHDOG", "1")
     monkeypatch.delenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE", raising=False)
 
-    assert _status_policy._loop_hang_watchdog_enabled_from_env() is False
+    assert _status_policy._loop_hang_watchdog_enabled_from_env() is True
 
+    monkeypatch.setenv("ADAOS_LOOP_HANG_WATCHDOG", "0")
     monkeypatch.setenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE", "1")
 
-    assert _status_policy._loop_hang_watchdog_enabled_from_env() is True
+    assert _status_policy._loop_hang_watchdog_enabled_from_env() is False
+
+
+def test_bootstrap_diagnostics_do_not_borrow_live_thread_frames() -> None:
+    forbidden_calls: list[str] = []
+    for module in (
+        _boot_sequence,
+        _nats_transport_runtime,
+        _status_watchdog,
+    ):
+        tree = ast.parse(inspect.getsource(module))
+        forbidden_calls.extend(
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"_current_frames", "get_stack"}
+        )
+
+    assert forbidden_calls == []
 
 
 def test_realtime_sidecar_fallback_candidates_disable_tcp_fallback_by_default(monkeypatch) -> None:

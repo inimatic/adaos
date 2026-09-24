@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import hashlib
 import json as _json
 import logging
 import os
-import tempfile
 import time
 import traceback
 import uuid
@@ -20,19 +18,14 @@ import nats as _nats
 from adaos.domain import Event
 from adaos.services.bootstrap_runtime.hub_route_proxy import (
     _dev_api_serve_core_update_sync_disabled,
-    _dev_without_supervisor,
-    _hub_route_node_status_supervisor_runtime,
 )
 from adaos.services.bootstrap_runtime.nats_credentials import NatsCredentialService
 from adaos.services.bootstrap_runtime.route_tunnel_runtime import NatsRouteTunnelRuntime
 from adaos.services.bootstrap_runtime.status_policy import (
-    _bounded_interval_seconds,
     _env_truthy,
     _hub_channel_console_allow_rl,
-    _hub_channel_console_trace_enabled,
 )
 from adaos.services.bootstrap_runtime.transport_cleanup import (
-    _close_route_tunnels_bounded,
     _current_async_task_is_cancelling,
     _run_bounded_async_cleanup,
 )
@@ -71,15 +64,10 @@ from adaos.services.reliability import (
     mark_root_control_down,
     mark_root_control_up,
     mark_route_degraded,
-    mark_route_ready,
     note_root_control_reconnect,
-    note_route_incident,
     observe_hub_root_integration_outbox,
     observe_hub_root_protocol_publish,
     observe_hub_root_protocol_subscription,
-    observe_hub_root_route_flow,
-    observe_hub_root_route_runtime,
-    observe_route_e2e,
     record_hub_root_transport_event,
     set_integration_readiness,
 )
@@ -321,6 +309,7 @@ async def _run_nats_root_transport(
 
             async def _nats_bridge() -> None:
                 nonlocal hub_id
+                nonlocal established_ws_tag
                 nonlocal reported_down
                 nonlocal nats_last_ok_at
                 nonlocal nats_attempt_server
@@ -496,7 +485,7 @@ async def _run_nats_root_transport(
                         base = (nurl or "").rstrip("/")
 
                         try:
-                            from urllib.parse import urlparse, urlunparse
+                            from urllib.parse import urlparse
 
                             pr = urlparse(base) if base else None
                             scheme = (pr.scheme if pr else "").lower()
@@ -830,51 +819,19 @@ async def _run_nats_root_transport(
                             snap: dict[str, Any] = {
                                 "done": bool(task.done()),
                                 "cancelled": bool(task.cancelled()),
+                                "name": str(task.get_name() or ""),
                             }
-                            try:
-                                exc = task.exception() if task.done() and not task.cancelled() else None
-                                snap["exc"] = f"{type(exc).__name__}: {exc}" if exc is not None else None
-                            except Exception as exc:
-                                snap["exc"] = f"{type(exc).__name__}: {exc}"
-                            frames: list[str] = []
-
-                            def _frame_has_y_py_locals(frame: Any) -> bool:
-                                locals_values: Any = None
-                                try:
-                                    locals_values = getattr(frame, "f_locals", {}) or {}
-                                    for value in locals_values.values():
-                                        try:
-                                            if type(value).__module__.split(".", 1)[0] == "y_py":
-                                                return True
-                                        finally:
-                                            del value
-                                except Exception:
-                                    return False
-                                finally:
-                                    del locals_values
-                                return False
-
-                            try:
-                                for frame in task.get_stack(limit=max(1, int(stack_limit))):
-                                    try:
-                                        if _frame_has_y_py_locals(frame):
-                                            frames.append("y_py_frame")
-                                            break
-                                        frames.append(
-                                            f"{Path(frame.f_code.co_filename).name}:{int(frame.f_lineno)}:{frame.f_code.co_name}"
-                                        )
-                                    except Exception:
-                                        continue
-                                    finally:
-                                        # Do not let diagnostics retain live
-                                        # frame objects. Frames can keep
-                                        # y_py YDoc/YMap locals alive and
-                                        # later drop them on a different
-                                        # thread during GC on Windows.
-                                        del frame
-                            except Exception as exc:
-                                frames = [f"{type(exc).__name__}: {exc}"]
-                            snap["stack"] = frames
+                            # Do not call Task.get_stack() or Task.exception()
+                            # from diagnostics. Both APIs expose live objects
+                            # owned by the task's event-loop thread. A status
+                            # snapshot may run on a worker and retain a frame or
+                            # traceback containing thread-affine y_py values.
+                            # Task state and its copied name are sufficient for
+                            # the transport liveness snapshot; event-loop stack
+                            # evidence is captured separately through the
+                            # faulthandler-based watchdog.
+                            snap["exc"] = None
+                            snap["stack"] = []
                             return snap
 
                         def _write_nats_ws_diag_file(

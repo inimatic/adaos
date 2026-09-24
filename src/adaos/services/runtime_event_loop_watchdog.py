@@ -69,6 +69,21 @@ def _stack_frames(thread_id: int, *, limit: int = 40) -> list[dict[str, Any]]:
     return capped
 
 
+def thread_stack_text(thread_id: int, *, limit: int = 40) -> str:
+    """Return a traceback-style stack without borrowing another thread's frames.
+
+    ``sys._current_frames()`` hands live frame objects to the inspecting thread.
+    Those frames can retain thread-affine native values such as ``y_py.YDoc``
+    and make their final decref happen on the inspector. The faulthandler-based
+    sampler used here crosses the thread boundary as plain text only.
+    """
+
+    return "\n".join(
+        f'  File "{frame["filename"]}", line {frame["lineno"]}, in {frame["function"]}'
+        for frame in _stack_frames(thread_id, limit=limit)
+    )
+
+
 @dataclass(frozen=True)
 class RuntimeEventLoopWatchdogConfig:
     interval_sec: float = 0.5
@@ -307,4 +322,5 @@ class RuntimeEventLoopWatchdog:
 __all__ = [
     "RuntimeEventLoopWatchdog",
     "RuntimeEventLoopWatchdogConfig",
+    "thread_stack_text",
 ]

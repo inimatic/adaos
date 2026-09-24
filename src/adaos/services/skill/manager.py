@@ -3395,7 +3395,18 @@ class SkillManager:
         slot: str | None = None,
         bypass_yjs_guard: bool = False,
     ) -> Any:
+        run_started = time.perf_counter()
+        phase_started = run_started
+        run_timings: dict[str, float] = {}
+
+        def _mark_phase(name: str) -> None:
+            nonlocal phase_started
+            now = time.perf_counter()
+            run_timings[name] = (now - phase_started) * 1000.0
+            phase_started = now
+
         status = self.runtime_status(name)
+        _mark_phase("runtime_status_ms")
         env = self._runtime_env(name)
         version = status.get("version")
         active_slot = status.get("active_slot")
@@ -3434,7 +3445,9 @@ class SkillManager:
             raise RuntimeError(f"skill '{name}' is deactivated: {reason}")
 
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _mark_phase("manifest_ms")
         self._load_runtime_data_projections(data, skill_name=name)
+        _mark_phase("projections_ms")
         tools = data.get("tools") or {}
         target_tool = _resolve_runtime_tool_name(tool, data.get("default_tool"), tools)
         if not target_tool:
@@ -3513,11 +3526,19 @@ class SkillManager:
             }
             return denied
         ctx.secrets = SecretsService(SkillSecretsBackend(slot_data_root / "files" / "secrets.json"), ctx.caps)
+        _mark_phase("prepare_ms")
+        call_timings: dict[str, float] = {}
+        execution_submitted_at = 0.0
 
         def _call_tool() -> Any:
             from adaos.services.applications.runtime_selection import application_execution
 
+            call_timings["worker_start_ms"] = max(
+                0.0,
+                (time.perf_counter() - execution_submitted_at) * 1000.0,
+            )
             with use_ctx(ctx), application_execution(ctx, name):
+                step_started = time.perf_counter()
                 result = execute_tool(
                     skill_dir,
                     module=module,
@@ -3525,8 +3546,13 @@ class SkillManager:
                     payload=payload,
                     extra_paths=extra_paths,
                 )
+                call_timings["execute_tool_ms"] = (time.perf_counter() - step_started) * 1000.0
+                step_started = time.perf_counter()
                 result = _resolve_sync_tool_result(result)
+                call_timings["resolve_result_ms"] = (time.perf_counter() - step_started) * 1000.0
+                step_started = time.perf_counter()
                 self._persist_skill_env(env, slot)
+                call_timings["persist_env_ms"] = (time.perf_counter() - step_started) * 1000.0
                 return result
 
         try:
@@ -3534,6 +3560,7 @@ class SkillManager:
                 raise RuntimeError(f"failed to establish context for skill '{name}'")
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(skill_memory_path)
+            execution_submitted_at = time.perf_counter()
 
             if execution_timeout:
                 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -3556,6 +3583,7 @@ class SkillManager:
             else:
                 result = _call_tool()
         finally:
+            run_timings["execute_ms"] = (time.perf_counter() - phase_started) * 1000.0
             ctx.secrets = prev_secrets
             if previous is None:
                 ctx.skill_ctx.clear()
@@ -3569,6 +3597,27 @@ class SkillManager:
                 os.environ.pop("ADAOS_SKILL_MEMORY_PATH", None)
             else:
                 os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
+
+            total_ms = (time.perf_counter() - run_started) * 1000.0
+            if total_ms >= 250.0:
+                _log.warning(
+                    "skill run_tool slow skill=%s tool=%s total_ms=%.1f "
+                    "runtime_status_ms=%.1f manifest_ms=%.1f projections_ms=%.1f "
+                    "prepare_ms=%.1f execute_ms=%.1f worker_start_ms=%.1f "
+                    "execute_tool_ms=%.1f resolve_result_ms=%.1f persist_env_ms=%.1f",
+                    name,
+                    target_tool,
+                    total_ms,
+                    float(run_timings.get("runtime_status_ms") or 0.0),
+                    float(run_timings.get("manifest_ms") or 0.0),
+                    float(run_timings.get("projections_ms") or 0.0),
+                    float(run_timings.get("prepare_ms") or 0.0),
+                    float(run_timings.get("execute_ms") or 0.0),
+                    float(call_timings.get("worker_start_ms") or 0.0),
+                    float(call_timings.get("execute_tool_ms") or 0.0),
+                    float(call_timings.get("resolve_result_ms") or 0.0),
+                    float(call_timings.get("persist_env_ms") or 0.0),
+                )
 
         return result
 
