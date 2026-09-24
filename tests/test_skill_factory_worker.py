@@ -9463,6 +9463,12 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
         }
         for tool in shared_manifest["tools"]
     ]
+    assert interface["compiler_view"]["exports"]["tools"] == [
+        "reusable_connections",
+        "attach_reusable_connection",
+        "portable_list_messages",
+    ]
+    assert interface["compiler_view"]["data_routes"] == []
     portable_list = next(
         item
         for item in interface["compiler_view"]["tools"]

@@ -4250,6 +4250,94 @@ class LocalSkillFactoryWorker:
 
         return shared_delivery_interface(self.state_dir, delivery)
 
+    @staticmethod
+    def _shared_delivery_compiler_view(
+        interface: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Project only the consumer-facing slice of a verified delivery."""
+
+        public_manifest = interface.get("public_manifest")
+        public_manifest = (
+            public_manifest if isinstance(public_manifest, Mapping) else {}
+        )
+        operation_bindings = [
+            copy.deepcopy(dict(item))
+            for item in interface.get("operation_bindings") or []
+            if isinstance(item, Mapping)
+        ]
+        mapped_tools = {
+            str(item.get("tool") or "").strip()
+            for item in operation_bindings
+            if str(item.get("tool") or "").strip()
+        }
+        # These two provider-owned helpers are deliberately outside capability
+        # operations: they enumerate and explicitly attach an existing Core-owned
+        # connection without exposing credentials to the consumer.
+        connection_helpers = {
+            "reusable_connections",
+            "attach_reusable_connection",
+        }
+        allowed_tools = mapped_tools | connection_helpers
+        raw_tools = [
+            item
+            for item in public_manifest.get("tools") or []
+            if isinstance(item, Mapping)
+        ]
+        if operation_bindings:
+            raw_tools = [
+                item
+                for item in raw_tools
+                if str(item.get("name") or "").strip() in allowed_tools
+            ]
+        tools = [
+            {
+                key: copy.deepcopy(value)
+                for key, value in tool.items()
+                if key != "behavioral_guarantees"
+            }
+            for tool in raw_tools
+        ]
+        exports = copy.deepcopy(public_manifest.get("exports") or {})
+        if operation_bindings and isinstance(exports, dict):
+            exports["tools"] = [
+                str(name)
+                for name in exports.get("tools") or []
+                if str(name).strip() in allowed_tools
+            ]
+        entry_symbols = [
+            copy.deepcopy(dict(item))
+            for item in interface.get("entry_symbols") or []
+            if isinstance(item, Mapping)
+            and (
+                not operation_bindings
+                or str(item.get("name") or "").strip() in allowed_tools
+            )
+        ]
+        return {
+            "package": copy.deepcopy(interface["package"]),
+            "capabilities": copy.deepcopy(
+                public_manifest.get("capabilities") or []
+            ),
+            "exports": exports,
+            "tools": tools,
+            # Provider-specific UI routes are not part of a portable consumer
+            # interface. Preserve them only for legacy deliveries without an
+            # operation mapping.
+            "data_routes": (
+                []
+                if operation_bindings
+                else copy.deepcopy(public_manifest.get("data_routes") or [])
+            ),
+            "provider_identity": copy.deepcopy(
+                interface.get("provider_identity") or {}
+            ),
+            "operation_bindings": operation_bindings,
+            "entry_symbols": entry_symbols,
+            "consumer_test_seam": copy.deepcopy(
+                interface.get("consumer_test_seam") or {}
+            ),
+        }
+
     def _portable_contract_reuse_bundle(
         self, webui: Mapping[str, Any]
     ) -> dict[str, Any] | None:
@@ -4358,43 +4446,9 @@ class LocalSkillFactoryWorker:
                         "skill_manifest_digest": interface[
                             "skill_manifest_digest"
                         ],
-                        "compiler_view": {
-                            "package": copy.deepcopy(interface["package"]),
-                            "capabilities": copy.deepcopy(
-                                interface["public_manifest"].get("capabilities")
-                                or []
-                            ),
-                            "exports": copy.deepcopy(
-                                interface["public_manifest"].get("exports") or {}
-                            ),
-                            "tools": [
-                                {
-                                    key: copy.deepcopy(value)
-                                    for key, value in tool.items()
-                                    if key != "behavioral_guarantees"
-                                }
-                                for tool in (
-                                    interface["public_manifest"].get("tools") or []
-                                )
-                                if isinstance(tool, Mapping)
-                            ],
-                            "data_routes": copy.deepcopy(
-                                interface["public_manifest"].get("data_routes")
-                                or []
-                            ),
-                            "provider_identity": copy.deepcopy(
-                                interface.get("provider_identity") or {}
-                            ),
-                            "operation_bindings": copy.deepcopy(
-                                interface.get("operation_bindings") or []
-                            ),
-                            "entry_symbols": copy.deepcopy(
-                                interface.get("entry_symbols") or []
-                            ),
-                            "consumer_test_seam": copy.deepcopy(
-                                interface.get("consumer_test_seam") or {}
-                            ),
-                        },
+                        "compiler_view": self._shared_delivery_compiler_view(
+                            interface
+                        ),
                     }
                     for item in delivery_values
                     if (interface := self._shared_delivery_interface(item)) is not None
