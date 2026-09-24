@@ -17,6 +17,7 @@ Related documents:
 - [Authority And Degraded Mode](authority-and-degraded-mode.md)
 - [Hub-Root Protocol](hub-root-protocol.md)
 - [AdaOS Realtime Sidecar](adaos-realtime-sidecar.md)
+- [Public Integration Callback Gateway](public-integration-callback-gateway.md)
 
 ## Ownership rule
 
