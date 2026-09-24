@@ -237,6 +237,16 @@ def _write_json(path: Path, payload: Any) -> None:
     )
 
 
+def _write_compact_json(path: Path, payload: Any) -> None:
+    """Write machine-first model input without indentation token overhead."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_json_preserving_style(path: Path, payload: Any, original: str) -> None:
     newline = "\r\n" if "\r\n" in original else "\r" if "\r" in original else "\n"
     indent_match = re.search(r"(?:\r\n|\r|\n)([ \t]+)\"", original)
@@ -4385,7 +4395,7 @@ class LocalSkillFactoryWorker:
     def _portable_contract_reuse_bundle(
         self, webui: Mapping[str, Any]
     ) -> dict[str, Any] | None:
-        """Project installed portable contracts into a bounded authoring input."""
+        """Project installed contracts as registry refs plus compiler-only views."""
 
         from adaos.services.builder.cbs_intent import validate_cbs_intent
         from adaos.services.builder.prototype_stage import prototype_cbs_intent
@@ -4399,6 +4409,13 @@ class LocalSkillFactoryWorker:
             self.state_dir / "capability-binding-state" / "portable"
         )
         requirements: list[dict[str, Any]] = []
+
+        def registry_ref(record_kind: str, digest: str) -> str:
+            return (
+                f"cbs-registry://portable/{record_kind}/sha256/"
+                + str(digest).removeprefix("sha256:")
+            )
+
         for raw_requirement in intent.get("requirements") or []:
             requirement = dict(raw_requirement)
             matches = catalog.matching_capabilities(
@@ -4408,18 +4425,101 @@ class LocalSkillFactoryWorker:
             if not matches:
                 continue
             selected = matches[0]
+            selected_value = selected.to_dict()
             reusable_bindings = []
             for binding in catalog.matching_bindings(
                 selected.capability_ref, selected.version
             ):
                 deliveries = catalog.deliveries_for_binding(binding.digest)
                 delivery_values = [item.to_dict() for item in deliveries]
+                binding_value = binding.to_dict()
                 reusable_binding: dict[str, Any] = {
-                    "binding_definition": binding.to_dict(),
-                    "deliveries": delivery_values,
+                    "binding": {
+                        "registry_ref": registry_ref(
+                            "binding-definitions", binding.digest
+                        ),
+                        "digest": binding.digest,
+                        "identity": {
+                            "binding_definition_ref": binding.binding_definition_ref,
+                            "version": binding_value["version"],
+                        },
+                        "compiler_view": {
+                            key: copy.deepcopy(binding_value.get(key))
+                            for key in (
+                                "capability_ref",
+                                "capability_version",
+                                "entry_protocol",
+                                "implementation_entrypoint",
+                                "state_support",
+                                "modes",
+                                "environment_constraints",
+                                "authority_requirements",
+                                "conformance_obligations",
+                            )
+                        },
+                    },
+                    "deliveries": [
+                        {
+                            "registry_ref": registry_ref(
+                                "binding-deliveries", item["delivery_digest"]
+                            ),
+                            "digest": item["delivery_digest"],
+                            "compiler_view": {
+                                key: copy.deepcopy(item.get(key))
+                                for key in (
+                                    "binding_definition_ref",
+                                    "binding_definition_digest",
+                                    "logical_entrypoint",
+                                    "package",
+                                    "physical_member",
+                                )
+                            },
+                        }
+                        for item in delivery_values
+                    ],
                 }
                 delivery_interfaces = [
-                    interface
+                    {
+                        "schema": "adaos.builder.shared_delivery_compiler_view.v1",
+                        "registry_ref": (
+                            "package-registry://"
+                            + str(interface["package"]["kind"])
+                            + "/"
+                            + str(interface["package"]["id"])
+                            + "@"
+                            + str(interface["package"]["version"])
+                            + "#"
+                            + str(interface["package"]["digest"])
+                        ),
+                        "interface_digest": interface["interface_digest"],
+                        "archive_digest_verified": True,
+                        "skill_manifest_digest": interface[
+                            "skill_manifest_digest"
+                        ],
+                        "compiler_view": {
+                            "package": copy.deepcopy(interface["package"]),
+                            "capabilities": copy.deepcopy(
+                                interface["public_manifest"].get("capabilities")
+                                or []
+                            ),
+                            "exports": copy.deepcopy(
+                                interface["public_manifest"].get("exports") or {}
+                            ),
+                            "tools": copy.deepcopy(
+                                interface["public_manifest"].get("tools") or []
+                            ),
+                            "data_routes": copy.deepcopy(
+                                interface["public_manifest"].get("data_routes")
+                                or []
+                            ),
+                            "entry_symbols": copy.deepcopy(
+                                interface.get("entry_symbols") or []
+                            ),
+                            "consumer_test_seam": copy.deepcopy(
+                                interface.get("consumer_test_seam") or {}
+                            ),
+                        },
+                    }
                     for item in delivery_values
                     if (interface := self._shared_delivery_interface(item)) is not None
                 ]
@@ -4433,14 +4533,42 @@ class LocalSkillFactoryWorker:
                     "contract_range": str(requirement["contract_range"]),
                     "selected_version": selected.version,
                     "selected_digest": selected.digest,
-                    "contract": selected.to_dict(),
+                    "selected_contract": {
+                        "registry_ref": registry_ref(
+                            "capability-contracts", selected.digest
+                        ),
+                        "digest": selected.digest,
+                        "identity": {
+                            "capability_ref": selected.capability_ref,
+                            "version": selected.version,
+                        },
+                        "compiler_view": {
+                            key: copy.deepcopy(selected_value.get(key))
+                            for key in (
+                                "title",
+                                "operations",
+                                "invariants",
+                                "effects",
+                                "authority_requirements",
+                                "dependencies",
+                                "state_ports",
+                                "conformance_refs",
+                                "compatibility",
+                            )
+                        },
+                    },
                     "reusable_bindings": reusable_bindings,
                 }
             )
         if not requirements:
             return None
         return {
-            "schema": "adaos.builder.portable_contract_reuse.v1",
+            "schema": "adaos.builder.portable_contract_reuse.v2",
+            "authority": {
+                "canonical_content": "registry_only",
+                "model_input": "compiler_view",
+                "registry_refs_are_paths": False,
+            },
             "policy": (
                 "An installed identity is canonical. Generate the exact same "
                 "CapabilityContract digest by mapping conforming adapter tools, or "
@@ -4453,6 +4581,56 @@ class LocalSkillFactoryWorker:
             ),
             "requirements": requirements,
         }
+
+    @staticmethod
+    def _compact_registry_backed_provider_contracts(
+        guide: dict[str, Any], reuse: Mapping[str, Any]
+    ) -> None:
+        """Replace provider-authoring manuals when an installed delivery wins."""
+
+        selected_by_capability = {
+            str(item.get("capability_ref") or "").removeprefix("capability:"): dict(
+                item.get("selected_contract") or {}
+            )
+            for item in reuse.get("requirements") or []
+            if isinstance(item, Mapping)
+            and isinstance(item.get("selected_contract"), Mapping)
+        }
+        contracts = guide.get("contracts")
+        if not isinstance(contracts, dict):
+            return
+        for contract_id, raw_contract in list(contracts.items()):
+            if not isinstance(raw_contract, Mapping):
+                continue
+            semantic_capability = str(
+                raw_contract.get("semantic_capability") or ""
+            ).strip()
+            selected = selected_by_capability.get(semantic_capability)
+            if selected is None:
+                continue
+            contracts[contract_id] = {
+                "schema": "adaos.builder.registry_backed_provider_view.v1",
+                "contract": raw_contract.get("contract"),
+                "semantic_capability": semantic_capability,
+                "provider_id": raw_contract.get("provider_id"),
+                "registry_contract_ref": selected.get("registry_ref"),
+                "registry_contract_digest": selected.get("digest"),
+                "implementation_mode": "reuse_shared_delivery",
+                "project_permission_profile": copy.deepcopy(
+                    raw_contract.get("project_permission_profile") or {}
+                ),
+                "webui_connection": copy.deepcopy(
+                    raw_contract.get("webui_connection") or {}
+                ),
+                "failure_contract": copy.deepcopy(
+                    raw_contract.get("failure_contract") or {}
+                ),
+                "tests": copy.deepcopy(raw_contract.get("tests") or []),
+                "consumer_rule": (
+                    "Use portable_contract_reuse delivery compiler views. Do not "
+                    "author another provider, copy its package, or call its private SDK."
+                ),
+            }
 
     @staticmethod
     def _task_evidence_root(output_dir: Path) -> Path:
@@ -7899,6 +8077,11 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("development_context"), Mapping)
             else {}
         )
+        cbs_compiler_view = (
+            copy.deepcopy(dict(artifacts.get("cbs_compiler_view") or {}))
+            if isinstance(artifacts.get("cbs_compiler_view"), Mapping)
+            else {}
+        )
         root_mcp = _public_root_mcp_profile(
             _root_mcp_profile_from_assignment(
                 assignment,
@@ -8009,6 +8192,13 @@ class LocalSkillFactoryWorker:
                 development_context.get("digest") or ""
             ).strip()
             or None,
+            "cbs_compiler_view": cbs_compiler_view or None,
+            "cbs_compilation_ref": str(
+                artifacts.get("cbs_compilation_ref")
+                or cbs_compiler_view.get("registry_ref")
+                or ""
+            ).strip()
+            or None,
             "contract_execution_checklist": contract_checklist or None,
             "validation_budget": _generated_test_budget(assignment),
             "root_mcp": root_mcp,
@@ -8094,8 +8284,12 @@ class LocalSkillFactoryWorker:
                 )
                 if portable_reuse is not None:
                     implementation_bindings["portable_contract_reuse"] = portable_reuse
+                    self._compact_registry_backed_provider_contracts(
+                        implementation_bindings,
+                        portable_reuse,
+                    )
                     portable_contract_reuse_present = True
-            _write_json(
+            _write_compact_json(
                 input_dir / "implementation-bindings.json",
                 implementation_bindings,
             )
@@ -8462,18 +8656,19 @@ missing contract.
             """## Installed portable contract authority
 
 `implementation-bindings.json` contains `portable_contract_reuse`. Its selected
-contract is installed canonical authority. Make the mapped provider operations
-conform to its exact schemas, errors and semantics so compilation reproduces
-its digest. When `reusable_bindings[].deliveries` contains the shared component
-selected by the Project, call that component's exported tools from the accepted
+contract `registry_ref` is installed canonical authority; it is an identifier,
+not a filesystem path. Use only its `compiler_view` for the exact schemas,
+errors and semantics needed by this task. When
+`reusable_bindings[].deliveries[].compiler_view` selects the shared component
+owned by the Project, call that component's exported tools from the accepted
 scenario and do not create, copy or edit a second provider implementation. Keep
 application-specific presentation adapters outside that semantic mapping.
-`delivery_interfaces` is a SHA-256-verified read-only projection of the selected
-package's public manifest, exact tool schemas and exported entry signatures. Use
-its `consumer_test_seam` for hermetic consumer tests; do not request or copy the
-provider implementation. Do not overwrite the catalog, silently redefine the
-identity, or bump a major version that no longer satisfies the accepted semantic
-Application.
+`delivery_interfaces[].compiler_view` is a SHA-256-verified bounded projection
+of the selected package's public tools and entry signatures. Use its
+`consumer_test_seam` for hermetic consumer tests; do not request the canonical
+record again or copy provider implementation. Do not overwrite the catalog,
+silently redefine the identity, or bump a major version that no longer satisfies
+the accepted semantic Application.
 """
             if portable_contract_reuse_present
             else ""

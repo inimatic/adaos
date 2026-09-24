@@ -9861,6 +9861,17 @@ class BuilderAutomationService:
         if request_mcp.get("enabled") is not False and subnet_id:
             request_mcp.setdefault("subnet_id", subnet_id)
             request_mcp.setdefault("bound_target_id", f"hub:{subnet_id}")
+        canonical_cbs_compilation = (
+            dict(session.get("cbs_compilation"))
+            if isinstance(session.get("cbs_compilation"), Mapping)
+            else None
+        )
+        if canonical_cbs_compilation is not None:
+            from adaos.services.builder.cbs import cbs_compiler_view
+
+            cbs_model_view = cbs_compiler_view(canonical_cbs_compilation)
+        else:
+            cbs_model_view = None
         request = {
             "request_id": request_id,
             "user_subnet_id": subnet_id,
@@ -9902,7 +9913,10 @@ class BuilderAutomationService:
                 "prototype_acceptance": copy.deepcopy(
                     session.get("prototype_acceptance")
                 ),
-                "cbs_compilation": copy.deepcopy(session.get("cbs_compilation")),
+                "cbs_compiler_view": cbs_model_view,
+                "cbs_compilation_ref": (
+                    cbs_model_view.get("registry_ref") if cbs_model_view else None
+                ),
                 "accepted_prototype_identity": self._retained_accepted_prototype_identity(
                     session
                 ),

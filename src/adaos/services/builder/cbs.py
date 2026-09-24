@@ -21,6 +21,7 @@ from .workflow import BuilderWorkflowError
 
 BUILDER_CBS_COMPILATION_SCHEMA = "adaos.builder.cbs_compilation.v1"
 BUILDER_CBS_COMPILER_VERSION = "1.2.0"
+BUILDER_CBS_COMPILER_VIEW_SCHEMA = "adaos.builder.cbs_compiler_view.v1"
 
 
 @lru_cache(maxsize=1)
@@ -55,6 +56,94 @@ def validate_cbs_compilation(value: Mapping[str, Any]) -> dict[str, Any]:
     for item in result["requirements"]:
         ApplicationRequirement.from_mapping(item)
     return result
+
+
+def cbs_compilation_registry_ref(compilation_digest: str) -> str:
+    digest = str(compilation_digest or "").strip().lower()
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
+        raise BuilderWorkflowError("CBS compilation registry reference requires a digest")
+    return (
+        "cbs-registry://applications/compilations/sha256/"
+        + digest.removeprefix("sha256:")
+    )
+
+
+def cbs_compiler_view(compilation: Mapping[str, Any]) -> dict[str, Any]:
+    """Project canonical CBS into a compact, registry-backed model input.
+
+    The full compilation remains authoritative in ApplicationCBSService. The
+    Builder model receives identities, constraints, and digests required for
+    implementation, without another copy of every canonical record envelope.
+    """
+
+    value = validate_cbs_compilation(compilation)
+    requirements = []
+    for raw in value.get("requirements") or []:
+        item = dict(raw)
+        policy_constraints = dict(item.get("policy_constraints") or {})
+        evidence_threshold = dict(item.get("evidence_threshold") or {})
+        requirements.append(
+            {
+                "requirement_ref": item["requirement_ref"],
+                "requirement_digest": item["requirement_digest"],
+                "capability_ref": item["capability_ref"],
+                "contract_range": item["contract_range"],
+                "locality": policy_constraints.get("locality"),
+                "privacy": policy_constraints.get("privacy"),
+                "required_authorities": list(
+                    policy_constraints.get("required_authorities") or []
+                ),
+                "required_claim_kinds": list(
+                    evidence_threshold.get("required_claim_kinds") or []
+                ),
+            }
+        )
+    return {
+        "schema": BUILDER_CBS_COMPILER_VIEW_SCHEMA,
+        "registry_ref": cbs_compilation_registry_ref(value["compilation_digest"]),
+        "application_ref": value["application_ref"],
+        "compiler_version": value["compiler_version"],
+        "compilation_digest": value["compilation_digest"],
+        "semantic_revision_digest": value["semantic_revision_digest"],
+        "environment_target": copy.deepcopy(value["environment_target"]),
+        "requirements": requirements,
+        "simulation_attachments": [
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in (
+                    "resource_type",
+                    "state_space_ref",
+                    "portability_class",
+                    "generation",
+                    "definition_digest",
+                    "records_digest",
+                )
+            }
+            for item in value.get("simulation_attachments") or []
+        ],
+        "automation_obligations": [
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in (
+                    "source_requirement_ref",
+                    "requirement_ref",
+                    "capability_ref",
+                    "statement_digest",
+                    "status",
+                )
+            }
+            for item in value.get("automation_obligations") or []
+        ],
+        "authoring_telemetry": copy.deepcopy(
+            value.get("authoring_telemetry") or {}
+        ),
+        "viability": copy.deepcopy(value["viability"]),
+        "authority": {
+            "canonical_content": "registry_only",
+            "model_input": "compiler_view",
+            "mutation": "denied",
+        },
+    }
 
 
 def _token(value: str, *, fallback: str) -> str:
@@ -270,6 +359,9 @@ def compile_prototype_cbs(
 __all__ = [
     "BUILDER_CBS_COMPILATION_SCHEMA",
     "BUILDER_CBS_COMPILER_VERSION",
+    "BUILDER_CBS_COMPILER_VIEW_SCHEMA",
+    "cbs_compilation_registry_ref",
+    "cbs_compiler_view",
     "compile_prototype_cbs",
     "validate_cbs_compilation",
 ]

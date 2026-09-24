@@ -20,7 +20,7 @@ from adaos.domain.capability_binding_state import (
 )
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.cbs import ApplicationCBSConflict, ApplicationCBSService
-from adaos.services.builder.cbs import compile_prototype_cbs
+from adaos.services.builder.cbs import cbs_compiler_view, compile_prototype_cbs
 from adaos.services.builder.workflow import BuilderWorkflowError
 from adaos.services.capability_binding_state import LocalIdentityStore
 
@@ -143,6 +143,22 @@ def test_compiler_preserves_semantic_identity_and_separates_simulation_state() -
         "automation-obligation:"
     )
     assert first["automation_obligations"][0]["capability_ref"] is None
+
+    model_view = cbs_compiler_view(first)
+    assert model_view["schema"] == "adaos.builder.cbs_compiler_view.v1"
+    assert model_view["registry_ref"].endswith(
+        first["compilation_digest"].removeprefix("sha256:")
+    )
+    assert model_view["authority"] == {
+        "canonical_content": "registry_only",
+        "model_input": "compiler_view",
+        "mutation": "denied",
+    }
+    assert "schema" not in model_view["requirements"][0]
+    assert model_view["requirements"][0]["requirement_digest"] == first[
+        "requirements"
+    ][0]["requirement_digest"]
+    assert len(str(model_view)) < len(str(first))
 
 
 def test_compiler_expands_compact_package_neutral_cbs_intent() -> None:

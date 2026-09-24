@@ -9338,9 +9338,22 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
         "target": {"type": "scenario", "id": project_id},
         "forge": {"sparse_paths": [f"scenarios/{project_id}/"]},
         "realize_request": {
-            "artifacts": {
-                "implementation_brief": "Implement the accepted Gmail application.",
-                "context_packet": {
+                "artifacts": {
+                    "implementation_brief": "Implement the accepted Gmail application.",
+                    "cbs_compiler_view": {
+                        "schema": "adaos.builder.cbs_compiler_view.v1",
+                        "registry_ref": (
+                            "cbs-registry://applications/compilations/sha256/"
+                            + "c" * 64
+                        ),
+                        "requirements": [
+                            {
+                                "capability_ref": "capability:mail.messages.manage",
+                                "contract_range": "^1.0.0",
+                            }
+                        ],
+                    },
+                    "context_packet": {
                     "schema": "adaos.builder.context_packet.v1",
                     "artifacts": {
                         "prototype": {
@@ -9367,28 +9380,71 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
 
     bindings_path = tmp_path / "input/implementation-bindings.json"
     bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+    packet = json.loads((tmp_path / "input/packet.json").read_text(encoding="utf-8"))
+    assert packet["cbs_compilation_ref"].endswith("c" * 64)
+    assert packet["cbs_compiler_view"]["schema"] == (
+        "adaos.builder.cbs_compiler_view.v1"
+    )
+    assert "cbs_compilation" not in packet
     reuse = bindings["portable_contract_reuse"]
+    assert reuse["schema"] == "adaos.builder.portable_contract_reuse.v2"
+    assert reuse["authority"] == {
+        "canonical_content": "registry_only",
+        "model_input": "compiler_view",
+        "registry_refs_are_paths": False,
+    }
     assert reuse["requirements"][0]["selected_digest"] == capability.digest
-    assert reuse["requirements"][0]["contract"] == capability.to_dict()
+    selected = reuse["requirements"][0]["selected_contract"]
+    assert selected["registry_ref"].endswith(
+        capability.digest.removeprefix("sha256:")
+    )
+    assert selected["identity"] == {
+        "capability_ref": capability.capability_ref,
+        "version": capability.version,
+    }
+    assert selected["compiler_view"]["operations"] == capability.to_dict()[
+        "operations"
+    ]
+    assert "contract" not in reuse["requirements"][0]
     reusable = reuse["requirements"][0]["reusable_bindings"]
-    assert reusable[0]["binding_definition"] == binding.to_dict()
-    assert reusable[0]["deliveries"] == [delivery.to_dict()]
+    assert reusable[0]["binding"]["registry_ref"].endswith(
+        binding.digest.removeprefix("sha256:")
+    )
+    assert reusable[0]["binding"]["compiler_view"][
+        "implementation_entrypoint"
+    ] == "mail.messages.manage.google-gmail"
+    assert reusable[0]["deliveries"][0]["registry_ref"].endswith(
+        delivery.digest.removeprefix("sha256:")
+    )
+    assert reusable[0]["deliveries"][0]["compiler_view"]["package"] == (
+        delivery.to_dict()["package"]
+    )
+    assert "binding_definition" not in reusable[0]
     interface = reusable[0]["delivery_interfaces"][0]
     assert interface["archive_digest_verified"] is True
-    assert interface["package"] == delivery.to_dict()["package"]
-    assert interface["public_manifest"]["tools"] == shared_manifest["tools"]
-    assert {item["name"] for item in interface["entry_symbols"]} == {
+    assert interface["registry_ref"].startswith("package-registry://skill/")
+    assert interface["compiler_view"]["package"] == delivery.to_dict()["package"]
+    assert interface["compiler_view"]["tools"] == shared_manifest["tools"]
+    assert {item["name"] for item in interface["compiler_view"]["entry_symbols"]} == {
         "reusable_connections",
         "attach_reusable_connection",
         "portable_list_messages",
     }
-    assert interface["consumer_test_seam"]["mode"] == "mock_exported_tool_boundary"
+    assert interface["compiler_view"]["consumer_test_seam"]["mode"] == (
+        "mock_exported_tool_boundary"
+    )
     assert interface["interface_digest"].startswith("sha256:")
+    gmail_view = bindings["contracts"]["google_gmail"]
+    assert gmail_view["implementation_mode"] == "reuse_shared_delivery"
+    assert gmail_view["registry_contract_ref"] == selected["registry_ref"]
+    assert "skill_manifest" not in gmail_view
+    assert "sdk" not in gmail_view
+    assert len(bindings_path.read_bytes()) < 24_000
     prompt = (tmp_path / "input/task.md").read_text(encoding="utf-8")
     assert "installed canonical authority" in prompt
     assert "application-specific presentation adapters" in prompt
     assert "shared component" in prompt
-    assert "delivery_interfaces" in prompt
+    assert "delivery_interfaces[].compiler_view" in prompt
     assert "SHA-256-verified" in prompt
     from adaos.services.builder.shared_delivery import shared_delivery_effect_checks
 
