@@ -1876,6 +1876,37 @@ async def test_probe_realtime_sidecar_ready_rejects_closed_port() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wait_realtime_sidecar_bound_prefers_control_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probes: list[tuple[str, int]] = []
+
+    async def _control_ready(*, host: str, control_port: int, timeout_s: float) -> bool:
+        probes.append((host, control_port))
+        return True
+
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_probe_realtime_sidecar_control_ready",
+        _control_ready,
+    )
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_find_realtime_listener_pid",
+        lambda _host, _port: (_ for _ in ()).throw(
+            AssertionError("control readiness must avoid the global pid scan")
+        ),
+    )
+
+    assert await realtime_sidecar_mod.wait_realtime_sidecar_bound(
+        host="127.0.0.1",
+        port=7422,
+        timeout_s=0.5,
+    )
+    assert probes == [("127.0.0.1", realtime_sidecar_mod.realtime_sidecar_control_port())]
+
+
+@pytest.mark.asyncio
 async def test_realtime_sidecar_probe_does_not_supersede_active_local_client(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

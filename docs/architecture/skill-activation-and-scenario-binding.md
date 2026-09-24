@@ -314,13 +314,21 @@ Implemented in the current pass:
 15. deferred service-skill startup waits for every client-started desktop room
     to complete its first bootstrap, subject to a bounded headless-node grace
     period
+16. runtime/workspace discovery is location-only for selected runtime skills;
+    manifest parsing is cached for one loader pass and happens only while
+    declarations and activation policy are evaluated
+17. runtime services are excluded from the API process unless their source
+    manifest explicitly declares `runtime.in_process_events: true`; the
+    resolved delivery manifest is not used as a substitute for this authoring
+    decision
 
-The 2026-09-24 installed-runtime inventory selected 53 in-process handlers:
-32 remain on the boot-import path and 21 tool-only handlers are deferred. Of
-the 53 source profiles, 30 contain decorated event subscriptions and 23 do not.
-Of the latter group, `neuro_nlu_lite_skill` remains early-loaded because its
-service manifest declares an event subscription, and `tlp_experiment_skill`
-remains early-loaded because its manifest explicitly opts into startup.
+On the 2026-09-24 development workspace, cold runtime plus workspace discovery
+fell from approximately 8.8 seconds to 0.35 seconds (`runtime=74.954 ms`,
+`workspace=278.259 ms`, repo fallback `4.340 ms`). The complete handler phase,
+including declaration loading, policy assessment, safety checks and the actual
+imports, took 5.692 seconds: 52 skills were selected, 31 were imported and 21
+tool-only handlers were deferred. These values are an observed inventory, not
+a stable product limit.
 
 Important current limitation:
 

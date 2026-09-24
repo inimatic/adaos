@@ -2121,6 +2121,17 @@ async def wait_realtime_sidecar_ready(*, host: str, port: int, timeout_s: float 
 async def wait_realtime_sidecar_bound(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
     deadline = time.monotonic() + max(0.5, float(timeout_s))
     while time.monotonic() < deadline:
+        # ``start()`` binds the NATS listener before the control endpoint.  A
+        # positive control probe therefore proves that the requested listener
+        # is already bound without a global psutil.net_connections() scan.
+        # The latter can take longer than the complete dev-start timeout on a
+        # busy Windows host and previously produced a false startup failure.
+        if await _probe_realtime_sidecar_control_ready(
+            host=host,
+            control_port=realtime_sidecar_control_port(),
+            timeout_s=min(0.5, max(0.1, deadline - time.monotonic())),
+        ):
+            return True
         if _find_realtime_listener_pid(host, port):
             return True
         if _skip_realtime_listener_pid_scan() and await probe_realtime_sidecar_ready(

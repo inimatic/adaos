@@ -2337,6 +2337,30 @@ def test_yws_tracking_cancels_pending_idle_room_reset(monkeypatch) -> None:
     gateway_module.y_server.rooms.clear()
 
 
+def test_live_webspace_room_ready_requires_completed_open_and_optional_transport(monkeypatch) -> None:
+    webspace_id = "room-readiness-probe"
+    gateway_module.y_server.rooms.pop(webspace_id, None)
+    monkeypatch.setattr(gateway_module, "_y_server_started", False)
+    assert gateway_module.live_webspace_room_ready(webspace_id, require_transport=True) is True
+
+    monkeypatch.setattr(gateway_module, "_y_server_started", True)
+    assert gateway_module.live_webspace_room_ready(webspace_id) is False
+    room = SimpleNamespace(_adaos_open_ready=False)
+    gateway_module.y_server.rooms[webspace_id] = room
+    try:
+        assert gateway_module.live_webspace_room_ready(webspace_id) is False
+        room._adaos_open_ready = True
+        monkeypatch.setattr(
+            gateway_module,
+            "_webspace_has_live_transports",
+            lambda target: target == webspace_id,
+        )
+        assert gateway_module.live_webspace_room_ready(webspace_id) is True
+        assert gateway_module.live_webspace_room_ready(webspace_id, require_transport=True) is True
+    finally:
+        gateway_module.y_server.rooms.pop(webspace_id, None)
+
+
 def test_idle_room_reset_preserves_room_for_active_events_ws(monkeypatch) -> None:
     webspace_id = "idle-room-events-ws"
     websocket = object()

@@ -4899,6 +4899,12 @@ def test_startup_materialization_defers_scenarios_without_opt_in(monkeypatch) ->
     assert result["ready_total"] == 1
     assert result["deferred_total"] == 2
     assert result["failed_total"] == 0
+    assert set(result["phases_ms"]) == {
+        "list_workspaces",
+        "index_workspaces",
+        "hydrate_webspaces",
+    }
+    assert all("admission" in item["timings_ms"] for item in result["webspaces"])
 
 
 def test_startup_materialization_always_hydrates_default_webspace(monkeypatch) -> None:

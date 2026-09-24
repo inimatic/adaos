@@ -293,6 +293,79 @@ def test_runtime_handler_discovery_uses_bounded_source_layout(tmp_path, monkeypa
     assert ImportlibSkillsLoader()._discover_runtime_handlers(tmp_path) == [(handler, "bounded_skill")]
 
 
+def test_workspace_discovery_does_not_read_manifest_for_runtime_selected_skill(
+    tmp_path: Path, monkeypatch
+) -> None:
+    skill_dir = tmp_path / "selected_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text("name: selected_skill\n", encoding="utf-8")
+    loader = ImportlibSkillsLoader()
+    manifest_reads: list[Path] = []
+    monkeypatch.setattr(loader, "_read_manifest", lambda path: manifest_reads.append(path) or {})
+
+    assert loader._discover_workspace_handlers(tmp_path, {"selected_skill"}) == []
+    assert skill_dir / "skill.yaml" not in manifest_reads
+
+
+def test_importlib_loader_keeps_service_handler_out_of_process_by_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime_skill = tmp_path / ".runtime" / "service_skill"
+    version_root = runtime_skill / "v1.0"
+    slot_root = version_root / "slots" / "A"
+    source_root = slot_root / "src" / "skills" / "service_skill"
+    handler = source_root / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    (source_root / "skill.yaml").write_text(
+        "name: service_skill\nversion: '1.0'\nruntime:\n  kind: service\n",
+        encoding="utf-8",
+    )
+    (runtime_skill / "current_version").write_text("1.0\n", encoding="utf-8")
+    (version_root / "active").write_text("A\n", encoding="utf-8")
+    loaded: list[Path] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda path, **_kwargs: loaded.append(path))
+
+    asyncio.run(loader.import_all_handlers(tmp_path))
+
+    assert loaded == []
+
+
+def test_importlib_loader_imports_service_handler_when_in_process_events_are_explicit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime_skill = tmp_path / ".runtime" / "event_service_skill"
+    version_root = runtime_skill / "v1.0"
+    slot_root = version_root / "slots" / "A"
+    source_root = slot_root / "src" / "skills" / "event_service_skill"
+    handler = source_root / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    (source_root / "skill.yaml").write_text(
+        "name: event_service_skill\n"
+        "version: '1.0'\n"
+        "runtime:\n"
+        "  kind: service\n"
+        "  in_process_events: true\n"
+        "  activation:\n"
+        "    mode: eager\n",
+        encoding="utf-8",
+    )
+    (runtime_skill / "current_version").write_text("1.0\n", encoding="utf-8")
+    (version_root / "active").write_text("A\n", encoding="utf-8")
+    loaded: list[Path] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda path, **_kwargs: loaded.append(path))
+    monkeypatch.setattr(loader, "_runtime_safety_issues", lambda _path: [])
+
+    asyncio.run(loader.import_all_handlers(tmp_path))
+
+    assert loaded == [handler]
+
+
 def test_importlib_loader_excludes_deactivated_runtime_and_workspace_fallback(tmp_path, monkeypatch) -> None:
     runtime_skill = tmp_path / ".runtime" / "quarantined_skill"
     version_root = runtime_skill / "v1.0"

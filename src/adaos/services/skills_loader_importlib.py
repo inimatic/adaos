@@ -397,6 +397,15 @@ def skill_handler_source_snapshot() -> dict[str, Any]:
 
 
 class ImportlibSkillsLoader(SkillsLoaderPort):
+    def __init__(self) -> None:
+        # One loader pass used to parse every selected manifest up to three
+        # times: service discovery, declaration loading, and activation
+        # classification.  Cold Windows filesystems make those small reads
+        # disproportionately expensive.  Keep a process-local cache only for
+        # the lifetime of this loader instance; reload entry points explicitly
+        # clear it so edited development manifests are never hidden.
+        self._manifest_cache: dict[Path, dict[str, Any]] = {}
+
     async def import_all_handlers(self, skills_root: Any) -> None:
         root = Path(skills_root() if callable(skills_root) else skills_root)
         started_at = time.perf_counter()
@@ -404,6 +413,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         if source_sync_enabled:
             await asyncio.to_thread(self._sync_runtime_from_repo_workspace_if_missing, root)
             await asyncio.to_thread(self._sync_runtime_from_workspace, root)
+        self._manifest_cache.clear()
         selected: set[str] = set()
         imported: set[str] = set()
         deferred: set[str] = set()
@@ -501,6 +511,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         expected_slot: str | None = None,
     ) -> dict[str, Any]:
         root = Path(skills_root() if callable(skills_root) else skills_root)
+        self._manifest_cache.clear()
         target = str(skill_name or "").strip()
         if not target:
             return {"ok": False, "reason": "skill_name_missing", "handlers": []}
@@ -541,7 +552,11 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 "handlers": [],
             }
         runtime_handlers = await asyncio.to_thread(self._discover_runtime_handlers, root)
-        handlers = [handler for handler, name in runtime_handlers if name == target]
+        handlers = [
+            handler
+            for handler, name in runtime_handlers
+            if name == target and self._handler_runs_in_process(handler)
+        ]
         if not handlers:
             loaded: set[str] = set()
             workspace_handlers = await asyncio.to_thread(self._discover_workspace_handlers, root, loaded)
@@ -718,6 +733,20 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         }.get(source, f"{source} skill handler")
         for handler, skill_name in handlers:
             handler_started_at = time.perf_counter()
+            manifest_path = self._find_skill_manifest(handler)
+            if manifest_path is not None and self._is_service_manifest(
+                manifest_path
+            ) and not self._service_allows_in_process_events(manifest_path):
+                timings.append(
+                    self._handler_import_timing(
+                        handler=handler,
+                        skill_name=skill_name,
+                        source=source,
+                        elapsed_ms=(time.perf_counter() - handler_started_at) * 1000.0,
+                        loaded=False,
+                    )
+                )
+                continue
             if skill_name:
                 # Claim the selected runtime source before validation/import so
                 # a broken or intentionally deferred installed handler cannot
@@ -808,8 +837,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             await asyncio.sleep(self._handler_import_yield_sec())
         return timings
 
-    @classmethod
-    def _requires_boot_import(cls, handler: Path) -> bool | None:
+    def _requires_boot_import(self, handler: Path) -> bool | None:
         """Return whether a handler must be imported before event delivery.
 
         Explicit eager/startup policy and manifest event declarations remain
@@ -817,13 +845,10 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         inventory is incomplete. Unknown inputs preserve the old boot import.
         """
 
-        manifest_path = cls._find_skill_manifest(handler)
+        manifest_path = self._find_skill_manifest(handler)
         if manifest_path is None:
             return None
-        try:
-            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return None
+        manifest = self._read_manifest(manifest_path)
         if not isinstance(manifest, dict):
             return None
         runtime = manifest.get("runtime")
@@ -990,11 +1015,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         if resolved in loaded:
             return
         loaded.add(resolved)
-        try:
-            payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            _LOG.debug("failed to read skill manifest for projections path=%s", manifest_path, exc_info=True)
-            return
+        payload = self._read_manifest(manifest_path)
         if not isinstance(payload, dict):
             return
         declaration_name = str(skill_name or payload.get("name") or "").strip()
@@ -1055,12 +1076,6 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             src_root = slot_dir / "src"
             if not src_root.exists():
                 continue
-            # Skip service skills by default; a service may explicitly expose
-            # lightweight in-process event handlers while keeping heavy work in
-            # its service runtime.
-            manifest_path = slot_dir / "resolved.manifest.json"
-            if self._is_service_manifest(manifest_path) and not self._service_allows_in_process_events(manifest_path):
-                continue
             direct_handler = src_root / "skills" / skill_name / "handlers" / "main.py"
             if direct_handler.exists():
                 handlers.append((direct_handler, skill_name))
@@ -1100,12 +1115,14 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 continue
             if skill_dir.name.startswith((".", "_")):
                 continue
+            # Runtime selection is authoritative.  Check it before touching a
+            # workspace manifest; on an installed node this avoids dozens of
+            # redundant cold reads while preserving the existing precedence.
+            if skill_dir.name in loaded:
+                continue
             # Skip service skills by default; see runtime.in_process_events.
             manifest_path = skill_dir / "skill.yaml"
             if self._is_service_manifest(manifest_path) and not self._service_allows_in_process_events(manifest_path):
-                continue
-            # Skip runtime-bundled skills.
-            if skill_dir.name in loaded:
                 continue
             handler = skill_dir / "handlers" / "main.py"
             if handler.exists():
@@ -1143,29 +1160,43 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 handlers.append((handler, skill_dir.name))
         return handlers
 
-    @staticmethod
-    def _read_manifest(path: Path) -> dict[str, Any]:
+    def _read_manifest(self, path: Path) -> dict[str, Any]:
+        try:
+            cache_key = path.resolve()
+        except OSError:
+            cache_key = path
+        cached = self._manifest_cache.get(cache_key)
+        if cached is not None:
+            return cached
         if not path.exists():
             return {}
         try:
             content = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
             return {}
-        return content if isinstance(content, dict) else {}
+        manifest = content if isinstance(content, dict) else {}
+        self._manifest_cache[cache_key] = manifest
+        return manifest
 
-    @staticmethod
-    def _is_service_manifest(path: Path) -> bool:
-        content = ImportlibSkillsLoader._read_manifest(path)
+    def _is_service_manifest(self, path: Path) -> bool:
+        content = self._read_manifest(path)
         runtime = content.get("runtime") or {}
         if isinstance(runtime, dict) and runtime.get("kind") == "service":
             return True
         return False
 
-    @staticmethod
-    def _service_allows_in_process_events(path: Path) -> bool:
-        content = ImportlibSkillsLoader._read_manifest(path)
+    def _service_allows_in_process_events(self, path: Path) -> bool:
+        content = self._read_manifest(path)
         runtime = content.get("runtime") or {}
         return bool(isinstance(runtime, dict) and runtime.get("in_process_events") is True)
+
+    def _handler_runs_in_process(self, handler: Path) -> bool:
+        manifest_path = self._find_skill_manifest(handler)
+        return bool(
+            manifest_path is None
+            or not self._is_service_manifest(manifest_path)
+            or self._service_allows_in_process_events(manifest_path)
+        )
 
     @staticmethod
     def _resolve_slot(version_dir: Path) -> Optional[Path]:

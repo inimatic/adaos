@@ -6831,6 +6831,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
             open_total_ms=(time.perf_counter() - room_open_started) * 1000.0,
             seed_result=seed_result,
         )
+        room._adaos_open_ready = True
         try:
             from adaos.services.named_entity_projection import notify_named_entity_room_ready
 
@@ -6880,6 +6881,23 @@ def live_webspace_ids(*, require_transport: bool = False) -> list[str]:
     if require_transport:
         room_ids = [item for item in room_ids if _webspace_has_live_transports(item)]
     return sorted(set(room_ids))
+
+
+def live_webspace_room_ready(webspace_id: str, *, require_transport: bool = False) -> bool:
+    """Return readiness without creating, seeding, or waiting for a YRoom.
+
+    Before the Y server starts, callers retain fail-open compatibility. Once
+    it is running, a room is ready only after ``get_room`` completed its
+    effective materialization and ``start_room`` boundary.
+    """
+
+    if not _y_server_started:
+        return True
+    key = str(webspace_id or "").strip() or "default"
+    room = getattr(y_server, "rooms", {}).get(key)
+    if room is None or not bool(getattr(room, "_adaos_open_ready", False)):
+        return False
+    return not require_transport or _webspace_has_live_transports(key)
 
 
 _y_server_started = False

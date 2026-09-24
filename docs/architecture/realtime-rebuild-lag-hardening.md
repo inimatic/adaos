@@ -114,6 +114,53 @@ projection is published on the event loop. A browser attach can therefore wait
 for ledger recovery without delaying scenario-switch control, websocket
 publishing, or loop-lag monitoring.
 
+Voice transport registration is also held behind the live YRoom boundary. The
+client may create the local `voice_chat.messages` observer during component
+construction, but it does not subscribe to the hub topic or request the first
+snapshot until materialization is ready and the provider for the current sync
+path is live. A bounded 30-second fallback preserves recovery for alternate or
+headless clients whose readiness surface is incomplete. This removes early
+conversation-ledger snapshots from the first-paint/YRoom critical path without
+dropping the receiver.
+
+The router independently enforces the same boundary for stale or alternate
+clients. Requests arriving before a live, fully opened target YRoom are
+coalesced by stream identity and resumed after room readiness, with a bounded
+30-second lifetime. The event-bus handler returns immediately, so neither the
+ledger read nor the wait itself occupies the YRoom critical path.
+
+### Startup Materialization Hydration Profile
+
+`hydrate_webspace_materialization_statuses` now records top-level timing for
+workspace listing, indexing and concurrent hydration. Every webspace records
+admission, deferred-status persistence, prewarmed-source lookup, semaphore wait
+and rebuild time; rebuilt webspaces retain the nested semantic, YDoc and phase
+timings returned by the rebuild pipeline. The complete profile remains on
+`app.state.webspace_materialization_hydration` and is emitted once in the
+startup log. The state retains every webspace; the log keeps every admitted or
+failed item plus the five slowest deferred items so routine startup does not
+produce one unbounded line.
+
+The 2026-09-24 profile separated two previously conflated modes. A semantic
+materialization cache hit completed the whole hydration in about 0.7 seconds.
+The cached record reported an original materialization cost of about 6.6
+seconds, consistent with earlier 6.6-10 second cold observations. The
+variability therefore comes from cache admission/full semantic-YDoc
+recomputation, not the hydration semaphore or workspace enumeration. Hydration
+remains synchronous for now: starting the same CPU and YDoc work concurrently
+with a cold YRoom would move contention into desktop first paint rather than
+remove it.
+
+### Development Sidecar Readiness
+
+`api serve` verifies its dev-managed realtime sidecar through the local control
+endpoint before falling back to listener ownership discovery. The sidecar binds
+the NATS listener before exposing that endpoint, so this is a valid bound check
+and avoids synchronous global `psutil.net_connections()` scans. On a busy
+Windows host those scans could consume the entire ten-second startup window and
+produce a false `sidecar did not bind` failure even though the child had already
+logged `serve start`.
+
 Demand coalescing remains useful burst control, but it is not a substitute for
 this ownership rule: subscription handlers must not execute ledger queries on
 the event-loop thread.

@@ -82,6 +82,17 @@ _WEBIO_STREAM_GUARD_STATS_LOCK = _webio_stream_guard._WEBIO_STREAM_GUARD_STATS_L
 _WEBIO_STREAM_GUARD_STATS = _webio_stream_guard._WEBIO_STREAM_GUARD_STATS
 
 
+def _voice_snapshot_yroom_ready(webspace_id: str) -> bool:
+    try:
+        from adaos.services.yjs.gateway_ws import live_webspace_room_ready
+
+        return bool(live_webspace_room_ready(webspace_id, require_transport=True))
+    except Exception:
+        # Alternate/headless embeddings that do not own the Y server keep the
+        # legacy behavior. The normal API runtime exposes the readiness gate.
+        return True
+
+
 def _sync_router_helper_dependencies() -> None:
     _telegram_projection.get_ctx = get_ctx
     _dialog_registry.get_ctx = get_ctx
@@ -479,6 +490,7 @@ class RouterService:
         self._voice_chat_persist_pending: dict[tuple[str, str], dict[str, Any]] = {}
         self._voice_chat_persist_committed_signatures: dict[tuple[str, str], str] = {}
         self._voice_chat_persist_next_allowed_at: dict[tuple[str, str], float] = {}
+        self._voice_chat_snapshot_deferred_tasks: dict[tuple[str, ...], asyncio.Task[None]] = {}
         self._dialog_state_tasks: dict[str, asyncio.Task[None]] = {}
         self._dialog_state_pending_events: dict[str, str] = {}
         self._webio_receiver_metadata_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
@@ -3870,15 +3882,83 @@ class RouterService:
             thread_id = _voice_chat_topic_id_from_sources(payload, meta, stream_params)
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
-                await _publish_voice_chat_snapshot(
-                    ws,
-                    target_node_id,
-                    conversation_id=conversation_id,
-                    dialog_channel_id=dialog_channel_id,
-                    thread_id=thread_id,
-                    persist=_voice_chat_persist_stream_snapshots_enabled(),
-                    suppress_unchanged=ev.type == "webio.stream.snapshot.requested",
+                publish_args = {
+                    "conversation_id": conversation_id,
+                    "dialog_channel_id": dialog_channel_id,
+                    "thread_id": thread_id,
+                    "persist": _voice_chat_persist_stream_snapshots_enabled(),
+                    "suppress_unchanged": ev.type == "webio.stream.snapshot.requested",
+                }
+                if _voice_snapshot_yroom_ready(ws):
+                    await _publish_voice_chat_snapshot(ws, target_node_id, **publish_args)
+                    continue
+
+                key = tuple(
+                    str(value or "").strip()
+                    for value in (
+                        ws,
+                        target_node_id,
+                        conversation_id,
+                        dialog_channel_id,
+                        thread_id,
+                    )
                 )
+                existing = self._voice_chat_snapshot_deferred_tasks.get(key)
+                if existing is not None and not existing.done():
+                    continue
+
+                async def _publish_after_room_ready(
+                    deferred_key: tuple[str, ...] = key,
+                    deferred_ws: str = ws,
+                    deferred_target_node_id: str | None = target_node_id,
+                    deferred_args: dict[str, Any] = publish_args,
+                ) -> None:
+                    try:
+                        max_wait_s = max(
+                            1.0,
+                            float(os.getenv("ADAOS_VOICE_SNAPSHOT_YROOM_MAX_WAIT_S") or "30.0"),
+                        )
+                    except Exception:
+                        max_wait_s = 30.0
+                    deadline = time.monotonic() + max_wait_s
+                    while self._started and time.monotonic() < deadline:
+                        if _voice_snapshot_yroom_ready(deferred_ws):
+                            await _publish_voice_chat_snapshot(
+                                deferred_ws,
+                                deferred_target_node_id,
+                                **deferred_args,
+                            )
+                            return
+                        await asyncio.sleep(0.25)
+                    self._vlog.debug(
+                        "voice_chat.snapshot deferred request expired webspace=%s wait_s=%.3f",
+                        deferred_ws,
+                        max_wait_s,
+                    )
+
+                task = asyncio.create_task(
+                    _publish_after_room_ready(),
+                    name=f"voice-chat-snapshot-yroom:{ws}",
+                )
+                self._voice_chat_snapshot_deferred_tasks[key] = task
+
+                def _forget_deferred(
+                    done: asyncio.Task[None],
+                    deferred_key: tuple[str, ...] = key,
+                ) -> None:
+                    if self._voice_chat_snapshot_deferred_tasks.get(deferred_key) is done:
+                        self._voice_chat_snapshot_deferred_tasks.pop(deferred_key, None)
+                    try:
+                        done.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        self._vlog.warning(
+                            "voice_chat.snapshot deferred task failed",
+                            exc_info=True,
+                        )
+
+                task.add_done_callback(_forget_deferred)
 
         def _voice_chat_stream_event_filter(ev: Event) -> bool:
             payload = ev.payload or {}
@@ -6444,6 +6524,17 @@ class RouterService:
             except Exception:
                 pass
             self._notify_tasks.clear()
+        if self._voice_chat_snapshot_deferred_tasks:
+            pending = [
+                task
+                for task in self._voice_chat_snapshot_deferred_tasks.values()
+                if not task.done()
+            ]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            self._voice_chat_snapshot_deferred_tasks.clear()
         if self._voice_chat_append_tasks:
             try:
                 timeout_s = max(0.0, float(os.getenv("ADAOS_VOICE_CHAT_APPEND_DRAIN_TIMEOUT_S") or "1.0"))

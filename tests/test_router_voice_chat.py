@@ -3190,6 +3190,57 @@ async def test_voice_chat_snapshot_ledger_recovery_does_not_block_event_loop(mon
     assert all(thread_id != event_loop_thread_id for thread_id in recovery_thread_ids)
 
 
+async def test_voice_chat_snapshot_waits_for_live_yroom_and_coalesces(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    room = {"ready": False}
+    monkeypatch.setattr(
+        router_service_module,
+        "_voice_snapshot_yroom_ready",
+        lambda _webspace_id: room["ready"],
+    )
+    recovery_calls: list[str] = []
+
+    def _recover(*_args, **_kwargs):
+        recovery_calls.append("recover")
+        return {"messages": [], "total_message_count": 0}
+
+    monkeypatch.setattr(
+        router_service_module.conversation_store,
+        "recover_projection_from_store",
+        _recover,
+    )
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    event = Event(
+        type="webio.stream.snapshot.requested",
+        source="test",
+        ts=1.0,
+        payload={"receiver": "voice_chat.messages", "webspace_id": "desktop"},
+    )
+
+    bus.publish(event)
+    bus.publish(event)
+    assert await bus.wait_for_idle(timeout=1.0)
+    await asyncio.sleep(0.05)
+    assert recovery_calls == []
+    assert len(router._voice_chat_snapshot_deferred_tasks) == 1
+
+    room["ready"] = True
+    for _ in range(20):
+        if recovery_calls:
+            break
+        await asyncio.sleep(0.05)
+    assert recovery_calls
+    await router.stop()
+
+
 async def test_voice_chat_snapshot_identity_lookup_does_not_block_event_loop(monkeypatch) -> None:
     bus = LocalEventBus()
     monkeypatch.setattr(

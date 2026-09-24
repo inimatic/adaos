@@ -8527,7 +8527,11 @@ async def hydrate_webspace_materialization_statuses(
 ) -> dict[str, Any]:
     """Hydrate explicitly opted-in scenarios and defer inactive webspaces."""
     started = time.perf_counter()
+    phases_ms: dict[str, float] = {}
+    phase_started = time.perf_counter()
     rows = await asyncio.to_thread(workspace_index.list_workspaces)
+    phases_ms["list_workspaces"] = _elapsed_ms(phase_started)
+    phase_started = time.perf_counter()
     default_id = default_webspace_id()
     rows_by_id = {
         str(getattr(row, "workspace_id", "") or "").strip(): row
@@ -8535,18 +8539,23 @@ async def hydrate_webspace_materialization_statuses(
         if str(getattr(row, "workspace_id", "") or "").strip()
     }
     webspace_ids = sorted(rows_by_id, key=lambda item: (item != default_id, item))
+    phases_ms["index_workspaces"] = _elapsed_ms(phase_started)
     concurrency = _startup_materialization_hydration_concurrency()
     semaphore = asyncio.Semaphore(concurrency)
 
     async def _hydrate(webspace_id: str) -> dict[str, Any]:
         item_started = time.perf_counter()
+        timings_ms: dict[str, float] = {}
         row = rows_by_id[webspace_id]
+        stage_started = time.perf_counter()
         allowed, scenario_id, source_mode, admission_reason = await asyncio.to_thread(
             _startup_materialization_allowed,
             row,
             default_webspace=webspace_id == default_id,
         )
+        timings_ms["admission"] = _elapsed_ms(stage_started)
         if not allowed:
+            stage_started = time.perf_counter()
             materialization = _pending_materialization_snapshot(
                 webspace_id,
                 scenario_id=scenario_id or None,
@@ -8566,6 +8575,7 @@ async def hydrate_webspace_materialization_statuses(
                 error=None,
                 materialization=materialization,
             )
+            timings_ms["record_deferred_status"] = _elapsed_ms(stage_started)
             return {
                 "webspace_id": webspace_id,
                 "ok": True,
@@ -8575,14 +8585,20 @@ async def hydrate_webspace_materialization_statuses(
                 "scenario_id": scenario_id or None,
                 "admission_reason": admission_reason,
                 "error": None,
+                "timings_ms": timings_ms,
                 "duration_ms": _elapsed_ms(item_started),
             }
         try:
+            stage_started = time.perf_counter()
             skill_decls_snapshot, skill_decls_fingerprint = _startup_materialization_skill_decls(
                 prewarm_sources,
                 source_mode,
             )
+            timings_ms["resolve_prewarmed_sources"] = _elapsed_ms(stage_started)
+            semaphore_started = time.perf_counter()
             async with semaphore:
+                timings_ms["semaphore_wait"] = _elapsed_ms(semaphore_started)
+                rebuild_started = time.perf_counter()
                 result = await rebuild_webspace_from_sources(
                     webspace_id,
                     action="startup_materialization_hydration",
@@ -8591,6 +8607,7 @@ async def hydrate_webspace_materialization_statuses(
                     skill_decls_snapshot=skill_decls_snapshot,
                     skill_decls_fingerprint=skill_decls_fingerprint,
                 )
+                timings_ms["rebuild"] = _elapsed_ms(rebuild_started)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -8625,6 +8642,7 @@ async def hydrate_webspace_materialization_statuses(
                 "ready": False,
                 "scenario_id": None,
                 "error": "startup_materialization_hydration_failed",
+                "timings_ms": timings_ms,
                 "duration_ms": _elapsed_ms(item_started),
             }
         materialization = (
@@ -8641,10 +8659,27 @@ async def hydrate_webspace_materialization_statuses(
             "scenario_id": str(result.get("scenario_id") or "").strip() or None,
             "admission_reason": admission_reason,
             "error": str(result.get("error") or "").strip() or None,
+            "timings_ms": timings_ms,
+            "rebuild_timings_ms": dict(result.get("timings_ms") or {})
+            if isinstance(result.get("timings_ms"), Mapping)
+            else {},
+            "semantic_rebuild_timings_ms": dict(
+                result.get("semantic_rebuild_timings_ms") or {}
+            )
+            if isinstance(result.get("semantic_rebuild_timings_ms"), Mapping)
+            else {},
+            "ydoc_timings_ms": dict(result.get("ydoc_timings_ms") or {})
+            if isinstance(result.get("ydoc_timings_ms"), Mapping)
+            else {},
+            "phase_timings_ms": dict(result.get("phase_timings_ms") or {})
+            if isinstance(result.get("phase_timings_ms"), Mapping)
+            else {},
             "duration_ms": _elapsed_ms(item_started),
         }
 
+    phase_started = time.perf_counter()
     items = list(await asyncio.gather(*(_hydrate(webspace_id) for webspace_id in webspace_ids)))
+    phases_ms["hydrate_webspaces"] = _elapsed_ms(phase_started)
     ready_total = sum(1 for item in items if item["ok"] and item["ready"])
     deferred_total = sum(1 for item in items if item.get("deferred"))
     failed_total = sum(1 for item in items if not item["ok"])
@@ -8656,6 +8691,7 @@ async def hydrate_webspace_materialization_statuses(
         "deferred_total": deferred_total,
         "failed_total": failed_total,
         "concurrency": concurrency,
+        "phases_ms": phases_ms,
         "duration_ms": _elapsed_ms(started),
         "webspaces": items,
     }

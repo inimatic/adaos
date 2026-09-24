@@ -1247,8 +1247,51 @@ async def _runtime_context(app: FastAPI):
             materialization_prewarm = await prewarm_webspace_materialization_sources()
             app.state.webspace_materialization_source_prewarm = materialization_prewarm
         with _StartupTimer("hydrate_webspace_materialization_statuses"):
-            app.state.webspace_materialization_hydration = (
-                await hydrate_webspace_materialization_statuses(materialization_prewarm)
+            hydration = await hydrate_webspace_materialization_statuses(materialization_prewarm)
+            app.state.webspace_materialization_hydration = hydration
+            hydration_items = [
+                item
+                for item in hydration.get("webspaces") or []
+                if isinstance(item, dict)
+            ]
+            hydration_profile_items = [
+                item
+                for item in hydration_items
+                if not bool(item.get("deferred")) or not bool(item.get("ok", True))
+            ]
+            hydration_profile_ids = {
+                str(item.get("webspace_id") or "") for item in hydration_profile_items
+            }
+            slow_deferred = sorted(
+                (
+                    item
+                    for item in hydration_items
+                    if str(item.get("webspace_id") or "") not in hydration_profile_ids
+                ),
+                key=lambda item: float(item.get("duration_ms") or 0.0),
+                reverse=True,
+            )[:5]
+            hydration_profile_items.extend(slow_deferred)
+            logging.getLogger("adaos.startup").info(
+                "webspace materialization hydration profile duration_ms=%s phases_ms=%s "
+                "webspace_total=%s sampled_webspaces=%s",
+                hydration.get("duration_ms"),
+                hydration.get("phases_ms"),
+                len(hydration_items),
+                [
+                    {
+                        "webspace_id": item.get("webspace_id"),
+                        "duration_ms": item.get("duration_ms"),
+                        "timings_ms": item.get("timings_ms"),
+                        "rebuild_timings_ms": item.get("rebuild_timings_ms"),
+                        "semantic_rebuild_timings_ms": item.get(
+                            "semantic_rebuild_timings_ms"
+                        ),
+                        "ydoc_timings_ms": item.get("ydoc_timings_ms"),
+                        "phase_timings_ms": item.get("phase_timings_ms"),
+                    }
+                    for item in hydration_profile_items
+                ],
             )
     except Exception:
         logging.getLogger("adaos.api.server").warning(
