@@ -2708,6 +2708,22 @@ def _mark_room_bootstrap_finished(
                 entry["bootstrap_timeout_total"] = int(entry.get("bootstrap_timeout_total") or 0) + 1
 
 
+def desktop_first_paint_observed() -> bool:
+    """Return true when every client-started room completed its first bootstrap."""
+
+    with _YROOM_LIFECYCLE_LOCK:
+        started = [
+            entry
+            for entry in _YROOM_LIFECYCLE.values()
+            if int(entry.get("bootstrap_total") or 0) > 0
+        ]
+        return bool(started) and all(
+            str(entry.get("last_bootstrap_state") or "").strip().lower() == "ready"
+            and int(entry.get("open_total") or 0) > 0
+            for entry in started
+        )
+
+
 def _mark_room_bootstrap_stuck(
     webspace_id: str,
     bootstrap_attempt_id: str,

@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, TypeVar
 
-from adaos.domain.capability_binding_state import CanonicalRecord
+from packaging.version import Version
+
+from adaos.domain.capability_binding_state import (
+    CAPABILITY_CONTRACT_SCHEMA,
+    CanonicalRecord,
+    CapabilityContract,
+    version_satisfies,
+)
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
 
@@ -20,6 +27,18 @@ RecordT = TypeVar("RecordT", bound=CanonicalRecord)
 
 def _identity(record: CanonicalRecord) -> tuple[str, str]:
     value = record.to_dict()
+    # Delivery is package-specific metadata for an otherwise stable binding
+    # definition.  It contains ``binding_definition_ref`` too, so it must be
+    # classified before the generic portable-record fields below.  Otherwise
+    # every delivery is incorrectly indexed as ``<binding>@1`` and relocating
+    # the same implementation to another package looks like a semantic
+    # BindingDefinition mutation.
+    if value.get("schema") == "adaos.binding.delivery.v1":
+        package = value["package"]
+        return (
+            f"{value['binding_definition_ref']}@{value['binding_definition_digest']}",
+            str(package["digest"]),
+        )
     # Prefer the record's own stable identity over references to records it
     # depends on.  BindingDefinition, for example, contains capability_ref but
     # must never collide with the CapabilityContract it realizes.
@@ -34,12 +53,6 @@ def _identity(record: CanonicalRecord) -> tuple[str, str]:
         if field in value:
             suffix = str(value.get("version") or value.get("claim_kind") or "1")
             return str(value[field]), suffix
-    if value.get("schema") == "adaos.binding.delivery.v1":
-        package = value["package"]
-        return (
-            f"{value['binding_definition_ref']}@{value['binding_definition_digest']}",
-            str(package["digest"]),
-        )
     raise PortableContractConflict(f"unsupported portable record: {value.get('schema')}")
 
 
@@ -111,6 +124,34 @@ class PortableContractCatalog:
         if result.digest != digest:
             raise PortableContractConflict("portable catalog record digest mismatch")
         return result
+
+    def matching_capabilities(
+        self, capability_ref: str, contract_range: str
+    ) -> tuple[CapabilityContract, ...]:
+        """Return verified installed contracts satisfying one semantic requirement.
+
+        The portable catalog is the authority for an identity already installed on
+        this node.  Authoring callers need the canonical content, not merely the
+        identity, otherwise a generated provider can accidentally redefine the
+        same version with different schemas and fail only during admission.
+        """
+
+        matches: list[CapabilityContract] = []
+        index = self._read_index()
+        for digest, raw_entry in index["records"].items():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            if raw_entry.get("schema") != CAPABILITY_CONTRACT_SCHEMA:
+                continue
+            if str(raw_entry.get("identity") or "") != str(capability_ref):
+                continue
+            version = str(raw_entry.get("revision") or "")
+            if not version_satisfies(version, contract_range):
+                continue
+            matches.append(self.load(str(digest), CapabilityContract))
+        return tuple(
+            sorted(matches, key=lambda item: Version(item.version), reverse=True)
+        )
 
     def _read_index(self) -> dict[str, Any]:
         if not self.index_path.is_file():

@@ -6568,6 +6568,157 @@ def test_worker_requires_tool_effects_on_changed_skill_manifests(
     ]
 
 
+def test_builder_records_tool_only_activation_assessment_from_handler_source(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "demo"
+    handler = skill_root / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "from adaos.sdk.core.decorators import tool\n"
+        "@tool('ping', side_effects='none')\n"
+        "def ping(_payload=None): return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    manifest_path = skill_root / "skill.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "demo",
+                "version": "0.1.0",
+                "tools": [{"name": "ping", "input_schema": {"type": "object"}}],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    receipts = LocalSkillFactoryWorker._record_changed_skill_activation(
+        workspace,
+        changed_paths={"skills/demo/handlers/main.py"},
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    activation = manifest["runtime"]["activation"]
+
+    assert receipts[0]["changed"] is True
+    assert activation["mode"] == "on_demand"
+    assert activation["startup_allowed"] is False
+    assert activation["background_refresh"] is False
+    assert activation["assessment"]["classification"] == "tool_only"
+    assert activation["assessment"]["assessor"] == "builder.compiler"
+    assert activation["assessment"]["handler_digest"].startswith("sha256:")
+
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+    LocalSkillFactoryWorker._validate_changed_skill_activation(
+        workspace,
+        checks,
+        errors,
+        changed_paths={"skills/demo/handlers/main.py", "skills/demo/skill.yaml"},
+    )
+    assert errors == []
+    assert checks[0]["ok"] is True
+    assert checks[0]["early_handler_import_required"] is False
+
+
+def test_builder_records_subscriber_activation_and_rejects_stale_assessment(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "demo"
+    handler = skill_root / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "from adaos.sdk.core.decorators import subscribe\n"
+        "@subscribe('sys.ready')\n"
+        "async def ready(_event): return None\n",
+        encoding="utf-8",
+    )
+    manifest_path = skill_root / "skill.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "demo",
+                "version": "0.1.0",
+                "events": {"subscribe": ["obsolete.topic"]},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    LocalSkillFactoryWorker._record_changed_skill_activation(
+        workspace,
+        changed_paths={"skills/demo/handlers/main.py"},
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    activation = manifest["runtime"]["activation"]
+    assert manifest["events"]["subscribe"] == ["sys.ready"]
+    assert activation["mode"] == "lazy"
+    assert activation["startup_allowed"] is True
+    assert activation["assessment"]["classification"] == "startup_event_subscriber"
+
+    handler.write_text(handler.read_text(encoding="utf-8") + "\nVALUE = 1\n", encoding="utf-8")
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+    LocalSkillFactoryWorker._validate_changed_skill_activation(
+        workspace,
+        checks,
+        errors,
+        changed_paths={"skills/demo/handlers/main.py"},
+    )
+    assert any("runtime.activation must match" in error for error in errors)
+    assert checks[0]["ok"] is False
+
+
+def test_builder_preserves_service_event_inventory_as_early_load_evidence(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "service_demo"
+    handler = skill_root / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    manifest_path = skill_root / "skill.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "service_demo",
+                "version": "0.1.0",
+                "runtime": {"kind": "service"},
+                "events": {"subscribe": ["mail.provider.changed"]},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    LocalSkillFactoryWorker._record_changed_skill_activation(
+        workspace,
+        changed_paths={"skills/service_demo/handlers/main.py"},
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["events"]["subscribe"] == ["mail.provider.changed"]
+    assert manifest["runtime"]["activation"]["mode"] == "lazy"
+    assert (
+        manifest["runtime"]["activation"]["assessment"]["classification"]
+        == "event_subscriber"
+    )
+
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+    LocalSkillFactoryWorker._validate_changed_skill_activation(
+        workspace,
+        checks,
+        errors,
+        changed_paths={"skills/service_demo/handlers/main.py"},
+    )
+    assert errors == []
+    assert checks[0]["ok"] is True
+    assert checks[0]["early_handler_import_required"] is True
+
+
 def test_worker_treats_browser_data_route_warnings_as_strict_errors(
     tmp_path: Path,
 ) -> None:
@@ -8822,6 +8973,112 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
     assert "Exact Automation binding contract" in prompt
     assert bindings_path.resolve().as_posix() in prompt
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
+
+
+def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
+    tmp_path: Path,
+) -> None:
+    from adaos.domain.capability_binding_state import CapabilityContract
+    from adaos.services.capability_binding_state import PortableContractCatalog
+
+    repo_root = Path(__file__).resolve().parents[1]
+    project_id = "gmail_contract_consumer"
+    workspace = tmp_path / "workspace"
+    scenario_root = workspace / "scenarios" / project_id
+    scenario_root.mkdir(parents=True)
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": project_id,
+                        "meta": {
+                            "builder": {
+                                "cbs_intent": {
+                                    "schema": "adaos.builder.cbs_intent.v1",
+                                    "requirements": [
+                                        {
+                                            "id": "mail",
+                                            "capability_ref": "capability:mail.messages.manage",
+                                            "contract_range": "^1.0.0",
+                                            "origin": "human_explicit",
+                                        }
+                                    ],
+                                }
+                            }
+                        },
+                        "widgets": [],
+                    }
+                }
+            }
+        },
+    }
+    (scenario_root / "webui.json").write_text(
+        json.dumps(webui, ensure_ascii=False), encoding="utf-8"
+    )
+    capability = CapabilityContract.create(
+        capability_ref="capability:mail.messages.manage",
+        version="1.0.0",
+        title="Manage messages",
+        operations=[
+            {
+                "operation_id": "list_messages",
+                "input_schema": {"type": "object", "additionalProperties": False},
+                "output_schema": {
+                    "type": "object",
+                    "required": ["ok"],
+                    "properties": {"ok": {"type": "boolean"}},
+                    "additionalProperties": False,
+                },
+                "errors": ["provider_unavailable"],
+            }
+        ],
+        authority_requirements=["providers.google.gmail"],
+    )
+    PortableContractCatalog(
+        tmp_path / "state/capability-binding-state/portable"
+    ).put(capability)
+    assignment = {
+        "task_id": "task.gmail-portable-reuse",
+        "target": {"type": "scenario", "id": project_id},
+        "forge": {"sparse_paths": [f"scenarios/{project_id}/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Implement the accepted Gmail application.",
+                "context_packet": {
+                    "schema": "adaos.builder.context_packet.v1",
+                    "artifacts": {
+                        "prototype": {
+                            "acceptance": {
+                                "schema": "adaos.builder.prototype_acceptance.v1",
+                                "decision": "accepted",
+                                "revision": "001",
+                                "prototype_resources": [],
+                            }
+                        }
+                    },
+                },
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev/skills",
+        dev_scenarios_root=tmp_path / "dev/scenarios",
+    )
+
+    worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    bindings_path = tmp_path / "input/implementation-bindings.json"
+    bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+    reuse = bindings["portable_contract_reuse"]
+    assert reuse["requirements"][0]["selected_digest"] == capability.digest
+    assert reuse["requirements"][0]["contract"] == capability.to_dict()
+    prompt = (tmp_path / "input/task.md").read_text(encoding="utf-8")
+    assert "installed canonical authority" in prompt
+    assert "application-specific presentation adapters" in prompt
 
 
 def test_worker_does_not_admit_attachment_bindings_from_system_context(

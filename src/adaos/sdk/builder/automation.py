@@ -458,6 +458,33 @@ def trial_verification_evidence(
             "reason": "access_matrix_test_missing",
             "task_id": task_id,
         }
+    behavior_checks = [
+        item
+        for item in passed_checks
+        if item.get("kind") == "checkpoint_test_contract"
+        and not str(item.get("path") or "").endswith(
+            "test_application_contract.py"
+        )
+    ]
+    if not behavior_checks:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "behavior_contract_test_missing",
+            "task_id": task_id,
+        }
+    disclosure_checks = [
+        item
+        for item in passed_checks
+        if item.get("kind") == "skill.public_tool_effects.strict"
+    ]
+    if not disclosure_checks:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "external_effect_disclosure_check_missing",
+            "task_id": task_id,
+        }
 
     def artifact_ref(item: Mapping[str, Any], prefix: str) -> str:
         return (
@@ -473,6 +500,8 @@ def trial_verification_evidence(
             "reason": "automation_source_commit_missing",
             "task_id": task_id,
         }
+    behavior_path = str(behavior_checks[0].get("path") or "").strip()
+    disclosure_path = str(disclosure_checks[0].get("path") or "").strip()
     return {
         "ok": True,
         "status": "ready",
@@ -486,7 +515,16 @@ def trial_verification_evidence(
                 for item in access_checks
             )
         ),
+        "pending_action_evidence": [
+            "suite:pending-action:" + behavior_path
+        ],
         "audit_evidence": [artifact_ref(provenance_artifact, "provenance")],
+        "disclosure_evidence": [
+            "suite:external-effects:" + disclosure_path
+        ],
+        "redaction_evidence": [
+            "suite:redaction:" + behavior_path
+        ],
         "evidence_manifest_schema": manifest.get("schema"),
     }
 

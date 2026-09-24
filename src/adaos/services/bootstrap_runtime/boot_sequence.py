@@ -28,6 +28,47 @@ def _deferred_service_skills_delay_s() -> float:
     return max(0.5, min(value, 300.0))
 
 
+def _deferred_service_skills_max_wait_s() -> float:
+    try:
+        value = float(
+            str(os.getenv("ADAOS_SERVICE_SKILLS_FIRST_PAINT_MAX_WAIT_S") or "120").strip()
+        )
+    except (TypeError, ValueError):
+        value = 120.0
+    return max(_deferred_service_skills_delay_s(), min(value, 600.0))
+
+
+async def _wait_for_first_paint_before_services(*, log: logging.Logger) -> str:
+    """Reserve CPU/disk for the first connected desktop room.
+
+    Headless nodes still start services after a bounded grace period. A short
+    initial delay also lets the listener bind before importing Yjs diagnostics.
+    """
+
+    started = time.monotonic()
+    minimum_delay = _deferred_service_skills_delay_s()
+    maximum_wait = _deferred_service_skills_max_wait_s()
+    await asyncio.sleep(minimum_delay)
+    while time.monotonic() - started < maximum_wait:
+        try:
+            from adaos.services.yjs.gateway_ws import desktop_first_paint_observed
+
+            if desktop_first_paint_observed():
+                log.info(
+                    "desktop first paint observed before service skill startup waited_s=%.3f",
+                    time.monotonic() - started,
+                )
+                return "first_paint_observed"
+        except Exception:
+            log.debug("failed to inspect desktop first-paint readiness", exc_info=True)
+        await asyncio.sleep(0.5)
+    log.info(
+        "service skill startup first-paint grace expired waited_s=%.3f",
+        time.monotonic() - started,
+    )
+    return "grace_expired"
+
+
 async def _start_services_before_managed_nlu(
     *,
     state: Any,
@@ -193,9 +234,9 @@ class BootstrapBootCoordinator:
                 service._log.warning("failed to start service skills", exc_info=True)
 
         async def _start_deferred_service_skills() -> None:
-            # Let the ASGI lifespan return and bind the listener before any
-            # external process discovery competes for CPU or disk.
-            await asyncio.sleep(_deferred_service_skills_delay_s())
+            # Let the listener bind and reserve CPU/disk for the first desktop
+            # materialization before external process discovery begins.
+            await _wait_for_first_paint_before_services(log=service._log)
             await _start_services_before_managed_nlu(
                 state=app.state,
                 start_service_skills=_start_service_skills,

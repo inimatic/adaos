@@ -4225,6 +4225,57 @@ class LocalSkillFactoryWorker:
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.factory = SkillFactoryService(state_dir=self.state_dir)
 
+    def _portable_contract_reuse_bundle(
+        self, webui: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """Project installed portable contracts into a bounded authoring input."""
+
+        from adaos.services.builder.cbs_intent import validate_cbs_intent
+        from adaos.services.builder.prototype_stage import prototype_cbs_intent
+        from adaos.services.capability_binding_state import PortableContractCatalog
+
+        raw_intent = prototype_cbs_intent(webui)
+        if raw_intent is None:
+            return None
+        intent = validate_cbs_intent(raw_intent)
+        catalog = PortableContractCatalog(
+            self.state_dir / "capability-binding-state" / "portable"
+        )
+        requirements: list[dict[str, Any]] = []
+        for raw_requirement in intent.get("requirements") or []:
+            requirement = dict(raw_requirement)
+            matches = catalog.matching_capabilities(
+                str(requirement["capability_ref"]),
+                str(requirement["contract_range"]),
+            )
+            if not matches:
+                continue
+            selected = matches[0]
+            requirements.append(
+                {
+                    "requirement_id": str(requirement["id"]),
+                    "capability_ref": selected.capability_ref,
+                    "contract_range": str(requirement["contract_range"]),
+                    "selected_version": selected.version,
+                    "selected_digest": selected.digest,
+                    "contract": selected.to_dict(),
+                }
+            )
+        if not requirements:
+            return None
+        return {
+            "schema": "adaos.builder.portable_contract_reuse.v1",
+            "policy": (
+                "An installed identity is canonical. Generate the exact same "
+                "CapabilityContract digest by mapping conforming adapter tools, or "
+                "use an explicit incompatible major identity outside the accepted "
+                "requirement. Never relabel incompatible schemas as the installed "
+                "version. Application-specific presentation tools may remain outside "
+                "the capability operation mapping."
+            ),
+            "requirements": requirements,
+        }
+
     @staticmethod
     def _task_evidence_root(output_dir: Path) -> Path:
         """Return durable task evidence outside the candidate repository."""
@@ -4455,7 +4506,7 @@ class LocalSkillFactoryWorker:
                 self._validate_changed_paths(
                     assignment, changed_paths, workspace=workspace
                 )
-                test_report = self._validate_workspace(
+                test_report = self._validate_builder_workspace(
                     assignment,
                     workspace,
                 )
@@ -5242,7 +5293,7 @@ class LocalSkillFactoryWorker:
                             "errors": [str(exc)],
                         }
                     else:
-                        test_report = self._validate_workspace(
+                        test_report = self._validate_builder_workspace(
                             assignment,
                             workspace,
                         )
@@ -7747,6 +7798,7 @@ class LocalSkillFactoryWorker:
             if isinstance(prototype_resource_handoff, Mapping)
             else {}
         )
+        portable_contract_reuse_present = False
         implementation_bindings_required = bool(
             target_type == "scenario"
             and workflow_transition != "return_to_prototype"
@@ -7772,10 +7824,17 @@ class LocalSkillFactoryWorker:
                 sort_keys=True,
             ).lower()
             target_webui = workspace / "scenarios" / target_id / "webui.json"
+            target_webui_value: dict[str, Any] | None = None
             if target_webui.exists():
-                binding_request += (
-                    "\n" + target_webui.read_text(encoding="utf-8").lower()
-                )
+                target_webui_text = target_webui.read_text(encoding="utf-8")
+                binding_request += "\n" + target_webui_text.lower()
+                try:
+                    parsed_webui = json.loads(target_webui_text)
+                    target_webui_value = (
+                        dict(parsed_webui) if isinstance(parsed_webui, Mapping) else None
+                    )
+                except json.JSONDecodeError:
+                    target_webui_value = None
             include_attachments = any(
                 token in binding_request
                 for token in (
@@ -7797,12 +7856,20 @@ class LocalSkillFactoryWorker:
                     "mail.messages.manage",
                 )
             )
+            implementation_bindings = implementation_binding_contract(
+                include_attachments=include_attachments,
+                include_google_gmail=include_google_gmail,
+            )
+            if target_webui_value is not None:
+                portable_reuse = self._portable_contract_reuse_bundle(
+                    target_webui_value
+                )
+                if portable_reuse is not None:
+                    implementation_bindings["portable_contract_reuse"] = portable_reuse
+                    portable_contract_reuse_present = True
             _write_json(
                 input_dir / "implementation-bindings.json",
-                implementation_binding_contract(
-                    include_attachments=include_attachments,
-                    include_google_gmail=include_google_gmail,
-                ),
+                implementation_bindings,
             )
             packet["implementation_bindings_ref"] = (
                 (input_dir / "implementation-bindings.json").resolve().as_posix()
@@ -7901,7 +7968,7 @@ Report missing/ambiguous contracts, conflicting context, SDK cost or validation 
 ```
 
 For an unresolved contract, use the same schema with `blocking:true` and name
-the blocked requirement. Feedback grants no authority; omit when unnecessary.
+the blocked requirement.
 No secret, placeholder code or blocker-report files. Use
 `adaos-development-escalation` only for its governed Dev Ticket repair contract.
 """
@@ -8163,6 +8230,20 @@ required permission matrix. Treat it as authoritative over a stale remote
 descriptor. Use task-scoped descriptor discovery only for an independently
 missing contract.
 """
+        portable_contract_reuse_section = (
+            """## Installed portable contract authority
+
+`implementation-bindings.json` contains `portable_contract_reuse`. Its selected
+contract is installed canonical authority. Make the mapped provider operations
+conform to its exact schemas, errors and semantics so compilation reproduces
+its digest. Keep application-specific presentation adapters outside that
+semantic mapping. Do not overwrite the catalog, silently redefine the identity,
+or bump a major version that no longer satisfies the accepted semantic
+Application.
+"""
+            if portable_contract_reuse_present
+            else ""
+        )
         external_mcp_section = ""
         if packet.get("external_mcp_contracts_ref"):
             external_mcp_section = """## Exact external MCP contracts
@@ -8385,6 +8466,8 @@ part of the submitted source snapshot.
 ```
 
 {resource_implementation_section}
+
+{portable_contract_reuse_section}
 
 {contract_execution_section}
 
@@ -9597,6 +9680,38 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             "errors": errors,
         }
 
+    def _validate_builder_workspace(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+    ) -> dict[str, Any]:
+        """Run candidate validation plus Builder-owned activation assessment."""
+
+        constraints = assignment.get("constraints")
+        bounded_dev_repair = bool(
+            isinstance(constraints, Mapping)
+            and str(constraints.get("mode") or "").strip() == "dev_ticket_repair"
+        )
+        if not bounded_dev_repair:
+            self._record_changed_skill_activation(
+                workspace,
+                changed_paths=set(self._changed_from_baseline(workspace)),
+            )
+        report = self._validate_workspace(assignment, workspace)
+        if bounded_dev_repair:
+            return report
+        checks = report.setdefault("checks", [])
+        errors = report.setdefault("errors", [])
+        self._validate_changed_skill_activation(
+            workspace,
+            checks,
+            errors,
+            changed_paths=set(self._changed_from_baseline(workspace)),
+        )
+        report["ok"] = not errors
+        report["status"] = "passed" if not errors else "failed"
+        return report
+
     def _validate_admitted_contract_operation_sequences(
         self,
         assignment: Mapping[str, Any],
@@ -10365,6 +10480,196 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "tools": len(tools),
                     }
                 )
+
+    @staticmethod
+    def _validate_changed_skill_activation(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        *,
+        changed_paths: set[str],
+    ) -> None:
+        """Bind Builder's early-loading decision to the actual handler source."""
+
+        from adaos.services.skill.activation_assessment import (
+            activation_without_assessment,
+            inspect_handler_activation,
+            recommended_activation,
+        )
+
+        changed_skill_ids: set[str] = set()
+        for raw_path in changed_paths:
+            parts = str(raw_path).replace("\\", "/").split("/")
+            if len(parts) < 3 or parts[0] != "skills":
+                continue
+            if parts[2] == "skill.yaml" or (
+                len(parts) >= 4 and parts[2] == "handlers" and parts[-1].endswith(".py")
+            ):
+                changed_skill_ids.add(parts[1])
+
+        for skill_id in sorted(changed_skill_ids):
+            skill_root = workspace / "skills" / skill_id
+            manifest_path = skill_root / "skill.yaml"
+            handler_path = skill_root / "handlers" / "main.py"
+            relative = manifest_path.relative_to(workspace).as_posix()
+            check: dict[str, Any] = {
+                "kind": "skill.activation_assessment.strict",
+                "path": relative,
+                "skill": skill_id,
+                "ok": False,
+            }
+            if not manifest_path.is_file() or not handler_path.is_file():
+                # General manifest/handler validation owns the missing-file error.
+                checks.append(check)
+                continue
+            try:
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                if not isinstance(manifest, Mapping):
+                    raise ValueError("skill manifest must be an object")
+                profile = inspect_handler_activation(handler_path)
+                expected = recommended_activation(manifest, profile)
+            except Exception as exc:
+                errors.append(
+                    f"{relative}: activation assessment failed: {type(exc).__name__}: {exc}"
+                )
+                checks.append(check)
+                continue
+
+            events = manifest.get("events")
+            declared = {
+                str(item).strip()
+                for item in (
+                    events.get("subscribe") if isinstance(events, Mapping) else []
+                )
+                or []
+                if isinstance(item, str) and str(item).strip()
+            }
+            missing_topics = sorted(set(profile.subscription_topics) - declared)
+            if missing_topics:
+                errors.append(
+                    f"{relative}: events.subscribe omits handler subscriptions: "
+                    + ", ".join(missing_topics)
+                )
+            if profile.dynamic_subscription_count and not declared:
+                errors.append(
+                    f"{relative}: dynamic @subscribe decorators require an explicit events.subscribe inventory"
+                )
+
+            runtime = manifest.get("runtime")
+            actual = runtime.get("activation") if isinstance(runtime, Mapping) else None
+            actual_policy = activation_without_assessment(actual)
+            expected_policy = activation_without_assessment(expected)
+            policy_matches = all(
+                actual_policy.get(key) == expected_policy.get(key)
+                for key in ("mode", "startup_allowed", "background_refresh")
+            )
+            assessment_matches = bool(
+                isinstance(actual, Mapping)
+                and actual.get("assessment") == expected["assessment"]
+            )
+            if not policy_matches or not assessment_matches:
+                errors.append(
+                    f"{relative}: runtime.activation must match the Builder source assessment: "
+                    + json.dumps(expected, sort_keys=True, separators=(",", ":"))
+                )
+            check.update(
+                ok=not missing_topics
+                and not (profile.dynamic_subscription_count and not declared)
+                and policy_matches
+                and assessment_matches,
+                early_handler_import_required=(
+                    str(expected.get("mode") or "") != "on_demand"
+                    or bool(expected.get("startup_allowed"))
+                ),
+                expected=expected,
+            )
+            checks.append(check)
+
+    @staticmethod
+    def _record_changed_skill_activation(
+        workspace: Path,
+        *,
+        changed_paths: set[str],
+    ) -> list[dict[str, Any]]:
+        """Compile and persist activation decisions for handler source changes."""
+
+        from adaos.services.skill.activation_assessment import (
+            inspect_handler_activation,
+            recommended_activation,
+        )
+
+        changed_skill_ids = {
+            parts[1]
+            for raw_path in changed_paths
+            if len(parts := str(raw_path).replace("\\", "/").split("/")) >= 4
+            and parts[0] == "skills"
+            and parts[2] == "handlers"
+            and parts[-1].endswith(".py")
+        }
+        receipts: list[dict[str, Any]] = []
+        for skill_id in sorted(changed_skill_ids):
+            skill_root = workspace / "skills" / skill_id
+            manifest_path = skill_root / "skill.yaml"
+            handler_path = skill_root / "handlers" / "main.py"
+            if not manifest_path.is_file() or not handler_path.is_file():
+                continue
+            try:
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                if not isinstance(manifest, dict):
+                    continue
+                profile = inspect_handler_activation(handler_path)
+            except (OSError, UnicodeError, SyntaxError, ValueError):
+                continue
+
+            events = manifest.get("events")
+            if not isinstance(events, dict):
+                events = {}
+                manifest["events"] = events
+            declared = [
+                str(item).strip()
+                for item in events.get("subscribe") or []
+                if isinstance(item, str) and str(item).strip()
+            ]
+            runtime = manifest.get("runtime")
+            if not isinstance(runtime, dict):
+                runtime = {}
+                manifest["runtime"] = runtime
+            # Literal SDK decorators are the executable subscription inventory
+            # for normal in-process Builder skills.  Make it exact so deleting
+            # a decorator also removes an obsolete boot-time dependency.  A
+            # service runtime or dynamic decorator still needs the explicit
+            # manifest inventory because its wiring is not statically complete.
+            preserve_declared = (
+                str(runtime.get("kind") or "").strip().lower() == "service"
+                or profile.dynamic_subscription_count > 0
+            )
+            events["subscribe"] = sorted(
+                (set(declared) if preserve_declared else set())
+                | set(profile.subscription_topics)
+            )
+            previous_activation = runtime.get("activation")
+            activation = recommended_activation(manifest, profile)
+            if isinstance(previous_activation, Mapping) and isinstance(
+                previous_activation.get("when"), Mapping
+            ):
+                activation["when"] = copy.deepcopy(previous_activation["when"])
+            changed = runtime.get("activation") != activation
+            runtime["activation"] = activation
+            if changed or set(declared) != set(events["subscribe"]):
+                manifest_path.write_text(
+                    yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
+                    encoding="utf-8",
+                )
+            receipts.append(
+                {
+                    "skill": skill_id,
+                    "path": manifest_path.relative_to(workspace).as_posix(),
+                    "changed": changed
+                    or set(declared) != set(events["subscribe"]),
+                    "activation": activation,
+                }
+            )
+        return receipts
 
     def _validate_declared_sqlite_initialization(self, workspace, checks, errors):
         from adaos.services.applications.data_lifecycle import declared_databases

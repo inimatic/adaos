@@ -20,7 +20,7 @@ from .workflow import BuilderWorkflowError
 
 
 BUILDER_CBS_COMPILATION_SCHEMA = "adaos.builder.cbs_compilation.v1"
-BUILDER_CBS_COMPILER_VERSION = "1.1.0"
+BUILDER_CBS_COMPILER_VERSION = "1.2.0"
 
 
 @lru_cache(maxsize=1)
@@ -176,7 +176,7 @@ def compile_prototype_cbs(
         if str(item.get("resource_type") or "") != "prototype.locale_dictionaries"
     ]
     attachments: list[dict[str, Any]] = []
-    if resources:
+    if resources and not (cbs_intent or {}).get("requirements"):
         requirements.append(
             _requirement(
                 requirement_ref=f"requirement:{application_token}.records",
@@ -185,6 +185,8 @@ def compile_prototype_cbs(
                 stateful=True,
             )
         )
+        authoring_counts["generated"] += 1
+    if resources:
         for item in sorted(resources, key=lambda value: str(value.get("resource_type") or "")):
             resource_type = str(item["resource_type"])
             resource_token = _token(resource_type.removeprefix("prototype."), fallback="records")
@@ -212,24 +214,12 @@ def compile_prototype_cbs(
             }
         )
         short = identity_digest.removeprefix("sha256:")[:16]
-        requirement_ref = f"requirement:{application_token}.automation.{short}"
-        if requirement_ref in seen_refs:
-            raise BuilderWorkflowError("prototype automation requirements do not have unique identities")
-        seen_refs.add(requirement_ref)
-        capability_ref = f"capability:application.automation.{short}"
-        requirements.append(
-            _requirement(
-                requirement_ref=requirement_ref,
-                capability_ref=capability_ref,
-                environment_target=environment_target,
-            )
-        )
-        authoring_counts["generated"] += 1
+        obligation_ref = f"automation-obligation:{application_token}.{short}"
         obligations.append(
             {
                 "source_requirement_ref": source_ref,
-                "requirement_ref": requirement_ref,
-                "capability_ref": capability_ref,
+                "requirement_ref": obligation_ref,
+                "capability_ref": None,
                 "statement_digest": canonical_payload_digest(
                     {
                         "statement": str(item.get("statement") or ""),

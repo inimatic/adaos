@@ -789,7 +789,13 @@ def _uvicorn_loop_mode() -> str:
 
 def _configure_api_serve_startup_env(*, launch_mode: str) -> None:
     if str(launch_mode or "").strip().lower() == "api_serve":
-        os.environ.setdefault("ADAOS_RUNTIME_BACKGROUND_BOOT", "1")
+        # A development server must not advertise an operational HTTP surface
+        # while runtime handlers are still being imported.  Those imports run
+        # in worker threads, but Python's process-wide import lock can still
+        # stall live request handlers for tens of seconds.  Managed/autostart
+        # runtimes retain their own background-boot default in the API server;
+        # an explicit environment override remains available for diagnostics.
+        os.environ.setdefault("ADAOS_RUNTIME_BACKGROUND_BOOT", "0")
 
 
 def _is_local_url(url: str | None) -> bool:

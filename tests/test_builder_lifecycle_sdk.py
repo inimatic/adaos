@@ -60,6 +60,7 @@ def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> N
 
     transitions: list[tuple[str, dict]] = []
     verification_calls: list[dict] = []
+    cbs_calls: list[dict] = []
     monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: _checkpoint_state())
     monkeypatch.setattr(
         applications,
@@ -100,6 +101,16 @@ def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> N
             "trial_workspace": "trial://candidate-1",
         },
     )
+    monkeypatch.setattr(
+        lifecycle,
+        "_admit_native_cbs_trial",
+        lambda **kwargs: cbs_calls.append(dict(kwargs))
+        or {
+            "status": "admitted",
+            "requirements_total": 1,
+            "requirements_resolved": 1,
+        },
+    )
 
     result = lifecycle.prepare_trial(
         "scenario",
@@ -118,6 +129,16 @@ def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> N
     assert transitions[1][1]["candidate_id"] == "candidate-1"
     assert result["workflow"]["governed"]["state"] == "candidate_prepared"
     assert result["application_verification"]["status"] == "passed"
+    assert result["cbs_admission"]["status"] == "admitted"
+    assert cbs_calls == [
+        {
+            "object_id": "recipes",
+            "project_id": "recipes",
+            "candidate_id": "candidate-1",
+            "release_digest": "sha256:" + "c" * 64,
+            "task_id": "task-1",
+        }
+    ]
     assert verification_calls == [
         {
             "project_id": "recipes",
@@ -796,3 +817,45 @@ def test_activity_dispatch_builds_implementation_brief_from_change(monkeypatch) 
     assert captured["webspace_id"] == "dev1"
     assert "Add a recipe search." in captured["implementation_brief"]
     assert "Search is deterministic." in captured["implementation_brief"]
+
+
+def test_activity_dispatch_preserves_project_composition_for_trial(monkeypatch) -> None:
+    captured: dict = {}
+    sealed_evidence = {
+        "ok": True,
+        "status": "ready",
+        "source_commit": "a" * 40,
+        "regression_evidence": ["suite:checkpoint:test-report"],
+        "access_matrix_evidence": ["suite:access-matrix:test_application_contract.py"],
+    }
+
+    def prepare(*args, **kwargs):
+        captured["args"] = args
+        captured.update(kwargs)
+        return {"ok": True, "status": "trial"}
+
+    monkeypatch.setattr(lifecycle, "prepare_trial", prepare)
+    monkeypatch.setattr(
+        lifecycle.automation,
+        "trial_verification_evidence",
+        lambda **_kwargs: sealed_evidence,
+    )
+
+    lifecycle.invoke_activity_command(
+        "start_trial",
+        "scenario",
+        "gmail_cbs_cleanroom",
+        actor="user:test",
+        idempotency_key="trial-1",
+        input_value={
+            "webspace_id": "desktop-dev",
+            "publication_project_ref": "project:gmail_cbs_cleanroom",
+            "permission_decision": True,
+        },
+    )
+
+    assert captured["args"] == ("scenario", "gmail_cbs_cleanroom")
+    assert captured["publication_project_ref"] == "project:gmail_cbs_cleanroom"
+    assert captured["source_webspace_id"] == "desktop-dev"
+    assert captured["permission_decision"] is True
+    assert captured["verification_evidence"] == sealed_evidence

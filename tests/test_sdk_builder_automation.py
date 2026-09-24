@@ -112,7 +112,17 @@ def test_trial_verification_evidence_uses_sealed_automation_artifacts(
                         "kind": "checkpoint_test_contract",
                         "path": "scenarios/roster/tests/test_application_contract.py",
                         "ok": True,
-                    }
+                    },
+                    {
+                        "kind": "checkpoint_test_contract",
+                        "path": "skills/roster_skill/tests/test_behavior.py",
+                        "ok": True,
+                    },
+                    {
+                        "kind": "skill.public_tool_effects.strict",
+                        "path": "skills/roster_skill/skill.yaml",
+                        "ok": True,
+                    },
                 ],
             }
         ),
@@ -143,6 +153,15 @@ def test_trial_verification_evidence_uses_sealed_automation_artifacts(
     ]
     assert evidence["access_matrix_evidence"] == [
         "suite:access-matrix:scenarios/roster/tests/test_application_contract.py"
+    ]
+    assert evidence["pending_action_evidence"] == [
+        "suite:pending-action:skills/roster_skill/tests/test_behavior.py"
+    ]
+    assert evidence["disclosure_evidence"] == [
+        "suite:external-effects:skills/roster_skill/skill.yaml"
+    ]
+    assert evidence["redaction_evidence"] == [
+        "suite:redaction:skills/roster_skill/tests/test_behavior.py"
     ]
 
 

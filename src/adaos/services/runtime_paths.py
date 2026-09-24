@@ -13,7 +13,14 @@ def _ctx_path(attr: str) -> Path | None:
         ctx = get_ctx()
         getter = getattr(ctx.paths, attr)
         raw = getter() if callable(getter) else getter
-        return Path(raw).expanduser().resolve()
+        # AgentContext paths are already the composition root's authoritative
+        # paths. ``Path.resolve`` performs filesystem realpath traversal on
+        # Windows and was repeatedly blocking the runtime event loop from hot
+        # NATS/outbox paths. Normalize lexically without touching the disk.
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return path.absolute()
     except Exception:
         return None
 

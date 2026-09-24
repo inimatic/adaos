@@ -10832,6 +10832,104 @@ def test_checkpoint_repackage_advances_only_project_composition_without_codex(
     assert saved["repackage_history"][-1]["operation_id"] == "release-abi-v2"
 
 
+def test_checkpoint_repackage_recovers_rejected_trial_without_codex(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    package_digest = "sha256:" + "a" * 64
+    source_revision = "commit.validated"
+    service._save_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "completed",
+            "iteration": 2,
+            "current_task_id": "task.validated",
+            "links": {"project_ref": "project:recipes"},
+            "completion_readiness": {
+                "ok": True,
+                "vcs_checkpoints": [
+                    {
+                        "ok": True,
+                        "kind": "scenario",
+                        "name": "recipes",
+                        "package_digest": package_digest,
+                        "source_revision": source_revision,
+                    }
+                ],
+            },
+        }
+    )
+    transitions: list[tuple[str, dict]] = []
+
+    class _Workflow:
+        @staticmethod
+        def describe(*_args):
+            return {
+                "automation": {
+                    "status": "completed",
+                    "head_task_id": "task.validated",
+                },
+                "delivery": {
+                    "status": "rejected",
+                    "candidate_id": "candidate.rejected",
+                    "package_digest": "sha256:" + "c" * 64,
+                    "release_digest": "sha256:" + "d" * 64,
+                    "decided_at": "2026-09-24T07:53:54+00:00",
+                },
+            }
+
+        @staticmethod
+        def transition(_kind, _object_id, action, **kwargs):
+            transitions.append((action, dict(kwargs)))
+            return {
+                "workflow": {
+                    "delivery": {"status": "checkpoint", "version": "0.3.9"}
+                }
+            }
+
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: _Workflow())
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_ensure_project_composition_checkpoint",
+        lambda self, value, *, checkpoints: {
+            "ok": True,
+            "version": "0.3.9",
+            "change_id": value["change_id"],
+            "checkpoint_count": len(checkpoints),
+        },
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Codex must not be submitted")
+        ),
+    )
+
+    result = service.repackage_checkpoint(
+        object_type="scenario",
+        object_id="recipes",
+        publication_project_ref="project:recipes",
+        actor="user:owner",
+        idempotency_key="rejected-trial-native-cbs",
+        reason="Repackage after rejecting a platform-incomplete Trial",
+    )
+
+    assert result["ok"] is True
+    assert result["model_started"] is False
+    assert [item[0] for item in transitions] == [
+        "automation_iteration_started",
+        "automation_completed",
+        "checkpoint_recorded",
+    ]
+    metadata = transitions[-1][1]["metadata"]
+    assert metadata["package_digest"] == package_digest
+    assert metadata["source_revision"] == source_revision
+
+
 def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair(
     tmp_path: Path,
     monkeypatch,
@@ -11546,6 +11644,84 @@ def test_validated_result_recovery_rewinds_clean_started_browser_feedback_repair
     assert result["session"]["current_task_id"] == "task.validated"
     assert recovery["cancelled_task_id"] == "task.clean-repair"
     assert recovery["reason"] == "clean_started_browser_feedback_repair_cancelled"
+
+
+def test_validated_result_recovery_rewinds_clean_platform_feedback_browser_repair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task = {
+        "task_id": "task.validated",
+        "status": "completed",
+        "updated_at": "2026-09-20T17:10:00+00:00",
+        "result": {"summary": "Validated candidate."},
+    }
+    feedback_task = {
+        "task_id": "task.platform-feedback",
+        "status": "failed",
+        "attempts": 1,
+        "updated_at": "2026-09-20T17:20:00+00:00",
+    }
+    workspace = tmp_path / "runs" / "task.platform-feedback" / "workspace"
+    workspace.mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.platform-feedback",
+        "status": "failed",
+        "iteration": 5,
+        "task": feedback_task,
+        "task_history": ["task.validated", "task.platform-feedback"],
+        "browser_feedback_repair_count": 1,
+        "pending_browser_feedback": {"ok": False, "receipt_digest": "sha256:1"},
+        "last_failure": {
+            "stage": "development_feedback",
+            "failure_class": "capability_blocked",
+        },
+        "completion_history": [
+            {
+                "task_id": "task.validated",
+                "iteration": 4,
+                "browser_feedback_repair": {"status": "queued", "attempt": 1},
+            }
+        ],
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        type(service.factory),
+        "read_task",
+        lambda _self, task_id: (
+            source_task if task_id == "task.validated" else feedback_task
+        ),
+    )
+
+    def finalize(_service, value):
+        completed = dict(value)
+        completed["status"] = "completed"
+        _service._save_session(completed)
+
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not rerun")
+    )
+
+    result = service.recover_validated_result(
+        object_type="scenario", object_id="recipes"
+    )
+
+    recovery = result["session"]["cancelled_repair_recovery_history"][-1]
+    assert result["ok"] is True
+    assert result["worker"]["recovery_stage"] == "validated_activation"
+    assert result["session"]["current_task_id"] == "task.validated"
+    assert recovery["cancelled_task_id"] == "task.platform-feedback"
+    assert recovery["reason"] == "clean_platform_feedback_browser_repair_resolved"
 
 
 @pytest.mark.parametrize(

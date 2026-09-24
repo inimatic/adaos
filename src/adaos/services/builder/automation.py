@@ -5797,9 +5797,11 @@ class BuilderAutomationService:
                 raise ValueError(
                     "checkpoint repackage requires completed canonical Automation"
                 )
-            if str(delivery.get("status") or "") != "checkpoint":
+            delivery_status = str(delivery.get("status") or "")
+            if delivery_status not in {"checkpoint", "rejected"}:
                 raise ValueError(
-                    "checkpoint repackage requires an exact retryable checkpoint"
+                    "checkpoint repackage requires an exact retryable checkpoint "
+                    "or a rejected immutable Trial"
                 )
 
             primary = next(
@@ -5813,8 +5815,17 @@ class BuilderAutomationService:
                 ),
                 None,
             )
-            package_digest = str(delivery.get("package_digest") or "").strip()
-            source_revision = str(delivery.get("source_revision") or "").strip()
+            package_digest = str(
+                primary.get("package_digest")
+                if delivery_status == "rejected"
+                else delivery.get("package_digest")
+                or ""
+            ).strip()
+            source_revision = str(
+                primary.get("source_revision") or primary.get("commit") or ""
+                if delivery_status == "rejected"
+                else delivery.get("source_revision") or ""
+            ).strip()
             if not primary or (
                 str(primary.get("package_digest") or "").strip() != package_digest
                 or str(
@@ -5870,25 +5881,26 @@ class BuilderAutomationService:
                 "task_id": repackage_session.get("current_task_id"),
                 "purpose": "recovery",
             }
-            self._workflow().transition(
-                object_type,
-                object_id,
-                "candidate_stale",
-                actor=actor_ref,
-                reason="Invalidate the old Project release identity before zero-model repackage",
-                metadata={
-                    **common_metadata,
-                    "candidate_id": str(delivery.get("candidate_id") or ""),
-                    "rebase_plan": {
-                        "stale_reason": "release_abi_repackage",
-                        "source_change_id": str(
-                            delivery.get("checkpoint_change_id") or ""
-                        ),
+            if delivery_status == "checkpoint":
+                self._workflow().transition(
+                    object_type,
+                    object_id,
+                    "candidate_stale",
+                    actor=actor_ref,
+                    reason="Invalidate the old Project release identity before zero-model repackage",
+                    metadata={
+                        **common_metadata,
+                        "candidate_id": str(delivery.get("candidate_id") or ""),
+                        "rebase_plan": {
+                            "stale_reason": "release_abi_repackage",
+                            "source_change_id": str(
+                                delivery.get("checkpoint_change_id") or ""
+                            ),
+                        },
+                        "run_id": f"repackage:{operation_key}:invalidate",
+                        "idempotency_key": f"{operation_key}:invalidate",
                     },
-                    "run_id": f"repackage:{operation_key}:invalidate",
-                    "idempotency_key": f"{operation_key}:invalidate",
-                },
-            )
+                )
             self._workflow().transition(
                 object_type,
                 object_id,
@@ -6232,13 +6244,34 @@ class BuilderAutomationService:
         self,
         session: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Rewind a source-clean automatic browser repair to its validated source."""
+        """Rewind a source-clean browser repair to its validated source.
+
+        Besides cancellation, a repair model may correctly report a blocking
+        Core/Client development feedback item and make no candidate changes.
+        Once the operator repairs that platform layer, explicit validated-result
+        recovery must be able to rerun the independent gates without asking the
+        model to rediscover or edit the already validated application.
+        """
 
         current = copy.deepcopy(dict(session))
         task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
+        failure = (
+            current.get("last_failure")
+            if isinstance(current.get("last_failure"), Mapping)
+            else {}
+        )
+        cancelled_repair = bool(
+            str(current.get("status") or "") == "cancelled"
+            and str(task.get("status") or "") == "cancelled"
+        )
+        platform_feedback_repair = bool(
+            str(current.get("status") or "") == "failed"
+            and str(task.get("status") or "") == "failed"
+            and str(failure.get("stage") or "") == "development_feedback"
+            and str(failure.get("failure_class") or "") == "capability_blocked"
+        )
         if (
-            str(current.get("status") or "") != "cancelled"
-            or str(task.get("status") or "") != "cancelled"
+            not (cancelled_repair or platform_feedback_repair)
             or not isinstance(current.get("pending_browser_feedback"), Mapping)
             or int(current.get("browser_feedback_repair_count") or 0) <= 0
         ):
@@ -6307,6 +6340,9 @@ class BuilderAutomationService:
                 "cancelled_task_id": current_task_id,
                 "source_task_id": source_task_id,
                 "reason": (
+                    "clean_platform_feedback_browser_repair_resolved"
+                    if platform_feedback_repair
+                    else
                     "clean_started_browser_feedback_repair_cancelled"
                     if attempts > 0
                     else "unstarted_browser_feedback_repair_cancelled"
@@ -6316,7 +6352,7 @@ class BuilderAutomationService:
         )
         restored["cancelled_repair_recovery_history"] = recovery_history[-20:]
         restored["updated_at"] = recovery_history[-1]["recovered_at"]
-        self._save_session(restored)
+        self._save_session(restored, allow_lineage_rewind=True)
         return restored
 
     def status(
@@ -13938,6 +13974,7 @@ class BuilderAutomationService:
         session: Mapping[str, Any],
         *,
         emit_projection: bool = True,
+        allow_lineage_rewind: bool = False,
     ) -> dict[str, Any]:
         payload = self._persistence_projection(session)
         path = self._session_path(
@@ -13953,9 +13990,13 @@ class BuilderAutomationService:
                 previous = json.loads(path.read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError):
                 previous = None
-            if isinstance(previous, Mapping) and _prefer_persisted_session(
+            if (
+                not allow_lineage_rewind
+                and isinstance(previous, Mapping)
+                and _prefer_persisted_session(
                 self._hydrate_session_compatibility(previous),
                 self._hydrate_session_compatibility(payload),
+                )
             ):
                 persisted = dict(previous)
                 _write_json(compact_path, self._compact_status_payload(persisted))

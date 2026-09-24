@@ -137,6 +137,7 @@ class GoogleGmailProvider:
         client_secret: str = "",
         redirect_uri: str = "",
         clock: Callable[[], float] = time.time,
+        oauth_configuration_loaded: bool = True,
     ) -> None:
         self.vault = vault
         self.applications = applications
@@ -146,6 +147,7 @@ class GoogleGmailProvider:
         self.client_secret = _text(client_secret)
         self.redirect_uri = _text(redirect_uri)
         self.clock = clock
+        self._oauth_configuration_loaded = bool(oauth_configuration_loaded)
 
     @classmethod
     def from_context(
@@ -160,12 +162,12 @@ class GoogleGmailProvider:
             raise GoogleGmailProviderError("credential_vault_unavailable")
         authority = getattr(ctx, "authority_state_dir", None) or ctx.paths.state_dir()
         applications = get_application_service(authority)
+        # Windows Keyring access is comparatively expensive. Most provider
+        # operations, including connection_status, do not need the OAuth
+        # client configuration. Keep environment lookup eager (it is cheap),
+        # but defer vault reads until an authorization or refresh operation.
         client_id = _text(os.getenv("ADAOS_GOOGLE_OAUTH_CLIENT_ID"))
         client_secret = _text(os.getenv("ADAOS_GOOGLE_OAUTH_CLIENT_SECRET"))
-        if not client_id:
-            client_id = _text(vault.get("provider:google.oauth:client_id", default=None))
-        if not client_secret:
-            client_secret = _text(vault.get("provider:google.oauth:client_secret", default=None))
         base = _text(os.getenv("ADAOS_SELF_BASE_URL"))
         if not base:
             config = getattr(ctx, "config", None)
@@ -181,7 +183,21 @@ class GoogleGmailProvider:
             client_secret=client_secret,
             redirect_uri=redirect_uri,
             clock=clock,
+            oauth_configuration_loaded=False,
         )
+
+    def _ensure_oauth_configuration(self) -> None:
+        if self._oauth_configuration_loaded:
+            return
+        if not self.client_id:
+            self.client_id = _text(
+                self.vault.get("provider:google.oauth:client_id", default=None)
+            )
+        if not self.client_secret:
+            self.client_secret = _text(
+                self.vault.get("provider:google.oauth:client_secret", default=None)
+            )
+        self._oauth_configuration_loaded = True
 
     @staticmethod
     def _state_key(state: str) -> str:
@@ -302,6 +318,7 @@ class GoogleGmailProvider:
         account_id: str = GOOGLE_GMAIL_PROVIDER_ID,
         candidate_permission_profile: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        self._ensure_oauth_configuration()
         if not self.client_id or not self.redirect_uri:
             raise GoogleGmailProviderError("google_oauth_not_configured")
         _release, declaration = self._provider_declaration(
@@ -435,6 +452,9 @@ class GoogleGmailProvider:
         authorization_code = _text(code)
         if not authorization_code:
             raise GoogleGmailProviderError("oauth_code_missing")
+        self._ensure_oauth_configuration()
+        if not self.client_id:
+            raise GoogleGmailProviderError("google_oauth_not_configured")
         token_form = {
             "client_id": self.client_id,
             "code": authorization_code,
@@ -536,6 +556,9 @@ class GoogleGmailProvider:
         }
 
     def _refresh(self, credential: Mapping[str, Any]) -> dict[str, Any]:
+        self._ensure_oauth_configuration()
+        if not self.client_id:
+            raise GoogleGmailProviderError("google_oauth_not_configured")
         refresh_token = _text(credential.get("refresh_token"))
         if not refresh_token:
             raise GoogleGmailProviderError("gmail_reconnect_required")

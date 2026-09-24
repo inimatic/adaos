@@ -52,6 +52,16 @@ class FakeVault:
         self.values.pop(key, None)
 
 
+class CountingVault(FakeVault):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads: list[str] = []
+
+    def get(self, key: str, *, default=None, scope="profile"):
+        self.reads.append(key)
+        return super().get(key, default=default, scope=scope)
+
+
 @dataclass
 class FakeResponse:
     status_code: int
@@ -441,6 +451,36 @@ def test_sdk_exports_the_bounded_public_provider_error() -> None:
         "status_code": 503,
         "retryable": True,
     }
+
+
+def test_provider_context_defers_oauth_keyring_reads_until_authorization(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = CountingVault()
+    vault.values.update({
+        "provider:google.oauth:client_id": "client-id",
+        "provider:google.oauth:client_secret": "client-secret",
+    })
+    monkeypatch.delenv("ADAOS_GOOGLE_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ADAOS_GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
+    provider = GoogleGmailProvider.from_context(
+        SimpleNamespace(
+            credential_vault=vault,
+            authority_state_dir=tmp_path,
+            paths=SimpleNamespace(state_dir=lambda: tmp_path),
+            config=SimpleNamespace(local_api_url="http://127.0.0.1:8777"),
+        )
+    )
+
+    assert vault.reads == []
+    provider._ensure_oauth_configuration()
+    assert vault.reads == [
+        "provider:google.oauth:client_id",
+        "provider:google.oauth:client_secret",
+    ]
+    assert provider.client_id == "client-id"
+    assert provider.client_secret == "client-secret"
 
 
 def test_oauth_callback_returns_safe_error_when_provider_is_unavailable(

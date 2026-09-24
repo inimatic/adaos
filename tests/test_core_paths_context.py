@@ -9,6 +9,7 @@ from adaos.apps import autostart_runner
 from adaos.services import agent_context
 from adaos.services import autostart, core_slots, core_update, hub_root_outbox_store, hub_root_protocol_store
 from adaos.services.runtime_paths import is_core_slot_path, source_checkout_base_dir_conflict
+from adaos.services.runtime_paths import current_state_dir
 
 
 class _FakePaths:
@@ -39,6 +40,18 @@ def test_core_slots_prefers_context_base_dir(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr(agent_context, "get_ctx", lambda: ctx)
 
     assert core_slots.slot_dir("A") == (tmp_path / "custom-base" / "state" / "core_slots" / "slots" / "A").resolve()
+
+
+def test_hot_context_state_path_does_not_resolve_through_filesystem(monkeypatch, tmp_path: Path) -> None:
+    ctx = _FakeCtx(tmp_path / "custom-base", tmp_path / "repo" / "src" / "adaos")
+    monkeypatch.setattr(agent_context, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda _self, *args, **kwargs: pytest.fail("authoritative context path used realpath"),
+    )
+
+    assert current_state_dir() == (tmp_path / "custom-base" / "state").absolute()
 
 
 def test_core_update_prefers_context_paths(monkeypatch, tmp_path: Path) -> None:

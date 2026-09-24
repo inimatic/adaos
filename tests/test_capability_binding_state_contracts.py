@@ -243,7 +243,6 @@ def test_portable_contract_distinguishes_pagination_from_credential_tokens() -> 
 
     assert accepted.capability_ref == "capability:mail.messages.list"
     payload = accepted.to_dict()
-    payload.pop(accepted.DIGEST_FIELD)
     payload["operations"][0]["input_schema"]["properties"]["access_token"] = {
         "type": "string"
     }
@@ -477,6 +476,14 @@ def test_package_relocation_changes_delivery_not_binding_identity(tmp_path: Path
     assert deliveries[0].digest != deliveries[1].digest
     assert {item.binding_definition_digest for item in deliveries} == {definition.digest}
 
+    catalog = PortableContractCatalog(tmp_path / "catalog")
+    first_path = catalog.put(deliveries[0])
+    second_path = catalog.put(deliveries[1])
+
+    assert first_path.is_file()
+    assert second_path.is_file()
+    assert first_path != second_path
+
 
 def test_portable_catalog_is_content_addressed_and_rejects_identity_mutation(tmp_path: Path) -> None:
     catalog = PortableContractCatalog(tmp_path / "catalog")
@@ -493,3 +500,16 @@ def test_portable_catalog_is_content_addressed_and_rejects_identity_mutation(tmp
     )
     with pytest.raises(PortableContractConflict, match="different content"):
         catalog.put(CapabilityContract.from_mapping(changed))
+
+
+def test_portable_catalog_returns_verified_matching_capabilities(tmp_path: Path) -> None:
+    catalog = PortableContractCatalog(tmp_path / "catalog")
+    capability = _capability()
+    catalog.put(capability)
+
+    assert catalog.matching_capabilities(
+        capability.capability_ref, "^1.0.0"
+    ) == (capability,)
+    assert catalog.matching_capabilities(
+        capability.capability_ref, "^2.0.0"
+    ) == ()

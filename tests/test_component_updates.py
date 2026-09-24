@@ -274,6 +274,100 @@ def test_local_trial_api_requires_explicit_confirmation(monkeypatch):
     assert calls[0][1]["actor"] == "user:owner"
 
 
+def test_local_trial_api_returns_bounded_acceptance_receipt(monkeypatch):
+    from types import SimpleNamespace
+
+    from adaos.services import personalization_runtime
+
+    large_projection = "private-workflow-state" * 100_000
+    service = SimpleNamespace(accept_local_trial=lambda *_args, **_kwargs: {
+        "ok": True,
+        "workflow": {
+            "generation": 65,
+            "delivery": {"status": "accepted", "internal": large_projection},
+            "publication": {"status": "published", "internal": large_projection},
+        },
+        "installation": {
+            "application_id": "gmail_cbs_cleanroom",
+            "status": "installed",
+            "installed_release_digest": "sha256:release",
+            "revision": 2,
+            "internal": large_projection,
+        },
+        "runtime_selection": {
+            "application_id": "gmail_cbs_cleanroom",
+            "source": "stable_installation",
+            "release_digest": "sha256:release",
+            "revision": 2,
+        },
+        "runtime_refresh": {"internal": large_projection},
+        "application_verification": {
+            "application_id": "gmail_cbs_cleanroom",
+            "release_digest": "sha256:release",
+            "stage": "publication",
+            "report_digest": "sha256:verification",
+            "internal": large_projection,
+        },
+        "publication_verification": {
+            "publication_allowed": True,
+            "promoted": True,
+            "report": {"report_digest": "sha256:publication", "internal": large_projection},
+        },
+    })
+    monkeypatch.setattr(personalization_runtime, "current_user_id", lambda: "owner")
+    app = FastAPI()
+    app.include_router(updates_api.router, prefix="/api/component-updates")
+    app.dependency_overrides[updates_api._get_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/component-updates/test/accept-trial",
+        json={
+            "candidate_id": "candidate",
+            "candidate_digest": "sha256:candidate",
+            "webspace_id": "desktop",
+            "confirmed": True,
+        },
+        headers={"X-AdaOS-Token": "dev-local-token"},
+    )
+
+    assert response.status_code == 200
+    assert len(response.content) < 2_000
+    assert "private-workflow-state" not in response.text
+    assert response.json() == {
+        "schema": "adaos.component_trial_acceptance_receipt.v1",
+        "ok": True,
+        "workflow": {
+            "generation": 65,
+            "delivery_status": "accepted",
+            "publication_status": "published",
+        },
+        "installation": {
+            "application_id": "gmail_cbs_cleanroom",
+            "status": "installed",
+            "installed_release_digest": "sha256:release",
+            "revision": 2,
+        },
+        "runtime_selection": {
+            "application_id": "gmail_cbs_cleanroom",
+            "source": "stable_installation",
+            "release_digest": "sha256:release",
+            "revision": 2,
+        },
+        "application_verification": {
+            "application_id": "gmail_cbs_cleanroom",
+            "release_digest": "sha256:release",
+            "stage": "publication",
+            "report_digest": "sha256:verification",
+        },
+        "publication_verification": {
+            "publication_allowed": True,
+            "promoted": True,
+            "report_digest": "sha256:publication",
+        },
+    }
+
+
 def test_local_trial_api_reports_runtime_conflict_without_server_error(monkeypatch):
     from types import SimpleNamespace
 

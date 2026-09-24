@@ -680,6 +680,19 @@ def test_final_verification_blocks_drift_and_admits_scoped_release(
             "family_tasks", release_digest=release.release_digest, stage="publication"
         )
 
+    promoted = management.promote_trial_verification_for_publication(
+        "family_tasks",
+        release_digest=release.release_digest,
+        publication_evidence="release:trial-runtime:candidate.family_tasks.1.0.0#" + "f" * 64,
+        actor_ref="user:owner",
+    )
+    assert promoted["publication_allowed"] is True
+    assert promoted["promoted"] is True
+    admitted_promoted = management.admit_release_stage(
+        "family_tasks", release_digest=release.release_digest, stage="publication"
+    )
+    assert admitted_promoted["report_digest"] == promoted["report"]["report_digest"]
+
     publication = _verification(management, release, scope="publication")
     admitted_publication = management.admit_release_stage(
         "family_tasks", release_digest=release.release_digest, stage="publication"

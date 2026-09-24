@@ -8,8 +8,10 @@ import pytest
 from adaos.services.bootstrap_runtime import BootstrapBootCoordinator, BootstrapLifecycleCoordinator
 from adaos.services.bootstrap_runtime.boot_sequence import (
     _deferred_service_skills_delay_s,
+    _deferred_service_skills_max_wait_s,
     _service_skills_block_boot,
     _start_services_before_managed_nlu,
+    _wait_for_first_paint_before_services,
 )
 
 
@@ -27,6 +29,70 @@ async def test_service_skills_do_not_block_boot_unless_explicitly_enabled(monkey
     assert _deferred_service_skills_delay_s() == 30.0
     monkeypatch.setenv("ADAOS_SERVICE_SKILLS_START_DELAY_S", "0")
     assert _deferred_service_skills_delay_s() == 0.5
+
+    monkeypatch.delenv("ADAOS_SERVICE_SKILLS_FIRST_PAINT_MAX_WAIT_S", raising=False)
+    assert _deferred_service_skills_max_wait_s() == 120.0
+
+
+async def test_service_start_waits_for_first_paint_after_minimum_delay(monkeypatch) -> None:
+    sleeps: list[float] = []
+    observations = iter([False, True])
+    logs: list[str] = []
+
+    async def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setenv("ADAOS_SERVICE_SKILLS_START_DELAY_S", "2")
+    monkeypatch.setenv("ADAOS_SERVICE_SKILLS_FIRST_PAINT_MAX_WAIT_S", "30")
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    monkeypatch.setattr(
+        "adaos.services.yjs.gateway_ws.desktop_first_paint_observed",
+        lambda: next(observations),
+    )
+    result = await _wait_for_first_paint_before_services(
+        log=SimpleNamespace(
+            info=lambda message, *_args: logs.append(message),
+            debug=lambda *_args, **_kwargs: None,
+        )
+    )
+
+    assert result == "first_paint_observed"
+    assert sleeps == [2.0, 0.5]
+    assert logs == [
+        "desktop first paint observed before service skill startup waited_s=%.3f"
+    ]
+
+
+async def test_first_paint_barrier_requires_every_started_room_ready() -> None:
+    from adaos.services.yjs import gateway_ws
+
+    with gateway_ws._YROOM_LIFECYCLE_LOCK:
+        previous = dict(gateway_ws._YROOM_LIFECYCLE)
+        gateway_ws._YROOM_LIFECYCLE.clear()
+        gateway_ws._YROOM_LIFECYCLE["desktop-dev"] = {
+            "bootstrap_total": 1,
+            "last_bootstrap_state": "ready",
+            "open_total": 1,
+        }
+    try:
+        assert gateway_ws.desktop_first_paint_observed() is True
+        with gateway_ws._YROOM_LIFECYCLE_LOCK:
+            gateway_ws._YROOM_LIFECYCLE["desktop"] = {
+                "bootstrap_total": 1,
+                "last_bootstrap_state": "starting",
+                "open_total": 0,
+            }
+        assert gateway_ws.desktop_first_paint_observed() is False
+        with gateway_ws._YROOM_LIFECYCLE_LOCK:
+            gateway_ws._YROOM_LIFECYCLE["desktop"].update(
+                last_bootstrap_state="ready",
+                open_total=1,
+            )
+        assert gateway_ws.desktop_first_paint_observed() is True
+    finally:
+        with gateway_ws._YROOM_LIFECYCLE_LOCK:
+            gateway_ws._YROOM_LIFECYCLE.clear()
+            gateway_ws._YROOM_LIFECYCLE.update(previous)
 
 
 async def test_installed_services_start_before_managed_nlu_maintenance() -> None:

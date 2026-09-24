@@ -18,7 +18,10 @@ def test_payload_only_materialize_updates_ready_materialization_from_resolved(mo
     async def _fake_open_readonly(_webspace_id: str):
         yield object()
 
-    def _fake_collect(_ydoc, _webspace_id: str, **_kwargs):
+    captured: dict[str, object] = {}
+
+    def _fake_collect(_ydoc, _webspace_id: str, **kwargs):
+        captured.update(kwargs)
         return webspace_runtime_module.WebspaceResolverInputs(
             webspace_id=webspace_id,
             scenario_id="prompt_engineer_scenario",
@@ -62,6 +65,16 @@ def test_payload_only_materialize_updates_ready_materialization_from_resolved(mo
         )
 
     monkeypatch.setattr(webspace_runtime_module, "_open_readonly_operational_ydoc", _fake_open_readonly)
+    monkeypatch.setattr(
+        runtime,
+        "_prepare_materialization_catalog_sources_sync",
+        lambda *_args, **_kwargs: (
+            [{"name": "gmail_skill"}],
+            "skills-fingerprint",
+            [("gmail", "Gmail", "mail")],
+            {"prepared": True, "trial_active": False},
+        ),
+    )
     monkeypatch.setattr(runtime, "_collect_resolver_inputs_in_doc", _fake_collect)
     monkeypatch.setattr(runtime, "resolve_webspace", _fake_resolve)
     webspace_runtime_module._set_webspace_rebuild_status(
@@ -91,6 +104,12 @@ def test_payload_only_materialize_updates_ready_materialization_from_resolved(mo
     assert state["materialization"]["readiness_state"] == "ready"
     assert state["materialization"]["missing_required_branches"] == []
     assert state["materialization"]["snapshot_source"] == "semantic_rebuild:payload_only"
+    assert captured["skill_decls_override"] == [{"name": "gmail_skill"}]
+    assert captured["desktop_scenarios_override"] == [("gmail", "Gmail", "mail")]
+    assert captured["external_inputs_override"] == {
+        "prepared": True,
+        "trial_active": False,
+    }
 
 
 def test_scenario_switch_rebuild_skips_workflow_sync_by_default(monkeypatch) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from adaos.sdk import navigation
@@ -75,6 +76,58 @@ def _published_candidate_matches(
         or ""
     ).strip()
     return published_id == candidate_id and published_digest == candidate_digest
+
+
+def _admit_native_cbs_trial(
+    *,
+    object_id: str,
+    project_id: str,
+    candidate_id: str,
+    release_digest: str,
+    task_id: str,
+) -> dict[str, Any] | None:
+    """Admit an exact CBS release before it receives Trial runtime authority."""
+
+    from adaos.sdk.core._ctx import require_ctx
+    from adaos.services.applications.cbs import ApplicationCBSService
+    from adaos.services.applications.cbs_admission import (
+        NativeApplicationCBSAdmissionService,
+    )
+    from adaos.services.artifact_pipeline.channels import ReleaseRepository
+    from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+
+    state_dir = Path(require_ctx("sdk.builder.lifecycle").paths.state_dir()).resolve()
+    application_ref = f"scenario:{object_id}"
+    compilation = ApplicationCBSService(state_dir).inspect(application_ref)
+    if compilation is None:
+        return None
+    artifact_root = state_dir / "artifact_pipeline"
+    release_plan = ReleaseRepository(
+        artifact_root / "release-cache"
+    ).get_release(project_id, release_digest)
+    admission = NativeApplicationCBSAdmissionService(state_dir).admit(
+        application_ref=application_ref,
+        compilation=compilation,
+        release_plan=release_plan,
+        package_store=ContentAddressedPackageStore(artifact_root / "packages"),
+        workspace_ref=f"trial:{candidate_id}",
+        evidence_context={
+            "candidate_id": candidate_id,
+            "task_id": task_id,
+            "source": "sdk.builder.lifecycle.prepare_trial",
+        },
+    )
+    if admission.get("status") != "admitted":
+        unresolved = ", ".join(
+            str(item.get("requirement_ref") or "unknown")
+            for item in admission.get("unresolved") or []
+            if isinstance(item, Mapping)
+        )
+        raise ValueError(
+            "Builder Trial CBS production admission is unresolved: "
+            + (unresolved or "unknown requirement")
+        )
+    return dict(admission)
 
 
 def _candidate_preparation_failure_is_known(exc: Exception) -> bool:
@@ -286,6 +339,32 @@ def prepare_trial(
         )
         raise
     result = {**dict(result), "application_verification": access_verification}
+    cbs_admission = None
+    if object_type == "scenario":
+        try:
+            cbs_admission = _admit_native_cbs_trial(
+                object_id=object_id,
+                project_id=str(release.get("project_id") or "").strip(),
+                candidate_id=candidate_id,
+                release_digest=release_digest,
+                task_id=str(automation_state.get("head_task_id") or "").strip(),
+            )
+        except Exception as exc:
+            workflow.transition(
+                object_type,
+                object_id,
+                "candidate_preparation_failed",
+                actor=actor,
+                metadata={
+                    "error": str(exc),
+                    "candidate_id": candidate_id,
+                    "release_digest": release_digest,
+                    "idempotency_key": f"{idempotency_key}:cbs-admission-failure",
+                },
+            )
+            raise
+        if cbs_admission is not None:
+            result["cbs_admission"] = cbs_admission
     activation = _mapping(result.get("trial_activation"))
     if object_type == "scenario" and activation:
         from adaos.sdk.builder.applications import place_local_trial
@@ -716,6 +795,24 @@ def invoke_activity_command(
             webspace_id=webspace_id,
         )
     if token == "start_trial":
+        verification_evidence = (
+            dict(details["verification_evidence"])
+            if isinstance(details.get("verification_evidence"), Mapping)
+            else automation.trial_verification_evidence(
+                object_type=object_type,
+                object_id=object_id,
+                webspace_id=webspace_id,
+            )
+        )
+        if verification_evidence.get("ok") is not True:
+            raise ValueError(
+                "Builder Trial verification evidence is unavailable: "
+                + str(
+                    verification_evidence.get("reason")
+                    or verification_evidence.get("status")
+                    or "unknown"
+                )
+            )
         return prepare_trial(
             object_type,
             object_id,
@@ -724,16 +821,16 @@ def invoke_activity_command(
             source_webspace_id=webspace_id,
             target_webspace_id=str(details.get("target_webspace_id") or "").strip()
             or None,
+            publication_project_ref=str(
+                details.get("publication_project_ref") or ""
+            ).strip()
+            or None,
             permission_decision=(
                 details.get("permission_decision")
                 if isinstance(details.get("permission_decision"), (bool, Mapping))
                 else None
             ),
-            verification_evidence=(
-                details.get("verification_evidence")
-                if isinstance(details.get("verification_evidence"), Mapping)
-                else None
-            ),
+            verification_evidence=verification_evidence,
         )
     if token in {"accept_trial", "reject_trial"}:
         return decide_trial(

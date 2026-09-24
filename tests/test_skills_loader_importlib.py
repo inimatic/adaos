@@ -184,6 +184,96 @@ def test_importlib_loader_keeps_declaration_loading_off_event_loop(tmp_path, mon
     assert asyncio.run(_run()) >= 6
 
 
+def test_importlib_loader_defers_tool_only_handler_but_loads_its_declarations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    skill_dir = tmp_path / "tool_only_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "from adaos.sdk.core.decorators import tool\n"
+        "@tool('demo', side_effects='none')\n"
+        "def demo(_payload=None): return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "name: tool_only_skill\nversion: '1.0.0'\n"
+        "runtime:\n  activation:\n    mode: on_demand\n"
+        "    startup_allowed: false\n    background_refresh: false\n",
+        encoding="utf-8",
+    )
+    imports: list[Path] = []
+    declarations: list[Path] = []
+    safety_scans: list[Path] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda path, **_kwargs: imports.append(path))
+    monkeypatch.setattr(
+        loader,
+        "_load_skill_declarations",
+        lambda path, _loaded, *, skill_name: declarations.append(path),
+    )
+    monkeypatch.setattr(
+        loader,
+        "_runtime_safety_issues",
+        lambda path: safety_scans.append(path) or [],
+    )
+
+    asyncio.run(loader.import_all_handlers(tmp_path))
+
+    assert declarations == [handler]
+    assert imports == []
+    assert safety_scans == []
+
+
+def test_importlib_loader_imports_source_subscriber_when_manifest_inventory_is_stale(
+    tmp_path: Path, monkeypatch
+) -> None:
+    skill_dir = tmp_path / "stale_manifest_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "from adaos.sdk.core.decorators import subscribe\n"
+        "@subscribe('demo.changed')\n"
+        "async def changed(_event): return None\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "name: stale_manifest_skill\nversion: '1.0.0'\n"
+        "events:\n  subscribe: []\n  publish: []\n"
+        "runtime:\n  activation:\n    mode: lazy\n"
+        "    startup_allowed: false\n    background_refresh: true\n",
+        encoding="utf-8",
+    )
+    imports: list[Path] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda path, **_kwargs: imports.append(path))
+
+    asyncio.run(loader.import_all_handlers(tmp_path))
+
+    assert imports == [handler]
+
+
+def test_importlib_loader_honors_explicit_eager_policy_for_tool_only_handler(
+    tmp_path: Path, monkeypatch
+) -> None:
+    skill_dir = tmp_path / "eager_tool_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text(
+        "name: eager_tool_skill\nversion: '1.0.0'\n"
+        "runtime:\n  activation:\n    mode: eager\n",
+        encoding="utf-8",
+    )
+    imports: list[Path] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda path, **_kwargs: imports.append(path))
+
+    asyncio.run(loader.import_all_handlers(tmp_path))
+
+    assert imports == [handler]
+
+
 def test_runtime_handler_discovery_uses_bounded_source_layout(tmp_path, monkeypatch) -> None:
     runtime_skill = tmp_path / ".runtime" / "bounded_skill"
     version_root = runtime_skill / "v1.0"

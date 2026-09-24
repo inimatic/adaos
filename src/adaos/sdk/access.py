@@ -154,6 +154,23 @@ def require(capability: str) -> dict[str, Any]:
     scope = current_caller_scope()
     if scope is not None and scope != ScopeRef("skill", skill.name):
         raise CallerAccessDenied("caller_credential_scope_mismatch")
+    verified_application = application()
+    if (
+        isinstance(verified_application, dict)
+        and verified_application.get("_ingress_authorized_permission_id") == capability
+    ):
+        # Trusted ingress already admitted and audited this exact Application
+        # permission for the bound release, subject and tool. Re-evaluating it
+        # here used to append a second generic policy audit and rewrite the
+        # multi-megabyte access store on every provider read.
+        return {
+            "decision": "allow",
+            "actor": actor.to_dict(),
+            "action": capability,
+            "scope": ScopeRef("skill", skill.name).to_dict(),
+            "resource": f"skill:{skill.name}",
+            "reason_code": "application_ingress_authorized",
+        }
     decision = personalization_access_service(ctx).evaluate(
         actor=actor,
         action=capability,

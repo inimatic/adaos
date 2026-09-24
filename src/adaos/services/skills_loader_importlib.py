@@ -15,6 +15,7 @@ from typing import Any, Iterable, Optional, Tuple
 from adaos.ports.skills_loader import SkillsLoaderPort
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.activation_assessment import handler_may_subscribe
 from adaos.services.skill.declarations import load_runtime_skill_declarations
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from adaos.services.skill.validation import runtime_async_blocking_issues
@@ -403,7 +404,9 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         if source_sync_enabled:
             await asyncio.to_thread(self._sync_runtime_from_repo_workspace_if_missing, root)
             await asyncio.to_thread(self._sync_runtime_from_workspace, root)
-        loaded: set[str] = set()
+        selected: set[str] = set()
+        imported: set[str] = set()
+        deferred: set[str] = set()
         loaded_declaration_manifests: set[Path] = set()
         runtime_safety_cache: dict[Path, list[dict[str, Any]]] = {}
         import_timings: list[dict[str, Any]] = []
@@ -426,7 +429,9 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         import_timings.extend(
             await self._load_discovered_handlers(
                 runtime_handlers,
-                loaded=loaded,
+                selected=selected,
+                imported=imported,
+                deferred=deferred,
                 loaded_declaration_manifests=loaded_declaration_manifests,
                 runtime_safety_cache=runtime_safety_cache,
                 skills_root=root,
@@ -437,13 +442,15 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         # Dev/fast-path: load handlers straight from the workspace tree when a
         # skill does not have an installed runtime bundle under .runtime.
         discovery_started_at = time.perf_counter()
-        excluded_skills = loaded | deactivated_runtime_skills
+        excluded_skills = selected | deactivated_runtime_skills
         workspace_handlers = await asyncio.to_thread(self._discover_workspace_handlers, root, excluded_skills)
         discovery_timings["workspace"] = round((time.perf_counter() - discovery_started_at) * 1000.0, 3)
         import_timings.extend(
             await self._load_discovered_handlers(
                 workspace_handlers,
-                loaded=loaded,
+                selected=selected,
+                imported=imported,
+                deferred=deferred,
                 loaded_declaration_manifests=loaded_declaration_manifests,
                 runtime_safety_cache=runtime_safety_cache,
                 skills_root=root,
@@ -454,13 +461,15 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         # Repo-bundled workspace skills are a final fallback for builtin skills
         # when the node-local workspace tree does not contain the sources.
         discovery_started_at = time.perf_counter()
-        excluded_skills = loaded | deactivated_runtime_skills
+        excluded_skills = selected | deactivated_runtime_skills
         repo_handlers = await asyncio.to_thread(self._discover_repo_workspace_handlers, root, excluded_skills)
         discovery_timings["repo_workspace"] = round((time.perf_counter() - discovery_started_at) * 1000.0, 3)
         import_timings.extend(
             await self._load_discovered_handlers(
                 repo_handlers,
-                loaded=loaded,
+                selected=selected,
+                imported=imported,
+                deferred=deferred,
                 loaded_declaration_manifests=loaded_declaration_manifests,
                 runtime_safety_cache=runtime_safety_cache,
                 skills_root=root,
@@ -469,10 +478,13 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         )
         slowest_imports = sorted(import_timings, key=lambda item: float(item.get("elapsed_ms") or 0.0), reverse=True)[:5]
         _LOG.info(
-            "skill handler import completed elapsed_s=%.3f loaded_skills=%d quarantined_skills=%d source_sync=%s candidate=%s "
+            "skill handler import completed elapsed_s=%.3f selected_skills=%d imported_skills=%d deferred_skills=%d "
+            "quarantined_skills=%d source_sync=%s candidate=%s "
             "discovery_ms=%s slowest_imports=%s",
             time.perf_counter() - started_at,
-            len(loaded),
+            len(selected),
+            len(imported),
+            len(deferred),
             len(deactivated_runtime_skills),
             source_sync_enabled,
             self._runtime_candidate_mode(),
@@ -690,7 +702,9 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         self,
         handlers: Iterable[Tuple[Path, Optional[str]]],
         *,
-        loaded: set[str],
+        selected: set[str],
+        imported: set[str],
+        deferred: set[str],
         loaded_declaration_manifests: set[Path],
         runtime_safety_cache: dict[Path, list[dict[str, Any]]],
         skills_root: Path,
@@ -704,6 +718,43 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         }.get(source, f"{source} skill handler")
         for handler, skill_name in handlers:
             handler_started_at = time.perf_counter()
+            if skill_name:
+                # Claim the selected runtime source before validation/import so
+                # a broken or intentionally deferred installed handler cannot
+                # fall through to an older workspace copy.
+                selected.add(skill_name)
+            declaration_started_at = time.perf_counter()
+            await asyncio.to_thread(
+                self._load_skill_declarations,
+                handler,
+                loaded_declaration_manifests,
+                skill_name=skill_name,
+            )
+            declaration_ms = (time.perf_counter() - declaration_started_at) * 1000.0
+            boot_import = await asyncio.to_thread(self._requires_boot_import, handler)
+            if boot_import is False:
+                if skill_name:
+                    deferred.add(skill_name)
+                timing = self._handler_import_timing(
+                    handler=handler,
+                    skill_name=skill_name,
+                    source=source,
+                    elapsed_ms=(time.perf_counter() - handler_started_at) * 1000.0,
+                    declaration_ms=declaration_ms,
+                    import_ms=0.0,
+                    loaded=False,
+                )
+                timing["deferred"] = True
+                timing["defer_reason"] = "tool_invocation_imports_on_demand"
+                timings.append(timing)
+                _LOG.info(
+                    "deferred tool-only skill handler until invocation skill=%s source=%s path=%s",
+                    skill_name or "",
+                    source,
+                    handler,
+                )
+                await asyncio.sleep(self._handler_import_yield_sec())
+                continue
             safety_root = self._skill_source_root(handler)
             issues = runtime_safety_cache.get(safety_root)
             if issues is None:
@@ -730,14 +781,6 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 )
                 await asyncio.sleep(self._handler_import_yield_sec())
                 continue
-            declaration_started_at = time.perf_counter()
-            await asyncio.to_thread(
-                self._load_skill_declarations,
-                handler,
-                loaded_declaration_manifests,
-                skill_name=skill_name,
-            )
-            declaration_ms = (time.perf_counter() - declaration_started_at) * 1000.0
             import_started_at = time.perf_counter()
             loaded_ok = await self._try_load_handler_async(
                 handler,
@@ -758,12 +801,48 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             )
             if loaded_ok:
                 if skill_name:
-                    loaded.add(skill_name)
+                    imported.add(skill_name)
                     _LOG.info("imported %s skill=%s path=%s", source_label, skill_name, handler)
                 else:
                     _LOG.info("imported %s path=%s", source_label, handler)
             await asyncio.sleep(self._handler_import_yield_sec())
         return timings
+
+    @classmethod
+    def _requires_boot_import(cls, handler: Path) -> bool | None:
+        """Return whether a handler must be imported before event delivery.
+
+        Explicit eager/startup policy and manifest event declarations remain
+        authoritative. The source check covers legacy manifests whose event
+        inventory is incomplete. Unknown inputs preserve the old boot import.
+        """
+
+        manifest_path = cls._find_skill_manifest(handler)
+        if manifest_path is None:
+            return None
+        try:
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return None
+        if not isinstance(manifest, dict):
+            return None
+        runtime = manifest.get("runtime")
+        activation = runtime.get("activation") if isinstance(runtime, dict) else None
+        if isinstance(activation, dict) and (
+            str(activation.get("mode") or "").strip() == "eager"
+            or activation.get("startup_allowed") is True
+        ):
+            return True
+        events = manifest.get("events")
+        subscriptions = events.get("subscribe") if isinstance(events, dict) else None
+        if isinstance(subscriptions, list) and any(
+            isinstance(item, str) and item.strip() for item in subscriptions
+        ):
+            return True
+        may_subscribe = handler_may_subscribe(handler)
+        if may_subscribe is None:
+            return None
+        return bool(may_subscribe)
 
     @staticmethod
     def _skill_source_root(handler: Path) -> Path:

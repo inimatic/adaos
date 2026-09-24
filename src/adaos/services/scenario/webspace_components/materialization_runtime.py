@@ -165,31 +165,63 @@ class WebspaceMaterializationService:
                 )
             return resolved.to_registry_entry()
 
-        prepared_skill_decls = skill_decls_snapshot
-        prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
-        if prepared_skill_decls is None:
-            stage_started = time.perf_counter()
-            prepared_skill_decls, prepared_skill_fingerprint = await operations.run_materialization_cpu(
-                runtime._prepare_materialization_skill_decls_sync,
-                webspace_id,
-                skill_source_mode,
-            )
-            operations.record_timing(timings, "prepare_skill_decls", stage_started)
-
         operational_doc_started = time.perf_counter()
         operational_doc_close_started = operational_doc_started
         async with operations.open_readonly_operational_ydoc(webspace_id) as ydoc:
             operations.record_timing(timings, "open_operational_doc", operational_doc_started)
+            operations.raise_if_rebuild_request_superseded(webspace_id, request_id)
+            prepared_scenario_id = str(scenario_id or "").strip()
+            if not prepared_scenario_id:
+                ui_map = ydoc.get_map("ui")
+                prepared_scenario_id = (
+                    str(ui_map.get("current_scenario") or "web_desktop").strip()
+                    or "web_desktop"
+                )
+            prepared_skill_decls = skill_decls_snapshot
+            prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
+            stage_started = time.perf_counter()
+            if prepared_skill_decls is None:
+                (
+                    prepared_skill_decls,
+                    prepared_skill_fingerprint,
+                    desktop_scenarios,
+                    external_inputs,
+                ) = await operations.run_materialization_cpu(
+                    runtime._prepare_materialization_catalog_sources_sync,
+                    webspace_id,
+                    prepared_scenario_id,
+                    materialization_identity,
+                    source_mode_override=skill_source_mode,
+                )
+                operations.record_timing(timings, "prepare_catalog_sources", stage_started)
+            else:
+                (
+                    prepared_skill_decls,
+                    prepared_skill_fingerprint,
+                    desktop_scenarios,
+                    external_inputs,
+                ) = await operations.run_materialization_cpu(
+                    runtime._prepare_materialization_external_sources_sync,
+                    webspace_id,
+                    prepared_scenario_id,
+                    prepared_skill_decls,
+                    prepared_skill_fingerprint,
+                    materialization_identity,
+                    source_mode_override=skill_source_mode,
+                )
+                operations.record_timing(timings, "prepare_external_sources", stage_started)
             operations.raise_if_rebuild_request_superseded(webspace_id, request_id)
             stage_started = time.perf_counter()
             inputs = runtime._collect_resolver_inputs_in_doc(
                 ydoc,
                 webspace_id,
                 materialization_identity=materialization_identity,
-                scenario_id_override=scenario_id,
+                scenario_id_override=prepared_scenario_id,
                 skill_decls_override=prepared_skill_decls,
                 skill_decls_fingerprint_override=prepared_skill_fingerprint,
+                desktop_scenarios_override=desktop_scenarios,
                 scenario_content_override=scenario_content_override,
+                external_inputs_override=external_inputs,
             )
             operations.record_timing(timings, "collect_inputs", stage_started)
             collect_phase_timings = operations.copy_timing_map(runtime._last_collect_inputs_timings_ms) or {}

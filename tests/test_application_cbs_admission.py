@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import copy
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
@@ -236,6 +237,50 @@ def test_exact_application_release_admits_every_requirement_and_plan(tmp_path: P
     assert projection["resolution"]["status"] == "admitted"
     assert projection["resolution"]["requirements_resolved"] == 2
     assert projection["plan"]["status"] == "ready"
+
+
+def test_reissued_evidence_for_a_recompiled_release_has_a_distinct_identity(
+    tmp_path: Path,
+) -> None:
+    plan, store = _release(tmp_path)
+    compilation = _compilation()
+    clock = [FIXED_NOW]
+    service = NativeApplicationCBSAdmissionService(
+        tmp_path / "state", now=lambda: clock[0]
+    )
+
+    first = service.admit(
+        application_ref="scenario:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:candidate-mail",
+        evidence_context={"verification": "first"},
+    )
+    recompiled = copy.deepcopy(compilation)
+    recompiled["compiler_version"] = "1.2.0"
+    recompiled["compilation_digest"] = canonical_payload_digest(
+        {
+            key: value
+            for key, value in recompiled.items()
+            if key != "compilation_digest"
+        }
+    )
+    clock[0] += timedelta(seconds=1)
+
+    second = service.admit(
+        application_ref="scenario:mail_client",
+        compilation=recompiled,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:candidate-mail",
+        evidence_context={"verification": "second"},
+    )
+
+    assert first["status"] == second["status"] == "admitted"
+    assert {item["claim_ref"] for item in first["evidence"]}.isdisjoint(
+        item["claim_ref"] for item in second["evidence"]
+    )
 
 
 def test_exact_application_release_fails_closed_when_provider_is_missing(

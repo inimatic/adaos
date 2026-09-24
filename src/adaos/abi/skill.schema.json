@@ -907,6 +907,10 @@
           "type": "boolean",
           "description": "Whether background refresh loops are permitted when the skill is inactive."
         },
+        "assessment": {
+          "$ref": "#/$defs/skillActivationAssessment",
+          "description": "Deterministic Builder assessment that explains and pins the early-loading decision to the inspected handler source."
+        },
         "when": {
           "type": "object",
           "additionalProperties": false,
@@ -931,6 +935,52 @@
               "description": "Explicit webspace ids used when webspace_scope is listed."
             }
           }
+        }
+      }
+    },
+
+    "skillActivationAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "assessor",
+        "classification",
+        "handler_digest",
+        "observed_subscriptions",
+        "declared_subscriptions",
+        "dynamic_subscription_count",
+        "tool_count",
+        "reasons"
+      ],
+      "properties": {
+        "schema": { "const": "adaos.skill.activation_assessment.v1" },
+        "assessor": { "const": "builder.compiler" },
+        "classification": {
+          "type": "string",
+          "enum": ["tool_only", "event_subscriber", "startup_event_subscriber"]
+        },
+        "handler_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "observed_subscriptions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "declared_subscriptions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "dynamic_subscription_count": { "type": "integer", "minimum": 0 },
+        "tool_count": { "type": "integer", "minimum": 0 },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
         }
       }
     }

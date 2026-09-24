@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
+from adaos.services.applications.access import ApplicationAccessError
 from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 from adaos.services.component_updates import ComponentUpdateService
 
@@ -15,6 +16,59 @@ router = APIRouter(tags=["component-updates"], dependencies=[Depends(require_tok
 
 def _get_service() -> ComponentUpdateService:
     return ComponentUpdateService()
+
+
+def _acceptance_receipt(result: Any) -> dict[str, Any]:
+    """Return the stable acceptance identity, not its internal projections.
+
+    Publication carries full workflow and runtime-refresh diagnostics for local
+    recovery.  Sending those private projections to the desktop made a single
+    successful acceptance response exceed a megabyte even though the client
+    only needs acknowledgement and the newly selected runtime identity.
+    """
+
+    source = dict(result) if isinstance(result, dict) else {}
+    workflow = source.get("workflow") if isinstance(source.get("workflow"), dict) else {}
+    delivery = workflow.get("delivery") if isinstance(workflow.get("delivery"), dict) else {}
+    publication = workflow.get("publication") if isinstance(workflow.get("publication"), dict) else {}
+    installation = source.get("installation") if isinstance(source.get("installation"), dict) else {}
+    selection = source.get("runtime_selection") if isinstance(source.get("runtime_selection"), dict) else {}
+    verification = (
+        source.get("application_verification")
+        if isinstance(source.get("application_verification"), dict)
+        else {}
+    )
+    promoted = (
+        source.get("publication_verification")
+        if isinstance(source.get("publication_verification"), dict)
+        else {}
+    )
+    report = promoted.get("report") if isinstance(promoted.get("report"), dict) else {}
+    return {
+        "schema": "adaos.component_trial_acceptance_receipt.v1",
+        "ok": bool(source.get("ok", True)),
+        "workflow": {
+            "generation": workflow.get("generation"),
+            "delivery_status": delivery.get("status"),
+            "publication_status": publication.get("status"),
+        },
+        "installation": {
+            key: installation.get(key)
+            for key in ("application_id", "status", "installed_release_digest", "revision")
+            if installation.get(key) is not None
+        },
+        "runtime_selection": selection,
+        "application_verification": {
+            key: verification.get(key)
+            for key in ("application_id", "release_digest", "stage", "report_digest")
+            if verification.get(key) is not None
+        },
+        "publication_verification": {
+            "publication_allowed": promoted.get("publication_allowed"),
+            "promoted": promoted.get("promoted"),
+            "report_digest": report.get("report_digest") or promoted.get("report_digest"),
+        },
+    }
 
 
 class ComponentUpdateResponseRequest(BaseModel):
@@ -103,8 +157,9 @@ def accept_component_trial(notice_id: str, body: ComponentTrialAcceptRequest,
     if not body.confirmed:
         raise HTTPException(status_code=409, detail="Workspace acceptance requires confirmation")
     try:
-        return service.accept_local_trial(notice_id, candidate_id=body.candidate_id,
+        result = service.accept_local_trial(notice_id, candidate_id=body.candidate_id,
             candidate_digest=body.candidate_digest, webspace_id=body.webspace_id,
             actor="user:" + current_user_id())
-    except (ValueError, FileNotFoundError, RuntimeChannelConflict) as exc:
+        return _acceptance_receipt(result)
+    except (ApplicationAccessError, ValueError, FileNotFoundError, RuntimeChannelConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

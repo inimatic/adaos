@@ -1126,6 +1126,61 @@ def test_builder_api_exposes_trial_decision() -> None:
     ]
 
 
+def test_builder_api_invokes_canonical_workflow_command() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Workflow:
+        def invoke_command(self, object_type, object_id, command, **kwargs):
+            calls.append(
+                {
+                    "object_type": object_type,
+                    "object_id": object_id,
+                    "command": command,
+                    **kwargs,
+                }
+            )
+            return {"ok": True, "command": command, "status": "trial"}
+
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_workflow_service] = lambda: _Workflow()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/builder/workflow/command",
+        json={
+            "object_type": "scenario",
+            "object_id": "gmail_cbs_cleanroom",
+            "command": "start_trial",
+            "actor": "user:owner",
+            "idempotency_key": "gmail-cleanroom-trial-01",
+            "input": {
+                "webspace_id": "desktop-dev",
+                "permission_decision": True,
+            },
+            "metadata": {"source": "builder.desktop"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "trial"
+    assert calls == [
+        {
+            "object_type": "scenario",
+            "object_id": "gmail_cbs_cleanroom",
+            "command": "start_trial",
+            "actor": "user:owner",
+            "idempotency_key": "gmail-cleanroom-trial-01",
+            "input_value": {
+                "webspace_id": "desktop-dev",
+                "permission_decision": True,
+            },
+            "metadata": {"source": "builder.desktop"},
+        }
+    ]
+
+
 def test_builder_api_recovers_validated_result_in_node_context() -> None:
     calls: list[dict[str, Any]] = []
 

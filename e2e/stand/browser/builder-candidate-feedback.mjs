@@ -66,7 +66,7 @@ const pendingDataStates = new Set(['idle', 'loading', 'refreshing'])
 const nonAuthoritativeDataStates = new Set(['stale', 'unavailable', 'error'])
 const runtimeDataKinds = new Set(['skill', 'api', 'mcp', 'resourceQuery'])
 
-const sensitiveDiagnosticKey = /(authorization|cookie|credential|password|secret|token|value)/i
+const sensitiveDiagnosticKey = /(authorization|cookie|credential|password|secret|token|value|body|content|message|subject|recipient|email|raw|payload|data|query)/i
 
 function boundedDiagnosticFields(value, depth = 0) {
   if (!value || typeof value !== 'object' || depth > 1) return undefined

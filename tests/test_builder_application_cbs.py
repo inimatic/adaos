@@ -135,6 +135,14 @@ def test_compiler_preserves_semantic_identity_and_separates_simulation_state() -
         "builder_inferred_requirements": 0,
         "compiler_generated_requirements": 2,
     }
+    assert not any(
+        item["capability_ref"].startswith("capability:application.automation.")
+        for item in first["requirements"]
+    )
+    assert first["automation_obligations"][0]["requirement_ref"].startswith(
+        "automation-obligation:"
+    )
+    assert first["automation_obligations"][0]["capability_ref"] is None
 
 
 def test_compiler_expands_compact_package_neutral_cbs_intent() -> None:
@@ -171,7 +179,11 @@ def test_compiler_expands_compact_package_neutral_cbs_intent() -> None:
     assert compilation["authoring_telemetry"] == {
         "human_authored_requirements": 1,
         "builder_inferred_requirements": 0,
-        "compiler_generated_requirements": 2,
+        "compiler_generated_requirements": 1,
+    }
+    assert {item["capability_ref"] for item in compilation["requirements"]} == {
+        "capability:application.ui.render",
+        "capability:mail.messages.manage",
     }
     assert "googleapis" not in str(mail).lower()
     assert "package" not in str(mail).lower()

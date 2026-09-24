@@ -424,6 +424,11 @@ def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publ
     monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         applications,
+        "_promote_local_trial_final_verification",
+        lambda *args, **kwargs: {"publication_allowed": True},
+    )
+    monkeypatch.setattr(
+        applications,
         "ApplicationAccessManagementService",
         lambda _service: SimpleNamespace(
             admit_release_stage=lambda *args, **kwargs: {"status": "passed"}

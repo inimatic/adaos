@@ -177,6 +177,16 @@ class BuilderWorkflowTransitionRequest(BaseModel):
     expected_generation: int | None = Field(default=None, ge=0)
 
 
+class BuilderWorkflowCommandRequest(BaseModel):
+    object_type: str = Field(..., pattern="^(skill|scenario|project)$")
+    object_id: str = Field(..., min_length=1)
+    command: str = Field(..., min_length=1)
+    actor: str = Field(default="builder.api", min_length=1)
+    idempotency_key: str = Field(..., min_length=1)
+    input: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class BuilderTrialDecisionRequest(BaseModel):
     object_type: str = Field(..., pattern="^(skill|scenario|project)$")
     object_id: str = Field(..., min_length=1)
@@ -607,6 +617,27 @@ def workflow_state(
         return {"ok": True, "workflow": service.describe(object_type, object_id)}
     except (FileNotFoundError, BuilderWorkflowError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workflow/command")
+def invoke_workflow_command(
+    body: BuilderWorkflowCommandRequest,
+    service: BuilderWorkflowService = Depends(_get_workflow_service),
+) -> dict[str, Any]:
+    """Invoke a canonical Builder command through the same ingress as chat."""
+
+    try:
+        return service.invoke_command(
+            body.object_type,
+            body.object_id,
+            body.command,
+            actor=body.actor,
+            idempotency_key=body.idempotency_key,
+            input_value=body.input,
+            metadata=body.metadata,
+        )
+    except (FileNotFoundError, BuilderWorkflowError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/workflow/transition")

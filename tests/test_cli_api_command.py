@@ -208,7 +208,7 @@ def test_api_preflight_uses_successful_port_repair(monkeypatch, tmp_path):
     assert calls["probe"] == 2
 
 
-def test_api_serve_skips_runtime_import_preflight_and_sets_background_boot(monkeypatch, tmp_path):
+def test_api_serve_skips_runtime_import_preflight_and_waits_for_runtime_boot(monkeypatch, tmp_path):
     runner = CliRunner()
     conf = NodeConfig(
         node_id="n1",
@@ -258,7 +258,7 @@ def test_api_serve_skips_runtime_import_preflight_and_sets_background_boot(monke
 
     assert result.exit_code == 0
     assert stopped == [("127.0.0.1", 8779)]
-    assert os.environ["ADAOS_RUNTIME_BACKGROUND_BOOT"] == "1"
+    assert os.environ["ADAOS_RUNTIME_BACKGROUND_BOOT"] == "0"
     assert uvicorn_calls
     assert uvicorn_calls[0]["args"][0] is fake_app
     assert "preflight failed" not in result.stdout
@@ -596,12 +596,12 @@ def test_configure_runtime_endpoint_env_uses_actual_api_bind(monkeypatch):
     assert os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] == "api_serve"
 
 
-def test_api_serve_startup_env_sets_background_boot_default(monkeypatch):
+def test_api_serve_startup_env_waits_for_runtime_boot_by_default(monkeypatch):
     monkeypatch.delenv("ADAOS_RUNTIME_BACKGROUND_BOOT", raising=False)
 
     api_cmd._configure_api_serve_startup_env(launch_mode="api_serve")
 
-    assert os.environ["ADAOS_RUNTIME_BACKGROUND_BOOT"] == "1"
+    assert os.environ["ADAOS_RUNTIME_BACKGROUND_BOOT"] == "0"
 
     monkeypatch.setenv("ADAOS_RUNTIME_BACKGROUND_BOOT", "0")
 

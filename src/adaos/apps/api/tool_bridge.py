@@ -2224,6 +2224,12 @@ async def _authorize_application_tool_call(
         "device_ref": device_ref,
         "session_ref": session_ref,
         "webspace_id": actor_chain["webspace_id"],
+        # The Application gate below records this exact release/subject/tool
+        # decision. SDK code may reuse it for the same permission instead of
+        # reparsing and rewriting the large personalization facts store.
+        "_ingress_authorized_permission_id": (
+            permission_id if decision.decision == "allow" else ""
+        ),
     }
     if decision.grant_id:
         grant = management.store.get_application_access_grant(decision.grant_id)
@@ -2556,7 +2562,13 @@ async def download_tool_attachment(
     )
 
 
-async def _authorize_scoped_tool_call(body: ToolCall, ctx: AgentContext, trial_runtime=None) -> None:
+async def _authorize_scoped_tool_call(
+    body: ToolCall,
+    ctx: AgentContext,
+    trial_runtime=None,
+    *,
+    resolved_manager=None,
+) -> None:
     from adaos.domain.personalization_access import ScopeRef
     from adaos.services.personalization_runtime import personalization_access_service
     from adaos.services.policy.caller import current_caller
@@ -2572,8 +2584,11 @@ async def _authorize_scoped_tool_call(body: ToolCall, ctx: AgentContext, trial_r
         routing["webspace_id"] = (body.context or {}).get("webspace_id")
     if await asyncio.to_thread(_webspace_uses_dev_runtime, routing):
         raise HTTPException(status_code=403, detail="scoped_caller_dev_runtime_not_supported")
-    manager = (await asyncio.to_thread(trial_runtime.ready_manager, skill)
-               if trial_runtime is not None else await _skill_manager_for_context(ctx))
+    manager = resolved_manager or (
+        await asyncio.to_thread(trial_runtime.ready_manager, skill)
+        if trial_runtime is not None
+        else await _skill_manager_for_context(ctx)
+    )
     effects = await asyncio.to_thread(_declared_tool_side_effects, manager, skill_name=skill, public_tool=tool, dev=False)
     if not effects:
         raise HTTPException(status_code=403, detail="scoped_tool_effects_undeclared")
@@ -2609,10 +2624,14 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
         # production Trial first can otherwise bind one declarative read to an
         # older beta runtime while the rest of the page uses DEV.
         trial_runtime = None if body.dev or implicit_dev_webspace else await asyncio.to_thread(selected_trial, ctx, webspace, "skill", body.tool.partition(":")[0])
+        resolved_manager = None
         if trial_runtime is not None:
             if body.dev:
                 raise TrialRuntimeUnavailable("A production Trial selection cannot execute DEV tools")
-            await asyncio.to_thread(trial_runtime.ready_manager, body.tool.partition(":")[0])
+            resolved_manager = await asyncio.to_thread(
+                trial_runtime.ready_manager,
+                body.tool.partition(":")[0],
+            )
             context = dict(body.context or {})
             context["runtime_selection"] = trial_runtime.identity(body.tool.partition(":")[0])
             body = body.model_copy(update={"context": context})
@@ -2621,7 +2640,15 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
             response.headers["X-AdaOS-Package-Digest"] = context["runtime_selection"]["package_digest"]
     except (TrialRuntimeUnavailable, FileNotFoundError, RuntimeChannelConflict) as exc:
         raise HTTPException(status_code=409, detail={"error": "trial_runtime_unavailable", "message": str(exc)}) from exc
-    await _authorize_scoped_tool_call(body, ctx, trial_runtime)
+    if resolved_manager is None:
+        await _authorize_scoped_tool_call(body, ctx, trial_runtime)
+    else:
+        await _authorize_scoped_tool_call(
+            body,
+            ctx,
+            trial_runtime,
+            resolved_manager=resolved_manager,
+        )
     await asyncio.to_thread(_reject_unavailable_trial_execution, body, ctx)
     resolved_timeout = _request_tool_call_timeout_s(body, request)
     if resolved_timeout is not None and resolved_timeout != body.timeout:
@@ -2632,13 +2659,19 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     if mode == "wait" and entry is not None:
         return await _tool_call_idempotency_wait(entry, response)
     if mode != "owner" or entry is None:
-        return await _call_tool_impl(body, request, response, ctx, trial_runtime=trial_runtime)
+        impl_options = {"trial_runtime": trial_runtime}
+        if resolved_manager is not None:
+            impl_options["resolved_manager"] = resolved_manager
+        return await _call_tool_impl(body, request, response, ctx, **impl_options)
     try:
         response.headers["X-AdaOS-Idempotency-Key"] = key
     except Exception:
         pass
     try:
-        result = await _call_tool_impl(body, request, response, ctx, trial_runtime=trial_runtime)
+        impl_options = {"trial_runtime": trial_runtime}
+        if resolved_manager is not None:
+            impl_options["resolved_manager"] = resolved_manager
+        result = await _call_tool_impl(body, request, response, ctx, **impl_options)
     except HTTPException as exc:
         try:
             headers = dict(exc.headers or {})
@@ -2687,7 +2720,15 @@ def _reject_unavailable_trial_execution(body: ToolCall, ctx: AgentContext) -> No
     })
 
 
-async def _call_tool_impl(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx), *, trial_runtime=None):
+async def _call_tool_impl(
+    body: ToolCall,
+    request: Request,
+    response: Response,
+    ctx: AgentContext = Depends(get_ctx),
+    *,
+    trial_runtime=None,
+    resolved_manager=None,
+):
     from adaos.services.applications.runtime_channel import RuntimeChannelConflict
     call_started_at = time.perf_counter()
     # Разбираем "<skill_name>:<public_tool_name>"
@@ -2712,8 +2753,11 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     if current_caller_scope() is not None and (body.dev or implicit_dev_webspace):
         raise HTTPException(status_code=403, detail="scoped_caller_dev_runtime_not_supported")
 
-    mgr = (await asyncio.to_thread(trial_runtime.ready_manager, skill_name)
-           if trial_runtime is not None else await _skill_manager_for_context(ctx))
+    mgr = resolved_manager or (
+        await asyncio.to_thread(trial_runtime.ready_manager, skill_name)
+        if trial_runtime is not None
+        else await _skill_manager_for_context(ctx)
+    )
     if trial_runtime is not None:
         implicit_dev_webspace = False
     if implicit_dev_webspace and await asyncio.to_thread(

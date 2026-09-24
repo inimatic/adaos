@@ -747,9 +747,17 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
     state = workflow.get_state("scenario", scenario_id)
     if lifecycle._candidate_identity(state) != (candidate_id, candidate_digest):
         raise ValueError("Builder Candidate changed; reopen its changelog")
-    access_verification = ApplicationAccessManagementService(
-        service
-    ).admit_release_stage(
+    access_management = ApplicationAccessManagementService(service)
+    publication_verification = _promote_local_trial_final_verification(
+        access_management,
+        application_id=application_id,
+        webspace_id=webspace_id,
+        candidate_id=candidate_id,
+        candidate_digest=candidate_digest,
+        release_digest=selection.release_digest,
+        actor_ref=actor_ref,
+    )
+    access_verification = access_management.admit_release_stage(
         application_id,
         release_digest=selection.release_digest,
         stage="publication",
@@ -771,7 +779,59 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
         **placement,
         "publication": result,
         "application_verification": access_verification,
+        "publication_verification": publication_verification,
     }
+
+
+def _promote_local_trial_final_verification(
+    management: ApplicationAccessManagementService,
+    *,
+    application_id: str,
+    webspace_id: str,
+    candidate_id: str,
+    candidate_digest: str,
+    release_digest: str,
+    actor_ref: str,
+) -> dict[str, Any]:
+    """Qualify the exact healthy Trial review for publication admission."""
+
+    from adaos.services.applications.trial_runtime import NativeTrialRuntime
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+
+    runtime = NativeTrialRuntime.resolve(_ctx(), candidate_id, release_digest)
+    activation = TrialActivationStore(
+        _state_dir() / "artifact_pipeline/trial-activations"
+    ).load(candidate_id)
+    identity = dict(activation.get("candidate_ref") or {})
+    target = dict(activation.get("target") or {})
+    health = dict(activation.get("health_evidence") or {})
+    binding = dict(activation.get("runtime_binding") or {})
+    if (
+        runtime.project_id != application_id
+        or activation.get("status") != "active"
+        or identity.get("candidate_id") != candidate_id
+        or identity.get("release_digest") != release_digest
+        or identity.get("package_digest") != candidate_digest
+        or target.get("webspace_id") != webspace_id
+        or health.get("status") != "passed"
+        or binding.get("authority") != "immutable_candidate"
+    ):
+        raise ValueError(
+            "The exact healthy Trial is required before publication verification"
+        )
+    lock_digest = str(binding.get("workspace_lock_digest") or "").strip()
+    if not lock_digest.startswith("sha256:"):
+        raise ValueError("Trial WorkspaceLock evidence is unavailable")
+    evidence_ref = (
+        f"release:trial-runtime:{candidate_id}#"
+        f"{lock_digest.removeprefix('sha256:')}"
+    )
+    return management.promote_trial_verification_for_publication(
+        application_id,
+        release_digest=release_digest,
+        publication_evidence=evidence_ref,
+        actor_ref=actor_ref,
+    )
 
 
 def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: str,

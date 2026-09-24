@@ -1567,6 +1567,122 @@ class ApplicationAccessManagementService:
             "permission_profile_digest": selected.permission_profile_digest,
         }
 
+    def promote_trial_verification_for_publication(
+        self,
+        application_id: str,
+        *,
+        release_digest: str,
+        publication_evidence: str,
+        actor_ref: str,
+    ) -> dict[str, Any]:
+        """Bind an exact, reviewed Trial runtime to publication verification.
+
+        Automation evidence admits the immutable release to Trial. Publication
+        additionally needs evidence that this exact release was materialized
+        and reviewed in its production Webspace. The caller owns validation of
+        that runtime evidence; this method preserves the already-passed access
+        checks and adds the distinct publication attestation.
+        """
+
+        evidence_ref = str(publication_evidence or "").strip()
+        if not evidence_ref.startswith("release:"):
+            raise ApplicationAccessError(
+                "publication verification requires exact Trial release evidence"
+            )
+        reviewer = str(actor_ref or "").strip()
+        if not reviewer:
+            raise ApplicationAccessError(
+                "publication verification requires an accountable reviewer"
+            )
+        release = self._verification_release(
+            application_id,
+            release_digest,
+            candidate_release=None,
+        )
+        profile = release.project_release.composition_lock
+        if profile is None or profile.permission_profile is None:
+            return {
+                "required": False,
+                "publication_allowed": True,
+                "reason": "legacy_application_contract",
+            }
+
+        reports = [
+            ApplicationVerificationReport.from_mapping(payload)
+            for payload in self.list_verification_reports(application_id)
+            if payload.get("release_digest") == release_digest
+        ]
+        existing = [
+            report
+            for report in reports
+            if report.release_scope == "publication"
+            and report.permission_profile_digest == release.permission_profile.digest
+            and report.overall == "passed"
+        ]
+        if existing:
+            selected = sorted(existing, key=lambda item: item.created_at, reverse=True)[0]
+            return {
+                "required": True,
+                "publication_allowed": True,
+                "report": selected.to_dict(),
+                "promoted": False,
+            }
+
+        trials = [
+            report
+            for report in reports
+            if report.release_scope == "trial"
+            and report.permission_profile_digest == release.permission_profile.digest
+            and report.overall == "passed"
+        ]
+        if not trials:
+            raise ApplicationAccessError(
+                "passed Application Final Verification for the exact Trial is required"
+            )
+        trial = sorted(trials, key=lambda item: item.created_at, reverse=True)[0]
+        checks = {
+            item.check_id: item
+            for item in trial.checks
+        }
+        checks["regression.publication_profile"] = VerificationCheck(
+            "regression.publication_profile",
+            "hard_gate",
+            "passed",
+            evidence=evidence_ref,
+            message="Exact Trial runtime and release review evidence recorded.",
+            actor_ref=reviewer,
+        )
+        checks["release.scope"] = VerificationCheck(
+            "release.scope",
+            "attestation",
+            "passed",
+            evidence=evidence_ref,
+            message="Verification scope: publication.",
+            actor_ref=reviewer,
+        )
+        checks["trial.runtime_review"] = VerificationCheck(
+            "trial.runtime_review",
+            "hard_gate",
+            "passed",
+            evidence=evidence_ref,
+            message="The exact immutable Trial was healthy and explicitly accepted.",
+            actor_ref=reviewer,
+        )
+        promoted = replace(
+            trial,
+            checks=tuple(checks.values()),
+            release_scope="publication",
+            created_at=utc_now(),
+            report_digest=None,
+        ).seal()
+        saved = self.save_verification_report(promoted)
+        return {
+            "required": True,
+            "publication_allowed": promoted.overall == "passed",
+            "report": saved,
+            "promoted": True,
+        }
+
     def final_verification(
         self,
         application_id: str,

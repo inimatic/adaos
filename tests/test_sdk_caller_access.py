@@ -10,6 +10,7 @@ from adaos.domain.personalization_access import Grant, ScopeRef, SessionKey, Sub
 from adaos.sdk import access
 from adaos.services.personalization_access import PersonalizationAccessService, PersonalizationAccessStore
 from adaos.services.policy.caller import current_caller, verified_caller
+from adaos.services.policy.application import bind_application, clear_application
 
 
 OWNER = SubjectRef("user", "owner")
@@ -79,6 +80,30 @@ def test_revocation_is_read_again_on_next_check(caller_access):
         service.revoke_grant("reader-data", actor=OWNER)
         with pytest.raises(PermissionError, match="missing_capability"):
             access.require("workspace.read")
+
+
+def test_exact_application_ingress_permission_is_not_reaudited(caller_access, monkeypatch):
+    ctx, _ = caller_access
+    calls = []
+    monkeypatch.setattr(
+        access,
+        "personalization_access_service",
+        lambda _ctx: calls.append(_ctx) or pytest.fail("ingress decision was repeated"),
+    )
+    bind_application({
+        "application_id": "mail_client",
+        "release_digest": "sha256:" + "a" * 64,
+        "subject_ref": OWNER.ref(),
+        "_ingress_authorized_permission_id": "providers.google.gmail",
+    })
+    try:
+        with verified_caller(OWNER):
+            decision = access.require("providers.google.gmail")
+            assert decision["decision"] == "allow"
+            assert decision["reason_code"] == "application_ingress_authorized"
+    finally:
+        clear_application()
+    assert calls == []
 
 
 def test_successful_reads_do_not_rewrite_facts_but_denials_and_writes_remain_audited(caller_access):

@@ -162,6 +162,19 @@ def test_skill_schema_accepts_runtime_activation_policy() -> None:
                 "mode": "lazy",
                 "startup_allowed": False,
                 "background_refresh": False,
+                "assessment": {
+                    "schema": "adaos.skill.activation_assessment.v1",
+                    "assessor": "builder.compiler",
+                    "classification": "event_subscriber",
+                    "handler_digest": "sha256:" + "a" * 64,
+                    "observed_subscriptions": ["webio.stream.snapshot.requested"],
+                    "declared_subscriptions": ["webio.stream.snapshot.requested"],
+                    "dynamic_subscription_count": 0,
+                    "tool_count": 3,
+                    "reasons": [
+                        "event_subscriptions_require_early_handler_registration"
+                    ],
+                },
                 "when": {
                     "scenarios_active": ["infrascope"],
                     "client_presence": True,

@@ -321,11 +321,21 @@ class NativeApplicationCBSAdmissionService:
             ),
             "context": context,
         }
+        release_evidence_digest = canonical_payload_digest(release_evidence)
         claims: list[EvidenceClaim] = []
         assessments: list[EvidenceAssessment] = []
         for capability, binding in zip(contracts, bindings, strict=True):
             claim_token = _key(
-                f"{release_digest}:{capability.digest}:{binding.digest}"
+                ":".join(
+                    (
+                        release_digest,
+                        str(compilation["compilation_digest"]),
+                        capability.digest,
+                        binding.digest,
+                        release_evidence_digest,
+                        created_at,
+                    )
+                )
             )[:24]
             claim = EvidenceClaim.create(
                 claim_ref=f"evidence-claim:application-release/{claim_token}",
@@ -356,7 +366,7 @@ class NativeApplicationCBSAdmissionService:
                 suite_digest=canonical_payload_digest(
                     {"contract": capability.digest, "binding": binding.digest}
                 ),
-                evidence_digest=canonical_payload_digest(release_evidence),
+                evidence_digest=release_evidence_digest,
                 provenance={
                     "issuer": "adaos:application-release-admission",
                     "runner": "trusted-release-validation",
