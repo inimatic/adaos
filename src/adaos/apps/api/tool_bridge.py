@@ -2731,7 +2731,13 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     # Preserve the cheap legacy path for obviously read-only calls while the
     # runtime is ready. A read intent or a lifecycle exception, however, must
     # always be authorized from the active resolved manifest.
-    if trial_runtime is None and accepting_new_work and body.intent != "read" and _looks_readonly_tool(public_tool):
+    if (
+        trial_runtime is None
+        and not body.dev
+        and accepting_new_work
+        and body.intent != "read"
+        and _looks_readonly_tool(public_tool)
+    ):
         declared_side_effects = ""
         declared_approval_scope: dict[str, Any] = {}
         declared_component_permissions: tuple[str, ...] = ()

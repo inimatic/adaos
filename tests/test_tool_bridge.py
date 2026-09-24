@@ -436,6 +436,78 @@ def test_tool_permission_error_is_bounded_403(monkeypatch) -> None:
     }
 
 
+def test_dev_read_like_tool_loads_application_contract(monkeypatch) -> None:
+    """DEV reads must not bypass the Application/CBS authority contract."""
+
+    contracts: list[tuple[str, str, bool]] = []
+    authorized: list[dict[str, object]] = []
+
+    class Manager:
+        def run_dev_tool(
+            self,
+            skill_name: str,
+            tool_name: str,
+            payload: dict[str, object],
+            timeout: float | None = None,
+        ) -> dict[str, object]:
+            return {"ok": True}
+
+    async def _manager(_ctx):
+        return Manager()
+
+    def _contract(_manager, *, skill_name: str, public_tool: str, dev: bool):
+        contracts.append((skill_name, public_tool, dev))
+        return {
+            "side_effects": "none",
+            "permissions": ["providers.google.gmail"],
+            "application_access": {
+                "permission": "providers.google.gmail",
+                "capability": "mail.read",
+            },
+        }
+
+    async def _authorize(**kwargs):
+        authorized.append(dict(kwargs))
+        return kwargs["body"], {"context": {"application_id": "mail_client"}}
+
+    async def _gate(**_kwargs):
+        return {"risk_class": "read_only"}
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "_skill_manager_for_context", _manager)
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_contract", _contract)
+    monkeypatch.setattr(tool_bridge_module, "_authorize_application_tool_call", _authorize)
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _gate)
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "attach_http_trace_headers",
+        lambda *_args: "trace-dev-read",
+    )
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="gmail_provider:list_messages",
+                arguments={"webspace_id": "desktop-dev"},
+                dev=True,
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert contracts == [("gmail_provider", "list_messages", True)]
+    assert authorized[0]["application_contract"] == {
+        "permission": "providers.google.gmail",
+        "capability": "mail.read",
+    }
+    assert authorized[0]["component_capabilities"] == (
+        "providers.google.gmail",
+    )
+
+
 def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) -> None:
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
@@ -1075,7 +1147,7 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
 
     assert result["ok"] is True
     assert calls == ["recipe_skill:list_recipes"]
-    assert len(preflight_thread_ids) == 3
+    assert len(preflight_thread_ids) == 4
     assert all(thread_id != owner_thread_id for thread_id in preflight_thread_ids)
 
 
