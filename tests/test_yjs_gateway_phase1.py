@@ -2675,6 +2675,42 @@ def test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread(mon
         gc.collect()
 
 
+def test_gateway_transport_snapshot_sanitizes_owner_failure_before_worker_handoff(monkeypatch) -> None:
+    owner_thread_ids: list[int] = []
+    monkeypatch.setattr(
+        gateway_module,
+        "_GATEWAY_SNAPSHOT_CACHE",
+        {
+            "transports": {"yws": {"ready": True}},
+            "rooms": {},
+            "updated_at": 100.0,
+        },
+    )
+
+    def _fail_snapshot(*, now_ts=None):  # noqa: ARG001
+        owner_thread_ids.append(threading.get_ident())
+        raise RuntimeError("synthetic owner snapshot failure")
+
+    monkeypatch.setattr(gateway_module, "_build_gateway_transport_snapshot", _fail_snapshot)
+
+    async def _exercise() -> tuple[int, dict[str, object]]:
+        owner_thread_id = threading.get_ident()
+        gateway_module._GATEWAY_SNAPSHOT_OWNER_THREAD_ID = owner_thread_id
+        gateway_module._GATEWAY_SNAPSHOT_OWNER_LOOP = asyncio.get_running_loop()
+        snapshot = await asyncio.to_thread(
+            gateway_module.gateway_transport_snapshot,
+            now_ts=105.0,
+        )
+        return owner_thread_id, snapshot
+
+    owner_thread_id, snapshot = asyncio.run(_exercise())
+
+    assert owner_thread_ids == [owner_thread_id]
+    assert snapshot["snapshot_mode"] == "cached"
+    assert snapshot["snapshot_age_s"] == 5.0
+    assert "_owner_snapshot_error" not in snapshot
+
+
 def test_gateway_transport_snapshot_prefers_cached_data_off_owner(monkeypatch) -> None:
     class _OwnerLoop:
         @staticmethod

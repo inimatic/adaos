@@ -6401,7 +6401,22 @@ def _build_gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[st
 
 
 async def _build_gateway_transport_snapshot_on_owner(now_ts: float | None) -> dict[str, Any]:
-    return _build_gateway_transport_snapshot(now_ts=now_ts)
+    try:
+        return _build_gateway_transport_snapshot(now_ts=now_ts)
+    except BaseException as exc:
+        # ``run_coroutine_threadsafe`` transfers an exception together with
+        # its traceback to the waiting thread. A diagnostics traceback can
+        # retain a room local (and therefore its YDoc), causing the final
+        # native decref to run on an arbitrary reliability worker. Convert the
+        # failure to plain data while we are still on the Yjs owner thread.
+        message = f"{type(exc).__name__}: {exc}"
+        exc.__traceback__ = None
+        exc.__cause__ = None
+        exc.__context__ = None
+        return {
+            "_owner_snapshot_error": message,
+            "updated_at": time.time() if now_ts is None else float(now_ts),
+        }
 
 
 def _schedule_gateway_transport_snapshot_refresh(
@@ -6486,7 +6501,15 @@ def gateway_transport_snapshot(
             owner_loop,
         )
         try:
-            return future.result(timeout=2.0)
+            result = future.result(timeout=2.0)
+            owner_error = str(result.get("_owner_snapshot_error") or "").strip()
+            if not owner_error:
+                return result
+            _ylog.debug(
+                "gateway diagnostics owner-thread snapshot failed: %s",
+                owner_error,
+            )
+            return _cached_gateway_transport_snapshot(now_ts=now_ts)
         except Exception:
             future.cancel()
             _ylog.debug("gateway diagnostics owner-thread handoff failed", exc_info=True)
