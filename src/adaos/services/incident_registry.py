@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import re
+import sys
+import threading
 import time
+import traceback
 from collections import Counter, deque
 from pathlib import Path
 from threading import RLock
@@ -44,6 +48,8 @@ _PROCESS_ACTIVITY_PREVIOUS: dict[int, dict[str, Any]] = {}
 _PROCESS_ACTIVITY_PREVIOUS_SYSTEM: dict[str, int] = {}
 _PROCESS_ACTIVITY_PREVIOUS_AT: float | None = None
 _PROCESS_ACTIVITY_IDENTITY_CACHE: dict[int, dict[str, Any]] = {}
+_UNRAISABLE_HOOK_LOCK = RLock()
+_PREVIOUS_UNRAISABLE_HOOK: Any | None = None
 
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(token|authorization|password|secret|key)=([^&\s]+)"),
@@ -1000,6 +1006,78 @@ def record_yjs_thread_affinity_fault(
     )
 
 
+def _yjs_unraisablehook(args: Any) -> None:
+    """Turn a PyO3 wrong-thread destructor into attributable plain evidence.
+
+    ``y_py`` reports unsendable finalizers through ``sys.unraisablehook``.  The
+    default hook prints only the Python instruction that happened to release
+    the last reference, which hides the worker identity and the surrounding
+    call chain.  Never retain ``args`` or its native object here: doing so can
+    postpone the same destructor and make the affinity failure harder to
+    reproduce.
+    """
+
+    exc = getattr(args, "exc_value", None)
+    if not is_yjs_thread_affinity_fault(exc):
+        previous = _PREVIOUS_UNRAISABLE_HOOK
+        if callable(previous):
+            previous(args)
+        return
+
+    current = threading.current_thread()
+    native = getattr(args, "object", None)
+    native_type = type(native)
+    object_type = f"{native_type.__module__}.{native_type.__name__}"
+    stack = "".join(traceback.format_stack(limit=24)).strip()
+    evidence = {
+        "thread_name": current.name,
+        "thread_ident": current.ident,
+        "python_stack": stack[-8000:],
+    }
+    try:
+        record_yjs_thread_affinity_fault(
+            source="python.unraisablehook",
+            component="yjs.finalizer",
+            operation="native_object_drop",
+            exc=exc,
+            object_type=object_type,
+            evidence=evidence,
+        )
+    except Exception:
+        pass
+    logging.getLogger("adaos.yjs.thread_affinity").error(
+        "Yjs native object dropped on the wrong thread thread=%s ident=%s object_type=%s error=%s\n%s",
+        current.name,
+        current.ident,
+        object_type,
+        str(exc or "").strip(),
+        stack,
+    )
+
+
+def install_yjs_unraisablehook() -> None:
+    """Install the process-wide Yjs finalizer diagnostic hook once."""
+
+    global _PREVIOUS_UNRAISABLE_HOOK
+    with _UNRAISABLE_HOOK_LOCK:
+        if sys.unraisablehook is _yjs_unraisablehook:
+            return
+        _PREVIOUS_UNRAISABLE_HOOK = sys.unraisablehook
+        sys.unraisablehook = _yjs_unraisablehook
+
+
+def uninstall_yjs_unraisablehook() -> None:
+    """Restore the hook that preceded :func:`install_yjs_unraisablehook`."""
+
+    global _PREVIOUS_UNRAISABLE_HOOK
+    with _UNRAISABLE_HOOK_LOCK:
+        if sys.unraisablehook is not _yjs_unraisablehook:
+            return
+        previous = _PREVIOUS_UNRAISABLE_HOOK
+        sys.unraisablehook = previous if callable(previous) else sys.__unraisablehook__
+        _PREVIOUS_UNRAISABLE_HOOK = None
+
+
 def record_channel_incident(
     *,
     channel: str,
@@ -1384,6 +1462,7 @@ __all__ = [
     "default_incident_registry_path",
     "incident_domain_from_owner",
     "incident_registry_snapshot",
+    "install_yjs_unraisablehook",
     "is_yjs_thread_affinity_fault",
     "local_blocking_evidence",
     "latest_process_activity_sample",
@@ -1407,4 +1486,5 @@ __all__ = [
     "record_yjs_thread_affinity_fault",
     "record_yjs_pressure_incident",
     "reset_incident_registry",
+    "uninstall_yjs_unraisablehook",
 ]

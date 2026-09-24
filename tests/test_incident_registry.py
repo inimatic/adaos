@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,42 @@ import adaos.services.incident_registry as incidents
 
 def setup_function() -> None:
     incidents.reset_incident_registry()
+    incidents.uninstall_yjs_unraisablehook()
+
+
+def test_yjs_unraisablehook_attributes_wrong_thread_finalizer(monkeypatch) -> None:
+    delegated: list[object] = []
+    monkeypatch.setattr(incidents.sys, "unraisablehook", delegated.append)
+
+    incidents.install_yjs_unraisablehook()
+    incidents.sys.unraisablehook(
+        SimpleNamespace(
+            exc_value=RuntimeError(
+                "y_py::y_doc::YDoc is unsendbale, but is dropped on another thread!"
+            ),
+            object=None,
+        )
+    )
+
+    snapshot = incidents.incident_registry_snapshot()
+    assert delegated == []
+    assert snapshot["total"] == 1
+    item = snapshot["items"][0]
+    assert item["class"] == "yjs_thread_affinity_fault"
+    assert item["latest_evidence"]["thread_name"]
+    assert item["latest_evidence"]["python_stack"]
+
+
+def test_yjs_unraisablehook_delegates_unrelated_errors(monkeypatch) -> None:
+    delegated: list[object] = []
+    monkeypatch.setattr(incidents.sys, "unraisablehook", delegated.append)
+    args = SimpleNamespace(exc_value=RuntimeError("ordinary finalizer"), object=None)
+
+    incidents.install_yjs_unraisablehook()
+    incidents.sys.unraisablehook(args)
+
+    assert delegated == [args]
+    assert incidents.incident_registry_snapshot()["total"] == 0
 
 
 def test_slow_event_handler_incident_is_attributed_to_skill() -> None:

@@ -1852,12 +1852,21 @@ async def _runtime_context(app: FastAPI):
 # пересоздаём приложение с lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from adaos.services.incident_registry import (
+        install_yjs_unraisablehook,
+        uninstall_yjs_unraisablehook,
+    )
+
+    install_yjs_unraisablehook()
     lifecycle = RuntimeApplicationLifecycle(app, runtime_context_factory=_runtime_context)
-    await lifecycle.start()
     try:
-        yield
+        await lifecycle.start()
+        try:
+            yield
+        finally:
+            await lifecycle.stop()
     finally:
-        await lifecycle.stop()
+        uninstall_yjs_unraisablehook()
 
 
 _CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
