@@ -2556,6 +2556,45 @@ class BuilderAutomationService:
             )
         with _LOCK:
             current = self.get_session(kind, project_id)
+            if (
+                current
+                and requested_change_set_id
+                and str(current.get("change_set_id") or "").strip()
+                != requested_change_set_id
+                and str(current.get("status") or "").strip()
+                in {
+                    "queued",
+                    "assigned",
+                    "workspace_preparing",
+                    "in_progress",
+                    "tests_running",
+                    "commit_ready",
+                }
+            ):
+                # The durable Automation projection can lag behind its Skill
+                # Factory task when nobody has polled the completed predecessor.
+                # Do not let that stale, apparently-active projection capture a
+                # newly approved Change. Read the exact task first; a genuinely
+                # active predecessor still retains exclusive ownership, while a
+                # terminal one can be replaced by the successor session below.
+                current_task_id = str(current.get("current_task_id") or "").strip()
+                if current_task_id:
+                    try:
+                        current_task = self.factory.read_task(current_task_id)
+                    except KeyError:
+                        current_task = {}
+                    if str(current_task.get("status") or "").strip() in {
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "expired",
+                    }:
+                        current = {
+                            **current,
+                            "status": str(current_task.get("status") or "").strip(),
+                            "task": current_task,
+                            "updated_at": current_task.get("updated_at") or _now_iso(),
+                        }
             if current and current.get("status") in {
                 "queued",
                 "assigned",

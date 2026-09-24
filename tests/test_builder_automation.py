@@ -6498,6 +6498,86 @@ def test_fresh_change_replaces_terminal_session_from_canonical_ready_state(
     )
 
 
+def test_fresh_change_replaces_stale_active_projection_of_terminal_task(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    first_change_id = "CS-recipes-stale-predecessor"
+    second_change_id = "CS-recipes-stale-successor"
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": first_change_id,
+            "request": "Implement the predecessor.",
+            "issues": [
+                {
+                    "issue_id": "predecessor",
+                    "title": "Implement the predecessor",
+                    "lane": "automation",
+                    "acceptance_criteria": ["The predecessor is implemented."],
+                }
+            ],
+        },
+    )
+    first = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the predecessor.",
+        webspace_id="prompt-dev",
+        change_set_id=first_change_id,
+    )
+    predecessor_task_id = first["session"]["current_task_id"]
+    assert service.factory.read_task(predecessor_task_id)["status"] == "completed"
+
+    # Persist the projection exactly as it can remain when the worker finishes
+    # but no status reader has reconciled its terminal Factory task yet.
+    stale = service.get_session("scenario", "recipes")
+    assert stale is not None
+    stale["status"] = "queued"
+    service._save_session(stale)
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": predecessor_task_id, "version": "0.1.1"},
+    )
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": second_change_id,
+            "supersedes_change_set_id": first_change_id,
+            "request": "Implement the successor.",
+            "issues": [
+                {
+                    "issue_id": "successor",
+                    "title": "Implement the successor",
+                    "lane": "automation",
+                    "acceptance_criteria": ["The successor is implemented."],
+                }
+            ],
+        },
+    )
+
+    successor = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the successor.",
+        webspace_id="prompt-dev",
+        change_set_id=second_change_id,
+    )
+
+    assert successor["duplicate"] is False
+    assert successor["session"]["current_task_id"] != predecessor_task_id
+    assert successor["session"]["change_set_id"] == second_change_id
+    assert successor["session"]["task_history"] == [
+        successor["session"]["current_task_id"]
+    ]
+
+
 def test_followup_invalidates_checkpoint_before_queueing_next_iteration(
     tmp_path: Path,
 ) -> None:
