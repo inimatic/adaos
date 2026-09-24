@@ -36,9 +36,15 @@ permission_profile:
 
     evidence = context["authoring_contract"]["trial_evidence_contract"]
     assert evidence["artifact_path"] == "tests/test_application_contract.py"
-    assert "exact package-relative" in evidence["admission"]
+    assert evidence["access_artifact_path"] == "tests/test_application_contract.py"
+    assert evidence["behavior_artifact_path"] == "tests/test_behavior_contract.py"
+    assert "both exact package-relative" in evidence["admission"]
     assert any(
         "tests/test_application_contract.py" in requirement
+        for requirement in context["authoring_requirements"]
+    )
+    assert any(
+        "tests/test_behavior_contract.py" in requirement
         for requirement in context["authoring_requirements"]
     )
 

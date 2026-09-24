@@ -87,6 +87,8 @@ def _authoring_contract() -> dict[str, Any]:
         "platform_roles": ["owner", "co_owner", "admin", "member", "child", "guest"],
         "trial_evidence_contract": {
             "artifact_path": "tests/test_application_contract.py",
+            "access_artifact_path": "tests/test_application_contract.py",
+            "behavior_artifact_path": "tests/test_behavior_contract.py",
             "required_when": "the owning Project declares a permission_profile",
             "with_application_roles": (
                 "exercise the owner/member/child/guest access matrix for every declared role"
@@ -95,9 +97,15 @@ def _authoring_contract() -> dict[str, Any]:
                 "prove permission enforcement is delegated to the trusted Core/Root boundary "
                 "and that the package does not create a local role store"
             ),
+            "behavior_evidence": (
+                "create a separate tests/test_behavior_contract.py checkpoint test; exercise "
+                "the consumer's observable operations and failure states through admitted public "
+                "interfaces or their provider-owned hermetic seam, without live external calls"
+            ),
             "admission": (
-                "Automation must execute and seal this exact package-relative test artifact; "
-                "passing equivalent tests under another filename is not Trial evidence"
+                "Automation must execute and seal both exact package-relative test artifacts; "
+                "access and behavior evidence are independent Trial obligations, so behavior "
+                "tests embedded only in test_application_contract.py are insufficient"
             ),
         },
         "validation_boundary": (
@@ -324,6 +332,7 @@ def application_permissions_context(
             "Declare application_roles only when the application has differentiated rights; enforce rights in tools, not only in UI visibility.",
             "When roles are declared, mark exactly one owner-compatible role with default_for: {owner: <same-role-id>} so Builder can provision publisher access without guessing.",
             "Create tests/test_application_contract.py for every declared permission_profile. With application roles, test the owner/member/child/guest matrix; without roles, prove trusted Core/Root enforcement and no local role store. Trial admission recognizes this exact sealed artifact path.",
+            "Create a separate tests/test_behavior_contract.py that exercises observable consumer behavior, failure states, and pending actions through admitted public interfaces or the provider-owned hermetic seam. Trial admission requires a sealed behavior checkpoint distinct from tests/test_application_contract.py.",
             "Record secrets, external providers, model use, notifications, background work and data practices explicitly.",
             "Use canonical machine identifiers for data-practice categories; keep prose in purposes, titles, retention policy, catalog copy or README.",
         ],
