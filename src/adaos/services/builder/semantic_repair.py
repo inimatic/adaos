@@ -390,4 +390,39 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
                 if any(original.get(name) != replacement.get(name) for name in immutable):
                     raise BuilderWorkflowError("state repair attempted an unrelated view change")
             result[target][index] = replacement
+    # A field-predicate proof redundantly names the predicate fields that are
+    # already visible in its view.  Bounded repair models occasionally add a
+    # second predicate to make a fixture unique but omit that existing rendered
+    # field from visible_field_refs.  Completing only those visible references
+    # is deterministic and cannot broaden the repair: hidden fields still fail
+    # normal validation, while unrelated and unreported states remain byte-for-
+    # byte unchanged.
+    repaired_state_ids = {
+        str(item["id"])
+        for item in repair.get("states") or []
+        if isinstance(item, Mapping)
+    }
+    views = {str(item["id"]): item for item in result["views"]}
+    for state in result["representative_states"]:
+        if str(state["id"]) not in repaired_state_ids:
+            continue
+        proof = state.get("proof") or {}
+        if proof.get("kind") != "field_predicate":
+            continue
+        view = views.get(str(state.get("view_ref") or ""), {})
+        rendered = {str(value) for value in view.get("field_refs") or []}
+        visible = list(proof.get("visible_field_refs") or [])
+        predicate_fields = [
+            str(field_ref)
+            for predicate in state.get("filters") or []
+            for field_ref in (
+                predicate.get("field_ref"),
+                (predicate.get("operand") or {}).get("field_ref"),
+            )
+            if field_ref
+        ]
+        for field_ref in predicate_fields:
+            if field_ref in rendered and field_ref not in visible:
+                visible.append(field_ref)
+        proof["visible_field_refs"] = visible
     return result

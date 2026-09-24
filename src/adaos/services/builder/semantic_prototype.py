@@ -3156,6 +3156,15 @@ def _state_proof_findings(
             str(control["field_ref"]) for control in view.get("query_controls") or []
             if control["kind"] == "filter"
         }
+        # A master-detail selection is an executable equality constraint too.
+        # Requiring a second toolbar filter for the same field is contradictory:
+        # semantic_selection explicitly rejects that overlap.  Treat the
+        # selected source record as the reachable control for query-empty
+        # evidence so a linked collection can prove an empty result without an
+        # impossible duplicate filter.
+        selection_filter = view.get("selection_filter")
+        if selection_filter and selection_filter.get("field_ref"):
+            controls.add(str(selection_filter["field_ref"]))
         if not predicate_fields.issubset(controls) or any(
             item["operator"] != "eq" or item.get("compare_field_ref") for item in filters
         ):

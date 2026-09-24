@@ -2482,6 +2482,83 @@ def test_state_repair_v3_adds_visibility_without_erasing_queries_or_empty_state(
     assert len(result["views"][0]["query_controls"]) == len(view["query_controls"]) + 1
 
 
+def test_state_repair_completes_visible_predicates_already_rendered_by_view() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    view = candidate["views"][0]
+    state = candidate["representative_states"][0]
+    state.update(
+        proof={"kind": "field_predicate", "visible_field_refs": ["title"]},
+        filters=[
+            {
+                "field_ref": "title",
+                "operator": "eq",
+                "operand": {"kind": "value", "value": "Pressure check", "field_ref": None},
+            },
+            {
+                "field_ref": "status",
+                "operator": "eq",
+                "operand": {"kind": "value", "value": "open", "field_ref": None},
+            },
+        ],
+        min_items=1,
+        max_items=1,
+    )
+    assert {"title", "status"} <= set(view["field_refs"])
+    findings = [
+        {
+            "code": "semantic.state_proof_hidden",
+            "semantic_refs": [f"state:{state['id']}", f"view:{view['id']}"],
+        }
+    ]
+    plan = prototype_sdk.prepare_state_repair(candidate, findings)
+    repair = {
+        "schema": "adaos.builder.state_repair.v3",
+        "base_sha256": plan["base_sha256"],
+        "states": [copy.deepcopy(state)],
+        "views": [],
+    }
+
+    repaired = prototype_sdk.apply_state_repair(candidate, repair, findings)
+
+    assert repaired["representative_states"][0]["proof"]["visible_field_refs"] == [
+        "title",
+        "status",
+    ]
+    compile_semantic_prototype_candidate(repaired, brief=brief)
+
+
+def test_query_empty_accepts_selection_filter_as_reachable_equality_control() -> None:
+    brief, semantic = _multi_resource_fixture()
+    people = semantic["resources"][1]
+    people["records"].append(
+        {"id": "person-3", "person_name": "Taylor", "person_phone": "+3"}
+    )
+    work_view = next(view for view in semantic["views"] if view["id"] == "work-list")
+    work_view["selection_filter"] = {
+        "field_ref": "work_owner_id",
+        "source_view_ref": "people-list",
+        "source_field_ref": None,
+    }
+    state = semantic["representative_states"][0]
+    state.update(
+        proof={"kind": "query_empty", "visible_field_refs": []},
+        filters=[
+            {"field_ref": "work_owner_id", "operator": "eq", "value": "person-3"}
+        ],
+        min_items=0,
+        max_items=0,
+    )
+
+    result = compile_semantic_prototype_candidate(
+        _multi_resource_candidate(semantic), brief=brief
+    )
+
+    check = result["representative_state_checks"][0]
+    assert check["proof"]["kind"] == "query_empty"
+    assert check["matching_record_count"] == 0
+
+
 def test_numeric_filter_compiles_to_number_input() -> None:
     brief, semantic = _multi_resource_fixture()
     resource = semantic["resources"][0]
