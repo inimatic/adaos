@@ -200,3 +200,72 @@ stable cold run took 1.1 seconds. This points to process/import/filesystem
 warm-up rather than steady-state Drive enumeration. Cold skill activation must
 remain separately instrumented; it is not folded into the steady-state Drive
 latency claim.
+
+## Cold-start and tool-preflight debt closure
+
+The `adaos_drive@0.1.16` pass exposed a source-authority mistake in the release
+procedure. The optimized code had been committed in the stable Workspace, but
+the Candidate was correctly built from the separate DEV source root, which was
+still stale. Its successful smoke therefore proved the core runtime changes,
+not the intended Drive source change. That release remains immutable audit
+history and is superseded by the corrected `adaos_drive@0.1.17` release.
+
+Release `0.1.17` was prepared only after the DEV and Workspace handler content
+matched. It restores the `scandir` implementation and removes two additional
+amplifiers:
+
+- a directory entry receives its already-known relative path from the bounded
+  parent enumeration, so projecting 64 entries does not resolve the source root
+  and child path 64 more times;
+- initial Drive state reads one coherent skill-environment snapshot instead of
+  loading the same JSON document four times while merging global and Webspace
+  sources.
+
+The change has deterministic tests for one memory snapshot, one metadata probe
+per directory entry, directory-cache reuse, concurrent single flight, stale
+generation rejection, and the complete Drive behavior suite.
+
+- Candidate: `adaos_drive-0-1-17-a999530dc18a`;
+- release digest:
+  `sha256:ad28d3d702e14e711e91d08edcf4e3dc643409e96557b14caadea999530dc18a`;
+- scenario package: `adaos_drive@0.1.11`, digest
+  `sha256:141e7e98aa2d300af734a56597b4968a0e6f77daf4c3dd95165c9784a922a57b`;
+- skill package: `adaos_drive@0.1.15`, digest
+  `sha256:4dd968d44f65b5cf64792bb075a17c28dd08bb04b0ebc8095b0fb1b475ea09ac`;
+- stable `WorkspaceLock` revision: 71, digest
+  `sha256:b4d5f15dc62fc465cf967e6df3a8e1c0f3c232fe6685b3bca3f32a952acd075f`;
+- Application installation revision: 7;
+- stable RuntimeSelection revision: 14.
+
+All 24 Drive tests and focused Ruff validation passed. The exact Candidate
+passed access verification, Trial placement, live navigation, acceptance,
+promotion, stable installation reconciliation, and a clean restart through
+`api serve` on port 8777. The first stable snapshot after that restart took
+1,157 ms, the immediate repeat 358 ms, and select/activate/open-folder calls
+took 596/348/330 ms. Every operation returned `ok=true`; the former
+`permission_not_declared` failure did not recur. Internal Drive snapshot work
+stayed below its 250 ms diagnostic threshold, so the remaining cold time is the
+bounded first runtime dispatch rather than repeated filesystem projection.
+
+This incident also fixes the operational rule for later Builder proofs:
+Candidate evidence must name and inspect the authoritative DEV source tree;
+a clean or committed stable Workspace checkout is not evidence that the DEV
+checkpoint contains the same change.
+
+The same runtime-debt pass made tool admission coherent and bounded. Tool
+side effects, approval scope, permissions, and Application access are now read
+from one resolved-manifest snapshot. A DEV call resolves its Project through
+the server-owned current Webspace scenario before falling back to the existing
+unique-owner scan. Runtime handler lookup has an exact path index, an
+invalidation-aware negative cache, and an immutable source-revision fast path;
+revision changes still purge modules and bytecode. Four concurrent Gmail DEV
+calls consequently reduced pre-local admission from 9--10 seconds to roughly
+0.3--0.6 seconds. Their remaining 1--3 second duration is inside generated
+provider execution and is tracked separately from CBS/Application authority.
+
+Finally, both YDoc materialization paths now prepare Application selections,
+Trial sources, launcher entries, and desktop catalog inputs outside the YDoc
+owner loop. Runtime-channel enumeration also avoids per-file filesystem
+`realpath`. The previously observed 2.1-second
+`ApplicationRuntimeChannel.list_selections` owner-loop stall is covered by a
+regression test and did not recur in the post-change live tool runs.
