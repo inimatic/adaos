@@ -5703,6 +5703,100 @@ def test_scenario_automation_materializes_installed_cbs_delivery_as_shared_depen
     assert result[0]["delivery_digest"] == delivery.digest
 
 
+def test_scenario_automation_accepts_project_owned_cbs_delivery(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from adaos.domain.capability_binding_state import (
+        BindingDefinition,
+        BindingDelivery,
+        CapabilityContract,
+    )
+    from adaos.services.capability_binding_state import PortableContractCatalog
+    from adaos.sdk.developer import compositions
+
+    service = _service(tmp_path)
+    provider_id = "recipes_control_skill"
+    provider_root = service.dev_skills_root / provider_id
+    provider_root.mkdir(parents=True)
+    (provider_root / "skill.yaml").write_text(
+        f"name: {provider_id}\nversion: 1.2.3\n", encoding="utf-8"
+    )
+    _write_project_manifest(
+        tmp_path / "dev",
+        skill_ids=(provider_id,),
+    )
+    capability = CapabilityContract.create(
+        capability_ref="capability:mail.messages.manage",
+        version="1.0.0",
+        title="Manage messages",
+        operations=(
+            {
+                "operation_id": "list_messages",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "errors": ["provider_unavailable"],
+            },
+        ),
+    )
+    binding = BindingDefinition.create(
+        binding_definition_ref="binding-definition:mail.messages.manage.google-gmail",
+        version="1.0.0",
+        capability_ref=capability.capability_ref,
+        capability_version=capability.version,
+        entry_protocol="adaos.skill.tools.v1",
+        implementation_entrypoint="mail.messages.manage.google-gmail",
+        state_support=(),
+        modes=("production",),
+        environment_constraints={
+            "profile_classes": ["local"],
+            "provider_features": ["gmail_modify"],
+        },
+        authority_requirements=("providers.google.gmail",),
+        conformance_obligations=("capability_conformance",),
+    )
+    delivery = BindingDelivery.create(
+        binding_definition_ref=binding.binding_definition_ref,
+        binding_definition_digest=binding.digest,
+        logical_entrypoint="mail.messages.manage.google-gmail",
+        package={
+            "kind": "skill",
+            "id": provider_id,
+            "version": "1.2.3",
+            "digest": "sha256:" + "d" * 64,
+        },
+        physical_member="handlers/main.py",
+    )
+    catalog = PortableContractCatalog(
+        service.state_dir / "capability-binding-state" / "portable"
+    )
+    for record in (capability, binding, delivery):
+        catalog.put(record)
+
+    def reject_dependency(*args, **kwargs):
+        raise AssertionError("an owned CBS delivery must not become a dependency")
+
+    monkeypatch.setattr(compositions, "ensure_dependency", reject_dependency)
+
+    result = service._ensure_portable_cbs_dependencies(
+        kind="scenario",
+        project_id="recipes",
+        links={"project_ref": "project:recipes"},
+        cbs_compilation={
+            "requirements": [
+                {
+                    "capability_ref": capability.capability_ref,
+                    "contract_range": "^1.0.0",
+                }
+            ]
+        },
+    )
+
+    assert result[0]["source"] == "portable_cbs_owned_delivery"
+    assert result[0]["component_ref"] == f"skill:{provider_id}"
+    assert result[0]["idempotent"] is True
+
+
 def test_ui_only_scenario_does_not_invent_conventional_companion_skill(
     tmp_path: Path,
 ) -> None:

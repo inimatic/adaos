@@ -3554,18 +3554,47 @@ class BuilderAutomationService:
             )
             if not source_root.is_dir() and not workspace_root.is_dir():
                 continue
-            result = compositions.ensure_dependency(
-                owner_project_id,
-                dependency_ref,
-                version=f"=={package['version']}",
-                relations=("realizes", "uses"),
+            owner_project: Mapping[str, Any] = {}
+            owner_manifest = (
+                self.dev_scenarios_root.parent
+                / "projects"
+                / owner_project_id
+                / "project.yaml"
+            )
+            if owner_manifest.is_file():
+                try:
+                    loaded_owner = yaml.safe_load(
+                        owner_manifest.read_text(encoding="utf-8")
+                    )
+                except (OSError, yaml.YAMLError):
+                    loaded_owner = None
+                if isinstance(loaded_owner, Mapping):
+                    owner_project = loaded_owner
+            owned_delivery = dependency_ref in {
+                str(item.get("ref") or "")
+                for item in owner_project.get("components", {}).get("owned", [])
+                if isinstance(item, Mapping)
+            }
+            result = (
+                {"ok": True, "idempotent": True}
+                if owned_delivery
+                else compositions.ensure_dependency(
+                    owner_project_id,
+                    dependency_ref,
+                    version=f"=={package['version']}",
+                    relations=("realizes", "uses"),
+                )
             )
             selected_refs.add(dependency_ref)
             created.append(
                 {
                     "kind": package_kind,
                     "name": package_id,
-                    "source": "portable_cbs_shared_dependency",
+                    "source": (
+                        "portable_cbs_owned_delivery"
+                        if owned_delivery
+                        else "portable_cbs_shared_dependency"
+                    ),
                     "project_ref": project_ref,
                     "component_ref": dependency_ref,
                     "component_version": str(package["version"]),
