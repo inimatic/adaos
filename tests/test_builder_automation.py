@@ -6366,6 +6366,15 @@ def test_completed_automation_rebinds_to_approved_successor_change(
         },
     )
 
+    predecessor = service.get_session("scenario", "recipes")
+    assert predecessor is not None
+    predecessor["prototype_acceptance"] = {
+        "schema": "adaos.builder.prototype_acceptance.v1",
+        "acceptance_id": "acceptance:predecessor",
+        "change_id": first_change_id,
+    }
+    service._save_session(predecessor)
+
     followed = service.submit_turn(
         text="Apply the approved input-policy repair.",
         object_type="scenario",
@@ -6385,6 +6394,7 @@ def test_completed_automation_rebinds_to_approved_successor_change(
     request = task["realize_request"]
     assert request["links"]["change_set_id"] == second_change_id
     assert request["links"]["canonical_change_id"] == second_change_id
+    assert request["artifacts"]["prototype_acceptance"] is None
     assert (
         _realize_content_artifact(service, task, "context_packet")["change"][
             "change_id"

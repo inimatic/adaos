@@ -4891,6 +4891,16 @@ class BuilderAutomationService:
                             str(session.get("object_id") or ""),
                         )
                     )
+                elif starts_automation and canonical_change_rebound:
+                    # Optional Prototype acceptance is represented by absence,
+                    # never by carrying the immutable receipt of the previous
+                    # Change into the successor task.
+                    session.pop("prototype_acceptance", None)
+                if starts_automation and canonical_change_rebound:
+                    session["source_prototype_version"] = self._project_prototype_ref(
+                        str(session.get("object_type") or ""),
+                        str(session.get("object_id") or ""),
+                    )
             if agent_profile is not None:
                 from adaos.services.codex_profiles import normalize_codex_profile
 
