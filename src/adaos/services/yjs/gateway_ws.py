@@ -9692,9 +9692,19 @@ async def process_events_command(
                 _log.warning("device.register post steps failed webspace=%s device=%s", captured_ws, captured_device, exc_info=True)
                 return {"yjs_post_failed": True}
 
+        # Acknowledge the control-plane identity before any Yjs work.  Starting
+        # the Y server, updating presence, and refreshing the workspace catalog
+        # can legitimately take seconds during development startup; none of
+        # those best-effort projection steps are part of device registration.
+        # In particular, keeping them ahead of the ACK makes an otherwise
+        # healthy client hit its control-command timeout and replay the
+        # registration while the first request is still being processed.
+        await _ack(data={"webspace_id": new_webspace})
+
         try:
-            # Ack control registration without opening a YRoom. The browser can
-            # now establish YWS, whose admitted room bootstrap is authoritative.
+            # The browser may establish YWS as soon as it receives the ACK.
+            # Complete the projections afterwards in this connection task so
+            # failures stay observable and do not create an unmanaged task.
             post_result = await _post_register()
             event_payload = {
                 "device_id": captured_device,
@@ -9711,17 +9721,15 @@ async def process_events_command(
                 "device.registered",
                 event_payload,
             )
-            ack_data = {"webspace_id": new_webspace}
-            if post_result.get("yjs_post_skipped"):
-                ack_data["yjs_post_skipped"] = True
-                ack_data["yjs_guard_reason"] = str(post_result.get("yjs_guard_reason") or "")
-            if post_result.get("yjs_presence_deferred"):
-                ack_data["yjs_presence_deferred"] = True
-                ack_data["yjs_presence_reason"] = str(post_result.get("yjs_presence_reason") or "")
-            await _ack(data=ack_data)
         except Exception:
-            # Best-effort: still send ack even if post-register fails
-            await _ack(data={"webspace_id": new_webspace})
+            # Registration has already succeeded. Projection failures are
+            # best-effort and must not emit a contradictory second ACK.
+            _log.warning(
+                "device.register projections failed after ack webspace=%s device=%s",
+                captured_ws,
+                captured_device,
+                exc_info=True,
+            )
         return new_webspace
 
     if kind == "desktop.toggleInstall":

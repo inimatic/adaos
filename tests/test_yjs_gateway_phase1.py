@@ -4129,10 +4129,12 @@ def test_process_events_command_switches_scenario_before_using_webspace(monkeypa
 def test_process_events_command_publishes_device_registered(monkeypatch) -> None:
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []
+    lifecycle: list[str] = []
 
     monkeypatch.setattr(gateway_module, "_make_publish_bus", lambda *args, **kwargs: (lambda topic, extra=None: published.append((topic, extra))))
 
     async def _fake_start_y_server() -> None:
+        lifecycle.append("start_y_server")
         return None
 
     async def _fake_update_device_presence(webspace_id: str, device_id: str) -> bool:
@@ -4141,6 +4143,7 @@ def test_process_events_command_publishes_device_registered(monkeypatch) -> None
         return True
 
     async def _send_response(msg: dict[str, object]) -> None:
+        lifecycle.append("ack")
         responses.append(msg)
 
     monkeypatch.setattr(gateway_module, "start_y_server", _fake_start_y_server)
@@ -4165,6 +4168,7 @@ def test_process_events_command_publishes_device_registered(monkeypatch) -> None
     ]
     assert responses[-1]["ok"] is True
     assert responses[-1]["data"] == {"webspace_id": "ops"}
+    assert lifecycle == ["ack", "start_y_server"]
 
 
 def test_device_register_rejects_missing_client_version_when_min_version_set(monkeypatch) -> None:
@@ -4265,11 +4269,7 @@ def test_device_register_skips_yjs_post_steps_when_yws_guard_is_active(monkeypat
         )
     ]
     assert responses[-1]["ok"] is True
-    assert responses[-1]["data"] == {
-        "webspace_id": "ops",
-        "yjs_post_skipped": True,
-        "yjs_guard_reason": "active_limit",
-    }
+    assert responses[-1]["data"] == {"webspace_id": "ops"}
     assert server_start_calls == ["start"]
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
@@ -4317,11 +4317,7 @@ def test_device_register_skips_yjs_post_steps_when_direct_yws_disabled(monkeypat
         )
     ]
     assert responses[-1]["ok"] is True
-    assert responses[-1]["data"] == {
-        "webspace_id": "ops",
-        "yjs_post_skipped": True,
-        "yjs_guard_reason": "direct_yws_disabled",
-    }
+    assert responses[-1]["data"] == {"webspace_id": "ops"}
 
 
 def test_update_device_presence_skips_room_when_direct_yws_disabled(monkeypatch) -> None:
