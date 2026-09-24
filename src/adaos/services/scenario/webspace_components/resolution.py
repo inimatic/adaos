@@ -143,6 +143,66 @@ def _merge_trial_and_ambient_skill_decls(
 
 
 class WebspaceResolutionService:
+    def prepare_external_inputs(
+        self,
+        runtime: Any,
+        operations: WebspaceResolutionOperations,
+        webspace_id: str,
+        scenario_id: str,
+        *,
+        source_mode: str,
+        skill_decls: Any,
+        skill_decls_fingerprint: str,
+        materialization_identity: Mapping[str, Any] | None = None,
+    ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+        """Collect filesystem-backed Application inputs outside the owner loop."""
+
+        from adaos.services.applications.runtime_selection import (
+            selected_trial,
+            trial_launcher_entries,
+        )
+
+        effective_decls = [
+            dict(item) for item in skill_decls or () if isinstance(item, Mapping)
+        ]
+        effective_fingerprint = str(skill_decls_fingerprint or "").strip()
+        effective_identity = dict(materialization_identity or {})
+        scenario_content: dict[str, Any] | None = None
+        trial = selected_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
+        if trial is not None:
+            import json
+
+            source = trial.verified_source(trial.component("scenario", scenario_id))
+            scenario_content = json.loads(
+                (source / "webui.json").read_text(encoding="utf-8")
+            )
+            effective_decls = _merge_trial_and_ambient_skill_decls(
+                runtime._collect_skill_decls_from_root(trial.root / "skills"),
+                effective_decls,
+            )
+            effective_fingerprint = operations.fingerprint_json_like(effective_decls)
+            effective_identity |= {
+                "webspace_id": webspace_id,
+                "scenario_id": scenario_id,
+                "revision": trial.candidate_id,
+                "source_fingerprint": f"trial:{trial.release_digest}",
+            }
+        elif not effective_fingerprint:
+            effective_fingerprint = operations.fingerprint_json_like(effective_decls)
+
+        return effective_decls, effective_fingerprint, {
+            "prepared": True,
+            "trial_active": trial is not None,
+            "scenario_content": scenario_content,
+            "materialization_identity": effective_identity,
+            "trial_apps": trial_launcher_entries(runtime.ctx, webspace_id),
+            "materialization": operations.scenario_materialization_contract(
+                scenario_id,
+                source_mode=source_mode,
+                identity=effective_identity or None,
+            ),
+        }
+
     def collect_inputs(
         self,
         runtime: Any,
@@ -156,6 +216,7 @@ class WebspaceResolutionService:
         skill_decls_fingerprint_override: str | None = None,
         desktop_scenarios_override: Any = None,
         scenario_content_override: Mapping[str, Any] | None = None,
+        external_inputs_override: Mapping[str, Any] | None = None,
     ) -> Any:
         collect_timings: Dict[str, float] = {}
         runtime._last_collect_inputs_timings_ms = None
@@ -169,11 +230,27 @@ class WebspaceResolutionService:
             or str(ui_map.get("current_scenario") or "web_desktop").strip()
             or "web_desktop"
         )
-        from adaos.services.applications.runtime_selection import selected_trial, trial_launcher_entries
+        external_inputs = (
+            dict(external_inputs_override)
+            if isinstance(external_inputs_override, Mapping)
+            and bool(external_inputs_override.get("prepared"))
+            else None
+        )
+        trial_ambient_prepared = external_inputs is not None
+        trial_active = bool(external_inputs and external_inputs.get("trial_active"))
+        if external_inputs is not None:
+            prepared_scenario_content = external_inputs.get("scenario_content")
+            if isinstance(prepared_scenario_content, Mapping):
+                scenario_content_override = prepared_scenario_content
+            prepared_identity = external_inputs.get("materialization_identity")
+            if isinstance(prepared_identity, Mapping):
+                materialization_identity = dict(prepared_identity)
+        else:
+            from adaos.services.applications.runtime_selection import selected_trial
 
-        trial = selected_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
-        trial_ambient_prepared = False
-        if trial is not None:
+            trial = selected_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
+            trial_active = trial is not None
+        if external_inputs is None and trial_active:
             ambient_skill_decls = skill_decls_override
             source = trial.verified_source(trial.component("scenario", scenario_id))
             import json
@@ -248,7 +325,7 @@ class WebspaceResolutionService:
             scenario_app_ui, base_catalog, registry_entry = operations.extract_scenario_sections_from_content(
                 scenario_content_override
             )
-            scenario_source = "application_trial" if trial is not None else "builder_preview_override"
+            scenario_source = "application_trial" if trial_active else "builder_preview_override"
             legacy_fallback = False
         else:
             scenario_app_ui, base_catalog, registry_entry, scenario_source, legacy_fallback = operations.resolve_scenario_sections_in_doc(
@@ -261,12 +338,28 @@ class WebspaceResolutionService:
         if metadata:
             metadata = dict(metadata)
         metadata["scenario_source"] = scenario_source
-        metadata["trial_apps"] = trial_launcher_entries(runtime.ctx, webspace_id)
+        if external_inputs is not None:
+            metadata["trial_apps"] = operations.clone_json_like(
+                external_inputs.get("trial_apps") or []
+            )
+        else:
+            from adaos.services.applications.runtime_selection import trial_launcher_entries
+
+            metadata["trial_apps"] = trial_launcher_entries(runtime.ctx, webspace_id)
         metadata["legacy_scenario_fallback"] = legacy_fallback
-        metadata["materialization"] = operations.scenario_materialization_contract(
-            scenario_id,
-            source_mode=mode,
-            identity=materialization_identity,
+        prepared_materialization = (
+            external_inputs.get("materialization")
+            if external_inputs is not None
+            else None
+        )
+        metadata["materialization"] = (
+            operations.clone_json_like(prepared_materialization)
+            if isinstance(prepared_materialization, Mapping)
+            else operations.scenario_materialization_contract(
+                scenario_id,
+                source_mode=mode,
+                identity=materialization_identity,
+            )
         )
 
         preserve_live_state = operations.preserve_live_state_on_rebuild_enabled()
@@ -310,7 +403,7 @@ class WebspaceResolutionService:
             skill_decls_fingerprint = str(getattr(runtime, "_last_skill_decls_fingerprint", "") or "").strip()
         else:
             skill_decls = [dict(item) for item in skill_decls_override if isinstance(item, Mapping)]
-            if trial is not None and not trial_ambient_prepared:
+            if trial_active and not trial_ambient_prepared:
                 try:
                     ambient_skill_decls = runtime._collect_skill_decls(mode=mode)
                 except Exception:
@@ -325,7 +418,7 @@ class WebspaceResolutionService:
                 )
             skill_decls_fingerprint = (
                 operations.fingerprint_json_like(skill_decls)
-                if trial is not None
+                if trial_active
                 else str(skill_decls_fingerprint_override or "").strip()
             )
             if not skill_decls_fingerprint:

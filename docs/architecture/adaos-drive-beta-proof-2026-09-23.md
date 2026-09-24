@@ -186,11 +186,13 @@ Drive testing unreliable. Runtime diagnostics no longer inspect live Python
 frames or task stacks, node-display lookup no longer reads configuration files
 from the Webspace materialization hot path, and catalog collection plus pure
 semantic resolution run outside the live event-loop thread. A selection
-refresh still takes about 2.4--2.8 seconds end to end, but only the bounded
-YDoc apply remains on its owner loop. The former multi-second loop stall is no
-longer present. A short 0.7-second lag was observed while a changed stable
-projection was atomically applied; reducing that owner-loop commit cost is
-retained as performance debt and is not a Drive correctness blocker.
+refresh initially still took about 2.4--2.8 seconds end to end. A remaining
+0.7-second stall was traced to synchronous Application selection, Trial source,
+and scenario-manifest reads during owner-loop input collection. Those external
+inputs now join catalog preparation off the owner loop. The repeated live
+refresh reduced owner-loop collection from 851--1,003 ms to 153 ms and total
+semantic rebuild to 2.1 seconds, with no watchdog stall or event-loop lag. Only
+the bounded YDoc read/apply phases remain on their owner loop.
 
 The first Trial snapshot after a full API restart took 11.2 seconds inside the
 skill execution boundary, while the immediate repeat took 790 ms and the later

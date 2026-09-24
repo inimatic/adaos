@@ -3970,8 +3970,12 @@ def test_rebuild_in_doc_async_offloads_catalog_and_resolution(monkeypatch) -> No
         calls.append(function.__name__)
         return function(*args, **kwargs)
 
-    def _prepare_catalog_sources(_webspace_id):
-        return [], "skills-fingerprint", []
+    def _prepare_catalog_sources(
+        _webspace_id,
+        _scenario_id,
+        _materialization_identity,
+    ):
+        return [], "skills-fingerprint", [], {"prepared": True}
 
     def _resolve_payload(_inputs):
         return resolved, payload, {"resolve": 3.0}
@@ -4003,7 +4007,7 @@ def test_rebuild_in_doc_async_offloads_catalog_and_resolution(monkeypatch) -> No
 
     entry = asyncio.run(
         runtime._rebuild_in_doc_async(
-            object(),
+            _FakeDoc({"ui": _FakeMap()}),
             "desktop",
             expected_request_id="request-1",
         )
@@ -4903,6 +4907,56 @@ def test_phase4_collect_resolver_inputs_does_not_refresh_projection_registry(mon
 
     assert inputs.scenario_id == "web_desktop"
     assert projection_calls == []
+
+
+def test_collect_resolver_inputs_uses_prepared_application_sources(monkeypatch) -> None:
+    from adaos.services.applications import runtime_selection
+
+    def _unexpected_application_read(*_args, **_kwargs):
+        raise AssertionError("Application state must be prepared off the owner loop")
+
+    monkeypatch.setattr(runtime_selection, "selected_trial", _unexpected_application_read)
+    monkeypatch.setattr(
+        runtime_selection,
+        "trial_launcher_entries",
+        _unexpected_application_read,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_scenario_materialization_contract",
+        _unexpected_application_read,
+    )
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    fake_doc = _FakeDoc(
+        {
+            "ui": _FakeMap({"current_scenario": "web_desktop", "scenarios": {}}),
+            "data": _FakeMap({"scenarios": {}}),
+            "registry": _FakeMap({"scenarios": {}}),
+        }
+    )
+    materialization = {
+        "required_branches": ["ui.application"],
+        "source": "prepared",
+        "scenario_id": "web_desktop",
+    }
+
+    inputs = runtime._collect_resolver_inputs_in_doc(
+        fake_doc,
+        "prepared-inputs",
+        skill_decls_override=[],
+        skill_decls_fingerprint_override="prepared-skills",
+        desktop_scenarios_override=[],
+        external_inputs_override={
+            "prepared": True,
+            "trial_active": False,
+            "materialization_identity": {},
+            "trial_apps": [{"id": "scenario:trial"}],
+            "materialization": materialization,
+        },
+    )
+
+    assert inputs.metadata["trial_apps"] == [{"id": "scenario:trial"}]
+    assert inputs.metadata["materialization"] == materialization
 
 
 def test_materialization_cpu_oneshot_stays_on_owner_thread(monkeypatch) -> None:
