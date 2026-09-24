@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactReleaseContractError,
+    DependencyBinding,
     ProjectRelease,
     WorkspaceLock,
     WorkspaceSlot,
@@ -32,6 +33,9 @@ from adaos.services.artifact_pipeline.storage import (
     atomic_write_json,
     mutation_lock,
     replace_with_retry,
+)
+from adaos.services.artifact_pipeline.trial_activation import (
+    unresolved_shared_skill_conflicts,
 )
 from adaos.services.workflow_admission import (
     WorkflowAdmissionError,
@@ -944,6 +948,7 @@ class WorkspaceActivationManager:
         data_mode: str | None,
         data_ref: str | None,
         cbs: Mapping[str, Any] | None = None,
+        shared_rebinding_evidence: tuple[Mapping[str, Any], ...] = (),
         updated_at: str | None = None,
     ) -> WorkspaceLock:
         if current is not None and current.cbs is not None and cbs is None:
@@ -966,11 +971,28 @@ class WorkspaceActivationManager:
         for package in plan.packages:
             components[package.key] = package
         plan_consumers = {item.key for item in plan.packages}
-        bindings = {
-            (item.consumer, item.dependency): item
-            for item in (current.bindings if current else ())
-            if item.consumer not in plan_consumers
+        rebound_by_dependency = {
+            str(item.get("skill_ref") or ""): str(
+                item.get("candidate_package_digest") or ""
+            )
+            for item in shared_rebinding_evidence
+            if str(item.get("status") or "") == "admissible"
         }
+        bindings: dict[tuple[str, str], DependencyBinding] = {}
+        for item in current.bindings if current else ():
+            if item.consumer in plan_consumers:
+                continue
+            rebound_digest = rebound_by_dependency.get(item.dependency)
+            binding = (
+                DependencyBinding(
+                    consumer=item.consumer,
+                    dependency=item.dependency,
+                    package_digest=rebound_digest,
+                )
+                if rebound_digest and rebound_digest != item.package_digest
+                else item
+            )
+            bindings[(binding.consumer, binding.dependency)] = binding
         for binding in plan.bindings:
             bindings[(binding.consumer, binding.dependency)] = binding
 
@@ -1500,6 +1522,23 @@ class WorkspaceActivationManager:
             self._phase(operation, "resolve", phase_hook=phase_hook)
             self._assert_plan(plan)
 
+            unresolved_conflicts, shared_rebinding_evidence = (
+                unresolved_shared_skill_conflicts(
+                    plan, current, self.package_store
+                )
+            )
+            if unresolved_conflicts:
+                summary = "; ".join(
+                    f"{item['skill']} used by {', '.join(item['active_consumers'])}"
+                    for item in unresolved_conflicts
+                )
+                raise ActivationError(
+                    "activation would replace a shared active skill without "
+                    "contract-preserving rebinding evidence: " + summary
+                )
+            operation["shared_skill_rebindings"] = shared_rebinding_evidence
+            self._write_operation(operation)
+
             self._phase(operation, "fetch", phase_hook=phase_hook)
             for package in plan.packages:
                 if self.package_store.has(package.digest):
@@ -1558,6 +1597,7 @@ class WorkspaceActivationManager:
                 data_mode=data_mode,
                 data_ref=data_ref,
                 cbs=cbs_lock,
+                shared_rebinding_evidence=tuple(shared_rebinding_evidence),
                 updated_at=desired_lock_updated_at,
             )
             operation["desired_lock"] = desired.to_dict()

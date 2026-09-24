@@ -9,7 +9,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from adaos.domain.artifact_release import WorkspaceLock
+from adaos.domain.artifact_release import (
+    ArtifactPackageRef,
+    WorkspaceLock,
+    canonical_payload_digest,
+)
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.artifact_pipeline.storage import (
     atomic_write_json,
@@ -22,6 +26,10 @@ TRIAL_ACTIVATION_SCHEMA = "adaos.trial.activation.v1"
 TRIAL_WORKSPACE_LAYOUT_SCHEMA = "adaos.trial.workspace_layout.v1"
 _STATUSES = {"active", "reconciling", "detached", "failed", "expired", "completed"}
 _DATA_MODES = {"empty", "mock", "snapshot", "read_only", "real"}
+_CBS_CONTRACT_MEMBERS = (
+    "contracts/capability.contract.json",
+    "contracts/binding.definition.json",
+)
 
 
 class TrialActivationError(ValueError):
@@ -565,6 +573,119 @@ def shared_skill_conflicts(
     return conflicts
 
 
+def contract_preserving_shared_skill_rebindings(
+    plan: ReleasePlan,
+    active_lock: WorkspaceLock | None,
+    package_store: Any,
+) -> list[dict[str, Any]]:
+    """Prove safe rebinding of active consumers to a new package delivery.
+
+    The single-version runtime may replace a shared skill without rebuilding
+    every consumer only when the portable CapabilityContract, the
+    BindingDefinition, and every logical delivery entrypoint are byte-for-byte
+    equivalent.  The package digest may change; semantic/provider ABI may not.
+    Missing or unreadable evidence is deliberately treated as no proof.
+    """
+
+    if active_lock is None:
+        return []
+    active_by_key = {item.key: item for item in active_lock.components}
+    candidate_by_key = {item.key: item for item in plan.packages}
+    evidence: list[dict[str, Any]] = []
+    for conflict in shared_skill_conflicts(plan, active_lock):
+        skill_ref = str(conflict.get("skill") or "")
+        active_package = active_by_key.get(skill_ref)
+        candidate_package = candidate_by_key.get(skill_ref)
+        if active_package is None or candidate_package is None:
+            continue
+        try:
+            active_fingerprint = _shared_skill_contract_fingerprint(
+                active_package, package_store
+            )
+            candidate_fingerprint = _shared_skill_contract_fingerprint(
+                candidate_package, package_store
+            )
+        except Exception:
+            continue
+        if active_fingerprint != candidate_fingerprint:
+            continue
+        record: dict[str, Any] = {
+            "schema": "adaos.artifact.contract_preserving_rebinding.v1",
+            "status": "admissible",
+            "skill_ref": skill_ref,
+            "active_package_digest": active_package.digest,
+            "candidate_package_digest": candidate_package.digest,
+            "active_consumers": list(conflict.get("active_consumers") or []),
+            "contract_fingerprint": active_fingerprint,
+            "policy": "exact_capability_binding_and_entrypoint_equivalence",
+        }
+        record["evidence_digest"] = canonical_payload_digest(record)
+        evidence.append(record)
+    return evidence
+
+
+def unresolved_shared_skill_conflicts(
+    plan: ReleasePlan,
+    active_lock: WorkspaceLock | None,
+    package_store: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return conflicts without exact rebinding proof and the admitted proofs."""
+
+    conflicts = shared_skill_conflicts(plan, active_lock)
+    admitted = contract_preserving_shared_skill_rebindings(
+        plan, active_lock, package_store
+    )
+    admitted_refs = {str(item.get("skill_ref") or "") for item in admitted}
+    return (
+        [
+            item
+            for item in conflicts
+            if str(item.get("skill") or "") not in admitted_refs
+        ],
+        admitted,
+    )
+
+
+def _shared_skill_contract_fingerprint(
+    package: ArtifactPackageRef,
+    package_store: Any,
+) -> dict[str, Any]:
+    _archive, verified = package_store.read_verified(package.digest)
+    if verified.ref != package:
+        raise TrialActivationError(
+            f"verified package identity changed for {package.key}"
+        )
+    files = {
+        str(item.get("path") or ""): str(item.get("digest") or "")
+        for item in verified.package_manifest.get("files") or []
+        if isinstance(item, Mapping)
+    }
+    contract_members = {
+        member: files.get(member, "") for member in _CBS_CONTRACT_MEMBERS
+    }
+    if any(not digest for digest in contract_members.values()):
+        raise TrialActivationError(
+            f"shared package {package.key} has no complete canonical CBS contracts"
+        )
+    entrypoints = sorted(
+        (
+            str(delivery.to_dict().get("binding_definition_ref") or ""),
+            str(delivery.to_dict().get("binding_definition_digest") or ""),
+            str(delivery.to_dict().get("logical_entrypoint") or ""),
+            str(delivery.to_dict().get("physical_member") or ""),
+        )
+        for delivery in verified.binding_deliveries
+    )
+    if not entrypoints:
+        raise TrialActivationError(
+            f"shared package {package.key} has no canonical BindingDelivery"
+        )
+    return {
+        "contract_members": contract_members,
+        "entrypoints": [list(item) for item in entrypoints],
+    }
+
+
 def build_trial_activation(
     *,
     candidate: Mapping[str, Any],
@@ -580,6 +701,7 @@ def build_trial_activation(
     isolation_evidence: Mapping[str, Any] | None,
     health_evidence: Mapping[str, Any] | None,
     previous_bindings: list[Mapping[str, Any]],
+    shared_rebinding_evidence: list[Mapping[str, Any]] | None = None,
     idempotency_key: str,
     started_at: str | None = None,
     expires_at: str | None = None,
@@ -648,6 +770,9 @@ def build_trial_activation(
             "bindings": [item.to_dict() for item in workspace_lock.bindings],
         },
         "previous_bindings": [copy.deepcopy(dict(item)) for item in previous_bindings],
+        "shared_rebinding_evidence": [
+            copy.deepcopy(dict(item)) for item in shared_rebinding_evidence or []
+        ],
         "status": status,
         "health_evidence": copy.deepcopy(dict(health_evidence or {})),
         "rollback": {"status": "available", "mode": "derived_runtime_detach"},
@@ -775,6 +900,7 @@ __all__ = [
     "TrialActivationStore",
     "TrialWorkspaceLayout",
     "build_trial_activation",
+    "contract_preserving_shared_skill_rebindings",
     "ensure_trial_workspace_shape",
     "legacy_runtime_trial_root",
     "legacy_runtime_trial_workspace",
@@ -784,4 +910,5 @@ __all__ = [
     "runtime_trial_workspace",
     "shared_skill_conflicts",
     "trial_workspace_root",
+    "unresolved_shared_skill_conflicts",
 ]

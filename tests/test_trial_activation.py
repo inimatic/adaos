@@ -16,12 +16,14 @@ from adaos.services.artifact_pipeline.trial_activation import (
     TRIAL_WORKSPACE_LAYOUT_SCHEMA,
     TrialActivationError,
     TrialWorkspaceLayout,
+    contract_preserving_shared_skill_rebindings,
     ensure_trial_workspace_shape,
     legacy_runtime_trial_root,
     legacy_runtime_trial_workspace,
     legacy_workspace_trial_root,
     shared_skill_conflicts,
     trial_workspace_root,
+    unresolved_shared_skill_conflicts,
 )
 
 
@@ -99,6 +101,125 @@ def test_runtime_trial_allows_same_skill_digest_or_closed_candidate_consumer() -
         SimpleNamespace(packages=(changed, scenario)),
         same_digest_lock,
     )
+
+
+def test_contract_preserving_delivery_rebinds_external_consumers() -> None:
+    active = _skill("a")
+    candidate = _skill("b")
+    lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-08-06T00:00:00+00:00",
+        components=(active,),
+        bindings=(
+            DependencyBinding(
+                consumer="scenario:other",
+                dependency=active.key,
+                package_digest=active.digest,
+            ),
+        ),
+    )
+
+    class _Delivery:
+        binding_definition_ref = "binding-definition:shared.v1"
+        binding_definition_digest = "sha256:" + "d" * 64
+
+        @staticmethod
+        def to_dict():
+            return {
+                "logical_entrypoint": "shared.v1",
+                "physical_member": "handlers/main.py",
+            }
+
+    class _Store:
+        @staticmethod
+        def read_verified(digest):
+            package = active if digest == active.digest else candidate
+            return b"archive", SimpleNamespace(
+                ref=package,
+                package_manifest={
+                    "files": [
+                        {
+                            "path": "contracts/capability.contract.json",
+                            "digest": "sha256:" + "1" * 64,
+                        },
+                        {
+                            "path": "contracts/binding.definition.json",
+                            "digest": "sha256:" + "2" * 64,
+                        },
+                    ]
+                },
+                binding_deliveries=(_Delivery(),),
+            )
+
+    plan = SimpleNamespace(packages=(candidate,))
+    evidence = contract_preserving_shared_skill_rebindings(plan, lock, _Store())
+    unresolved, admitted = unresolved_shared_skill_conflicts(plan, lock, _Store())
+
+    assert unresolved == []
+    assert admitted == evidence
+    assert evidence[0]["skill_ref"] == "skill:shared_skill"
+    assert evidence[0]["active_consumers"] == ["scenario:other"]
+    assert evidence[0]["status"] == "admissible"
+    assert evidence[0]["evidence_digest"].startswith("sha256:")
+
+
+def test_contract_change_keeps_shared_skill_conflict_fail_closed() -> None:
+    active = _skill("a")
+    candidate = _skill("b")
+    lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-08-06T00:00:00+00:00",
+        components=(active,),
+        bindings=(
+            DependencyBinding(
+                consumer="scenario:other",
+                dependency=active.key,
+                package_digest=active.digest,
+            ),
+        ),
+    )
+
+    class _Delivery:
+        binding_definition_ref = "binding-definition:shared.v1"
+        binding_definition_digest = "sha256:" + "d" * 64
+
+        @staticmethod
+        def to_dict():
+            return {
+                "logical_entrypoint": "shared.v1",
+                "physical_member": "handlers/main.py",
+            }
+
+    class _Store:
+        @staticmethod
+        def read_verified(digest):
+            package = active if digest == active.digest else candidate
+            capability_digest = (
+                "sha256:" + ("1" if package is active else "9") * 64
+            )
+            return b"archive", SimpleNamespace(
+                ref=package,
+                package_manifest={
+                    "files": [
+                        {
+                            "path": "contracts/capability.contract.json",
+                            "digest": capability_digest,
+                        },
+                        {
+                            "path": "contracts/binding.definition.json",
+                            "digest": "sha256:" + "2" * 64,
+                        },
+                    ]
+                },
+                binding_deliveries=(_Delivery(),),
+            )
+
+    unresolved, admitted = unresolved_shared_skill_conflicts(
+        SimpleNamespace(packages=(candidate,)), lock, _Store()
+    )
+
+    assert admitted == []
+    assert unresolved[0]["reason"] == "shared_skill_version_conflict"
 
 
 def test_trial_preview_resolves_exact_candidate_as_well_as_legacy_version(tmp_path):

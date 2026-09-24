@@ -151,6 +151,7 @@ from .trial_activation import (
     TrialActivationStore,
     TrialWorkspaceLayout,
     build_trial_activation,
+    contract_preserving_shared_skill_rebindings,
     legacy_workspace_trial_root,
     legacy_runtime_trial_root,
     legacy_runtime_trial_workspace,
@@ -159,6 +160,7 @@ from .trial_activation import (
     runtime_trial_workspace,
     shared_skill_conflicts,
     trial_workspace_root,
+    unresolved_shared_skill_conflicts,
 )
 from .publication import (
     PROMOTION_OPERATION_SCHEMA,
@@ -311,6 +313,7 @@ __all__ = [
     "begin_trial",
     "build_project_release",
     "build_trial_activation",
+    "contract_preserving_shared_skill_rebindings",
     "candidate_from_release",
     "complete_trial",
     "compose_artifact_trust_runtime",
@@ -327,6 +330,7 @@ __all__ = [
     "runtime_trial_workspace",
     "shared_skill_conflicts",
     "trial_workspace_root",
+    "unresolved_shared_skill_conflicts",
     "package_provenance_digest",
     "package_provenance_statement",
     "release_provenance_digest",

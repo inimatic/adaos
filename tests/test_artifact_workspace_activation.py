@@ -108,6 +108,62 @@ def _built_skill(root: Path, *, version: str, marker: str):
     return build_artifact_package(skill, kind="skill", source_ref=_source())
 
 
+def _built_cbs_skill(root: Path, *, version: str, marker: str):
+    skill = root / f"cbs-skill-{marker}"
+    (skill / "contracts").mkdir(parents=True)
+    (skill / "handlers").mkdir()
+    (skill / "handlers" / "main.py").write_text(
+        f"MARKER = {marker!r}\n", encoding="utf-8"
+    )
+    (skill / "skill.yaml").write_text(
+        f"""\
+name: shared_mail_provider
+version: {version}
+capabilities: [providers.google.gmail]
+tools:
+  - name: list_messages
+    input_schema:
+      type: object
+      additionalProperties: false
+    output_schema:
+      type: object
+      required: [items]
+      properties:
+        items: {{type: array}}
+      additionalProperties: false
+""",
+        encoding="utf-8",
+    )
+    (skill / "contracts" / "provider.cbs.yaml").write_text(
+        """\
+schema: adaos.cbs.provider_authoring.v1
+authorship:
+  origin: builder_inferred
+capability:
+  ref: capability:mail.messages.manage
+  version: 1.0.0
+  title: Manage mail messages
+  operations:
+    - operation_id: list_messages
+      tool: list_messages
+      errors: [permission_denied]
+  authority_requirements: [providers.google.gmail]
+binding:
+  ref: binding-definition:mail.messages.google-gmail
+  version: 1.0.0
+  entry_protocol: adaos.skill.tools.v1
+  logical_entrypoint: mail.messages.google
+  physical_member: handlers/main.py
+  modes: [production]
+  profile_classes: [local]
+  provider_features: [oauth_pkce]
+  conformance_obligations: [capability_conformance]
+""",
+        encoding="utf-8",
+    )
+    return build_artifact_package(skill, kind="skill", source_ref=_source())
+
+
 def _plan_with_skill(scenario, skill):
     return build_project_release(
         project_id="recipes",
@@ -118,6 +174,23 @@ def _plan_with_skill(scenario, skill):
         requirements_by_package={
             scenario.ref.digest: (
                 DependencyRequirement("skill", "shopping", skill.ref.version),
+            )
+        },
+    )
+
+
+def _plan_with_cbs_skill(scenario, skill, *, project_id: str):
+    return build_project_release(
+        project_id=project_id,
+        version=scenario.ref.version,
+        source_ref=_source(),
+        components=(scenario.ref,),
+        catalog=PackageCatalog((skill.ref,)),
+        requirements_by_package={
+            scenario.ref.digest: (
+                DependencyRequirement(
+                    "skill", "shared_mail_provider", skill.ref.version
+                ),
             )
         },
     )
@@ -679,6 +752,77 @@ def test_project_release_consolidates_replaced_standalone_component_slot(
         manager.operation_path(result.operation_id).read_text(encoding="utf-8")
     )
     assert operation["slot_plan"]["removed"][0]["project_id"] == "shopping"
+
+
+def test_contract_preserving_shared_provider_upgrade_rebinds_active_consumers(
+    tmp_path: Path,
+) -> None:
+    first_consumer = _built_scenario(
+        tmp_path,
+        version="1.0.0",
+        marker="consumer-one",
+        scenario_id="consumer_one",
+    )
+    second_consumer = _built_scenario(
+        tmp_path,
+        version="1.0.0",
+        marker="consumer-two",
+        scenario_id="consumer_two",
+    )
+    provider_v1 = _built_cbs_skill(
+        tmp_path, version="1.0.0", marker="provider-one"
+    )
+    provider_v2 = _built_cbs_skill(
+        tmp_path, version="1.1.0", marker="provider-two"
+    )
+    first_plan = _plan_with_cbs_skill(
+        first_consumer, provider_v1, project_id="consumer_one"
+    )
+    second_plan = _plan_with_cbs_skill(
+        second_consumer, provider_v2, project_id="consumer_two"
+    )
+    store, manager = _manager(tmp_path)
+    for built in (first_consumer, second_consumer, provider_v1, provider_v2):
+        store.put(built.archive_bytes)
+
+    _activate(
+        manager,
+        first_plan,
+        idempotency_key="consumer-one-v1",
+        slot_id="consumer_one",
+    )
+    result = _activate(
+        manager,
+        second_plan,
+        idempotency_key="consumer-two-provider-v2",
+        slot_id="consumer_two",
+    )
+
+    components = {item.key: item for item in result.workspace_lock.components}
+    assert components["skill:shared_mail_provider"].digest == provider_v2.ref.digest
+    assert {item.slot_id for item in result.workspace_lock.slots} == {
+        "consumer_one",
+        "consumer_two",
+    }
+    provider_bindings = [
+        item
+        for item in result.workspace_lock.bindings
+        if item.dependency == "skill:shared_mail_provider"
+    ]
+    assert {item.consumer for item in provider_bindings} == {
+        "scenario:consumer_one",
+        "scenario:consumer_two",
+    }
+    assert {item.package_digest for item in provider_bindings} == {
+        provider_v2.ref.digest
+    }
+    operation = json.loads(
+        manager.operation_path(result.operation_id).read_text(encoding="utf-8")
+    )
+    assert operation["shared_skill_rebindings"][0]["status"] == "admissible"
+    assert operation["shared_skill_rebindings"][0]["active_consumers"] == [
+        "scenario:consumer_one"
+    ]
 
 
 def test_removed_dependency_is_restored_when_post_switch_health_fails(tmp_path: Path) -> None:

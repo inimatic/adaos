@@ -85,7 +85,7 @@ from adaos.services.artifact_pipeline.trial_activation import (
     build_trial_activation,
     ensure_trial_workspace_shape,
     load_workspace_lock,
-    shared_skill_conflicts,
+    unresolved_shared_skill_conflicts,
 )
 from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.workflow_artifacts import load_manifest_bound_workflow
@@ -1963,11 +1963,23 @@ class ArtifactPublicationService:
             requirements_by_package=requirements_by_package,
             validation_evidence=(effective_validation_evidence,),
         )
+        # The CAS is non-authoritative and may safely receive verified bytes
+        # before Candidate admission. Contract-preserving rebinding evidence
+        # must be computed from the exact candidate and active package bytes.
+        self.package_store.put(
+            built.archive_bytes, expected_digest=built.ref.digest
+        )
+        for dependency_digest, archive in dependency_archives.items():
+            self.package_store.put(archive, expected_digest=dependency_digest)
         try:
             active_lock = load_workspace_lock(
                 self.workspace_root / ".adaos" / "workspace.lock.json"
             )
-            conflicts = shared_skill_conflicts(plan, active_lock)
+            conflicts, shared_rebinding_evidence = (
+                unresolved_shared_skill_conflicts(
+                    plan, active_lock, self.package_store
+                )
+            )
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc
         if conflicts:
@@ -2082,6 +2094,7 @@ class ArtifactPublicationService:
                     if active_lock is not None
                     else []
                 ),
+                shared_rebinding_evidence=shared_rebinding_evidence,
                 idempotency_key=trial_idempotency_key,
                 started_at=trial_started_at,
             )
@@ -2158,7 +2171,9 @@ class ArtifactPublicationService:
                 stable.release.version,
                 source="stable",
             )
-        conflicts = shared_skill_conflicts(plan, active_lock)
+        conflicts, shared_rebinding_evidence = unresolved_shared_skill_conflicts(
+            plan, active_lock, self.package_store
+        )
         if conflicts:
             summary = "; ".join(
                 f"{item['skill']} used by {', '.join(item['active_consumers'])}"
@@ -2382,6 +2397,7 @@ class ArtifactPublicationService:
                     if active_lock is not None
                     else []
                 ),
+                shared_rebinding_evidence=shared_rebinding_evidence,
                 idempotency_key=trial_idempotency_key,
                 started_at=trial_started_at,
             )
@@ -2510,7 +2526,11 @@ class ArtifactPublicationService:
             active_lock = load_workspace_lock(
                 self.workspace_root / ".adaos" / "workspace.lock.json"
             )
-            conflicts = shared_skill_conflicts(plan, active_lock)
+            conflicts, shared_rebinding_evidence = (
+                unresolved_shared_skill_conflicts(
+                    plan, active_lock, self.package_store
+                )
+            )
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc
         if conflicts:
@@ -2558,6 +2578,7 @@ class ArtifactPublicationService:
                 "status": "passed",
                 "check": "verified_trial_reconstruction",
             },
+            shared_rebinding_evidence=shared_rebinding_evidence,
         )
 
     def get_candidate(self, candidate_id: str) -> CandidateRecord:
