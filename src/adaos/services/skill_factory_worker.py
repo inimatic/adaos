@@ -4181,9 +4181,16 @@ def manifest_scope_blocking_feedback_message(
             if isinstance(ref, Mapping)
             and str(ref.get("type") or "").strip() == "file"
         ]
-        if not file_refs or any(
-            not ref.endswith(admitted_suffixes) or ref.startswith("/") or ".." in ref.split("/")
-            for ref in file_refs
+        # Evidence may legitimately include the focused test which proves the
+        # required manifest transformation.  Those additional references do
+        # not grant source authority: the preserved workspace is still pinned
+        # and changed paths are validated independently.  Require at least one
+        # exact manifest reference, while rejecting unsafe paths anywhere in
+        # the evidence set.
+        if (
+            not file_refs
+            or any(ref.startswith("/") or ".." in ref.split("/") for ref in file_refs)
+            or not any(ref.endswith(admitted_suffixes) for ref in file_refs)
         ):
             return None
     return message

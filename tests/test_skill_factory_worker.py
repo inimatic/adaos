@@ -97,7 +97,8 @@ def test_manifest_scope_feedback_requires_exact_safe_manifest_evidence(
         '"blocking":true,"details":"Replacing scaffold manifests requires a '
         'large rewrite.","evidence_refs":['
         '{"type":"file","ref":"scenarios/demo/webui.json"},'
-        '{"type":"file","ref":"skills/demo/skill.yaml"}]}]}\n'
+        '{"type":"file","ref":"skills/demo/skill.yaml"},'
+        '{"type":"file","ref":"scenarios/demo/tests/test_bindings.py"}]}]}\n'
         "```"
     )
     (run_root / "output" / "last_message.md").write_text(
@@ -115,10 +116,19 @@ def test_manifest_scope_feedback_requires_exact_safe_manifest_evidence(
     )
 
     unsafe = report.replace(
-        "scenarios/demo/webui.json", "src/adaos/services/builder/automation.py"
+        "scenarios/demo/webui.json", "../outside/webui.json"
     )
     (run_root / "output" / "last_message.md").write_text(
         json.dumps({"status": "blocked", "report": unsafe, "questions": []}),
+        encoding="utf-8",
+    )
+    assert worker_module.manifest_scope_blocking_feedback_message(run_root, failure) is None
+
+    no_manifest = report.replace(
+        "scenarios/demo/webui.json", "scenarios/demo/tests/test_webui.py"
+    ).replace("skills/demo/skill.yaml", "skills/demo/tests/test_skill.py")
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps({"status": "blocked", "report": no_manifest, "questions": []}),
         encoding="utf-8",
     )
     assert worker_module.manifest_scope_blocking_feedback_message(run_root, failure) is None
