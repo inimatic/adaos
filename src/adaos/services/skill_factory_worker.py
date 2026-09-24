@@ -4430,7 +4430,11 @@ class LocalSkillFactoryWorker:
             for binding in catalog.matching_bindings(
                 selected.capability_ref, selected.version
             ):
-                deliveries = catalog.deliveries_for_binding(binding.digest)
+                # Registry history stays canonical, but a compiler needs only
+                # the best currently admitted materialization. Including every
+                # historical package repeats large tool schemas and makes the
+                # model choose a release that resolution has already ranked.
+                deliveries = catalog.deliveries_for_binding(binding.digest)[:1]
                 delivery_values = [item.to_dict() for item in deliveries]
                 binding_value = binding.to_dict()
                 reusable_binding: dict[str, Any] = {

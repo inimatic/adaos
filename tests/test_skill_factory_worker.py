@@ -9274,6 +9274,14 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
                 "name": "portable_list_messages",
                 "entry": "handlers.main:portable_list_messages",
                 "side_effects": "none",
+                "behavioral_guarantees": {
+                    "collection_projection": "summary_only",
+                    "detail_loading": "on_demand",
+                    "provider_fetch_strategy": "batch",
+                    "max_provider_round_trips": 2,
+                    "max_items": 25,
+                    "evidence_refs": ["tests/test_provider.py::test_batch"],
+                },
                 "permissions": ["workspace.read", "providers.google.gmail"],
                 "input_schema": {"type": "object", "additionalProperties": False},
                 "output_schema": {
@@ -9425,6 +9433,19 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     assert interface["registry_ref"].startswith("package-registry://skill/")
     assert interface["compiler_view"]["package"] == delivery.to_dict()["package"]
     assert interface["compiler_view"]["tools"] == shared_manifest["tools"]
+    portable_list = next(
+        item
+        for item in interface["compiler_view"]["tools"]
+        if item["name"] == "portable_list_messages"
+    )
+    assert portable_list["behavioral_guarantees"] == {
+        "collection_projection": "summary_only",
+        "detail_loading": "on_demand",
+        "provider_fetch_strategy": "batch",
+        "max_provider_round_trips": 2,
+        "max_items": 25,
+        "evidence_refs": ["tests/test_provider.py::test_batch"],
+    }
     assert {item["name"] for item in interface["compiler_view"]["entry_symbols"]} == {
         "reusable_connections",
         "attach_reusable_connection",
