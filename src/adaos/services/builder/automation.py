@@ -2595,6 +2595,14 @@ class BuilderAutomationService:
                             "task": current_task,
                             "updated_at": current_task.get("updated_at") or _now_iso(),
                         }
+            replaces_terminal_predecessor = bool(
+                current
+                and requested_change_set_id
+                and str(current.get("change_set_id") or "").strip()
+                != requested_change_set_id
+                and str(current.get("status") or "").strip()
+                in {"completed", "failed", "cancelled", "expired"}
+            )
             if current and current.get("status") in {
                 "queued",
                 "assigned",
@@ -2913,7 +2921,14 @@ class BuilderAutomationService:
             session["status"] = "queued"
             session["current_task_id"] = submitted["task"]["task_id"]
             session["task_history"].append(session["current_task_id"])
-            self._save_session(session)
+            self._save_session(
+                session,
+                # Iterations are monotonic only inside one Change. A successor
+                # starts at zero by design, so the generic stale-write guard
+                # must not restore the terminal predecessor over this exact
+                # newly queued task.
+                allow_lineage_rewind=replaces_terminal_predecessor,
+            )
             self._workflow().transition(
                 kind,
                 project_id,
