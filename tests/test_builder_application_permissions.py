@@ -80,3 +80,48 @@ permission_profile:
 
     assert context["authority_status"] == "valid"
     assert context["project_ref"] == "project:mail_client"
+
+
+def test_requested_project_authorizes_declared_shared_dependency(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    skills = tmp_path / "skills"
+    for project_id in ("mail_client", "mail_manager"):
+        project = projects / project_id
+        project.mkdir(parents=True)
+        (project / "project.yaml").write_text(
+            f"""
+id: {project_id}
+components:
+  owned:
+    - ref: scenario:{project_id}
+  dependencies:
+    - ref: skill:gmail_provider
+      version: ==1.0.0
+      lifecycle: shared
+      relations: [realizes, uses]
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: providers.google.gmail
+      purpose: Use an explicitly attached Gmail account.
+  optional: []
+""".lstrip(),
+            encoding="utf-8",
+        )
+    skill = skills / "gmail_provider"
+    skill.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        "name: gmail_provider\ncapabilities: [providers.google.gmail]\n",
+        encoding="utf-8",
+    )
+
+    context = application_permissions_context(
+        component_ref="skill:gmail_provider",
+        requested_project_ref="project:mail_manager",
+        dev_projects_root=projects,
+        dev_skills_root=skills,
+    )
+
+    assert context["authority_status"] == "valid"
+    assert context["project_ref"] == "project:mail_manager"
+    assert context["declared"] == ["providers.google.gmail"]

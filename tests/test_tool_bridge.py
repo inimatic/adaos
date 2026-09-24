@@ -1486,6 +1486,94 @@ permission_profile:
     assert access["context"]["application_id"] == "mail_client"
 
 
+def test_dev_application_context_authorizes_shared_project_dependency(
+    tmp_path, monkeypatch
+) -> None:
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.policy.application import clear_application
+    from adaos.services.policy.caller import verified_caller
+
+    projects = tmp_path / "projects"
+    skills = tmp_path / "skills"
+    (projects / "mail_manager").mkdir(parents=True)
+    (skills / "gmail_provider").mkdir(parents=True)
+    (projects / "mail_manager" / "project.yaml").write_text(
+        """
+id: mail_manager
+components:
+  owned:
+    - ref: scenario:mail_manager
+  dependencies:
+    - ref: skill:gmail_provider
+      version: ==1.0.0
+      lifecycle: shared
+      relations: [realizes, uses]
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: workspace.read
+      purpose: Read provider results.
+    - id: providers.google.gmail
+      purpose: Use an explicitly attached Gmail account.
+  optional: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (skills / "gmail_provider" / "skill.yaml").write_text(
+        "name: gmail_provider\nversion: 1.0.0\ncapabilities: [workspace.read, providers.google.gmail]\n",
+        encoding="utf-8",
+    )
+
+    class _Paths:
+        def dev_projects_dir(self):
+            return projects
+
+        def dev_skills_dir(self):
+            return skills
+
+    monkeypatch.setattr(
+        "adaos.services.workspaces.index.get_workspace",
+        lambda _webspace_id: SimpleNamespace(
+            is_dev=True,
+            current_scenario_overlay="mail_manager",
+            home_scenario="web_desktop",
+        ),
+    )
+    body = tool_bridge_module.ToolCall(
+        tool="gmail_provider:list_messages",
+        arguments={"webspace_id": "desktop-dev"},
+        dev=True,
+    )
+    clear_application()
+    try:
+        with verified_caller(SubjectRef("user", "owner")):
+            updated, access = asyncio.run(
+                tool_bridge_module._authorize_application_tool_call(
+                    body=body,
+                    request=SimpleNamespace(headers={}),
+                    ctx=SimpleNamespace(paths=_Paths()),
+                    skill_name="gmail_provider",
+                    public_tool="list_messages",
+                    manager=object(),
+                    declared_side_effects="none",
+                    component_capabilities=(
+                        "workspace.read",
+                        "providers.google.gmail",
+                    ),
+                    application_contract={
+                        "permission": "providers.google.gmail",
+                        "capability": "mail.read",
+                    },
+                )
+            )
+        assert access is not None
+        assert access["context"]["application_id"] == "mail_manager"
+        assert access["context"]["component_ref"] == "skill:gmail_provider"
+        assert updated.context["_verified_application_access"] == access["context"]
+    finally:
+        clear_application()
+
+
 def test_dev_application_context_rejects_undeclared_tool_permission(
     tmp_path,
 ) -> None:

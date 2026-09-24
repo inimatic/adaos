@@ -132,6 +132,31 @@ def _owned_refs(project: Mapping[str, Any]) -> list[str]:
     )
 
 
+def _dependency_refs(project: Mapping[str, Any]) -> list[str]:
+    """Return components the Project is allowed to consume but does not own.
+
+    Shared CBS deliveries deliberately remain independent of their consuming
+    Applications.  DEV authorization still needs the Project declaration as
+    its authority ceiling, so a declared dependency is a valid tool-call
+    target even though it must never be treated as Project-owned source.
+    """
+
+    components = project.get("components")
+    if not isinstance(components, Mapping):
+        return []
+    return list(
+        dict.fromkeys(
+            str(item.get("ref") or "").strip()
+            for item in components.get("dependencies") or []
+            if isinstance(item, Mapping) and str(item.get("ref") or "").strip()
+        )
+    )
+
+
+def _declared_component_refs(project: Mapping[str, Any]) -> list[str]:
+    return list(dict.fromkeys([*_owned_refs(project), *_dependency_refs(project)]))
+
+
 def _project_owner(
     component_ref: str,
     *,
@@ -145,16 +170,18 @@ def _project_owner(
         if not path.is_file():
             return requested, None, ["owning DEV Project manifest is not available"]
         project, _ = _manifest(path)
-        if project and (component_ref == requested or component_ref in _owned_refs(project)):
+        if project and (
+            component_ref == requested or component_ref in _declared_component_refs(project)
+        ):
             return requested, path, []
-        return None, None, ["requested Project does not own the Automation target"]
+        return None, None, ["requested Project does not declare the component"]
 
     owners: list[tuple[str, Path]] = []
     for path in sorted(dev_projects_root.glob("*/project.yaml")):
         project, _ = _manifest(path)
         project_id = str(project.get("id") or path.parent.name).strip()
         project_ref = f"project:{project_id}"
-        if component_ref == project_ref or component_ref in _owned_refs(project):
+        if component_ref == project_ref or component_ref in _declared_component_refs(project):
             owners.append((project_ref, path))
     if len(owners) == 1:
         return owners[0][0], owners[0][1], []
