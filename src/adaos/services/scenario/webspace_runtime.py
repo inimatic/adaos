@@ -8,6 +8,7 @@ import atexit
 import asyncio
 import base64
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -5359,18 +5360,37 @@ class WebspaceScenarioRuntime:
         scenario_content_override: Mapping[str, Any] | None = None,
         external_inputs_override: Mapping[str, Any] | None = None,
     ) -> WebspaceResolverInputs:
-        return _RUNTIME.resolution.collect_inputs(
+        collect_inputs = _RUNTIME.resolution.collect_inputs
+        kwargs: dict[str, Any] = {
+            "materialization_identity": materialization_identity,
+            "scenario_id_override": scenario_id_override,
+            "skill_decls_override": skill_decls_override,
+            "skill_decls_fingerprint_override": skill_decls_fingerprint_override,
+            "desktop_scenarios_override": desktop_scenarios_override,
+            "scenario_content_override": scenario_content_override,
+            "external_inputs_override": external_inputs_override,
+        }
+        try:
+            signature = inspect.signature(collect_inputs)
+            parameters = signature.parameters
+            supports_extra_kwargs = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+            if not supports_extra_kwargs:
+                kwargs = {
+                    key: value
+                    for key, value in kwargs.items()
+                    if key in parameters
+                }
+        except Exception:
+            pass
+        return collect_inputs(
             self,
             _resolution_operations(self.ctx),
             ydoc,
             webspace_id,
-            materialization_identity=materialization_identity,
-            scenario_id_override=scenario_id_override,
-            skill_decls_override=skill_decls_override,
-            skill_decls_fingerprint_override=skill_decls_fingerprint_override,
-            desktop_scenarios_override=desktop_scenarios_override,
-            scenario_content_override=scenario_content_override,
-            external_inputs_override=external_inputs_override,
+            **kwargs,
         )
 
     def resolve_webspace(self, inputs: WebspaceResolverInputs) -> WebspaceResolverOutputs:
@@ -5779,16 +5799,27 @@ class WebspaceScenarioRuntime:
         prepared_declarations = [
             dict(item) for item in declarations if isinstance(item, Mapping)
         ]
+        prepared_fingerprint = str(fingerprint or "").strip()
         desktop_scenarios = self._list_desktop_scenarios(space=source_mode)
+        prepare_external_inputs = getattr(_RUNTIME.resolution, "prepare_external_inputs", None)
+        if not callable(prepare_external_inputs):
+            if not prepared_fingerprint:
+                prepared_fingerprint = _fingerprint_json_like(prepared_declarations)
+            return (
+                prepared_declarations,
+                prepared_fingerprint,
+                desktop_scenarios,
+                {},
+            )
         prepared_declarations, prepared_fingerprint, external_inputs = (
-            _RUNTIME.resolution.prepare_external_inputs(
+            prepare_external_inputs(
                 self,
                 _resolution_operations(self.ctx),
                 webspace_id,
                 scenario_id,
                 source_mode=source_mode,
                 skill_decls=prepared_declarations,
-                skill_decls_fingerprint=str(fingerprint or "").strip(),
+                skill_decls_fingerprint=prepared_fingerprint,
                 materialization_identity=materialization_identity,
             )
         )

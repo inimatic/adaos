@@ -4100,6 +4100,90 @@ def test_payload_from_doc_offloads_catalog_and_resolution(monkeypatch) -> None:
     assert runtime._last_materialized_payload == payload
 
 
+def test_prepare_materialization_external_sources_tolerates_legacy_resolution(monkeypatch) -> None:
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
+    monkeypatch.delattr(
+        type(webspace_runtime_module._RUNTIME.resolution),
+        "prepare_external_inputs",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_list_desktop_scenarios",
+        lambda *, space: [("web_desktop", "Desktop", "desktop")],
+    )
+
+    declarations, fingerprint, desktop_scenarios, external_inputs = (
+        runtime._prepare_materialization_external_sources_sync(
+            "desktop",
+            "web_desktop",
+            [{"skill": "prewarmed"}],
+            "fp-prewarmed",
+            source_mode_override="workspace",
+        )
+    )
+
+    assert declarations == [{"skill": "prewarmed"}]
+    assert fingerprint == "fp-prewarmed"
+    assert desktop_scenarios == [("web_desktop", "Desktop", "desktop")]
+    assert external_inputs == {}
+
+
+def test_collect_resolver_inputs_tolerates_legacy_resolution_signature(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    expected = webspace_runtime_module.WebspaceResolverInputs(
+        webspace_id="desktop",
+        scenario_id="web_desktop",
+        source_mode="workspace",
+    )
+
+    def _legacy_collect_inputs(
+        self,  # noqa: ARG001
+        runtime,  # noqa: ARG001
+        operations,  # noqa: ARG001
+        ydoc,  # noqa: ARG001
+        webspace_id: str,
+        *,
+        materialization_identity=None,
+        scenario_id_override=None,
+        skill_decls_override=None,
+        skill_decls_fingerprint_override=None,
+        scenario_content_override=None,
+    ):
+        captured.update(
+            {
+                "webspace_id": webspace_id,
+                "skill_decls_override": skill_decls_override,
+                "skill_decls_fingerprint_override": skill_decls_fingerprint_override,
+                "materialization_identity": materialization_identity,
+                "scenario_id_override": scenario_id_override,
+                "scenario_content_override": scenario_content_override,
+            }
+        )
+        return expected
+
+    monkeypatch.setattr(
+        type(webspace_runtime_module._RUNTIME.resolution),
+        "collect_inputs",
+        _legacy_collect_inputs,
+    )
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
+
+    result = runtime._collect_resolver_inputs_in_doc(
+        _FakeDoc({"ui": _FakeMap({"current_scenario": "web_desktop"})}),
+        "desktop",
+        skill_decls_override=[{"skill": "prewarmed"}],
+        skill_decls_fingerprint_override="fp-prewarmed",
+        desktop_scenarios_override=[("web_desktop", "Desktop", "desktop")],
+        external_inputs_override={},
+    )
+
+    assert result is expected
+    assert captured["webspace_id"] == "desktop"
+    assert captured["skill_decls_override"] == [{"skill": "prewarmed"}]
+    assert captured["skill_decls_fingerprint_override"] == "fp-prewarmed"
+    assert "desktop_scenarios_override" not in captured
+
+
 def test_go_home_webspace_uses_manifest_home_scenario(monkeypatch) -> None:
     webspace_id = "phase2-go-home"
     _pair_preview(webspace_id)
