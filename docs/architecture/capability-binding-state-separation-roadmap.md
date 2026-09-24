@@ -23,7 +23,9 @@ definition plus an exact package delivery without duplicating tool schemas. It
 deliberately does not by itself change the roadmap's registry/reuse status: a
 curated portable mail contract, local registry reference, independently
 delivered reusable binding, resolver selection, and explicit second-consumer
-account attachment remain open before the reuse proof.
+account attachment remain open before the reuse proof. The first consumer's
+exact result and qualification boundary are recorded in
+[Gmail Mail Client: Stage-One CBS Beta Proof](gmail-mail-client-cbs-beta-proof-2026-09-24.md).
 
 ## Outcome
 

@@ -158,6 +158,7 @@ nav:
       - Capability Binding And State Separation Roadmap: architecture/capability-binding-state-separation-roadmap.md
       - CBS0 Capability Binding State Inventory: architecture/capability-binding-state-cbs0-inventory.md
       - CBS1-CBS5 Implementation And Migration: architecture/capability-binding-state-cbs1-cbs5-implementation.md
+      - Gmail Mail Client Stage-One CBS Beta Proof: architecture/gmail-mail-client-cbs-beta-proof-2026-09-24.md
       - Application Lifecycle Distribution And Feedback: architecture/application-lifecycle-and-distribution.md
       - Application Lifecycle Distribution Roadmap: architecture/application-lifecycle-and-distribution-roadmap.md
       - Application Access Permissions And Roles: architecture/application-access-permissions.md

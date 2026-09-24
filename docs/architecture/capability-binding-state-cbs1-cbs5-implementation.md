@@ -287,7 +287,9 @@ The first retained use is Gmail Mail Client Prototype revision `007`, whose
 accepted intent requires `capability:mail.messages.manage` at `^1.0.0` while
 keeping Gmail as a later local binding choice. Wide and compact visual and
 interaction evidence is stored under `e2e/artifacts/`. This proves the compact
-authoring-to-acceptance boundary, not provider reuse.
+authoring-to-acceptance boundary, not provider reuse. The exact beta lifecycle,
+digests, permissions, runtime evidence, and remaining qualifications are in
+[Gmail Mail Client: Stage-One CBS Beta Proof](gmail-mail-client-cbs-beta-proof-2026-09-24.md).
 
 ### Bounded Gmail provider boundary
 
