@@ -143,3 +143,58 @@ Trial placement, live tool smoke, acceptance, Workspace promotion and stable
 data transition. The stable runtime then returned a cold snapshot in 948 ms,
 an immediate warm snapshot in 390 ms, and successfully selected, opened and
 left `Annaarch` through the Application access boundary.
+
+## Single-probe directory entries and runtime-stability update
+
+The governed `adaos_drive@0.1.15` release removes repeated filesystem metadata
+probes from a directory enumeration. Each `os.scandir` entry now contributes
+its type and stat data once to the bounded item projection. This matters for
+remote and antivirus-observed folders, where repeated `Path.is_*` and `stat`
+calls amplified latency even after the cache and single-flight work above.
+
+Release `0.1.14` was built locally first but collided with the immutable
+published version namespace. Its local-only artifact was preserved for audit;
+the corrected governed release was rebuilt as `0.1.15` rather than overwriting
+the existing version.
+
+- Candidate: `adaos_drive-0-1-15-8e5323d7a7e4`;
+- Candidate digest:
+  `sha256:fff911bc2fc961ad24bd36e59c53b7a3c012dbe88a686d53aa96819190a10ac5`;
+- release digest:
+  `sha256:cca9d03cb6917031a31aac007f788c6a91e93e9dcb3d27a57e558e5323d7a7e4`;
+- scenario package: `adaos_drive@0.1.8`, digest
+  `sha256:d00cef28e8539f1f056b7d319557a99c26b2a56ca715aa70ccc50b21909f0f91`;
+- skill package: `adaos_drive@0.1.12`, digest
+  `sha256:43283dea2f567284f39f39294405c48a898529006d9d2c600c66acf7df9ed354`;
+- stable `WorkspaceLock` revision: 69, digest
+  `sha256:15c8793ad1526435352de5b1a3ea9ac16ae6ec63a27e882d9115c8eae22d1484`;
+- Application installation revision: 5;
+- stable RuntimeSelection revision: 10.
+
+All 23 Drive tests, focused Ruff validation, strict skill validation, and
+scenario validation passed. The Candidate then passed Trial placement, live
+permission-bound navigation, explicit acceptance, promotion, stable
+installation reconciliation, and a second live stable smoke. The stable run
+returned a cold snapshot in 1,066 ms and an immediate warm snapshot in 474 ms;
+select, activate, and open-folder calls completed in 682 ms, 436 ms, and 447 ms
+respectively. Every operation returned `ok=true`, including entry into and out
+of `Annaarch`, and neither `permission_not_declared` nor
+`application_grant_missing` recurred.
+
+The same verification closed the runtime-degradation blocker that had made
+Drive testing unreliable. Runtime diagnostics no longer inspect live Python
+frames or task stacks, node-display lookup no longer reads configuration files
+from the Webspace materialization hot path, and catalog collection plus pure
+semantic resolution run outside the live event-loop thread. A selection
+refresh still takes about 2.4--2.8 seconds end to end, but only the bounded
+YDoc apply remains on its owner loop. The former multi-second loop stall is no
+longer present. A short 0.7-second lag was observed while a changed stable
+projection was atomically applied; reducing that owner-loop commit cost is
+retained as performance debt and is not a Drive correctness blocker.
+
+The first Trial snapshot after a full API restart took 11.2 seconds inside the
+skill execution boundary, while the immediate repeat took 790 ms and the later
+stable cold run took 1.1 seconds. This points to process/import/filesystem
+warm-up rather than steady-state Drive enumeration. Cold skill activation must
+remain separately instrumented; it is not folded into the steady-state Drive
+latency claim.
