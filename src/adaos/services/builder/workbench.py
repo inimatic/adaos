@@ -1196,8 +1196,6 @@ class BuilderWorkbenchService:
         effective = dict(target)
         if not bool(effective.get("follow_active")):
             return effective
-        if str(effective.get("stage") or "").strip().lower() != "automation":
-            return effective
         scenario_id = str(
             effective.get("scenario_id") or effective.get("object_id") or ""
         ).strip()
@@ -1219,6 +1217,42 @@ class BuilderWorkbenchService:
             or not retained_revision
         ):
             return effective
+        target_stage = str(effective.get("stage") or "").strip().lower()
+        if target_stage != "automation":
+            # A follow-active target is lifecycle intent, not an immutable
+            # Prototype pin. Automation can finish while Preview is closed (or
+            # after the binding changed during the run), leaving the durable
+            # target at a Prototype revision whose disposable ui_revisions
+            # directory no longer exists. Only advance it when the canonical
+            # project state and retained snapshot agree on the completed task.
+            project_root = (
+                Path(self.dev_scenarios_root) / scenario_id
+                if self.dev_scenarios_root is not None
+                else None
+            )
+            prompt_state = (
+                _read_json(project_root / "prompt_state.json")
+                if project_root is not None
+                else {}
+            )
+            workflow = (
+                prompt_state.get("workflow")
+                if isinstance(prompt_state.get("workflow"), Mapping)
+                else {}
+            )
+            automation = (
+                workflow.get("automation")
+                if isinstance(workflow.get("automation"), Mapping)
+                else {}
+            )
+            if not (
+                str(automation.get("status") or "").strip().lower() == "completed"
+                and str(automation.get("head_task_id") or "").strip()
+                == retained_revision
+            ):
+                return effective
+            effective["stage"] = "automation"
+            effective["resolved_follow_active_stage"] = True
         if str(effective.get("revision") or "").strip() != retained_revision:
             effective["revision"] = retained_revision
             effective["label"] = f"active: {scenario_id} @ {retained_revision}"

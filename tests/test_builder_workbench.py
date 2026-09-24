@@ -94,6 +94,76 @@ def test_existing_preview_target_resolves_follow_active_automation_revision(tmp_
     assert json.loads(binding_path.read_text(encoding="utf-8")) == binding
 
 
+def test_existing_preview_target_advances_completed_prototype_to_automation(tmp_path):
+    relations = SimpleNamespace(
+        get_incoming=lambda token: SimpleNamespace(source_webspace_id="desktop")
+        if token == "desktop-dev"
+        else None,
+    )
+    scenarios_root = tmp_path / "dev" / "scenarios"
+    service = BuilderWorkbenchService(
+        state_dir=tmp_path,
+        dev_scenarios_root=scenarios_root,
+        relationship_registry=relations,
+    )
+    binding_path = service.binding_path("desktop")
+    binding_path.parent.mkdir(parents=True)
+    binding = {
+        "preview_webspace_id": "desktop-dev",
+        "preview_target": {
+            "stage": "prototype",
+            "scenario_id": "inbox_triage",
+            "revision": "002",
+            "follow_active": True,
+        },
+    }
+    binding_path.write_text(json.dumps(binding), encoding="utf-8")
+    project_root = scenarios_root / "inbox_triage"
+    project_root.mkdir(parents=True)
+    (project_root / "prompt_state.json").write_text(
+        json.dumps(
+            {
+                "workflow": {
+                    "automation": {
+                        "status": "completed",
+                        "head_task_id": "task.current",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshot_path = (
+        tmp_path
+        / "builder"
+        / "workflow_snapshots"
+        / "scenario"
+        / "inbox_triage"
+        / "automation"
+        / "snapshot.json"
+    )
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "object_type": "scenario",
+                "object_id": "inbox_triage",
+                "task_id": "task.current",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    target = service.existing_preview_target("desktop-dev")
+
+    assert target is not None
+    assert target["stage"] == "automation"
+    assert target["revision"] == "task.current"
+    assert target["resolved_follow_active_stage"] is True
+    assert target["resolved_follow_active"] is True
+    assert json.loads(binding_path.read_text(encoding="utf-8")) == binding
+
+
 def test_existing_preview_target_keeps_exact_automation_pin(tmp_path):
     relations = SimpleNamespace(
         get_incoming=lambda token: SimpleNamespace(source_webspace_id="desktop")
