@@ -7,7 +7,6 @@ from copy import deepcopy
 import logging
 import os
 import shutil
-import sys
 import uuid
 from urllib.parse import urlparse
 import yaml
@@ -241,6 +240,10 @@ class NodeConfig:
     subnet_settings: SubnetSettings = field(default_factory=SubnetSettings)
     node_settings: NodeSettings = field(default_factory=NodeSettings)
     dev_settings: DevSettings = field(default_factory=DevSettings)
+    # Bootstrap-owned snapshot of the mutable runtime display assignment.
+    # It is deliberately excluded from node.yaml serialization so hot runtime
+    # consumers do not have to re-open node_runtime.json on the event loop.
+    runtime_node_display: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def root(self) -> RootState | None:
@@ -774,8 +777,8 @@ def _migrate_managed_key_material(conf: NodeConfig) -> bool:
     except TypeError:  # pragma: no cover - compatibility with Python <3.12
         base_resolved = base
 
-    for group, field, fallback in managed_specs:
-        current = _get_value(group, field)
+    for group, field_name, fallback in managed_specs:
+        current = _get_value(group, field_name)
         configured_path = _expand_path(current, fallback)
         canonical_path = _expand_path(fallback, fallback)
 
@@ -796,7 +799,7 @@ def _migrate_managed_key_material(conf: NodeConfig) -> bool:
         if inside_base is not None:
             canonical_value = _config_stringify_path(str(configured_resolved))
             if canonical_value:
-                _set_value(group, field, canonical_value)
+                _set_value(group, field_name, canonical_value)
             continue
 
         should_rehome = configured_resolved.name == canonical_resolved.name
@@ -805,7 +808,7 @@ def _migrate_managed_key_material(conf: NodeConfig) -> bool:
             shutil.copy2(configured_resolved, canonical_resolved)
             changed = True
         if canonical_resolved.exists():
-            _set_value(group, field, fallback)
+            _set_value(group, field_name, fallback)
 
     return changed
 
@@ -931,6 +934,11 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
         subnet_settings=subnet_settings,
         node_settings=node_settings,
         dev_settings=dev_settings,
+        runtime_node_display=(
+            dict(runtime_state.get("node_display"))
+            if isinstance(runtime_state.get("node_display"), dict)
+            else {}
+        ),
     )
     changed = subnet_changed or conf.ensure_defaults()
     if role != str(data.get("role") or "hub").strip().lower():

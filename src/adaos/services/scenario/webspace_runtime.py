@@ -81,6 +81,7 @@ _RESOLVED_WEBSPACE_CACHE_LIMIT = 16
 _MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
+_LOCAL_NODE_DISPLAY_CONFIG_ID = 0
 
 
 def _builder_publication_operations() -> BuilderPublicationOperations:
@@ -182,7 +183,7 @@ def _task_scheduling_operations() -> WebspaceTaskSchedulingOperations:
     )
 
 
-def _skill_catalog_operations() -> WebspaceSkillCatalogOperations:
+def _skill_catalog_operations(ctx: Any | None = None) -> WebspaceSkillCatalogOperations:
     return WebspaceSkillCatalogOperations(
         apply_node_context_to_ui=_apply_node_context_to_ui,
         apply_webui_load_hint=_apply_webui_load_hint,
@@ -193,7 +194,7 @@ def _skill_catalog_operations() -> WebspaceSkillCatalogOperations:
         detached_member_node_ids=_detached_member_node_ids,
         fingerprint_json_like=_fingerprint_json_like,
         get_local_capacity=get_local_capacity,
-        load_config=load_config,
+        load_config=lambda: _runtime_node_config(ctx),
         local_node_id=_local_node_id,
         logger=_log,
         looks_like_skill_ui_interface=_looks_like_skill_ui_interface,
@@ -212,7 +213,7 @@ def _skill_catalog_operations() -> WebspaceSkillCatalogOperations:
     )
 
 
-def _resolution_operations() -> WebspaceResolutionOperations:
+def _resolution_operations(ctx: Any | None = None) -> WebspaceResolutionOperations:
     return WebspaceResolutionOperations(
         apply_node_context_to_ui=_apply_node_context_to_ui,
         apply_node_display_to_entry=_apply_node_display_to_entry,
@@ -234,7 +235,7 @@ def _resolution_operations() -> WebspaceResolutionOperations:
         fingerprint_json_like=_fingerprint_json_like,
         has_effective_branch_value=_has_effective_branch_value,
         is_y_map_value=_is_y_map_value,
-        load_config=load_config,
+        load_config=lambda: _runtime_node_config(ctx),
         local_node_id=_local_node_id,
         log_webui_contract_issues=log_webui_contract_issues,
         logger=_log,
@@ -249,7 +250,7 @@ def _resolution_operations() -> WebspaceResolutionOperations:
         merge_installed_with_auto=_merge_installed_with_auto,
         merge_registry_lists=_merge_registry_lists,
         merge_webio_receivers=_merge_webio_receivers,
-        node_display_from_config=node_display_from_config,
+        node_display_from_config=_runtime_node_display_from_config,
         node_scoped_catalog_id=_node_scoped_catalog_id,
         node_scoped_modal_ids=_node_scoped_modal_ids,
         normalize_materialization_required_branches=_normalize_materialization_required_branches,
@@ -983,44 +984,90 @@ def _normalize_optional_token(value: Any) -> str | None:
     return token or None
 
 
-def _local_node_id() -> str:
-    try:
-        conf = load_config()
+def _runtime_node_config(ctx: Any | None = None) -> Any | None:
+    """Return the bootstrap-owned config snapshot without touching storage.
+
+    Webspace resolution runs on the asyncio event-loop thread.  Calling
+    ``load_config`` from this path can perform several Windows filesystem
+    probes and stall every API connection sharing that loop.  Bootstrap owns
+    the live config snapshot, so resolution must consume that authority rather
+    than re-read its persistence representation.
+    """
+
+    if ctx is None:
+        try:
+            ctx = get_ctx()
+        except Exception:
+            return None
+    conf = getattr(ctx, "config", None)
+    if conf is not None:
+        return conf
+    # Lightweight compatibility contexts used by synchronous tooling and
+    # tests do not own a bootstrap snapshot.  The real AgentContext must never
+    # fall back to filesystem I/O from webspace resolution.
+    if not isinstance(ctx, AgentContext):
+        try:
+            return load_config()
+        except Exception:
+            return None
+    return None
+
+
+def _node_id_from_runtime_config(conf: Any | None) -> str:
+    if conf is not None:
         node_id = str(getattr(conf, "node_id", "") or "").strip()
         if node_id:
             return node_id
         nested = str(getattr(getattr(conf, "node_settings", None), "id", "") or "").strip()
         if nested:
             return nested
-    except Exception:
-        pass
     return "hub"
 
 
+def _local_node_id() -> str:
+    return _node_id_from_runtime_config(_runtime_node_config())
+
+
 def _local_node_label() -> str:
-    try:
-        conf = load_config()
-        return str(node_display_from_config(conf).get("node_label") or "").strip() or _local_node_id()
-    except Exception:
-        return _local_node_id()
+    return str(_local_node_display().get("node_label") or "").strip() or _local_node_id()
 
 
-def _local_node_display() -> dict[str, Any]:
+def _node_display_for_runtime_config(conf: Any | None) -> dict[str, Any]:
+    global _LOCAL_NODE_DISPLAY_CONFIG_ID
+
+    config_id = id(conf) if conf is not None else 0
     cached_at, cached = _RUNTIME.cache.get_local_node_display()
     now = time.monotonic()
-    if cached and (now - cached_at) <= _LOCAL_NODE_DISPLAY_CACHE_TTL_S:
+    if (
+        cached
+        and config_id == _LOCAL_NODE_DISPLAY_CONFIG_ID
+        and (now - cached_at) <= _LOCAL_NODE_DISPLAY_CACHE_TTL_S
+    ):
         return dict(cached)
     try:
-        display = node_display_from_config(load_config())
+        display = node_display_from_config(conf) if conf is not None else {}
     except Exception:
+        display = {}
+    if not display:
         display = {
-            "node_label": _local_node_label(),
+            "node_label": _node_id_from_runtime_config(conf),
             "node_compact_label": "N0",
             "node_index": 0,
             "node_color": "",
         }
+    _LOCAL_NODE_DISPLAY_CONFIG_ID = config_id
     _RUNTIME.cache.put_local_node_display(now, display)
     return dict(display)
+
+
+def _local_node_display() -> dict[str, Any]:
+    return _node_display_for_runtime_config(_runtime_node_config())
+
+
+def _runtime_node_display_from_config(conf: Any) -> dict[str, Any]:
+    """Compatibility adapter backed by the cached runtime display snapshot."""
+
+    return _node_display_for_runtime_config(conf)
 
 
 _HOME_SCENARIO_REF_UNSET = object()
@@ -1392,16 +1439,7 @@ def _node_scoped_modal_ids(registry: Mapping[str, Any], *, node_id: str) -> Dict
 
 
 def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
-    try:
-        conf = load_config()
-        display = node_display_from_config(conf)
-    except Exception:
-        display = {
-            "node_label": _local_node_label(),
-            "node_compact_label": "N0",
-            "node_color": "",
-            "node_index": 0,
-        }
+    display = _local_node_display()
     node_id = _local_node_id()
     apps: List[Dict[str, Any]] = []
     widgets: List[Dict[str, Any]] = []
@@ -5220,7 +5258,7 @@ class WebspaceScenarioRuntime:
     ) -> dict[str, Any] | None:
         return _RUNTIME.skill_catalog.load_webui(
             self,
-            _skill_catalog_operations(),
+            _skill_catalog_operations(self.ctx),
             skill_name,
             space,
             log_missing=log_missing,
@@ -5236,7 +5274,7 @@ class WebspaceScenarioRuntime:
     ) -> list[dict[str, Any]]:
         return _RUNTIME.skill_catalog.collect_skill_decls(
             self,
-            _skill_catalog_operations(),
+            _skill_catalog_operations(self.ctx),
             mode,
             include_remote=include_remote,
         )
@@ -5244,13 +5282,13 @@ class WebspaceScenarioRuntime:
     def _collect_remote_skill_decls(self) -> list[dict[str, Any]]:
         return _RUNTIME.skill_catalog.collect_remote_skill_decls(
             self,
-            _skill_catalog_operations(),
+            _skill_catalog_operations(self.ctx),
         )
 
     def _collect_skill_decls_from_root(self, skills_root: Path) -> list[dict[str, Any]]:
         return _RUNTIME.skill_catalog.collect_skill_decls_from_root(
             self,
-            _skill_catalog_operations(),
+            _skill_catalog_operations(self.ctx),
             skills_root,
         )
 
@@ -5321,7 +5359,7 @@ class WebspaceScenarioRuntime:
     ) -> WebspaceResolverInputs:
         return _RUNTIME.resolution.collect_inputs(
             self,
-            _resolution_operations(),
+            _resolution_operations(self.ctx),
             ydoc,
             webspace_id,
             materialization_identity=materialization_identity,
@@ -5383,7 +5421,7 @@ class WebspaceScenarioRuntime:
         return resolved
 
     def _resolve_webspace_uncached(self, inputs: WebspaceResolverInputs) -> WebspaceResolverOutputs:
-        return _RUNTIME.resolution.resolve(self, _resolution_operations(), inputs)
+        return _RUNTIME.resolution.resolve(self, _resolution_operations(self.ctx), inputs)
 
     def _apply_resolved_state_in_doc(
         self,
@@ -5403,7 +5441,7 @@ class WebspaceScenarioRuntime:
     ) -> None:
         _RUNTIME.resolution.apply(
             self,
-            _resolution_operations(),
+            _resolution_operations(self.ctx),
             ydoc,
             webspace_id,
             resolved,
@@ -6075,7 +6113,7 @@ def _webspace_info_from_row(
         current_scenario = _workspace_manifest_current_scenario(row)
     validation = _build_webspace_validation(
         source_mode=row.effective_source_mode,
-        webspace_id=str(getattr(row, "workspace_id", "") or target_webspace_id),
+        webspace_id=str(getattr(row, "workspace_id", "") or ""),
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
         effective_home_scenario=row.effective_home_scenario,
         current_scenario=current_scenario,

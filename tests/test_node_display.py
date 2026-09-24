@@ -62,6 +62,28 @@ def test_node_display_from_config_uses_hostname_attribute(monkeypatch) -> None:
     assert payload["node_name_source"] == "observed"
 
 
+def test_node_display_from_config_uses_bootstrap_runtime_snapshot(monkeypatch) -> None:
+    monkeypatch.setattr(
+        node_display,
+        "load_node_display_runtime_state",
+        lambda: (_ for _ in ()).throw(AssertionError("must not read runtime storage")),
+    )
+
+    payload = node_display.node_display_from_config(
+        SimpleNamespace(
+            role="member",
+            node_id="member-3",
+            node_names=[],
+            primary_node_name="",
+            hostname="member",
+            runtime_node_display={"display_index": 3, "accent_index": 5},
+        )
+    )
+
+    assert payload["node_index"] == 3
+    assert payload["node_color_index"] == 5
+
+
 def test_node_display_from_directory_node_uses_hostname_before_fallback() -> None:
     payload = node_display.node_display_from_directory_node(
         {

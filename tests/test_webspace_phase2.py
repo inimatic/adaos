@@ -350,18 +350,6 @@ def test_build_local_desktop_catalog_snapshot_prefers_live_ydoc_values_over_decl
         def items(self):
             return self._data.items()
 
-        def items(self):
-            return self._data.items()
-
-        def items(self):
-            return self._data.items()
-
-        def items(self):
-            return self._data.items()
-
-        def items(self):
-            return self._data.items()
-
     class _YDoc:
         def __init__(self, data):
             self._data = data
@@ -1858,7 +1846,9 @@ def test_collect_remote_skill_decls_uses_member_desktop_catalog_snapshot(monkeyp
 
     monkeypatch.setattr(subnet_directory_module, "get_directory", lambda: _Directory())
 
-    runtime = webspace_runtime_module.WebspaceScenarioRuntime()
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(
+        SimpleNamespace(config=SimpleNamespace(role="hub", node_id="hub-1", node_names=["Hub"]))
+    )
     decls = runtime._collect_remote_skill_decls()
 
     assert len(decls) == 1
@@ -5987,7 +5977,15 @@ def test_phase3_resolver_outputs_are_explicit_and_reusable(monkeypatch) -> None:
         "load_config",
         lambda: SimpleNamespace(role="hub", node_id="node-0", node_settings=SimpleNamespace(node_names=[])),
     )
-    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(
+        SimpleNamespace(
+            config=SimpleNamespace(
+                role="hub",
+                node_id="node-0",
+                node_settings=SimpleNamespace(node_names=[]),
+            )
+        )
+    )
     resolved = runtime.resolve_webspace(
         webspace_runtime_module.WebspaceResolverInputs(
             webspace_id="phase3-explicit-resolver",

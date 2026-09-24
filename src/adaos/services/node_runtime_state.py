@@ -54,6 +54,23 @@ def _clear_node_config_cache() -> None:
         node_config_mod._NODE_CONFIG_CACHE.clear()
 
 
+def _sync_runtime_display_snapshot(node_display: Any) -> None:
+    """Refresh the bootstrap-owned in-memory display snapshot when available."""
+
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        conf = getattr(get_ctx(), "config", None)
+        if conf is not None and hasattr(conf, "runtime_node_display"):
+            setattr(
+                conf,
+                "runtime_node_display",
+                dict(node_display) if isinstance(node_display, dict) else {},
+            )
+    except Exception:
+        pass
+
+
 def _read_lock_pid(lock_path: Path) -> int | None:
     try:
         raw = lock_path.read_text(encoding="utf-8").strip()
@@ -228,6 +245,8 @@ def save_node_runtime_state(
         payload["updated_at"] = time.time()
         _write_text_atomically(path, json.dumps(payload, ensure_ascii=False, indent=2))
     _clear_node_config_cache()
+    if node_display is not _UNSET:
+        _sync_runtime_display_snapshot(node_display)
     return dict(payload)
 
 

@@ -166,7 +166,11 @@ def node_display_from_config(conf: Any) -> dict[str, Any]:
     node_id = str(getattr(conf, "node_id", "") or "").strip()
     node_names = list(getattr(conf, "node_names", []) or [])
     hostname = str(getattr(conf, "hostname", "") or "").strip() or socket.gethostname()
-    assignment = load_node_display_runtime_state() if role == "member" else {}
+    runtime_snapshot = getattr(conf, "runtime_node_display", None)
+    if isinstance(runtime_snapshot, Mapping):
+        assignment = dict(runtime_snapshot)
+    else:
+        assignment = load_node_display_runtime_state() if role == "member" else {}
     return node_display_payload(
         node_id=node_id,
         role=role,
