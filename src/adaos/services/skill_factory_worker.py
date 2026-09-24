@@ -1677,6 +1677,40 @@ _context_packet_prompt_projection = context_packet_prompt_projection
 def _browser_feedback_prompt_projection(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
+
+    def bounded_fields(raw: Any, *, depth: int = 0) -> dict[str, Any]:
+        if not isinstance(raw, Mapping) or depth > 1:
+            return {}
+        projected: dict[str, Any] = {}
+        for key, item in list(raw.items())[:16]:
+            name = str(key)[:128]
+            if any(
+                marker in name.lower()
+                for marker in (
+                    "authorization",
+                    "cookie",
+                    "credential",
+                    "password",
+                    "secret",
+                    "token",
+                    "value",
+                )
+            ):
+                projected[name] = "[redacted]"
+            elif isinstance(item, str):
+                projected[name] = item[:512]
+            elif isinstance(item, (bool, int, float)) or item is None:
+                projected[name] = item
+            elif isinstance(item, Mapping):
+                projected[name] = bounded_fields(item, depth=depth + 1)
+            elif isinstance(item, list):
+                projected[name] = [
+                    entry[:256] if isinstance(entry, str) else entry
+                    for entry in item[:8]
+                    if isinstance(entry, (str, bool, int, float)) or entry is None
+                ]
+        return projected
+
     report = value.get("report") if isinstance(value.get("report"), Mapping) else {}
     samples: list[dict[str, Any]] = []
     for item in report.get("samples") or []:
@@ -1687,6 +1721,21 @@ def _browser_feedback_prompt_projection(value: Any) -> dict[str, Any] | None:
             if isinstance(item.get("diagnostics"), Mapping)
             else {}
         )
+        request_failures: list[dict[str, Any]] = []
+        for raw_failure in item.get("request_failures") or []:
+            if not isinstance(raw_failure, Mapping):
+                continue
+            failure = {
+                key: (str(raw_failure.get(key))[:2048] if key in {"url", "error"} else raw_failure.get(key))
+                for key in ("method", "status", "url", "error")
+                if raw_failure.get(key) not in (None, "")
+            }
+            raw_diagnostic = raw_failure.get("diagnostic")
+            if isinstance(raw_diagnostic, Mapping):
+                failure["diagnostic"] = bounded_fields(raw_diagnostic)
+            request_failures.append(failure)
+            if len(request_failures) >= 12:
+                break
         samples.append(
             {
                 "layout": item.get("layout"),
@@ -1697,6 +1746,7 @@ def _browser_feedback_prompt_projection(value: Any) -> dict[str, Any] | None:
                 "warnings": [str(entry)[:1000] for entry in item.get("warnings") or []][
                     :12
                 ],
+                "request_failures": request_failures,
                 "diagnostics": {
                     key: (
                         copy.deepcopy(diagnostics.get(key))[:160]

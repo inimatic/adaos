@@ -65,11 +65,37 @@ const pendingDataStates = new Set(['idle', 'loading', 'refreshing'])
 const nonAuthoritativeDataStates = new Set(['stale', 'unavailable', 'error'])
 const runtimeDataKinds = new Set(['skill', 'api', 'mcp', 'resourceQuery'])
 
+const sensitiveDiagnosticKey = /(authorization|cookie|credential|password|secret|token|value)/i
+
+function boundedDiagnosticFields(value, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 1) return undefined
+  const result = {}
+  for (const [key, raw] of Object.entries(value).slice(0, 16)) {
+    if (sensitiveDiagnosticKey.test(key)) {
+      result[key] = '[redacted]'
+    } else if (['string', 'boolean', 'number'].includes(typeof raw)) {
+      result[key] = typeof raw === 'string' ? raw.slice(0, 512) : raw
+    } else if (Array.isArray(raw)) {
+      result[key] = raw.slice(0, 8)
+        .filter(item => ['string', 'boolean', 'number'].includes(typeof item))
+        .map(item => typeof item === 'string' ? item.slice(0, 256) : item)
+    } else if (raw && typeof raw === 'object') {
+      result[key] = boundedDiagnosticFields(raw, depth + 1)
+    }
+  }
+  return result
+}
+
 function boundedToolFailureDiagnostic(request, response, bodyText) {
   let tool = null
+  let argumentsProjection
+  let contextProjection
   try {
     const payload = JSON.parse(request.postData() || '{}')
-    tool = typeof payload?.tool === 'string' ? payload.tool.slice(0, 256) : null
+    const target = payload?.target ?? payload?.tool
+    tool = typeof target === 'string' ? target.slice(0, 256) : null
+    argumentsProjection = boundedDiagnosticFields(payload?.params ?? payload?.arguments)
+    contextProjection = boundedDiagnosticFields(payload?.context)
   } catch {}
   let body = null
   try {
@@ -79,14 +105,28 @@ function boundedToolFailureDiagnostic(request, response, bodyText) {
   }
   const detail = body && typeof body === 'object' && 'detail' in body ? body.detail : body
   const diagnostic = { tool }
+  if (argumentsProjection && Object.keys(argumentsProjection).length) {
+    diagnostic.arguments = argumentsProjection
+  }
+  if (contextProjection && Object.keys(contextProjection).length) {
+    diagnostic.context = contextProjection
+  }
   if (typeof detail === 'string') {
     diagnostic.detail = detail.slice(0, 2048)
   } else if (detail && typeof detail === 'object') {
-    for (const key of ['error', 'reason', 'message', 'permission_id', 'application_id', 'retryable']) {
-      if (['string', 'boolean', 'number'].includes(typeof detail[key])) {
-        diagnostic[key] = typeof detail[key] === 'string'
-          ? detail[key].slice(0, 2048)
-          : detail[key]
+    const layers = [
+      detail,
+      detail.toolResult,
+      detail.toolResult?.detail,
+      detail.technical_detail,
+    ].filter(layer => layer && typeof layer === 'object')
+    for (const layer of layers) {
+      for (const key of ['error', 'reason', 'message', 'permission_id', 'application_id', 'retryable']) {
+        if (diagnostic[key] === undefined && ['string', 'boolean', 'number'].includes(typeof layer[key])) {
+          diagnostic[key] = typeof layer[key] === 'string'
+            ? layer[key].slice(0, 2048)
+            : layer[key]
+        }
       }
     }
     if (typeof detail.detail === 'string') diagnostic.detail = detail.detail.slice(0, 2048)
@@ -95,7 +135,7 @@ function boundedToolFailureDiagnostic(request, response, bodyText) {
     }
   }
   const headers = response.headers()
-  const trace = String(headers['x-adaos-trace'] || '').trim()
+  const trace = String(headers['x-adaos-trace'] || headers['x-request-id'] || '').trim()
   if (trace) diagnostic.trace_id = trace.slice(0, 256)
   return diagnostic
 }
@@ -108,6 +148,8 @@ function formatToolFailureDiagnostic(diagnostic) {
       parts.push(`${key}=${String(diagnostic[key])}`)
     }
   }
+  if (diagnostic.arguments) parts.push(`arguments=${JSON.stringify(diagnostic.arguments)}`)
+  if (diagnostic.context) parts.push(`context=${JSON.stringify(diagnostic.context)}`)
   return parts.length ? ` [${parts.join(' ')}]` : ''
 }
 

@@ -27,6 +27,9 @@ def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> N
     assert "boundedToolFailureDiagnostic" in script
     assert "target.pathname === '/api/tools/call'" in script
     assert "request.postData()" in script
+    assert "payload?.target ?? payload?.tool" in script
+    assert "sensitiveDiagnosticKey" in script
+    assert "detail.toolResult?.detail" in script
     assert "response.text()" in script
     assert "Promise.allSettled(responseDiagnosticTasks)" in script
 
@@ -207,6 +210,23 @@ def test_browser_feedback_projection_is_bounded_and_human_readable() -> None:
                     "layout": "compact",
                     "hard_failures": ["Русский текст не помещается"],
                     "warnings": ["missing label"],
+                    "request_failures": [
+                        {
+                            "method": "POST",
+                            "status": 500,
+                            "url": "http://127.0.0.1:8777/api/tools/call",
+                            "diagnostic": {
+                                "tool": "mail.messages.list",
+                                "error": "provider_failed",
+                                "message": "upstream rejected request",
+                                "arguments": {
+                                    "mailbox": "inbox",
+                                    "client_secret": "must-not-reach-model",
+                                },
+                                "context": {"widgetId": "messages"},
+                            },
+                        }
+                    ],
                     "diagnostics": {
                         "document_width": 480,
                         "viewport_width": 390,
@@ -227,6 +247,13 @@ def test_browser_feedback_projection_is_bounded_and_human_readable() -> None:
         "Русский текст не помещается"
     ]
     assert len(projection["samples"][0]["diagnostics"]["visible_widget_ids"]) == 160
+    failure = projection["samples"][0]["request_failures"][0]
+    assert failure["diagnostic"]["tool"] == "mail.messages.list"
+    assert failure["diagnostic"]["arguments"] == {
+        "mailbox": "inbox",
+        "client_secret": "[redacted]",
+    }
+    assert "must-not-reach-model" not in str(projection)
     assert browser_feedback_failures(receipt) == [
         "compact: Русский текст не помещается"
     ]
