@@ -341,7 +341,9 @@ class ComponentUpdateService:
 
     def reconcile_local_trials(self, webspace_id: str, *, application_id: str | None = None) -> int:
         from adaos.sdk.builder import applications, lifecycle, workflow
+        from adaos.sdk.developer import projects
         from adaos.services.applications.store import ApplicationStore
+        from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
 
         store = ApplicationStore(Path(self.state_dir or current_state_dir()))
         selections = [item for item in store.list_runtime_selections() if item.webspace_id == webspace_id
@@ -365,22 +367,113 @@ class ComponentUpdateService:
             try:
                 state = workflow.get_state("scenario", scenario)
             except FileNotFoundError:
-                # Stable can outlive its local DEV checkout. Do not recreate it.
-                continue
+                # Component notices outlive mutable DEV checkouts. Immutable
+                # Candidate and activation records below remain sufficient to
+                # reconcile the selected local release.
+                state = {}
             delivery = state.get("delivery") or {}
-            if delivery.get("candidate_id") != release.accepted_candidate_id:
+            candidate_id = release.accepted_candidate_id
+            workflow_matches = (
+                delivery.get("candidate_id") == candidate_id
+                and bool(_text(delivery.get("package_digest")))
+                and _text(delivery.get("release_digest")) in {"", release.release_digest}
+            )
+            candidate_digest = _text(delivery.get("package_digest")) if workflow_matches else ""
+            trial_status = _text(delivery.get("status")) if workflow_matches else ""
+            summary = (
+                str((state.get("change") or state.get("change_set") or {}).get("request") or "")
+                if workflow_matches
+                else ""
+            )
+            candidate: Mapping[str, Any] = {}
+            if not workflow_matches:
+                try:
+                    candidate_result = projects.get_candidate(candidate_id)
+                except (FileNotFoundError, KeyError, RuntimeError, ValueError):
+                    continue
+                candidate = (
+                    candidate_result.get("candidate")
+                    if isinstance(candidate_result.get("candidate"), Mapping)
+                    else {}
+                )
+                if (
+                    _text(candidate.get("candidate_id")) != candidate_id
+                    or _text(candidate.get("release_digest")) != release.release_digest
+                    or not _text(candidate.get("package_digest"))
+                ):
+                    continue
+                candidate_digest = _text(candidate.get("package_digest"))
+                candidate_status = _text(candidate.get("status")).lower()
+                trial_status = {
+                    "accepted": "accepted",
+                    "promoted": "published",
+                    "rejected": "rejected",
+                    "stale": "rejected",
+                }.get(candidate_status, "trial")
+
+            # One Application channel can project the same release into many
+            # rooms, while its isolated Trial has one authoritative activation
+            # target. Anchor review and acceptance to that target instead of
+            # whichever room happened to request the global changelog.
+            notice_selection = selection
+            notice_webspace_id = selection.webspace_id
+            activation = TrialActivationStore(
+                Path(self.state_dir or current_state_dir())
+                / "artifact_pipeline/trial-activations"
+            ).load(candidate_id) or {}
+            activation_candidate = (
+                activation.get("candidate_ref")
+                if isinstance(activation.get("candidate_ref"), Mapping)
+                else {}
+            )
+            activation_target = (
+                activation.get("target")
+                if isinstance(activation.get("target"), Mapping)
+                else {}
+            )
+            if (
+                not workflow_matches
+                and selection.source == "local_trial"
+                and not activation_candidate
+            ):
                 continue
-            published = selection.source == "stable_installation" and lifecycle._published_candidate_matches(
-                state.get("publication") or {}, candidate_id=delivery["candidate_id"],
-                candidate_digest=str(delivery.get("package_digest") or delivery.get("release_digest") or ""))
+            if activation_candidate:
+                if (
+                    _text(activation_candidate.get("candidate_id")) != candidate_id
+                    or _text(activation_candidate.get("release_digest")) != release.release_digest
+                    or _text(activation_candidate.get("package_digest")) != candidate_digest
+                ):
+                    continue
+                target_webspace_id = _text(activation_target.get("webspace_id"))
+                if target_webspace_id and target_webspace_id != selection.webspace_id:
+                    try:
+                        notice_selection = store.get_runtime_selection(
+                            target_webspace_id, selection.application_id
+                        )
+                    except FileNotFoundError:
+                        continue
+                    if notice_selection.release_digest != release.release_digest:
+                        continue
+                    notice_webspace_id = target_webspace_id
+
+            published = selection.source == "stable_installation"
+            if published:
+                trial_status = "published"
+            elif workflow_matches and lifecycle._published_candidate_matches(
+                state.get("publication") or {}, candidate_id=candidate_id,
+                candidate_digest=candidate_digest,
+            ):
+                # A completed publication whose derived stable projection has
+                # not reconciled yet must remain visible as publishing Beta.
+                trial_status = "accepted"
             notice = self.record_aprobation(component_type="scenario", component_id=scenario,
                 aprobation={"source_kind": "builder_local_trial", "trial": {
-                    "candidate_id": delivery["candidate_id"], "candidate_digest": delivery.get("package_digest"),
+                    "candidate_id": candidate_id, "candidate_digest": candidate_digest,
                     "release_digest": release.release_digest, "version": release.project_release.version,
-                    "status": "published" if published else delivery.get("status"),
-                }, "runtime_selection": _runtime_selection_snapshot(selection), "changelog": {"title": application.display["title"],
-                    "summary": str((state.get("change") or state.get("change_set") or {}).get("request") or application.display.get("summary") or "")}},
-                webspace_id=webspace_id)
+                    "status": trial_status,
+                }, "runtime_selection": _runtime_selection_snapshot(notice_selection), "changelog": {"title": application.display["title"],
+                    "summary": summary or str(application.display.get("summary") or "")}},
+                webspace_id=notice_webspace_id)
             if notice:
                 count += 1
         return count
@@ -395,19 +488,21 @@ class ComponentUpdateService:
             raise ValueError("The local Trial notice is unavailable")
         if (notice["candidate"]["id"], notice["candidate"]["digest"]) != (candidate_id, candidate_digest):
             raise ValueError("The reviewed Candidate changed")
-        notice_webspace_id = _text(notice.get("webspace_id"))
-        if notice_webspace_id and notice_webspace_id != webspace_id:
-            raise ValueError("The reviewed Candidate belongs to another Webspace")
         store = ApplicationStore(Path(self.state_dir or current_state_dir()))
         pinned = notice.get("runtime_selection")
         if isinstance(pinned, Mapping) and _text(pinned.get("application_id")):
             application_id = _text(pinned.get("application_id"))
+            target_webspace_id = (
+                _text(pinned.get("webspace_id"))
+                or _text(notice.get("webspace_id"))
+                or webspace_id
+            )
             try:
-                selection = store.get_runtime_selection(webspace_id, application_id)
+                selection = store.get_runtime_selection(target_webspace_id, application_id)
             except FileNotFoundError:
                 raise ValueError("The reviewed Candidate RuntimeSelection is no longer available") from None
             expected = {
-                "webspace_id": webspace_id,
+                "webspace_id": target_webspace_id,
                 "application_id": application_id,
                 "release_digest": _text(pinned.get("release_digest")),
                 "source": _text(pinned.get("source")),
@@ -430,23 +525,35 @@ class ComponentUpdateService:
             # Compatibility for notices written before RuntimeSelection identity
             # became part of the review record. New and reconciled notices never
             # rely on this ambient lookup.
+            target_webspace_id = _text(notice.get("webspace_id")) or webspace_id
+            candidate_release_digest = _text((notice.get("candidate") or {}).get("release_digest"))
             matches = []
             for selection in store.list_runtime_selections():
-                if selection.webspace_id != webspace_id:
+                if selection.webspace_id != target_webspace_id:
                     continue
                 try:
                     release = store.get_release(selection.application_id, selection.release_digest)
                 except FileNotFoundError:
                     continue
-                if release.accepted_candidate_id == candidate_id:
+                if (
+                    release.accepted_candidate_id == candidate_id
+                    and (
+                        not candidate_release_digest
+                        or selection.release_digest == candidate_release_digest
+                    )
+                ):
                     matches.append(selection)
+            if not matches:
+                raise ValueError(
+                    "The reviewed Candidate is no longer selected; reopen its changelog"
+                )
             if len(matches) != 1:
                 raise ValueError("The legacy Candidate notice has no unambiguous RuntimeSelection")
             selection = matches[0]
             application_id = selection.application_id
-        result = applications.accept_local_trial(application_id, webspace_id=webspace_id,
+        result = applications.accept_local_trial(application_id, webspace_id=target_webspace_id,
             candidate_id=candidate_id, candidate_digest=candidate_digest, actor_ref=actor)
-        self.reconcile_local_trials(webspace_id)
+        self.reconcile_local_trials(target_webspace_id)
         return result
 
     def active_component_metadata(self, component_type: str, component_id: str) -> dict[str, Any] | None:

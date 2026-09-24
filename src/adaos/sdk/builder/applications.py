@@ -732,6 +732,7 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
                        candidate_digest: str, actor_ref: str) -> dict[str, Any]:
     """Accept an exact local Candidate into Workspace, without public distribution."""
     from . import lifecycle, workflow
+    from adaos.sdk.developer import projects
 
     service = _application_service()
     publisher = _local_subnet_ref()
@@ -744,10 +745,39 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
     if selection.source not in {"local_trial", "stable_installation"}:
         raise ValueError("Only the publisher's local Trial can be accepted into Workspace")
     scenario_id = _primary_scenario(application)
-    state = workflow.get_state("scenario", scenario_id)
-    if lifecycle._candidate_identity(state) != (candidate_id, candidate_digest):
-        raise ValueError("Builder Candidate changed; reopen its changelog")
+    try:
+        state = workflow.get_state("scenario", scenario_id)
+    except FileNotFoundError:
+        state = {}
+    workflow_matches = lifecycle._candidate_identity(state) == (
+        candidate_id,
+        candidate_digest,
+    )
+    candidate: Mapping[str, Any] = {}
+    if not workflow_matches:
+        # A selected immutable Trial can outlive or advance independently from
+        # the mutable Builder workflow projection. Resume only when the
+        # Candidate record proves the exact reviewed package and release.
+        try:
+            candidate_result = projects.get_candidate(candidate_id)
+        except (FileNotFoundError, KeyError, RuntimeError, ValueError):
+            raise ValueError("Builder Candidate changed; reopen its changelog") from None
+        candidate = (
+            candidate_result.get("candidate")
+            if isinstance(candidate_result.get("candidate"), Mapping)
+            else {}
+        )
+        if (
+            str(candidate.get("candidate_id") or "").strip() != candidate_id
+            or str(candidate.get("package_digest") or "").strip() != candidate_digest
+            or str(candidate.get("release_digest") or "").strip()
+            != selection.release_digest
+            or str(candidate.get("status") or "").strip().lower()
+            not in {"trial", "accepted"}
+        ):
+            raise ValueError("Builder Candidate changed; reopen its changelog")
     access_management = ApplicationAccessManagementService(service)
+    delivery_status = str((state.get("delivery") or {}).get("status") or "").strip().lower()
     publication_verification = _promote_local_trial_final_verification(
         access_management,
         application_id=application_id,
@@ -756,6 +786,9 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
         candidate_digest=candidate_digest,
         release_digest=selection.release_digest,
         actor_ref=actor_ref,
+        allow_completed=(
+            not workflow_matches or delivery_status in {"accepted", "published"}
+        ),
     )
     access_verification = access_management.admit_release_stage(
         application_id,
@@ -764,7 +797,67 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
     )
     identity = {"expected_candidate_id": candidate_id, "expected_candidate_digest": candidate_digest}
     key = f"accept-local-trial:{application_id}:{candidate_id}"
-    if (state.get("delivery") or {}).get("status") not in {"accepted", "published"}:
+    if not workflow_matches:
+        if str(candidate.get("status") or "").strip().lower() != "accepted":
+            decided = projects.decide_candidate(
+                candidate_id,
+                accepted=True,
+                observations=[{
+                    "actor": actor_ref,
+                    "decision": "accepted_for_publication",
+                    "idempotency_key": key + ":decision",
+                }],
+            )
+            decided_candidate = (
+                decided.get("candidate")
+                if isinstance(decided.get("candidate"), Mapping)
+                else {}
+            )
+            if (
+                str(decided_candidate.get("candidate_id") or "").strip()
+                != candidate_id
+                or str(decided_candidate.get("package_digest") or "").strip()
+                != candidate_digest
+                or str(decided_candidate.get("release_digest") or "").strip()
+                != selection.release_digest
+                or str(decided_candidate.get("status") or "").strip().lower()
+                != "accepted"
+            ):
+                raise ValueError("Candidate acceptance is not confirmed")
+        result = projects.promote_candidate(
+            candidate_id,
+            permission_decision={
+                "approved": True,
+                "actor": actor_ref,
+                "actor_type": "user",
+                "approval_id": f"candidate:{candidate_id}:publication",
+            },
+        )
+        if (
+            not bool(result.get("ok", True))
+            or result.get("error")
+            or str(result.get("status") or "").strip().lower() == "stale"
+            or str(result.get("candidate_id") or "").strip() != candidate_id
+            or str(result.get("release_digest") or "").strip()
+            != selection.release_digest
+            or str(result.get("package_digest") or "").strip() != candidate_digest
+        ):
+            raise ValueError("Workspace publication is not confirmed; Trial selection is retained")
+        placement = place_local_stable(
+            application_id,
+            webspace_id=webspace_id,
+            candidate_id=candidate_id,
+            candidate_digest=candidate_digest,
+            actor_ref=actor_ref,
+            publication_result=result,
+        )
+        return {
+            **placement,
+            "publication": result,
+            "application_verification": access_verification,
+            "publication_verification": publication_verification,
+        }
+    if delivery_status not in {"accepted", "published"}:
         lifecycle.decide_trial("scenario", scenario_id, accepted=True, actor=actor_ref,
                               idempotency_key=key + ":decision", **identity)
     result = lifecycle.publish_candidate("scenario", scenario_id, actor=actor_ref,
@@ -792,6 +885,7 @@ def _promote_local_trial_final_verification(
     candidate_digest: str,
     release_digest: str,
     actor_ref: str,
+    allow_completed: bool = False,
 ) -> dict[str, Any]:
     """Qualify the exact healthy Trial review for publication admission."""
 
@@ -806,9 +900,10 @@ def _promote_local_trial_final_verification(
     target = dict(activation.get("target") or {})
     health = dict(activation.get("health_evidence") or {})
     binding = dict(activation.get("runtime_binding") or {})
+    activation_statuses = {"active", "completed"} if allow_completed else {"active"}
     if (
         runtime.project_id != application_id
-        or activation.get("status") != "active"
+        or activation.get("status") not in activation_statuses
         or identity.get("candidate_id") != candidate_id
         or identity.get("release_digest") != release_digest
         or identity.get("package_digest") != candidate_digest
@@ -835,7 +930,8 @@ def _promote_local_trial_final_verification(
 
 
 def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: str,
-                       candidate_digest: str, actor_ref: str) -> dict[str, Any]:
+                       candidate_digest: str, actor_ref: str,
+                       publication_result: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Project verified Workspace publication; never use a DEV Preview surface."""
     import json
     from adaos.domain.artifact_release import WorkspaceLock
@@ -849,12 +945,39 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
     service = _application_service()
     application = service.store.get_application(application_id)
     scenario_id = _primary_scenario(application)
-    state = workflow.get_state("scenario", scenario_id)
+    try:
+        state = workflow.get_state("scenario", scenario_id)
+    except FileNotFoundError:
+        state = {}
+    try:
+        selected_release_digest = service.store.get_runtime_selection(
+            webspace_id, application_id
+        ).release_digest
+    except FileNotFoundError:
+        selected_release_digest = ""
     publication = state.get("publication") or {}
-    if not lifecycle._published_candidate_matches(publication, candidate_id=candidate_id, candidate_digest=candidate_digest):
+    workflow_published = lifecycle._published_candidate_matches(
+        publication,
+        candidate_id=candidate_id,
+        candidate_digest=candidate_digest,
+    )
+    receipt = dict(publication_result or {})
+    receipt_published = (
+        bool(receipt.get("ok", True))
+        and not receipt.get("error")
+        and str(receipt.get("candidate_id") or "").strip() == candidate_id
+        and str(receipt.get("release_digest") or "").strip()
+        == selected_release_digest
+        and str(receipt.get("package_digest") or "").strip() == candidate_digest
+    )
+    if not workflow_published and not receipt_published:
         raise ValueError("The exact Candidate has not been accepted into Workspace")
-    record = publication["release_record"]
-    digest = record["release_digest"]
+    record = publication.get("release_record") or {}
+    digest = (
+        str(record.get("release_digest") or "").strip()
+        if workflow_published
+        else str(receipt.get("release_digest") or "").strip()
+    )
     release = service.store.get_release(application_id, digest)
     if release.accepted_candidate_id != candidate_id:
         raise ValueError("Published Application release belongs to another Candidate")
@@ -883,9 +1006,9 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
                 expected_revision=selection.revision if selection else 0, actor_ref=actor_ref,
                 subnet_ref=publisher, capability="applications.apply")
     existing = (state.get("project") or {}).get("placements") or []
-    if not any(item.get("kind") == "stable" and item.get("status") == "active"
-               and (item.get("target") or {}).get("webspace_id") == webspace_id
-               and (item.get("result_ref") or {}).get("digest") == digest for item in existing):
+    if workflow_published and not any(item.get("kind") == "stable" and item.get("status") == "active"
+                                      and (item.get("target") or {}).get("webspace_id") == webspace_id
+                                      and (item.get("result_ref") or {}).get("digest") == digest for item in existing):
         state = workflow.record_project_placement("scenario", scenario_id, {
             "kind": "stable", "result_ref": {"kind": "release", "id": publication["release"],
                 "version": release.project_release.version, "digest": digest},
@@ -893,12 +1016,13 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
             "scenario_id": scenario_id, "data_mode": "real", "runtime_binding": dict(record["activation"]),
             "safety": {"status": "verified", "source": "publication_activation"}},
             expected_generation=int(state["generation"]))["workflow"]
-    for item in (state.get("project") or {}).get("placements") or []:
-        if (item.get("kind") == "trial" and item.get("status") == "active"
-            and (item.get("target") or {}).get("webspace_id") == webspace_id
-            and (item.get("result_ref") or {}).get("id") == candidate_id):
-            state = workflow.record_project_placement("scenario", scenario_id, {**item, "status": "detached"},
-                expected_generation=int(state["generation"]))["workflow"]
+    if workflow_published:
+        for item in (state.get("project") or {}).get("placements") or []:
+            if (item.get("kind") == "trial" and item.get("status") == "active"
+                and (item.get("target") or {}).get("webspace_id") == webspace_id
+                and (item.get("result_ref") or {}).get("id") == candidate_id):
+                state = workflow.record_project_placement("scenario", scenario_id, {**item, "status": "detached"},
+                    expected_generation=int(state["generation"]))["workflow"]
     refresh = _refresh_application_placements(application_id)
     return {"ok": True, "workflow": state, "installation": installation.to_dict(),
             "runtime_selection": selection.to_dict(), "runtime_refresh": refresh,

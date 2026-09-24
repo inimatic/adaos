@@ -443,6 +443,137 @@ def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publ
     assert effects == []
 
 
+def test_local_trial_acceptance_resumes_exact_selected_candidate_when_workflow_is_stale(
+    monkeypatch,
+):
+    from adaos.sdk.builder import workflow
+    from adaos.sdk.developer import projects
+
+    selection = SimpleNamespace(
+        release_digest="sha256:selected-release",
+        source="local_trial",
+        revision=14,
+    )
+    release = SimpleNamespace(accepted_candidate_id="selected-candidate")
+    app = SimpleNamespace(entrypoints=({"presentation_ref": "scenario:test"},))
+    store = SimpleNamespace(
+        get_application=lambda _application_id: app,
+        get_runtime_selection=lambda *_args: selection,
+        get_release=lambda *_args: release,
+    )
+    service = SimpleNamespace(store=store)
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:test")
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(workflow, "get_state", lambda *_args: {"delivery": {
+        "candidate_id": "stale-candidate",
+        "package_digest": "sha256:stale-package",
+        "status": "stale",
+    }})
+    monkeypatch.setattr(projects, "get_candidate", lambda _candidate_id: {"candidate": {
+        "candidate_id": "selected-candidate",
+        "package_digest": "sha256:selected-package",
+        "release_digest": "sha256:selected-release",
+        "status": "accepted",
+    }})
+    monkeypatch.setattr(
+        projects,
+        "decide_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("accepted Candidate must not be decided again")
+        ),
+    )
+    promotions = []
+    monkeypatch.setattr(
+        projects,
+        "promote_candidate",
+        lambda candidate_id, **kwargs: promotions.append((candidate_id, kwargs)) or {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "release_digest": "sha256:selected-release",
+            "package_digest": "sha256:selected-package",
+        },
+    )
+    monkeypatch.setattr(
+        applications,
+        "_promote_local_trial_final_verification",
+        lambda *_args, **kwargs: {
+            "publication_allowed": True,
+            "allow_completed": kwargs["allow_completed"],
+        },
+    )
+    monkeypatch.setattr(
+        applications,
+        "ApplicationAccessManagementService",
+        lambda _service: SimpleNamespace(
+            admit_release_stage=lambda *_args, **_kwargs: {"status": "passed"}
+        ),
+    )
+    placements = []
+    monkeypatch.setattr(
+        applications,
+        "place_local_stable",
+        lambda application_id, **kwargs: placements.append((application_id, kwargs)) or {
+            "ok": True,
+            "runtime_selection": {"source": "stable_installation"},
+        },
+    )
+
+    result = applications.accept_local_trial(
+        "test",
+        webspace_id="desktop",
+        candidate_id="selected-candidate",
+        candidate_digest="sha256:selected-package",
+        actor_ref="user:test",
+    )
+
+    assert result["ok"] is True
+    assert promotions[0][0] == "selected-candidate"
+    assert promotions[0][1]["permission_decision"]["approved"] is True
+    assert placements[0][1]["publication_result"]["release_digest"] == "sha256:selected-release"
+    assert result["publication_verification"]["allow_completed"] is True
+
+
+def test_local_stable_receipt_cannot_replace_a_different_selected_release(monkeypatch):
+    from adaos.sdk.builder import workflow
+
+    store = SimpleNamespace(
+        get_application=lambda _application_id: SimpleNamespace(
+            entrypoints=({"presentation_ref": "scenario:test"},)
+        ),
+        get_runtime_selection=lambda *_args: SimpleNamespace(
+            release_digest="sha256:selected-release"
+        ),
+    )
+    monkeypatch.setattr(
+        applications,
+        "_application_service",
+        lambda: SimpleNamespace(store=store),
+    )
+    monkeypatch.setattr(applications, "production_webspace_id", lambda value: value)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:test")
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(workflow, "get_state", lambda *_args: {})
+
+    with pytest.raises(
+        ValueError,
+        match="exact Candidate has not been accepted into Workspace",
+    ):
+        applications.place_local_stable(
+            "test",
+            webspace_id="desktop",
+            candidate_id="selected-candidate",
+            candidate_digest="sha256:selected-package",
+            actor_ref="user:test",
+            publication_result={
+                "ok": True,
+                "candidate_id": "selected-candidate",
+                "release_digest": "sha256:different-release",
+                "package_digest": "sha256:selected-package",
+            },
+        )
+
+
 def test_builder_updates_application_metadata_through_durable_operation(
     monkeypatch, tmp_path: Path
 ) -> None:
