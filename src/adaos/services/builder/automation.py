@@ -9898,6 +9898,15 @@ class BuilderAutomationService:
                 "base_implementation_brief_path": session.get("brief_path"),
                 "companion_skill_ids": companions,
                 "iteration_instruction": iteration_instruction,
+                # An unchanged retry is still a fresh release-evidence run.
+                # Its Git diff is intentionally empty, so the Worker cannot
+                # use changed paths alone to decide which package-owned test
+                # contracts must be revalidated for Trial admission.
+                "validation_scope": (
+                    "owned_artifacts"
+                    if iteration_instruction == _UNCHANGED_RETRY_INSTRUCTION
+                    else "changed_paths"
+                ),
                 "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "continuation_contract": _continuation_contract(),

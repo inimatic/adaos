@@ -9740,18 +9740,23 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         artifacts = dict(request.get("artifacts") or {})
         workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
         changed_paths = set(self._changed_from_baseline(workspace))
+        contract_test_paths = self._contract_test_paths(
+            request,
+            workspace,
+            changed_paths=changed_paths,
+        )
         self._validate_checkpoint_owned_manifest_metadata(workspace, checks, errors)
         self._validate_tests_do_not_pin_checkpoint_metadata(
             workspace,
             checks,
             errors,
-            changed_paths=changed_paths,
+            changed_paths=contract_test_paths,
         )
         self._validate_tests_do_not_depend_on_development_context(
             workspace,
             checks,
             errors,
-            changed_paths=changed_paths,
+            changed_paths=contract_test_paths,
         )
         self._validate_skill_manifests(workspace, checks, errors)
         self._validate_owned_skill_data_lifecycle(workspace, checks, errors)
@@ -10540,6 +10545,56 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "ok": True,
                     }
                 )
+
+    @staticmethod
+    def _contract_test_paths(
+        request: Mapping[str, Any],
+        workspace: Path,
+        *,
+        changed_paths: set[str],
+    ) -> set[str]:
+        """Select tests that own release evidence for this exact run.
+
+        Normal implementation turns inspect changed tests only so unrelated
+        legacy dependencies cannot block a bounded patch. An unchanged retry
+        has no diff by design, but must still emit fresh Trial evidence for
+        the target and its owned companion skills.
+        """
+
+        result = set(changed_paths)
+        artifacts = (
+            request.get("artifacts")
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        if str(artifacts.get("validation_scope") or "") != "owned_artifacts":
+            return result
+        target = (
+            request.get("target")
+            if isinstance(request.get("target"), Mapping)
+            else {}
+        )
+        owned_test_roots: set[Path] = set()
+        target_kind = str(target.get("type") or "").strip().lower().rstrip("s")
+        target_id = str(target.get("id") or "").strip()
+        if target_id and Path(target_id).name == target_id:
+            if target_kind == "skill":
+                owned_test_roots.add(workspace / "skills" / target_id / "tests")
+            elif target_kind == "scenario":
+                owned_test_roots.add(workspace / "scenarios" / target_id / "tests")
+        for skill_id in artifacts.get("companion_skill_ids") or []:
+            token = str(skill_id or "").strip()
+            if token and Path(token).name == token:
+                owned_test_roots.add(workspace / "skills" / token / "tests")
+        for tests_root in owned_test_roots:
+            if not tests_root.is_dir():
+                continue
+            result.update(
+                path.relative_to(workspace).as_posix()
+                for path in tests_root.glob("test_*.py")
+                if path.is_file()
+            )
+        return result
 
     @staticmethod
     def _validate_tests_do_not_pin_checkpoint_metadata(

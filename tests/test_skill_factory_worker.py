@@ -9490,6 +9490,35 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     assert effect_check["binding_definition_digest"] == binding.digest
 
 
+def test_worker_revalidates_owned_tests_for_unchanged_retry(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    owned_tests = workspace / "skills" / "owned" / "tests"
+    dependency_tests = workspace / "skills" / "dependency" / "tests"
+    owned_tests.mkdir(parents=True)
+    dependency_tests.mkdir(parents=True)
+    (owned_tests / "test_behavior.py").write_text(
+        "def test_behavior():\n    assert True\n", encoding="utf-8"
+    )
+    (dependency_tests / "test_manifest.py").write_text(
+        "def test_version(manifest):\n"
+        "    assert manifest['version'] == '0.1.0'\n",
+        encoding="utf-8",
+    )
+    request = {
+        "target": {"type": "scenario", "id": "demo"},
+        "artifacts": {
+            "validation_scope": "owned_artifacts",
+            "companion_skill_ids": ["owned"],
+        },
+    }
+
+    selected = LocalSkillFactoryWorker._contract_test_paths(
+        request, workspace, changed_paths=set()
+    )
+
+    assert selected == {"skills/owned/tests/test_behavior.py"}
+
+
 def test_worker_does_not_admit_attachment_bindings_from_system_context(
     tmp_path: Path,
 ) -> None:
