@@ -140,6 +140,20 @@ The provider credential key is scoped by provider, user subject, and logical
 account rather than by Application. Each consuming Application still has its
 own redacted, revisioned connected-account authorization record.
 
+## Progressive message lists
+
+Use `gmail.list_message_summaries(...)` for a first-paint message collection.
+Gmail's ordinary list endpoint returns identifiers only; the Core provider
+therefore resolves up to 20 metadata summaries with one Gmail HTTP batch after
+the list request. The consumer receives a normal typed result plus
+`nextPageToken`, `fetch_strategy="gmail_http_batch"`, and a bounded network
+round-trip count. It must render that page immediately and request the next
+page progressively instead of issuing one `get_message` call per row.
+
+`gmail.list_messages(...)` remains the identifier-only primitive. Use
+`gmail.get_message(...)` when the user opens a single message and the reader
+needs its body. Message content remains transient across both paths.
+
 ## Setup and Builder
 
 Trial placement compiles the setup contract from immutable component manifests

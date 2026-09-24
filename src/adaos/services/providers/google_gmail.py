@@ -9,9 +9,10 @@ than one Application without copying credentials into either package.
 from __future__ import annotations
 
 import base64
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email import policy as email_policy
+from email.parser import BytesParser
 import hashlib
 import json
 import os
@@ -40,6 +41,7 @@ DEFAULT_CALLBACK_PATH = "/api/providers/google/gmail/oauth/callback"
 _TOKEN_TYPE = "Bearer"
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_SEND_BYTES = 5 * 1024 * 1024
+_MAX_BATCH_MESSAGES = 20
 _OAUTH_STATE_TTL_S = 10 * 60
 _REFRESH_SKEW_S = 60
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.@+-]{1,180}$")
@@ -124,6 +126,146 @@ def _safe_json(response: Any, *, error_code: str) -> dict[str, Any]:
     if len(serialized) > _MAX_RESPONSE_BYTES:
         raise GoogleGmailProviderError("gmail_response_too_large")
     return dict(payload)
+
+
+def _response_header(response: Any, name: str) -> str:
+    headers = getattr(response, "headers", None)
+    if not isinstance(headers, Mapping):
+        return ""
+    target = str(name or "").strip().lower()
+    return next(
+        (
+            _text(value)
+            for key, value in headers.items()
+            if str(key).strip().lower() == target
+        ),
+        "",
+    )
+
+
+def _gmail_metadata_batch_body(message_ids: list[str], boundary: str) -> bytes:
+    lines: list[str] = []
+    metadata_query = urlencode(
+        [
+            ("format", "metadata"),
+            ("metadataHeaders", "From"),
+            ("metadataHeaders", "To"),
+            ("metadataHeaders", "Subject"),
+            ("metadataHeaders", "Date"),
+        ]
+    )
+    for index, message_id in enumerate(message_ids):
+        encoded_id = quote(message_id, safe="")
+        lines.extend(
+            [
+                f"--{boundary}",
+                "Content-Type: application/http",
+                f"Content-ID: <adaos-message-{index}>",
+                "",
+                f"GET /gmail/v1/users/me/messages/{encoded_id}?{metadata_query} HTTP/1.1",
+                "Accept: application/json",
+                "",
+            ]
+        )
+    lines.extend([f"--{boundary}--", ""])
+    return "\r\n".join(lines).encode("ascii")
+
+
+def _gmail_metadata_batch_payloads(
+    response: Any,
+    *,
+    requested_message_ids: list[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    content = getattr(response, "content", b"")
+    if not isinstance(content, bytes) or not content:
+        raise GoogleGmailProviderError("gmail_batch_response_invalid")
+    if len(content) > _MAX_RESPONSE_BYTES:
+        raise GoogleGmailProviderError("gmail_response_too_large")
+    content_type = _response_header(response, "Content-Type")
+    if "multipart/" not in content_type.lower():
+        raise GoogleGmailProviderError("gmail_batch_response_invalid")
+    try:
+        envelope = BytesParser(policy=email_policy.default).parsebytes(
+            (
+                f"Content-Type: {content_type}\r\n"
+                "MIME-Version: 1.0\r\n\r\n"
+            ).encode("ascii")
+            + content
+        )
+        parts = list(envelope.iter_parts())
+    except Exception as exc:
+        raise GoogleGmailProviderError("gmail_batch_response_invalid") from exc
+    if not parts:
+        raise GoogleGmailProviderError("gmail_batch_response_invalid")
+    messages_by_id: dict[str, dict[str, Any]] = {}
+    omitted_ids: list[str] = []
+    for part_index, part in enumerate(parts):
+        response_content_id = _text(part.get("Content-ID"))
+        content_id_match = re.search(
+            r"adaos-message-(\d+)", response_content_id
+        )
+        requested_index = (
+            int(content_id_match.group(1))
+            if content_id_match is not None
+            else part_index
+        )
+        payload = part.get_payload(decode=True)
+        if not isinstance(payload, bytes):
+            raw_payload = part.get_payload()
+            if not isinstance(raw_payload, str):
+                raise GoogleGmailProviderError("gmail_batch_response_invalid")
+            payload = raw_payload.encode("utf-8")
+        status_and_headers, separator, json_body = payload.partition(b"\r\n\r\n")
+        if not separator:
+            status_and_headers, separator, json_body = payload.partition(b"\n\n")
+        if not separator:
+            raise GoogleGmailProviderError("gmail_batch_response_invalid")
+        status_line = status_and_headers.splitlines()[0].decode(
+            "ascii", errors="replace"
+        )
+        match = re.match(r"^HTTP/\S+\s+(\d{3})(?:\s|$)", status_line)
+        if match is None:
+            raise GoogleGmailProviderError("gmail_batch_response_invalid")
+        status = int(match.group(1))
+        try:
+            item = json.loads(json_body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise GoogleGmailProviderError("gmail_batch_response_invalid") from exc
+        if status == 404:
+            missing_id = (
+                requested_message_ids[requested_index]
+                if requested_index < len(requested_message_ids)
+                else ""
+            )
+            if missing_id:
+                omitted_ids.append(missing_id)
+            continue
+        if status == 401:
+            raise GoogleGmailProviderError(
+                "gmail_reconnect_required", status_code=401
+            )
+        if status == 403:
+            raise GoogleGmailProviderError(
+                "gmail_permission_denied", status_code=403
+            )
+        if status == 429 or status >= 500:
+            raise GoogleGmailProviderError(
+                "gmail_provider_unavailable", status_code=status, retryable=True
+            )
+        if not 200 <= status < 300 or not isinstance(item, Mapping):
+            raise GoogleGmailProviderError(
+                "gmail_request_failed", status_code=status
+            )
+        message_id = _text(item.get("id"))
+        if not message_id:
+            raise GoogleGmailProviderError("gmail_batch_response_invalid")
+        messages_by_id[message_id] = dict(item)
+    messages = [
+        messages_by_id[message_id]
+        for message_id in requested_message_ids
+        if message_id in messages_by_id
+    ]
+    return messages, omitted_ids
 
 
 class GoogleGmailProvider:
@@ -939,7 +1081,7 @@ class GoogleGmailProvider:
         }
         if op == "list_message_summaries":
             max_results = int(args.get("max_results") or 20)
-            if not 1 <= max_results <= 20:
+            if not 1 <= max_results <= _MAX_BATCH_MESSAGES:
                 raise GoogleGmailProviderError("gmail_page_size_invalid")
             list_params: dict[str, Any] = {"maxResults": max_results}
             if _text(args.get("query")):
@@ -961,23 +1103,58 @@ class GoogleGmailProvider:
                 if isinstance(item, Mapping)
             ]
 
-            def fetch_summary(message_id: str) -> dict[str, Any]:
-                return self._authorized_json_request(
-                    "GET",
-                    f"{GMAIL_API_ORIGIN}/gmail/v1/users/me/messages/{quote(message_id, safe='')}",
-                    headers=headers,
-                    params={"format": "metadata"},
-                )
-
             if message_ids:
-                # Gmail's list endpoint returns only ids. Fetch bounded metadata
-                # concurrently inside the trusted provider so a consumer does
-                # not create an N+1 sequence across the SDK/tool boundary.
-                with ThreadPoolExecutor(max_workers=min(8, len(message_ids))) as pool:
-                    messages = list(pool.map(fetch_summary, message_ids))
+                # Gmail's list endpoint returns ids only. Materialize the bounded
+                # first-paint projection through Gmail's native HTTP batch
+                # endpoint so the provider performs two network round trips
+                # instead of a parallel-but-still-expensive N+1 request set.
+                boundary = f"adaos_gmail_{secrets.token_hex(12)}"
+                batch_response = self._transport_request(
+                    "POST",
+                    f"{GMAIL_API_ORIGIN}/batch/gmail/v1",
+                    headers={
+                        **headers,
+                        "Accept": "multipart/mixed",
+                        "Content-Type": f"multipart/mixed; boundary={boundary}",
+                    },
+                    data=_gmail_metadata_batch_body(message_ids, boundary),
+                    timeout=(5.0, 20.0),
+                )
+                batch_status = int(
+                    getattr(batch_response, "status_code", 0) or 0
+                )
+                if batch_status == 401:
+                    raise GoogleGmailProviderError(
+                        "gmail_reconnect_required", status_code=401
+                    )
+                if batch_status == 403:
+                    raise GoogleGmailProviderError(
+                        "gmail_permission_denied", status_code=403
+                    )
+                if batch_status == 429 or batch_status >= 500:
+                    raise GoogleGmailProviderError(
+                        "gmail_provider_unavailable",
+                        status_code=batch_status,
+                        retryable=True,
+                    )
+                if not 200 <= batch_status < 300:
+                    raise GoogleGmailProviderError(
+                        "gmail_request_failed", status_code=batch_status
+                    )
+                messages, omitted_message_ids = _gmail_metadata_batch_payloads(
+                    batch_response,
+                    requested_message_ids=message_ids,
+                )
             else:
                 messages = []
-            payload = {"messages": messages}
+                omitted_message_ids = []
+            payload = {
+                "messages": messages,
+                "fetch_strategy": "gmail_http_batch",
+                "network_round_trips": 2 if message_ids else 1,
+            }
+            if omitted_message_ids:
+                payload["omitted_message_ids"] = omitted_message_ids
             if _text(listed.get("nextPageToken")):
                 payload["nextPageToken"] = _text(listed["nextPageToken"])[:2048]
             return GmailOperationResult(op, payload).to_dict()

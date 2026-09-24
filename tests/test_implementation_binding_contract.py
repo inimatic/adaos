@@ -124,6 +124,7 @@ def test_google_gmail_contract_is_loaded_only_for_relevant_automation_context():
         "connection_status",
         "get_message",
         "list_labels",
+        "list_message_summaries",
         "list_messages",
         "mutate_message",
         "prepare_send",

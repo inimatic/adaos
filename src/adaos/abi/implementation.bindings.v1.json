@@ -97,6 +97,7 @@
                 {"operation_id": "connection_status", "tool": "connection_status", "errors": ["gmail_account_not_connected", "gmail_reconnect_required", "gmail_permission_denied", "gmail_provider_unavailable"]},
                 {"operation_id": "begin_connection", "tool": "begin_connection", "errors": ["google_oauth_not_configured", "gmail_permission_denied", "gmail_provider_unavailable"]},
                 {"operation_id": "list_messages", "tool": "list_messages", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
+                {"operation_id": "list_message_summaries", "tool": "list_message_summaries", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
                 {"operation_id": "get_message", "tool": "get_message", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
                 {"operation_id": "list_labels", "tool": "list_labels", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
                 {"operation_id": "mutate_message", "tool": "mutate_message", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
@@ -139,6 +140,7 @@
           "attach_reusable_connection": "gmail.attach_reusable_connection(account_id='google.gmail') -> {ok,provider_id,account_id,email_address,scopes,status,attached:true,reused_credential:true}",
           "connection_status": "gmail.connection_status(account_id='google.gmail')",
           "list_messages": "gmail.list_messages(query='', label_ids=(), page_token='', max_results=50, account_id='google.gmail')",
+          "list_message_summaries": "gmail.list_message_summaries(query='', label_ids=(), page_token='', max_results=20, account_id='google.gmail')",
           "get_message": "gmail.get_message(message_id, format='full', account_id='google.gmail')",
           "list_labels": "gmail.list_labels(account_id='google.gmail')",
           "modify_message": "gmail.modify_message(message_id, add_label_ids=(), remove_label_ids=(), account_id='google.gmail')",
@@ -164,6 +166,7 @@
             "rule": "The owned skill validates and projects result into its own bounded output schema. It never returns or persists a raw provider object that is not required by the accepted UI."
           },
           "list_messages_result": "{messages?:[{id:string,threadId:string}],nextPageToken?:string,resultSizeEstimate?:integer}",
+          "list_message_summaries_result": "{messages:[Gmail metadata message],nextPageToken?:string,fetch_strategy:'gmail_http_batch',network_round_trips:1|2,omitted_message_ids?:[string]}; use this bounded progressive operation for first-paint lists instead of list_messages followed by N get_message calls",
           "get_message_result": "The Gmail users.messages.get object. Project only id, threadId, labelIds, snippet and decoded headers/body fields required for the selected transient reader; never log or persist payload body data.",
           "list_labels_result": "{labels?:[{id:string,name:string,type?:string,messageListVisibility?:string,labelListVisibility?:string}]}",
           "modify_or_trash_result": "The resulting Gmail message object; project only confirmation identity and current labels.",
@@ -191,7 +194,7 @@
               "ok": {"const": true},
               "provider_id": {"const": "google.gmail"},
               "operation": {
-                "enum": ["list_messages", "get_message", "list_labels", "modify_message", "trash_message", "send_message"]
+                "enum": ["list_messages", "list_message_summaries", "get_message", "list_labels", "modify_message", "trash_message", "send_message"]
               },
               "result": {"type": "object"}
             },
@@ -336,6 +339,7 @@
         "synthetic_examples": {
           "connection_status": {"ok": true, "provider_id": "google.gmail", "account_id": "google.gmail", "status": "connected", "email_address": "owner@example.test", "scopes": ["https://www.googleapis.com/auth/gmail.modify"]},
           "list_messages": {"ok": true, "provider_id": "google.gmail", "operation": "list_messages", "result": {"messages": [{"id": "msg-1", "threadId": "thread-1"}], "nextPageToken": "page-2", "resultSizeEstimate": 1}},
+          "list_message_summaries": {"ok": true, "provider_id": "google.gmail", "operation": "list_message_summaries", "result": {"messages": [{"id": "msg-1", "threadId": "thread-1", "labelIds": ["INBOX", "UNREAD"], "snippet": "Example preview", "payload": {"headers": [{"name": "From", "value": "Sender <sender@example.test>"}, {"name": "Subject", "value": "Example"}]} }], "nextPageToken": "page-2", "fetch_strategy": "gmail_http_batch", "network_round_trips": 2}},
           "get_message": {"ok": true, "provider_id": "google.gmail", "operation": "get_message", "result": {"id": "msg-1", "threadId": "thread-1", "labelIds": ["INBOX", "UNREAD"], "snippet": "Example preview", "payload": {"mimeType": "text/plain", "headers": [{"name": "From", "value": "Sender <sender@example.test>"}, {"name": "Subject", "value": "Example"}], "body": {"size": 12, "data": "RXhhbXBsZSBib2R5"}}}},
           "list_labels": {"ok": true, "provider_id": "google.gmail", "operation": "list_labels", "result": {"labels": [{"id": "INBOX", "name": "INBOX", "type": "system"}]}},
           "modify_message": {"ok": true, "provider_id": "google.gmail", "operation": "modify_message", "result": {"id": "msg-1", "threadId": "thread-1", "labelIds": ["STARRED"]}},
@@ -358,13 +362,13 @@
         "reconnect": ["gmail_account_not_connected", "gmail_reconnect_required"],
         "permission": ["gmail_permission_denied", "gmail_required_scope_missing"],
         "retryable": ["gmail_provider_unavailable"],
-        "read_projection_rule": "A tool used as a browser dataSource must convert expected provider lifecycle errors into a successful bounded projection: connection_status returns {ok:true,items:[{id:'google.gmail',status:'disconnected|auth_required|permission_denied|offline|provider_error',least_privilege_note:string}]}; list_labels, list_messages and get_message return {ok:true,items:[],status:<the same lifecycle state>,notice:string}. Do not retain ok:false when adding items. This lets the accepted setup/authorization/offline UI settle without treating an expected state as a transport failure.",
+        "read_projection_rule": "A tool used as a browser dataSource must convert expected provider lifecycle errors into a successful bounded projection: connection_status returns {ok:true,items:[{id:'google.gmail',status:'disconnected|auth_required|permission_denied|offline|provider_error',least_privilege_note:string}]}; list_labels, list_messages, list_message_summaries and get_message return {ok:true,items:[],status:<the same lifecycle state>,notice:string}. Do not retain ok:false when adding items. This lets the accepted setup/authorization/offline UI settle without treating an expected state as a transport failure.",
         "rule": "Mutations, invalid input and unexpected provider failures return {ok:false,error,message} or raise a bounded error. Never return a successful mutation after provider failure and never include response bodies, tokens or OAuth codes in logs/errors."
       },
       "tests": [
         "mock the typed SDK facade; package tests perform no external network calls",
         "prove missing Application context and missing/denied provider capability fail closed",
-        "prove search/list/get/labels and every accepted mutation map to the exact SDK method",
+        "prove search/list/list_message_summaries/get/labels and every accepted mutation map to the exact SDK method",
         "prove send idempotency suppresses a duplicate before a second SDK call",
         "prove tokens, OAuth codes and message bodies are absent from logs, persisted UI state and fixtures"
       ]

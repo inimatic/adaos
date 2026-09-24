@@ -65,13 +65,19 @@ class CountingVault(FakeVault):
 @dataclass
 class FakeResponse:
     status_code: int
-    payload: dict
+    payload: dict | None
+    headers: dict[str, str] | None = None
+    raw_content: bytes | None = None
 
     @property
     def content(self) -> bytes:
+        if self.raw_content is not None:
+            return self.raw_content
         return json.dumps(self.payload).encode("utf-8")
 
     def json(self):
+        if self.payload is None:
+            raise ValueError("response is not JSON")
         return self.payload
 
 
@@ -85,6 +91,33 @@ class FakeTransport:
         if not self.responses:
             raise AssertionError("unexpected transport request")
         return self.responses.pop(0)
+
+
+def _gmail_batch_response(
+    parts: list[tuple[int, int, dict]],
+) -> FakeResponse:
+    boundary = "gmail_batch_test"
+    lines: list[str] = []
+    for request_index, status, payload in parts:
+        lines.extend(
+            [
+                f"--{boundary}",
+                "Content-Type: application/http",
+                f"Content-ID: <response-adaos-message-{request_index}>",
+                "",
+                f"HTTP/1.1 {status} Test",
+                "Content-Type: application/json; charset=UTF-8",
+                "",
+                json.dumps(payload),
+            ]
+        )
+    lines.extend([f"--{boundary}--", ""])
+    return FakeResponse(
+        200,
+        None,
+        headers={"Content-Type": f"multipart/mixed; boundary={boundary}"},
+        raw_content="\r\n".join(lines).encode("utf-8"),
+    )
 
 
 def _application(application_id: str = "gmail_mail_client") -> Application:
@@ -503,13 +536,27 @@ def test_provider_lists_bounded_message_summaries_inside_one_operation(
                     "nextPageToken": "next-page",
                 },
             ),
-            FakeResponse(
-                200,
-                {"id": "message-1", "threadId": "thread-1", "payload": {}},
-            ),
-            FakeResponse(
-                200,
-                {"id": "message-2", "threadId": "thread-2", "payload": {}},
+            _gmail_batch_response(
+                [
+                    (
+                        1,
+                        200,
+                        {
+                            "id": "message-2",
+                            "threadId": "thread-2",
+                            "payload": {},
+                        },
+                    ),
+                    (
+                        0,
+                        200,
+                        {
+                            "id": "message-1",
+                            "threadId": "thread-1",
+                            "payload": {},
+                        },
+                    ),
+                ]
             ),
         ]
     )
@@ -527,26 +574,77 @@ def test_provider_lists_bounded_message_summaries_inside_one_operation(
     )
 
     assert result["operation"] == "list_message_summaries"
-    assert {item["id"] for item in result["result"]["messages"]} == {
+    assert [item["id"] for item in result["result"]["messages"]] == [
         "message-1",
         "message-2",
-    }
+    ]
     assert result["result"]["nextPageToken"] == "next-page"
-    assert len(transport.calls) == 3
+    assert result["result"]["fetch_strategy"] == "gmail_http_batch"
+    assert result["result"]["network_round_trips"] == 2
+    assert len(transport.calls) == 2
     assert transport.calls[0][1] == f"{GMAIL_API_ORIGIN}/gmail/v1/users/me/messages"
     assert transport.calls[0][2]["params"] == {
         "maxResults": 2,
         "q": "is:unread",
         "labelIds": ["INBOX"],
     }
-    assert {call[2]["params"]["format"] for call in transport.calls[1:]} == {
-        "metadata"
-    }
+    assert transport.calls[1][1] == f"{GMAIL_API_ORIGIN}/batch/gmail/v1"
+    batch_body = transport.calls[1][2]["data"].decode("ascii")
+    assert batch_body.count("GET /gmail/v1/users/me/messages/") == 2
+    assert "format=metadata" in batch_body
     assert all(
         call[2]["headers"]["Authorization"] == "Bearer access-secret"
         for call in transport.calls
     )
     assert "access-secret" not in json.dumps(result)
+
+
+def test_provider_batch_listing_omits_a_message_removed_after_listing(
+    tmp_path: Path,
+) -> None:
+    provider, _vault, transport, release, _result = _connect(tmp_path)
+    transport.calls.clear()
+    transport.responses.extend(
+        [
+            FakeResponse(
+                200,
+                {
+                    "messages": [
+                        {"id": "message-1", "threadId": "thread-1"},
+                        {"id": "message-gone", "threadId": "thread-gone"},
+                    ]
+                },
+            ),
+            _gmail_batch_response(
+                [
+                    (
+                        0,
+                        200,
+                        {
+                            "id": "message-1",
+                            "threadId": "thread-1",
+                            "payload": {},
+                        },
+                    ),
+                    (1, 404, {"error": {"code": 404}}),
+                ]
+            ),
+        ]
+    )
+
+    result = provider.execute(
+        "list_message_summaries",
+        application_id="gmail_mail_client",
+        release_digest=release.release_digest,
+        subject_ref="user:owner",
+        arguments={"max_results": 2},
+    )
+
+    assert [item["id"] for item in result["result"]["messages"]] == [
+        "message-1"
+    ]
+    assert result["result"]["omitted_message_ids"] == ["message-gone"]
+    assert len(transport.calls) == 2
 
 
 def test_sdk_projects_message_summary_arguments_to_the_bounded_operation(
