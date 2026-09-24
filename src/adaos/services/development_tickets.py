@@ -58,6 +58,7 @@ ACTIVE_TICKET_STATES = {
     "verified",
 }
 TERMINAL_TICKET_STATES = {"closed", "superseded", "stale"}
+TICKET_PRIORITIES = {"must", "should", "could", "deferred"}
 TICKET_STATUS_GROUPS = {
     "open": ACTIVE_TICKET_STATES,
     "active": ACTIVE_TICKET_STATES,
@@ -127,9 +128,11 @@ def project_development_ticket_summary(ticket: Mapping[str, Any]) -> dict[str, A
             "status_group",
             "summary",
             "severity",
+            "priority",
             "blocking",
             "owner_area",
             "component_ref",
+            "web_component",
             "owner_scope",
             "origin_scope",
             "target_scope",
@@ -254,6 +257,10 @@ def _component_ref_from_scopes(
     origin = _mapping(origin_scope)
     meta = _mapping(metadata)
     for source in (meta, target, origin):
+        web_component = _mapping(source.get("web_component"))
+        token = _text(web_component.get("ref") or web_component.get("id"))
+        if token:
+            return token
         for key in ("component_ref", "ref", "canonical_ref", "target_ref", "modal_ref", "skill_ref", "scenario_ref", "project_ref"):
             token = _text(source.get(key))
             if token:
@@ -305,6 +312,8 @@ def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         out["revision"] = 1
     out["status_group"] = ticket_status_group(_text(out.get("status")))
+    priority = _text(out.get("priority")).lower()
+    out["priority"] = priority if priority in TICKET_PRIORITIES else "should"
     out["owner_area"] = _text(out.get("owner_area")) or _owner_area_from_scope(
         _mapping(out.get("target_scope")),
         _mapping(out.get("metadata")),
@@ -314,6 +323,14 @@ def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
         _mapping(out.get("origin_scope")),
         _mapping(out.get("metadata")),
     )
+    web_component = _web_component_from_scopes(
+        _mapping(out.get("web_component")),
+        _mapping(out.get("target_scope")),
+        _mapping(out.get("origin_scope")),
+        _mapping(out.get("metadata")),
+    )
+    if web_component:
+        out["web_component"] = web_component
     out["relation_refs"] = _normalize_relation_refs(
         _sequence_of_mappings(out.get("relation_refs") or []),
         _sequence_of_mappings(out.get("related_refs") or []),
@@ -1924,6 +1941,7 @@ def _ticket_scope_tokens(ticket: Mapping[str, Any]) -> set[str]:
     tokens: set[str] = set()
     _collect_scope_tokens(tokens, ticket.get("owner_area"))
     _collect_scope_tokens(tokens, ticket.get("component_ref"))
+    _collect_scope_tokens(tokens, ticket.get("web_component"))
     _collect_scope_tokens(tokens, ticket.get("target_scope"))
     _collect_scope_tokens(tokens, ticket.get("relation_refs"))
     _collect_scope_tokens(tokens, ticket.get("related_refs"))
@@ -1946,6 +1964,7 @@ def _ticket_search_text(ticket: Mapping[str, Any]) -> str:
         _text(ticket.get("status")),
         _text(ticket.get("owner_area")),
         _text(ticket.get("component_ref")),
+        json.dumps(ticket.get("web_component") or {}, ensure_ascii=False, sort_keys=True, default=str),
         _text(ticket.get("summary")),
         _text(ticket.get("source")),
         json.dumps(ticket.get("target_scope") or {}, ensure_ascii=False, sort_keys=True, default=str),
@@ -1964,6 +1983,61 @@ def _artifact_id_from_ref(ref: Mapping[str, Any]) -> str:
     if uri.startswith("dev-ticket-artifact:"):
         return uri.split(":", 1)[1].strip()
     return ""
+
+
+def _web_component_from_scopes(
+    web_component: Mapping[str, Any] | None,
+    target_scope: Mapping[str, Any] | None = None,
+    origin_scope: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the stable UI element identity carried by a Dev Ticket.
+
+    Older prototype-review tickets stored these fields directly in target_scope;
+    keep projecting those records while new clients use the explicit entity.
+    """
+
+    target = _mapping(target_scope)
+    origin = _mapping(origin_scope)
+    meta = _mapping(metadata)
+    candidates = [
+        _mapping(web_component),
+        _mapping(target.get("web_component")),
+        _mapping(origin.get("web_component")),
+        _mapping(meta.get("web_component")),
+    ]
+    selected = next((item for item in candidates if item), {})
+    ref = _text(selected.get("ref") or selected.get("id"))
+    if not ref:
+        legacy_ref = _text(target.get("component_ref"))
+        if legacy_ref.startswith(("widget:", "field:")):
+            ref = legacy_ref
+            selected = {
+                "ref": ref,
+                "kind": target.get("component_kind"),
+                "type": target.get("component_type"),
+                "label": target.get("component_label"),
+            }
+    if not ref or not ref.startswith(("widget:", "field:")):
+        return {}
+    kind = _text(selected.get("kind")) or ref.split(":", 1)[0]
+    component_type = _text(selected.get("type")) or kind
+    label = _text(selected.get("label") or selected.get("name")) or ref
+    normalized = {
+        **selected,
+        "ref": ref,
+        "kind": kind,
+        "type": component_type,
+        "label": label,
+    }
+    if ref.startswith("widget:") and not _text(normalized.get("widget_id")):
+        normalized["widget_id"] = ref.split(":", 1)[1]
+    if ref.startswith("field:"):
+        parts = ref.split(":", 2)
+        if len(parts) == 3:
+            normalized.setdefault("widget_id", parts[1])
+            normalized.setdefault("field_id", parts[2])
+    return {key: value for key, value in normalized.items() if value not in (None, "")}
 
 
 _EXTERNAL_ISSUE_POLICY_MODES = {
@@ -2081,6 +2155,7 @@ class DevelopmentTicketService:
         classification_confidence: float | None = None,
         owner_area: str | None = None,
         component_ref: str | None = None,
+        web_component: Mapping[str, Any] | None = None,
         relation_refs: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         signal_kind = _text(kind)
@@ -2093,6 +2168,8 @@ class DevelopmentTicketService:
         meta = _mapping(metadata)
         area = _text(owner_area) or _owner_area_from_scope(target, meta)
         component = _text(component_ref) or _component_ref_from_scopes(target, origin, meta)
+        web_element = _web_component_from_scopes(web_component, target, origin, meta)
+        component = component or _text(web_element.get("ref"))
         key = _text(dedup_key) or _fingerprint("dsig", signal_kind, text.lower(), _target_identity(target), metadata or {})
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
@@ -2107,6 +2184,8 @@ class DevelopmentTicketService:
                     )
                     signal["owner_area"] = _text(signal.get("owner_area")) or area
                     signal["component_ref"] = _text(signal.get("component_ref")) or component
+                    if web_element and not _mapping(signal.get("web_component")):
+                        signal["web_component"] = web_element
                     signal["updated_at"] = _now()
                     self._append_history(
                         signal,
@@ -2131,6 +2210,7 @@ class DevelopmentTicketService:
                 "blocking": bool(blocking),
                 "owner_area": area,
                 "component_ref": component,
+                **({"web_component": web_element} if web_element else {}),
                 "classification_confidence": float(classification_confidence if classification_confidence is not None else 1.0),
                 "owner_scope": owner,
                 "origin_scope": origin,
@@ -2163,12 +2243,14 @@ class DevelopmentTicketService:
         kind: str,
         summary: str | None = None,
         status: str = "captured",
+        priority: str | None = None,
         source: str | None = None,
         dedup_key: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         policy: Mapping[str, Any] | None = None,
         owner_area: str | None = None,
         component_ref: str | None = None,
+        web_component: Mapping[str, Any] | None = None,
         relation_refs: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         signal_id = _text(signal.get("signal_id"))
@@ -2189,7 +2271,20 @@ class DevelopmentTicketService:
             _mapping(signal.get("origin_scope")),
             meta,
         )
+        web_element = _web_component_from_scopes(
+            web_component or _mapping(signal.get("web_component")),
+            target,
+            _mapping(signal.get("origin_scope")),
+            meta,
+        )
+        component = component or _text(web_element.get("ref"))
         key = _text(dedup_key) or _fingerprint("dticket", ticket_kind, signal.get("dedup_key"), _target_identity(target))
+        priority_token = _text(priority).lower()
+        if priority_token and priority_token not in TICKET_PRIORITIES:
+            raise ValueError(f"unsupported Dev Ticket priority: {priority_token}")
+        if not priority_token:
+            severity_token = _text(signal.get("severity")).lower()
+            priority_token = "must" if bool(signal.get("blocking")) or severity_token in {"high", "critical"} else "should"
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
             if signal_id not in state["signals"]:
@@ -2213,6 +2308,10 @@ class DevelopmentTicketService:
                     )
                     ticket["owner_area"] = _text(ticket.get("owner_area")) or area
                     ticket["component_ref"] = _text(ticket.get("component_ref")) or component
+                    if _text(ticket.get("priority")).lower() not in TICKET_PRIORITIES:
+                        ticket["priority"] = priority_token
+                    if web_element and not _mapping(ticket.get("web_component")):
+                        ticket["web_component"] = web_element
                     ticket["metadata"] = {
                         **_mapping(ticket.get("metadata")),
                         **meta,
@@ -2237,11 +2336,13 @@ class DevelopmentTicketService:
                 "revision": 1,
                 "kind": ticket_kind,
                 "status": _text(status) or "captured",
+                "priority": priority_token,
                 "summary": text,
                 "severity": _text(signal.get("severity")) or "medium",
                 "blocking": bool(signal.get("blocking")),
                 "owner_area": area,
                 "component_ref": component,
+                **({"web_component": web_element} if web_element else {}),
                 "owner_scope": _mapping(signal.get("owner_scope")),
                 "origin_scope": _mapping(signal.get("origin_scope")),
                 "target_scope": target,
@@ -5134,6 +5235,47 @@ class DevelopmentTicketService:
             self._write(state)
             return _normalized_ticket(ticket)
 
+    def update_ticket_priority(
+        self,
+        ticket_id: str,
+        *,
+        priority: str,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        priority_token = _text(priority).lower()
+        if priority_token not in TICKET_PRIORITIES:
+            raise ValueError(f"unsupported Dev Ticket priority: {priority_token or '<missing>'}")
+        actor_token = _text(actor) or "system"
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            self._assert_expected_revision(ticket, expected_revision)
+            if _text(ticket.get("status")) in TERMINAL_TICKET_STATES:
+                raise ValueError("terminal Dev Ticket cannot be edited")
+            stored_priority = _text(ticket.get("priority")).lower()
+            previous = stored_priority or "should"
+            if stored_priority == priority_token:
+                return _normalized_ticket(ticket)
+            now = _now()
+            ticket["priority"] = priority_token
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": "priority_updated",
+                    "actor": actor_token,
+                    "previous_priority": previous,
+                    "priority": priority_token,
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
     def requalify_builder_repair(
         self,
         ticket_id: str,
@@ -5800,6 +5942,7 @@ class DevelopmentTicketService:
         modal_id: str | None = None,
         component: str | None = None,
         severity: str | None = None,
+        priority: str | None = None,
         blocking: bool | None = None,
         source: str | None = None,
         owner: str | None = None,
@@ -5839,6 +5982,23 @@ class DevelopmentTicketService:
         if severity_token:
             allowed = {_text(part) for part in severity_token.split(",") if _text(part)}
             tickets = [item for item in tickets if _text(item.get("severity")) in allowed]
+        priority_token = _text(priority).lower()
+        if priority_token:
+            if priority_token == "non_deferred":
+                tickets = [
+                    item
+                    for item in tickets
+                    if _text(item.get("priority") or "should").lower() != "deferred"
+                ]
+            else:
+                allowed = {_text(part).lower() for part in priority_token.split(",") if _text(part)}
+                if not allowed <= TICKET_PRIORITIES:
+                    raise ValueError(f"unsupported Dev Ticket priority filter: {priority_token}")
+                tickets = [
+                    item
+                    for item in tickets
+                    if _text(item.get("priority") or "should").lower() in allowed
+                ]
         if blocking is not None:
             tickets = [item for item in tickets if bool(item.get("blocking")) is bool(blocking)]
         source_token = _text(source)

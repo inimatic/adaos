@@ -64,8 +64,10 @@ class DevTicketCreateRequest(BaseModel):
     blocking: bool = False
     owner_area: str | None = None
     component_ref: str | None = None
+    web_component: dict[str, Any] | None = None
     source: str = "ui_feedback"
     status: str = "proposed"
+    priority: str | None = Field(default=None, pattern="^(must|should|could|deferred)$")
     dedup_key: str | None = None
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
@@ -86,6 +88,7 @@ class DevTicketArtifactUploadRequest(BaseModel):
 
 class DevTicketUpdateRequest(BaseModel):
     summary: str | None = Field(default=None, min_length=1)
+    priority: str | None = Field(default=None, pattern="^(must|should|could|deferred)$")
     actor: str = Field(default="ui", min_length=1)
     expected_revision: int | None = Field(default=None, ge=1)
 
@@ -1083,6 +1086,7 @@ def _ticket_target_tokens(ticket: Mapping[str, Any]) -> set[str]:
     tokens: set[str] = set()
     _append_filter_tokens(tokens, ticket.get("owner_area"))
     _append_filter_tokens(tokens, ticket.get("component_ref"))
+    _append_filter_tokens(tokens, ticket.get("web_component"))
     target = ticket.get("target_scope")
     if isinstance(target, Mapping):
         _append_filter_tokens(tokens, target)
@@ -1189,6 +1193,10 @@ def list_tickets(
     modal_id: str | None = None,
     component: str | None = None,
     severity: str | None = None,
+    priority: str | None = Query(
+        default=None,
+        pattern="^(?:all|non_deferred|(?:must|should|could|deferred)(?:,(?:must|should|could|deferred))*)$",
+    ),
     blocking: str | None = None,
     source: str | None = None,
     owner: str | None = None,
@@ -1222,6 +1230,7 @@ def list_tickets(
         status=status_filter,
         status_group=status_group,
         severity=severity,
+        priority=None if priority == "all" else priority,
         blocking=_bool_query(blocking),
         source=source,
         owner=owner,
@@ -1272,18 +1281,21 @@ def create_ticket(
             metadata=body.metadata,
             owner_area=body.owner_area,
             component_ref=body.component_ref,
+            web_component=body.web_component,
             relation_refs=body.relation_refs,
         )
         ticket_result = service.ensure_ticket_for_signal(
             signal_result["signal"],
             kind=ticket_kind,
             status=body.status,
+            priority=body.priority,
             source=body.source,
             dedup_key=body.dedup_key,
             metadata=body.metadata,
             policy=body.policy,
             owner_area=body.owner_area,
             component_ref=body.component_ref,
+            web_component=body.web_component,
             relation_refs=body.relation_refs,
         )
         ticket = ticket_result["ticket"]
@@ -1698,15 +1710,26 @@ def update_ticket(
     body: DevTicketUpdateRequest,
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
-    if body.summary is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="summary is required")
+    if body.summary is None and body.priority is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="summary or priority is required")
     try:
-        ticket = service.update_ticket_summary(
-            ticket_id,
-            summary=body.summary,
-            actor=body.actor,
-            expected_revision=body.expected_revision,
-        )
+        ticket = service.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        if body.summary is not None:
+            ticket = service.update_ticket_summary(
+                ticket_id,
+                summary=body.summary,
+                actor=body.actor,
+                expected_revision=body.expected_revision,
+            )
+        if body.priority is not None:
+            ticket = service.update_ticket_priority(
+                ticket_id,
+                priority=body.priority,
+                actor=body.actor,
+                expected_revision=int(ticket.get("revision") or 1) if body.summary is not None else body.expected_revision,
+            )
         return {"ok": True, **_ticket_detail(service, ticket)}
     except KeyError as exc:
         raise _not_found(ticket_id) from exc

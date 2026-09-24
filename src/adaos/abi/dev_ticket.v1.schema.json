@@ -61,9 +61,23 @@
     },
     "summary": { "type": "string", "minLength": 1 },
     "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+    "priority": { "enum": ["must", "should", "could", "deferred"] },
     "blocking": { "type": "boolean" },
     "owner_area": { "type": "string" },
     "component_ref": { "type": "string" },
+    "web_component": {
+      "type": "object",
+      "required": ["ref", "kind", "type", "label"],
+      "properties": {
+        "ref": { "type": "string", "pattern": "^(widget|field):.+" },
+        "kind": { "enum": ["widget", "field"] },
+        "type": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "widget_id": { "type": "string" },
+        "field_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
     "target_scope": { "type": "object" },
     "owner_scope": { "type": "object" },
     "origin_scope": { "type": "object" },

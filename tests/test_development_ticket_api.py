@@ -235,6 +235,101 @@ def test_development_ticket_api_create_accepts_signal_kind_with_ticket_kind(tmp_
     ]
 
 
+def test_development_ticket_api_updates_and_filters_priority(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+
+    first = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Keep the primary action visible",
+            "kind": "feedback",
+            "target_scope": {"type": "scenario", "id": "builder"},
+        },
+    )
+    assert first.status_code == 201, first.text
+    ticket = first.json()["ticket"]
+    assert ticket["priority"] == "should"
+
+    updated = client.patch(
+        f"/api/development-tickets/{ticket['ticket_id']}",
+        headers=_headers(),
+        json={
+            "priority": "must",
+            "actor": "test",
+            "expected_revision": ticket["revision"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["ticket"]["priority"] == "must"
+
+    second = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Optional visual polish",
+            "kind": "feedback",
+            "priority": "deferred",
+            "target_scope": {"type": "scenario", "id": "builder"},
+        },
+    )
+    assert second.status_code == 201, second.text
+
+    must = client.get("/api/development-tickets?priority=must", headers=_headers())
+    assert must.status_code == 200, must.text
+    assert [item["ticket_id"] for item in must.json()["items"]] == [ticket["ticket_id"]]
+
+    non_deferred = client.get(
+        "/api/development-tickets?priority=non_deferred",
+        headers=_headers(),
+    )
+    assert non_deferred.status_code == 200, non_deferred.text
+    assert [item["ticket_id"] for item in non_deferred.json()["items"]] == [ticket["ticket_id"]]
+
+
+def test_development_ticket_api_persists_and_filters_web_component(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+    web_component = {
+        "ref": "widget:application-header",
+        "kind": "widget",
+        "type": "item.details",
+        "label": "Applications",
+        "widget_id": "application-header",
+    }
+
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback_note",
+            "ticket_kind": "feedback",
+            "status": "captured",
+            "summary": "Align the application header actions.",
+            "source": "client_dev_tickets",
+            "component_ref": web_component["ref"],
+            "web_component": web_component,
+            "target_scope": {
+                "type": "scenario",
+                "id": "applications",
+                "component_ref": web_component["ref"],
+                "web_component": web_component,
+            },
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    assert payload["signal"]["web_component"] == web_component
+    assert payload["ticket"]["web_component"] == web_component
+
+    listed = client.get(
+        f"/api/development-tickets?component_ref={web_component['ref']}&projection=summary",
+        headers=_headers(),
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["tickets"][0]["web_component"] == web_component
+
+
 def test_development_ticket_api_prepares_and_applies_zero_model_qualification(
     tmp_path: Path,
     monkeypatch,

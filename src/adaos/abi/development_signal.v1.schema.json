@@ -69,6 +69,19 @@
     "blocking": { "type": "boolean" },
     "owner_area": { "type": "string" },
     "component_ref": { "type": "string" },
+    "web_component": {
+      "type": "object",
+      "required": ["ref", "kind", "type", "label"],
+      "properties": {
+        "ref": { "type": "string", "pattern": "^(widget|field):.+" },
+        "kind": { "enum": ["widget", "field"] },
+        "type": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "widget_id": { "type": "string" },
+        "field_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
     "classification_confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
     "owner_scope": { "type": "object" },
     "origin_scope": { "type": "object" },
