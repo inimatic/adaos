@@ -6666,6 +6666,62 @@ def test_fresh_change_resets_higher_iteration_terminal_predecessor(
     assert persisted["change_set_id"] == second_change_id
 
 
+def test_failed_change_restart_resets_higher_iteration_session(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    change_id = "CS-recipes-restart"
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": change_id,
+            "request": "Implement recipes.",
+            "issues": [
+                {
+                    "issue_id": "recipes",
+                    "title": "Implement recipes",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Recipes are implemented."],
+                }
+            ],
+        },
+    )
+    first = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipes.",
+        webspace_id="prompt-dev",
+        change_set_id=change_id,
+    )
+    failed = service.status(object_type="scenario", object_id="recipes")["session"]
+    failed["iteration"] = 5
+    failed["status"] = "failed"
+    service._save_session(failed)
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "automation_failed",
+        metadata={"task_id": first["session"]["current_task_id"]},
+    )
+
+    restarted = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Retry the same accepted Change.",
+        webspace_id="prompt-dev",
+        change_set_id=change_id,
+    )
+
+    assert restarted["duplicate"] is False
+    assert restarted["session"]["iteration"] == 0
+    assert restarted["session"]["current_task_id"] != first["session"][
+        "current_task_id"
+    ]
+    persisted = service.get_session("scenario", "recipes")
+    assert persisted is not None
+    assert persisted["current_task_id"] == restarted["session"]["current_task_id"]
+
+
 def test_followup_invalidates_checkpoint_before_queueing_next_iteration(
     tmp_path: Path,
 ) -> None:

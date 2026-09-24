@@ -2597,11 +2597,17 @@ class BuilderAutomationService:
                         }
             replaces_terminal_predecessor = bool(
                 current
-                and requested_change_set_id
-                and str(current.get("change_set_id") or "").strip()
-                != requested_change_set_id
                 and str(current.get("status") or "").strip()
                 in {"completed", "failed", "cancelled", "expired"}
+                and str(
+                    (
+                        workflow_before.get("governed")
+                        if isinstance(workflow_before.get("governed"), Mapping)
+                        else {}
+                    ).get("state")
+                    or ""
+                ).strip()
+                == "automation_ready"
             )
             if current and current.get("status") in {
                 "queued",
