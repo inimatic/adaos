@@ -112,6 +112,8 @@ def _enforce_continuation_model_policy(
         raise ValueError(
             "preserved candidate changed after admission; model fallback is forbidden"
         )
+
+
 BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
 BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
 BOUNDED_REPAIR_DISCOVERY_LINES = 400
@@ -1727,7 +1729,11 @@ def _browser_feedback_prompt_projection(value: Any) -> dict[str, Any] | None:
             if not isinstance(raw_failure, Mapping):
                 continue
             failure = {
-                key: (str(raw_failure.get(key))[:2048] if key in {"url", "error"} else raw_failure.get(key))
+                key: (
+                    str(raw_failure.get(key))[:2048]
+                    if key in {"url", "error"}
+                    else raw_failure.get(key)
+                )
                 for key in ("method", "status", "url", "error")
                 if raw_failure.get(key) not in (None, "")
             }
@@ -4179,8 +4185,7 @@ def manifest_scope_blocking_feedback_message(
         file_refs = [
             str(ref.get("ref") or "").replace("\\", "/").strip()
             for ref in evidence
-            if isinstance(ref, Mapping)
-            and str(ref.get("type") or "").strip() == "file"
+            if isinstance(ref, Mapping) and str(ref.get("type") or "").strip() == "file"
         ]
         # Evidence may legitimately include the focused test which proves the
         # required manifest transformation.  Those additional references do
@@ -4256,7 +4261,10 @@ class LocalSkillFactoryWorker:
             with zipfile.ZipFile(archive_path) as archive:
                 manifest_info = archive.getinfo("skill.yaml")
                 package_manifest_info = archive.getinfo(".adaos/package-manifest.json")
-                if manifest_info.file_size > 512_000 or package_manifest_info.file_size > 512_000:
+                if (
+                    manifest_info.file_size > 512_000
+                    or package_manifest_info.file_size > 512_000
+                ):
                     return None
                 manifest_bytes = archive.read(manifest_info)
                 package_manifest_bytes = archive.read(package_manifest_info)
@@ -4271,7 +4279,9 @@ class LocalSkillFactoryWorker:
             handler_tree = ast.parse(handler_bytes.decode("utf-8"))
         except (UnicodeError, json.JSONDecodeError, yaml.YAMLError, SyntaxError):
             return None
-        if not isinstance(manifest, Mapping) or not isinstance(package_manifest, Mapping):
+        if not isinstance(manifest, Mapping) or not isinstance(
+            package_manifest, Mapping
+        ):
             return None
         expected_id = str(package.get("id") or "").strip()
         expected_version = str(package.get("version") or "").strip()
@@ -4293,15 +4303,23 @@ class LocalSkillFactoryWorker:
         tools = [
             dict(tool)
             for tool in manifest.get("tools") or []
-            if isinstance(tool, Mapping) and str(tool.get("name") or "").strip() in exported
+            if isinstance(tool, Mapping)
+            and str(tool.get("name") or "").strip() in exported
         ]
         entry_symbols: list[dict[str, Any]] = []
         for node in handler_tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name not in exported:
+            if (
+                not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or node.name not in exported
+            ):
                 continue
             parameters = [
                 item.arg
-                for item in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+                for item in (
+                    *node.args.posonlyargs,
+                    *node.args.args,
+                    *node.args.kwonlyargs,
+                )
                 if item.arg not in {"self", "cls"}
             ]
             if node.args.vararg is not None:
@@ -4351,14 +4369,17 @@ class LocalSkillFactoryWorker:
                 "provider_conformance_owner": expected_id,
             },
         }
-        interface["interface_digest"] = "sha256:" + hashlib.sha256(
-            json.dumps(
-                interface,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        interface["interface_digest"] = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    interface,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        )
         return interface
 
     def _portable_contract_reuse_bundle(
@@ -5095,9 +5116,7 @@ class LocalSkillFactoryWorker:
             )
             requested_checkpoint = (
                 dict(request_artifacts.get("continuation_checkpoint") or {})
-                if isinstance(
-                    request_artifacts.get("continuation_checkpoint"), Mapping
-                )
+                if isinstance(request_artifacts.get("continuation_checkpoint"), Mapping)
                 else {}
             )
             _enforce_continuation_model_policy(
@@ -5107,9 +5126,7 @@ class LocalSkillFactoryWorker:
             validation_continuation = bool(
                 continuation_mode == "validate_preserved_candidate"
             )
-            model_continuation = bool(
-                continuation_mode == "resume_preserved_candidate"
-            )
+            model_continuation = bool(continuation_mode == "resume_preserved_candidate")
             structured_edits = self._structured_edits_from_assignment(assignment)
             validation_only = self._validation_only_from_assignment(
                 assignment, workspace
@@ -5159,7 +5176,10 @@ class LocalSkillFactoryWorker:
                     "and rerun validation.\n"
                 )
                 if prior_feedback:
-                    prompt += "\nPrevious blocking report (context only):\n\n" + prior_feedback
+                    prompt += (
+                        "\nPrevious blocking report (context only):\n\n"
+                        + prior_feedback
+                    )
                 (input_dir / "task.md").write_text(prompt, encoding="utf-8")
             packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
             prompt_budget = _codex_prompt_budget_check(assignment, prompt)
@@ -7988,7 +8008,9 @@ class LocalSkillFactoryWorker:
                 try:
                     parsed_webui = json.loads(target_webui_text)
                     target_webui_value = (
-                        dict(parsed_webui) if isinstance(parsed_webui, Mapping) else None
+                        dict(parsed_webui)
+                        if isinstance(parsed_webui, Mapping)
+                        else None
                     )
                 except json.JSONDecodeError:
                     target_webui_value = None
@@ -9491,6 +9513,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             errors,
             changed_paths=changed_paths,
         )
+        self._validate_shared_delivery_tool_effects(
+            assignment,
+            workspace,
+            checks,
+            errors,
+        )
         self._validate_declared_sqlite_initialization(workspace, checks, errors)
         self._validate_skill_webui_contracts(workspace, checks, errors)
         self._validate_skill_data_routes(workspace, checks, errors)
@@ -10644,6 +10672,45 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     }
                 )
 
+    def _validate_shared_delivery_tool_effects(
+        self,
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Admit provider-owned effects from exact reusable package archives."""
+
+        from adaos.services.builder.shared_delivery import (
+            shared_delivery_effect_checks,
+        )
+
+        target = assignment.get("target")
+        target_id = (
+            str(target.get("id") or "").strip() if isinstance(target, Mapping) else ""
+        )
+        if not target_id or Path(target_id).name != target_id:
+            return
+        project_path = workspace / "projects" / target_id / "project.yaml"
+        webui_path = workspace / "scenarios" / target_id / "webui.json"
+        if not project_path.is_file() or not webui_path.is_file():
+            return
+        try:
+            project = yaml.safe_load(project_path.read_text(encoding="utf-8")) or {}
+            webui = _loads_strict_json(webui_path.read_text(encoding="utf-8"))
+        except Exception:
+            # General YAML/JSON validation owns malformed candidate documents.
+            return
+        if not isinstance(project, Mapping) or not isinstance(webui, Mapping):
+            return
+        admitted, violations = shared_delivery_effect_checks(
+            self.state_dir,
+            project=project,
+            webui=webui,
+        )
+        checks.extend(admitted)
+        errors.extend(violations)
+
     @staticmethod
     def _validate_changed_skill_activation(
         workspace: Path,
@@ -10686,7 +10753,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 checks.append(check)
                 continue
             try:
-                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                manifest = (
+                    yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                )
                 if not isinstance(manifest, Mapping):
                     raise ValueError("skill manifest must be an object")
                 profile = inspect_handler_activation(handler_path)
@@ -10777,7 +10846,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             if not manifest_path.is_file() or not handler_path.is_file():
                 continue
             try:
-                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                manifest = (
+                    yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                )
                 if not isinstance(manifest, dict):
                     continue
                 profile = inspect_handler_activation(handler_path)
@@ -10827,8 +10898,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 {
                     "skill": skill_id,
                     "path": manifest_path.relative_to(workspace).as_posix(),
-                    "changed": changed
-                    or set(declared) != set(events["subscribe"]),
+                    "changed": changed or set(declared) != set(events["subscribe"]),
                     "activation": activation,
                 }
             )

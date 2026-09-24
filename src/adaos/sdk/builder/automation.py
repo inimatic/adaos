@@ -6,6 +6,8 @@ from collections.abc import Mapping
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 from typing import Any
 
 
@@ -357,9 +359,10 @@ def trial_verification_evidence(
 ) -> dict[str, Any]:
     """Project trusted Automation evidence for Application Trial admission.
 
-    The projection contains only evidence sealed by the Automation service. It
-    deliberately excludes browser and live-runtime observations, which belong
-    to the later publication gate after the Trial is active.
+    Application evidence is sealed by Automation. Provider-owned effect
+    disclosure may additionally be reconstructed from the immutable Automation
+    Git commit and an exact content-addressed shared delivery. Browser and live
+    runtime observations belong to the later publication gate.
     """
 
     service = _service()
@@ -462,9 +465,7 @@ def trial_verification_evidence(
         item
         for item in passed_checks
         if item.get("kind") == "checkpoint_test_contract"
-        and not str(item.get("path") or "").endswith(
-            "test_application_contract.py"
-        )
+        and not str(item.get("path") or "").endswith("test_application_contract.py")
     ]
     if not behavior_checks:
         return {
@@ -476,8 +477,70 @@ def trial_verification_evidence(
     disclosure_checks = [
         item
         for item in passed_checks
-        if item.get("kind") == "skill.public_tool_effects.strict"
+        if item.get("kind")
+        in {
+            "skill.public_tool_effects.strict",
+            "shared_delivery.public_tool_effects.strict",
+        }
     ]
+    if not disclosure_checks:
+        source_commit = str(result.get("commit_hash") or "").strip().lower()
+        workspace = run_root / "workspace"
+        target_id = str(object_id or "").strip()
+        if (
+            re.fullmatch(r"[0-9a-f]{40}", source_commit)
+            and Path(target_id).name == target_id
+            and (workspace / ".git").exists()
+        ):
+
+            def committed_text(relative: str) -> str:
+                completed = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(workspace),
+                        "show",
+                        f"{source_commit}:{relative}",
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=15,
+                )
+                return completed.stdout
+
+            try:
+                import yaml
+
+                from adaos.services.builder.shared_delivery import (
+                    shared_delivery_effect_checks,
+                )
+
+                project = (
+                    yaml.safe_load(committed_text(f"projects/{target_id}/project.yaml"))
+                    or {}
+                )
+                webui = json.loads(committed_text(f"scenarios/{target_id}/webui.json"))
+                if isinstance(project, Mapping) and isinstance(webui, Mapping):
+                    reconstructed, reconstruction_errors = (
+                        shared_delivery_effect_checks(
+                            Path(service.state_dir),
+                            project=project,
+                            webui=webui,
+                        )
+                    )
+                    if not reconstruction_errors:
+                        disclosure_checks = reconstructed
+            except (
+                OSError,
+                ValueError,
+                subprocess.SubprocessError,
+                json.JSONDecodeError,
+                yaml.YAMLError,
+            ):
+                disclosure_checks = []
     if not disclosure_checks:
         return {
             "ok": False,
@@ -515,16 +578,10 @@ def trial_verification_evidence(
                 for item in access_checks
             )
         ),
-        "pending_action_evidence": [
-            "suite:pending-action:" + behavior_path
-        ],
+        "pending_action_evidence": ["suite:pending-action:" + behavior_path],
         "audit_evidence": [artifact_ref(provenance_artifact, "provenance")],
-        "disclosure_evidence": [
-            "suite:external-effects:" + disclosure_path
-        ],
-        "redaction_evidence": [
-            "suite:redaction:" + behavior_path
-        ],
+        "disclosure_evidence": ["suite:external-effects:" + disclosure_path],
+        "redaction_evidence": ["suite:redaction:" + behavior_path],
         "evidence_manifest_schema": manifest.get("schema"),
     }
 

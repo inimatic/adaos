@@ -49,13 +49,16 @@ def test_foreground_result_surfaces_terminal_failure() -> None:
 def test_background_result_keeps_queued_acknowledgement() -> None:
     queued = {"ok": True, "status": "automation_queued"}
 
-    assert automation._foreground_result(
-        _Service(background=True),
-        queued,
-        object_type="scenario",
-        object_id="recipes",
-        webspace_id="desktop",
-    ) == queued
+    assert (
+        automation._foreground_result(
+            _Service(background=True),
+            queued,
+            object_type="scenario",
+            object_id="recipes",
+            webspace_id="desktop",
+        )
+        == queued
+    )
 
 
 def test_foreground_questions_are_not_reported_as_execution_failure():
@@ -65,8 +68,13 @@ def test_foreground_questions_are_not_reported_as_execution_failure():
             result["automation"].update(status="awaiting_input", waiting_for_input=True)
             return result
 
-    result = automation._foreground_result(Questions(background=False, status="failed"), {"ok": True},
-        object_type="scenario", object_id="sample", webspace_id="desktop")
+    result = automation._foreground_result(
+        Questions(background=False, status="failed"),
+        {"ok": True},
+        object_type="scenario",
+        object_id="sample",
+        webspace_id="desktop",
+    )
     assert result["ok"] and result["status"] == "automation_awaiting_input"
     assert result["session"]["status"] == "failed"
 
@@ -119,8 +127,8 @@ def test_trial_verification_evidence_uses_sealed_automation_artifacts(
                         "ok": True,
                     },
                     {
-                        "kind": "skill.public_tool_effects.strict",
-                        "path": "skills/roster_skill/skill.yaml",
+                        "kind": "shared_delivery.public_tool_effects.strict",
+                        "path": "package:skill/roster_provider@1.0.0#sha256:exact",
                         "ok": True,
                     },
                 ],
@@ -158,7 +166,7 @@ def test_trial_verification_evidence_uses_sealed_automation_artifacts(
         "suite:pending-action:skills/roster_skill/tests/test_behavior.py"
     ]
     assert evidence["disclosure_evidence"] == [
-        "suite:external-effects:skills/roster_skill/skill.yaml"
+        "suite:external-effects:package:skill/roster_provider@1.0.0#sha256:exact"
     ]
     assert evidence["redaction_evidence"] == [
         "suite:redaction:skills/roster_skill/tests/test_behavior.py"
@@ -179,8 +187,16 @@ def test_trial_verification_evidence_blocks_without_access_matrix_test(
                 "tests": {"status": "passed"},
                 "evidence": {
                     "artifacts": [
-                        {"kind": "test_report", "logical_path": "test.json", "digest": "sha256:b"},
-                        {"kind": "provenance", "logical_path": "provenance.json", "digest": "sha256:c"},
+                        {
+                            "kind": "test_report",
+                            "logical_path": "test.json",
+                            "digest": "sha256:b",
+                        },
+                        {
+                            "kind": "provenance",
+                            "logical_path": "provenance.json",
+                            "digest": "sha256:c",
+                        },
                     ]
                 },
             }

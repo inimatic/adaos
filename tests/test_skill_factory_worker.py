@@ -117,14 +117,15 @@ def test_manifest_scope_feedback_requires_exact_safe_manifest_evidence(
         == report
     )
 
-    unsafe = report.replace(
-        "scenarios/demo/webui.json", "../outside/webui.json"
-    )
+    unsafe = report.replace("scenarios/demo/webui.json", "../outside/webui.json")
     (run_root / "output" / "last_message.md").write_text(
         json.dumps({"status": "blocked", "report": unsafe, "questions": []}),
         encoding="utf-8",
     )
-    assert worker_module.manifest_scope_blocking_feedback_message(run_root, failure) is None
+    assert (
+        worker_module.manifest_scope_blocking_feedback_message(run_root, failure)
+        is None
+    )
 
     no_manifest = report.replace(
         "scenarios/demo/webui.json", "scenarios/demo/tests/test_webui.py"
@@ -133,7 +134,10 @@ def test_manifest_scope_feedback_requires_exact_safe_manifest_evidence(
         json.dumps({"status": "blocked", "report": no_manifest, "questions": []}),
         encoding="utf-8",
     )
-    assert worker_module.manifest_scope_blocking_feedback_message(run_root, failure) is None
+    assert (
+        worker_module.manifest_scope_blocking_feedback_message(run_root, failure)
+        is None
+    )
 
 
 def test_explicit_preserved_validation_forbids_model_fallback() -> None:
@@ -6661,7 +6665,9 @@ def test_builder_records_subscriber_activation_and_rejects_stale_assessment(
     assert activation["startup_allowed"] is True
     assert activation["assessment"]["classification"] == "startup_event_subscriber"
 
-    handler.write_text(handler.read_text(encoding="utf-8") + "\nVALUE = 1\n", encoding="utf-8")
+    handler.write_text(
+        handler.read_text(encoding="utf-8") + "\nVALUE = 1\n", encoding="utf-8"
+    )
     checks: list[dict[str, object]] = []
     errors: list[str] = []
     LocalSkillFactoryWorker._validate_changed_skill_activation(
@@ -8394,7 +8400,7 @@ def test_worker_resumes_blocked_candidate_across_contract_delta(
     )
     (source_run / "output").mkdir()
     (source_run / "output" / "last_message.md").write_text(
-        '```adaos-development-feedback\n'
+        "```adaos-development-feedback\n"
         '{"schema":"adaos.development_feedback_output.v1","items":['
         '{"category":"insufficient_context","summary":"Contract delta required",'
         '"blocking":true,"target_refs":["sdk:demo.show"]}]}\n```',
@@ -9023,6 +9029,27 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     (scenario_root / "webui.json").write_text(
         json.dumps(webui, ensure_ascii=False), encoding="utf-8"
     )
+    project_root = workspace / "projects" / project_id
+    project_root.mkdir(parents=True)
+    project = {
+        "schema": "adaos.project.v1",
+        "kind": "project",
+        "id": project_id,
+        "version": "0.1.0",
+        "components": {
+            "owned": [{"ref": f"scenario:{project_id}"}],
+            "dependencies": [
+                {
+                    "ref": "skill:gmail_provider_skill",
+                    "version": "==1.2.3",
+                    "lifecycle": "shared",
+                }
+            ],
+        },
+    }
+    (project_root / "project.yaml").write_text(
+        yaml.safe_dump(project, sort_keys=False), encoding="utf-8"
+    )
     capability = CapabilityContract.create(
         capability_ref="capability:mail.messages.manage",
         version="1.0.0",
@@ -9225,6 +9252,27 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     assert "shared component" in prompt
     assert "delivery_interfaces" in prompt
     assert "SHA-256-verified" in prompt
+    from adaos.services.builder.shared_delivery import shared_delivery_effect_checks
+
+    effect_checks, effect_errors = shared_delivery_effect_checks(
+        tmp_path / "state",
+        project=project,
+        webui=webui,
+    )
+    assert effect_errors == []
+    assert len(effect_checks) == 1
+    effect_check = effect_checks[0]
+    assert effect_check["kind"] == "shared_delivery.public_tool_effects.strict"
+    assert effect_check["path"] == (
+        "package:skill/gmail_provider_skill@1.2.3#sha256:" + archive_digest
+    )
+    assert effect_check["ok"] is True
+    assert effect_check["tools"] == 3
+    assert effect_check["package"] == delivery.to_dict()["package"]
+    assert effect_check["interface_digest"] == interface["interface_digest"]
+    assert effect_check["skill_manifest_digest"] == interface["skill_manifest_digest"]
+    assert effect_check["capability_ref"] == "capability:mail.messages.manage"
+    assert effect_check["binding_definition_digest"] == binding.digest
 
 
 def test_worker_does_not_admit_attachment_bindings_from_system_context(
