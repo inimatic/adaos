@@ -346,6 +346,16 @@ class ApplicationAccessManagementService:
         requested_release_digest: str = "",
         webspace_id: str = "",
     ) -> dict[str, Any] | None:
+        def release_delivers_skill(release: ApplicationRelease) -> bool:
+            project_release = release.project_release
+            return any(
+                item.kind == "skill" and item.artifact_id == skill_name
+                for item in project_release.components
+            ) or any(
+                item.kind == "skill" and item.artifact_id == skill_name
+                for item in project_release.resolved_dependencies
+            )
+
         candidates: list[dict[str, Any]] = []
         selected = {
             (item.application_id, item.release_digest): item
@@ -359,10 +369,7 @@ class ApplicationAccessManagementService:
                 installation.application_id,
                 installation.installed_release_digest,
             )
-            if not any(
-                item.kind == "skill" and item.artifact_id == skill_name
-                for item in release.project_release.components
-            ):
+            if not release_delivers_skill(release):
                 continue
             selection = selected.get(
                 (installation.application_id, release.release_digest)
@@ -388,10 +395,7 @@ class ApplicationAccessManagementService:
                 release = self.store.get_release(*identity)
             except FileNotFoundError:
                 continue
-            if not any(
-                item.kind == "skill" and item.artifact_id == skill_name
-                for item in release.project_release.components
-            ):
+            if not release_delivers_skill(release):
                 continue
             candidates.append(
                 {

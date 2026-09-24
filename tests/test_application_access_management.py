@@ -20,6 +20,7 @@ from adaos.domain.artifact_release import (
     ProjectCompositionLock,
     ProjectMemberLock,
     ProjectRelease,
+    ResolvedDependency,
     canonical_payload_digest,
 )
 from adaos.services.applications import ApplicationService, ApplicationStore
@@ -311,6 +312,70 @@ def test_trial_runtime_context_resolves_without_stable_installation(
     assert resolved is not None
     assert resolved["installation_revision"] is None
     assert resolved["runtime_selection"]["source"] == "local_trial"
+
+
+def test_runtime_context_resolves_shared_skill_dependency(
+    tmp_path: Path,
+) -> None:
+    applications, management, release = _services(tmp_path)
+    project_release = ProjectRelease.from_mapping(
+        {
+            **release.project_release.to_dict(),
+            "resolved_dependencies": [
+                ResolvedDependency(
+                    kind="skill",
+                    artifact_id="shared_calendar_skill",
+                    version="1.2.3",
+                    package_digest=DIGEST_C,
+                    version_spec="^1.0.0",
+                ).to_dict()
+            ],
+            "release_digest": None,
+        }
+    ).seal()
+    shared_release = applications.register_release(
+        ApplicationRelease(
+            application_id=release.application_id,
+            publisher_ref=release.publisher_ref,
+            project_release=project_release,
+            accepted_candidate_id="candidate.family_tasks.shared",
+            acceptance_evidence=release.acceptance_evidence,
+            provenance_refs=release.provenance_refs,
+            lifecycle="stable",
+        )
+    )
+    applications.store.save_installation(
+        ApplicationInstallation(
+            installation_id="installation:family_tasks",
+            application_id="family_tasks",
+            installed_release_digest=shared_release.release_digest,
+            component_refs=(
+                {
+                    "component_ref": "scenario:family_tasks",
+                    "package_digest": DIGEST_A,
+                    "lifecycle": "bound",
+                },
+                {
+                    "component_ref": "skill:shared_calendar_skill",
+                    "package_digest": DIGEST_C,
+                    "lifecycle": "shared",
+                },
+            ),
+            data_policy="retain",
+            status="active",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+
+    resolved = management.resolve_runtime_context(
+        skill_name="shared_calendar_skill",
+        requested_application_id="family_tasks",
+    )
+
+    assert resolved is not None
+    assert resolved["release_digest"] == shared_release.release_digest
+    assert resolved["installation_revision"] == 1
 
 
 def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
