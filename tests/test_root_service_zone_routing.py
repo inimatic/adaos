@@ -356,17 +356,17 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         "_artifact_publication_service",
         lambda _cfg: _Publication(),
     )
-    monkeypatch.setattr(
-        service,
-        "_semantic_registry_projection",
-        lambda: SimpleNamespace(
+    def semantic_projection():
+        git_calls.append(("semantic_projection", "prepared"))
+        return SimpleNamespace(
             prepare_release=lambda _plan, **_kwargs: {
                 "status": "prepared",
                 "paths": ["semantic"],
                 "index_digest": "sha256:" + "c" * 64,
             }
-        ),
-    )
+        )
+
+    monkeypatch.setattr(service, "_semantic_registry_projection", semantic_projection)
 
     result = service.publish_project_candidate_source(
         "candidate-media",
@@ -376,7 +376,11 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     )
 
     assert result["status"] == "published"
-    commit = dict(git_calls[0][1])
+    assert git_calls[:2] == [
+        ("sparse_add", "semantic"),
+        ("semantic_projection", "prepared"),
+    ]
+    commit = dict(git_calls[2][1])
     assert commit["subpath"] == (
         "projects/media",
         "scenarios/media",
@@ -384,14 +388,13 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         "registry.json",
         "semantic",
     )
-    assert git_calls[1:6] == [
+    assert git_calls[3:7] == [
         ("sparse_add", "projects/media"),
         ("sparse_add", "scenarios/media"),
         ("sparse_add", "skills/media_skill"),
         ("sparse_add", "registry.json"),
-        ("sparse_add", "semantic"),
     ]
-    assert git_calls[6] == ("push", {"remote": "registry", "branch": "main"})
+    assert git_calls[7] == ("push", {"remote": "registry", "branch": "main"})
     assert receipt_calls[0]["commit"] == "b" * 40
     assert receipt_calls[0]["paths"] == commit["subpath"]
 

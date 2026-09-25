@@ -3071,6 +3071,12 @@ class RootDeveloperService:
                 "Workspace registry is not a Git checkout; run `adaos skill sync` first"
             )
 
+        # The runtime registry is a sparse checkout.  Hydrate the complete
+        # semantic subtree before reading and extending its indexes; otherwise
+        # a publisher that does not currently materialize ``semantic/`` sees an
+        # empty catalog and replaces the index while leaving older immutable
+        # release records orphaned in Git.
+        self.ctx.git.sparse_add(str(workspace), "semantic")
         semantic_projection = self._semantic_registry_projection()
         semantic_publication = semantic_projection.prepare_release(
             plan,
@@ -3169,6 +3175,8 @@ class RootDeveloperService:
         # been committed (so Git cannot replace accepted bytes with an older
         # index entry) and before the pull/push round trip.
         for path in bounded_paths:
+            if path == "semantic":
+                continue
             self.ctx.git.sparse_add(str(workspace), path)
         self.ctx.git.push(
             str(workspace),
