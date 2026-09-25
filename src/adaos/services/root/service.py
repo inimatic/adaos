@@ -3115,6 +3115,40 @@ class RootDeveloperService:
                 + ", ".join(denied)
             )
 
+        load_promotion = getattr(publication, "load_promotion", None)
+        promotion_operation = (
+            load_promotion(token) if callable(load_promotion) else None
+        )
+        existing_source_receipt = None
+        if isinstance(promotion_operation, Mapping):
+            receipts = promotion_operation.get("receipts")
+            if isinstance(receipts, Mapping) and isinstance(
+                receipts.get("source_registry_published"), Mapping
+            ):
+                existing_source_receipt = dict(
+                    receipts["source_registry_published"]
+                )
+        if existing_source_receipt is not None:
+            if (
+                existing_source_receipt.get("repository") != remote_name
+                or existing_source_receipt.get("branch") != branch_name
+            ):
+                raise RootServiceError(
+                    "existing source registry publication uses another remote or branch"
+                )
+            non_projection_changes = [
+                item
+                for item in changed
+                if not str(item).replace("\\", "/").startswith(
+                    "semantic/catalog/"
+                )
+            ]
+            if non_projection_changes:
+                raise RootServiceError(
+                    "published source is immutable; only a missing public Application "
+                    "catalog projection may be backfilled"
+                )
+
         commit_message = sanitize_message(
             message
             or f"publish(project): {plan.release.project_id} v{plan.release.version}"
@@ -3136,13 +3170,18 @@ class RootDeveloperService:
             commit = self.ctx.git.current_commit(str(workspace))
         else:
             commit = self.ctx.git.current_commit(str(workspace)) or commit
-        receipt = publication.record_source_registry_publication(
+        receipt = existing_source_receipt or publication.record_source_registry_publication(
             token,
             repository=remote_name,
             branch=branch_name,
             commit=commit,
             paths=bounded_paths,
         )
+        if application_catalog_publication is not None:
+            application_catalog_publication = {
+                **application_catalog_publication,
+                "registry_commit": commit,
+            }
         return {
             "ok": True,
             "status": "published",
@@ -3155,6 +3194,7 @@ class RootDeveloperService:
             "changed_files": changed,
             "semantic_publication": semantic_publication,
             "application_catalog_publication": application_catalog_publication,
+            "registry_projection_commit": commit,
             "publication": receipt,
         }
 
