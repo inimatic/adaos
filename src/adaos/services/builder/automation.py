@@ -5342,6 +5342,58 @@ class BuilderAutomationService:
         """Retry the unchanged governed request after a terminal executor failure."""
 
         kind, project_id = self._project_ref(object_type, object_id)
+        observed = self.get_session(kind, project_id)
+        if observed:
+            observed = self.refresh_session(observed)
+            observed_failure = (
+                dict(observed.get("last_failure") or {})
+                if isinstance(observed.get("last_failure"), Mapping)
+                else {}
+            )
+            observed_details = (
+                dict(observed_failure.get("details") or {})
+                if isinstance(observed_failure.get("details"), Mapping)
+                else {}
+            )
+            classification = (
+                dict(observed_details.get("classification") or {})
+                if isinstance(observed_details.get("classification"), Mapping)
+                else {}
+            )
+            checkpoint = (
+                dict(observed_details.get("checkpoint") or {})
+                if isinstance(observed_details.get("checkpoint"), Mapping)
+                else {}
+            )
+            exact_platform_resume = bool(
+                str(observed.get("status") or "").strip() == "failed"
+                and str(observed_failure.get("failure_class") or "").strip()
+                == "platform_failure"
+                and classification.get("model_rerun_required") is False
+                and checkpoint.get("model_policy") == "forbid"
+                and checkpoint.get("model_rerun_required") is False
+                and checkpoint.get("recovery_command")
+                == "recover_validated_result"
+                and str(checkpoint.get("task_id") or "").strip()
+                == str(observed.get("current_task_id") or "").strip()
+                and str(checkpoint.get("checkpoint_digest") or "").startswith(
+                    "sha256:"
+                )
+            )
+            if exact_platform_resume:
+                recovered = self.recover_validated_result(
+                    object_type=kind,
+                    object_id=project_id,
+                )
+                recovered.update(
+                    {
+                        "retried_unchanged_request": True,
+                        "resumed_exact_checkpoint": True,
+                        "model_started": False,
+                        "checkpoint_digest": checkpoint.get("checkpoint_digest"),
+                    }
+                )
+                return recovered
         with _LOCK:
             session = self.get_session(kind, project_id)
             if not session:

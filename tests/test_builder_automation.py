@@ -104,6 +104,49 @@ def _write_project_manifest(
     )
 
 
+def test_retry_failed_platform_checkpoint_recovers_without_model() -> None:
+    checkpoint = {
+        "schema": "adaos.builder.failure_checkpoint.v1",
+        "task_id": "task.platform",
+        "model_policy": "forbid",
+        "model_rerun_required": False,
+        "recovery_command": "recover_validated_result",
+        "checkpoint_digest": "sha256:" + "a" * 64,
+    }
+    session = {
+        "status": "failed",
+        "current_task_id": "task.platform",
+        "last_failure": {
+            "failure_class": "platform_failure",
+            "details": {
+                "classification": {"model_rerun_required": False},
+                "checkpoint": checkpoint,
+            },
+        },
+    }
+    recovered_calls: list[tuple[str, str]] = []
+
+    class _Service(BuilderAutomationService):
+        def get_session(self, *_args):
+            return session
+
+        def refresh_session(self, value):
+            return value
+
+        def recover_validated_result(self, *, object_type, object_id):
+            recovered_calls.append((object_type, object_id))
+            return {"ok": True, "status": "completed"}
+
+    service = object.__new__(_Service)
+
+    result = service.retry_failed(object_type="scenario", object_id="recipes")
+
+    assert recovered_calls == [("scenario", "recipes")]
+    assert result["resumed_exact_checkpoint"] is True
+    assert result["model_started"] is False
+    assert result["checkpoint_digest"] == checkpoint["checkpoint_digest"]
+
+
 def _service(tmp_path: Path) -> BuilderAutomationService:
     repo_root = Path(__file__).resolve().parents[1]
     dev_skills = tmp_path / "dev" / "skills"

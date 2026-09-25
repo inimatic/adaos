@@ -44,15 +44,41 @@ from adaos.services.skill_factory_worker import (
     _codex_jsonl_live_budget_estimate,
     _codex_jsonl_root_mcp_evidence,
     _codex_prompt_budget_check,
+    _classify_worker_failure,
     _context_packet_prompt_projection,
     _deterministic_repair_prompt,
     _enforce_continuation_model_policy,
     _loads_strict_json,
+    _materialize_digest_addressed_compiler_views,
     _persisted_descriptor_working_set_evidence,
     _root_mcp_profile_from_assignment,
     _task_mcp_descriptor_working_set,
     _task_mcp_validation_evidence,
 )
+
+
+def test_worker_failure_classification_forbids_model_after_platform_checkpoint() -> None:
+    classified = _classify_worker_failure(
+        OSError("temporary filesystem failure"),
+        stage="artifact_activation",
+        candidate_checkpoint_ready=True,
+    )
+
+    assert classified["failure_class"] == "platform_failure"
+    assert classified["owner"] == "platform"
+    assert classified["model_rerun_required"] is False
+    assert classified["recovery_mode"] == "validate_exact_checkpoint"
+
+
+def test_worker_failure_classification_requires_builder_decision_before_candidate() -> None:
+    classified = _classify_worker_failure(
+        TimeoutError("model transport timeout"),
+        stage="model_execution",
+        candidate_checkpoint_ready=False,
+    )
+
+    assert classified["failure_class"] == "platform_failure"
+    assert classified["model_rerun_required"] is True
 
 
 def test_strict_json_validation_rejects_duplicate_manifest_keys() -> None:
@@ -374,15 +400,16 @@ def test_run_assignment_persists_preflight_mcp_failure(
     assert result["error"] == (
         "ValueError: task-scoped Root MCP lease admits no supported tools"
     )
-    assert failed == [
-        {
-            "task_id": "task.invalid-mcp",
-            "node_id": worker.node_id,
-            "message": result["error"],
-            "stage": "workspace_preparing",
-            "retryable": True,
-        }
-    ]
+    assert len(failed) == 1
+    assert failed[0]["task_id"] == "task.invalid-mcp"
+    assert failed[0]["node_id"] == worker.node_id
+    assert failed[0]["message"] == result["error"]
+    assert failed[0]["stage"] == "workspace_preparing"
+    assert failed[0]["retryable"] is True
+    assert failed[0]["failure_class"] == "external_failure"
+    assert failed[0]["details"]["classification"]["owner"] == "external_dependency"
+    assert failed[0]["details"]["classification"]["model_rerun_required"] is True
+    assert failed[0]["details"]["checkpoint"] is None
 
 
 def test_codex_jsonl_root_mcp_evidence_is_bounded_and_target_scoped(
@@ -5779,6 +5806,43 @@ def test_context_packet_omits_unrequired_missing_workflow_facet() -> None:
 
     assert "workflow_definition" not in projection["facets"]
     assert projection["facets"]["execution_authority"]["status"] == "present"
+
+
+def test_large_compiler_facets_are_digest_addressed_and_compact(tmp_path: Path) -> None:
+    projection = {
+        "digest": "sha256:" + "1" * 64,
+        "facets": {
+            "application_permissions": {
+                "status": "present",
+                "authority_status": "valid",
+                "profile_digest": "sha256:" + "2" * 64,
+                "declared": ["workspace.read"],
+                "roles": [{"id": f"role-{index}", "description": "x" * 400} for index in range(12)],
+                "role_matrix": [{"role": f"role-{index}"} for index in range(12)],
+            },
+            "execution_authority": {"status": "present"},
+        },
+    }
+
+    compact, refs = _materialize_digest_addressed_compiler_views(
+        projection,
+        input_dir=tmp_path,
+        threshold_bytes=512,
+    )
+
+    assert len(refs) == 1
+    reference = refs[0]
+    assert reference["facet"] == "application_permissions"
+    assert reference["digest"].startswith("sha256:")
+    assert Path(reference["path"]).is_file()
+    facet = compact["facets"]["application_permissions"]
+    assert facet["authority_status"] == "valid"
+    assert facet["declared"] == ["workspace.read"]
+    assert facet["content_counts"] == {"roles": 12, "role_matrix": 12}
+    assert "roles" not in facet
+    envelope = json.loads(Path(reference["path"]).read_text(encoding="utf-8"))
+    assert envelope["payload_digest"] == reference["digest"]
+    assert len(envelope["payload"]["roles"]) == 12
 
 
 def test_generated_test_cannot_pin_raw_manifest_digest(tmp_path: Path) -> None:
