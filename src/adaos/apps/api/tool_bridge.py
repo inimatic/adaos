@@ -2063,6 +2063,13 @@ async def _authorize_application_tool_call(
         request_context.get("application_release_digest"),
         _mapping(request_context.get("runtime_selection")).get("release_digest"),
     )
+    requested_scenario_id = _first_text(
+        request_context.get("scenario_id"),
+        request_context.get("current_scenario_id"),
+        _mapping(body.arguments).get("scenario_id"),
+        _mapping(body.arguments).get("current_scenario"),
+        _mapping(_mapping(body.arguments).get("_meta")).get("scenario_id"),
+    )
     paths = getattr(ctx, "paths", None)
     state_dir_getter = getattr(paths, "state_dir", None)
     if not callable(state_dir_getter) and not getattr(ctx, "authority_state_dir", None):
@@ -2076,6 +2083,7 @@ async def _authorize_application_tool_call(
         skill_name=skill_name,
         requested_application_id=requested_application_id,
         requested_release_digest=requested_release_digest,
+        requested_scenario_id=requested_scenario_id,
         webspace_id=_resolve_tool_webspace_id(body.arguments or {}, context=body.context),
     )
     if runtime is None:

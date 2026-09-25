@@ -344,6 +344,7 @@ class ApplicationAccessManagementService:
         skill_name: str,
         requested_application_id: str = "",
         requested_release_digest: str = "",
+        requested_scenario_id: str = "",
         webspace_id: str = "",
     ) -> dict[str, Any] | None:
         def release_delivers_skill(release: ApplicationRelease) -> bool:
@@ -354,6 +355,28 @@ class ApplicationAccessManagementService:
             ) or any(
                 item.kind == "skill" and item.artifact_id == skill_name
                 for item in project_release.resolved_dependencies
+            )
+
+        def application_uses_scenario(candidate: Mapping[str, Any]) -> bool:
+            try:
+                application = self.store.get_application(
+                    str(candidate["application_id"])
+                )
+            except FileNotFoundError:
+                application = None
+            if application is not None and any(
+                str(item.get("presentation_ref") or "")
+                == f"scenario:{requested_scenario_id}"
+                for item in application.entrypoints
+            ):
+                return True
+            release = candidate["release"]
+            return any(
+                item.kind == "scenario" and item.artifact_id == requested_scenario_id
+                for item in release.project_release.components
+            ) or any(
+                item.kind == "scenario" and item.artifact_id == requested_scenario_id
+                for item in release.project_release.resolved_dependencies
             )
 
         candidates: list[dict[str, Any]] = []
@@ -418,6 +441,10 @@ class ApplicationAccessManagementService:
                 item
                 for item in candidates
                 if item["release_digest"] == requested_release_digest
+            ]
+        if requested_scenario_id:
+            candidates = [
+                item for item in candidates if application_uses_scenario(item)
             ]
         if not candidates:
             return None

@@ -370,7 +370,7 @@ def test_runtime_context_resolves_shared_skill_dependency(
 
     resolved = management.resolve_runtime_context(
         skill_name="shared_calendar_skill",
-        requested_application_id="family_tasks",
+        requested_scenario_id="family_tasks",
     )
 
     assert resolved is not None
