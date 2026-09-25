@@ -1526,6 +1526,67 @@ def test_public_stable_source_projection_is_exact_and_idempotent(
     assert len(calls) == 1
 
 
+def test_public_application_projection_requires_exact_semantic_and_catalog_receipts(
+    service: ApplicationService,
+) -> None:
+    release = service.register_release(_release())
+    service.move_channel(
+        "app_recipes",
+        "stable",
+        release.release_digest,
+        publisher_ref="subnet:sn_home",
+        expected_release_digest=None,
+    )
+
+    def incomplete(**kwargs):
+        return {
+            "repository": "inimatic/recipes",
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "source_revision": kwargs["release"]["project_release"]["source_ref"][
+                "revision"
+            ],
+        }
+
+    projection = StableSourceProjectionService(service, publisher=incomplete)
+    with pytest.raises(ApplicationServiceError, match="public Application catalog"):
+        projection.publish(
+            "app_recipes",
+            release.release_digest,
+            publisher_ref="subnet:sn_home",
+            release_notes="Public stable",
+            require_application_catalog=True,
+        )
+
+    def complete(**kwargs):
+        return {
+            **incomplete(**kwargs),
+            "semantic_publication": {
+                "status": "prepared",
+                "record_count": 3,
+            },
+            "application_catalog_publication": {
+                "status": "prepared",
+                "application_id": "app_recipes",
+                "release_digest": release.release_digest,
+                "projection_digest": DIGEST_C,
+            },
+        }
+
+    projection = StableSourceProjectionService(service, publisher=complete)
+    receipt = projection.publish(
+        "app_recipes",
+        release.release_digest,
+        publisher_ref="subnet:sn_home",
+        release_notes="Public stable",
+        require_application_catalog=True,
+    )
+
+    assert receipt["semantic_publication"]["status"] == "prepared"
+    assert receipt["application_catalog_publication"]["application_id"] == (
+        "app_recipes"
+    )
+
+
 def test_git_stable_source_publisher_binds_candidate_release_and_registry() -> None:
     application = _application().to_dict()
     release = _release().to_dict()

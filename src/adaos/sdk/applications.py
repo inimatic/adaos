@@ -1267,14 +1267,34 @@ def _enrich_application_models(
                 application_id, stable_digest
             )
             if stable_digest:
+                semantic_publication = deepcopy(
+                    (source_receipt or {}).get("semantic_publication")
+                )
+                application_catalog_publication = deepcopy(
+                    (source_receipt or {}).get(
+                        "application_catalog_publication"
+                    )
+                )
                 local["source_registry"] = {
                     "status": "published" if source_receipt else "not_published",
                     "release_digest": stable_digest,
                     "repository": (source_receipt or {}).get("repository"),
                     "commit": (source_receipt or {}).get("commit"),
                     "published_at": (source_receipt or {}).get("published_at"),
-                    "semantic_publication": deepcopy(
-                        (source_receipt or {}).get("semantic_publication")
+                    "semantic_publication": semantic_publication,
+                    "application_catalog_publication": (
+                        application_catalog_publication
+                    ),
+                    "installable_catalog_status": (
+                        "published"
+                        if isinstance(application_catalog_publication, Mapping)
+                        else "not_published"
+                    ),
+                    "installable_distribution": bool(
+                        isinstance(semantic_publication, Mapping)
+                        and isinstance(
+                            application_catalog_publication, Mapping
+                        )
                     ),
                     "evidence_present": bool(source_receipt),
                 }

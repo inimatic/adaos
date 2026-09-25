@@ -140,8 +140,11 @@ class StableSourceProjectionService:
                     raise StableSourceProjectionError(
                         "stable source projection identity mismatch"
                     )
-                if not require_application_catalog or isinstance(
-                    payload.get("application_catalog_publication"), Mapping
+                if not require_application_catalog or (
+                    isinstance(payload.get("semantic_publication"), Mapping)
+                    and isinstance(
+                        payload.get("application_catalog_publication"), Mapping
+                    )
                 ):
                     return payload
             result = dict(
@@ -170,11 +173,25 @@ class StableSourceProjectionService:
                 "published_at": utc_now(),
             }
             semantic_publication = result.get("semantic_publication")
-            if isinstance(semantic_publication, Mapping):
-                receipt["semantic_publication"] = dict(semantic_publication)
             application_catalog_publication = result.get(
                 "application_catalog_publication"
             )
+            if require_application_catalog and (
+                not isinstance(semantic_publication, Mapping)
+                or semantic_publication.get("status") != "prepared"
+                or not isinstance(application_catalog_publication, Mapping)
+                or application_catalog_publication.get("status") != "prepared"
+                or application_catalog_publication.get("application_id")
+                != application_id
+                or application_catalog_publication.get("release_digest")
+                != release_digest
+            ):
+                raise StableSourceProjectionError(
+                    "registry publication did not return the exact portable semantic "
+                    "and public Application catalog evidence"
+                )
+            if isinstance(semantic_publication, Mapping):
+                receipt["semantic_publication"] = dict(semantic_publication)
             if isinstance(application_catalog_publication, Mapping):
                 receipt["application_catalog_publication"] = dict(
                     application_catalog_publication
