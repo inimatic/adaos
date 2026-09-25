@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-25.
+Last reviewed: 2026-09-26.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
@@ -758,6 +758,26 @@ Builder development and consumes only public contracts.
   but the physical Scenario directory did not. The repaired local runtime now
   lists Applications, accepts the Desktop scenario switch, and renders the
   Applications collection/detail journey in a real browser.
+
+  Applications publication/autoupdate qualification (2026-09-26): Builder
+  produced the missing behavior-contract evidence through one governed chat
+  correction, after which Trial acceptance pinned an unambiguous exact
+  `RuntimeSelection`. `applications@0.1.38` was finalized and published with
+  release digest
+  `sha256:92e3d0c12b8dbec064d609fee711f3aec682ce6d3592a5201fbbf4b61750959a`
+  and source-registry commit `45a47c467429bb44e8dfd5cde251c64db57f4602`.
+  The clean subnet consumed that publication through its retained registry
+  event: run `appautorun.0c1a3099e37cde3113dd9054897b9dd9` applied one
+  candidate, failed none, and advanced the active installation to revision 2.
+  A post-run audit exposed a projection-order defect rather than an activation
+  failure: the workspace and Application installation were exact, while the
+  legacy SQLite Scenario row still reported `0.1.63`. Workspace sync now
+  reconciles SQLite again after any successful Application auto-update, and
+  the list API prefers the materialized registry during that bounded window.
+  After the ordinary Scenario sync, the clean subnet reports Applications
+  `0.1.65`; Desktop accepted the Applications switch and reached a ready
+  29-widget materialization with no missing required branches. The correction
+  is covered by the green Core CI at `c04407b14610bc1d9555461c37562808284c50c7`.
 - [x] `[must]` `APP4-47` Carry universal Application icon metadata from
   `project.yaml` through Project composition, registry projection and SDK read
   models. `ProjectRelease.catalog` is the immutable ABI boundary, so build,

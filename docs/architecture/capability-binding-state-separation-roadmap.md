@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
-Last reviewed: 2026-09-25.
+Last reviewed: 2026-09-26.
 
 Implementation checkpoint: every non-deferred item through `CBS5` and every
 `must`/`should` item in `CBS6` through `CBS9` has validated-local evidence as
@@ -57,6 +57,21 @@ production route. The clean subnet synchronized revision
 three installed Applications as current. Portable semantic distribution no
 longer depends on a Core restart or polling, although both remain recovery
 paths.
+
+Application lifecycle follow-up, 2026-09-26: the Applications dogfood Project
+completed governed Trial, acceptance, exact finalize, shared publication, and
+clean-subnet auto-update as `applications@0.1.38`. The exact release digest is
+`sha256:92e3d0c12b8dbec064d609fee711f3aec682ce6d3592a5201fbbf4b61750959a`;
+the registry source commit is `45a47c467429bb44e8dfd5cde251c64db57f4602`.
+Run `appautorun.0c1a3099e37cde3113dd9054897b9dd9` applied the candidate on
+the clean subnet with no failed or review-required result. A stale legacy
+Scenario row found after activation led to a post-auto-update reconciliation
+rail and a materialized-registry preference in the list API. The repaired
+subnet now exposes Applications Scenario `0.1.65`, accepts it on Desktop, and
+reaches ready materialization without missing required branches. This proves
+that exact Application publication can reuse the registry notification and
+ordinary plan/apply rails; it does not change the remaining local-credential
+boundary in `CBS10-07`.
 
 ## Outcome
 
