@@ -23,7 +23,7 @@ def process_constraint_kind(statement: str) -> str | None:
     These clauses retain their evidence but are verified by authoring/process
     review, not by adding widgets. Ambiguous clauses stay UI requirements.
     """
-    text = str(statement).strip().rstrip(".!;")
+    text = re.sub(r"\s+", " ", str(statement)).strip().rstrip(".!;")
     text = re.sub(
         r"^the prototype visibly and coherently satisfies:\s*",
         "",
@@ -65,6 +65,7 @@ def process_constraint_kind(statement: str) -> str | None:
             r"the (?:wide|compact|desktop|mobile|browser) review (?:showed|found|observed|revealed) .{1,320}",
             r"this is the single allowed chat correction",
             r"fix (?:both|the) observed failures without expanding the product",
+            r"(?:it )?must never (?:create|copy|fork|edit)(?:,? (?:or|and)? ?(?:create|copy|fork|edit))* (?:a |the )?provider implementation",
             r"(?:сохрани|используй) (?:существующие|текущие) языки(?: интерфейса)?",
             r"не переименовывай (?:существующие )?идентификаторы полей",
         ),
@@ -477,6 +478,22 @@ def _operation_mentions(
             clause[:match.start()],
             flags=re.IGNORECASE,
         ):
+            continue
+        if kind == "transition" and matched.startswith("complete") and re.match(
+            r"\s+(?:viable|usable|working|functional|production-ready|product|"
+            r"application|app|prototype|solution|experience|version)\b",
+            suffix,
+            flags=re.IGNORECASE,
+        ):
+            # ``complete`` is an adjective in "smallest complete viable app".
+            continue
+        if kind == "inspect" and matched in {"view", "views"} and re.search(
+            r"\b(?:has|have|with|contains?|exposes?)\s+exactly\s+"
+            r"(?:\d+|one|two|three|four|five)\s+product\s+$",
+            prefix,
+            flags=re.IGNORECASE,
+        ):
+            # A product-view cardinality is a layout requirement, not a read job.
             continue
         if mentions and mentions[-1][0] == kind:
             previous = mentions[-1][1]

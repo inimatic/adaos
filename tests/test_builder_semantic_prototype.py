@@ -2525,6 +2525,35 @@ def test_state_repair_v3_adds_visibility_without_erasing_queries_or_empty_state(
     assert len(result["views"][0]["query_controls"]) == len(view["query_controls"]) + 1
 
 
+def test_state_repair_context_exposes_exact_typed_options_and_fixtures() -> None:
+    from adaos.services.builder.semantic_repair import prepare_state_repair
+
+    _, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    state = candidate["representative_states"][0]
+    findings = [
+        {
+            "code": "semantic.state_fixture_mismatch",
+            "semantic_refs": [f"state:{state['id']}"],
+        }
+    ]
+
+    plan = prepare_state_repair(candidate, findings, version=3)
+
+    assert plan is not None
+    context = plan["state_contexts"][0]
+    assert context["state_id"] == state["id"]
+    assert context["view_id"] == state["view_ref"]
+    result_field = next(item for item in context["fields"] if item["id"] == "result")
+    assert result_field == {
+        "id": "result",
+        "value_type": "choice",
+        "option_values": ["ok", "issue"],
+    }
+    assert context["fixtures"][0]["values"]["result"] == "issue"
+    assert "declared option_value" in plan["task"]
+
+
 def test_state_repair_completes_visible_predicates_already_rendered_by_view() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)
@@ -2569,6 +2598,33 @@ def test_state_repair_completes_visible_predicates_already_rendered_by_view() ->
         "status",
     ]
     compile_semantic_prototype_candidate(repaired, brief=brief)
+
+
+def test_candidate_normalizes_structured_output_suffix_in_choice_state_literal() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["representative_states"][0].update(
+        proof={"kind": "field_predicate", "visible_field_refs": ["result"]},
+        filters=[
+            {
+                "field_ref": "result",
+                "operator": "eq",
+                "value": "ok}}]},{",
+            }
+        ],
+        min_items=1,
+        max_items=1,
+    )
+
+    compiled = compile_semantic_prototype_candidate(
+        _multi_resource_candidate(semantic), brief=brief
+    )
+
+    state = compiled["semantic_document"]["representative_states"][0]
+    assert state["filters"][0]["value"] == "ok"
+    assert any(
+        item["kind"] == "structured_output_scalar_suffix"
+        for item in compiled["normalizations"]
+    )
 
 
 def test_query_empty_accepts_selection_filter_as_reachable_equality_control() -> None:

@@ -203,6 +203,76 @@ def _state_fixture_scope(candidate, findings):
     return list(scope.values())
 
 
+def _state_repair_contexts(
+    candidate: Mapping[str, Any],
+    states: Sequence[Mapping[str, Any]],
+    views: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expose only the exact typed data needed for a bounded state repair."""
+
+    view_by_id = {str(view["id"]): view for view in views}
+    resource_by_id = {
+        str(resource["id"]): resource for resource in candidate.get("resources") or []
+    }
+    contexts: list[dict[str, Any]] = []
+    for state in states:
+        view = view_by_id.get(str(state.get("view_ref") or ""))
+        if view is None:
+            continue
+        resource = resource_by_id.get(str(view.get("resource_ref") or ""))
+        if resource is None:
+            continue
+        fields = list(resource.get("fields") or [])
+        field_ids = [str(field["id"]) for field in fields]
+        field_contexts = []
+        for field in fields:
+            options = field.get("options") or []
+            field_contexts.append(
+                {
+                    "id": field["id"],
+                    "value_type": field.get("value_type"),
+                    "option_values": [
+                        option.get("value")
+                        for option in options
+                        if isinstance(option, Mapping) and "value" in option
+                    ],
+                }
+            )
+        fixtures = []
+        for record in resource.get("records") or []:
+            values = list(record.get("values") or [])
+            fixtures.append(
+                {
+                    "id": record.get("id"),
+                    "values": {
+                        field_id: values[index]
+                        for index, field_id in enumerate(field_ids)
+                        if index < len(values)
+                    },
+                }
+            )
+        contexts.append(
+            {
+                "state_id": state["id"],
+                "view_id": view["id"],
+                "resource_id": resource["id"],
+                "fields": field_contexts,
+                "fixtures": fixtures,
+                "view_field_refs": list(view.get("field_refs") or []),
+                "view_query_controls": [
+                    {
+                        "id": control.get("id"),
+                        "kind": control.get("kind"),
+                        "field_ref": control.get("field_ref"),
+                    }
+                    for control in view.get("query_controls") or []
+                ],
+                "view_has_empty_state": view.get("empty_state") is not None,
+            }
+        )
+    return contexts
+
+
 def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]], *, legacy: bool = False, version: int | None = None) -> dict[str, Any] | None:
     if version is not None and version not in (1, 2, 3, 4):
         raise BuilderWorkflowError("unsupported state repair version")
@@ -262,15 +332,17 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     definitions["representativeState"]["properties"]["id"] = {"type": "string", "enum": [state["id"] for state in states]}
     definitions["view"]["properties"]["id"] = {"type": "string", "enum": [view["id"] for view in views]}
     digest = _digest(candidate)
+    state_contexts = _state_repair_contexts(candidate, states, views)
     plan = {
         "base_sha256": digest,
         "allowed_state_ids": [state["id"] for state in states],
         "allowed_view_ids": [view["id"] for view in views],
+        "state_contexts": state_contexts,
         "task": (
             "Return only changed states and view patches resolving every reported failure. "
             + ("View add_field_refs and add_query_controls are ADDITIONS: empty arrays preserve all existing fields and controls. Never repeat or replace an existing query ID. empty_state=null preserves the existing empty presentation; an object sets it. " if version >= 3 else
                "View field_refs and query_controls REPLACE their complete original lists; empty arrays clear them. Carry unchanged entries forward. empty_state=null clears the original empty presentation. ")
-            + "Core retains the original title, resource, role, surface and media. Existing fixtures, commands, bindings and unreported states are immutable. First identify the intended state in the original request and Brief, then choose its proof and counts. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. The merged candidate is fully validated after this patch."
+            + "Core retains the original title, resource, role, surface and media. Existing fixtures, commands, bindings and unreported states are immutable. First identify the intended state in the original request and Brief, then choose its proof and counts. state_contexts is the exact typed scope: use only a declared option_value for a choice literal and count the listed fixture matches before returning the patch. Never concatenate JSON punctuation or multiple values into one literal. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. The merged candidate is fully validated after this patch."
         ),
         "output_schema": {
             "type": "object", "additionalProperties": False,

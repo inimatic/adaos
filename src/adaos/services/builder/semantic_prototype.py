@@ -299,7 +299,25 @@ def _candidate_choice_value(
         )
     ]
     if len(matches) != 1:
-        return value, False
+        # Some strict structured-output backends have emitted a valid enum
+        # token followed by JSON grammar punctuation inside the string value
+        # (for example ``offline}}]},{``). Recover only when one declared
+        # string option is an exact prefix and the complete suffix is structural
+        # punctuation. This cannot turn ordinary prose or an unknown value into
+        # authority-bearing data.
+        stripped = value.strip()
+        structural_matches = [
+            option.get("value")
+            for option in options
+            if isinstance(option.get("value"), str)
+            and stripped.startswith(option["value"])
+            and re.fullmatch(
+                r"[\[\]{}(),:\"']{3,}", stripped[len(option["value"]) :]
+            )
+        ]
+        if len(structural_matches) != 1:
+            return value, False
+        return structural_matches[0], True
     return matches[0], True
 
 
@@ -371,6 +389,66 @@ def _normalize_candidate_fixture_values(
                 }
             )
         record["values"] = values
+
+
+def _normalize_candidate_state_predicate_values(
+    *,
+    fields: Sequence[Mapping[str, Any]],
+    states: Sequence[dict[str, Any]],
+    path: str,
+    normalizations: list[dict[str, str]],
+) -> None:
+    """Normalize typed state literals with the same rules as fixture values."""
+
+    by_id = {str(field.get("id") or ""): field for field in fields}
+    for state_index, state in enumerate(states):
+        for predicate_index, predicate in enumerate(state.get("filters") or []):
+            operand = predicate.get("operand")
+            if not isinstance(operand, dict) or operand.get("kind") != "value":
+                continue
+            field = by_id.get(str(predicate.get("field_ref") or ""))
+            if field is None:
+                continue
+            original = operand.get("value")
+            kind = str(field.get("value_type") or "")
+            changed = False
+            normalized = original
+            normalization_kind = "localized_choice_value"
+            if kind == "choice":
+                normalized, changed = _candidate_choice_value(field, original)
+                if changed and isinstance(original, str) and isinstance(normalized, str):
+                    suffix = original.strip()[len(normalized) :]
+                    if suffix and re.fullmatch(r"[\[\]{}(),:\"']{3,}", suffix):
+                        normalization_kind = "structured_output_scalar_suffix"
+            elif kind in {"number", "boolean"} and isinstance(original, str):
+                try:
+                    normalized = json.loads(original)
+                except ValueError:
+                    continue
+                if kind == "number" and not (
+                    isinstance(normalized, (int, float))
+                    and not isinstance(normalized, bool)
+                    and math.isfinite(normalized)
+                ):
+                    continue
+                if kind == "boolean" and not isinstance(normalized, bool):
+                    continue
+                changed = True
+                normalization_kind = "typed_json_scalar"
+            if not changed:
+                continue
+            operand["value"] = normalized
+            normalizations.append(
+                {
+                    "kind": normalization_kind,
+                    "from": json.dumps(original, ensure_ascii=False),
+                    "to": json.dumps(normalized, ensure_ascii=False),
+                    "target": (
+                        f"{path}[{state_index}].filters[{predicate_index}]"
+                        ".operand.value"
+                    ),
+                }
+            )
 
 
 def _brief_requirement_ids(brief: Mapping[str, Any]) -> set[str]:
@@ -1416,6 +1494,13 @@ def _canonicalize_semantic_prototype_candidate(
                         f"$.representative_states[{state_index}].filters[{filter_index}].operand.field_ref"
                     ),
                 )
+
+    _normalize_candidate_state_predicate_values(
+        fields=fields,
+        states=states,
+        path="$.representative_states",
+        normalizations=normalizations,
+    )
 
     if identity_index is not None:
         _normalize_relationship_identity_literals(

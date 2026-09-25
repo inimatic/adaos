@@ -762,6 +762,34 @@ def test_numbered_review_correction_keeps_versions_and_drops_review_noise() -> N
     assert process_statements.isdisjoint(inventory_statements)
 
 
+def test_multiline_provider_implementation_guard_is_a_process_constraint() -> None:
+    from adaos.services.builder.prototype_context import (
+        prototype_process_constraints,
+        prototype_requirement_inventory,
+    )
+
+    brief = compile_prototype_brief(
+        "During Automation reuse a compatible binding; it\n"
+        "must never create, copy, fork or edit a provider implementation."
+    )
+    process = prototype_process_constraints(brief)
+
+    assert any("provider implementation" in item["statement"] for item in process)
+    assert not any(
+        "provider implementation" in item["statement"]
+        for item in prototype_requirement_inventory(brief)
+    )
+
+
+def test_product_view_cardinality_and_complete_viable_are_not_operations() -> None:
+    brief = compile_prototype_brief(
+        "Build the smallest complete viable follow-up queue. "
+        "The product has exactly two product views."
+    )
+
+    assert brief["operations"] == []
+
+
 def test_dashboard_refinement_does_not_invent_create_or_transition_jobs() -> None:
     brief = compile_prototype_brief(
         "Refine the dashboard. Do not add another top bar. "
