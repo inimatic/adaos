@@ -366,6 +366,13 @@ The full ready snapshot is the restart durability boundary. The preceding diff
 protects the pre-observer in-memory log, but a periodic or debounced backup is
 not allowed to decide whether a subsequent process can reuse the materialization.
 
+Root MCP reads used by the first application paint run on a dedicated interactive
+executor. Reliability diagnostics expose submitted, completed, failed, in-flight,
+queue-wait, and execution-time counters; queue delay and handler execution are
+therefore measured separately instead of attributing both to the Application SDK.
+The executor remains bounded; widening it is not a substitute for moving expensive
+provider or materialization work out of the first-paint critical path.
+
 Backend-update origin matching follows the same hot-path rule. Its marker is a
 TTL-bounded, process-local correlation table, not a portable content address;
 it uses the payload length plus Python's per-process keyed bytes hash. Reusing a

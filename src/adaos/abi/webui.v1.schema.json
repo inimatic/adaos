@@ -1492,6 +1492,11 @@
           "exclusiveMinimum": 0,
           "description": "Maximum request start rate for one semantic runtime-read identity."
         },
+        "startPolicy": {
+          "type": "string",
+          "enum": ["immediate", "materialization_ready"],
+          "description": "Controls whether a runtime read starts immediately or after authoritative YDoc materialization is ready."
+        },
         "value": {},
         "resource": {
           "$ref": "#/$defs/id",

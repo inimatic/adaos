@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 import os
 import threading
 import time
@@ -13,6 +14,7 @@ from typing import Any
 _LOCK = threading.Lock()
 _EXECUTOR: ThreadPoolExecutor | None = None
 _INTERACTIVE_EXECUTOR: ThreadPoolExecutor | None = None
+_LOG = logging.getLogger("adaos.runtime.executor")
 _STATE: dict[str, Any] = {
     "schema": "adaos.runtime.default_executor.v1",
     "state": "not_installed",
@@ -24,6 +26,14 @@ _STATE: dict[str, Any] = {
     "last_error": None,
     "interactive_configured_workers": 0,
     "interactive_live_threads": 0,
+    "interactive_submitted_total": 0,
+    "interactive_completed_total": 0,
+    "interactive_failed_total": 0,
+    "interactive_inflight": 0,
+    "interactive_last_queue_wait_ms": None,
+    "interactive_max_queue_wait_ms": 0.0,
+    "interactive_last_execution_ms": None,
+    "interactive_max_execution_ms": 0.0,
 }
 
 
@@ -189,10 +199,61 @@ async def run_runtime_interactive(func, /, *args, **kwargs):
         raise RuntimeError("interactive runtime executor is unavailable")
     context = contextvars.copy_context()
     call = partial(func, *args, **kwargs)
+    queued_at = time.perf_counter()
+    with _LOCK:
+        _STATE["interactive_submitted_total"] = int(
+            _STATE.get("interactive_submitted_total") or 0
+        ) + 1
+
+    def _invoke():
+        started_at = time.perf_counter()
+        queue_wait_ms = round((started_at - queued_at) * 1000.0, 3)
+        with _LOCK:
+            _STATE["interactive_inflight"] = int(
+                _STATE.get("interactive_inflight") or 0
+            ) + 1
+            _STATE["interactive_last_queue_wait_ms"] = queue_wait_ms
+            _STATE["interactive_max_queue_wait_ms"] = max(
+                float(_STATE.get("interactive_max_queue_wait_ms") or 0.0),
+                queue_wait_ms,
+            )
+        failed = False
+        try:
+            return context.run(call)
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            execution_ms = round((time.perf_counter() - started_at) * 1000.0, 3)
+            with _LOCK:
+                _STATE["interactive_inflight"] = max(
+                    0,
+                    int(_STATE.get("interactive_inflight") or 0) - 1,
+                )
+                _STATE["interactive_completed_total"] = int(
+                    _STATE.get("interactive_completed_total") or 0
+                ) + 1
+                if failed:
+                    _STATE["interactive_failed_total"] = int(
+                        _STATE.get("interactive_failed_total") or 0
+                    ) + 1
+                _STATE["interactive_last_execution_ms"] = execution_ms
+                _STATE["interactive_max_execution_ms"] = max(
+                    float(_STATE.get("interactive_max_execution_ms") or 0.0),
+                    execution_ms,
+                )
+            if queue_wait_ms >= 250.0 or execution_ms >= 1_000.0:
+                _LOG.warning(
+                    "interactive runtime call slow function=%s queue_wait_ms=%.3f execution_ms=%.3f failed=%s",
+                    getattr(func, "__qualname__", getattr(func, "__name__", type(func).__name__)),
+                    queue_wait_ms,
+                    execution_ms,
+                    failed,
+                )
+
     return await asyncio.get_running_loop().run_in_executor(
         executor,
-        context.run,
-        call,
+        _invoke,
     )
 
 
@@ -214,6 +275,14 @@ def _reset_runtime_default_executor_for_tests() -> None:
                 "last_error": None,
                 "interactive_configured_workers": 0,
                 "interactive_live_threads": 0,
+                "interactive_submitted_total": 0,
+                "interactive_completed_total": 0,
+                "interactive_failed_total": 0,
+                "interactive_inflight": 0,
+                "interactive_last_queue_wait_ms": None,
+                "interactive_max_queue_wait_ms": 0.0,
+                "interactive_last_execution_ms": None,
+                "interactive_max_execution_ms": 0.0,
             }
         )
     if executor is not None:
