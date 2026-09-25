@@ -391,6 +391,16 @@ no low-level engineering edit. The exact result and remaining one-shot
 reliability gaps are recorded in
 [Gmail CBS Reuse And Builder Beta Proof](gmail-cbs-reuse-builder-proof-2026-09-24.md).
 
+Third proof checkpoint (2026-09-25): Builder created the smaller
+`mail_focus_reader@0.1.2` Application with exact identity confirmation and no
+low-level consumer-source takeover. The admitted release reused the existing
+portable mail contract, shared Gmail delivery, and Core-owned connected account;
+Trial, Applications permission review, publication, workspace activation, and
+the real Stable browser journey passed. The workflow still required 11
+Automation iterations and nine model turns, so the one-shot acceptance target
+remains open. The exact evidence and RCA are recorded in
+[Gmail CBS Third-Consumer Builder Proof](gmail-cbs-third-consumer-builder-proof-2026-09-25.md).
+
 ### ASC6. Installed Application Evolution
 
 **Outcome:** Builder evolves the installed Application while preserving its

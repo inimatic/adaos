@@ -29,6 +29,17 @@ The earlier single-consumer boundary remains in
 This closes the local two-consumer reuse proof, not federated registry naming,
 automatic contract extraction, or universal provider portability.
 
+Third-consumer checkpoint, 2026-09-25: Builder created and published the
+minimal `mail_focus_reader@0.1.2` consumer against the same portable contract,
+shared package, and provider-owned connected account. Native admission resolved
+2 of 2 requirements; Trial, Applications permission review, publication,
+workspace activation, real provider reads, and the Stable browser journey all
+passed. Exact release facts, first-paint timings, token telemetry, systemic
+fixes, and the still-failed one-shot criterion are recorded in
+[Gmail CBS Third-Consumer Builder Proof](gmail-cbs-third-consumer-builder-proof-2026-09-25.md).
+This strengthens the local reuse proof but does not close federated discovery,
+public callback materialization, or autonomous-development efficiency.
+
 ## Outcome
 
 AdaOS can preserve Application and eligible state identities while changing a
