@@ -235,6 +235,37 @@ def test_verifier_recompiles_generated_contracts_instead_of_trusting_package(
         verify_artifact_package(tampered)
 
 
+def test_promoted_materialization_can_be_rebuilt_with_compiler_outputs(
+    tmp_path: Path,
+) -> None:
+    skill = _skill(
+        tmp_path, name="gmail_materialized_provider", physical_member="handlers/main.py"
+    )
+    built = build_artifact_package(skill, kind="skill", source_ref=_source())
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    with zipfile.ZipFile(io.BytesIO(built.archive_bytes), "r") as archive:
+        for name in archive.namelist():
+            if name == ".adaos/package-manifest.json":
+                continue
+            target = materialized / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(archive.read(name))
+
+    with pytest.raises(PackageBuildError, match="must not be authored directly"):
+        build_artifact_package(materialized, kind="skill", source_ref=_source())
+
+    rebuilt = build_artifact_package(
+        materialized,
+        kind="skill",
+        source_ref=_source(),
+        accept_compiler_outputs=True,
+    )
+
+    assert rebuilt.ref == built.ref
+    assert rebuilt.archive_bytes == built.archive_bytes
+
+
 def test_compiler_rejects_owned_outputs_and_undeclared_authority(
     tmp_path: Path,
 ) -> None:

@@ -478,6 +478,7 @@ def build_artifact_package(
     source_ref: ArtifactSourceRef,
     limits: PackageLimits | None = None,
     workflow_registry: WorkflowAdapterRegistry | None = None,
+    accept_compiler_outputs: bool = False,
 ) -> BuiltArtifactPackage:
     limits = limits or PackageLimits()
     root = Path(artifact_dir).expanduser().resolve()
@@ -493,10 +494,17 @@ def build_artifact_package(
         )
 
     try:
-        cbs_compilation = compile_cbs_provider_files(dict(files), kind=kind)
+        cbs_compilation = compile_cbs_provider_files(
+            dict(files),
+            kind=kind,
+            allow_generated_outputs=accept_compiler_outputs,
+        )
     except CBSProviderAuthoringError as exc:
         raise PackageBuildError(f"invalid compact CBS authoring: {exc}") from exc
     if cbs_compilation is not None:
+        if accept_compiler_outputs:
+            generated_paths = set(cbs_compilation.generated_files)
+            files = [item for item in files if item[0] not in generated_paths]
         files = sorted(
             [*files, *cbs_compilation.generated_files.items()], key=lambda item: item[0]
         )

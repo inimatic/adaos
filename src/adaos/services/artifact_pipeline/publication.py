@@ -857,6 +857,7 @@ class ArtifactPublicationService:
                 source_root,
                 kind=package.kind,
                 source_ref=package.source_ref,
+                accept_compiler_outputs=True,
             )
             if rebuilt.ref.digest != package.digest:
                 raise PublicationError(
