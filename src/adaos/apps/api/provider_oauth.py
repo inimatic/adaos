@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from html import escape
+from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Body, Depends, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 
+from adaos.domain.integration_ingress import IngressAcknowledgement
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.providers.google_gmail import (
     GoogleGmailProvider,
@@ -71,11 +74,11 @@ async def google_gmail_oauth_callback(
     return _page("Gmail connected", f"Connected account: {account}", ok=True)
 
 
-@router.post("/integrations/ingress/oauth/deliver")
+@router.post("/integrations/ingress/oauth/deliver", response_model=None)
 async def deliver_oauth_ingress(
     envelope: dict = Body(...),
     ctx: AgentContext = Depends(get_ctx),
-) -> HTMLResponse:
+) -> Response:
     """Accept one encrypted Root envelope at the selected Core authority."""
 
     try:
@@ -98,8 +101,24 @@ async def deliver_oauth_ingress(
             str(code).replace("_", " "),
             ok=False,
         )
-    account = str(result.get("email_address") or result.get("account_id") or "provider")
-    return _page("Account connected", f"Connected account: {account}", ok=True)
+    acknowledgement = IngressAcknowledgement.create(
+        ack_ref=f"ingress-ack:{uuid4()}",
+        envelope_ref=str(envelope.get("envelope_ref") or ""),
+        attempt_ref=str(envelope.get("attempt_ref") or ""),
+        endpoint_ref=str(envelope.get("endpoint_ref") or ""),
+        audience=str(envelope.get("audience") or ""),
+        accepted_at=datetime.now(timezone.utc).isoformat(),
+        status="accepted",
+    )
+    return JSONResponse(
+        acknowledgement.to_dict(),
+        status_code=200,
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 __all__ = ["router"]

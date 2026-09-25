@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 from datetime import datetime, timezone
 import json
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -28,6 +30,7 @@ from adaos.services.integrations.ingress import (
     IntegrationIngressError,
     google_oauth_ingress_profile,
 )
+from adaos.apps.api import provider_oauth
 
 
 class Vault:
@@ -231,4 +234,70 @@ def test_public_attempt_registers_only_hashed_rendezvous_and_decrypts_envelope()
     decrypted = broker.decrypt_routed_envelope(envelope.to_dict())
     assert decrypted["state"] == started["state"]
     assert decrypted["code"] == "authorization-code"
+
+    invalid_cases = (
+        ("profile_ref", "ingress-profile:oauth.other@1", "profile_mismatch"),
+        ("issuer_ref", "issuer:other", "issuer_mismatch"),
+        ("endpoint_ref", "ingress-endpoint:other", "endpoint_mismatch"),
+        ("endpoint_revision", 2, "generation_mismatch"),
+        ("audience", "ingress-route:other", "audience_mismatch"),
+        ("route_binding_ref", "ingress-route:other", "route_mismatch"),
+        ("generation", 2, "generation_mismatch"),
+        (
+            "expires_at",
+            datetime.fromtimestamp(now - 1, tz=timezone.utc).isoformat(),
+            "envelope_expired",
+        ),
+    )
+    unsigned = envelope.to_dict()
+    unsigned.pop("envelope_digest")
+    for field, replacement, error in invalid_cases:
+        changed = RoutedIngressEnvelope.create(**{**unsigned, field: replacement})
+        with pytest.raises(IntegrationIngressError, match=error):
+            broker.decrypt_routed_envelope(changed.to_dict())
+
+
+def test_public_delivery_returns_digest_addressed_exact_acknowledgement(monkeypatch) -> None:
+    envelope = {
+        "envelope_ref": "ingress-envelope:test",
+        "attempt_ref": "callback-attempt:test",
+        "endpoint_ref": "ingress-endpoint:google-oauth-public",
+        "audience": "ingress-route:google-oauth-public",
+    }
+
+    class Broker:
+        def decrypt_routed_envelope(self, _envelope):
+            return {
+                "profile_ref": GOOGLE_OAUTH_INGRESS_PROFILE_REF,
+                "attempt_ref": "callback-attempt:test",
+                "state": "state",
+                "code": "code",
+                "error": "",
+            }
+
+    class Provider:
+        def complete_authorization(self, **_values):
+            return {"email_address": "owner@example.test"}
+
+    monkeypatch.setattr(provider_oauth, "broker_from_context", lambda _ctx: Broker())
+    monkeypatch.setattr(
+        provider_oauth.GoogleGmailProvider,
+        "from_context",
+        classmethod(lambda _cls, _ctx: Provider()),
+    )
+
+    response = asyncio.run(
+        provider_oauth.deliver_oauth_ingress(
+            envelope=envelope,
+            ctx=SimpleNamespace(),
+        )
+    )
+    acknowledgement = json.loads(response.body)
+
+    assert response.status_code == 200
+    assert acknowledgement["schema"] == "adaos.integration.ingress_acknowledgement.v1"
+    assert acknowledgement["envelope_ref"] == envelope["envelope_ref"]
+    assert acknowledgement["attempt_ref"] == envelope["attempt_ref"]
+    assert acknowledgement["status"] == "accepted"
+    assert acknowledgement["ack_digest"].startswith("sha256:")
 

@@ -443,8 +443,17 @@ class IntegrationIngressBroker:
             raise IntegrationIngressError("ingress_envelope_invalid") from exc
         value = envelope.to_dict()
         endpoint = self.endpoint.to_dict()
+        profile = self.profile.to_dict()
+        if value["profile_ref"] != endpoint["profile_ref"]:
+            raise IntegrationIngressError("ingress_envelope_profile_mismatch")
+        if value["profile_ref"] != profile["profile_ref"]:
+            raise IntegrationIngressError("ingress_envelope_profile_mismatch")
+        if value["issuer_ref"] != profile["issuer_ref"]:
+            raise IntegrationIngressError("ingress_envelope_issuer_mismatch")
         if value["audience"] != endpoint["route_binding_ref"]:
             raise IntegrationIngressError("ingress_envelope_audience_mismatch")
+        if value["route_binding_ref"] != endpoint["route_binding_ref"]:
+            raise IntegrationIngressError("ingress_envelope_route_mismatch")
         if value["endpoint_ref"] != endpoint["endpoint_ref"]:
             raise IntegrationIngressError("ingress_envelope_endpoint_mismatch")
         if int(value["endpoint_revision"]) != int(endpoint["revision"]):

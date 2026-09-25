@@ -3,7 +3,16 @@
 Status: implementation roadmap for
 [External Integration Ingress And Public Callback Gateway](public-integration-callback-gateway.md).
 
-Last reviewed: 2026-09-24.
+Last reviewed: 2026-09-25.
+
+Implementation checkpoint (2026-09-25): EIG0's OAuth contracts and inventory,
+the EIG1 broker/loopback implementation, and the repository implementation of
+EIG2's Root rendezvous, encrypted delivery, bounded retry, neutral response and
+exact Core acknowledgement are complete. The isolated
+`integrations.inimatic.com` nginx/ACME configuration is committed, but DNS,
+certificate issuance, WAF/rate-limit policy and a live Internet-to-Core proof
+remain deployment work. Accordingly `EIG2-01` and the live EIG3 items stay
+open; repository tests are not presented as external operational evidence.
 
 ## Outcome
 
@@ -59,17 +68,17 @@ EIG0 contracts and inventory
 **Outcome:** ingress identities, classes and existing provider-specific routes
 are explicit before authority changes.
 
-- [ ] `[must]` `EIG0-01` Add fail-closed schemas and immutable models for
+- [x] `[must]` `EIG0-01` Add fail-closed schemas and immutable models for
   `IngressProfile`, `IngressEndpointRevision`, `CallbackAttempt`, routed ingress
   envelope, acknowledgement and redacted audit evidence.
-- [ ] `[must]` `EIG0-02` Define canonical refs, revisions, digest normalization,
+- [x] `[must]` `EIG0-02` Define canonical refs, revisions, digest normalization,
   supported ingress classes and unknown-field rejection.
-- [ ] `[must]` `EIG0-03` Inventory existing OAuth, webhook, Telegram and other
+- [x] `[must]` `EIG0-03` Inventory existing OAuth, webhook, Telegram and other
   externally callable routes; classify authority, credentials, retention,
   acknowledgement and retry behavior.
-- [ ] `[must]` `EIG0-04` Define `BindingDefinition.ingress_ports` and effective
+- [x] `[must]` `EIG0-04` Define `BindingDefinition.ingress_ports` and effective
   guarantee validation without changing Application semantic requirements.
-- [ ] `[must]` `EIG0-05` Add a terminology/schema lint preventing literal public
+- [x] `[must]` `EIG0-05` Add a terminology/schema lint preventing literal public
   callback URLs and physical route identities in portable artifacts.
 - [ ] `[should]` `EIG0-06` Define webhook subscription/delivery schemas now but
   keep their runtime mode unsupported until EIG5.
@@ -85,17 +94,17 @@ OAuth ingress profile and endpoint revision without changing runtime behavior.
 **Outcome:** one Core-owned broker creates and validates OAuth attempts while
 the existing `127.0.0.1:8777` flow remains functional.
 
-- [ ] `[must]` `EIG1-01` Implement typed `begin_authorization` and completion
+- [x] `[must]` `EIG1-01` Implement typed `begin_authorization` and completion
   APIs over `CallbackAttempt`; prohibit generic caller-supplied callback URLs.
-- [ ] `[must]` `EIG1-02` Materialize an admitted `local-development` endpoint
+- [x] `[must]` `EIG1-02` Materialize an admitted `local-development` endpoint
   from the environment profile.
-- [ ] `[must]` `EIG1-03` Route the existing Gmail handler through the broker and
+- [x] `[must]` `EIG1-03` Route the existing Gmail handler through the broker and
   remove provider-owned state storage as an independent authority.
-- [ ] `[must]` `EIG1-04` Bind state to issuer, endpoint revision, provider
+- [x] `[must]` `EIG1-04` Bind state to issuer, endpoint revision, provider
   connection, binding instance, subject, Application and return intent.
-- [ ] `[must]` `EIG1-05` Enforce expiry, single use, replay idempotency, PKCE S256
+- [x] `[must]` `EIG1-05` Enforce expiry, single use, replay idempotency, PKCE S256
   where supported and log/model-context redaction.
-- [ ] `[must]` `EIG1-06` Cover success, denial, wrong issuer/profile, missing and
+- [x] `[must]` `EIG1-06` Cover success, denial, wrong issuer/profile, missing and
   expired state, replay, token-exchange failure and restart recovery.
 - [ ] `[should]` `EIG1-07` Expose typed redacted diagnostics through Applications
   rather than raw provider errors.
@@ -114,17 +123,17 @@ an exact outbound-connected Core without becoming credential authority.
 
 - [ ] `[must]` `EIG2-01` Provision the isolated TLS origin, DNS, CSP, WAF/body
   limits, request redaction and route-class rate limits.
-- [ ] `[must]` `EIG2-02` Implement the Root ingress registry containing only a
+- [x] `[must]` `EIG2-02` Implement the Root ingress registry containing only a
   hashed rendezvous and the minimum admitted route projection.
-- [ ] `[must]` `EIG2-03` Implement an authenticated, audience-bound encrypted
+- [x] `[must]` `EIG2-03` Implement an authenticated, audience-bound encrypted
   envelope over the existing outbound Root/hub route.
-- [ ] `[must]` `EIG2-04` Require local-acceptance acknowledgement; no alternate
+- [x] `[must]` `EIG2-04` Require local-acceptance acknowledgement; no alternate
   node/tenant fallback is allowed.
-- [ ] `[must]` `EIG2-05` Implement short bounded encrypted retention and explicit
+- [x] `[must]` `EIG2-05` Implement short bounded encrypted retention and explicit
   offline/expired failure without central token exchange.
-- [ ] `[must]` `EIG2-06` Render neutral success/error pages with restrictive CSP,
+- [x] `[must]` `EIG2-06` Render neutral success/error pages with restrictive CSP,
   no code/state leakage and no arbitrary return URL.
-- [ ] `[must]` `EIG2-07` Exercise wrong class, endpoint, issuer, route,
+- [x] `[must]` `EIG2-07` Exercise wrong class, endpoint, issuer, route,
   generation, expiry, replay, offline node and acknowledgement loss.
 - [ ] `[should]` `EIG2-08` Add regional endpoint materialization and data-residency
   policy without automatic region switching.
@@ -142,11 +151,11 @@ be replayed or rerouted.
 **Outcome:** the existing Google/Gmail binding works through the canonical
 public profile without changing consumer Application semantics or credentials.
 
-- [ ] `[must]` `EIG3-01` Create an immutable Google OAuth callback profile and
+- [x] `[must]` `EIG3-01` Create an immutable Google OAuth callback profile and
   public endpoint revision; do not use `google.gmail` as its semantic identity.
 - [ ] `[must]` `EIG3-02` Register the exact public URI in the Google OAuth client
   while retaining the loopback URI during the migration window.
-- [ ] `[must]` `EIG3-03` Select `public-connected` through environment/binding
+- [x] `[must]` `EIG3-03` Select `public-connected` through environment/binding
   resolution rather than a provider-specific flag.
 - [ ] `[must]` `EIG3-04` Complete live authorization, local code exchange, vault
   storage and explicit attachment from an outbound-only Core.
