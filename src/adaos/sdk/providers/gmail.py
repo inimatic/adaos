@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+import copy
+import json
+import logging
+import threading
+import time
 from typing import Any, Iterable, Mapping
 
 from adaos.sdk.core._ctx import require_ctx
@@ -14,6 +20,118 @@ from adaos.services.providers.google_gmail import (
     GoogleGmailProvider,
     GoogleGmailProviderError as GmailProviderError,
 )
+
+
+_log = logging.getLogger("adaos.sdk.providers.gmail")
+_READ_CACHE_TTL_S = {
+    "get_message": 5.0,
+    "list_labels": 30.0,
+    "list_message_summaries": 5.0,
+    "list_messages": 5.0,
+}
+_READ_CACHE_MAX_ENTRIES = 128
+_READ_CACHE_LOCK = threading.RLock()
+_READ_CACHE: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+_READ_INFLIGHT: dict[tuple[str, ...], Future[dict[str, Any]]] = {}
+
+
+def _read_cache_key(
+    operation: str,
+    *,
+    application: Mapping[str, Any],
+    subject_ref: str,
+    account_id: str,
+    arguments: Mapping[str, Any] | None,
+    permission_profile: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    return (
+        str(application.get("application_id") or "").strip(),
+        str(application.get("release_digest") or "").strip(),
+        subject_ref,
+        account_id,
+        operation,
+        json.dumps(
+            dict(arguments or {}),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ),
+        json.dumps(
+            dict(permission_profile or {}),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ),
+    )
+
+
+def _invalidate_read_cache(
+    *,
+    application_id: str,
+    subject_ref: str,
+    account_id: str,
+) -> None:
+    prefix = (application_id,)
+    with _READ_CACHE_LOCK:
+        for key in list(_READ_CACHE):
+            if key[:1] == prefix and key[2] == subject_ref and key[3] == account_id:
+                _READ_CACHE.pop(key, None)
+
+
+def _execute_read_single_flight(
+    operation: str,
+    *,
+    key: tuple[str, ...],
+    execute: Any,
+) -> dict[str, Any]:
+    now = time.monotonic()
+    owner = False
+    with _READ_CACHE_LOCK:
+        for stale_key, (expires_at, _value) in list(_READ_CACHE.items()):
+            if expires_at <= now:
+                _READ_CACHE.pop(stale_key, None)
+        cached = _READ_CACHE.get(key)
+        if cached is not None:
+            _log.debug("gmail read cache hit operation=%s", operation)
+            return copy.deepcopy(cached[1])
+        future = _READ_INFLIGHT.get(key)
+        if future is None:
+            future = Future()
+            _READ_INFLIGHT[key] = future
+            owner = True
+
+    if not owner:
+        try:
+            result = future.result(timeout=30.0)
+        except FutureTimeoutError as exc:
+            raise GmailProviderError(
+                "gmail_provider_unavailable",
+                retryable=True,
+            ) from exc
+        _log.debug("gmail read single-flight follower operation=%s", operation)
+        return copy.deepcopy(result)
+
+    try:
+        result = execute()
+    except BaseException as exc:
+        with _READ_CACHE_LOCK:
+            _READ_INFLIGHT.pop(key, None)
+            future.set_exception(exc)
+        raise
+
+    with _READ_CACHE_LOCK:
+        _READ_INFLIGHT.pop(key, None)
+        if result.get("ok") is True:
+            _READ_CACHE[key] = (
+                time.monotonic() + _READ_CACHE_TTL_S[operation],
+                copy.deepcopy(result),
+            )
+            while len(_READ_CACHE) > _READ_CACHE_MAX_ENTRIES:
+                _READ_CACHE.pop(next(iter(_READ_CACHE)))
+        future.set_result(copy.deepcopy(result))
+    return result
 
 
 def _invocation() -> tuple[GoogleGmailProvider, dict[str, Any], str]:
@@ -50,20 +168,44 @@ def _execute(
     arguments: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider, application, subject_ref = _invocation()
-    return provider.execute(
-        operation,
-        application_id=str(application["application_id"]),
-        release_digest=str(application["release_digest"]),
-        subject_ref=subject_ref,
-        account_id=account_id,
-        arguments=arguments,
-        candidate_permission_profile=_permission_profile(application),
-    )
+    application_id = str(application["application_id"])
+    permission_profile = _permission_profile(application)
+
+    def execute() -> dict[str, Any]:
+        return provider.execute(
+            operation,
+            application_id=application_id,
+            release_digest=str(application["release_digest"]),
+            subject_ref=subject_ref,
+            account_id=account_id,
+            arguments=arguments,
+            candidate_permission_profile=permission_profile,
+        )
+
+    if operation in _READ_CACHE_TTL_S:
+        return _execute_read_single_flight(
+            operation,
+            key=_read_cache_key(
+                operation,
+                application=application,
+                subject_ref=subject_ref,
+                account_id=account_id,
+                arguments=arguments,
+                permission_profile=permission_profile,
+            ),
+            execute=execute,
+        )
+    result = execute()
+    if operation in {"modify_message", "send_message", "trash_message"}:
+        _invalidate_read_cache(
+            application_id=application_id,
+            subject_ref=subject_ref,
+            account_id=account_id,
+        )
+    return result
 
 
-def begin_connection(
-    *, account_id: str = GOOGLE_GMAIL_PROVIDER_ID
-) -> dict[str, Any]:
+def begin_connection(*, account_id: str = GOOGLE_GMAIL_PROVIDER_ID) -> dict[str, Any]:
     provider, application, subject_ref = _invocation()
     return provider.begin_authorization(
         application_id=str(application["application_id"]),
@@ -100,9 +242,7 @@ def attach_reusable_connection(
     )
 
 
-def connection_status(
-    *, account_id: str = GOOGLE_GMAIL_PROVIDER_ID
-) -> dict[str, Any]:
+def connection_status(*, account_id: str = GOOGLE_GMAIL_PROVIDER_ID) -> dict[str, Any]:
     return _execute("connection_status", account_id=account_id)
 
 
@@ -166,9 +306,7 @@ def get_message(
     )
 
 
-def list_labels(
-    *, account_id: str = GOOGLE_GMAIL_PROVIDER_ID
-) -> dict[str, Any]:
+def list_labels(*, account_id: str = GOOGLE_GMAIL_PROVIDER_ID) -> dict[str, Any]:
     return _execute("list_labels", account_id=account_id)
 
 

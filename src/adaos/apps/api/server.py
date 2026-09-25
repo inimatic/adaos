@@ -261,6 +261,19 @@ def _post_ready_prewarm_delay_sec() -> float:
     return min(30.0, max(0.0, value))
 
 
+def _post_ready_prewarm_first_paint_max_wait_sec() -> float:
+    """Bound how long a headless runtime defers optional disk-heavy prewarm."""
+
+    raw = str(
+        os.getenv("ADAOS_POST_READY_PREWARM_FIRST_PAINT_MAX_WAIT_SEC") or "45"
+    ).strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = 45.0
+    return min(300.0, max(0.0, value))
+
+
 def _runtime_event_loop_lag_monitor_enabled() -> bool:
     raw = os.getenv("ADAOS_RUNTIME_EVENT_LOOP_LAG_MONITOR")
     if raw is None:
@@ -713,6 +726,31 @@ async def _yjs_owner_gc_runtime(app: FastAPI):
                 gc.enable()
 
 
+async def _wait_for_first_paint_before_post_ready_prewarm(
+    *,
+    minimum_delay_sec: float,
+) -> str:
+    """Keep optional catalog/materialization scans out of first paint."""
+
+    started = time.monotonic()
+    if minimum_delay_sec > 0.0:
+        await asyncio.sleep(minimum_delay_sec)
+    maximum_wait_sec = _post_ready_prewarm_first_paint_max_wait_sec()
+    while time.monotonic() - started < maximum_wait_sec:
+        try:
+            from adaos.services.yjs.gateway_ws import desktop_first_paint_observed
+
+            if desktop_first_paint_observed():
+                return "first_paint_observed"
+        except Exception:
+            logging.getLogger("adaos.startup").debug(
+                "failed to inspect first-paint readiness before post-ready prewarm",
+                exc_info=True,
+            )
+        await asyncio.sleep(0.25)
+    return "headless_grace_expired"
+
+
 async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> None:
     """Warm optional catalogs after the API can serve persisted state."""
     started = time.perf_counter()
@@ -727,8 +765,19 @@ async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> N
     }
     app.state.post_ready_catalog_materialization_prewarm = status
     try:
-        if delay_sec:
-            await asyncio.sleep(delay_sec)
+        barrier = await _wait_for_first_paint_before_post_ready_prewarm(
+            minimum_delay_sec=delay_sec,
+        )
+        status["barrier"] = barrier
+        status["barrier_wait_ms"] = round(
+            (time.perf_counter() - started) * 1000.0,
+            3,
+        )
+        logging.getLogger("adaos.startup").info(
+            "post-ready catalog/materialization prewarm admitted barrier=%s waited_ms=%s",
+            barrier,
+            status["barrier_wait_ms"],
+        )
     except asyncio.CancelledError:
         status["state"] = "cancelled"
         status["completed_at"] = time.time()

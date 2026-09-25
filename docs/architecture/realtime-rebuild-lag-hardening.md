@@ -151,6 +151,15 @@ remains synchronous for now: starting the same CPU and YDoc work concurrently
 with a cold YRoom would move contention into desktop first paint rather than
 remove it.
 
+The complete Builder-catalog/source prewarm is consequently admitted only
+after every browser-started YRoom has reached first paint. A headless runtime
+still runs it after a bounded 45-second grace. This work remains optional cache
+population: API readiness and a room's own demand materialization do not wait
+for it. `ADAOS_POST_READY_PREWARM_FIRST_PAINT_MAX_WAIT_SEC` controls the bounded
+headless grace, while `ADAOS_POST_READY_PREWARM_DELAY_SEC` remains the minimum
+post-readiness delay. The barrier outcome and wait duration are retained with
+the phase timings.
+
 ### Development Sidecar Readiness
 
 `api serve` verifies its dev-managed realtime sidecar through the local control

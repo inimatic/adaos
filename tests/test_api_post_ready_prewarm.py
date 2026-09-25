@@ -20,6 +20,43 @@ def test_post_ready_prewarm_delay_is_bounded(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_POST_READY_PREWARM_DELAY_SEC", "invalid")
     assert server._post_ready_prewarm_delay_sec() == 1.5
 
+    monkeypatch.setenv("ADAOS_POST_READY_PREWARM_FIRST_PAINT_MAX_WAIT_SEC", "-1")
+    assert server._post_ready_prewarm_first_paint_max_wait_sec() == 0.0
+
+    monkeypatch.setenv("ADAOS_POST_READY_PREWARM_FIRST_PAINT_MAX_WAIT_SEC", "999")
+    assert server._post_ready_prewarm_first_paint_max_wait_sec() == 300.0
+
+
+def test_post_ready_prewarm_waits_for_started_room_first_paint(monkeypatch) -> None:
+    from adaos.services.yjs import gateway_ws
+
+    checks = iter((False, False, True))
+    sleeps: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        gateway_ws,
+        "desktop_first_paint_observed",
+        lambda: next(checks),
+    )
+    monkeypatch.setattr(
+        server,
+        "_post_ready_prewarm_first_paint_max_wait_sec",
+        lambda: 30.0,
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", _sleep)
+
+    result = asyncio.run(
+        server._wait_for_first_paint_before_post_ready_prewarm(
+            minimum_delay_sec=1.5,
+        )
+    )
+
+    assert result == "first_paint_observed"
+    assert sleeps == [1.5, 0.25, 0.25]
+
 
 def test_catalog_and_materialization_prewarm_runs_after_readiness(monkeypatch) -> None:
     calls: list[object] = []
@@ -49,6 +86,11 @@ def test_catalog_and_materialization_prewarm_runs_after_readiness(monkeypatch) -
         }
 
     monkeypatch.setattr(server, "_post_ready_prewarm_delay_sec", lambda: 0.0)
+    monkeypatch.setattr(
+        server,
+        "_post_ready_prewarm_first_paint_max_wait_sec",
+        lambda: 0.0,
+    )
     monkeypatch.setattr(builder_service, "BuilderProjectCatalogService", _Catalog)
     monkeypatch.setattr(
         webspace_runtime,

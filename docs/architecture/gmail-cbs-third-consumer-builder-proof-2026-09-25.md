@@ -115,6 +115,31 @@ The provider itself is no longer the old 26-second bottleneck, but the complete
 first-paint path is still too slow for production polish and remains measured
 performance debt.
 
+### Follow-up runtime hardening
+
+The provider SDK now coalesces identical in-flight read operations per
+Application release, subject, account, operation, arguments, and permission
+profile. Successful reads receive a short bounded cache; every Gmail mutation
+invalidates the affected Application/account cache. Admission is still
+performed independently for each Application before a request can join a
+flight, and neither credentials nor message bodies are used as cache identity.
+
+The unit proof observes one provider execution for two concurrent identical
+reads, a cache hit for the immediate repeat, and invalidation after a mutation.
+On the connected local runtime, paired label handlers fell from the earlier
+5.6--8.0 second range to approximately 2.42 seconds each; an immediate cached
+request completed its handler in approximately 1.50 seconds. A pair of unique
+message-query requests completed in approximately 1.77 and 1.03 seconds. These
+numbers include the Application/tool runtime boundary and are not presented as
+raw Google API latency.
+
+Optional catalog and all-mode materialization prewarm is also held behind the
+first observed desktop paint, with a bounded 45-second headless grace. The live
+run admitted that work only after YRoom became ready. The remaining roughly
+16--19 second cold paint is therefore attributed to YRoom snapshot/bootstrap
+and materialization work, rather than the optional prewarm or the former Gmail
+N+1 metadata path. It remains an explicit beta-performance debt.
+
 ## Clean-Subnet Publication And Auto-Update Follow-Up
 
 The public registry revision `7e898cb156b8381d57edd14f590eaf92f6d2df6f`
@@ -248,9 +273,10 @@ and is not claimed as implemented by this proof.
 
 ## Next Actions
 
-1. Reduce Stable first paint by deduplicating initial labels/messages loads and
-   measuring Webspace materialization, access resolution, skill startup, and
-   provider IO separately.
+1. Continue reducing Stable first paint at the remaining YRoom
+   snapshot/bootstrap boundary. Initial Gmail reads are now coalesced and the
+   optional catalog/materialization prewarm is outside the first-paint critical
+   path; the remaining phases must stay separately instrumented.
 2. Convert the remaining full Builder workflow projections to digest-addressed
    registry views and stop retrying unchanged evidence phases after an exact
    platform failure has been classified.

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -462,7 +464,9 @@ def test_dev_preview_uses_pinned_verified_provider_declaration_without_release(
     )
     state = parse_qs(urlparse(start["authorization_url"]).query)["state"][0]
     pending_key = next(
-        key for key in vault.values if key.startswith("integration:ingress:oauth-attempt:")
+        key
+        for key in vault.values
+        if key.startswith("integration:ingress:oauth-attempt:")
     )
     pending = json.loads(vault.values[pending_key])
     assert pending["correlation"]["candidate_permission_profile"] == profile
@@ -493,7 +497,9 @@ def test_oauth_state_is_one_use_and_denial_never_creates_a_credential(
         provider.complete_authorization(state=state, code="replay")
 
     assert not any("credential.v1" in value for value in vault.values.values())
-    assert provider.access.connected_accounts("gmail_mail_client")[0]["status"] == "denied"
+    assert (
+        provider.access.connected_accounts("gmail_mail_client")[0]["status"] == "denied"
+    )
 
 
 def test_provider_exposes_only_fixed_gmail_operations_and_never_retries_a_send(
@@ -665,9 +671,7 @@ def test_provider_batch_listing_omits_a_message_removed_after_listing(
         arguments={"max_results": 2},
     )
 
-    assert [item["id"] for item in result["result"]["messages"]] == [
-        "message-1"
-    ]
+    assert [item["id"] for item in result["result"]["messages"]] == ["message-1"]
     assert result["result"]["omitted_message_ids"] == ["message-gone"]
     assert len(transport.calls) == 2
 
@@ -727,6 +731,57 @@ def test_sdk_projects_message_summary_arguments_to_the_bounded_operation(
     ]
 
 
+def test_sdk_coalesces_and_caches_duplicate_provider_reads(monkeypatch) -> None:
+    application = {
+        "application_id": "mail_focus_reader",
+        "release_digest": DIGEST_A,
+        "subject_ref": "user:owner",
+    }
+    entered = threading.Event()
+    release = threading.Event()
+    invocation_barrier = threading.Barrier(2)
+    calls: list[str] = []
+
+    class _Provider:
+        def execute(self, operation: str, **_kwargs):
+            calls.append(operation)
+            entered.set()
+            assert release.wait(timeout=2.0)
+            return {"ok": True, "operation": operation, "result": {"labels": []}}
+
+    provider = _Provider()
+
+    def _invocation():
+        invocation_barrier.wait(timeout=2.0)
+        return provider, application, "user:owner"
+
+    monkeypatch.setattr(gmail_sdk, "_invocation", _invocation)
+    with gmail_sdk._READ_CACHE_LOCK:
+        gmail_sdk._READ_CACHE.clear()
+        gmail_sdk._READ_INFLIGHT.clear()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(gmail_sdk._execute, "list_labels")
+        second = executor.submit(gmail_sdk._execute, "list_labels")
+        assert entered.wait(timeout=2.0)
+        release.set()
+        assert first.result(timeout=2.0) == second.result(timeout=2.0)
+
+    assert calls == ["list_labels"]
+
+    monkeypatch.setattr(
+        gmail_sdk,
+        "_invocation",
+        lambda: (provider, application, "user:owner"),
+    )
+    assert gmail_sdk._execute("list_labels")["ok"] is True
+    assert calls == ["list_labels"]
+
+    assert gmail_sdk._execute("modify_message")["ok"] is True
+    assert gmail_sdk._execute("list_labels")["ok"] is True
+    assert calls == ["list_labels", "modify_message", "list_labels"]
+
+
 def test_sdk_accepts_trusted_user_subject_for_a_session_caller(monkeypatch) -> None:
     provider = object()
     application = {
@@ -769,10 +824,12 @@ def test_provider_context_defers_oauth_keyring_reads_until_authorization(
     monkeypatch,
 ) -> None:
     vault = CountingVault()
-    vault.values.update({
-        "provider:google.oauth:client_id": "client-id",
-        "provider:google.oauth:client_secret": "client-secret",
-    })
+    vault.values.update(
+        {
+            "provider:google.oauth:client_id": "client-id",
+            "provider:google.oauth:client_secret": "client-secret",
+        }
+    )
     monkeypatch.delenv("ADAOS_GOOGLE_OAUTH_CLIENT_ID", raising=False)
     monkeypatch.delenv("ADAOS_GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
     provider = GoogleGmailProvider.from_context(
