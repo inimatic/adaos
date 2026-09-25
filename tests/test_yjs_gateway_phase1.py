@@ -2609,6 +2609,8 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
             "persisted_via": "diff",
             "apply_updates_ms": 3.0,
             "total_ms": 6.0,
+            "room_resolver_timings_ms": {"worker": 1.5, "total": 2.0},
+            "room_payload_apply_timings_ms": {"branch_apply": 2.5, "total": 3.0},
         },
     )
     bootstrap_attempt_id = gateway_module._mark_room_bootstrap_started(key, yws_attempt_id="yws-test-1")
@@ -2648,6 +2650,8 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert room_info["bootstrap_stuck"] is False
     assert room_info["last_open_mode"] == "cold_open"
     assert room_info["last_open_bootstrap_mode"] == "scenario_projection"
+    assert room_info["last_open_resolver_timings_ms"] == {"worker": 1.5, "total": 2.0}
+    assert room_info["last_open_payload_apply_timings_ms"] == {"branch_apply": 2.5, "total": 3.0}
     assert room_info["update_send_stream"]["current_buffer_used"] == 5
     assert room_info["update_send_stream"]["tasks_waiting_send"] == 2
     assert room_info["diagnostic"]["effective_initial_replay_total"] == 1

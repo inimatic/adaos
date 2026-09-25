@@ -2592,6 +2592,10 @@ def _mark_room_open(
                 str(lifecycle.get("persisted_via") or "").strip() or None if lifecycle else None
             )
             entry["last_open_bootstrap_single_pass"] = bool(lifecycle.get("used_provided_ydoc")) if lifecycle else False
+            entry["last_open_resolver_timings_ms"] = dict(lifecycle.get("room_resolver_timings_ms") or {})
+            entry["last_open_payload_apply_timings_ms"] = dict(
+                lifecycle.get("room_payload_apply_timings_ms") or {}
+            )
 
 
 def _mark_room_reset(
@@ -2931,6 +2935,8 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
         "last_open_bootstrap_mode": str(meta.get("last_open_bootstrap_mode") or "").strip() or None,
         "last_open_bootstrap_persisted_via": str(meta.get("last_open_bootstrap_persisted_via") or "").strip() or None,
         "last_open_bootstrap_single_pass": bool(meta.get("last_open_bootstrap_single_pass")),
+        "last_open_resolver_timings_ms": dict(meta.get("last_open_resolver_timings_ms") or {}),
+        "last_open_payload_apply_timings_ms": dict(meta.get("last_open_payload_apply_timings_ms") or {}),
         "last_bootstrap_attempt_id": str(meta.get("last_bootstrap_attempt_id") or "").strip() or None,
         "last_bootstrap_yws_attempt_id": str(meta.get("last_bootstrap_yws_attempt_id") or "").strip() or None,
         "last_bootstrap_started_at": meta.get("last_bootstrap_started_at"),
@@ -8563,6 +8569,7 @@ async def _ensure_room_effective_materialized(
                     "room_effective_materialized_bytes": len(update or b""),
                     "room_bootstrap_marker_persisted": bool(ready_result.get("persisted")),
                     "room_resolver_timings_ms": dict(runtime._last_rebuild_timings_ms or {}),
+                    "room_payload_apply_timings_ms": dict(apply_result.get("phase_timings_ms") or {}),
                 }
             )
         try:
@@ -8571,10 +8578,12 @@ async def _ensure_room_effective_materialized(
         except Exception:
             pass
         _ylog.info(
-            "YRoom effective branches materialized before open webspace=%s persisted=%s bytes=%d",
+            "YRoom effective branches materialized before open webspace=%s persisted=%s bytes=%d resolver_phases=%s apply_phases=%s",
             webspace_id,
             bool(update),
             len(update or b""),
+            json.dumps(dict(runtime._last_rebuild_timings_ms or {}), ensure_ascii=True, sort_keys=True),
+            json.dumps(dict(apply_result.get("phase_timings_ms") or {}), ensure_ascii=True, sort_keys=True),
         )
         return True
     except Exception as exc:

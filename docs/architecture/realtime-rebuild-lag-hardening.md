@@ -343,7 +343,10 @@ Cold-room diagnostics expose `last_bootstrap_step_timings_ms`. The bounded map
 separates backup scheduling, persisted seed/replay, effective materialization,
 and rebuild-status finalization without retaining live Yjs objects. Use it
 before changing the materialization pipeline: total room-open time alone cannot
-distinguish persisted replay from resolver and payload-apply cost.
+distinguish persisted replay from resolver and payload-apply cost. When effective
+materialization is needed, `last_open_resolver_timings_ms` and
+`last_open_payload_apply_timings_ms` split that stage further into isolated
+semantic resolution, branch mutation/encoding, persistence, and broadcast work.
 
 Backend-update origin matching follows the same hot-path rule. Its marker is a
 TTL-bounded, process-local correlation table, not a portable content address;
