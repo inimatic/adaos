@@ -39,6 +39,10 @@ from adaos.services.applications.cbs import (
 from adaos.services.applications.cbs_admission import (
     NativeApplicationCBSAdmissionService,
 )
+from adaos.services.applications.service import (
+    ApplicationService,
+    ApplicationServiceError,
+)
 from adaos.services.applications.store import ApplicationStore, ApplicationStoreError
 from adaos.services.artifact_pipeline.cbs_authoring import (
     BINDING_OUTPUT_PATH,
@@ -922,6 +926,23 @@ class SemanticRegistryProjection:
                 "installed_release_digest": installation.installed_release_digest,
             }
 
+        try:
+            install_access = ApplicationService(
+                application_store
+            ).ensure_install_access(
+                application.application_id,
+                release_digest=str(release.release_digest),
+                subnet_ref=str(local_publisher_ref or "subnet:local"),
+                issuer_ref="system:semantic-registry-reconciliation",
+            )
+        except (ApplicationServiceError, OSError, ValueError) as exc:
+            install_access = {
+                "status": "failed",
+                "reason": "install_access_reconciliation_failed",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+
         artifact_root = Path(self.state_dir) / "artifact_pipeline"
         try:
             plan = ReleaseRepository(artifact_root / "release-cache").get_release(
@@ -938,6 +959,7 @@ class SemanticRegistryProjection:
                 return {
                     "status": "awaiting_packages",
                     "missing_package_digests": missing,
+                    "install_access": install_access,
                 }
             subnet = str(local_publisher_ref or "subnet:local").removeprefix(
                 "subnet:"
@@ -961,12 +983,14 @@ class SemanticRegistryProjection:
                 "reason": "installed_cbs_reconciliation_failed",
                 "error_type": type(exc).__name__,
                 "message": str(exc),
+                "install_access": install_access,
             }
         return {
             "status": str(admission.get("status") or "unknown"),
             "admission_digest": admission.get("admission_digest"),
             "requirements_total": admission.get("requirements_total"),
             "requirements_resolved": admission.get("requirements_resolved"),
+            "install_access": install_access,
         }
 
 

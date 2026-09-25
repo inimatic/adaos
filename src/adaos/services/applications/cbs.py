@@ -663,7 +663,7 @@ class ApplicationCBSService:
         lock = {
             "status": "committed" if workspace_committed else "unchanged",
             "summary": (
-                "Workspace publication and stable selection are observed"
+                "Stable installation and Workspace runtime authority are observed"
                 if workspace_committed
                 else "Workspace authority remains unchanged by this view"
             ),

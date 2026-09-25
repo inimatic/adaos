@@ -95,6 +95,108 @@ class ApplicationService:
     def register_release(self, release: ApplicationRelease) -> ApplicationRelease:
         return self.store.put_release(release)
 
+    def ensure_install_access(
+        self,
+        application_id: str,
+        *,
+        release_digest: str,
+        subnet_ref: str,
+        issuer_ref: str,
+    ) -> dict[str, Any]:
+        """Materialize permissions explicitly declared ``grant_on_install``.
+
+        The reviewed install/update operation is the approval boundary for
+        these declarations.  Runtime pending actions remain responsible for
+        every permission using another approval policy.
+        """
+
+        release = self.store.get_release(application_id, release_digest)
+        declarations = (
+            *release.permission_profile.required,
+            *release.permission_profile.optional,
+        )
+        permissions = tuple(
+            sorted(
+                {
+                    item.permission_id
+                    for item in declarations
+                    if item.approval_policy == "grant_on_install"
+                }
+            )
+        )
+        if not permissions:
+            return {
+                "schema": "adaos.application.install_access.v1",
+                "status": "not_required",
+                "application_id": application_id,
+                "release_digest": release_digest,
+                "permissions": [],
+            }
+        owner_roles = tuple(
+            sorted(
+                role.role_id
+                for role in release.application_roles
+                if role.default_for.get("owner") == role.role_id
+            )
+        )
+        subnet = str(subnet_ref or "").strip().removeprefix("subnet:")
+        if not subnet:
+            raise ApplicationServiceError(
+                "subnet_ref is required for install-time Application access"
+            )
+        subject_ref = f"user:{subnet}"
+        for grant in self.store.list_application_access_grants(
+            application_id,
+            subject_ref=subject_ref,
+        ):
+            if (
+                grant.status == "active"
+                and grant.reviewed_permission_profile_digest
+                == release.permission_profile.digest
+                and set(permissions).issubset(grant.permission_ceiling)
+                and set(owner_roles).issubset(grant.application_roles)
+            ):
+                return {
+                    "schema": "adaos.application.install_access.v1",
+                    "status": "ready",
+                    "application_id": application_id,
+                    "release_digest": release_digest,
+                    "permissions": list(permissions),
+                    "application_roles": list(owner_roles),
+                    "grant": grant.to_dict(),
+                    "created": False,
+                }
+
+        from .access import ApplicationAccessService
+
+        grant = ApplicationAccessService(self).grant_access(
+            application_id,
+            release_digest=release_digest,
+            subject_ref=subject_ref,
+            application_roles=owner_roles,
+            permission_ceiling=permissions,
+            issuer_ref=str(issuer_ref or "system:application-install"),
+            idempotency_key=f"grant-on-install:{release_digest}",
+            constraints={
+                "subject_kind": "user",
+                "platform_role": "owner",
+                "profile_binding": True,
+                "session_bound": False,
+                "durable_approvals": True,
+                "provisioned_by": "application_install",
+            },
+        )
+        return {
+            "schema": "adaos.application.install_access.v1",
+            "status": "ready",
+            "application_id": application_id,
+            "release_digest": release_digest,
+            "permissions": list(permissions),
+            "application_roles": list(owner_roles),
+            "grant": grant.to_dict(),
+            "created": True,
+        }
+
     def reconcile_workspace_installation(
         self, application_id: str, release_digest: str, workspace_lock: WorkspaceLock
     ) -> ApplicationInstallation:
@@ -1029,6 +1131,14 @@ class ApplicationService:
             raise ApplicationServiceError(
                 "Application operation executor is not configured"
             )
+        install_access = None
+        if operation.kind in {"install", "update"}:
+            install_access = self.ensure_install_access(
+                operation.application_id,
+                release_digest=str(operation.plan.get("release_digest") or ""),
+                subnet_ref=operation.subnet_ref,
+                issuer_ref=operation.actor_ref,
+            )
         applying = self._transition_operation(operation, "applying")
         try:
             result = dict(self.executor(operation.plan))
@@ -1278,6 +1388,8 @@ class ApplicationService:
                     expected_revision=0,
                 )
         operation_result = {**result, "installation": installation.to_dict()}
+        if install_access is not None:
+            operation_result["install_access"] = install_access
         if subscription_result is not None:
             operation_result["subscription"] = subscription_result.to_dict()
         return self._transition_operation(

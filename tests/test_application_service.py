@@ -11,6 +11,10 @@ from adaos.domain.application import (
     ApplicationInstallation,
     ApplicationRelease,
 )
+from adaos.domain.application_access import (
+    ApplicationPermissionProfile,
+    normalize_application_roles,
+)
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
@@ -1017,6 +1021,107 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(
     )
     assert removed.status == "succeeded"
     assert removed.result["installation"]["status"] == "removed"
+
+
+def test_install_materializes_only_declared_grant_on_install_access(
+    tmp_path: Path,
+) -> None:
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+    )
+    service.register(_application())
+    profile = ApplicationPermissionProfile.from_mapping(
+        {
+            "schema": "adaos.application.permission_profile.v1",
+            "required": [
+                {
+                    "id": "workspace.read",
+                    "purpose": "Load the installed Application",
+                    "approval_policy": "grant_on_install",
+                },
+                {
+                    "id": "workspace.write",
+                    "purpose": "Modify shared workspace data",
+                    "approval_policy": "request_each_use",
+                },
+            ],
+            "optional": [],
+        }
+    )
+    roles = normalize_application_roles(
+        (
+            {
+                "id": "owner",
+                "title": "Owner",
+                "grants": ["app.view"],
+                "assignable_to": ["owner"],
+                "default_for": {"owner": "owner"},
+                "requires_permissions": ["workspace.read"],
+            },
+        ),
+        known_permissions=profile.flat_permissions,
+    )
+    base = _release()
+    release = service.register_release(
+        ApplicationRelease(
+            application_id=base.application_id,
+            publisher_ref=base.publisher_ref,
+            project_release=base.project_release,
+            accepted_candidate_id=base.accepted_candidate_id,
+            acceptance_evidence=base.acceptance_evidence,
+            provenance_refs=base.provenance_refs,
+            permission_profile=profile,
+            application_roles=roles,
+            lifecycle=base.lifecycle,
+        )
+    )
+    operation = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-access",
+        expected_revision=0,
+        release_digest=release.release_digest,
+    )
+
+    applied = service.apply_operation(
+        operation.operation_id,
+        plan_digest=operation.plan_digest,
+        idempotency_key=operation.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    access = applied.result["install_access"]
+    assert access["status"] == "ready"
+    assert access["created"] is True
+    assert access["permissions"] == ["workspace.read"]
+    assert access["application_roles"] == ["owner"]
+    grants = service.store.list_application_access_grants(
+        "app_recipes", subject_ref="user:sn_home"
+    )
+    assert len(grants) == 1
+    assert grants[0].permission_ceiling == ("workspace.read",)
+    assert grants[0].application_roles == ("owner",)
+    assert grants[0].reviewed_permission_profile_digest == profile.digest
+
+    replay = service.ensure_install_access(
+        "app_recipes",
+        release_digest=release.release_digest,
+        subnet_ref="subnet:sn_home",
+        issuer_ref="system:test",
+    )
+    assert replay["status"] == "ready"
+    assert replay["created"] is False
+    assert len(
+        service.store.list_application_access_grants(
+            "app_recipes", subject_ref="user:sn_home"
+        )
+    ) == 1
 
 
 def test_install_plans_exact_shared_dependencies_and_reuses_active_reference(
