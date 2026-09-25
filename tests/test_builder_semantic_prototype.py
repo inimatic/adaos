@@ -2525,6 +2525,79 @@ def test_state_repair_v3_adds_visibility_without_erasing_queries_or_empty_state(
     assert len(result["views"][0]["query_controls"]) == len(view["query_controls"]) + 1
 
 
+def test_state_repair_drops_exact_scope_predicate_and_illegal_scope_control() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    view = candidate["views"][0]
+    view["scope_filters"] = [{"field_ref": "status", "value": "open"}]
+    view["query_controls"] = [
+        {
+            "id": "title-filter",
+            "kind": "filter",
+            "field_ref": "title",
+            "label": {"en": "Title", "ru": "Название"},
+        }
+    ]
+    state = candidate["representative_states"][0]
+    state.update(
+        proof={"kind": "query_empty", "visible_field_refs": ["title"]},
+        filters=[
+            {
+                "field_ref": "status",
+                "operator": "eq",
+                "operand": {"kind": "value", "value": "open", "field_ref": None},
+            },
+            {
+                "field_ref": "title",
+                "operator": "eq",
+                "operand": {
+                    "kind": "value",
+                    "value": "No matching work item",
+                    "field_ref": None,
+                },
+            },
+        ],
+        min_items=0,
+        max_items=0,
+    )
+    findings = [
+        {
+            "code": "semantic.state_query_unreachable",
+            "semantic_refs": [f"state:{state['id']}", f"view:{view['id']}"],
+        }
+    ]
+    plan = prototype_sdk.prepare_state_repair(candidate, findings)
+    assert plan["state_contexts"][0]["view_scope_filters"] == view["scope_filters"]
+    repair = {
+        "schema": "adaos.builder.state_repair.v3",
+        "base_sha256": plan["base_sha256"],
+        "states": [copy.deepcopy(state)],
+        "views": [
+            {
+                "id": view["id"],
+                "empty_state": None,
+                "add_field_refs": [],
+                "add_query_controls": [
+                    {
+                        "id": "status-filter",
+                        "kind": "filter",
+                        "field_ref": "status",
+                        "label": {"en": "Status", "ru": "Статус"},
+                    }
+                ],
+            }
+        ],
+    }
+
+    repaired = prototype_sdk.apply_state_repair(candidate, repair, findings)
+
+    repaired_view = repaired["views"][0]
+    repaired_state = repaired["representative_states"][0]
+    assert repaired_view["query_controls"] == view["query_controls"]
+    assert [item["field_ref"] for item in repaired_state["filters"]] == ["title"]
+    compile_semantic_prototype_candidate(repaired, brief=brief)
+
+
 def test_state_repair_context_exposes_exact_typed_options_and_fixtures() -> None:
     from adaos.services.builder.semantic_repair import prepare_state_repair
 

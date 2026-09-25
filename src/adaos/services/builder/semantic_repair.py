@@ -267,6 +267,9 @@ def _state_repair_contexts(
                     }
                     for control in view.get("query_controls") or []
                 ],
+                "view_scope_filters": copy.deepcopy(
+                    list(view.get("scope_filters") or [])
+                ),
                 "view_has_empty_state": view.get("empty_state") is not None,
             }
         )
@@ -408,7 +411,7 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
             "Return only changed states and view patches resolving every reported failure. "
             + ("View add_field_refs and add_query_controls are ADDITIONS: empty arrays preserve all existing fields and controls. Never repeat or replace an existing query ID. empty_state=null preserves the existing empty presentation; an object sets it. " if version >= 3 else
                "View field_refs and query_controls REPLACE their complete original lists; empty arrays clear them. Carry unchanged entries forward. empty_state=null clears the original empty presentation. ")
-            + "Core retains the original title, resource, role, surface and media. Existing fixtures, commands, bindings and unreported states are immutable. First identify the intended state in the original request and Brief, then choose its proof and counts. state_contexts is the exact typed scope: use only a declared option_value for a choice literal and count the listed fixture matches before returning the patch. Never concatenate JSON punctuation or multiple values into one literal. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. The merged candidate is fully validated after this patch."
+            + "Core retains the original title, resource, role, surface and media. Existing fixtures, commands, bindings and unreported states are immutable. First identify the intended state in the original request and Brief, then choose its proof and counts. state_contexts is the exact typed scope: use only a declared option_value for a choice literal and count the listed fixture matches before returning the patch. view_scope_filters are already applied and are not user-resettable query controls: do not add a query control for one of their fields, and do not repeat an identical scope predicate in a query_empty state. Never concatenate JSON punctuation or multiple values into one literal. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. The merged candidate is fully validated after this patch."
         ),
         "output_schema": {
             "type": "object", "additionalProperties": False,
@@ -466,6 +469,41 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
                 view["selection_filter"].setdefault("source_field_ref", None)
     Draft202012Validator(plan["output_schema"]).validate(repair)
     result = copy.deepcopy(dict(candidate))
+    # Scope filters are immutable, always-on predicates.  Repeating the same
+    # predicate in a query-empty proof is semantically redundant, while adding
+    # a resettable query control for that field is structurally forbidden.  A
+    # bounded repair can safely erase only the exact duplicate and its illegal
+    # control addition: the scoped record set, user-visible query and proof all
+    # remain unchanged.  Non-identical predicates are retained and therefore
+    # still fail normal validation rather than being guessed away.
+    if version >= 3:
+        scope_by_view = {
+            str(view["id"]): {
+                (str(item.get("field_ref") or ""), item.get("value"))
+                for item in view.get("scope_filters") or []
+                if isinstance(item, Mapping)
+            }
+            for view in result["views"]
+        }
+        for state in repair.get("states") or []:
+            proof = state.get("proof") or {}
+            if proof.get("kind") != "query_empty":
+                continue
+            scope = scope_by_view.get(str(state.get("view_ref") or ""), set())
+            state["filters"] = [
+                predicate
+                for predicate in state.get("filters") or []
+                if not (
+                    isinstance(predicate, Mapping)
+                    and predicate.get("operator") == "eq"
+                    and (predicate.get("operand") or {}).get("kind") == "value"
+                    and (
+                        str(predicate.get("field_ref") or ""),
+                        (predicate.get("operand") or {}).get("value"),
+                    )
+                    in scope
+                )
+            ]
     if version == 4:
         scope = {item["resource_ref"]: item for item in plan["fixture_scope"]}
         protected = {identity for item in scope.values() for identity in item["state_ids"]}
@@ -504,7 +542,14 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
                     updated = copy.deepcopy(original)
                     updated["field_refs"] = list(dict.fromkeys([*original["field_refs"], *replacement["add_field_refs"]]))
                     controls = {item["id"]: item for item in original["query_controls"]}
+                    scope_fields = {
+                        str(item.get("field_ref") or "")
+                        for item in original.get("scope_filters") or []
+                        if isinstance(item, Mapping)
+                    }
                     for control in replacement["add_query_controls"]:
+                        if str(control.get("field_ref") or "") in scope_fields:
+                            continue
                         if control["id"] in controls:
                             raise BuilderWorkflowError("state repair cannot replace or duplicate an existing query control")
                         controls[control["id"]] = control
