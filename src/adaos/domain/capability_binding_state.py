@@ -217,6 +217,13 @@ def _assert_portable(value: Any, *, path: tuple[str, ...] = ()) -> None:
         raise CapabilityBindingStateContractError(
             f"portable record contains a storage locator at {'.'.join(path)}"
         )
+    if (
+        re.match(r"^https://", lowered)
+        and ("/callback" in lowered or "/webhook" in lowered)
+    ) or "route.v2.to_hub." in lowered or "route.to_hub." in lowered:
+        raise CapabilityBindingStateContractError(
+            f"portable record contains a physical ingress route at {'.'.join(path)}"
+        )
 
 
 RecordT = TypeVar("RecordT", bound="CanonicalRecord")
@@ -387,6 +394,7 @@ class BindingDefinition(CanonicalRecord):
         environment_constraints: Mapping[str, Any],
         authority_requirements: Iterable[str],
         conformance_obligations: Iterable[str],
+        ingress_ports: Iterable[Mapping[str, Any]] = (),
     ) -> "BindingDefinition":
         _validate_ref(
             binding_definition_ref,
@@ -402,8 +410,13 @@ class BindingDefinition(CanonicalRecord):
             )
         for item in state_support:
             _validate_range(item.get("contract_range"), field="state_support.contract_range")
-        return cls._create(
-            {
+        ingress = [dict(item) for item in ingress_ports]
+        names = [str(item.get("name") or "") for item in ingress]
+        if len(names) != len(set(names)):
+            raise CapabilityBindingStateContractError(
+                "ingress_ports names must be unique"
+            )
+        payload = {
                 "binding_definition_ref": binding_definition_ref,
                 "version": version,
                 "capability_ref": capability_ref,
@@ -416,7 +429,9 @@ class BindingDefinition(CanonicalRecord):
                 "authority_requirements": list(authority_requirements),
                 "conformance_obligations": list(conformance_obligations),
             }
-        )
+        if ingress:
+            payload["ingress_ports"] = ingress
+        return cls._create(payload)
 
     @property
     def binding_definition_ref(self) -> str:
@@ -494,10 +509,11 @@ class EnvironmentProfile(CanonicalRecord):
         provider_features: Iterable[str],
         guarantees: Mapping[str, Any],
         authorities: Iterable[str],
+        ingress_guarantees: Iterable[Mapping[str, Any]] = (),
     ) -> "EnvironmentProfile":
         _validate_ref(profile_ref, prefix="profile:", field="profile_ref")
-        return cls._create(
-            {
+        ingress = [dict(item) for item in ingress_guarantees]
+        payload = {
                 "profile_ref": profile_ref,
                 "profile_class": profile_class,
                 "modes": list(modes),
@@ -505,7 +521,9 @@ class EnvironmentProfile(CanonicalRecord):
                 "guarantees": dict(guarantees),
                 "authorities": list(authorities),
             }
-        )
+        if ingress:
+            payload["ingress_guarantees"] = ingress
+        return cls._create(payload)
 
     @property
     def profile_ref(self) -> str:

@@ -4,9 +4,10 @@ Status: target architecture. OAuth redirect materialization is the first
 delivery slice; durable webhooks and other callback classes follow only after
 the OAuth slice is proven.
 
-Last reviewed: 2026-09-24.
+Last reviewed: 2026-09-25.
 
 Roadmap: [External Integration Ingress Roadmap](public-integration-callback-gateway-roadmap.md).
+Compatibility inventory: [External Integration Route Inventory](external-integration-route-inventory.md).
 
 ## Decision
 

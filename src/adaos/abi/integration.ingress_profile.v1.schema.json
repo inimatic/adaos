@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/integration.ingress_profile.v1.schema.json",
+  "title": "AdaOS Integration Ingress Profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "profile_ref", "ingress_class", "protocol", "issuer_ref", "request_schema_ref", "verification", "delivery", "retention", "response", "compatibility", "profile_digest"],
+  "properties": {
+    "schema": {"const": "adaos.integration.ingress_profile.v1"},
+    "profile_ref": {"type": "string", "pattern": "^ingress-profile:[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$"},
+    "ingress_class": {"enum": ["oauth.authorization_response", "webhook.event", "provider.challenge", "async.continuation"]},
+    "protocol": {"type": "string", "minLength": 1, "maxLength": 128},
+    "issuer_ref": {"type": "string", "pattern": "^issuer:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+    "request_schema_ref": {"type": "string", "pattern": "^schema:[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$"},
+    "verification": {"type": "object", "additionalProperties": false, "required": ["state", "pkce", "issuer_binding"], "properties": {"state": {"enum": ["required"]}, "pkce": {"enum": ["S256", "unsupported"]}, "issuer_binding": {"enum": ["required"]}}},
+    "delivery": {"type": "object", "additionalProperties": false, "required": ["mode", "acknowledgement"], "properties": {"mode": {"enum": ["immediate_single_use", "durable_at_least_once"]}, "acknowledgement": {"enum": ["local_acceptance", "durable_acceptance"]}}},
+    "retention": {"type": "object", "additionalProperties": false, "required": ["ttl_seconds"], "properties": {"ttl_seconds": {"type": "integer", "minimum": 30, "maximum": 86400}}},
+    "response": {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"enum": ["neutral_browser_result", "provider_defined"]}}},
+    "compatibility": {"type": "object", "additionalProperties": false, "required": ["major"], "properties": {"major": {"type": "integer", "minimum": 1}}},
+    "profile_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

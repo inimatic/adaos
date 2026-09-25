@@ -416,6 +416,27 @@ class SemanticResolver:
                     set(profile["authorities"])
                 ):
                     continue
+                ingress_by_profile = {
+                    str(item.get("profile_ref") or ""): dict(item.get("guarantees") or {})
+                    for item in profile.get("ingress_guarantees") or ()
+                    if isinstance(item, Mapping)
+                }
+                ingress_supported = True
+                for port in definition_value.get("ingress_ports") or ():
+                    offered = ingress_by_profile.get(str(port.get("profile_ref") or ""), {})
+                    required = dict(port.get("required_guarantees") or {})
+                    if any(offered.get(key) is not value for key, value in required.items()):
+                        ingress_supported = False
+                        rejections.append(
+                            ResolutionRejection(
+                                "missing_ingress_guarantee",
+                                f"EnvironmentProfile cannot materialize ingress port {port.get('name')}",
+                                definition.binding_definition_ref,
+                            )
+                        )
+                        break
+                if not ingress_supported:
+                    continue
                 matching_deliveries = [
                     item
                     for item in deliveries

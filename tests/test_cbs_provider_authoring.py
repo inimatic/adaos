@@ -68,8 +68,14 @@ binding:
   logical_entrypoint: mail.messages.google
   physical_member: {physical_member}
   modes: [production]
-  profile_classes: [local]
+  profile_classes: [local, public-connected]
   provider_features: [oauth_pkce, send_idempotency]
+  ingress_ports:
+    - name: authorization_return
+      profile_ref: ingress-profile:oauth.authorization-code.google@1
+      required_guarantees:
+        single_use: true
+        local_acceptance: true
   conformance_obligations: [capability_conformance]
 """
 
@@ -171,6 +177,16 @@ def test_compact_provider_compiles_canonical_contracts_and_exact_delivery(
         "send_message",
     ]
     assert binding.digest == delivery.binding_definition_digest
+    assert binding.to_dict()["ingress_ports"] == [
+        {
+            "name": "authorization_return",
+            "profile_ref": "ingress-profile:oauth.authorization-code.google@1",
+            "required_guarantees": {
+                "single_use": True,
+                "local_acceptance": True,
+            },
+        }
+    ]
 
 
 def test_compilation_is_deterministic_and_package_relocation_preserves_definition(

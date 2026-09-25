@@ -26,6 +26,28 @@
         }
       }
     },
+    "ingress_ports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "profile_ref", "required_guarantees"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+          "profile_ref": {"type": "string", "pattern": "^ingress-profile:"},
+          "required_guarantees": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "single_use": {"const": true},
+              "local_acceptance": {"const": true},
+              "encrypted_delivery": {"const": true}
+            },
+            "minProperties": 1
+          }
+        }
+      }
+    },
     "modes": {"type": "array", "minItems": 1, "items": {"enum": ["semantic", "simulation", "sandbox", "production"]}, "uniqueItems": true},
     "environment_constraints": {
       "type": "object", "additionalProperties": false,

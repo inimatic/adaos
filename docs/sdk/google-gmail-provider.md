@@ -101,9 +101,10 @@ provider:google.oauth:client_id
 provider:google.oauth:client_secret
 ```
 
-`ADAOS_SELF_BASE_URL` may override the callback base. Otherwise Core uses its
-configured local API URL and finally `http://127.0.0.1:8777`. For the current
-desktop/dev beta the Google Web Application client must admit exactly:
+The Core ingress broker materializes the callback from the selected
+EnvironmentProfile. Applications, skills and the provider adapter do not
+construct a callback URL. For `environment-profile:local-development@1` the
+Google Web Application client must admit exactly:
 
 ```text
 http://127.0.0.1:8777/api/providers/google/gmail/oauth/callback
@@ -112,6 +113,11 @@ http://127.0.0.1:8777/api/providers/google/gmail/oauth/callback
 Do not use a Google OAuth client of type **Desktop application** for this flow;
 create one of type **Web application** so the exact redirect URI can be
 registered.
+
+For `environment-profile:public-connected@1`, follow the
+[public callback operator procedure](../operations/public-google-oauth-callback.md)
+and additionally register the canonical `integrations.inimatic.com` URI. Keep
+the loopback URI during the migration window.
 
 ## Google Cloud setup for the beta
 

@@ -440,8 +440,12 @@ def test_dev_preview_uses_pinned_verified_provider_declaration_without_release(
         candidate_permission_profile=profile,
     )
     state = parse_qs(urlparse(start["authorization_url"]).query)["state"][0]
-    pending = json.loads(vault.values[provider._state_key(state)])
-    assert pending["candidate_permission_profile"] == profile
+    pending_key = next(
+        key for key in vault.values if key.startswith("integration:ingress:oauth-attempt:")
+    )
+    pending = json.loads(vault.values[pending_key])
+    assert pending["correlation"]["candidate_permission_profile"] == profile
+    assert pending["attempt"]["application_ref"] == "application:gmail_mail_client"
 
     result = provider.complete_authorization(state=state, code="authorization-code")
 
@@ -464,7 +468,7 @@ def test_oauth_state_is_one_use_and_denial_never_creates_a_credential(
 
     with pytest.raises(GoogleGmailProviderError, match="oauth_authorization_denied"):
         provider.complete_authorization(state=state, error="access_denied")
-    with pytest.raises(GoogleGmailProviderError, match="oauth_state_invalid"):
+    with pytest.raises(GoogleGmailProviderError, match="oauth_state_replayed"):
         provider.complete_authorization(state=state, code="replay")
 
     assert not any("credential.v1" in value for value in vault.values.values())

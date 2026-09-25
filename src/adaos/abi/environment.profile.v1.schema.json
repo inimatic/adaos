@@ -8,7 +8,7 @@
   "properties": {
     "schema": {"const": "adaos.environment.profile.v1"},
     "profile_ref": {"type": "string", "pattern": "^profile:"},
-    "profile_class": {"enum": ["local"]},
+    "profile_class": {"enum": ["local", "public-connected"]},
     "modes": {"type": "array", "minItems": 1, "items": {"enum": ["simulation", "sandbox", "production"]}, "uniqueItems": true},
     "provider_features": {"$ref": "#/$defs/textSet"},
     "guarantees": {
@@ -21,6 +21,27 @@
       }
     },
     "authorities": {"$ref": "#/$defs/textSet"},
+    "ingress_guarantees": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile_ref", "guarantees"],
+        "properties": {
+          "profile_ref": {"type": "string", "pattern": "^ingress-profile:"},
+          "guarantees": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["single_use", "local_acceptance", "encrypted_delivery"],
+            "properties": {
+              "single_use": {"type": "boolean"},
+              "local_acceptance": {"type": "boolean"},
+              "encrypted_delivery": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
     "profile_digest": {"$ref": "#/$defs/digest"}
   },
   "$defs": {

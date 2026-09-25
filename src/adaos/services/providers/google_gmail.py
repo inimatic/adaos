@@ -8,7 +8,6 @@ than one Application without copying credentials into either package.
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email import policy as email_policy
@@ -28,6 +27,13 @@ import requests
 from adaos.services.applications import (
     ApplicationAccessManagementService,
     get_application_service,
+)
+from adaos.services.integrations.ingress import (
+    GOOGLE_ISSUER_REF,
+    GOOGLE_OAUTH_INGRESS_PROFILE_REF,
+    IntegrationIngressBroker,
+    IntegrationIngressError,
+    broker_from_context,
 )
 
 
@@ -298,6 +304,7 @@ class GoogleGmailProvider:
         redirect_uri: str = "",
         clock: Callable[[], float] = time.time,
         oauth_configuration_loaded: bool = True,
+        ingress_broker: IntegrationIngressBroker | None = None,
     ) -> None:
         self.vault = vault
         self.applications = applications
@@ -308,6 +315,10 @@ class GoogleGmailProvider:
         self.redirect_uri = _text(redirect_uri)
         self.clock = clock
         self._oauth_configuration_loaded = bool(oauth_configuration_loaded)
+        self.ingress = ingress_broker or IntegrationIngressBroker(
+            vault=vault,
+            clock=clock,
+        )
 
     @classmethod
     def from_context(
@@ -328,13 +339,8 @@ class GoogleGmailProvider:
         # but defer vault reads until an authorization or refresh operation.
         client_id = _text(os.getenv("ADAOS_GOOGLE_OAUTH_CLIENT_ID"))
         client_secret = _text(os.getenv("ADAOS_GOOGLE_OAUTH_CLIENT_SECRET"))
-        base = _text(os.getenv("ADAOS_SELF_BASE_URL"))
-        if not base:
-            config = getattr(ctx, "config", None)
-            base = _text(getattr(config, "local_api_url", ""))
-        if not base:
-            base = "http://127.0.0.1:8777"
-        redirect_uri = base.rstrip("/") + DEFAULT_CALLBACK_PATH
+        ingress = broker_from_context(ctx, clock=clock)
+        redirect_uri = ingress.endpoint.callback_uri
         return cls(
             vault=vault,
             applications=applications,
@@ -344,6 +350,7 @@ class GoogleGmailProvider:
             redirect_uri=redirect_uri,
             clock=clock,
             oauth_configuration_loaded=False,
+            ingress_broker=ingress,
         )
 
     def _ensure_oauth_configuration(self) -> None:
@@ -358,11 +365,6 @@ class GoogleGmailProvider:
                 self.vault.get("provider:google.oauth:client_secret", default=None)
             )
         self._oauth_configuration_loaded = True
-
-    @staticmethod
-    def _state_key(state: str) -> str:
-        digest = hashlib.sha256(state.encode("utf-8")).hexdigest()
-        return f"provider:{GOOGLE_GMAIL_PROVIDER_ID}:oauth-state:{digest}"
 
     @staticmethod
     def _account_key(subject_ref: str, account_id: str) -> str:
@@ -504,22 +506,14 @@ class GoogleGmailProvider:
             None,
         )
         expected_revision = int((previous or {}).get("revision") or 0)
-        state = secrets.token_urlsafe(32)
-        verifier = secrets.token_urlsafe(64)[:96]
-        challenge = base64.urlsafe_b64encode(
-            hashlib.sha256(verifier.encode("ascii")).digest()
-        ).decode("ascii").rstrip("=")
         issued_at = float(self.clock())
         pending = {
-            "schema": "adaos.provider.google.gmail.oauth_state.v1",
             "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
             "application_id": application_id,
             "release_digest": release_digest,
             "subject_ref": subject,
             "account_id": declared_account_id,
             "scopes": [GMAIL_MODIFY_SCOPE],
-            "redirect_uri": self.redirect_uri,
-            "code_verifier": verifier,
             "expected_revision": expected_revision,
             "issued_at": issued_at,
             "expires_at": issued_at + _OAUTH_STATE_TTL_S,
@@ -528,11 +522,30 @@ class GoogleGmailProvider:
             pending["candidate_permission_profile"] = dict(
                 candidate_permission_profile
             )
-        self._vault_put_json(self._state_key(state), pending)
+        connection_identity = hashlib.sha256(
+            f"{GOOGLE_GMAIL_PROVIDER_ID}\0{subject}\0{declared_account_id}".encode(
+                "utf-8"
+            )
+        ).hexdigest()[:32]
+        try:
+            authorization = self.ingress.begin_authorization(
+                provider_connection_ref=f"provider-connection:{connection_identity}",
+                binding_instance_ref="binding-instance:google-gmail-provider",
+                application_ref=f"application:{application_id}",
+                subject_ref=subject,
+                return_intent="application.connection.refresh",
+                correlation=pending,
+            )
+        except IntegrationIngressError as exc:
+            raise GoogleGmailProviderError(exc.code, retryable=exc.retryable) from exc
+        state = str(authorization["state"])
+        verifier = str(authorization["code_verifier"])
+        challenge = str(authorization["code_challenge"])
+        redirect_uri = str(authorization["redirect_uri"])
         authorization_url = GOOGLE_AUTHORIZATION_ENDPOINT + "?" + urlencode(
             {
                 "client_id": self.client_id,
-                "redirect_uri": self.redirect_uri,
+                "redirect_uri": redirect_uri,
                 "response_type": "code",
                 "scope": GMAIL_MODIFY_SCOPE,
                 "access_type": "offline",
@@ -761,19 +774,22 @@ class GoogleGmailProvider:
         state: str,
         code: str = "",
         error: str = "",
+        expected_attempt_ref: str = "",
     ) -> dict[str, Any]:
         state_value = _text(state)
         if not state_value:
             raise GoogleGmailProviderError("oauth_state_missing")
-        state_key = self._state_key(state_value)
-        pending = self._vault_get_json(state_key)
-        if pending is None:
-            raise GoogleGmailProviderError("oauth_state_invalid")
-        self._vault_delete(state_key)
-        if pending.get("schema") != "adaos.provider.google.gmail.oauth_state.v1":
-            raise GoogleGmailProviderError("oauth_state_invalid")
-        if float(pending.get("expires_at") or 0.0) <= float(self.clock()):
-            raise GoogleGmailProviderError("oauth_state_expired")
+        try:
+            authorization = self.ingress.consume_authorization(
+                state=state_value,
+                expected_profile_ref=GOOGLE_OAUTH_INGRESS_PROFILE_REF,
+                expected_issuer_ref=GOOGLE_ISSUER_REF,
+                expected_attempt_ref=expected_attempt_ref,
+            )
+        except IntegrationIngressError as exc:
+            raise GoogleGmailProviderError(exc.code, retryable=exc.retryable) from exc
+        pending = dict(authorization["correlation"])
+        attempt = dict(authorization["attempt"])
         self._provider_declaration(
             str(pending["application_id"]),
             str(pending["release_digest"]),
@@ -785,6 +801,7 @@ class GoogleGmailProvider:
         )
         if _text(error):
             self._mark_denied(pending)
+            self.ingress.record_outcome(attempt, "denied")
             raise GoogleGmailProviderError("oauth_authorization_denied")
         authorization_code = _text(code)
         if not authorization_code:
@@ -795,9 +812,9 @@ class GoogleGmailProvider:
         token_form = {
             "client_id": self.client_id,
             "code": authorization_code,
-            "code_verifier": str(pending["code_verifier"]),
+            "code_verifier": str(authorization["code_verifier"]),
             "grant_type": "authorization_code",
-            "redirect_uri": str(pending["redirect_uri"]),
+            "redirect_uri": str(authorization["endpoint"]["callback_uri"]),
         }
         if self.client_secret:
             token_form["client_secret"] = self.client_secret
@@ -808,6 +825,7 @@ class GoogleGmailProvider:
             timeout=(5.0, 15.0),
         )
         if int(getattr(response, "status_code", 0) or 0) != 200:
+            self.ingress.record_outcome(attempt, "provider_failed")
             raise GoogleGmailProviderError("oauth_token_exchange_failed")
         token = _safe_json(response, error_code="oauth_token_response_invalid")
         access_token = _text(token.get("access_token"))
@@ -883,6 +901,7 @@ class GoogleGmailProvider:
             else:
                 self._vault_put_json(account_key, previous_token)
             raise GoogleGmailProviderError("connected_account_conflict") from exc
+        self.ingress.record_outcome(attempt, "accepted")
         return {
             "ok": True,
             "provider_id": GOOGLE_GMAIL_PROVIDER_ID,

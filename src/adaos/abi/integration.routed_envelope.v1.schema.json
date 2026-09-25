@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/integration.routed_envelope.v1.schema.json",
+  "title": "AdaOS Integration Routed Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "envelope_ref", "attempt_ref", "endpoint_ref", "endpoint_revision", "profile_ref", "issuer_ref", "audience", "route_binding_ref", "generation", "issued_at", "expires_at", "algorithm", "encrypted_key", "nonce", "ciphertext", "auth_tag", "envelope_digest"],
+  "properties": {
+    "schema": {"const": "adaos.integration.routed_envelope.v1"},
+    "envelope_ref": {"type": "string", "pattern": "^ingress-envelope:"},
+    "attempt_ref": {"type": "string", "pattern": "^callback-attempt:"},
+    "endpoint_ref": {"type": "string", "pattern": "^ingress-endpoint:"},
+    "endpoint_revision": {"type": "integer", "minimum": 1},
+    "profile_ref": {"type": "string", "pattern": "^ingress-profile:"},
+    "issuer_ref": {"type": "string", "pattern": "^issuer:"},
+    "audience": {"type": "string", "pattern": "^ingress-route:"},
+    "route_binding_ref": {"type": "string", "pattern": "^ingress-route:"},
+    "generation": {"type": "integer", "minimum": 1},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "algorithm": {"const": "RSA-OAEP-256+A256GCM"},
+    "encrypted_key": {"type": "string", "minLength": 32, "maxLength": 2048},
+    "nonce": {"type": "string", "minLength": 12, "maxLength": 64},
+    "ciphertext": {"type": "string", "minLength": 1, "maxLength": 16384},
+    "auth_tag": {"type": "string", "minLength": 16, "maxLength": 64},
+    "envelope_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

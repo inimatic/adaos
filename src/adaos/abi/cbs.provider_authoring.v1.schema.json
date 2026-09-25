@@ -57,6 +57,28 @@
         "logical_entrypoint": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*(?::[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*)?$"},
         "physical_member": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"},
         "state_support": {"type": "array", "items": {"type": "object"}},
+        "ingress_ports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "profile_ref", "required_guarantees"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+              "profile_ref": {"type": "string", "pattern": "^ingress-profile:"},
+              "required_guarantees": {
+                "type": "object",
+                "additionalProperties": false,
+                "minProperties": 1,
+                "properties": {
+                  "single_use": {"const": true},
+                  "local_acceptance": {"const": true},
+                  "encrypted_delivery": {"const": true}
+                }
+              }
+            }
+          }
+        },
         "modes": {"type": "array", "minItems": 1, "items": {"enum": ["semantic", "simulation", "sandbox", "production"]}, "uniqueItems": true},
         "profile_classes": {"$ref": "#/$defs/textSet"},
         "provider_features": {"$ref": "#/$defs/textSet"},

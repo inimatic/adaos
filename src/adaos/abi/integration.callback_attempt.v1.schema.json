@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/integration.callback_attempt.v1.schema.json",
+  "title": "AdaOS Integration Callback Attempt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "attempt_ref", "endpoint_ref", "endpoint_revision", "endpoint_revision_digest", "profile_ref", "issuer_ref", "provider_connection_ref", "binding_instance_ref", "application_ref", "subject_ref", "return_intent", "state_hash", "issued_at", "expires_at", "max_deliveries", "status", "attempt_digest"],
+  "properties": {
+    "schema": {"const": "adaos.integration.callback_attempt.v1"},
+    "attempt_ref": {"type": "string", "pattern": "^callback-attempt:"},
+    "endpoint_ref": {"type": "string", "pattern": "^ingress-endpoint:"},
+    "endpoint_revision": {"type": "integer", "minimum": 1},
+    "endpoint_revision_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "profile_ref": {"type": "string", "pattern": "^ingress-profile:"},
+    "issuer_ref": {"type": "string", "pattern": "^issuer:"},
+    "provider_connection_ref": {"type": "string", "pattern": "^provider-connection:"},
+    "binding_instance_ref": {"type": "string", "pattern": "^binding-instance:"},
+    "application_ref": {"type": "string", "pattern": "^application:"},
+    "subject_ref": {"type": "string", "pattern": "^(user|service):"},
+    "return_intent": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$"},
+    "state_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "max_deliveries": {"const": 1},
+    "status": {"enum": ["pending", "accepted", "denied", "expired", "failed"]},
+    "attempt_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

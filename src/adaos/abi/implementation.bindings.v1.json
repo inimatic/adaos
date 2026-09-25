@@ -61,7 +61,14 @@
           "logical_entrypoint": "mail.messages.manage.google-gmail",
           "physical_member": "handlers/main.py",
           "modes": ["production"],
-          "profile_classes": ["local"],
+          "profile_classes": ["local", "public-connected"],
+          "ingress_ports": [
+            {
+              "name": "authorization_return",
+              "profile_ref": "ingress-profile:oauth.authorization-code.google@1",
+              "required_guarantees": {"single_use": true, "local_acceptance": true}
+            }
+          ],
           "operation_mapping": "Map every accepted semantic mail operation exactly once to an existing tools[].name. Do not copy input_schema or output_schema into the descriptor; the compiler takes them from skill.yaml. Declare bounded errors for every operation.",
           "compiler_owned_outputs": ["contracts/capability.contract.json", "contracts/binding.definition.json"],
           "semantic_intent": {
@@ -123,7 +130,14 @@
               "logical_entrypoint": "mail.messages.manage.google-gmail",
               "physical_member": "handlers/main.py",
               "modes": ["production"],
-              "profile_classes": ["local"],
+              "profile_classes": ["local", "public-connected"],
+              "ingress_ports": [
+                {
+                  "name": "authorization_return",
+                  "profile_ref": "ingress-profile:oauth.authorization-code.google@1",
+                  "required_guarantees": {"single_use": true, "local_acceptance": true}
+                }
+              ],
               "provider_features": ["oauth_pkce", "gmail_modify", "send_idempotency"],
               "authority_requirements": ["providers.google.gmail", "storage.relational", "workspace.read", "workspace.write"],
               "conformance_obligations": ["capability_conformance", "external_evidence_freshness"]

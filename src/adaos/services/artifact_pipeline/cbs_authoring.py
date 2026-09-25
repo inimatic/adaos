@@ -271,6 +271,7 @@ def compile_cbs_provider_files(
                 binding_source.get("conformance_obligations")
                 or ["capability_conformance"]
             ),
+            ingress_ports=_list(binding_source.get("ingress_ports")),
         )
     except CapabilityBindingStateContractError as exc:
         raise CBSProviderAuthoringError(str(exc)) from exc

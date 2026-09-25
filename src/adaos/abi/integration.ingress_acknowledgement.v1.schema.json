@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/integration.ingress_acknowledgement.v1.schema.json",
+  "title": "AdaOS Integration Ingress Acknowledgement v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ack_ref", "envelope_ref", "attempt_ref", "endpoint_ref", "audience", "accepted_at", "status", "ack_digest"],
+  "properties": {
+    "schema": {"const": "adaos.integration.ingress_acknowledgement.v1"},
+    "ack_ref": {"type": "string", "pattern": "^ingress-ack:"},
+    "envelope_ref": {"type": "string", "pattern": "^ingress-envelope:"},
+    "attempt_ref": {"type": "string", "pattern": "^callback-attempt:"},
+    "endpoint_ref": {"type": "string", "pattern": "^ingress-endpoint:"},
+    "audience": {"type": "string", "pattern": "^ingress-route:"},
+    "accepted_at": {"type": "string", "format": "date-time"},
+    "status": {"enum": ["accepted", "rejected", "expired", "replayed"]},
+    "ack_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
