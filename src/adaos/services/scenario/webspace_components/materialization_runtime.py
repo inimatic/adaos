@@ -72,17 +72,25 @@ class WebspaceMaterializationService:
             and not scenario_content_override
             and not skill_source_mode
         )
-        if use_process_worker:
-            stage_started = time.perf_counter()
+        cache_eligible = not scenario_content_override and not skill_source_mode
+        worker_result = None
+        cache_lookup_started = time.perf_counter()
+        if cache_eligible:
             worker_result = operations.get_cached_materialized_worker_result(
                 materialization_identity,
                 cache_mode="payload_only",
                 require_snapshot=False,
             )
             if worker_result is not None:
-                operations.record_timing(ydoc_timings, "materialization_cache_lookup", stage_started)
+                operations.record_timing(
+                    ydoc_timings,
+                    "materialization_cache_lookup",
+                    cache_lookup_started,
+                )
                 ydoc_timings["materialization_cache_hit"] = 0.0
-            else:
+        if worker_result is not None or use_process_worker:
+            stage_started = time.perf_counter()
+            if worker_result is None:
                 prepared_skill_decls = skill_decls_snapshot
                 prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
                 worker_result = await operations.run_materialization_worker(
@@ -274,6 +282,19 @@ class WebspaceMaterializationService:
         }
         runtime._last_apply_phase_timings_ms = None
         runtime._last_rebuild_ydoc_timings_ms = operations.finalize_timing_map(ydoc_timings, started_at=materialize_started)
+        if cache_eligible:
+            operations.remember_materialized_worker_result(
+                materialization_identity,
+                {
+                    "materialized_payload": payload,
+                    "rebuild_timings_ms": runtime._last_rebuild_timings_ms,
+                    "resolver_debug": dict(runtime._last_resolver_debug or {}),
+                    "apply_summary": dict(runtime._last_apply_summary or {}),
+                    "ydoc_timings_ms": runtime._last_rebuild_ydoc_timings_ms,
+                },
+                cache_mode="payload_only",
+                require_snapshot=False,
+            )
         return entry
 
 
