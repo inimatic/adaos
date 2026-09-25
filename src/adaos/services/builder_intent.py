@@ -909,10 +909,15 @@ def _merge_requirement_list(
                         ]
                     )
                 )
-                item["confidence"] = max(
-                    float(existing.get("confidence") or 0),
-                    float(item.get("confidence") or 0),
-                )
+                # Evidenced statements carry confidence, while operation
+                # requirements intentionally do not.  The generic merger must
+                # not invent a property rejected by the operation ABI merely
+                # because the same operation appeared in two accepted turns.
+                if "confidence" in existing or "confidence" in item:
+                    item["confidence"] = max(
+                        float(existing.get("confidence") or 0),
+                        float(item.get("confidence") or 0),
+                    )
             merged[stable_id] = item
     return list(merged.values())
 

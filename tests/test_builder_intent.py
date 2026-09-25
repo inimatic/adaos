@@ -654,6 +654,19 @@ def test_accepted_brief_merge_preserves_project_origin_and_current_jobs() -> Non
     )
 
 
+def test_brief_merge_does_not_add_confidence_to_duplicate_operations() -> None:
+    first = compile_prototype_brief("Archive a selected message.")
+    second = compile_prototype_brief(
+        "Keep the query visible and archive the selected message."
+    )
+
+    merged = merge_prototype_briefs(first, second)
+    archive = next(item for item in merged["operations"] if item["kind"] == "archive")
+
+    assert "confidence" not in archive
+    assert archive["evidence"]
+
+
 def test_dashboard_refinement_does_not_invent_create_or_transition_jobs() -> None:
     brief = compile_prototype_brief(
         "Refine the dashboard. Do not add another top bar. "
