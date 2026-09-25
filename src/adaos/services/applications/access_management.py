@@ -29,7 +29,7 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 
 from .access import ApplicationAccessError, ApplicationAccessService
 from .service import ApplicationService
-from .store import _read
+from .store import ApplicationStoreError, _read
 
 
 _log = logging.getLogger("adaos.applications.access")
@@ -91,19 +91,38 @@ def _runtime_authority_signature(
                     append(path)
         return tuple(values)
 
-    for collection in (
-        "definitions",
-        "releases",
-        "installations",
-        "runtime_selections",
-        "runtime_channels",
-    ):
-        parent = root / collection
-        if not parent.is_dir():
-            values.append((collection, 0, 0))
-            continue
-        for path in sorted(item for item in parent.rglob("*") if item.is_file()):
+    # A scenario-only caller has not carried the Application identity yet.  Its
+    # candidate set can still only be changed by active installations or
+    # runtime selections.  Track those records, their channels, and only the
+    # definitions/releases reachable from them; hundreds of unpublished local
+    # definitions are not runtime authority and must not tax every tool call.
+    active_keys: set[str] = set()
+    installations_root = root / "installations"
+    if installations_root.is_dir():
+        for path in sorted(installations_root.glob("*/current.json")):
             append(path)
+            active_keys.add(path.parent.name)
+    selections_root = root / "runtime_selections"
+    if selections_root.is_dir():
+        for path in sorted(selections_root.glob("*/current.json")):
+            append(path)
+            try:
+                application = str(_read(path).get("application_id") or "").strip()
+            except ApplicationStoreError:
+                application = ""
+            if application:
+                active_keys.add(identity(application))
+    channels_root = root / "runtime_channels"
+    if channels_root.is_dir():
+        for path in sorted(channels_root.glob("*.sqlite3")):
+            append(path)
+            active_keys.add(path.stem)
+    for key in sorted(active_keys):
+        append(root / "definitions" / key / "current.json")
+        release_root = root / "releases" / key
+        if release_root.is_dir():
+            for path in sorted(release_root.glob("*.json")):
+                append(path)
     return tuple(values)
 
 
