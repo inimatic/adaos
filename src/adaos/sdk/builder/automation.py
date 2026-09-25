@@ -466,9 +466,17 @@ def trial_verification_evidence(
     behavior_checks = [
         item
         for item in passed_checks
-        if item.get("kind") == "checkpoint_test_contract"
-        and not str(item.get("path") or "").endswith("test_application_contract.py")
+        if str(item.get("path") or "").endswith("test_behavior_contract.py")
     ]
+    if not behavior_checks:
+        behavior_checks = [
+            item
+            for item in passed_checks
+            if item.get("kind") == "checkpoint_test_contract"
+            and not str(item.get("path") or "").endswith(
+                "test_application_contract.py"
+            )
+        ]
     if not behavior_checks:
         return {
             "ok": False,
@@ -517,6 +525,7 @@ def trial_verification_evidence(
                 import yaml
 
                 from adaos.services.builder.shared_delivery import (
+                    owned_skill_effect_checks,
                     shared_delivery_effect_checks,
                 )
 
@@ -535,6 +544,34 @@ def trial_verification_evidence(
                     )
                     if not reconstruction_errors:
                         disclosure_checks = reconstructed
+                    if not disclosure_checks:
+                        components = project.get("components")
+                        owned = (
+                            components.get("owned")
+                            if isinstance(components, Mapping)
+                            else []
+                        )
+                        manifests: dict[str, Mapping[str, Any]] = {}
+                        for item in owned or ():
+                            if not isinstance(item, Mapping):
+                                continue
+                            component_ref = str(item.get("ref") or "").strip()
+                            if not component_ref.startswith("skill:"):
+                                continue
+                            skill_id = component_ref.split(":", 1)[1].strip()
+                            manifest = yaml.safe_load(
+                                committed_text(f"skills/{skill_id}/skill.yaml")
+                            ) or {}
+                            if isinstance(manifest, Mapping):
+                                manifests[skill_id] = manifest
+                        reconstructed, reconstruction_errors = (
+                            owned_skill_effect_checks(
+                                project=project,
+                                manifests=manifests,
+                            )
+                        )
+                        if not reconstruction_errors:
+                            disclosure_checks = reconstructed
             except (
                 OSError,
                 ValueError,

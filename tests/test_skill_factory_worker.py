@@ -9705,9 +9705,23 @@ def test_worker_reseals_named_release_contracts_for_narrow_continuation(
     (scenario_tests / "test_unrelated_legacy.py").write_text(
         "def test_legacy():\n    assert True\n", encoding="utf-8"
     )
+    companion_root = workspace / "skills" / "mail_provider"
+    companion_tests = companion_root / "tests"
+    companion_tests.mkdir(parents=True)
+    (companion_root / "skill.yaml").write_text("tools: []\n", encoding="utf-8")
+    for name in ("test_application_contract.py", "test_behavior_contract.py"):
+        (companion_tests / name).write_text(
+            "def test_contract():\n    assert True\n", encoding="utf-8"
+        )
+    (companion_tests / "test_unrelated_legacy.py").write_text(
+        "def test_legacy():\n    assert True\n", encoding="utf-8"
+    )
     request = {
         "target": {"type": "scenario", "id": "mail_reader"},
-        "artifacts": {"validation_scope": "changed_paths"},
+        "artifacts": {
+            "validation_scope": "changed_paths",
+            "companion_skill_ids": ["mail_provider"],
+        },
     }
 
     selected = LocalSkillFactoryWorker._contract_test_paths(
@@ -9721,7 +9735,44 @@ def test_worker_reseals_named_release_contracts_for_narrow_continuation(
         "projects/mail_reader/tests/test_application_contract.py",
         "scenarios/mail_reader/tests/test_application_contract.py",
         "scenarios/mail_reader/tests/test_behavior_contract.py",
+        "skills/mail_provider/skill.yaml",
+        "skills/mail_provider/tests/test_application_contract.py",
+        "skills/mail_provider/tests/test_behavior_contract.py",
     }
+
+
+def test_owned_skill_effect_checks_cover_exact_project_skills() -> None:
+    from adaos.services.builder.shared_delivery import owned_skill_effect_checks
+
+    checks, errors = owned_skill_effect_checks(
+        project={
+            "components": {
+                "owned": [
+                    {"ref": "scenario:mail_reader"},
+                    {"ref": "skill:mail_provider"},
+                ]
+            }
+        },
+        manifests={
+            "mail_provider": {
+                "tools": [
+                    {"name": "list_messages", "side_effects": "read_only"},
+                    {"name": "archive", "side_effects": "external_write"},
+                ]
+            }
+        },
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "skill.public_tool_effects.strict",
+            "path": "skills/mail_provider/skill.yaml",
+            "component_ref": "skill:mail_provider",
+            "ok": True,
+            "tools": 2,
+        }
+    ]
 
 
 def test_worker_does_not_admit_attachment_bindings_from_system_context(

@@ -10862,6 +10862,23 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 for path in (root / "tests" / name,)
                 if path.is_file()
             )
+        companion_test_roots: set[Path] = set()
+        for skill_id in artifacts.get("companion_skill_ids") or []:
+            token = str(skill_id or "").strip()
+            if not token or Path(token).name != token:
+                continue
+            result.add(f"skills/{token}/skill.yaml")
+            tests_root = workspace / "skills" / token / "tests"
+            companion_test_roots.add(tests_root)
+            result.update(
+                path.relative_to(workspace).as_posix()
+                for name in (
+                    "test_application_contract.py",
+                    "test_behavior_contract.py",
+                )
+                for path in (tests_root / name,)
+                if path.is_file()
+            )
         if str(artifacts.get("validation_scope") or "") != "owned_artifacts":
             return result
         owned_test_roots: set[Path] = set()
@@ -10871,11 +10888,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 owned_test_roots.add(workspace / "skills" / target_id / "tests")
             elif target_kind == "scenario":
                 owned_test_roots.add(workspace / "scenarios" / target_id / "tests")
-        for skill_id in artifacts.get("companion_skill_ids") or []:
-            token = str(skill_id or "").strip()
-            if token and Path(token).name == token:
-                result.add(f"skills/{token}/skill.yaml")
-                owned_test_roots.add(workspace / "skills" / token / "tests")
+        owned_test_roots.update(companion_test_roots)
         for tests_root in owned_test_roots:
             if not tests_root.is_dir():
                 continue

@@ -1503,6 +1503,30 @@ def create_trial(
     permission_decision: bool | Mapping[str, Any] | None = None,
     verification_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    application = _application(application_id, expected_revision)
+    scenario_id = _primary_scenario(application)
+    resolved_verification_evidence = (
+        dict(verification_evidence)
+        if isinstance(verification_evidence, Mapping) and verification_evidence
+        else None
+    )
+    if resolved_verification_evidence is None:
+        from . import automation
+
+        resolved_verification_evidence = automation.trial_verification_evidence(
+            object_type="scenario",
+            object_id=scenario_id,
+            webspace_id=source_webspace_id,
+        )
+        if resolved_verification_evidence.get("ok") is not True:
+            raise ValueError(
+                "Builder Trial verification evidence is unavailable: "
+                + str(
+                    resolved_verification_evidence.get("reason")
+                    or resolved_verification_evidence.get("status")
+                    or "unknown"
+                )
+            )
     intent = {
         "source_webspace_id": source_webspace_id,
         "permission_decision": (
@@ -1510,7 +1534,7 @@ def create_trial(
             if isinstance(permission_decision, Mapping)
             else permission_decision
         ),
-        "verification_evidence": dict(verification_evidence or {}),
+        "verification_evidence": resolved_verification_evidence,
     }
 
     def execute() -> Mapping[str, Any]:
@@ -1525,7 +1549,7 @@ def create_trial(
             source_webspace_id=source_webspace_id,
             publication_project_ref=f"project:{application.legacy_project_id}",
             permission_decision=permission_decision,
-            verification_evidence=verification_evidence,
+            verification_evidence=resolved_verification_evidence,
         )
 
     return _execute_development(
@@ -1898,6 +1922,31 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
         application = _application(application_id, expected_revision)
         scenario_id = _primary_scenario(application)
         if action == "create_trial":
+            verification_evidence = (
+                dict(intent["verification_evidence"])
+                if isinstance(intent.get("verification_evidence"), Mapping)
+                and intent.get("verification_evidence")
+                else None
+            )
+            if verification_evidence is None:
+                from . import automation
+
+                verification_evidence = automation.trial_verification_evidence(
+                    object_type="scenario",
+                    object_id=scenario_id,
+                    webspace_id=str(
+                        intent.get("source_webspace_id") or "desktop"
+                    ),
+                )
+                if verification_evidence.get("ok") is not True:
+                    raise ValueError(
+                        "Builder Trial verification evidence is unavailable: "
+                        + str(
+                            verification_evidence.get("reason")
+                            or verification_evidence.get("status")
+                            or "unknown"
+                        )
+                    )
             return lifecycle.prepare_trial(
                 "scenario",
                 scenario_id,
@@ -1910,11 +1959,7 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
                     if isinstance(intent.get("permission_decision"), (bool, Mapping))
                     else None
                 ),
-                verification_evidence=(
-                    intent.get("verification_evidence")
-                    if isinstance(intent.get("verification_evidence"), Mapping)
-                    else None
-                ),
+                verification_evidence=verification_evidence,
             )
         return lifecycle.decide_trial(
             "scenario",

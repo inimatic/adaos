@@ -460,7 +460,77 @@ def shared_delivery_effect_checks(
     return checks, errors
 
 
+def owned_skill_effect_checks(
+    *,
+    project: Mapping[str, Any],
+    manifests: Mapping[str, Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Verify public-tool effects for every owned skill in an exact Project.
+
+    ``manifests`` is supplied by the caller so the same verifier can operate on
+    an Automation Git commit without reading mutable DEV source.
+    """
+
+    components = project.get("components")
+    owned = components.get("owned") if isinstance(components, Mapping) else []
+    checks: list[dict[str, Any]] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for item in owned or ():
+        if not isinstance(item, Mapping):
+            continue
+        ref = str(item.get("ref") or "").strip()
+        if not ref.startswith("skill:") or ref in seen:
+            continue
+        seen.add(ref)
+        skill_id = ref.split(":", 1)[1].strip()
+        relative = f"skills/{skill_id}/skill.yaml"
+        manifest = manifests.get(skill_id)
+        if not isinstance(manifest, Mapping):
+            errors.append(f"{relative}: owned skill manifest is unavailable")
+            continue
+        tools = manifest.get("tools")
+        if not isinstance(tools, list):
+            errors.append(f"{relative}: public tools declaration must be a list")
+            continue
+        violations: list[str] = []
+        for index, tool in enumerate(tools):
+            if not isinstance(tool, Mapping):
+                violations.append(f"tools[{index}]: invalid declaration")
+                continue
+            name = str(tool.get("name") or f"tools[{index}]").strip()
+            side_effects = (
+                str(tool.get("side_effects") or "")
+                .strip()
+                .lower()
+                .replace("-", "_")
+            )
+            if not side_effects:
+                violations.append(f"{name}: missing side_effects")
+            elif side_effects not in _STRICT_TOOL_EFFECTS:
+                violations.append(
+                    f"{name}: unsupported side_effects {side_effects!r}"
+                )
+        if violations:
+            errors.append(
+                f"{relative}: public tool effect contract is incomplete: "
+                + "; ".join(violations)
+            )
+            continue
+        checks.append(
+            {
+                "kind": "skill.public_tool_effects.strict",
+                "path": relative,
+                "component_ref": ref,
+                "ok": True,
+                "tools": len(tools),
+            }
+        )
+    return checks, errors
+
+
 __all__ = [
+    "owned_skill_effect_checks",
     "portable_contract_reuse_bundle",
     "shared_delivery_effect_checks",
     "shared_delivery_interface",

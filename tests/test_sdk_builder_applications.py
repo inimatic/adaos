@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.sdk.builder import applications
+from adaos.sdk.builder import automation
 from adaos.sdk.core.exporter import export
 from adaos.sdk.developer import compositions
 from adaos.domain.application import Application
@@ -67,6 +68,61 @@ def test_builder_application_create_uses_bounded_composition_and_core(monkeypatc
     assert service.store.get_application("applications").protection["system_application"] is True
     assert created[0][1]["kind"] == "scenario"
     assert created[0][1]["entrypoints"][0]["presentation"] == "scenario:applications"
+
+
+def test_create_trial_derives_and_persists_sealed_automation_evidence(
+    monkeypatch,
+) -> None:
+    application = SimpleNamespace(
+        legacy_project_id="mail_reader",
+        entrypoints=(
+            {"presentation_ref": "scenario:mail_reader"},
+        ),
+    )
+    evidence = {
+        "ok": True,
+        "status": "ready",
+        "source_commit": "a" * 40,
+    }
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(applications, "_application", lambda *_args: application)
+    monkeypatch.setattr(
+        automation,
+        "trial_verification_evidence",
+        lambda **kwargs: ({**evidence, "projection": kwargs}),
+    )
+
+    def execute(action, application_id, **arguments):
+        captured.update(
+            action=action,
+            application_id=application_id,
+            arguments=arguments,
+        )
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(applications, "_execute_development", execute)
+
+    result = applications.create_trial(
+        "mail_reader",
+        source_webspace_id="desktop-dev",
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.develop",
+        expected_revision=2,
+        idempotency_key="trial-mail-reader-1",
+        permission_decision={"approved": True},
+    )
+
+    assert result["status"] == "succeeded"
+    arguments = captured["arguments"]
+    assert arguments["intent"]["verification_evidence"] == {
+        **evidence,
+        "projection": {
+            "object_type": "scenario",
+            "object_id": "mail_reader",
+            "webspace_id": "desktop-dev",
+        },
+    }
 
 
 def test_publish_to_registry_makes_stable_application_public_and_records_receipt(
