@@ -350,6 +350,8 @@ def canonical_materialization_identity(
     user_id: str | None = None,
     roles: Any = None,
     policy_fingerprint: str | None = None,
+    application_id: str | None = None,
+    application_release_digest: str | None = None,
 ) -> dict[str, Any]:
     """
     Build the access-scoped identity for a resolved effective view.
@@ -373,9 +375,20 @@ def canonical_materialization_identity(
     if revision_token and source_token:
         version_token = f"{revision_token}.{source_token[:12]}"
     policy_token = _normalize_materialization_token(policy_fingerprint, fallback="")
+    application_token = str(application_id or "").strip()
+    application_release_token = str(application_release_digest or "").strip()
+    if bool(application_token) != bool(application_release_token):
+        raise ValueError(
+            "Application materialization identity requires both id and release digest"
+        )
     key = f"{webspace_token}:{scenario_token}:{version_token}:{user_token}:roles-{roles_hash}"
     if policy_token:
         key = f"{key}:policy-{policy_token[:12]}"
+    if application_token:
+        application_hash = hashlib.sha1(
+            f"{application_token}:{application_release_token}".encode("utf-8")
+        ).hexdigest()[:12]
+        key = f"{key}:application-{application_hash}"
     key_hash = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
     return {
         "schema": "adaos.materialization.identity.v1",
@@ -390,6 +403,14 @@ def canonical_materialization_identity(
         "roles": role_list,
         "roles_hash": roles_hash,
         "policy_fingerprint": policy_token or None,
+        **(
+            {
+                "application_id": application_token,
+                "application_release_digest": application_release_token,
+            }
+            if application_token
+            else {}
+        ),
     }
 
 
@@ -3913,11 +3934,21 @@ def _scenario_switch_materialization_identity(
         source_mode=source_mode,
     )
     skill_fingerprint = _skill_sources_fingerprint_for_materialization(source_mode)
-    from adaos.services.applications.runtime_selection import selected_trial, selection_snapshot
+    from adaos.services.applications.runtime_selection import (
+        selected_application,
+        selected_trial,
+        selection_snapshot,
+    )
 
     ctx = get_ctx()
     selections = selection_snapshot(ctx, target_webspace)
     selected = selected_trial(ctx, target_webspace, "scenario", target_scenario)
+    application = selected_application(
+        ctx,
+        target_webspace,
+        "scenario",
+        target_scenario,
+    )
     if selected is not None:
         source_fingerprint = f"trial:{selected.release_digest}"
     if selections:
@@ -3928,6 +3959,10 @@ def _scenario_switch_materialization_identity(
         source_fingerprint=source_fingerprint,
         policy_fingerprint=f"skills:{skill_fingerprint}" if skill_fingerprint else None,
         revision=selected.candidate_id if selected is not None else None,
+        application_id=application.application_id if application is not None else None,
+        application_release_digest=(
+            application.release_digest if application is not None else None
+        ),
     )
 
 

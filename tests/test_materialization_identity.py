@@ -1,3 +1,5 @@
+import pytest
+
 from adaos.services.scenario.webspace_runtime import canonical_materialization_identity
 
 
@@ -47,3 +49,40 @@ def test_canonical_materialization_identity_uses_current_without_revision_or_sou
     assert identity["revision"] is None
     assert identity["source_fingerprint"] is None
     assert ":current:guest:" in identity["key"]
+
+
+def test_canonical_materialization_identity_pins_application_release() -> None:
+    first = canonical_materialization_identity(
+        webspace_id="desktop",
+        scenario_id="mail_focus_reader",
+        application_id="mail_focus_reader",
+        application_release_digest="sha256:first",
+    )
+    second = canonical_materialization_identity(
+        webspace_id="desktop",
+        scenario_id="mail_focus_reader",
+        application_id="mail_focus_reader",
+        application_release_digest="sha256:second",
+    )
+
+    assert first["application_id"] == "mail_focus_reader"
+    assert first["application_release_digest"] == "sha256:first"
+    assert first["key"] != second["key"]
+    assert first["key_hash"] != second["key_hash"]
+
+
+@pytest.mark.parametrize(
+    ("application_id", "application_release_digest"),
+    [("mail_focus_reader", None), (None, "sha256:first")],
+)
+def test_canonical_materialization_identity_rejects_partial_application_authority(
+    application_id: str | None,
+    application_release_digest: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="requires both"):
+        canonical_materialization_identity(
+            webspace_id="desktop",
+            scenario_id="mail_focus_reader",
+            application_id=application_id,
+            application_release_digest=application_release_digest,
+        )

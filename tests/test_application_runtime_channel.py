@@ -184,3 +184,29 @@ def test_trial_resolution_is_node_wide_but_never_overrides_dev(tmp_path, monkeyp
     assert len(calls) == 1
     assert runtime_selection.selected_trial(get_ctx(), "preview", "scenario", "screen") is None
     assert len(calls) == 1
+
+
+def test_selected_application_is_webspace_exact_and_never_overrides_dev(tmp_path, monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.applications import runtime_selection
+    from adaos.services.workspaces import index
+
+    desktop = selection()
+    mobile = selection("mobile")
+    release = SimpleNamespace(project_release=SimpleNamespace(
+        components=[SimpleNamespace(kind="scenario", artifact_id="screen")]))
+    monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _: SimpleNamespace(
+        list_runtime_selections=lambda: [desktop, mobile],
+        get_release=lambda *_args: release,
+    ))
+    monkeypatch.setattr(index, "get_workspace", lambda name: SimpleNamespace(is_dev=name == "preview"))
+
+    assert runtime_selection.selected_application(
+        get_ctx(), "desktop", "scenario", "screen"
+    ) == desktop
+    assert runtime_selection.selected_application(
+        get_ctx(), "mobile", "scenario", "screen"
+    ) == mobile
+    assert runtime_selection.selected_application(
+        get_ctx(), "preview", "scenario", "screen"
+    ) is None

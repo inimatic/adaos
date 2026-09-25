@@ -13,6 +13,41 @@ def selection_snapshot(ctx: AgentContext, webspace_id: str) -> list[dict]:
     return [item.to_dict() for item in store.list_runtime_selections() if item.webspace_id == webspace_id]
 
 
+def selected_application(
+    ctx: AgentContext,
+    webspace_id: str,
+    kind: str,
+    component_id: str,
+):
+    """Resolve one selected Application which delivers a materialized component."""
+
+    target_webspace = str(webspace_id or "").strip()
+    if target_webspace:
+        from adaos.services.agent_context import use_ctx
+        from adaos.services.workspaces.index import get_workspace
+
+        with use_ctx(ctx):
+            workspace = get_workspace(target_webspace)
+        if workspace is not None and workspace.is_dev:
+            return None
+    store = ApplicationStore(Path(ctx.paths.state_dir()))
+    matches = []
+    for selection in store.list_runtime_selections():
+        if target_webspace and selection.webspace_id != target_webspace:
+            continue
+        release = store.get_release(selection.application_id, selection.release_digest)
+        if any(
+            item.kind == kind and item.artifact_id == component_id
+            for item in release.project_release.components
+        ):
+            matches.append(selection)
+    if len(matches) > 1:
+        raise TrialRuntimeUnavailable(
+            "Ambiguous Application runtime selection for component"
+        )
+    return matches[0] if matches else None
+
+
 def selected_trial(ctx: AgentContext, webspace_id: str, kind: str, component_id: str):
     store = ApplicationStore(Path(ctx.paths.state_dir()))
     matches = []
