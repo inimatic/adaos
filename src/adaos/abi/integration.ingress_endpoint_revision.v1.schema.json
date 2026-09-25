@@ -4,7 +4,7 @@
   "title": "AdaOS Integration Ingress Endpoint Revision v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "endpoint_ref", "revision", "profile_ref", "profile_digest", "environment_profile_ref", "callback_uri", "callback_profile_id", "provider_registration_ref", "route_binding_ref", "credential_authority_ref", "generation", "status", "guarantees", "revision_digest"],
+  "required": ["schema", "endpoint_ref", "revision", "profile_ref", "profile_digest", "environment_profile_ref", "zone_id", "callback_uri", "callback_profile_id", "provider_registration_ref", "route_binding_ref", "credential_authority_ref", "generation", "status", "guarantees", "revision_digest"],
   "properties": {
     "schema": {"const": "adaos.integration.ingress_endpoint_revision.v1"},
     "endpoint_ref": {"type": "string", "pattern": "^ingress-endpoint:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
@@ -12,6 +12,7 @@
     "profile_ref": {"type": "string", "pattern": "^ingress-profile:"},
     "profile_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "environment_profile_ref": {"type": "string", "pattern": "^environment-profile:"},
+    "zone_id": {"enum": ["local", "us", "eu", "ru", "in", "ch"]},
     "callback_uri": {"type": "string", "pattern": "^https?://", "maxLength": 2048},
     "callback_profile_id": {"type": "string", "pattern": "^cbp_[A-Za-z0-9_-]{8,120}$"},
     "provider_registration_ref": {"type": "string", "pattern": "^provider-registration:"},

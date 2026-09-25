@@ -29,6 +29,8 @@ from adaos.services.integrations.ingress import (
     IntegrationIngressBroker,
     IntegrationIngressError,
     google_oauth_ingress_profile,
+    materialize_google_oauth_endpoint,
+    public_google_oauth_callback_uri,
 )
 from adaos.apps.api import provider_oauth
 
@@ -183,6 +185,7 @@ def test_public_attempt_registers_only_hashed_rendezvous_and_decrypts_envelope()
     assert started["redirect_uri"] == PUBLIC_GOOGLE_OAUTH_CALLBACK_URI
     assert len(captured) == 1
     projection = captured[0]
+    assert projection["zone_id"] == "us"
     assert projection["state_hash"] == started["state_hash"]
     assert started["state"] not in json.dumps(projection)
 
@@ -202,7 +205,8 @@ def test_public_attempt_registers_only_hashed_rendezvous_and_decrypts_envelope()
         separators=(",", ":"),
     ).encode("utf-8")
     aad = (
-        f"{projection['attempt_ref']}\0{projection['route_binding_ref']}\0{projection['generation']}"
+        f"{projection['attempt_ref']}\0{projection['zone_id']}\0"
+        f"{projection['route_binding_ref']}\0{projection['generation']}"
     ).encode("utf-8")
     encrypted = AESGCM(content_key).encrypt(nonce, payload, aad)
     encrypted_key = public_key.encrypt(
@@ -220,6 +224,7 @@ def test_public_attempt_registers_only_hashed_rendezvous_and_decrypts_envelope()
         endpoint_revision=projection["endpoint_revision"],
         profile_ref=projection["profile_ref"],
         issuer_ref=projection["issuer_ref"],
+        zone_id=projection["zone_id"],
         audience=projection["route_binding_ref"],
         route_binding_ref=projection["route_binding_ref"],
         generation=projection["generation"],
@@ -238,6 +243,7 @@ def test_public_attempt_registers_only_hashed_rendezvous_and_decrypts_envelope()
     invalid_cases = (
         ("profile_ref", "ingress-profile:oauth.other@1", "profile_mismatch"),
         ("issuer_ref", "issuer:other", "issuer_mismatch"),
+        ("zone_id", "ru", "zone_mismatch"),
         ("endpoint_ref", "ingress-endpoint:other", "endpoint_mismatch"),
         ("endpoint_revision", 2, "generation_mismatch"),
         ("audience", "ingress-route:other", "audience_mismatch"),
@@ -257,12 +263,55 @@ def test_public_attempt_registers_only_hashed_rendezvous_and_decrypts_envelope()
             broker.decrypt_routed_envelope(changed.to_dict())
 
 
+def test_public_endpoint_materialization_is_zone_aware_and_portable_profile_is_not() -> None:
+    central = materialize_google_oauth_endpoint(
+        PUBLIC_CONNECTED_ENVIRONMENT_REF,
+        zone_id="eu",
+    ).to_dict()
+    ru = materialize_google_oauth_endpoint(
+        PUBLIC_CONNECTED_ENVIRONMENT_REF,
+        zone_id="ru",
+    ).to_dict()
+
+    assert central["callback_uri"] == PUBLIC_GOOGLE_OAUTH_CALLBACK_URI
+    assert central["zone_id"] == "eu"
+    assert central["endpoint_ref"] == "ingress-endpoint:google-oauth-public-eu"
+    assert ru["callback_uri"] == public_google_oauth_callback_uri("ru")
+    assert ru["callback_uri"].startswith("https://ru.integrations.inimatic.com/")
+    assert ru["zone_id"] == "ru"
+    assert ru["route_binding_ref"] == "ingress-route:google-oauth-public-ru"
+    assert central["profile_ref"] == ru["profile_ref"]
+    assert central["profile_digest"] == ru["profile_digest"]
+
+
+def test_public_broker_registers_the_selected_zone() -> None:
+    captured: list[dict] = []
+
+    class Registrar:
+        def register_attempt(self, projection):
+            captured.append(dict(projection))
+            return {"ok": True}
+
+    broker = IntegrationIngressBroker(
+        vault=Vault(),
+        environment_profile_ref=PUBLIC_CONNECTED_ENVIRONMENT_REF,
+        zone_id="ru",
+        clock=lambda: 2_000_000_000.0,
+        public_registrar=Registrar(),
+    )
+    started = _begin(broker)
+
+    assert started["redirect_uri"] == public_google_oauth_callback_uri("ru")
+    assert started["attempt"]["zone_id"] == "ru"
+    assert captured[0]["zone_id"] == "ru"
+
+
 def test_public_delivery_returns_digest_addressed_exact_acknowledgement(monkeypatch) -> None:
     envelope = {
         "envelope_ref": "ingress-envelope:test",
         "attempt_ref": "callback-attempt:test",
-        "endpoint_ref": "ingress-endpoint:google-oauth-public",
-        "audience": "ingress-route:google-oauth-public",
+        "endpoint_ref": "ingress-endpoint:google-oauth-public-us",
+        "audience": "ingress-route:google-oauth-public-us",
     }
 
     class Broker:

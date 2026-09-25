@@ -8,11 +8,12 @@ Last reviewed: 2026-09-25.
 Implementation checkpoint (2026-09-25): EIG0's OAuth contracts and inventory,
 the EIG1 broker/loopback implementation, and the repository implementation of
 EIG2's Root rendezvous, encrypted delivery, bounded retry, neutral response and
-exact Core acknowledgement are complete. The isolated
-`integrations.inimatic.com` nginx/ACME configuration is committed, but DNS,
-certificate issuance, WAF/rate-limit policy and a live Internet-to-Core proof
-remain deployment work. Accordingly `EIG2-01` and the live EIG3 items stay
-open; repository tests are not presented as external operational evidence.
+exact Core acknowledgement are complete. The zone-aware isolated nginx/ACME
+configuration is committed for `integrations.inimatic.com` and
+`ru.integrations.inimatic.com`, but DNS, certificate issuance, WAF/rate-limit
+policy and a live Internet-to-Core proof remain deployment work. Accordingly
+`EIG2-01` and the live EIG3 items stay open; repository tests are not presented
+as external operational evidence.
 
 ## Outcome
 
@@ -50,6 +51,10 @@ tests and exact-revision evidence exist.
 7. Do not let provider packages or Builder concatenate callback hosts/paths.
 8. Do not make webhook generalization a prerequisite for the Gmail public
    callback proof.
+9. Do not derive callback hosts in a provider package, Application or Builder;
+   materialize them from the admitted subnet/Root zone map.
+10. Do not redirect or fall back between zone ingress authorities during an
+    active callback attempt.
 
 ## Delivery Sequence
 
@@ -118,8 +123,9 @@ closed through the common broker.
 
 ## EIG2: Public OAuth Ingress And Routed Delivery
 
-**Outcome:** `integrations.inimatic.com` can deliver a bounded OAuth response to
-an exact outbound-connected Core without becoming credential authority.
+**Outcome:** the ingress authority admitted for a subnet's Root zone can
+deliver a bounded OAuth response to an exact outbound-connected Core without
+becoming credential authority.
 
 - [ ] `[must]` `EIG2-01` Provision the isolated TLS origin, DNS, CSP, WAF/body
   limits, request redaction and route-class rate limits.
@@ -135,8 +141,10 @@ an exact outbound-connected Core without becoming credential authority.
   no code/state leakage and no arbitrary return URL.
 - [x] `[must]` `EIG2-07` Exercise wrong class, endpoint, issuer, route,
   generation, expiry, replay, offline node and acknowledgement loss.
-- [ ] `[should]` `EIG2-08` Add regional endpoint materialization and data-residency
-  policy without automatic region switching.
+- [x] `[must]` `EIG2-08` Bind endpoint materialization, Root rendezvous,
+  encrypted delivery and evidence to the subnet/Root zone; support the central
+  `integrations.inimatic.com` and isolated
+  `ru.integrations.inimatic.com` authorities without automatic zone switching.
 - [ ] `[could]` `EIG2-09` Add synthetic health probes that cannot create an OAuth
   attempt or provider connection.
 - [ ] `[deferred]` `EIG2-10` Exchange OAuth codes or retain provider tokens at the
@@ -153,8 +161,9 @@ public profile without changing consumer Application semantics or credentials.
 
 - [x] `[must]` `EIG3-01` Create an immutable Google OAuth callback profile and
   public endpoint revision; do not use `google.gmail` as its semantic identity.
-- [ ] `[must]` `EIG3-02` Register the exact public URI in the Google OAuth client
-  while retaining the loopback URI during the migration window.
+- [ ] `[must]` `EIG3-02` Register every exact activated zonal public URI in the
+  Google OAuth client while retaining the loopback URI during the migration
+  window; wildcard or cross-zone redirect fallback is not accepted.
 - [x] `[must]` `EIG3-03` Select `public-connected` through environment/binding
   resolution rather than a provider-specific flag.
 - [ ] `[must]` `EIG3-04` Complete live authorization, local code exchange, vault
@@ -262,7 +271,8 @@ portable integration semantics
   != derived health and impact views
 ```
 
-Public ingress may evolve, move regions and change physical Root routes without
-changing unaffected Application or capability identities. Any provider
-registration, credential authority or delivery-guarantee change is explicit,
-planned, evidenced and reversible within its declared boundary.
+Public ingress may evolve, split zone authorities and change physical Root
+routes without changing unaffected Application or capability identities. A
+subnet's zone placement, provider registration, credential authority or
+delivery-guarantee change is explicit, planned, evidenced and reversible
+within its declared boundary.

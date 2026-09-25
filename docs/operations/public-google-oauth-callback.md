@@ -4,7 +4,9 @@ Status: operator procedure for the EIG3 migration window.
 
 ## Prerequisites
 
-- DNS `integrations.inimatic.com` resolves to the selected Root ingress.
+- DNS for the selected zone authority resolves to that zone's Root ingress:
+  `integrations.inimatic.com` for central/shared zones or
+  `ru.integrations.inimatic.com` for the isolated RU zone.
 - The isolated ingress vhost has a valid TLS certificate and exposes only
   `/v1/oauth/callback/cbp_*` plus its health probe.
 - Root and the selected Core have a healthy outbound hub route.
@@ -14,11 +16,22 @@ Status: operator procedure for the EIG3 migration window.
 ## Google registration
 
 In the existing Google Cloud **Web application** OAuth client retain the local
-development URI during migration and add this exact URI:
+development URI during migration and add the exact URI for every activated
+zone. For the central/shared authority:
 
 ```text
 https://integrations.inimatic.com/v1/oauth/callback/cbp_google_oauth_primary
 ```
+
+For the isolated RU authority:
+
+```text
+https://ru.integrations.inimatic.com/v1/oauth/callback/cbp_google_oauth_primary
+```
+
+Do not use wildcard redirect URIs and do not route an RU callback through the
+central authority (or conversely). An authorization attempt is pinned to one
+zone until completion or expiry.
 
 Do not create an Application-specific URI. This callback profile represents
 the Google authorization-server/client registration and may serve separately

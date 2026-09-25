@@ -28,6 +28,13 @@ from adaos.domain.integration_ingress import (
     IngressProfile,
     RoutedIngressEnvelope,
 )
+from adaos.services.zone_hosts import (
+    DEFAULT_PUBLIC_ROOT_BASE_URL,
+    DEFAULT_PUBLIC_ZONE_ID,
+    canonical_zone_id,
+    zone_integration_ingress_base_url,
+    zone_public_base_url,
+)
 
 
 GOOGLE_OAUTH_INGRESS_PROFILE_REF = (
@@ -40,9 +47,18 @@ GOOGLE_OAUTH_CALLBACK_PROFILE_ID = "cbp_google_oauth_primary"
 LOCAL_GOOGLE_OAUTH_CALLBACK_URI = (
     "http://127.0.0.1:8777/api/providers/google/gmail/oauth/callback"
 )
-PUBLIC_GOOGLE_OAUTH_CALLBACK_URI = (
-    "https://integrations.inimatic.com/v1/oauth/callback/"
-    + GOOGLE_OAUTH_CALLBACK_PROFILE_ID
+
+
+def public_google_oauth_callback_uri(zone_id: str | None) -> str:
+    return (
+        zone_integration_ingress_base_url(zone_id)
+        + "/v1/oauth/callback/"
+        + GOOGLE_OAUTH_CALLBACK_PROFILE_ID
+    )
+
+
+PUBLIC_GOOGLE_OAUTH_CALLBACK_URI = public_google_oauth_callback_uri(
+    DEFAULT_PUBLIC_ZONE_ID
 )
 _ATTEMPT_SCHEMA = "adaos.integration.oauth_attempt_authority.v1"
 _CONSUMED_SCHEMA = "adaos.integration.oauth_attempt_consumed.v1"
@@ -104,6 +120,8 @@ def google_oauth_ingress_profile() -> IngressProfile:
 
 def materialize_google_oauth_endpoint(
     environment_profile_ref: str,
+    *,
+    zone_id: str | None = None,
 ) -> IngressEndpointRevision:
     profile = google_oauth_ingress_profile()
     public = environment_profile_ref == PUBLIC_CONNECTED_ENVIRONMENT_REF
@@ -112,20 +130,28 @@ def materialize_google_oauth_endpoint(
         PUBLIC_CONNECTED_ENVIRONMENT_REF,
     }:
         raise IntegrationIngressError("ingress_environment_not_supported")
-    suffix = "public" if public else "loopback"
+    materialized_zone = (
+        (canonical_zone_id(zone_id) or DEFAULT_PUBLIC_ZONE_ID) if public else "local"
+    )
+    suffix = f"public-{materialized_zone}" if public else "loopback"
     return IngressEndpointRevision.create(
         endpoint_ref=f"ingress-endpoint:google-oauth-{suffix}",
         revision=1,
         profile_ref=profile.profile_ref,
         profile_digest=profile.digest,
         environment_profile_ref=environment_profile_ref,
+        zone_id=materialized_zone,
         callback_uri=(
-            PUBLIC_GOOGLE_OAUTH_CALLBACK_URI
+            public_google_oauth_callback_uri(materialized_zone)
             if public
             else LOCAL_GOOGLE_OAUTH_CALLBACK_URI
         ),
         callback_profile_id=GOOGLE_OAUTH_CALLBACK_PROFILE_ID,
-        provider_registration_ref="provider-registration:google-oauth-primary",
+        provider_registration_ref=(
+            f"provider-registration:google-oauth-primary-{materialized_zone}"
+            if public
+            else "provider-registration:google-oauth-primary-loopback"
+        ),
         route_binding_ref=f"ingress-route:google-oauth-{suffix}",
         credential_authority_ref="credential-authority:core-local",
         generation=1,
@@ -186,11 +212,13 @@ class IntegrationIngressBroker:
         *,
         vault: Any,
         environment_profile_ref: str = LOCAL_DEVELOPMENT_ENVIRONMENT_REF,
+        zone_id: str | None = None,
         clock: Callable[[], float] = time.time,
         public_registrar: PublicAttemptRegistrar | None = None,
     ) -> None:
         self.vault = vault
         self.environment_profile_ref = _text(environment_profile_ref)
+        self.zone_id = canonical_zone_id(zone_id) or DEFAULT_PUBLIC_ZONE_ID
         self.clock = clock
         self.public_registrar = public_registrar
 
@@ -200,7 +228,10 @@ class IntegrationIngressBroker:
 
     @property
     def endpoint(self) -> IngressEndpointRevision:
-        return materialize_google_oauth_endpoint(self.environment_profile_ref)
+        return materialize_google_oauth_endpoint(
+            self.environment_profile_ref,
+            zone_id=self.zone_id,
+        )
 
     @staticmethod
     def _pending_key(state_hash: str) -> str:
@@ -254,6 +285,7 @@ class IntegrationIngressBroker:
             attempt_ref=attempt.attempt_ref,
             profile_ref=str(value["profile_ref"]),
             endpoint_ref=str(value["endpoint_ref"]),
+            zone_id=str(value["zone_id"]),
             state_hash=str(value["state_hash"]),
             outcome=outcome,
             observed_at=_iso(self.clock()),
@@ -317,6 +349,7 @@ class IntegrationIngressBroker:
             endpoint_revision_digest=endpoint.digest,
             profile_ref=profile.profile_ref,
             issuer_ref=GOOGLE_ISSUER_REF,
+            zone_id=endpoint.to_dict()["zone_id"],
             provider_connection_ref=provider_connection_ref,
             binding_instance_ref=binding_instance_ref,
             application_ref=application_ref,
@@ -347,6 +380,7 @@ class IntegrationIngressBroker:
                 "callback_profile_id": endpoint.to_dict()["callback_profile_id"],
                 "profile_ref": profile.profile_ref,
                 "issuer_ref": GOOGLE_ISSUER_REF,
+                "zone_id": endpoint.to_dict()["zone_id"],
                 "endpoint_ref": endpoint.endpoint_ref,
                 "endpoint_revision": endpoint.to_dict()["revision"],
                 "endpoint_revision_digest": endpoint.digest,
@@ -450,6 +484,8 @@ class IntegrationIngressBroker:
             raise IntegrationIngressError("ingress_envelope_profile_mismatch")
         if value["issuer_ref"] != profile["issuer_ref"]:
             raise IntegrationIngressError("ingress_envelope_issuer_mismatch")
+        if value["zone_id"] != endpoint["zone_id"]:
+            raise IntegrationIngressError("ingress_envelope_zone_mismatch")
         if value["audience"] != endpoint["route_binding_ref"]:
             raise IntegrationIngressError("ingress_envelope_audience_mismatch")
         if value["route_binding_ref"] != endpoint["route_binding_ref"]:
@@ -480,7 +516,8 @@ class IntegrationIngressBroker:
             str(value["auth_tag"])
         )
         aad = (
-            f"{value['attempt_ref']}\0{value['audience']}\0{value['generation']}"
+            f"{value['attempt_ref']}\0{value['zone_id']}\0"
+            f"{value['audience']}\0{value['generation']}"
         ).encode("utf-8")
         try:
             plaintext = AESGCM(content_key).decrypt(
@@ -508,19 +545,32 @@ def broker_from_context(
         or os.getenv("ADAOS_ENVIRONMENT_PROFILE_REF")
         or LOCAL_DEVELOPMENT_ENVIRONMENT_REF
     )
+    settings = getattr(ctx, "settings", None)
+    config = getattr(ctx, "config", None)
+    zone_raw = _text(
+        os.getenv("ADAOS_ZONE_ID")
+        or getattr(config, "zone_id", None)
+        or getattr(settings, "zone_id", None)
+    )
+    zone_id = canonical_zone_id(zone_raw)
+    if zone_raw and zone_id is None:
+        raise IntegrationIngressError("ingress_zone_not_supported")
+    zone_id = zone_id or DEFAULT_PUBLIC_ZONE_ID
     registrar: RootIngressRegistryClient | None = None
     if environment_profile_ref == PUBLIC_CONNECTED_ENVIRONMENT_REF:
         from adaos.services.personalization_runtime import current_subnet_id
-        from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
-        settings = getattr(ctx, "settings", None)
-        config = getattr(ctx, "config", None)
         root_settings = getattr(config, "root_settings", None)
         root_base = _text(
             getattr(settings, "api_base", None)
             or getattr(root_settings, "base_url", None)
             or DEFAULT_PUBLIC_ROOT_BASE_URL
         )
+        if root_base.rstrip("/") in {
+            DEFAULT_PUBLIC_ROOT_BASE_URL,
+            "http://api.inimatic.com",
+        }:
+            root_base = zone_public_base_url(zone_id)
         root_token = _text(
             getattr(settings, "root_token", None)
             or getattr(root_settings, "token", None)
@@ -533,6 +583,7 @@ def broker_from_context(
     return IntegrationIngressBroker(
         vault=vault,
         environment_profile_ref=environment_profile_ref,
+        zone_id=zone_id,
         clock=clock,
         public_registrar=registrar,
     )
@@ -552,4 +603,5 @@ __all__ = [
     "broker_from_context",
     "google_oauth_ingress_profile",
     "materialize_google_oauth_endpoint",
+    "public_google_oauth_callback_uri",
 ]

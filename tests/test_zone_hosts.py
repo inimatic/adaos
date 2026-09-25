@@ -3,6 +3,8 @@ from __future__ import annotations
 from adaos.services.zone_hosts import (
     canonical_zone_id,
     resolve_zone_for_server,
+    zone_integration_ingress_base_url,
+    zone_integration_ingress_host,
     zone_public_base_url,
     zone_public_host,
 )
@@ -25,6 +27,14 @@ def test_zone_public_base_url_maps_logical_zones_to_shared_hosts() -> None:
     assert zone_public_base_url("ru") == "https://ru.api.inimatic.com"
     assert zone_public_base_url("us") == "https://api.inimatic.com"
     assert zone_public_base_url("in") == "https://api.inimatic.com"
+
+
+def test_zone_integration_ingress_host_uses_the_admitted_zone_authority() -> None:
+    assert zone_integration_ingress_host("ru") == "ru.integrations.inimatic.com"
+    assert zone_integration_ingress_host("russia") == "ru.integrations.inimatic.com"
+    assert zone_integration_ingress_host("us") == "integrations.inimatic.com"
+    assert zone_integration_ingress_host("eu") == "integrations.inimatic.com"
+    assert zone_integration_ingress_base_url("ru") == "https://ru.integrations.inimatic.com"
 
 
 def test_resolve_zone_for_server_keeps_supported_requested_zone() -> None:

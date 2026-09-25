@@ -5,6 +5,8 @@ from typing import Final
 CENTRAL_PUBLIC_HOST: Final[str] = "api.inimatic.com"
 RU_PUBLIC_HOST: Final[str] = "ru.api.inimatic.com"
 PUBLIC_APP_HOST: Final[str] = "inimatic.com"
+CENTRAL_INTEGRATION_INGRESS_HOST: Final[str] = "integrations.inimatic.com"
+RU_INTEGRATION_INGRESS_HOST: Final[str] = "ru.integrations.inimatic.com"
 DEFAULT_PUBLIC_ZONE_ID: Final[str] = "us"
 DEFAULT_PUBLIC_ROOT_BASE_URL: Final[str] = f"https://{CENTRAL_PUBLIC_HOST}"
 DEFAULT_PUBLIC_APP_BASE_URL: Final[str] = f"https://{PUBLIC_APP_HOST}"
@@ -72,6 +74,27 @@ def zone_public_base_url(zone_id: str | None, *, scheme: str = "https") -> str:
     if normalized_scheme not in {"http", "https"}:
         normalized_scheme = "https"
     return f"{normalized_scheme}://{zone_public_host(zone_id)}"
+
+
+def zone_integration_ingress_host(zone_id: str | None) -> str:
+    """Return the physical callback authority admitted for a subnet zone.
+
+    Logical central zones currently share one Root ingress authority.  The RU
+    zone is isolated.  Callers must use this placement mapping instead of
+    constructing a hostname from a zone id.
+    """
+
+    canonical = canonical_zone_id(zone_id)
+    return RU_INTEGRATION_INGRESS_HOST if canonical == "ru" else CENTRAL_INTEGRATION_INGRESS_HOST
+
+
+def zone_integration_ingress_base_url(
+    zone_id: str | None, *, scheme: str = "https"
+) -> str:
+    normalized_scheme = str(scheme or "https").strip().lower()
+    if normalized_scheme not in {"http", "https"}:
+        normalized_scheme = "https"
+    return f"{normalized_scheme}://{zone_integration_ingress_host(zone_id)}"
 
 
 def zone_public_nats_ws_url(zone_id: str | None, *, path: str = "/nats") -> str:

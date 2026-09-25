@@ -95,7 +95,8 @@ endpoint_ref: ingress-endpoint:<opaque-id>
 revision: 3
 profile_ref: ingress-profile:oauth.authorization-code.google@1
 environment_profile_ref: environment-profile:public-connected@1
-public_uri: https://integrations.inimatic.com/v1/oauth/callback/cbp_<opaque-id>
+zone_id: ru
+callback_uri: https://ru.integrations.inimatic.com/v1/oauth/callback/cbp_<opaque-id>
 provider_registration_ref: provider-registration:<opaque-id>
 route_binding_ref: ingress-route:<opaque-id>
 credential_authority_ref: credential-authority:core-local
@@ -154,13 +155,26 @@ are explicit and bounded by the profile.
 
 ## Public URI Namespace
 
-Use one isolated integration origin with separate operational route classes:
+Use one isolated integration origin per physical Root-zone authority, with
+separate operational route classes:
 
 ```text
-https://integrations.inimatic.com/v1/oauth/callback/{callback_profile_id}
-https://integrations.inimatic.com/v1/webhooks/{endpoint_id}
-https://integrations.inimatic.com/v1/continuations/{attempt_id}
+https://{zone-ingress-authority}/v1/oauth/callback/{callback_profile_id}
+https://{zone-ingress-authority}/v1/webhooks/{endpoint_id}
+https://{zone-ingress-authority}/v1/continuations/{attempt_id}
 ```
+
+The current placement map is:
+
+| Subnet/Root zone family | Ingress authority |
+| --- | --- |
+| central/shared (`us`, `eu`, `in`, `ch`) | `integrations.inimatic.com` |
+| isolated RU (`ru`) | `ru.integrations.inimatic.com` |
+
+This mapping is platform authority. Provider packages, Applications and
+Builder never derive a host by concatenating a zone label. Adding or splitting
+a zone changes the admitted placement map and endpoint revisions, not portable
+capability or ingress-profile identity.
 
 `callback_profile_id` identifies a stable OAuth authorization-server/client
 registration profile, not a skill or business capability. A Google OAuth
@@ -169,16 +183,19 @@ Google registrations may require different consent, scopes, regions or
 verification. Therefore `google.gmail` is not a canonical public route
 identity.
 
-One OAuth redirect URI is registered per admitted callback profile by default.
+One OAuth redirect URI is registered per admitted callback profile and zone
+authority by default. A provider registration may list multiple zonal URIs
+only as explicit endpoint revisions; wildcard redirect hosts are forbidden.
 Sharing a URI across issuers is allowed only when the profile has an explicit
 issuer-identification and mix-up defense. Changing a provider-registered URI is
 a coordinated endpoint migration, not a normal package or Application update.
 Old URI revisions remain routable only for their bounded migration window.
 
-`integrations.inimatic.com` is intentionally separate from the main
-`inimatic.com` web origin. It has independent cookies, CSP, request limits,
-WAF policy, logging redaction and operational ownership. The main client must
-not observe authorization codes or raw webhook payloads.
+Each `*.integrations.inimatic.com` authority is intentionally separate from
+the main `inimatic.com` web origin and from every other zone authority. It has
+independent cookies, CSP, request limits, WAF policy, logging redaction and
+operational ownership. The main client must not observe authorization codes or
+raw webhook payloads.
 
 ## CBS Placement
 
@@ -246,7 +263,7 @@ Application
   -> provider authorization URL with exact redirect_uri and opaque state
 
 provider authorization server
-  -> integrations.inimatic.com OAuth route
+  -> admitted zone integration authority OAuth route
   -> validate endpoint profile, state projection, expiry and replay
   -> encrypted delivery to the exact admitted subnet/node route
   -> local broker and adapter validate the full attempt and issuer
@@ -269,7 +286,7 @@ attempt.
 
 ```text
 provider
-  -> integrations.inimatic.com webhook endpoint
+  -> admitted zone integration authority webhook endpoint
   -> endpoint/profile lookup, generic admission and bounded body capture
   -> verification according to the admitted verifier placement
   -> durable encrypted IngressDelivery acceptance
@@ -309,9 +326,11 @@ The route must enforce:
 - class-specific retention and replay rules;
 - redaction of URI query data and sensitive payloads from diagnostics.
 
-Regional ingress origins may be introduced for data-residency requirements.
-The selected region becomes part of the endpoint materialization and provider
-registration. It is not inferred or changed during a callback.
+The subnet's admitted Root zone selects the ingress authority when the endpoint
+revision is materialized. `zone_id` is bound into the endpoint digest, attempt,
+Root rendezvous, encrypted envelope and evidence. The selected zone also
+becomes part of provider registration. It is never inferred from a callback,
+redirected to another zone or changed while an attempt is active.
 
 ## Core And Skill-Facing API
 
@@ -334,7 +353,7 @@ subscription = integrations.ensure_webhook_subscription(
 The selected `EnvironmentProfile` decides materialization:
 
 - `local-development` returns an admitted loopback endpoint;
-- `public-connected` returns the admitted `integrations.inimatic.com` endpoint;
+- `public-connected` returns the endpoint admitted for the subnet's Root zone;
 - a profile without the required ingress guarantees fails closed with an
   actionable explanation.
 
@@ -348,8 +367,8 @@ handlers. Applications never declare a callback URL or handler.
    inactive and ambiguous endpoints fail closed.
 2. OAuth `state` is high-entropy, single-use, time-bounded and stored only as a
    hash in public authority.
-3. An OAuth attempt is bound to endpoint revision, issuer, provider connection,
-   binding, subject, Application, route and return intent.
+3. An OAuth attempt is bound to zone, endpoint revision, issuer, provider
+   connection, binding, subject, Application, route and return intent.
 4. PKCE S256 is required where supported. The verifier remains in local
    credential authority.
 5. Authorization codes, tokens, secrets and unredacted provider error payloads
@@ -387,12 +406,15 @@ retry and dead-letter behavior have executable evidence.
 ## Acceptance Criteria
 
 - one provider-registered OAuth URI per callback profile serves every admitted
-  subnet without exposing tenant, subnet or node identifiers;
+  subnet in its zone authority without exposing tenant, subnet or node
+  identifiers;
 - the provider completes OAuth while the target node has only an outbound Root
   connection;
 - code exchange and all long-lived credentials remain in target Core;
 - wrong class, issuer, endpoint, route, state, generation, expiry and replay
   fail closed with redacted evidence;
+- cross-zone registration, callback delivery and replay fail closed without
+  falling back to a global or neighbouring zone;
 - local-development and public-connected materializations preserve portable
   binding and Application semantics;
 - two Applications explicitly reuse one Core-owned provider connection without
