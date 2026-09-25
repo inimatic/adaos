@@ -2,6 +2,9 @@
 
 Status: validated-local beta proof, 2026-09-25.
 
+Follow-up: the optimized matched authoring run is recorded in
+[Gmail CBS Fourth-Consumer Matched Builder Proof](gmail-cbs-fourth-consumer-builder-proof-2026-09-25.md).
+
 This checkpoint exercises the complete Builder-to-workspace path for a third
 consumer of `capability:mail.messages.manage@1.0.0`. It follows the
 `gmail_cbs_cleanroom` provider Application and the independent `inbox_triage`
