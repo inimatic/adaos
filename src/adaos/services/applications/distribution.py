@@ -6,7 +6,12 @@ from typing import Any, Callable, Mapping, Protocol
 
 from adaos.domain.application import ApplicationRelease, utc_now
 from adaos.services.artifact_pipeline.attestation_sets import ReleaseAttestationSet
-from adaos.services.artifact_pipeline.candidates import CandidateRecord, CandidateStore, assert_promotable
+from adaos.services.artifact_pipeline.candidates import (
+    GENESIS_RELEASE_DIGEST,
+    CandidateRecord,
+    CandidateStore,
+    assert_promotable,
+)
 from adaos.services.artifact_pipeline.channels import ChannelPointer, ReleaseRepository
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.releases import ReleasePlan
@@ -119,6 +124,31 @@ class ApplicationDistributionService:
             if channels.get("stable")
             else None
         )
+        if stable is None:
+            observed = self._channel_or_none(candidate.project_id, "stable")
+            if observed is not None:
+                if observed.release_digest == candidate.release_digest:
+                    # Compatibility publication may already have moved the
+                    # shared Project channel before the Application aggregate
+                    # existed.  Validate the accepted Candidate against its
+                    # recorded base, then let _move_channel adopt the observed
+                    # exact release into the local Application channel set.
+                    if candidate.base_release_digest != GENESIS_RELEASE_DIGEST:
+                        try:
+                            stable = self.applications.store.get_release(
+                                application_id,
+                                candidate.base_release_digest,
+                            ).project_release
+                        except FileNotFoundError:
+                            stable = self.releases.get_release(
+                                candidate.project_id,
+                                candidate.base_release_digest,
+                            ).release
+                else:
+                    stable = self.remote.get_release(
+                        candidate.project_id,
+                        observed.release_digest,
+                    ).release
         if stable is not None and stable.release_digest == candidate.release_digest:
             operation = self._load_operation(candidate_id)
             stable_state = (

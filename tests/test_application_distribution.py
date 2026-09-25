@@ -448,6 +448,75 @@ def test_later_stable_requires_current_exact_prerelease(tmp_path: Path) -> None:
     }
 
 
+def test_adopts_compatibility_published_stable_into_application_channel(
+    tmp_path: Path,
+) -> None:
+    distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
+    first, first_plan = _accepted_candidate(
+        tmp_path,
+        version="1.0.0",
+        base=None,
+        candidates=candidates,
+        releases=releases,
+        packages=packages,
+        admission=admission,
+    )
+    distribution.publish_trial(
+        "app_recipes",
+        first.candidate_id,
+        publisher_ref="subnet:publisher",
+        mode="link_only",
+    )
+    distribution.promote_stable(
+        "app_recipes",
+        first.candidate_id,
+        publisher_ref="subnet:publisher",
+        expected_stable_digest=None,
+    )
+    second, second_plan = _accepted_candidate(
+        tmp_path,
+        version="1.1.0",
+        base=first_plan,
+        candidates=candidates,
+        releases=releases,
+        packages=packages,
+        admission=admission,
+    )
+    distribution.applications.store.set_channel(
+        "app_recipes",
+        "stable",
+        None,
+        expected_release_digest=first.release_digest,
+    )
+    distribution.publish_trial(
+        "app_recipes",
+        second.candidate_id,
+        publisher_ref="subnet:publisher",
+        mode="link_only",
+    )
+
+    # Simulate the legacy/compatibility publisher moving the shared stable
+    # channel while the Application aggregate has not observed that move.
+    remote.set_channel(
+        second_plan,
+        "stable",
+        expected_release_digest=first.release_digest,
+    )
+
+    promoted = distribution.promote_stable(
+        "app_recipes",
+        second.candidate_id,
+        publisher_ref="subnet:publisher",
+        expected_stable_digest=None,
+    )
+
+    assert promoted["channel"]["completed_via"] == "observation"
+    assert distribution.applications.store.get_channels("app_recipes")["channels"] == {
+        "stable": second.release_digest
+    }
+    assert remote.upload_writes == 2
+
+
 def test_unknown_upload_is_observed_before_retry(tmp_path: Path) -> None:
     distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
     candidate, _ = _accepted_candidate(
