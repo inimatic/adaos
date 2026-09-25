@@ -77,7 +77,7 @@ def inspect_application_cbs(
 ) -> dict[str, Any]:
     try:
         service = _service(ctx)
-        compilation = service.inspect(application_ref)
+        compilation = service.inspect_requirement_source(application_ref)
         admission = service.inspect_admission(application_ref)
     except (ApplicationCBSConflict, BuilderWorkflowError, OSError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -86,6 +86,12 @@ def inspect_application_cbs(
     return {
         "ok": True,
         "compilation": compilation,
+        "requirement_source": compilation,
+        "requirement_source_kind": (
+            "builder_compilation"
+            if compilation.get("schema") == "adaos.builder.cbs_compilation.v1"
+            else "portable_semantic_requirement_set"
+        ),
         "admission": admission,
         "activation_performed": False,
     }
