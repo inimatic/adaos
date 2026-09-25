@@ -1941,6 +1941,12 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
     assert room_info["last_bootstrap_yws_attempt_id"] == "yws-room-seed"
     assert room_info["last_bootstrap_state"] == "ready"
     assert room_info["last_bootstrap_step"] == "finalize_rebuild_status"
+    assert {
+        "schedule_backup",
+        "seed_from_scenario",
+        "effective_materialized",
+        "finalize_rebuild_status",
+    }.issubset(room_info["last_bootstrap_step_timings_ms"])
     captured.clear()
     asyncio.run(gateway_module._release_room_refs(webspace_id, room))
     server.rooms.pop(webspace_id, None)
@@ -2607,6 +2613,12 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     )
     bootstrap_attempt_id = gateway_module._mark_room_bootstrap_started(key, yws_attempt_id="yws-test-1")
     gateway_module._mark_room_bootstrap_step(key, bootstrap_attempt_id, "seed_from_scenario")
+    gateway_module._mark_room_bootstrap_step_finished(
+        key,
+        bootstrap_attempt_id,
+        "seed_from_scenario",
+        duration_ms=4.25,
+    )
     gateway_module._mark_room_bootstrap_finished(key, bootstrap_attempt_id, state="ready")
     gateway_module._mark_room_reset(
         key,
@@ -2632,6 +2644,7 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert room_info["last_bootstrap_yws_attempt_id"] == "yws-test-1"
     assert room_info["last_bootstrap_state"] == "ready"
     assert room_info["last_bootstrap_step"] == "seed_from_scenario"
+    assert room_info["last_bootstrap_step_timings_ms"] == {"seed_from_scenario": 4.25}
     assert room_info["bootstrap_stuck"] is False
     assert room_info["last_open_mode"] == "cold_open"
     assert room_info["last_open_bootstrap_mode"] == "scenario_projection"

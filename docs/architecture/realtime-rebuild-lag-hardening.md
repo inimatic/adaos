@@ -333,9 +333,17 @@ event-loop/owner thread and was observed to stall browser admission for roughly
 
 The guard therefore reads only the contract fields it needs: `desktop`,
 `pageSchema`, modal catalogs, required root children, and the small installed
-arrays. Full branch enumeration remains diagnostic-only and must stay out of
-the normal readiness/update path. `test_gateway_effective_guard_hot_path_uses_point_reads`
-locks this invariant by using maps that reject key enumeration.
+arrays. Full branch enumeration must stay out of both the normal readiness path
+and per-connection DEBUG logging. Room-open diagnostics log the cached
+plain-data readiness summary instead of scanning `ui` and `data` again for every
+client. `test_gateway_effective_guard_hot_path_uses_point_reads` locks the
+readiness invariant by using maps that reject key enumeration.
+
+Cold-room diagnostics expose `last_bootstrap_step_timings_ms`. The bounded map
+separates backup scheduling, persisted seed/replay, effective materialization,
+and rebuild-status finalization without retaining live Yjs objects. Use it
+before changing the materialization pipeline: total room-open time alone cannot
+distinguish persisted replay from resolver and payload-apply cost.
 
 Backend-update origin matching follows the same hot-path rule. Its marker is a
 TTL-bounded, process-local correlation table, not a portable content address;

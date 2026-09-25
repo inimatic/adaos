@@ -2646,6 +2646,7 @@ def _mark_room_bootstrap_started(webspace_id: str, *, yws_attempt_id: str | None
         entry["last_bootstrap_duration_ms"] = None
         entry["last_bootstrap_state"] = "starting"
         entry["last_bootstrap_step"] = None
+        entry["last_bootstrap_step_timings_ms"] = {}
         entry["last_bootstrap_error"] = None
         entry["bootstrap_stuck"] = False
         entry["stuck_step"] = None
@@ -2666,6 +2667,29 @@ def _mark_room_bootstrap_step(webspace_id: str, bootstrap_attempt_id: str, step:
         if str(entry.get("last_bootstrap_attempt_id") or "") != attempt_id:
             return
         entry["last_bootstrap_step"] = str(step or "").strip() or None
+
+
+def _mark_room_bootstrap_step_finished(
+    webspace_id: str,
+    bootstrap_attempt_id: str,
+    step: str,
+    *,
+    duration_ms: float,
+) -> None:
+    """Record plain-data timings for a step in the current cold-room attempt."""
+
+    key = str(webspace_id or "").strip() or "default"
+    attempt_id = str(bootstrap_attempt_id or "").strip()
+    step_token = str(step or "").strip()
+    if not attempt_id or not step_token:
+        return
+    with _YROOM_LIFECYCLE_LOCK:
+        entry = _YROOM_LIFECYCLE.setdefault(key, {})
+        if str(entry.get("last_bootstrap_attempt_id") or "") != attempt_id:
+            return
+        timings = dict(entry.get("last_bootstrap_step_timings_ms") or {})
+        timings[step_token] = round(max(0.0, float(duration_ms)), 3)
+        entry["last_bootstrap_step_timings_ms"] = timings
 
 
 def _mark_room_bootstrap_finished(
@@ -2916,6 +2940,7 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
         "last_bootstrap_duration_ms": meta.get("last_bootstrap_duration_ms"),
         "last_bootstrap_state": str(meta.get("last_bootstrap_state") or "").strip() or None,
         "last_bootstrap_step": str(meta.get("last_bootstrap_step") or "").strip() or None,
+        "last_bootstrap_step_timings_ms": dict(meta.get("last_bootstrap_step_timings_ms") or {}),
         "last_bootstrap_error": str(meta.get("last_bootstrap_error") or "").strip() or None,
         "bootstrap_stuck": bool(meta.get("bootstrap_stuck")),
         "stuck_step": str(meta.get("stuck_step") or "").strip() or None,
@@ -6572,27 +6597,44 @@ class WorkspaceWebsocketServer(WebsocketServer):
 
                 async def _await_bootstrap_step(label: str, awaitable: Any, *, cancel_on_timeout: bool = True) -> Any:
                     _mark_room_bootstrap_step(webspace_id, bootstrap_attempt_id, label)
+                    step_started = time.perf_counter()
                     timeout_s = max(float(_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S), 0.0)
                     if timeout_s <= 0.0:
-                        return await awaitable
+                        try:
+                            return await awaitable
+                        finally:
+                            _mark_room_bootstrap_step_finished(
+                                webspace_id,
+                                bootstrap_attempt_id,
+                                label,
+                                duration_ms=(time.perf_counter() - step_started) * 1000.0,
+                            )
                     if not cancel_on_timeout:
                         task = asyncio.ensure_future(awaitable)
                         try:
-                            return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
-                        except asyncio.TimeoutError:
-                            _mark_room_bootstrap_stuck(
+                            try:
+                                return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
+                            except asyncio.TimeoutError:
+                                _mark_room_bootstrap_stuck(
+                                    webspace_id,
+                                    bootstrap_attempt_id,
+                                    step=label,
+                                    reason=f"{label}_slow_after_{timeout_s:.3f}s",
+                                )
+                                _ylog.warning(
+                                    "yws room bootstrap step slow; continuing without cancellation webspace=%s step=%s timeout_s=%.3f",
+                                    webspace_id,
+                                    label,
+                                    timeout_s,
+                                )
+                                return await asyncio.shield(task)
+                        finally:
+                            _mark_room_bootstrap_step_finished(
                                 webspace_id,
                                 bootstrap_attempt_id,
-                                step=label,
-                                reason=f"{label}_slow_after_{timeout_s:.3f}s",
-                            )
-                            _ylog.warning(
-                                "yws room bootstrap step slow; continuing without cancellation webspace=%s step=%s timeout_s=%.3f",
-                                webspace_id,
                                 label,
-                                timeout_s,
+                                duration_ms=(time.perf_counter() - step_started) * 1000.0,
                             )
-                            return await asyncio.shield(task)
                     try:
                         return await asyncio.wait_for(awaitable, timeout=timeout_s)
                     except asyncio.TimeoutError:
@@ -6610,6 +6652,13 @@ class WorkspaceWebsocketServer(WebsocketServer):
                             incident.get("recommended_action") if isinstance(incident, dict) else None,
                         )
                         raise
+                    finally:
+                        _mark_room_bootstrap_step_finished(
+                            webspace_id,
+                            bootstrap_attempt_id,
+                            label,
+                            duration_ms=(time.perf_counter() - step_started) * 1000.0,
+                        )
 
                 # Second check after acquiring lock - another coroutine may
                 # have already created the room while we were waiting.
@@ -6870,28 +6919,19 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 exc_info=True,
             )
         if _ylog.isEnabledFor(logging.DEBUG):
-            try:
-                ui_map = room.ydoc.get_map("ui")
-                data_map = room.ydoc.get_map("data")
-                ui_keys = list(ui_map.keys())
-                data_keys = list(data_map.keys())
-                # y_py YMap objects are thread-affine. Keep only plain lists in
-                # diagnostics locals so later cross-thread frame sampling cannot
-                # drop a live YMap on the wrong thread.
-                del ui_map
-                del data_map
-                room._diag_effective_branch_snapshot = {
-                    "ready": _room_effective_top_level_ready(room.ydoc),
-                    "mode": "top_level_debug",
-                }
-                _ylog.debug(
-                    "YRoom ready webspace=%s ui keys=%s data keys=%s",
-                    webspace_id,
-                    ui_keys,
-                    data_keys,
-                )
-            except Exception:
-                _ylog.warning("failed to inspect YDoc for webspace=%s", webspace_id, exc_info=True)
+            # Never enumerate shared YMap keys for a debug message. On a
+            # 600-KiB desktop document that scan used to block the owner loop
+            # once per connecting client. Materialization already leaves a
+            # plain-data readiness snapshot that is safe and cheap to log.
+            diagnostic = getattr(room, "_diag_effective_branch_snapshot", None)
+            diagnostic = diagnostic if isinstance(diagnostic, dict) else {}
+            _ylog.debug(
+                "YRoom ready webspace=%s effective_ready=%s mode=%s scenario=%s",
+                webspace_id,
+                bool(diagnostic.get("ready")),
+                str(diagnostic.get("mode") or "not_observed"),
+                diagnostic.get("current_scenario"),
+            )
         return room
 
 
