@@ -159,6 +159,36 @@ class NativeApplicationCBSAdmissionService:
         record = json.loads(record_path.read_text(encoding="utf-8"))
         return self._validate_record(record, application_ref=application_ref)
 
+    def find_by_project_release(
+        self, project_release_digest: str
+    ) -> dict[str, Any] | None:
+        """Find the unique immutable admission for an exact ProjectRelease."""
+
+        expected = str(project_release_digest or "").strip().lower()
+        matches: list[dict[str, Any]] = []
+        if not self.root.is_dir():
+            return None
+        for path in sorted(self.root.glob("*/records/*.json")):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise NativeApplicationCBSAdmissionError(
+                    f"cannot read CBS admission record: {path}"
+                ) from exc
+            if not isinstance(value, Mapping):
+                raise NativeApplicationCBSAdmissionError(
+                    f"CBS admission record must be an object: {path}"
+                )
+            if str(value.get("project_release_digest") or "").lower() != expected:
+                continue
+            application_ref = str(value.get("application_ref") or "")
+            matches.append(self._validate_record(value, application_ref=application_ref))
+        if len(matches) > 1:
+            raise NativeApplicationCBSAdmissionError(
+                "ProjectRelease has more than one CBS admission identity"
+            )
+        return matches[0] if matches else None
+
     def admit(
         self,
         *,

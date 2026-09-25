@@ -125,6 +125,31 @@ def _project_manifest_digest(project: Mapping[str, Any]) -> str:
     return _digest(dict(project))
 
 
+def _project_readme(manifest_path: Path) -> str | None:
+    path = Path(manifest_path).resolve().parent / "README.md"
+    if not path.is_file() or path.is_symlink():
+        return None
+    payload = path.read_bytes()
+    if len(payload) > 131_072:
+        raise ApplicationRegistryProjectionError("Project README exceeds 128 KiB")
+    try:
+        return payload.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeDecodeError as exc:
+        raise ApplicationRegistryProjectionError(
+            "Project README must be valid UTF-8"
+        ) from exc
+
+
+def _project_projection_source_digest(manifest_path: Path, manifest: bytes) -> str:
+    readme = _project_readme(manifest_path)
+    return _digest(
+        {
+            "manifest_digest": _digest_bytes(manifest),
+            "readme_digest": _digest_bytes(readme.encode("utf-8")) if readme else None,
+        }
+    )
+
+
 def _project_row(
     project: Mapping[str, Any],
     *,
@@ -174,6 +199,9 @@ def _project_row(
         "source_kind": source_kind,
         "validation_status": "valid",
     }
+    readme = _project_readme(source_path)
+    if readme:
+        row["readme"] = readme
     for field in ("title_i18n", "description_i18n"):
         value = catalog.get(field)
         if isinstance(value, Mapping):
@@ -1042,7 +1070,7 @@ class ApplicationRegistryProjection:
             try:
                 stat = manifest_path.stat()
                 raw = manifest_path.read_bytes()
-                source_digest = _digest_bytes(raw)
+                source_digest = _project_projection_source_digest(manifest_path, raw)
                 cached = cached_sources.get(source_id)
                 if (
                     allow_reuse
@@ -1158,7 +1186,7 @@ class ApplicationRegistryProjection:
                 try:
                     stat = manifest_path.stat()
                     raw = manifest_path.read_bytes()
-                    source_digest = _digest_bytes(raw)
+                    source_digest = _project_projection_source_digest(manifest_path, raw)
                     size_bytes = int(stat.st_size)
                     mtime_ns = int(stat.st_mtime_ns)
                     ctime_ns = int(stat.st_ctime_ns)
@@ -1231,7 +1259,7 @@ class ApplicationRegistryProjection:
         path = Path(manifest_path).expanduser().resolve()
         stat = path.stat()
         raw = path.read_bytes()
-        source_digest = _digest_bytes(raw)
+        source_digest = _project_projection_source_digest(path, raw)
         schema_digest = _digest_bytes(bytes(schema_bytes))
         payload = _project_row(project, source_path=path)
         payload_digest = _digest(payload)

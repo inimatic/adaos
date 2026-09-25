@@ -29,7 +29,14 @@ class PortableContractConflict(ValueError):
 RecordT = TypeVar("RecordT", bound=CanonicalRecord)
 
 
-def _identity(record: CanonicalRecord) -> tuple[str, str]:
+def portable_record_identity(record: CanonicalRecord) -> tuple[str, str]:
+    """Return the stable identity and immutable revision of a portable record.
+
+    The same identity rule is used by the node-local cache and the shared
+    semantic registry.  Keeping it public prevents the two indexes from
+    silently accepting different meanings for the same record.
+    """
+
     value = record.to_dict()
     # Delivery is package-specific metadata for an otherwise stable binding
     # definition.  It contains ``binding_definition_ref`` too, so it must be
@@ -84,7 +91,7 @@ class PortableContractCatalog:
 
     def put(self, record: CanonicalRecord) -> Path:
         payload = record.to_dict()
-        identity, revision = _identity(record)
+        identity, revision = portable_record_identity(record)
         digest = record.digest
         path = self.records_root / digest.removeprefix("sha256:")[:2] / f"{digest.removeprefix('sha256:')}.json"
         with mutation_lock(self.writer_lock_path):
@@ -128,6 +135,23 @@ class PortableContractCatalog:
         if result.digest != digest:
             raise PortableContractConflict("portable catalog record digest mismatch")
         return result
+
+    def load_mapping(self, digest: str) -> dict[str, Any]:
+        """Load one verified canonical payload without guessing its model."""
+
+        index = self._read_index()
+        entry = index["records"].get(str(digest))
+        if not isinstance(entry, Mapping):
+            raise KeyError(digest)
+        relative = Path(str(entry.get("path") or ""))
+        path = (Path(self.root) / relative).resolve()
+        root = Path(self.root).resolve()
+        if root != path and root not in path.parents:
+            raise PortableContractConflict("portable catalog index escapes its root")
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, Mapping):
+            raise PortableContractConflict("portable catalog record must be an object")
+        return dict(value)
 
     def matching_capabilities(
         self, capability_ref: str, contract_range: str

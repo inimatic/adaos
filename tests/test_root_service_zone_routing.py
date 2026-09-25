@@ -278,7 +278,6 @@ def test_project_candidate_reports_registry_phase_and_promotion_receipt(
         "_artifact_publication_service",
         lambda _cfg: _Publication(),
     )
-
     result = service.get_artifact_candidate("candidate-media")
 
     assert result["lifecycle_phase"] == "registry"
@@ -321,6 +320,8 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     )
 
     class _Publication:
+        package_store = object()
+
         def verify_promoted_workspace_source(self, candidate_id):
             assert candidate_id == "candidate-media"
             return {"status": "passed"}
@@ -352,6 +353,17 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         "_artifact_publication_service",
         lambda _cfg: _Publication(),
     )
+    monkeypatch.setattr(
+        service,
+        "_semantic_registry_projection",
+        lambda: SimpleNamespace(
+            prepare_release=lambda _plan, **_kwargs: {
+                "status": "prepared",
+                "paths": ["semantic"],
+                "index_digest": "sha256:" + "c" * 64,
+            }
+        ),
+    )
 
     result = service.publish_project_candidate_source(
         "candidate-media",
@@ -367,6 +379,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         "scenarios/media",
         "skills/media_skill",
         "registry.json",
+        "semantic",
     )
     assert git_calls[1] == ("push", {"remote": "registry", "branch": "main"})
     assert receipt_calls[0]["commit"] == "b" * 40

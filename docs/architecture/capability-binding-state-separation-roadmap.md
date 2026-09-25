@@ -755,6 +755,50 @@ case have matched legacy/CBS arms. The raw CBS5 observation is consumed without
 rewriting but remains unmatched historical context. The predefined primary
 claim is published as `not_supported`; see [CBS9 benchmark](cbs9-benchmark.md).
 
+## Milestone CBS10: Shared Semantic Registry Publication
+
+**Outcome:** portable CBS identities are discoverable across subnets through
+the existing AdaOS registry without introducing another package manager or
+copying local authority.
+
+**Exit proof:** an exact Gmail provider Application is published from
+Applications, a clean subnet imports its portable contract/binding/delivery
+records, and another Gmail consumer resolves the shared delivery while creating
+its own local account attachment and credential authority.
+
+- [ ] `[must]` `CBS10-01` Add fail-closed schemas for the shared semantic index
+  and exact semantic Application release projection.
+- [ ] `[must]` `CBS10-02` Publish content-addressed `CapabilityContract`,
+  `StateContract`, `BindingDefinition`, `BindingDelivery`, and explicitly
+  portable `EvidenceClaim` records under the existing Git registry; deduplicate
+  by stable identity, immutable revision, and digest.
+- [ ] `[must]` `CBS10-03` Bind publication to the exact admitted CBS compilation
+  and ProjectRelease, and commit source plus semantic projection atomically.
+- [ ] `[must]` `CBS10-04` Reject credentials, local provider/account references,
+  `BindingInstance`, `StateSpace`, operational assessments, and local evidence
+  from shared publication.
+- [ ] `[must]` `CBS10-05` Materialize the compact semantic index in every sparse
+  registry checkout and verify/import its portable records into the local
+  catalog without installing the first publisher Application.
+- [ ] `[must]` `CBS10-06` Expose governed `Finalize` and `Publish` operations in
+  Applications, including exact source-registry commit and semantic publication
+  evidence.
+- [ ] `[must]` `CBS10-07` Prove publication and reuse with
+  `gmail_cbs_cleanroom` and a distinct Gmail consumer on a clean subnet. Reuse
+  the capability/provider credential attachment without copying a secret into
+  either Application or the registry.
+- [ ] `[should]` `CBS10-08` Resolve a thin distribution online by semantic
+  requirement and exact environment/policy/evidence constraints.
+- [ ] `[should]` `CBS10-09` Export and admit a resolved portable distribution
+  bundle with the exact immutable package and semantic closure for offline use.
+- [ ] `[should]` `CBS10-10` Add registry query/explanation surfaces for eligible
+  contracts, bindings, deliveries, publishers, and rejection reasons.
+- [ ] `[could]` `CBS10-11` Add bounded registry-side search/ranking caches after
+  correctness and cold-start costs are measured.
+- [ ] `[deferred]` `CBS10-12` Define global cross-registry naming governance,
+  federation conflict resolution, revocation propagation, and ecosystem-wide
+  garbage collection.
+
 ## Cross-Cutting Acceptance Gates
 
 ### Contract gate
@@ -833,6 +877,8 @@ claim is published as `not_supported`; see [CBS9 benchmark](cbs9-benchmark.md).
 - minimal CRUD-first implementations rather than generalized pre-proof
   frameworks;
 - complete five-invariant CRUD proof, telemetry, and evidence bundle.
+- shared semantic registry publication through the existing package/source
+  registry, with secret-free import on a clean subnet.
 
 ### Should
 
@@ -843,6 +889,7 @@ claim is published as `not_supported`; see [CBS9 benchmark](cbs9-benchmark.md).
 - operator inspectors and plan diffs;
 - rebuildable Semantic/Impact Graph and read-only Evolver observations;
 - matched evolutionary benchmark.
+- thin online resolution and resolved offline distribution proof.
 
 ### Could
 
@@ -860,7 +907,7 @@ claim is published as `not_supported`; see [CBS9 benchmark](cbs9-benchmark.md).
 - automatic migration of every legacy data store;
 - arbitrary external distributed transactions and unattended destructive work;
 - global multi-user semantic CRDT/merge authority;
-- public/federated capability registry before the local proof;
+- cross-registry federation and global naming governance;
 - general-purpose global solver;
 - package-manager rewrite or competing workspace lock;
 - universal-domain or ecosystem-wide claims from bounded proofs.

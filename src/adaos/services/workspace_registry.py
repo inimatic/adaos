@@ -54,6 +54,10 @@ def registry_pattern_set(patterns: Iterable[str]) -> list[str]:
     merged: list[str] = []
     if REGISTRY_FILE_NAME not in merged:
         merged.append(REGISTRY_FILE_NAME)
+    # Portable CBS records are a compact shared index, not installable source.
+    # Keep it present in every sparse registry so resolution and Builder reuse
+    # do not depend on which applications are already materialized locally.
+    merged.append("semantic")
     for raw in patterns:
         try:
             value = str(raw).strip()

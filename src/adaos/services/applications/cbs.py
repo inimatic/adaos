@@ -129,6 +129,29 @@ class ApplicationCBSService:
             raise ApplicationCBSConflict("CBS compilation application identity mismatch")
         return compilation
 
+    def inspect_digest(
+        self, application_ref: str, compilation_digest: str
+    ) -> dict[str, Any] | None:
+        """Return one exact immutable compilation instead of the latest pointer."""
+
+        digest = str(compilation_digest or "").strip().lower()
+        if not digest.startswith("sha256:") or len(digest) != 71:
+            raise ApplicationCBSConflict("CBS compilation digest is invalid")
+        path = (
+            self.root
+            / _key(str(application_ref))
+            / "records"
+            / f"{digest.removeprefix('sha256:')}.json"
+        )
+        if not path.is_file():
+            return None
+        value = validate_cbs_compilation(json.loads(path.read_text(encoding="utf-8")))
+        if str(value["application_ref"]) != str(application_ref):
+            raise ApplicationCBSConflict("CBS compilation application identity mismatch")
+        if str(value["compilation_digest"]) != digest:
+            raise ApplicationCBSConflict("CBS compilation digest mismatch")
+        return value
+
     def history(self, application_ref: str) -> list[dict[str, Any]]:
         records = self.root / _key(str(application_ref)) / "records"
         if not records.is_dir():

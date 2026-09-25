@@ -11,6 +11,12 @@ from adaos.services.applications.cbs import ApplicationCBSService
 from adaos.services.applications.cbs_admission import (
     NativeApplicationCBSAdmissionService,
 )
+from adaos.services.capability_binding_state import (
+    PortableContractCatalog,
+)
+from adaos.services.capability_binding_state.registry_projection import (
+    SemanticRegistryProjection,
+)
 from adaos.services.artifact_pipeline import (
     ContentAddressedPackageStore,
     PackageCatalog,
@@ -237,6 +243,64 @@ def test_exact_application_release_admits_every_requirement_and_plan(tmp_path: P
     assert projection["resolution"]["status"] == "admitted"
     assert projection["resolution"]["requirements_resolved"] == 2
     assert projection["plan"]["status"] == "ready"
+
+
+def test_exact_release_publishes_and_imports_shared_semantic_registry(
+    tmp_path: Path,
+) -> None:
+    plan, store = _release(tmp_path)
+    compilation = _compilation()
+    state_dir = tmp_path / "publisher-state"
+    ApplicationCBSService(state_dir).register(compilation)
+    admission_service = NativeApplicationCBSAdmissionService(
+        state_dir, now=lambda: FIXED_NOW
+    )
+    admitted = admission_service.admit(
+        application_ref="scenario:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:candidate-mail",
+        evidence_context={"candidate_id": "candidate-mail"},
+    )
+
+    registry = tmp_path / "registry"
+    projection = SemanticRegistryProjection(registry, state_dir)
+    published = projection.prepare_release(plan, package_store=store)
+
+    assert published["status"] == "prepared"
+    assert published["record_count"] == 6
+    assert published["portable_evidence_count"] == 0
+    assert published["omitted_local_evidence_count"] == 2
+    assert published == projection.prepare_release(plan, package_store=store)
+    assert (
+        admission_service.find_by_project_release(plan.release.release_digest)
+        == admitted
+    )
+    assert (
+        ApplicationCBSService(state_dir).inspect_digest(
+            "scenario:mail_client", compilation["compilation_digest"]
+        )
+        == compilation
+    )
+
+    consumer_state = tmp_path / "consumer-state"
+    imported = SemanticRegistryProjection(registry, consumer_state).import_to_local_catalog()
+    assert imported["record_count"] == 6
+    catalog = PortableContractCatalog(
+        consumer_state / "capability-binding-state" / "portable"
+    )
+    contracts = catalog.matching_capabilities(
+        "capability:mail.messages.manage", "^1.0.0"
+    )
+    assert len(contracts) == 1
+    bindings = catalog.matching_bindings(
+        contracts[0].capability_ref, contracts[0].version
+    )
+    assert len(bindings) == 1
+    deliveries = catalog.deliveries_for_binding(bindings[0].digest)
+    assert len(deliveries) == 1
+    assert deliveries[0].to_dict()["package"]["id"] == "mail_provider"
 
 
 def test_reissued_evidence_for_a_recompiled_release_has_a_distinct_identity(

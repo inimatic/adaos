@@ -223,6 +223,9 @@ def test_registry_projection_rebuilds_dev_projects_and_queries_without_manifest_
     projects = tmp_path / "projects"
     _write_project(projects, _project("alpha", "scenario:alpha"))
     _write_project(projects, _project("beta", "scenario:beta"))
+    (projects / "beta" / "README.md").write_text(
+        "# Beta\n\nOperator setup guide.\n", encoding="utf-8"
+    )
     service = ApplicationRegistryProjection(tmp_path / "state")
 
     result = _rebuild(service, projects)
@@ -242,6 +245,7 @@ def test_registry_projection_rebuilds_dev_projects_and_queries_without_manifest_
     owners = service.project_for_component("scenario:alpha")
 
     assert [item["id"] for item in listed] == ["beta"]
+    assert listed[0]["readme"] == "# Beta\n\nOperator setup guide.\n"
     assert owners[0]["id"] == "alpha"
     assert owners[0]["primary_ref"] == "scenario:alpha"
 

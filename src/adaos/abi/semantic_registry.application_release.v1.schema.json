@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.semantic_registry.application_release.v1",
+  "title": "AdaOS semantic Application release projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "project_id",
+    "version",
+    "application_ref",
+    "project_release_digest",
+    "source_ref",
+    "compilation_digest",
+    "semantic_revision_digest",
+    "requirements",
+    "portable_artifacts",
+    "distribution",
+    "projection_digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.semantic_registry.application_release.v1" },
+    "project_id": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "application_ref": { "type": "string", "pattern": "^scenario:" },
+    "project_release_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "source_ref": { "type": "object" },
+    "compilation_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "semantic_revision_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "requirements": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "portable_artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["thin", "resolved"],
+      "properties": {
+        "thin": { "type": "object" },
+        "resolved": { "type": "object" }
+      }
+    },
+    "projection_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

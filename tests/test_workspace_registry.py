@@ -1217,6 +1217,7 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
     assert result["unresolved_runtime_scenarios"] == []
     assert result["patterns"] == [
         "registry.json",
+        "semantic",
         "skills/media_center_skill",
         "skills/mediaserver",
         "skills/voice_chat_skill",

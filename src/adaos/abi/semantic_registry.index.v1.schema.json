@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.semantic_registry.index.v1",
+  "title": "AdaOS shared semantic registry index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "identities",
+    "records",
+    "application_releases",
+    "index_digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.semantic_registry.index.v1" },
+    "identities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      }
+    },
+    "records": {
+      "type": "object",
+      "propertyNames": { "pattern": "^sha256:[0-9a-f]{64}$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema",
+          "identity",
+          "revision",
+          "path",
+          "published_by_release_digests"
+        ],
+        "properties": {
+          "schema": { "type": "string", "minLength": 1 },
+          "identity": { "type": "string", "minLength": 1 },
+          "revision": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "pattern": "^semantic/records/sha256/" },
+          "published_by_release_digests": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        }
+      }
+    },
+    "application_releases": {
+      "type": "object",
+      "additionalProperties": { "type": "object" }
+    },
+    "index_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

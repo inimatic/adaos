@@ -189,6 +189,48 @@ only in a graph database or model-generated summary.
 state migration locks, and `WorkspaceLock` remain authoritative in their
 existing domains. New records refer to or extend them by digest.
 
+### The shared registry is a semantic index over existing artifacts
+
+AdaOS does not introduce a second package manager or a second blob store for
+CBS. The existing immutable package/release store remains the physical
+distribution authority. The existing Git source registry gains a compact
+`semantic/` projection containing content-addressed portable records and an
+index that relates them to exact Application and package releases.
+
+```text
+semantic/index.json                         rebuildable search index
+semantic/records/sha256/<prefix>/<digest>  portable immutable record
+semantic/applications/<project>/<release>  immutable Application projection
+```
+
+`CapabilityContract`, `StateContract`, `BindingDefinition`, and explicitly
+portable `EvidenceClaim` records are indexed by stable identity, immutable
+revision, and digest. `BindingDelivery` relates a package-independent binding
+definition to an exact existing package member. The first package that carries
+a contract may introduce it to the registry, but the registry identity is not
+owned by that Application or package. A second publisher of the same exact
+identity is deduplicated; a different digest for the same identity and revision
+is rejected.
+
+Application publication is one atomic Git commit over verified stable source
+and its semantic projection. It is admitted only from the exact CBS compilation
+and exact ProjectRelease admission. Credentials, `BindingInstance`,
+`StateSpace`, account identifiers, operational assessments, and local evidence
+never enter this projection.
+
+Two distribution views refer to the same immutable facts:
+
+- a **thin distribution** contains Application requirements and resolves
+  eligible bindings/packages through the registry during installation;
+- a **resolved distribution** pins and, when required, carries the exact
+  package and portable-artifact closure for offline installation.
+
+Registry sync always materializes the compact semantic index and imports its
+verified portable records into the node-local cache. This makes a reusable
+contract visible before the Application that first published it is installed.
+The local resolver still creates local binding instances, provider account
+attachments, credentials, evidence assessments, and state spaces.
+
 ## Three Architectural Planes
 
 ### Portable plane

@@ -2257,6 +2257,16 @@ class RootDeveloperService:
             attestation_admission=trust.admission,
         )
 
+    def _semantic_registry_projection(self):
+        from adaos.services.capability_binding_state.registry_projection import (
+            SemanticRegistryProjection,
+        )
+
+        return SemanticRegistryProjection(
+            registry_root=Path(self.ctx.paths.workspace_dir()),
+            state_dir=Path(self.ctx.paths.state_dir()),
+        )
+
     @staticmethod
     def _workspace_lock_components(
         lock: Any,
@@ -3016,11 +3026,17 @@ class RootDeveloperService:
                 "Workspace registry is not a Git checkout; run `adaos skill sync` first"
             )
 
+        semantic_publication = self._semantic_registry_projection().prepare_release(
+            plan,
+            package_store=publication.package_store,
+        )
+
         paths = [f"projects/{plan.release.project_id}"]
         for package in plan.release.components:
             plural = "skills" if package.kind == "skill" else "scenarios"
             paths.append(f"{plural}/{package.artifact_id}")
         paths.append("registry.json")
+        paths.extend(semantic_publication.get("paths") or ("semantic",))
         bounded_paths = tuple(dict.fromkeys(paths))
         changed = sorted(
             {
@@ -3074,6 +3090,7 @@ class RootDeveloperService:
             "release_digest": plan.release.release_digest,
             "verification": verification,
             "changed_files": changed,
+            "semantic_publication": semantic_publication,
             "publication": receipt,
         }
 

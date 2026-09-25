@@ -74,11 +74,14 @@ class GitStableSourcePublisher:
         commit = str(publication.get("commit") or "").strip()
         if not commit:
             raise StableSourceProjectionError("Git source publication did not return a commit")
-        return {
+        projected = {
             "repository": self.repository,
             "commit": commit,
             "source_revision": source_revision,
         }
+        if isinstance(result.get("semantic_publication"), Mapping):
+            projected["semantic_publication"] = dict(result["semantic_publication"])
+        return projected
 
 
 class StableSourceProjectionService:
@@ -158,8 +161,35 @@ class StableSourceProjectionService:
                 "publisher_ref": publisher_ref,
                 "published_at": utc_now(),
             }
+            semantic_publication = result.get("semantic_publication")
+            if isinstance(semantic_publication, Mapping):
+                receipt["semantic_publication"] = dict(semantic_publication)
             atomic_write_json(path, receipt)
         return receipt
+
+    def inspect(
+        self, application_id: str, release_digest: str
+    ) -> dict[str, Any] | None:
+        """Read one immutable source-registry receipt without publishing."""
+
+        path = self._path(str(application_id), str(release_digest))
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise StableSourceProjectionError(
+                "stable source projection receipt is unreadable"
+            ) from exc
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("application_id") != application_id
+            or payload.get("release_digest") != release_digest
+        ):
+            raise StableSourceProjectionError(
+                "stable source projection receipt identity mismatch"
+            )
+        return dict(payload)
 
 
 __all__ = [

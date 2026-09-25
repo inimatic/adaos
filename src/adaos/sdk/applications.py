@@ -34,6 +34,10 @@ from adaos.services.applications.conditions import enrich_application_conditions
 from adaos.services.applications.runtime_credentials import (
     ApplicationRuntimeCredentials,
 )
+from adaos.services.applications.source_projection import (
+    StableSourceProjectionError,
+    StableSourceProjectionService,
+)
 from adaos.services.applications.update_batches import (
     ApplicationUpdateBatchStore,
     update_batch_id,
@@ -809,6 +813,9 @@ def _workspace_project_read_models(
                         "summary": str(project.get("description") or ""),
                         "categories": list(project.get("categories") or ()),
                     },
+                    "metadata": {
+                        "readme": str(project.get("readme") or ""),
+                    },
                     "visibility": "private",
                     "catalog_visibility": str(project.get("visibility") or "unlisted"),
                     "entrypoints": entrypoints,
@@ -995,6 +1002,19 @@ def _development_workflow_summary(
         OSError,
         ValueError,
     ):
+        return None
+
+
+def _stable_source_projection_receipt(
+    application_id: str, release_digest: str
+) -> dict[str, Any] | None:
+    if not application_id or not release_digest:
+        return None
+    try:
+        return StableSourceProjectionService(
+            _service(), publisher=lambda **_kwargs: {}
+        ).inspect(application_id, release_digest)
+    except (OSError, ValueError, StableSourceProjectionError):
         return None
 
 
@@ -1242,9 +1262,38 @@ def _enrich_application_models(
                     local["trial"] = deepcopy(workflow.get("trial"))
                     local["publication"] = deepcopy(workflow.get("publication"))
                     local["updated_at"] = workflow["updated_at"] or local["updated_at"]
+            stable_digest = str((model.get("channels") or {}).get("stable") or "")
+            source_receipt = _stable_source_projection_receipt(
+                application_id, stable_digest
+            )
+            if stable_digest:
+                local["source_registry"] = {
+                    "status": "published" if source_receipt else "not_published",
+                    "release_digest": stable_digest,
+                    "repository": (source_receipt or {}).get("repository"),
+                    "commit": (source_receipt or {}).get("commit"),
+                    "published_at": (source_receipt or {}).get("published_at"),
+                    "semantic_publication": deepcopy(
+                        (source_receipt or {}).get("semantic_publication")
+                    ),
+                    "evidence_present": bool(source_receipt),
+                }
             project_id = str(application.get("legacy_project_id") or "").strip()
             if project_id:
                 try:
+                    development_project = ApplicationRegistryProjection(
+                        _state_dir()
+                    ).get_development_project(project_id)
+                    readme = str((development_project or {}).get("readme") or "")
+                    if readme:
+                        local["readme"] = readme
+                        metadata = (
+                            dict(application.get("metadata") or {})
+                            if isinstance(application.get("metadata"), Mapping)
+                            else {}
+                        )
+                        metadata["readme"] = readme
+                        application["metadata"] = metadata
                     from adaos.sdk.developer import compositions
 
                     project = compositions.get(project_id)

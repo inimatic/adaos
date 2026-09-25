@@ -1416,6 +1416,7 @@ def test_public_stable_source_projection_is_exact_and_idempotent(
 
     assert first == repeated
     assert first["source_revision"] == release.project_release.source_ref.revision
+    assert projection.inspect("app_recipes", release.release_digest) == first
     assert len(calls) == 1
 
 

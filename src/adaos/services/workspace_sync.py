@@ -28,6 +28,23 @@ _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _BOOTSTRAP_SCENARIOS = ("web_desktop",)
 
 
+def _import_semantic_registry(ctx, workspace_root: Path) -> dict[str, Any]:
+    from adaos.services.capability_binding_state.registry_projection import (
+        SemanticRegistryProjection,
+    )
+
+    state_dir_resolver = getattr(ctx.paths, "state_dir", None)
+    state_dir = (
+        Path(state_dir_resolver())
+        if callable(state_dir_resolver)
+        else Path(getattr(ctx.settings, "base_dir")) / ".adaos" / "state"
+    )
+    return SemanticRegistryProjection(
+        registry_root=workspace_root,
+        state_dir=state_dir,
+    ).import_to_local_catalog()
+
+
 def _environment_type() -> str:
     return str(os.getenv("ENV_TYPE") or os.getenv("ADAOS_ENV_TYPE") or "prod").strip().lower()
 
@@ -503,6 +520,11 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             reconcile_result = reconcile_workspace_db_to_materialized(ctx)
         except Exception as exc:
             errors.append(f"reconcile: {exc}")
+        semantic_registry: dict[str, Any] | None = None
+        try:
+            semantic_registry = _import_semantic_registry(ctx, workspace_root)
+        except Exception as exc:
+            errors.append(f"semantic registry: {exc}")
         return {
             "ok": len(errors) == 0,
             "mode": "archive",
@@ -518,6 +540,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "project_materialization": project_materialization,
             "errors": errors,
             "reconcile": reconcile_result,
+            "semantic_registry": semantic_registry,
             "patterns": desired,
             "source_alignment": source_alignment,
         }
@@ -620,6 +643,24 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "patterns": desired,
         }
 
+    try:
+        semantic_registry = _import_semantic_registry(ctx, workspace_root)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "skills": skills,
+            "scenarios": scenarios,
+            "registry_skills": registry_skills,
+            "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
+            "runtime_scenario_refs": runtime_scenario_refs,
+            "scenario_required_skills": scenario_required_skills,
+            "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
+            "fallback_used": fallback_used,
+            "error": f"semantic registry import failed after pull: {exc}",
+            "patterns": desired,
+        }
+
     return {
         "ok": True,
         "skills": skills,
@@ -633,6 +674,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         "fallback_used": fallback_used,
         "project_materialization": project_materialization,
         "reconcile": reconcile_result,
+        "semantic_registry": semantic_registry,
         "patterns": desired,
         "source_alignment": source_alignment,
     }

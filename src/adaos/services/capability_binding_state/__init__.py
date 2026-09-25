@@ -1,6 +1,10 @@
 """Capability, binding, state, resolution, and activation services."""
 
-from .catalog import PortableContractCatalog, PortableContractConflict
+from .catalog import (
+    PortableContractCatalog,
+    PortableContractConflict,
+    portable_record_identity,
+)
 from .activation import (
     CBSActivationCoordinator,
     CBSActivationResult,
@@ -131,6 +135,7 @@ __all__ = [
     "ExactPackageResolver",
     "PortableContractCatalog",
     "PortableContractConflict",
+    "portable_record_identity",
     "ProductionReservationProvider",
     "ProviderTimeout",
     "ReconciliationRequired",
