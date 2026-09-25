@@ -4,6 +4,7 @@ import copy
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from adaos.domain.application import Application, ApplicationRelease
 from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
@@ -11,6 +12,9 @@ from adaos.domain.capability_binding_state import ApplicationRequirement
 from adaos.services.applications.cbs import ApplicationCBSService
 from adaos.services.applications.cbs_admission import (
     NativeApplicationCBSAdmissionService,
+)
+from adaos.services.applications.deployment_executor import (
+    ApplicationDeploymentExecutor,
 )
 from adaos.services.capability_binding_state import (
     PortableContractCatalog,
@@ -388,6 +392,67 @@ def test_public_application_catalog_imports_installable_aggregate_without_instal
     }
     assert consumer_store.list_installations() == ()
     assert consumer_store.list_runtime_selections() == ()
+    imported_application = catalog_import["applications"][0]
+    assert imported_application["local_admission"] == {"status": "not_installed"}
+    assert imported_application["semantic_requirement_set"]["application_ref"] == (
+        "scenario:mail_client"
+    )
+
+    consumer_cbs = ApplicationCBSService(consumer_state)
+    requirement_source = consumer_cbs.inspect_requirement_source(
+        "application:mail_client",
+        project_release_digest=str(plan.release.release_digest),
+    )
+    assert requirement_source is not None
+    assert requirement_source["schema"] == (
+        "adaos.application.semantic_requirement_set.v1"
+    )
+    assert requirement_source["compilation_digest"] == (
+        compilation["compilation_digest"]
+    )
+    before_admission = consumer_cbs.lifecycle_projection(
+        "application:mail_client",
+        runtime_selection={
+            "source": "stable_installation",
+            "release_digest": plan.release.release_digest,
+            "revision": 1,
+        },
+    )
+    assert before_admission["requirement"]["status"] == "compiled"
+    assert before_admission["resolution"]["status"] == "unresolved"
+
+    executor = ApplicationDeploymentExecutor(
+        runtime=SimpleNamespace(
+            releases=SimpleNamespace(
+                get_release=lambda project_id, release_digest: plan,
+                fetch_package=lambda package: store.read(package.digest),
+            )
+        ),
+        state_dir=consumer_state,
+    )
+    consumer_admission = executor._native_cbs_admission(
+        {
+            "kind": "install",
+            "application_id": "mail_client",
+            "legacy_project_id": "mail_client",
+            "release_digest": plan.release.release_digest,
+            "subnet_ref": "subnet:consumer",
+        }
+    )
+    assert consumer_admission is not None
+    assert consumer_admission["status"] == "admitted"
+    after_admission = consumer_cbs.lifecycle_projection(
+        "application:mail_client",
+        runtime_selection={
+            "source": "stable_installation",
+            "release_digest": plan.release.release_digest,
+            "revision": 1,
+        },
+    )
+    assert after_admission["resolution"]["status"] == "admitted"
+    assert after_admission["plan"]["status"] == "ready"
+    assert after_admission["activation"]["status"] == "active"
+    assert after_admission["lock"]["status"] == "committed"
 
 
 def test_reissued_evidence_for_a_recompiled_release_has_a_distinct_identity(

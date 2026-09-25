@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+import pytest
+
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
@@ -252,6 +254,35 @@ def test_executor_runs_install_update_remove_through_project_deployment(
         runtime.store.get_deployment("application-deployment:app_test").status
         == "removed"
     )
+
+
+def test_executor_refuses_unadmitted_cbs_before_deployment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = _release("1.0.0", "a")
+    runtime = ProjectDeploymentRuntime(
+        store=ProjectDeploymentStore(state_dir=tmp_path),
+        releases=Releases(release),
+        inventory=Inventory(),
+        adapter=Adapter(),
+        local_node_id="node-local",
+    )
+    executor = ApplicationDeploymentExecutor(runtime=runtime, state_dir=tmp_path)
+    monkeypatch.setattr(
+        executor,
+        "_native_cbs_admission",
+        lambda _plan: {
+            "schema": "adaos.application.cbs_admission.v1",
+            "status": "unresolved",
+        },
+    )
+
+    result = executor(_plan("install", release))
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "native_cbs_admission_required"
+    with pytest.raises(FileNotFoundError):
+        runtime.store.get_deployment("application-deployment:app_test")
 
 
 def test_executor_materializes_resolved_dependency_from_exact_release_closure(

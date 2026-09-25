@@ -32,7 +32,10 @@ from adaos.domain.capability_binding_state import (
     EvidenceClaim,
     StateContract,
 )
-from adaos.services.applications.cbs import ApplicationCBSService
+from adaos.services.applications.cbs import (
+    ApplicationCBSConflict,
+    ApplicationCBSService,
+)
 from adaos.services.applications.cbs_admission import (
     NativeApplicationCBSAdmissionService,
 )
@@ -42,6 +45,7 @@ from adaos.services.artifact_pipeline.cbs_authoring import (
     CAPABILITY_OUTPUT_PATH,
 )
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+from adaos.services.artifact_pipeline.channels import ReleaseRepository
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
@@ -829,6 +833,8 @@ class SemanticRegistryProjection:
                 != semantic.get("projection_digest")
                 or semantic_payload.get("project_release_digest")
                 != release.release_digest
+                or semantic_payload.get("project_id")
+                != release.project_release.project_id
             ):
                 raise SemanticRegistryProjectionError(
                     f"public Application semantic projection differs: {application_id}"
@@ -844,7 +850,43 @@ class SemanticRegistryProjection:
                 raise SemanticRegistryProjectionError(
                     f"public Application import failed for {application_id}: {exc}"
                 ) from exc
-            imported.append(result)
+            try:
+                requirement_source = ApplicationCBSService(
+                    Path(self.state_dir)
+                ).import_semantic_requirement_set(
+                    application_id=application_id,
+                    semantic_release=semantic_payload,
+                )
+            except ApplicationCBSConflict as exc:
+                raise SemanticRegistryProjectionError(
+                    "public Application semantic requirements failed validation: "
+                    f"{application_id}: {exc}"
+                ) from exc
+            local_admission = self._reconcile_installed_admission(
+                application=application,
+                release=release,
+                application_store=store,
+                requirement_source=requirement_source,
+                local_publisher_ref=local_publisher_ref,
+            )
+            imported.append(
+                {
+                    **result,
+                    "semantic_requirement_set": {
+                        "application_ref": requirement_source["application_ref"],
+                        "project_release_digest": requirement_source[
+                            "project_release_digest"
+                        ],
+                        "compilation_digest": requirement_source[
+                            "compilation_digest"
+                        ],
+                        "requirement_set_digest": requirement_source[
+                            "requirement_set_digest"
+                        ],
+                    },
+                    "local_admission": local_admission,
+                }
+            )
         return {
             "schema": "adaos.semantic_registry.public_application_import.v1",
             "status": "imported",
@@ -852,6 +894,79 @@ class SemanticRegistryProjection:
             "application_count": len(imported),
             "release_count": len(catalog["releases"]),
             "applications": imported,
+        }
+
+    def _reconcile_installed_admission(
+        self,
+        *,
+        application: Application,
+        release: ApplicationRelease,
+        application_store: ApplicationStore,
+        requirement_source: Mapping[str, Any],
+        local_publisher_ref: str | None,
+    ) -> dict[str, Any]:
+        """Re-admit an already active imported release when its bytes are local."""
+
+        try:
+            installation = application_store.get_installation(
+                application.application_id
+            )
+        except FileNotFoundError:
+            return {"status": "not_installed"}
+        if (
+            installation.status != "active"
+            or installation.installed_release_digest != release.release_digest
+        ):
+            return {
+                "status": "not_current",
+                "installed_release_digest": installation.installed_release_digest,
+            }
+
+        artifact_root = Path(self.state_dir) / "artifact_pipeline"
+        try:
+            plan = ReleaseRepository(artifact_root / "release-cache").get_release(
+                release.project_release.project_id,
+                str(release.release_digest),
+            )
+            packages = ContentAddressedPackageStore(artifact_root / "packages")
+            missing = [
+                package.digest
+                for package in plan.packages
+                if not packages.has(package.digest)
+            ]
+            if missing:
+                return {
+                    "status": "awaiting_packages",
+                    "missing_package_digests": missing,
+                }
+            subnet = str(local_publisher_ref or "subnet:local").removeprefix(
+                "subnet:"
+            )
+            admission = NativeApplicationCBSAdmissionService(
+                Path(self.state_dir)
+            ).admit(
+                application_ref=str(requirement_source["application_ref"]),
+                compilation=requirement_source,
+                release_plan=plan,
+                package_store=packages,
+                workspace_ref=f"workspace:{subnet or 'local'}",
+                evidence_context={
+                    "application_id": application.application_id,
+                    "source": "semantic_registry_reconciliation",
+                },
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            return {
+                "status": "failed",
+                "reason": "installed_cbs_reconciliation_failed",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+        return {
+            "status": str(admission.get("status") or "unknown"),
+            "admission_digest": admission.get("admission_digest"),
+            "requirements_total": admission.get("requirements_total"),
+            "requirements_resolved": admission.get("requirements_resolved"),
         }
 
 

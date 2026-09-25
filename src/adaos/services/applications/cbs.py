@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.domain.capability_binding_state import (
     ApplicationRequirement,
     CapabilityContract,
@@ -35,10 +36,12 @@ def _key(value: str) -> str:
 
 @dataclass(slots=True)
 class ApplicationCBSService:
-    """Store exact compilations and expose read-only viability projections.
+    """Store semantic requirement sources and expose viability projections.
 
-    This service owns no binding or state authority. A successful write records
-    what Builder compiled; it does not resolve packages or activate a plan.
+    A source may be a full local Builder compilation or the compact, immutable
+    requirement set carried by a public registry release.  This service owns no
+    binding or state authority: recording either source does not resolve
+    packages or activate a plan.
     """
 
     state_dir: Path
@@ -50,6 +53,206 @@ class ApplicationCBSService:
     @property
     def writer_lock_path(self) -> Path:
         return self.root / ".writer.lock"
+
+    @property
+    def semantic_sources_root(self) -> Path:
+        return self.root / "semantic-sources"
+
+    @property
+    def semantic_source_lock_path(self) -> Path:
+        return self.semantic_sources_root / ".writer.lock"
+
+    def import_semantic_requirement_set(
+        self,
+        *,
+        application_id: str,
+        semantic_release: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Persist the compact requirement source from a public release.
+
+        The public projection intentionally does not carry Builder acceptance,
+        simulation, or authoring telemetry.  Only package-neutral requirements
+        and their publisher digests cross the registry boundary; resolution,
+        evidence, BindingInstances, and activation remain local.
+        """
+
+        application_token = str(application_id or "").strip()
+        value = dict(semantic_release)
+        if not application_token:
+            raise ApplicationCBSConflict("Application id is required")
+        if value.get("schema") != "adaos.semantic_registry.application_release.v1":
+            raise ApplicationCBSConflict("unsupported semantic Application release")
+        expected_projection = str(value.get("projection_digest") or "")
+        unsigned = dict(value)
+        unsigned.pop("projection_digest", None)
+        if expected_projection != canonical_payload_digest(unsigned):
+            raise ApplicationCBSConflict("semantic Application projection digest mismatch")
+
+        application_ref = str(value.get("application_ref") or "").strip()
+        project_id = str(value.get("project_id") or "").strip()
+        release_digest = str(value.get("project_release_digest") or "").strip()
+        compilation_digest = str(value.get("compilation_digest") or "").strip()
+        semantic_revision_digest = str(
+            value.get("semantic_revision_digest") or ""
+        ).strip()
+        if not application_ref or not project_id:
+            raise ApplicationCBSConflict("semantic Application identity is incomplete")
+        for label, digest in (
+            ("project release", release_digest),
+            ("compilation", compilation_digest),
+            ("semantic revision", semantic_revision_digest),
+        ):
+            if not digest.startswith("sha256:") or len(digest) != 71:
+                raise ApplicationCBSConflict(f"semantic {label} digest is invalid")
+
+        raw_requirements = value.get("requirements")
+        if not isinstance(raw_requirements, list) or not raw_requirements:
+            raise ApplicationCBSConflict(
+                "semantic Application release has no requirements"
+            )
+        requirements = [
+            ApplicationRequirement.from_mapping(item).to_dict()
+            for item in raw_requirements
+            if isinstance(item, Mapping)
+        ]
+        if len(requirements) != len(raw_requirements):
+            raise ApplicationCBSConflict("semantic requirements contain a malformed item")
+        targets = [dict(item.get("environment_target") or {}) for item in requirements]
+        if any(target != targets[0] for target in targets[1:]):
+            raise ApplicationCBSConflict(
+                "semantic requirements must share one environment target"
+            )
+
+        record: dict[str, Any] = {
+            "schema": "adaos.application.semantic_requirement_set.v1",
+            "application_id": application_token,
+            "application_ref": application_ref,
+            "project_id": project_id,
+            "project_release_digest": release_digest,
+            "compilation_digest": compilation_digest,
+            "semantic_revision_digest": semantic_revision_digest,
+            "environment_target": targets[0],
+            "requirements": requirements,
+            "source_projection_digest": expected_projection,
+        }
+        record["requirement_set_digest"] = canonical_payload_digest(record)
+        digest = str(record["requirement_set_digest"])
+        record_path = (
+            self.semantic_sources_root
+            / "records"
+            / f"{digest.removeprefix('sha256:')}.json"
+        )
+        canonical_pointer = (
+            self.semantic_sources_root / "canonical" / f"{_key(application_ref)}.json"
+        )
+        alias_ref = f"application:{application_token}"
+        alias_pointer = (
+            self.semantic_sources_root / "aliases" / f"{_key(alias_ref)}.json"
+        )
+        pointer = {
+            "schema": "adaos.application.semantic_requirement_pointer.v1",
+            "application_ref": application_ref,
+            "application_alias": alias_ref,
+            "project_release_digest": release_digest,
+            "compilation_digest": compilation_digest,
+            "requirement_set_digest": digest,
+        }
+        with mutation_lock(self.semantic_source_lock_path):
+            if record_path.is_file():
+                existing = json.loads(record_path.read_text(encoding="utf-8"))
+                if existing != record:
+                    raise ApplicationCBSConflict(
+                        "semantic requirement-set digest collision"
+                    )
+            else:
+                atomic_write_json(record_path, record)
+            atomic_write_json(canonical_pointer, pointer)
+            atomic_write_json(alias_pointer, pointer)
+        return record
+
+    def resolve_application_ref(self, application_ref: str) -> str:
+        """Resolve a local Application aggregate alias to its semantic identity."""
+
+        requested = str(application_ref or "").strip()
+        alias_path = self.semantic_sources_root / "aliases" / f"{_key(requested)}.json"
+        pointer = self._read_semantic_pointer(alias_path)
+        return str(pointer.get("application_ref") or requested) if pointer else requested
+
+    def inspect_requirement_source(
+        self,
+        application_ref: str,
+        *,
+        project_release_digest: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the exact full compilation or compact imported requirement set."""
+
+        requested = str(application_ref or "").strip()
+        canonical_ref = self.resolve_application_ref(requested)
+        expected_release = str(project_release_digest or "").strip()
+        if expected_release:
+            admission = NativeApplicationCBSAdmissionService(
+                self.state_dir
+            ).find_by_project_release(expected_release)
+            if (
+                admission is not None
+                and admission.get("application_ref") == canonical_ref
+            ):
+                exact = self.inspect_digest(
+                    canonical_ref, str(admission.get("compilation_digest") or "")
+                )
+                if exact is not None:
+                    return exact
+
+        pointer_path = (
+            self.semantic_sources_root
+            / ("aliases" if requested != canonical_ref else "canonical")
+            / f"{_key(requested if requested != canonical_ref else canonical_ref)}.json"
+        )
+        pointer = self._read_semantic_pointer(pointer_path)
+        if pointer is not None and (
+            not expected_release
+            or pointer.get("project_release_digest") == expected_release
+        ):
+            digest = str(pointer.get("requirement_set_digest") or "")
+            path = (
+                self.semantic_sources_root
+                / "records"
+                / f"{digest.removeprefix('sha256:')}.json"
+            )
+            return self._read_semantic_source(
+                path,
+                application_ref=canonical_ref,
+                project_release_digest=expected_release or None,
+            )
+        if expected_release:
+            matches: list[dict[str, Any]] = []
+            records = self.semantic_sources_root / "records"
+            for path in sorted(records.glob("*.json")) if records.is_dir() else ():
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ApplicationCBSConflict(
+                        "semantic requirement source is unreadable"
+                    ) from exc
+                if (
+                    isinstance(raw, Mapping)
+                    and raw.get("application_ref") == canonical_ref
+                    and raw.get("project_release_digest") == expected_release
+                ):
+                    matches.append(
+                        self._read_semantic_source(
+                            path,
+                            application_ref=canonical_ref,
+                            project_release_digest=expected_release,
+                        )
+                    )
+            if len(matches) > 1:
+                raise ApplicationCBSConflict(
+                    "release has ambiguous semantic requirement sources"
+                )
+            if matches:
+                return matches[0]
+        return self.inspect(canonical_ref)
 
     def compile_and_register(
         self,
@@ -170,12 +373,26 @@ class ApplicationCBSService:
             ),
         )
 
-    def inspect_admission(self, application_ref: str) -> dict[str, Any] | None:
+    def inspect_admission(
+        self,
+        application_ref: str,
+        *,
+        project_release_digest: str | None = None,
+    ) -> dict[str, Any] | None:
         """Return the latest exact release admission, when one exists."""
 
-        return NativeApplicationCBSAdmissionService(self.state_dir).inspect(
-            application_ref
-        )
+        canonical_ref = self.resolve_application_ref(application_ref)
+        service = NativeApplicationCBSAdmissionService(self.state_dir)
+        expected_release = str(project_release_digest or "").strip()
+        if expected_release:
+            admission = service.find_by_project_release(expected_release)
+            if (
+                admission is not None
+                and admission.get("application_ref") == canonical_ref
+            ):
+                return admission
+            return None
+        return service.inspect(canonical_ref)
 
     def semantic_viability(
         self,
@@ -185,7 +402,7 @@ class ApplicationCBSService:
         evidence_claims: Iterable[Mapping[str, Any] | EvidenceClaim] = (),
         evidence_assessments: Iterable[Mapping[str, Any] | EvidenceAssessment] = (),
     ) -> dict[str, Any]:
-        compilation = self.inspect(application_ref)
+        compilation = self.inspect_requirement_source(application_ref)
         if compilation is None:
             raise KeyError(application_ref)
         contracts = tuple(
@@ -315,18 +532,20 @@ class ApplicationCBSService:
         this projection never becomes a second activation authority.
         """
 
-        compilation = self.inspect(application_ref)
-        admission = self.inspect_admission(application_ref)
         selection = dict(runtime_selection or {})
+        expected_release = str(selection.get("release_digest") or "").strip()
+        compilation = self.inspect_requirement_source(
+            application_ref,
+            project_release_digest=expected_release or None,
+        )
+        admission = self.inspect_admission(
+            application_ref,
+            project_release_digest=expected_release or None,
+        )
         development = dict(local_development or {})
         trial = (
             dict(development.get("trial"))
             if isinstance(development.get("trial"), Mapping)
-            else {}
-        )
-        publication = (
-            dict(development.get("publication"))
-            if isinstance(development.get("publication"), Mapping)
             else {}
         )
         matching_admission = False
@@ -440,10 +659,7 @@ class ApplicationCBSService:
             "revision": selection.get("revision"),
         }
 
-        workspace_committed = (
-            bool(publication.get("evidence_present"))
-            and source == "stable_installation"
-        )
+        workspace_committed = source == "stable_installation"
         lock = {
             "status": "committed" if workspace_committed else "unchanged",
             "summary": (
@@ -490,6 +706,61 @@ class ApplicationCBSService:
         if not isinstance(value, Mapping) or value.get("schema") != "adaos.application.cbs_pointer.v1":
             raise ApplicationCBSConflict("invalid Application CBS pointer")
         return dict(value)
+
+    @staticmethod
+    def _read_semantic_pointer(path: Path) -> dict[str, Any] | None:
+        if not path.is_file():
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(value, Mapping)
+            or value.get("schema")
+            != "adaos.application.semantic_requirement_pointer.v1"
+        ):
+            raise ApplicationCBSConflict("invalid semantic requirement pointer")
+        return dict(value)
+
+    @staticmethod
+    def _read_semantic_source(
+        path: Path,
+        *,
+        application_ref: str,
+        project_release_digest: str | None,
+    ) -> dict[str, Any]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ApplicationCBSConflict(
+                "semantic requirement source is unavailable"
+            ) from exc
+        if (
+            not isinstance(value, Mapping)
+            or value.get("schema")
+            != "adaos.application.semantic_requirement_set.v1"
+            or value.get("application_ref") != application_ref
+        ):
+            raise ApplicationCBSConflict("semantic requirement source identity mismatch")
+        if (
+            project_release_digest
+            and value.get("project_release_digest") != project_release_digest
+        ):
+            raise ApplicationCBSConflict("semantic requirement release mismatch")
+        record = dict(value)
+        expected = str(record.pop("requirement_set_digest", ""))
+        if expected != canonical_payload_digest(record):
+            raise ApplicationCBSConflict("semantic requirement-set digest mismatch")
+        record["requirement_set_digest"] = expected
+        requirements = record.get("requirements")
+        if not isinstance(requirements, list) or not requirements:
+            raise ApplicationCBSConflict("semantic requirement source is empty")
+        record["requirements"] = [
+            ApplicationRequirement.from_mapping(item).to_dict()
+            for item in requirements
+            if isinstance(item, Mapping)
+        ]
+        if len(record["requirements"]) != len(requirements):
+            raise ApplicationCBSConflict("semantic requirement source is malformed")
+        return record
 
 
 __all__ = ["ApplicationCBSConflict", "ApplicationCBSService"]

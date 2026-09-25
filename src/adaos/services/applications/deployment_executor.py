@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from adaos.domain.application import utc_now
 from adaos.domain.artifact_release import canonical_payload_digest
+from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.domain.project_deployment import (
     ComponentPlacementPolicy,
     DataRetentionPolicy,
@@ -220,7 +221,96 @@ class ApplicationDataSnapshotStore:
 class ApplicationDeploymentExecutor:
     def __init__(self, *, runtime: ProjectDeploymentRuntime, state_dir: Path) -> None:
         self.runtime = runtime
-        self.snapshots = ApplicationDataSnapshotStore(state_dir)
+        self.state_dir = Path(state_dir).expanduser().resolve()
+        self.snapshots = ApplicationDataSnapshotStore(self.state_dir)
+        self.package_store = ContentAddressedPackageStore(
+            self.state_dir / "artifact_pipeline" / "packages"
+        )
+
+    def _native_cbs_admission(
+        self, plan: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        """Admit an imported semantic release before changing runtime authority."""
+
+        if str(plan.get("kind") or "") not in {"install", "update"}:
+            return None
+        application_id = str(plan.get("application_id") or "").strip()
+        project_id = str(plan.get("legacy_project_id") or "").strip()
+        release_digest = str(plan.get("release_digest") or "").strip()
+        if not application_id or not project_id or not release_digest:
+            return None
+
+        from adaos.services.applications.cbs import ApplicationCBSService
+        from adaos.services.applications.cbs_admission import (
+            NativeApplicationCBSAdmissionError,
+            NativeApplicationCBSAdmissionService,
+        )
+
+        admissions = NativeApplicationCBSAdmissionService(self.state_dir)
+        current = admissions.find_by_project_release(release_digest)
+        cbs = ApplicationCBSService(self.state_dir)
+        source = cbs.inspect_requirement_source(
+            f"application:{application_id}",
+            project_release_digest=release_digest,
+        )
+        if source is None:
+            for candidate in (
+                f"scenario:{project_id}",
+                f"project:{project_id}",
+                f"skill:{project_id}",
+            ):
+                source = cbs.inspect_requirement_source(
+                    candidate,
+                    project_release_digest=release_digest,
+                )
+                if source is not None:
+                    break
+        if source is None:
+            return current
+        application_ref = str(source.get("application_ref") or "")
+        try:
+            release_plan = self.runtime.releases.get_release(
+                project_id, release_digest
+            )
+            for package in release_plan.packages:
+                if self.package_store.has(package.digest):
+                    self.package_store.verify(package.digest)
+                    continue
+                fetch = getattr(self.runtime.releases, "fetch_package", None)
+                if not callable(fetch):
+                    raise FileNotFoundError(
+                        f"CBS package is not locally available: {package.digest}"
+                    )
+                archive = fetch(package)
+                if not self.package_store.has(package.digest):
+                    self.package_store.put(
+                        archive, expected_digest=package.digest
+                    )
+            subnet = str(plan.get("subnet_ref") or "subnet:local").removeprefix(
+                "subnet:"
+            )
+            return admissions.admit(
+                application_ref=application_ref,
+                compilation=source,
+                release_plan=release_plan,
+                package_store=self.package_store,
+                workspace_ref=f"workspace:{subnet or 'local'}",
+                evidence_context={
+                    "application_id": application_id,
+                    "operation": str(plan.get("kind") or ""),
+                    "source": "public_semantic_requirement_set",
+                },
+            )
+        except (FileNotFoundError, OSError, ValueError, NativeApplicationCBSAdmissionError) as exc:
+            return {
+                "schema": "adaos.application.cbs_admission_failure.v1",
+                "status": "failed",
+                "reason": "native_cbs_admission_failed",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "application_ref": application_ref,
+                "project_release_digest": release_digest,
+            }
 
     @staticmethod
     def _principal(actor_ref: str) -> DeploymentPrincipal:
@@ -455,6 +545,29 @@ class ApplicationDeploymentExecutor:
         actor_ref = str(plan.get("actor_ref") or "application-core")
         principal = self._principal(actor_ref)
         snapshot_receipt: dict[str, Any] | None = None
+        if kind == "remove":
+            return self._remove(plan, principal=principal)
+        if kind not in {
+            "install",
+            "update",
+            "relocate_component",
+            "install_component",
+            "remove_component",
+        }:
+            raise ApplicationDeploymentExecutorError(
+                "unsupported Application deployment operation"
+            )
+        cbs_admission = self._native_cbs_admission(plan)
+        if cbs_admission is not None and str(
+            cbs_admission.get("status") or ""
+        ) != "admitted":
+            return {
+                "ok": False,
+                "status": "failed",
+                "reason": "native_cbs_admission_required",
+                "cbs_admission": dict(cbs_admission),
+                "snapshot_receipt": snapshot_receipt,
+            }
         if kind == "update":
             snapshot = (
                 plan.get("snapshot")
@@ -468,18 +581,6 @@ class ApplicationDeploymentExecutor:
                     snapshot.get("consistency_boundary")
                     or "artifact_activation_transaction"
                 ),
-            )
-        if kind == "remove":
-            return self._remove(plan, principal=principal)
-        if kind not in {
-            "install",
-            "update",
-            "relocate_component",
-            "install_component",
-            "remove_component",
-        }:
-            raise ApplicationDeploymentExecutorError(
-                "unsupported Application deployment operation"
             )
         desired, expected_revision, previous = self._desired(plan)
         self.runtime.define(
@@ -518,6 +619,9 @@ class ApplicationDeploymentExecutor:
                 "deployment_plan": deployment_plan.to_dict(),
                 "deployment_operation": operation.to_dict(),
                 "snapshot_receipt": snapshot_receipt,
+                "cbs_admission": (
+                    dict(cbs_admission) if cbs_admission is not None else None
+                ),
             }
         if operation.uncertain or operation.state in {"uncertain", "partial"}:
             return {

@@ -1469,7 +1469,26 @@ def get_application(
                     )
                     selection_value = selection.to_dict()
                 except FileNotFoundError:
-                    selection_value = None
+                    installation = (
+                        dict(model.get("installation") or {})
+                        if isinstance(model.get("installation"), Mapping)
+                        else {}
+                    )
+                    selection_value = (
+                        {
+                            "schema": "adaos.application.stable_installation_projection.v1",
+                            "webspace_id": str(webspace_id or "desktop"),
+                            "application_id": token,
+                            "source": "stable_installation",
+                            "release_digest": installation.get(
+                                "installed_release_digest"
+                            ),
+                            "revision": installation.get("revision"),
+                        }
+                        if installation.get("status") == "active"
+                        and installation.get("installed_release_digest")
+                        else None
+                    )
                 from adaos.services.applications.cbs import ApplicationCBSService
 
                 model["cbs_lifecycle"] = ApplicationCBSService(
