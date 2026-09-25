@@ -1111,23 +1111,35 @@ class WorkspaceActivationManager:
     def _lock_digest(lock: WorkspaceLock | None) -> str | None:
         return lock.to_dict()["lock_digest"] if lock is not None else None
 
-    @staticmethod
     def _component_plan(
+        self,
         current: WorkspaceLock | None,
         desired: WorkspaceLock,
     ) -> dict[str, list[str]]:
         before = {item.key: item for item in (current.components if current else ())}
         after = {item.key: item for item in desired.components}
-        return {
+        same_digest = {
+            key
+            for key in after
+            if key in before and after[key].digest == before[key].digest
+        }
+        repair: set[str] = set()
+        for key in same_digest:
+            try:
+                self._verify_materialized_component(after[key])
+            except (ActivationError, PackageVerificationError, FileNotFoundError):
+                repair.add(key)
+        plan = {
             "added": sorted(key for key in after if key not in before),
             "changed": sorted(
                 key for key in after if key in before and after[key].digest != before[key].digest
             ),
-            "retained": sorted(
-                key for key in after if key in before and after[key].digest == before[key].digest
-            ),
+            "retained": sorted(same_digest - repair),
             "removed": sorted(key for key in before if key not in after),
         }
+        if repair:
+            plan["repair"] = sorted(repair)
+        return plan
 
     @staticmethod
     def _slot_plan(
@@ -1644,6 +1656,43 @@ class WorkspaceActivationManager:
                 },
             )
             component_plan = self._component_plan(current, desired)
+            repair_keys = set(component_plan.get("repair", ()))
+            if repair_keys:
+                desired_by_key = {item.key: item for item in desired.components}
+                repaired_packages: list[dict[str, Any]] = []
+                for key in sorted(repair_keys):
+                    if key in staged:
+                        continue
+                    package = desired_by_key[key]
+                    if not self.package_store.has(package.digest):
+                        if fetch_package is None:
+                            raise ActivationError(
+                                f"repair package is not present in local store: {package.digest}"
+                            )
+                        self.package_store.put(
+                            fetch_package(package),
+                            expected_digest=package.digest,
+                        )
+                    path = stage_root / package.kind / package.artifact_id
+                    verified = self.package_store.extract_to_directory(
+                        package.digest,
+                        path,
+                    )
+                    if verified.ref != package:
+                        raise ActivationError(
+                            f"stored repair package reference differs from WorkspaceLock: {package.key}"
+                        )
+                    staged[package.key] = path
+                    repaired_packages.append(
+                        {
+                            "package": package.key,
+                            "digest": package.digest,
+                            "file_count": len(verified.file_names),
+                            "uncompressed_bytes": verified.uncompressed_bytes,
+                        }
+                    )
+                if repaired_packages:
+                    operation["package_verification"]["repair_packages"] = repaired_packages
             operation["component_plan"] = component_plan
             operation["slot_plan"] = self._slot_plan(current, desired)
             self._phase(
@@ -1732,8 +1781,12 @@ class WorkspaceActivationManager:
             )
 
             moves: list[dict[str, Any]] = []
-            mutable_keys = set(component_plan["added"]) | set(component_plan["changed"])
-            for package in plan.packages:
+            mutable_keys = (
+                set(component_plan["added"])
+                | set(component_plan["changed"])
+                | set(component_plan.get("repair", ()))
+            )
+            for package in desired.components:
                 if package.key not in mutable_keys:
                     continue
                 target = self._target_for(package)
