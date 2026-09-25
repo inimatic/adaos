@@ -47,6 +47,17 @@ account creation/attachment part of the cross-subnet reuse proof remains open.
 Public callback materialization and autonomous-development efficiency retain
 their separately recorded boundaries.
 
+Registry follow-up, 2026-09-25: `mail_focus_reader@0.1.4` corrects all four
+permission policies to canonical `grant_on_install`, and a reviewed clean-
+subnet update now has exact install access plus native 2-of-2 CBS admission.
+The signed `adaos-registry` GitHub webhook, global Root producer, zonal fanout,
+retained reconnect replay, and subnet consumer have been exercised as one
+production route. The clean subnet synchronized revision
+`54b7cddc7cd2731c8a38a9110e5cc3dbd6a89827` and deterministically skipped its
+three installed Applications as current. Portable semantic distribution no
+longer depends on a Core restart or polling, although both remain recovery
+paths.
+
 ## Outcome
 
 AdaOS can preserve Application and eligible state identities while changing a

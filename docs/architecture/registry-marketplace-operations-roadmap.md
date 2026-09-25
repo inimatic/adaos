@@ -67,12 +67,19 @@ to `0.1.3` through the ordinary safe Application plan/apply protocol. The
 portable catalog and provider package arrived; no Gmail secret or account was
 copied.
 
-The update consumer is complete on the subnet side: it runs after readiness,
-also subscribes to the retained `applications.registry.updated` event, records
-durable receipts, and fails closed for permission elevation, migration,
-conflict, or uncertain outcomes. A public Root/zonal producer for that event is
-still operationally open; boot/core-update registry polling is the currently
-proven path. Thin semantic-only online resolution, offline resolved bundles,
+The update rail is complete end to end. The subnet consumer runs after
+readiness, subscribes to the retained `applications.registry.updated` event,
+records durable receipts, and fails closed for permission elevation,
+migration, conflict, or uncertain outcomes. A signed GitHub push webhook on
+`adaos-registry` now reaches the deployed public Root producer, which records
+the latest registry revision in Redis, dispatches to connected hubs, fans out
+through the existing Root-to-zone management route, and replays the retained
+revision after reconnect. Revision
+`54b7cddc7cd2731c8a38a9110e5cc3dbd6a89827` was delivered through the
+production global and RU-zone route to the local and clean-subnet hubs; the
+clean subnet synchronized and recorded all three installed Applications as
+`already_current`. Boot/core-update polling remains a compatibility and
+recovery path. Thin semantic-only online resolution, offline resolved bundles,
 and cross-registry federation remain later CBS10 work.
 
 ## Why This Note Exists
@@ -763,10 +770,14 @@ ordinary Application plan/apply service. `applications.registry.updated` is a
 bounded retained event, is forwarded by hubs, and is replayed to reconnecting
 members. `sys.ready` also schedules a post-readiness registry poll, which
 closes the Core-update path without delaying first paint. Durable receipts make
-safe applies, review gates, failures, and skips inspectable. The remaining
-distribution gap is the public Root/registry-CI emitter that publishes the new
-catalog digest into the existing root-to-zone event rail; polling remains the
-compatibility fallback until that emitter is deployed.
+safe applies, review gates, failures, and skips inspectable. The public
+Root/registry emitter is deployed at
+`/v1/github/application_registry/callback`; the `adaos-registry` push webhook
+uses the existing HMAC trust boundary and the producer reuses
+`CORE_UPDATE_ZONE_FANOUT_URLS` unless a dedicated
+`APPLICATION_REGISTRY_ZONE_FANOUT_URLS` list is configured. The production
+global-to-RU fanout and clean-subnet receipt are proven. Polling remains the
+compatibility fallback, not the primary notification mechanism.
 
 - Keep `registry.json` backward compatible by preserving `skills` and
   `scenarios` arrays while adding Application entries and legacy Project aliases

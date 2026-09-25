@@ -50,6 +50,17 @@ with scenario package
 and the same independently delivered Gmail provider package
 `sha256:403e924b61e66ae9d04aa69a4594d3fe2873349f75904c5633e3e01212c0df19`.
 
+The current canonical release is `mail_focus_reader@0.1.4`, digest
+`sha256:dcf069de8867b654d79ef17d6278b67d450a84bfc53eb2e7650fd615230fe53d`.
+It replaces the invalid legacy `on_install` spelling with the supported
+`grant_on_install` policy for all four declared permissions. Builder now
+rejects unknown approval policies before packaging. On a clean subnet the
+policy correction correctly required reviewed application because it expands
+install-time authority; after review, installation revision 5 is active and
+native CBS is `compiled -> admitted -> ready -> active -> committed` with both
+requirements resolved. This does not weaken the earlier `0.1.2 -> 0.1.3`
+automatic-update proof, which remained a compatible no-review transition.
+
 Applications projects the CBS lifecycle as `compiled -> admitted -> ready ->
 active -> committed`. The projection is explicitly derived; the admitted
 resolution, plans, activation journal, runtime selection, and WorkspaceLock
@@ -128,6 +139,13 @@ provider outage: portable contracts, packages and evidence cross the registry;
 credentials do not. The remaining `CBS10-07` proof step is to provision that
 subnet's own Google OAuth client/account and attach it to the imported binding.
 
+The public notification path is also live. The deployed signed registry
+webhook delivered registry revision
+`54b7cddc7cd2731c8a38a9110e5cc3dbd6a89827` through global Root and the RU
+zone to the clean subnet. Its durable auto-update receipt completed with zero
+candidates and `mail_focus_reader`, `applications`, and `web_desktop` all
+classified `already_current`.
+
 ## Builder And Platform Corrections
 
 No low-level edit was made to the `mail_focus_reader` consumer source after the
@@ -158,6 +176,13 @@ The run caused the following systemic corrections:
    that hint, including during first paint before the materialization snapshot
    arrives. Server resolution still verifies it against installed release
    authority.
+7. Terminal publication replay no longer trusts `WorkspaceLock` alone. If an
+   immutable package directory or its retained development projection is
+   missing, Core restores the exact promoted CAS objects under the Workspace
+   writer lock, verifies them, and repeats runtime reload and health admission
+   before reporting success. This closes the observed `scenario_not_found`
+   failure where Applications was installed and locked but its physical
+   Scenario directory had disappeared.
 
 The first Trial attempt failed closed because the lifecycle command omitted
 the publication Project reference and entered component-only validation. The

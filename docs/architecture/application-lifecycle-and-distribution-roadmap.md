@@ -729,10 +729,27 @@ Builder development and consumes only public contracts.
   `appop.31a9057df62bb87719506bb3e8ffbca0`; all package stages and health checks
   completed and installation revision advanced from 3 to 4 without a manual
   update command. This proves the Core-update/restart polling path as well as
-  safe exact apply; a public Root/zonal publisher can use the same retained
-  event rail when it emits `applications.registry.updated`. The item remains
-  open for the failure/retry presentation and for a real
+  safe exact apply. The public producer is now deployed too: a signed
+  `adaos-registry` GitHub push reaches global Root, is retained by registry
+  revision, fans out through the existing Root-to-zone management rail, and
+  publishes `applications.registry.updated` to connected and subsequently
+  reconnecting subnets. A production E2E delivered revision
+  `54b7cddc7cd2731c8a38a9110e5cc3dbd6a89827` to both local and clean-subnet
+  hubs; the clean subnet completed registry sync and skipped Applications,
+  Desktop, and Mail Focus Reader as `already_current`. The item remains open
+  for the failure/retry presentation and for a real
   permission-elevation or migration handoff through Applications UI.
+
+  Runtime materialization correction (2026-09-25): a completed promotion is
+  no longer considered healthy solely because its `WorkspaceLock` and terminal
+  receipts exist. Replay verifies each exact installed package plus retained
+  development projection; missing or corrupt source is restored from CAS under
+  the Workspace writer lock, then runtime reload and health admission run again
+  before success is returned. This closes the observed Applications
+  `scenario_not_found` state in which logical installation authority survived
+  but the physical Scenario directory did not. The repaired local runtime now
+  lists Applications, accepts the Desktop scenario switch, and renders the
+  Applications collection/detail journey in a real browser.
 - [x] `[must]` `APP4-47` Carry universal Application icon metadata from
   `project.yaml` through Project composition, registry projection and SDK read
   models. `ProjectRelease.catalog` is the immutable ABI boundary, so build,
