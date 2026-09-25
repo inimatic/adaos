@@ -363,6 +363,7 @@ class ApplicationService:
         application_id: str,
         *,
         subscriber_subnet_ref: str | None = None,
+        include_release: bool = True,
     ) -> dict[str, Any]:
         channels = dict(self.store.get_channels(application_id).get("channels") or {})
         try:
@@ -415,7 +416,7 @@ class ApplicationService:
                 "reason": "rollout_not_eligible",
                 "rollout": rollout,
             }
-        return {
+        result = {
             "application_id": application_id,
             "update_track": subscription.update_track,
             "effective_channel": effective_channel,
@@ -424,8 +425,10 @@ class ApplicationService:
             if rollout is None or rollout["eligible"]
             else "stable_rollout_fallback",
             "rollout": rollout,
-            "release": self.store.get_release(application_id, digest).to_dict(),
         }
+        if include_release:
+            result["release"] = self.store.get_release(application_id, digest).to_dict()
+        return result
 
     def select_runtime(
         self,
@@ -1559,6 +1562,107 @@ class ApplicationService:
             "operation": operation.to_dict() if operation else None,
         }
 
+    def _read_summary_model(
+        self,
+        application: Application,
+        *,
+        installation: ApplicationInstallation | None,
+        subscription: ApplicationSubscription | None,
+        runtime_selections: list[RuntimeSelection],
+        operation: ApplicationOperation | None,
+        subscriber_subnet_ref: str | None,
+    ) -> dict[str, Any]:
+        """Build one bounded catalog row without expanding release closures."""
+
+        channels = dict(self.store.get_channels(application.application_id).get("channels") or {})
+        local_beta = any(item.source == "local_trial" for item in runtime_selections)
+        local_beta_digests = {
+            item.release_digest for item in runtime_selections if item.source == "local_trial"
+        }
+        effective_installed = installation is not None or local_beta
+        prerelease_following = bool(subscription and subscription.update_track == "prerelease")
+        effective = self.effective_release(
+            application.application_id,
+            subscriber_subnet_ref=subscriber_subnet_ref,
+            include_release=False,
+        )
+        update_available = bool(
+            installation
+            and effective.get("release_digest")
+            and effective["release_digest"] != installation.installed_release_digest
+        )
+        release_cache: dict[str, dict[str, Any] | None] = {}
+
+        def release_for(digest: str | None) -> dict[str, Any] | None:
+            token = str(digest or "").strip()
+            if not token:
+                return None
+            if token not in release_cache:
+                try:
+                    release_cache[token] = self.store.get_release_summary(application.application_id, token)
+                except FileNotFoundError:
+                    release_cache[token] = None
+            return release_cache[token]
+
+        installed_release = release_for(installation.installed_release_digest if installation else None)
+        local_beta_releases = [
+            release
+            for digest in sorted(local_beta_digests)
+            if (release := release_for(digest)) is not None
+        ]
+        local_beta_release = local_beta_releases[0] if len(local_beta_releases) == 1 else None
+        installation_summary = None
+        if installation is not None:
+            value = installation.to_dict()
+            installation_summary = {
+                key: value[key]
+                for key in (
+                    "schema", "installation_id", "application_id", "installed_release_digest",
+                    "data_policy", "status", "revision", "created_at", "updated_at",
+                )
+                if key in value
+            }
+        operation_summary = None
+        if operation is not None:
+            value = operation.to_dict()
+            operation_summary = {
+                key: value[key]
+                for key in (
+                    "schema", "operation_id", "application_id", "kind", "status", "revision",
+                    "recovery_reason", "created_at", "updated_at",
+                )
+                if key in value
+            }
+        return {
+            "schema": "adaos.application.catalog_summary.v1",
+            "application": application.to_dict(),
+            "installed": effective_installed,
+            "installation": installation_summary,
+            "available": bool(channels.get("stable")) or application.visibility != "public",
+            "update_available": update_available,
+            "pinned": bool(subscription and subscription.update_policy == "pinned"),
+            "prerelease_following": prerelease_following,
+            "use_prerelease": local_beta or prerelease_following,
+            "local_beta_active": local_beta,
+            "runtime_selections": [item.to_dict() for item in runtime_selections],
+            "auto_update_enabled": bool(
+                subscription.update_policy == "auto_compatible"
+                if subscription is not None
+                else installation is not None
+            ),
+            "retired": application.lifecycle in {"retired", "archived"},
+            "subscription": subscription.to_dict() if subscription else None,
+            "channels": channels,
+            "installed_release": installed_release,
+            "local_beta_release": local_beta_release,
+            "local_beta_releases": local_beta_releases,
+            "active_release": local_beta_release or installed_release,
+            "marketplace_release": release_for(channels.get("stable")),
+            "prerelease_release": release_for(channels.get("prerelease")),
+            "effective_release": effective,
+            "operation": operation_summary,
+        }
+
     def get_model(
         self,
         application_id: str,
@@ -1596,6 +1700,7 @@ class ApplicationService:
         *,
         installed_only: bool = False,
         subscriber_subnet_ref: str | None = None,
+        summary: bool = False,
     ) -> list[dict[str, Any]]:
         installations = {
             item.application_id: item
@@ -1623,7 +1728,7 @@ class ApplicationService:
             ):
                 continue
             models.append(
-                self._read_model(
+                (self._read_summary_model if summary else self._read_model)(
                     application,
                     installation=installation,
                     subscription=subscription,

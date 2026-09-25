@@ -1240,6 +1240,13 @@ def test_application_reads_project_only_existing_local_developments(
         "foreign",
         "local-beta",
     ]
+    assert applications.list_applications(
+        developed_only=True,
+        view="summary",
+        query="APPLICA",
+        offset=0,
+        limit=1,
+    )[0]["application"]["application_id"] == "applications"
 
 
 def test_application_read_survives_missing_development_project(

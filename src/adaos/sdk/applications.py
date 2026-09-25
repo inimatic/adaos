@@ -1022,12 +1022,14 @@ def _application_models(
     *,
     installed_only: bool,
     application_id: str | None = None,
+    summary: bool = False,
 ) -> list[dict[str, Any]]:
     service = _service()
     if application_id is None:
         values = service.list_models(
             installed_only=installed_only,
             subscriber_subnet_ref=_local_subnet_ref(),
+            summary=summary,
         )
     else:
         try:
@@ -1159,6 +1161,7 @@ def _enrich_application_models(
     *,
     development: Mapping[str, Mapping[str, Any]],
     webspace_id: str | None,
+    compact: bool = False,
 ) -> list[dict[str, Any]]:
     webspace = str(webspace_id or "").strip()
     home_snapshot: Any = None
@@ -1212,6 +1215,52 @@ def _enrich_application_models(
         )
         local_source = development.get(application_id)
         local = deepcopy(dict(local_source)) if local_source is not None else None
+        if compact:
+            if local is not None:
+                entrypoints = application.get("entrypoints") or []
+                presentation_ref = str(
+                    (entrypoints[0] if entrypoints else {}).get("presentation_ref") or ""
+                )
+                object_type, _, object_id = presentation_ref.partition(":")
+                if object_type and object_id:
+                    workflow = _development_workflow_summary(object_type, object_id)
+                    if workflow is not None:
+                        local.update(
+                            {
+                                "status": workflow["status"],
+                                "phase": workflow["phase"],
+                                "revision": workflow["revision"],
+                                "stable": workflow["stable"],
+                                "accepted": workflow["accepted"],
+                                "publication_status": workflow["publication_status"],
+                                "updated_at": workflow["updated_at"] or local["updated_at"],
+                            }
+                        )
+            model["local_development"] = local
+            model["execution_placement"] = placements.get(
+                application_id,
+                _empty_execution_placement(
+                    application_id, status="not_materialized", managed=False, partial=False
+                ),
+            )
+            application["distribution"] = {
+                "visibility": str(application.get("visibility") or "private")
+            }
+            application["marketplace_listing"] = _marketplace_listing(application)
+            model["active_release"] = (
+                _active_release_for_webspace(model, webspace_id=webspace_id) or None
+            )
+            home = _home_projection(model, webspace_id, snapshot=home_snapshot)
+            model["home"] = home
+            model["pinned"] = bool(home.get("pinned"))
+            model["effective_navigation"] = _effective_navigation(
+                model, webspace_id=webspace_id, home=home
+            )
+            model["installation_summary"] = _installation_summary(
+                model, webspace_id=webspace_id
+            )
+            enriched.append(enrich_application_conditions(model))
+            continue
         if local is not None:
             entrypoints = application.get("entrypoints") or []
             presentation_ref = str(
@@ -1393,9 +1442,21 @@ def list_applications(
     developed_only: bool = False,
     include_development: bool = True,
     webspace_id: str | None = None,
+    view: str = "full",
+    query: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    development = _local_development_index() if include_development else {}
-    models = _application_models(installed_only=installed_only)
+    normalized_view = str(view or "full").strip().lower()
+    if normalized_view not in {"summary", "full"}:
+        raise ValueError("view must be summary or full")
+    compact = normalized_view == "summary"
+    development = (
+        _local_development_index()
+        if include_development and (not compact or developed_only)
+        else {}
+    )
+    models = _application_models(installed_only=installed_only, summary=compact)
     if available_only:
         models = [
             item
@@ -1414,10 +1475,54 @@ def list_applications(
             if item["application"]["visibility"] == "public"
             and bool(item.get("channels", {}).get("stable"))
         ]
+    if developed_only:
+        models = [
+            item
+            for item in models
+            if str(item.get("application", {}).get("application_id") or "")
+            in development
+        ]
+        models.sort(
+            key=lambda item: str(
+                development.get(
+                    str(item.get("application", {}).get("application_id") or ""),
+                    {},
+                ).get("updated_at")
+                or ""
+            ),
+            reverse=True,
+        )
+    normalized_query = str(query or "").strip().casefold()
+    if normalized_query:
+
+        def matches_query(model: Mapping[str, Any]) -> bool:
+            application = model.get("application") or {}
+            display = application.get("display") or {}
+            metadata = application.get("metadata") or {}
+            values = (
+                application.get("application_id"),
+                application.get("legacy_project_id"),
+                display.get("title"),
+                display.get("summary"),
+                metadata.get("title"),
+                metadata.get("summary"),
+            )
+            return any(
+                normalized_query in str(value or "").casefold() for value in values
+            )
+
+        models = [item for item in models if matches_query(item)]
+    normalized_offset = max(0, int(offset))
+    if limit is not None:
+        normalized_limit = max(1, int(limit))
+        models = models[normalized_offset : normalized_offset + normalized_limit]
+    elif normalized_offset:
+        models = models[normalized_offset:]
     models = _enrich_application_models(
         models,
         development=development,
         webspace_id=webspace_id,
+        compact=compact,
     )
     if developed_only:
         models = [
@@ -3628,7 +3733,12 @@ def assess_updates(
     }
     if len(requested) > 100:
         raise ValueError("application_ids cannot contain more than 100 items")
-    models = list_applications(installed_only=True, webspace_id=webspace_id)
+    models = list_applications(
+        installed_only=True,
+        include_development=False,
+        webspace_id=webspace_id,
+        view="summary",
+    )
     if requested:
         models = [
             item

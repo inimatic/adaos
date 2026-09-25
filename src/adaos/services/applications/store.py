@@ -376,6 +376,40 @@ class ApplicationStore:
             raise ApplicationStoreError("ApplicationRelease path identity mismatch")
         return value
 
+    def get_release_summary(self, application_id: str, release_digest: str) -> dict[str, Any]:
+        """Read only immutable release fields required by catalog projections."""
+
+        path = self._release_path(application_id, release_digest)
+        if not path.is_file():
+            raise FileNotFoundError(f"ApplicationRelease not found: {application_id}@{release_digest}")
+        raw = _read(path)
+        observed_application_id = str(raw.get("application_id") or "")
+        observed_digest = str(raw.get("release_digest") or "")
+        if observed_application_id != application_id or observed_digest != release_digest:
+            raise ApplicationStoreError("ApplicationRelease path identity mismatch")
+        project = raw.get("project_release")
+        project = dict(project) if isinstance(project, Mapping) else {}
+        catalog = project.get("catalog")
+        catalog = dict(catalog) if isinstance(catalog, Mapping) else {}
+        summary: dict[str, Any] = {
+            "schema": "adaos.application.release_summary.v1",
+            "application_id": observed_application_id,
+            "publisher_ref": raw.get("publisher_ref"),
+            "legacy_project_id": raw.get("legacy_project_id"),
+            "version": raw.get("version") or project.get("version"),
+            "release_digest": observed_digest,
+            "lifecycle": raw.get("lifecycle"),
+            "project_release": {
+                "project_id": project.get("project_id"),
+                "version": project.get("version"),
+                "release_digest": project.get("release_digest"),
+                "catalog": catalog,
+            },
+        }
+        if raw.get("published_at") is not None:
+            summary["published_at"] = raw["published_at"]
+        return summary
+
     def list_releases(self, application_id: str) -> tuple[ApplicationRelease, ...]:
         parent = self.root / "releases" / _key(application_id)
         if not parent.is_dir():

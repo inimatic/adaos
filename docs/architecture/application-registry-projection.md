@@ -656,13 +656,17 @@ schema-incompatible facts do not drive install/update/access decisions.
 **Outcome:** Applications UI can render quickly without exposing private
 registry or access facts through Yjs.
 
-- [ ] `[must]` `APREG7-01` Define browser-safe Application catalog and
+- [~] `[must]` `APREG7-01` Define browser-safe Application catalog and
   installed summary shapes derived from the private projection.
 - [ ] `[must]` `APREG7-02` Add redaction tests for manifests, local paths,
   secrets, grants, actor chains, validation evidence, and private package
   internals.
-- [ ] `[must]` `APREG7-03` Publish only bounded summaries into Yjs or WebIO
-  surfaces.
+- [~] `[must]` `APREG7-03` Publish only bounded summaries into Yjs or WebIO
+  surfaces. Root MCP now defaults to `adaos.application.catalog_summary.v1`,
+  reads `adaos.application.release_summary.v1`, and enforces 100-row pages (20
+  for explicit full view). Completing this item still requires routing the
+  summary through the sealed SQLite projection and inspecting serialized Yjs
+  snapshots for every private field class.
 - [ ] `[should]` `APREG7-04` Prefer stream/snapshot routes for large catalog
   result sets and keep Yjs for compact first-paint state.
 - [ ] `[deferred]` `APREG7-05` Private Yjs namespaces for registry internals.

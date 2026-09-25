@@ -1248,6 +1248,19 @@ def contracts() -> list[RootMcpToolContract]:
                     "catalog_only": {"type": "boolean"},
                     "available_only": {"type": "boolean"},
                     "developed_only": {"type": "boolean"},
+                    "view": {
+                        "type": "string",
+                        "enum": ["summary", "full"],
+                        "default": "summary",
+                    },
+                    "query": {"type": "string", "maxLength": 200},
+                    "offset": {"type": "integer", "minimum": 0, "default": 0},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 100,
+                    },
                     "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
                 }
             ),
@@ -1257,10 +1270,19 @@ def contracts() -> list[RootMcpToolContract]:
                         "applications": {
                             "type": "array",
                             "items": application_record,
-                            "maxItems": 5000,
-                        }
+                            "maxItems": 100,
+                        },
+                        "page": schema_object(
+                            properties={
+                                "offset": {"type": "integer", "minimum": 0},
+                                "limit": {"type": "integer", "minimum": 1},
+                                "returned": {"type": "integer", "minimum": 0},
+                                "has_more": {"type": "boolean"},
+                            },
+                            required=["offset", "limit", "returned", "has_more"],
+                        ),
                     },
-                    required=["applications"],
+                    required=["applications", "page"],
                 )
             ),
             required_capability="applications.read",
@@ -2923,14 +2945,31 @@ def _mcp_mutation_context(
 
 
 def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    view = str(arguments.get("view") or "summary")
+    requested_limit = int(arguments.get("limit") or 100)
+    limit = max(1, min(requested_limit, 20 if view == "full" else 100))
+    offset = max(0, int(arguments.get("offset") or 0))
+    applications = _sdk().list_applications(
+        installed_only=bool(arguments.get("installed_only", False)),
+        catalog_only=bool(arguments.get("catalog_only", False)),
+        available_only=bool(arguments.get("available_only", False)),
+        developed_only=bool(arguments.get("developed_only", False)),
+        webspace_id=_webspace_id(arguments),
+        view=view,
+        query=str(arguments.get("query") or "").strip() or None,
+        offset=offset,
+        limit=limit + 1,
+    )
+    has_more = len(applications) > limit
+    applications = applications[:limit]
     return {
-        "applications": _sdk().list_applications(
-            installed_only=bool(arguments.get("installed_only", False)),
-            catalog_only=bool(arguments.get("catalog_only", False)),
-            available_only=bool(arguments.get("available_only", False)),
-            developed_only=bool(arguments.get("developed_only", False)),
-            webspace_id=_webspace_id(arguments),
-        )
+        "applications": applications,
+        "page": {
+            "offset": offset,
+            "limit": limit,
+            "returned": len(applications),
+            "has_more": has_more,
+        },
     }
 
 

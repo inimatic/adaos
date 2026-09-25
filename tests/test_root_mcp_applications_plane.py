@@ -391,7 +391,14 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
 
     list_result = listed.output_schema["properties"]["result"]
     record = list_result["properties"]["applications"]["items"]
-    assert list_result["required"] == ["applications"]
+    assert list_result["required"] == ["applications", "page"]
+    assert list_result["properties"]["applications"]["maxItems"] == 100
+    assert list_result["properties"]["page"]["required"] == [
+        "offset",
+        "limit",
+        "returned",
+        "has_more",
+    ]
     assert {
         "application",
         "installed",
@@ -508,7 +515,7 @@ def test_applications_plane_forwards_catalog_and_development_filters(
     stub = _StubSdk()
     monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
 
-    applications_plane.handlers()["applications.list"](
+    result = applications_plane.handlers()["applications.list"](
         {
             "installed_only": False,
             "catalog_only": True,
@@ -528,9 +535,19 @@ def test_applications_plane_forwards_catalog_and_development_filters(
                 "available_only": True,
                 "developed_only": True,
                 "webspace_id": "desktop",
+                "view": "summary",
+                "query": None,
+                "offset": 0,
+                "limit": 101,
             },
         )
     ]
+    assert result["page"] == {
+        "offset": 0,
+        "limit": 100,
+        "returned": 1,
+        "has_more": False,
+    }
 
 
 def test_applications_plane_exposes_reviewed_bulk_update_flow(monkeypatch) -> None:

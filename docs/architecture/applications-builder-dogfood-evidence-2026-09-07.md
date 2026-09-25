@@ -181,6 +181,26 @@ before application startup made the observed cold wall time roughly `41-51 s`.
 Noncritical catalog/status hydration and lazy skill loading need a formal
 readiness budget rather than more timeout tolerance.
 
+The 2026-09-25 runtime repair introduced a separate browser-safe catalog read
+path. Before it, an unfiltered Applications read expanded complete release
+closures and returned about `2.23 MB` in roughly `8 s`; a development tab with
+442 retained projects still produced about `1.82 MB`, large enough to fail the
+1 MiB NATS route after envelope/base64 overhead. The default Root projection
+now reads immutable release summaries, omits component/evidence/lock bodies,
+and pages at no more than 100 rows. The measured installed page is 31 rows,
+about `209 KB`, and takes about `0.43 s` warm; update assessment is about
+`12.8 KB` and `0.37 s` warm. Full detail remains available through the
+single-Application read.
+
+Root MCP UI/control work also moved to a prestarted four-worker interactive
+lane instead of sharing the eight-worker background I/O pool. A real browser
+run rendered Applications and opened detail without `scenario_not_found`,
+console errors, or continuous terminal-failure polling. The shell appeared at
+about `1.3 s`; under a deliberately loaded cold restart the first catalog was
+still delayed to about `10.8 s` by YRoom materialization, simultaneous Gmail
+provider starts, and service-skill CPU/I/O. Those are retained performance
+debts; the summary result does not claim that desktop first paint is complete.
+
 The Client was migrated from the legacy browser/webpack build to
 `browser-esbuild`. A previous production build took about `646 s`; after moving
 Ionicons to on-demand static SVG delivery and the optional CV/TensorFlow

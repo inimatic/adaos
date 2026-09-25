@@ -627,6 +627,12 @@ Builder development and consumes only public contracts.
   service readiness and make workflow projection incremental. Keep exact
   readiness semantics for routes that need the hydrated state and publish p50,
   p95, and cold-start budgets.
+  A 2026-09-25 intermediate step separates latency-sensitive Root MCP calls
+  from the background executor, makes Applications collection reads compact by
+  default, and bounds them to 100-row server pages (20 for explicit full view).
+  Installed collection reads fell to about 209 KB/0.43 s warm, but cold browser
+  readiness still contends with YRoom materialization and post-ready service
+  startup, so the milestone remains open.
 - [ ] `[should]` `APP4-39` Expose the exact-checkpoint precondition before a
   Project release operation does expensive work. Report the required
   `checkpoint -> push -> trial` order, the stale component ref, and the last

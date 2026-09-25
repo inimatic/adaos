@@ -223,6 +223,26 @@ def test_store_refuses_to_delete_application_with_release(tmp_path: Path) -> Non
         store.delete_unpublished_application("app_recipes", expected_revision=1)
 
 
+def test_catalog_summary_omits_full_release_closure(service: ApplicationService) -> None:
+    release = service.register_release(_release())
+    service.move_channel(
+        "app_recipes",
+        "stable",
+        release.release_digest,
+        publisher_ref="subnet:sn_home",
+        expected_release_digest=None,
+    )
+
+    summary = service.list_models(summary=True)[0]
+    full = service.list_models()[0]
+
+    assert summary["schema"] == "adaos.application.catalog_summary.v1"
+    assert summary["marketplace_release"]["version"] == "1.0.0"
+    assert "components" not in summary["marketplace_release"]["project_release"]
+    assert "release" not in summary["effective_release"]
+    assert full["effective_release"]["release"]["release_digest"] == release.release_digest
+
+
 def test_operation_plan_projects_structured_permission_review(
     service: ApplicationService,
 ) -> None:

@@ -1052,6 +1052,22 @@ or acceptance evidence to counts and digest refs. Private repository names,
 source scopes, materialization paths, credentials, logs, and publisher-internal
 Dev Ticket data are not returned by `ApplicationsPlane`.
 
+Catalog collection reads use `view=summary` by default. The summary carries
+only product identity, display/catalog metadata, lifecycle flags, exact release
+digests, compact installation/operation state, navigation, and condition
+summaries. Complete component closures, evidence bodies, migrations, and locks
+are read only by an explicit detail operation. `applications.list` is
+server-paginated with a maximum page of 100 summaries (20 for an explicitly
+requested full view), returns `page.has_more`, and supports bounded query and
+offset inputs. This is a transport invariant: historical development inventory
+must not produce a Root response larger than the NATS route can carry.
+
+Latency-sensitive Root MCP control reads run on a small prestarted interactive
+executor. Background hydration, provider I/O, package work, and skill startup
+remain on the general runtime executor, so a burst of cold provider calls
+cannot consume every worker needed to render Applications. This scheduling
+separation changes neither Root policy nor operation authority.
+
 Minimum user/agent SDK surface:
 
 ```text
