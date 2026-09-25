@@ -3,6 +3,7 @@
 # Many subsystems (notably NATS-over-WS tuning) rely on env vars, so best-effort load `.env` here too.
 import os
 from pathlib import Path
+import gc
 import logging
 import time
 from starlette.staticfiles import StaticFiles
@@ -613,6 +614,33 @@ async def _cancel_background_task(task: asyncio.Task[Any] | None, *, timeout: fl
         _startup_log.warning("background startup task did not stop cleanly", exc_info=True)
 
 
+async def _to_thread_without_yjs_cyclic_gc(func, /, *args, **kwargs):
+    """Run plain-Python work without collecting owner-thread Yjs cycles.
+
+    CPython may start cyclic collection on whichever thread happens to allocate
+    the threshold-crossing object.  Once a live ``y_py`` room exists, that can
+    finalize an otherwise unreachable YDoc cycle on an arbitrary executor
+    worker even when the worker never touched Yjs.  Suspend automatic cyclic
+    collection around the bounded offload, then collect and restore it on the
+    event-loop owner thread.  Ordinary reference counting remains enabled.
+    """
+
+    y_py_loaded = any(
+        name == "y_py" or name.startswith("y_py.") for name in sys.modules
+    )
+    restore_gc = y_py_loaded and gc.isenabled()
+    if restore_gc:
+        gc.disable()
+    try:
+        return await asyncio.to_thread(func, *args, **kwargs)
+    finally:
+        if restore_gc:
+            try:
+                gc.collect()
+            finally:
+                gc.enable()
+
+
 async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> None:
     """Warm optional catalogs after the API can serve persisted state."""
     started = time.perf_counter()
@@ -641,7 +669,7 @@ async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> N
         from adaos.services.builder import BuilderProjectCatalogService
 
         with _StartupTimer("post_ready_prewarm_builder_project_catalog"):
-            await asyncio.to_thread(
+            await _to_thread_without_yjs_cyclic_gc(
                 BuilderProjectCatalogService.from_context().list_projects,
                 limit=5000,
             )

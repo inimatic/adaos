@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import threading
 from types import SimpleNamespace
 
 from adaos.apps.api import server
@@ -75,3 +77,43 @@ def test_catalog_and_materialization_prewarm_runs_after_readiness(monkeypatch) -
         "materialization_sources",
         "materialization_hydration",
     }
+
+
+def test_yjs_gc_is_collected_on_owner_after_catalog_worker(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+    owner_thread = threading.current_thread().name
+    monkeypatch.setitem(sys.modules, "y_py", SimpleNamespace())
+    monkeypatch.setattr(server.gc, "isenabled", lambda: True)
+    monkeypatch.setattr(
+        server.gc,
+        "disable",
+        lambda: calls.append(("disable", threading.current_thread().name)),
+    )
+    monkeypatch.setattr(
+        server.gc,
+        "collect",
+        lambda: calls.append(("collect", threading.current_thread().name)) or 0,
+    )
+    monkeypatch.setattr(
+        server.gc,
+        "enable",
+        lambda: calls.append(("enable", threading.current_thread().name)),
+    )
+
+    def _catalog_read() -> str:
+        calls.append(("worker", threading.current_thread().name))
+        return "ready"
+
+    result = asyncio.run(server._to_thread_without_yjs_cyclic_gc(_catalog_read))
+
+    assert result == "ready"
+    assert [name for name, _thread in calls] == [
+        "disable",
+        "worker",
+        "collect",
+        "enable",
+    ]
+    assert calls[0][1] == owner_thread
+    assert calls[1][1] != owner_thread
+    assert calls[2][1] == owner_thread
+    assert calls[3][1] == owner_thread

@@ -183,6 +183,11 @@ The run caused the following systemic corrections:
    before reporting success. This closes the observed `scenario_not_found`
    failure where Applications was installed and locked but its physical
    Scenario directory had disappeared.
+8. The post-ready Builder catalog prewarm keeps automatic cyclic collection
+   suspended only for its bounded executor offload, then collects and restores
+   it on the event-loop owner thread. A plain JSON allocation in that worker
+   previously triggered finalization of an unrelated cyclic `YDoc` there and
+   degraded Yjs despite the catalog never accessing Yjs itself.
 
 The first Trial attempt failed closed because the lifecycle command omitted
 the publication Project reference and entered component-only validation. The
