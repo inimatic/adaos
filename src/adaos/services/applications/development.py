@@ -33,6 +33,7 @@ class ApplicationDevelopmentCoordinator:
         "publish_trial": "applications.publish",
         "publish_prerelease": "applications.publish",
         "promote_stable": "applications.publish",
+        "publish_to_registry": "applications.publish",
         "publish_stable_source": "applications.publish",
     }
 

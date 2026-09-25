@@ -69,6 +69,83 @@ def test_builder_application_create_uses_bounded_composition_and_core(monkeypatc
     assert created[0][1]["entrypoints"][0]["presentation"] == "scenario:applications"
 
 
+def test_publish_to_registry_makes_stable_application_public_and_records_receipt(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    service.register(
+        Application(
+            application_id="mail_reader",
+            legacy_project_id="mail_reader",
+            publisher_ref="subnet:home",
+            slug="mail_reader",
+            display={"title": "Mail Reader", "summary": "Read mail"},
+            visibility="private",
+            entrypoints=(
+                {
+                    "entrypoint_id": "main",
+                    "presentation_ref": "scenario:mail_reader",
+                },
+            ),
+            publisher={
+                "publisher_ref": "subnet:home",
+                "display_name": "Home",
+                "subnet_short_ref": "home",
+                "release_key_ref": "artifact-signing:home:key",
+                "release_key_fingerprint": "sha256:" + "f" * 64,
+                "home_zone": "local",
+                "trust_relation": "local",
+            },
+        )
+    )
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    projected: list[dict[str, object]] = []
+
+    class _Projection:
+        def __init__(self, observed_service, *, publisher) -> None:
+            assert observed_service is service
+            assert publisher == "publisher-port"
+
+        def publish(self, application_id, release_digest, **kwargs):
+            projected.append(
+                {
+                    "application_id": application_id,
+                    "release_digest": release_digest,
+                    **kwargs,
+                }
+            )
+            return {"schema": "adaos.application.stable_source_projection.v1"}
+
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(applications, "get_stable_source_publisher", lambda: "publisher-port")
+    monkeypatch.setattr(applications, "StableSourceProjectionService", _Projection)
+
+    operation = applications.publish_to_registry(
+        "mail_reader",
+        "sha256:" + "a" * 64,
+        release_notes="First public beta",
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.publish",
+        expected_revision=1,
+        idempotency_key="publish-mail-reader-1",
+    )
+
+    assert operation["status"] == "succeeded"
+    assert operation["result"]["application"]["visibility"] == "public"
+    assert service.store.get_application("mail_reader").revision == 2
+    assert projected == [
+        {
+            "application_id": "mail_reader",
+            "release_digest": "sha256:" + "a" * 64,
+            "publisher_ref": "subnet:home",
+            "release_notes": "First public beta",
+        }
+    ]
+
+
 def test_candidate_verification_adopts_project_before_release_gate(monkeypatch) -> None:
     application = Application(
         application_id="desktop",

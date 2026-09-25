@@ -35,6 +35,7 @@ _ACTION_CAPABILITIES = {
     "publish_trial": "applications.publish",
     "publish_prerelease": "applications.publish",
     "promote_stable": "applications.publish",
+    "publish_to_registry": "applications.publish",
     "publish_stable_source": "applications.publish",
     "recover": "applications.recover",
 }
@@ -1711,6 +1712,95 @@ def publish_stable_source(
     )
 
 
+def _publish_to_registry_effect(
+    application_id: str,
+    release_digest: str,
+    *,
+    release_notes: str,
+    subnet_ref: str,
+    expected_revision: int,
+) -> Mapping[str, Any]:
+    """Make one publisher-owned stable Application public and project it.
+
+    The visibility transition is deliberately resumable.  If publication loses
+    its response after the Application became public, recovery observes the
+    exact next revision and retries only the idempotent registry projection.
+    """
+
+    service = _application_service()
+    application = service.store.get_application(application_id)
+    if application.publisher_ref != subnet_ref:
+        raise ValueError("only the local Application publisher may publish to registry")
+    if application.visibility == "public":
+        if application.revision not in {expected_revision, expected_revision + 1}:
+            raise ValueError(
+                f"Application revision conflict: expected {expected_revision} or "
+                f"{expected_revision + 1}, observed {application.revision}"
+            )
+    else:
+        if application.revision != expected_revision:
+            raise ValueError(
+                f"Application revision conflict: expected {expected_revision}, "
+                f"observed {application.revision}"
+            )
+        application = service.register(
+            replace(
+                application,
+                visibility="public",
+                revision=application.revision + 1,
+                updated_at=utc_now(),
+            ),
+            expected_revision=expected_revision,
+        )
+    receipt = StableSourceProjectionService(
+        service, publisher=get_stable_source_publisher()
+    ).publish(
+        application_id,
+        release_digest,
+        publisher_ref=subnet_ref,
+        release_notes=release_notes,
+    )
+    return {
+        "ok": True,
+        "application": application.to_dict(),
+        "registry_publication": receipt,
+    }
+
+
+def publish_to_registry(
+    application_id: str,
+    release_digest: str,
+    *,
+    release_notes: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    expected_revision: int,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Publish one exact stable Application and its portable CBS projection."""
+
+    if len(str(release_notes)) > 20_000:
+        raise ValueError("release_notes exceeds 20000 characters")
+    intent = {"release_digest": release_digest, "release_notes": str(release_notes)}
+
+    def execute() -> Mapping[str, Any]:
+        return _publish_to_registry_effect(
+            application_id,
+            release_digest,
+            release_notes=release_notes,
+            subnet_ref=subnet_ref,
+            expected_revision=expected_revision,
+        )
+
+    return _execute_development(
+        "publish_to_registry", application_id, actor_ref=actor_ref,
+        subnet_ref=subnet_ref, capability=capability,
+        expected_revision=expected_revision, idempotency_key=idempotency_key,
+        intent=intent, callback=execute,
+    )
+
+
 def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, Any]:
     action = str(operation.get("action") or "")
     application_id = str(operation.get("application_id") or "")
@@ -1872,6 +1962,14 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
             publisher_ref=subnet_ref,
             release_notes=str(intent.get("release_notes") or ""),
         )
+    if action == "publish_to_registry":
+        return _publish_to_registry_effect(
+            application_id,
+            str(intent.get("release_digest") or ""),
+            release_notes=str(intent.get("release_notes") or ""),
+            subnet_ref=subnet_ref,
+            expected_revision=expected_revision,
+        )
     raise ValueError(f"unsupported stored Application development action: {action}")
 
 
@@ -1927,6 +2025,7 @@ __all__ = [
     "promote_stable",
     "publish_link_trial",
     "publish_prerelease",
+    "publish_to_registry",
     "publish_stable_source",
     "publisher_context",
     "reconcile_development_operation",

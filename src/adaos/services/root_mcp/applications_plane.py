@@ -324,6 +324,33 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             metadata={**metadata, "handler": "applications_development_promote_stable"},
         ),
         RootMcpToolContract(
+            id="applications.development.publish_to_registry",
+            title="Publish Application to registry",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary=(
+                "Make the exact stable Application public and publish its source "
+                "and portable CBS projection to the configured shared registry."
+            ),
+            input_schema=schema_object(
+                properties={
+                    **mutation,
+                    "release_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "release_notes": {"type": "string", "maxLength": 20000},
+                },
+                required=[*mutation_required, "release_digest", "release_notes"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.publish",
+            side_effects="write",
+            metadata={
+                **metadata,
+                "handler": "applications_development_publish_to_registry",
+            },
+        ),
+        RootMcpToolContract(
             id="applications.development.publish_stable_source",
             title="Publish stable Application source",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -3833,6 +3860,23 @@ def _handle_development_publish_stable_source(
     )
 
 
+def _handle_development_publish_to_registry(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_publish_to_registry": True,
+            "request": _builder_request(arguments),
+        }
+    return _builder_sdk().publish_to_registry(
+        _application_id(arguments),
+        str(arguments.get("release_digest") or ""),
+        release_notes=str(arguments.get("release_notes") or ""),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.publish"),
+    )
+
+
 def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
@@ -4181,6 +4225,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.development.publish_link_trial": _handle_development_publish_link_trial,
         "applications.development.publish_prerelease": _handle_development_publish_prerelease,
         "applications.development.promote_stable": _handle_development_promote_stable,
+        "applications.development.publish_to_registry": _handle_development_publish_to_registry,
         "applications.development.publish_stable_source": _handle_development_publish_stable_source,
     }
 
