@@ -1,7 +1,49 @@
 """Close evidence references over declared, unambiguous ownership edges."""
 
+import re
 from collections.abc import Mapping
-from .prototype_context import prototype_process_constraints
+
+from .prototype_context import (
+    prototype_process_constraints,
+    prototype_state_requirements,
+)
+
+
+_CARDINAL_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+_PRODUCT_VIEW_CARDINALITY = re.compile(
+    r"\bexactly\s+(?P<count>\d+|one|two|three|four|five|six|seven|eight|nine|ten)"
+    r"\s+(?:semantic\s+)?product\s+views?\b",
+    re.IGNORECASE,
+)
+
+
+def _product_view_cardinalities(brief: Mapping) -> set[int]:
+    counts: set[int] = set()
+    for group in ("principal_jobs", "residual_requirements"):
+        for item in brief.get(group) or []:
+            statement = str(item.get("statement") or "")
+            for match in _PRODUCT_VIEW_CARDINALITY.finditer(statement):
+                raw = match.group("count").casefold()
+                counts.add(int(raw) if raw.isdigit() else _CARDINAL_WORDS[raw])
+    problem = brief.get("problem")
+    if isinstance(problem, Mapping) and problem.get("state") == "known":
+        for match in _PRODUCT_VIEW_CARDINALITY.finditer(
+            str(problem.get("value") or "")
+        ):
+            raw = match.group("count").casefold()
+            counts.add(int(raw) if raw.isdigit() else _CARDINAL_WORDS[raw])
+    return counts
 
 
 def close_bindings(document: dict, brief: Mapping | None) -> list[dict]:
@@ -58,6 +100,71 @@ def binding_findings(document: Mapping, brief: Mapping | None) -> list[dict]:
     def add(ref, detail):
         findings.append({"code": "semantic.requirement_binding_incomplete", "path": "$.requirement_bindings",
                          "requirement_ref": ref, "detail": detail})
+
+    cardinalities = _product_view_cardinalities(brief)
+    if len(cardinalities) > 1:
+        findings.append({
+            "code": "semantic.product_view_cardinality_conflict",
+            "path": "$.views",
+            "expected_counts": sorted(cardinalities),
+            "detail": (
+                "Prototype Brief contains conflicting exact product-view counts: "
+                f"{sorted(cardinalities)}"
+            ),
+        })
+    elif cardinalities:
+        expected = next(iter(cardinalities))
+        actual = len(document.get("views") or [])
+        if actual != expected:
+            findings.append({
+                "code": "semantic.product_view_count_mismatch",
+                "path": "$.views",
+                "expected_count": expected,
+                "actual_count": actual,
+                "semantic_refs": [
+                    f"view:{item['id']}" for item in document.get("views") or []
+                ],
+                "detail": (
+                    f"Prototype Brief requires exactly {expected} product views; "
+                    f"semantic document declares {actual}"
+                ),
+            })
+
+    used_state_refs: dict[str, str] = {}
+    for requirement in prototype_state_requirements(brief):
+        ref = str(requirement.get("id") or "")
+        if not ref or ref in gaps:
+            continue
+        state_refs = sorted(
+            item for item in bindings.get(ref, set()) if item.startswith("state:")
+        )
+        if len(state_refs) != 1:
+            findings.append({
+                "code": "semantic.representative_state_binding_required",
+                "path": "$.requirement_bindings",
+                "requirement_ref": ref,
+                "semantic_refs": state_refs,
+                "detail": (
+                    f"representative-state requirement {ref!r} must bind exactly "
+                    "one explicit state proof"
+                ),
+            })
+            continue
+        state_ref = state_refs[0]
+        prior = used_state_refs.get(state_ref)
+        if prior is not None:
+            findings.append({
+                "code": "semantic.representative_state_binding_reused",
+                "path": "$.requirement_bindings",
+                "requirement_ref": ref,
+                "semantic_refs": [state_ref],
+                "detail": (
+                    f"representative-state requirements {prior!r} and {ref!r} "
+                    f"reuse {state_ref!r}; each accepted state needs independent proof"
+                ),
+            })
+        else:
+            used_state_refs[state_ref] = ref
 
     for requirement in document.get("automation_requirements", []):
         ref = requirement["requirement_ref"]

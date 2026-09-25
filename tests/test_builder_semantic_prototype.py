@@ -9,6 +9,7 @@ from jsonschema import ValidationError
 from adaos.sdk.builder import prototype as prototype_sdk
 from adaos.sdk.developer import prototypes as developer_prototypes
 from adaos.services.builder.semantic_prototype import (
+    SemanticPrototypeValidationError,
     compile_semantic_prototype_candidate,
     compile_semantic_prototype,
     semantic_prototype_candidate_contract,
@@ -1874,30 +1875,73 @@ def test_semantic_prototype_requires_residual_requirement_binding() -> None:
 
 def test_semantic_prototype_accepts_stable_representative_state_requirements() -> None:
     brief, semantic = _fixture()
-    brief = compile_prototype_brief(
-        "Move work through New, In progress, Blocked and Done."
-    )
+    brief = compile_prototype_brief("Represent empty and no-results states.")
     semantic["brief_ref"] = brief["brief_id"]
     semantic["brief_digest"] = brief["digest"]
+    second_state = copy.deepcopy(semantic["representative_states"][0])
+    second_state["id"] = "no-results"
+    semantic["representative_states"].append(second_state)
     semantic["requirement_bindings"] = [
         {
             "requirement_ref": item["id"],
-            "semantic_refs": ["field:status"],
+            "semantic_refs": [f"state:{state['id']}"],
         }
-        for item in prototype_sdk.model_context(brief)["state_requirements"]
+        for item, state in zip(
+            prototype_sdk.model_context(brief)["state_requirements"],
+            semantic["representative_states"],
+            strict=True,
+        )
         if "id" in item
     ]
-    semantic["requirement_bindings"].extend(
-        {
-            "requirement_ref": item["id"],
-            "semantic_refs": ["command:complete"],
-        }
-        for item in brief["principal_jobs"] + brief["operations"]
-    )
 
     assert validate_semantic_prototype(semantic, brief=brief)["document_id"] == (
         "work-review"
     )
+
+
+def test_semantic_prototype_rejects_representative_state_bound_only_to_field() -> None:
+    brief, semantic = _multi_resource_fixture()
+    brief = compile_prototype_brief("Represent empty state.")
+    semantic["brief_ref"] = brief["brief_id"]
+    semantic["brief_digest"] = brief["digest"]
+    requirement = prototype_sdk.model_context(brief)["state_requirements"][0]
+    semantic["requirement_bindings"] = [{
+        "requirement_ref": requirement["id"],
+        "semantic_refs": ["field:status"],
+    }]
+
+    with pytest.raises(SemanticPrototypeValidationError) as caught:
+        validate_semantic_prototype(semantic, brief=brief)
+
+    assert any(
+        item["code"] == "semantic.representative_state_binding_required"
+        for item in caught.value.findings
+    )
+
+
+def test_semantic_prototype_enforces_exact_product_view_count() -> None:
+    brief, semantic = _multi_resource_fixture()
+    brief["residual_requirements"].append({
+        "id": "residual:exact-views",
+        "statement": "The product has exactly two product views",
+        "evidence": ["test"],
+        "confidence": 1.0,
+    })
+    semantic["requirement_bindings"].append({
+        "requirement_ref": "residual:exact-views",
+        "semantic_refs": ["view:work-list"],
+    })
+
+    with pytest.raises(SemanticPrototypeValidationError) as caught:
+        validate_semantic_prototype(semantic, brief=brief)
+
+    finding = next(
+        item
+        for item in caught.value.findings
+        if item["code"] == "semantic.product_view_count_mismatch"
+    )
+    assert finding["expected_count"] == 2
+    assert finding["actual_count"] == 4
 
 
 def test_capture_each_requires_collection_and_editor_bindings() -> None:
