@@ -1428,6 +1428,52 @@ def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):
     assert scenario_rows["greet_on_boot"].active_version == "0.4.0"
 
 
+def test_reconcile_runs_again_after_application_auto_update(monkeypatch) -> None:
+    reconciliations: list[object] = []
+    ctx = object()
+
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "reconcile_workspace_db_to_materialized",
+        lambda observed_ctx: reconciliations.append(observed_ctx) or {"ok": True},
+    )
+
+    result = workspace_sync_module._reconcile_after_application_auto_update(
+        ctx,
+        {"status": "completed", "applied_count": 1},
+    )
+
+    assert result == {"ok": True}
+    assert reconciliations == [ctx]
+
+
+@pytest.mark.parametrize(
+    "auto_update",
+    [
+        None,
+        {"status": "skipped", "applied_count": 1},
+        {"status": "completed", "applied_count": 0},
+    ],
+)
+def test_reconcile_is_not_repeated_when_application_workspace_did_not_change(
+    monkeypatch,
+    auto_update,
+) -> None:
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "reconcile_workspace_db_to_materialized",
+        lambda _ctx: pytest.fail("unexpected reconciliation"),
+    )
+
+    assert (
+        workspace_sync_module._reconcile_after_application_auto_update(
+            object(),
+            auto_update,
+        )
+        is None
+    )
+
+
 def test_reconcile_workspace_db_skips_unchanged_registry_rows(tmp_path: Path):
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "weather_skill"

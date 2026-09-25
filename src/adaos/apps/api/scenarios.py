@@ -285,9 +285,9 @@ async def list_scenarios(
         seen.add(key)
         registry_meta = workspace_registry_by_name.get(scenario_id)
         item_version = str(
-            item.get("version")
+            ((registry_meta or {}).get("version") if isinstance(registry_meta, dict) else "")
+            or item.get("version")
             or item.get("active_version")
-            or ((registry_meta or {}).get("version") if isinstance(registry_meta, dict) else "")
             or ""
         ).strip()
         item["id"] = scenario_id

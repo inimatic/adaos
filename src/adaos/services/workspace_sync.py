@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +131,25 @@ def _automatic_application_update_result(
             "reason": "auto_update_runner_failed",
             "error": {"type": type(exc).__name__, "message": str(exc)[:500]},
         }
+
+
+def _reconcile_after_application_auto_update(
+    ctx,
+    application_auto_update: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Refresh legacy registries after an Application changed the workspace."""
+
+    result = (
+        application_auto_update
+        if isinstance(application_auto_update, Mapping)
+        else {}
+    )
+    if (
+        str(result.get("status") or "").strip().lower() != "completed"
+        or int(result.get("applied_count") or 0) <= 0
+    ):
+        return None
+    return reconcile_workspace_db_to_materialized(ctx)
 
 
 def _environment_type() -> str:
@@ -616,6 +636,14 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             ctx,
             semantic_registry,
         )
+        post_application_reconcile: dict[str, Any] | None = None
+        try:
+            post_application_reconcile = _reconcile_after_application_auto_update(
+                ctx,
+                application_auto_update,
+            )
+        except Exception as exc:
+            errors.append(f"post-Application-update reconcile: {exc}")
         return {
             "ok": len(errors) == 0,
             "mode": "archive",
@@ -633,6 +661,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "reconcile": reconcile_result,
             "semantic_registry": semantic_registry,
             "application_auto_update": application_auto_update,
+            "post_application_reconcile": post_application_reconcile,
             "patterns": desired,
             "source_alignment": source_alignment,
         }
@@ -757,6 +786,31 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         ctx,
         semantic_registry,
     )
+    try:
+        post_application_reconcile = _reconcile_after_application_auto_update(
+            ctx,
+            application_auto_update,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "skills": skills,
+            "scenarios": scenarios,
+            "registry_skills": registry_skills,
+            "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
+            "runtime_scenario_refs": runtime_scenario_refs,
+            "scenario_required_skills": scenario_required_skills,
+            "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
+            "fallback_used": fallback_used,
+            "project_materialization": project_materialization,
+            "reconcile": reconcile_result,
+            "semantic_registry": semantic_registry,
+            "application_auto_update": application_auto_update,
+            "error": f"workspace reconcile failed after Application update: {exc}",
+            "patterns": desired,
+            "source_alignment": source_alignment,
+        }
 
     return {
         "ok": True,
@@ -773,6 +827,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         "reconcile": reconcile_result,
         "semantic_registry": semantic_registry,
         "application_auto_update": application_auto_update,
+        "post_application_reconcile": post_application_reconcile,
         "patterns": desired,
         "source_alignment": source_alignment,
     }

@@ -567,6 +567,56 @@ def test_scenario_list_uses_active_version_and_skips_missing_scenario_yaml(monke
     assert [(item["name"], item["version"]) for item in result["items"]] == [("scene", "0.2.0")]
 
 
+def test_scenario_list_prefers_materialized_registry_version_during_reconcile_window(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class _StaleScenarioManager(_FakeScenarioManager):
+        def list_installed(self) -> list[_Record]:
+            return [_Record(name="applications", installed=True, active_version="0.1.63")]
+
+    workspace = tmp_path / "workspace"
+    scenarios_root = workspace / "scenarios"
+    scenario_root = scenarios_root / "applications"
+    scenario_root.mkdir(parents=True)
+    (scenario_root / "scenario.yaml").write_text(
+        "id: applications\nversion: '0.1.65'\n",
+        encoding="utf-8",
+    )
+    (workspace / "registry.json").write_text(
+        '{"version":2,"skills":[],"scenarios":['
+        '{"kind":"scenario","id":"applications","name":"applications",'
+        '"version":"0.1.65","manifest":"scenarios/applications/scenario.yaml"}]}'
+        "\n",
+        encoding="utf-8",
+    )
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            workspace_dir=lambda: workspace,
+            scenarios_workspace_dir=lambda: scenarios_root,
+            scenarios_dir=lambda: scenarios_root,
+        )
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "load_config",
+        lambda: SimpleNamespace(role="node", node_id="node-local"),
+    )
+    monkeypatch.setattr(
+        scenarios,
+        "node_display_from_config",
+        lambda _config: {"node_label": "Node", "node_compact_label": "N", "node_index": 1},
+    )
+
+    result = asyncio.run(
+        scenarios.list_scenarios(mgr=_StaleScenarioManager(), ctx=ctx)
+    )
+
+    assert [(item["name"], item["version"]) for item in result["items"]] == [
+        ("applications", "0.1.65")
+    ]
+
+
 def test_scenario_list_includes_dev_artifacts_only_for_dev_webspace(monkeypatch, tmp_path) -> None:
     dev_root = tmp_path / "dev" / "scenarios"
     (dev_root / "dev_recipe").mkdir(parents=True)
