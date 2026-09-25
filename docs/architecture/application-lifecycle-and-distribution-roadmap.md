@@ -723,8 +723,15 @@ Builder development and consumes only public contracts.
   instead of changing the installation. Safe outcomes and skipped decisions
   are recorded under `state/applications/auto_update_runs`, and registry events
   are retained and replayed to reconnecting subnet members. Startup schedules
-  this work after readiness so it does not extend desktop first paint. The
-  item remains open for the failure/retry presentation and for a real
+  this work after readiness so it does not extend desktop first paint. A clean
+  subnet proof imported the public catalog, then advanced Mail Focus Reader
+  from `0.1.2` to `0.1.3` with operation
+  `appop.31a9057df62bb87719506bb3e8ffbca0`; all package stages and health checks
+  completed and installation revision advanced from 3 to 4 without a manual
+  update command. This proves the Core-update/restart polling path as well as
+  safe exact apply; a public Root/zonal publisher can use the same retained
+  event rail when it emits `applications.registry.updated`. The item remains
+  open for the failure/retry presentation and for a real
   permission-elevation or migration handoff through Applications UI.
 - [x] `[must]` `APP4-47` Carry universal Application icon metadata from
   `project.yaml` through Project composition, registry projection and SDK read

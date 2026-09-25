@@ -3,7 +3,7 @@
 Status: domain roadmap for registry, publication, installation, and durable
 operation mechanics.
 
-Last reviewed: 2026-09-07.
+Last reviewed: 2026-09-25.
 
 Application product identity, full-screen Applications UX, channel semantics,
 subscriptions, publisher authority, Trial access, and Development Reports are
@@ -46,6 +46,34 @@ Workspace activation through deployed backend `0.1.142`. See
 The governing rule is:
 
 > Yjs is a live projection layer for clients, not the execution transport and not the source of truth for orchestration.
+
+## Implementation Checkpoint: 2026-09-25
+
+The existing Git/package registry now also carries a fail-closed,
+content-addressed semantic index. Exact public Application publication commits
+the source projection, Application release/catalog entry, immutable packages,
+and the portable CBS projection together. Capability and state contracts,
+binding definitions/deliveries, and explicitly portable evidence have
+independent identities in that index; credentials, connected accounts,
+`BindingInstance`, `StateSpace`, operational evidence and other local authority
+are rejected.
+
+Applications exposes the governed finalize/publish path and its exact registry
+commit evidence. Sparse registry synchronization verifies and imports the
+semantic index before installation. A clean-subnet proof imported 11 portable
+Gmail/UI identities, installed Applications `0.1.36`, Desktop `0.3.52`, and
+Mail Focus Reader, then automatically advanced Mail Focus Reader from `0.1.2`
+to `0.1.3` through the ordinary safe Application plan/apply protocol. The
+portable catalog and provider package arrived; no Gmail secret or account was
+copied.
+
+The update consumer is complete on the subnet side: it runs after readiness,
+also subscribes to the retained `applications.registry.updated` event, records
+durable receipts, and fails closed for permission elevation, migration,
+conflict, or uncertain outcomes. A public Root/zonal producer for that event is
+still operationally open; boot/core-update registry polling is the currently
+proven path. Thin semantic-only online resolution, offline resolved bundles,
+and cross-registry federation remain later CBS10 work.
 
 ## Why This Note Exists
 
@@ -123,8 +151,9 @@ Current MVP priority:
 - a shared SDK/API and CI-gated delivery contract around the existing
   `adaos dev project publish` path; current `skill push`/`scenario push` remain
   component-first compatibility paths
-- shared remote `adaos-registry` catalog semantics are still not fully
-  normalized across every skill/scenario push path
+- legacy component-first `skill push`/`scenario push` paths are not yet fully
+  normalized with exact Application/CBS publication; the governed Application
+  publish path is authoritative for the completed proof
 - marketplace content is not yet modeled as a client-facing catalog adapter separate from raw `registry.json`
 - complete client affordances for the core-owned cancellation and retry API are
   not yet wired into every operations UI

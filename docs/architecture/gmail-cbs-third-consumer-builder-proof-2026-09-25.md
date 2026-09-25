@@ -1,6 +1,7 @@
 # Gmail CBS Third-Consumer Builder Proof
 
-Status: validated-local beta proof, 2026-09-25.
+Status: validated-local beta proof with clean-subnet distribution follow-up,
+2026-09-25.
 
 Follow-up: the optimized matched authoring run is recorded in
 [Gmail CBS Fourth-Consumer Matched Builder Proof](gmail-cbs-fourth-consumer-builder-proof-2026-09-25.md).
@@ -39,6 +40,15 @@ provider delivery and reused the Core-owned Gmail connection.
 | Publication | `published` |
 | Stable runtime | `desktop`, `stable_installation`, revision 2 |
 | Workspace lock | committed publication at workspace revision 78 |
+
+The original Builder proof above remains pinned to `0.1.2`. A subsequent
+source-preserving release published `mail_focus_reader@0.1.3` as Application
+release
+`sha256:310f01a72ffd473d65348f0146210c8198eb9b9454e886d4635681e858980599`,
+with scenario package
+`sha256:2b5f8b6ba8b935eaff6ee37599a3a38953d7d52bcb9bad136559a03699e51661`
+and the same independently delivered Gmail provider package
+`sha256:403e924b61e66ae9d04aa69a4594d3fe2873349f75904c5633e3e01212c0df19`.
 
 Applications projects the CBS lifecycle as `compiled -> admitted -> ready ->
 active -> committed`. The projection is explicitly derived; the admitted
@@ -93,6 +103,30 @@ data-source scheduling, Core admission, skill startup, and live provider IO.
 The provider itself is no longer the old 26-second bottleneck, but the complete
 first-paint path is still too slow for production polish and remains measured
 performance debt.
+
+## Clean-Subnet Publication And Auto-Update Follow-Up
+
+The public registry revision `7e898cb156b8381d57edd14f590eaf92f6d2df6f`
+contains the exact `0.1.3` release and its portable CBS projection. A separate
+subnet at `192.168.0.30` imported a local portable catalog with 11 immutable
+identities/records, including `capability:mail.messages.manage@1.0.0`, its
+Gmail binding definition, and the exact provider delivery. Applications
+`0.1.36` and Desktop `0.3.52` were installed from the same public registry.
+
+After the subnet initially installed `mail_focus_reader@0.1.2`, the post-ready
+registry synchronizer found `0.1.3` and the auto-update service ran the normal
+reviewed plan/apply machinery. Operation
+`appop.31a9057df62bb87719506bb3e8ffbca0` completed fetch, verification, staging,
+activation, health and commit for all three release components, and advanced
+the installation revision from 3 to 4. No direct update command was used.
+
+The clean subnet has no Gmail OAuth secret or connected account. Provider reuse
+discovery now returns an ordinary empty result without opening an unconfigured
+credential vault, while mail operations return the actionable
+`account_not_connected` result. This is the required authority boundary, not a
+provider outage: portable contracts, packages and evidence cross the registry;
+credentials do not. The remaining `CBS10-07` proof step is to provision that
+subnet's own Google OAuth client/account and attach it to the imported binding.
 
 ## Builder And Platform Corrections
 

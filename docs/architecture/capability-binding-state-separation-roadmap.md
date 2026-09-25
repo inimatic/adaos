@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
-Last reviewed: 2026-09-24.
+Last reviewed: 2026-09-25.
 
 Implementation checkpoint: every non-deferred item through `CBS5` and every
 `must`/`should` item in `CBS6` through `CBS9` has validated-local evidence as
@@ -37,8 +37,15 @@ workspace activation, real provider reads, and the Stable browser journey all
 passed. Exact release facts, first-paint timings, token telemetry, systemic
 fixes, and the still-failed one-shot criterion are recorded in
 [Gmail CBS Third-Consumer Builder Proof](gmail-cbs-third-consumer-builder-proof-2026-09-25.md).
-This strengthens the local reuse proof but does not close federated discovery,
-public callback materialization, or autonomous-development efficiency.
+The follow-up `0.1.3` release was published with its exact source, Application
+release, packages, and portable semantic projection. A separate clean subnet
+imported 11 portable identities/records, installed the exact public release and
+shared Gmail delivery, then automatically advanced `mail_focus_reader` from
+`0.1.2` to `0.1.3` through the ordinary plan/apply protocol after registry
+sync. That subnet deliberately has no copied Gmail secret, so the final local
+account creation/attachment part of the cross-subnet reuse proof remains open.
+Public callback materialization and autonomous-development efficiency retain
+their separately recorded boundaries.
 
 ## Outcome
 
@@ -766,27 +773,31 @@ Applications, a clean subnet imports its portable contract/binding/delivery
 records, and another Gmail consumer resolves the shared delivery while creating
 its own local account attachment and credential authority.
 
-- [ ] `[must]` `CBS10-01` Add fail-closed schemas for the shared semantic index
+- [x] `[must]` `CBS10-01` Add fail-closed schemas for the shared semantic index
   and exact semantic Application release projection.
-- [ ] `[must]` `CBS10-02` Publish content-addressed `CapabilityContract`,
+- [x] `[must]` `CBS10-02` Publish content-addressed `CapabilityContract`,
   `StateContract`, `BindingDefinition`, `BindingDelivery`, and explicitly
   portable `EvidenceClaim` records under the existing Git registry; deduplicate
   by stable identity, immutable revision, and digest.
-- [ ] `[must]` `CBS10-03` Bind publication to the exact admitted CBS compilation
+- [x] `[must]` `CBS10-03` Bind publication to the exact admitted CBS compilation
   and ProjectRelease, and commit source plus semantic projection atomically.
-- [ ] `[must]` `CBS10-04` Reject credentials, local provider/account references,
+- [x] `[must]` `CBS10-04` Reject credentials, local provider/account references,
   `BindingInstance`, `StateSpace`, operational assessments, and local evidence
   from shared publication.
-- [ ] `[must]` `CBS10-05` Materialize the compact semantic index in every sparse
+- [x] `[must]` `CBS10-05` Materialize the compact semantic index in every sparse
   registry checkout and verify/import its portable records into the local
   catalog without installing the first publisher Application.
-- [ ] `[must]` `CBS10-06` Expose governed `Finalize` and `Publish` operations in
+- [x] `[must]` `CBS10-06` Expose governed `Finalize` and `Publish` operations in
   Applications, including exact source-registry commit and semantic publication
   evidence.
-- [ ] `[must]` `CBS10-07` Prove publication and reuse with
+- [~] `[must]` `CBS10-07` Prove publication and reuse with
   `gmail_cbs_cleanroom` and a distinct Gmail consumer on a clean subnet. Reuse
   the capability/provider credential attachment without copying a secret into
-  either Application or the registry.
+  either Application or the registry. Shared publication, clean-subnet import,
+  exact provider delivery, consumer install, and subsequent auto-update are
+  proven. The clean subnet still needs its own Gmail OAuth credential and local
+  connected-account attachment before this item is complete; credentials are
+  intentionally neither copied from the publisher nor published in Git.
 - [ ] `[should]` `CBS10-08` Resolve a thin distribution online by semantic
   requirement and exact environment/policy/evidence constraints.
 - [ ] `[should]` `CBS10-09` Export and admit a resolved portable distribution
