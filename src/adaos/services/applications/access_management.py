@@ -34,16 +34,63 @@ from .store import _read
 
 _log = logging.getLogger("adaos.applications.access")
 _RUNTIME_CONTEXT_CACHE_LOCK = RLock()
+_RUNTIME_CONTEXT_KEY_LOCKS: dict[tuple[str, str, str, str, str, str], RLock] = {}
 _RUNTIME_CONTEXT_CACHE: dict[
     tuple[str, str, str, str, str, str],
     tuple[tuple[tuple[str, int, int], ...], dict[str, Any] | None],
 ] = {}
 
 
-def _runtime_authority_signature(root: Path) -> tuple[tuple[str, int, int], ...]:
+def _runtime_authority_signature(
+    root: Path,
+    *,
+    application_id: str = "",
+    release_digest: str = "",
+    webspace_id: str = "",
+) -> tuple[tuple[str, int, int], ...]:
     """Cheap, cross-process invalidation for the runtime authority projection."""
 
+    def identity(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def append(path: Path) -> None:
+        try:
+            stat = path.stat()
+        except OSError:
+            values.append((path.relative_to(root).as_posix(), 0, 0))
+            return
+        values.append(
+            (
+                path.relative_to(root).as_posix(),
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+            )
+        )
+
     values: list[tuple[str, int, int]] = []
+    if application_id:
+        key = identity(application_id)
+        append(root / "definitions" / key / "current.json")
+        append(root / "installations" / key / "current.json")
+        append(root / "runtime_channels" / f"{key}.sqlite3")
+        if webspace_id:
+            selection_key = identity(f"{webspace_id}:{application_id}")
+            append(root / "runtime_selections" / selection_key / "current.json")
+        else:
+            selection_root = root / "runtime_selections"
+            if selection_root.is_dir():
+                for path in sorted(selection_root.glob("*/current.json")):
+                    append(path)
+        if release_digest:
+            digest = release_digest.split(":", 1)[-1]
+            append(root / "releases" / key / f"{digest}.json")
+        else:
+            release_root = root / "releases" / key
+            if release_root.is_dir():
+                for path in sorted(release_root.glob("*.json")):
+                    append(path)
+        return tuple(values)
+
     for collection in (
         "definitions",
         "releases",
@@ -56,18 +103,15 @@ def _runtime_authority_signature(root: Path) -> tuple[tuple[str, int, int], ...]
             values.append((collection, 0, 0))
             continue
         for path in sorted(item for item in parent.rglob("*") if item.is_file()):
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            values.append(
-                (
-                    path.relative_to(root).as_posix(),
-                    int(stat.st_mtime_ns),
-                    int(stat.st_size),
-                )
-            )
+            append(path)
     return tuple(values)
+
+
+def _runtime_context_key_lock(
+    key: tuple[str, str, str, str, str, str],
+) -> RLock:
+    with _RUNTIME_CONTEXT_CACHE_LOCK:
+        return _RUNTIME_CONTEXT_KEY_LOCKS.setdefault(key, RLock())
 
 
 def _verification_now() -> str:
@@ -417,12 +461,41 @@ class ApplicationAccessManagementService:
             )
 
         candidates: list[dict[str, Any]] = []
+        if requested_application_id and webspace_id:
+            try:
+                exact_selection = self.store.get_runtime_selection(
+                    webspace_id, requested_application_id
+                )
+            except FileNotFoundError:
+                exact_selection = None
+            selected_values = (exact_selection,) if exact_selection is not None else ()
+        else:
+            selected_values = tuple(
+                item
+                for item in self.store.list_runtime_selections()
+                if (not webspace_id or item.webspace_id == webspace_id)
+                and (
+                    not requested_application_id
+                    or item.application_id == requested_application_id
+                )
+            )
         selected = {
             (item.application_id, item.release_digest): item
-            for item in self.store.list_runtime_selections()
-            if not webspace_id or item.webspace_id == webspace_id
+            for item in selected_values
         }
-        for installation in self.store.list_installations():
+        if requested_application_id:
+            try:
+                exact_installation = self.store.get_installation(
+                    requested_application_id
+                )
+            except FileNotFoundError:
+                exact_installation = None
+            installations = (
+                (exact_installation,) if exact_installation is not None else ()
+            )
+        else:
+            installations = self.store.list_installations()
+        for installation in installations:
             if installation.status != "active":
                 continue
             release = self.store.get_release(
@@ -516,9 +589,16 @@ class ApplicationAccessManagementService:
             str(webspace_id),
         )
         started = time.perf_counter()
-        with _RUNTIME_CONTEXT_CACHE_LOCK:
-            signature = _runtime_authority_signature(self.store.root)
-            cached = _RUNTIME_CONTEXT_CACHE.get(key)
+        key_lock = _runtime_context_key_lock(key)
+        with key_lock:
+            signature = _runtime_authority_signature(
+                self.store.root,
+                application_id=requested_application_id,
+                release_digest=requested_release_digest,
+                webspace_id=webspace_id,
+            )
+            with _RUNTIME_CONTEXT_CACHE_LOCK:
+                cached = _RUNTIME_CONTEXT_CACHE.get(key)
             if cached is not None and cached[0] == signature:
                 _log.debug(
                     "application runtime context profile skill=%s cache_hit=true duration_ms=%.1f",
@@ -534,7 +614,12 @@ class ApplicationAccessManagementService:
                 requested_scenario_id=requested_scenario_id,
                 webspace_id=webspace_id,
             )
-            stable_signature = _runtime_authority_signature(self.store.root)
+            stable_signature = _runtime_authority_signature(
+                self.store.root,
+                application_id=requested_application_id,
+                release_digest=requested_release_digest,
+                webspace_id=webspace_id,
+            )
             if stable_signature != signature:
                 result = self._resolve_runtime_context_uncached(
                     skill_name=skill_name,
@@ -543,14 +628,17 @@ class ApplicationAccessManagementService:
                     requested_scenario_id=requested_scenario_id,
                     webspace_id=webspace_id,
                 )
-                stable_signature = _runtime_authority_signature(self.store.root)
-            for cache_key in tuple(_RUNTIME_CONTEXT_CACHE):
-                if cache_key[0] == key[0] and _RUNTIME_CONTEXT_CACHE[cache_key][0] != stable_signature:
-                    _RUNTIME_CONTEXT_CACHE.pop(cache_key, None)
-            _RUNTIME_CONTEXT_CACHE[key] = (
-                stable_signature,
-                dict(result) if result is not None else None,
-            )
+                stable_signature = _runtime_authority_signature(
+                    self.store.root,
+                    application_id=requested_application_id,
+                    release_digest=requested_release_digest,
+                    webspace_id=webspace_id,
+                )
+            with _RUNTIME_CONTEXT_CACHE_LOCK:
+                _RUNTIME_CONTEXT_CACHE[key] = (
+                    stable_signature,
+                    dict(result) if result is not None else None,
+                )
             _log.debug(
                 "application runtime context profile skill=%s cache_hit=false duration_ms=%.1f",
                 skill_name,
