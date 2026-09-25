@@ -783,6 +783,37 @@ async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> N
         status["completed_at"] = time.time()
         status["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
         raise
+
+    # On-demand reads already build the same caches.  Running optional disk and
+    # registry scans while an attached browser is fetching its first scenario
+    # data only steals executor/SQLite capacity from the interactive path.
+    # Headless runtimes still prewarm after their bounded grace period.
+    if barrier == "first_paint_observed":
+        try:
+            from adaos.services.yjs.gateway_ws import active_yws_connection_total
+
+            active_connections = active_yws_connection_total()
+        except Exception:
+            active_connections = 0
+        if active_connections > 0:
+            status.update(
+                {
+                    "state": "skipped",
+                    "skip_reason": "interactive_yws_clients_active",
+                    "active_yws_connections": active_connections,
+                    "completed_at": time.time(),
+                    "duration_ms": round(
+                        (time.perf_counter() - started) * 1000.0,
+                        3,
+                    ),
+                }
+            )
+            logging.getLogger("adaos.startup").info(
+                "post-ready catalog/materialization prewarm skipped "
+                "reason=interactive_yws_clients_active connections=%s",
+                active_connections,
+            )
+            return
     status["state"] = "running"
 
     phase_started = time.perf_counter()

@@ -337,6 +337,21 @@ arrays. Full branch enumeration remains diagnostic-only and must stay out of
 the normal readiness/update path. `test_gateway_effective_guard_hot_path_uses_point_reads`
 locks this invariant by using maps that reject key enumeration.
 
+Backend-update origin matching follows the same hot-path rule. Its marker is a
+TTL-bounded, process-local correlation table, not a portable content address;
+it uses the payload length plus Python's per-process keyed bytes hash. Reusing a
+bytes object therefore reuses its cached hash instead of calculating SHA-1 in
+both the mark and consume phases. Durable artifacts and evidence digests still
+use cryptographic hashes.
+
+Optional post-ready catalog/materialization prewarm must also stay outside the
+interactive window. When first paint was produced for an attached Yjs browser,
+the prewarm is skipped: the browser's on-demand reads populate the same caches.
+A headless runtime still performs it after the bounded grace period. The
+runtime exposes this decision as `state=skipped` with
+`skip_reason=interactive_yws_clients_active` rather than silently competing for
+executor, filesystem, and SQLite capacity.
+
 ## CRDT Checkpoint Direction
 
 YStore replay compaction bounds the replay tail but cannot remove Yjs struct

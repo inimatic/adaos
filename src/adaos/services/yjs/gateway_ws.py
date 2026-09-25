@@ -2723,6 +2723,13 @@ def desktop_first_paint_observed() -> bool:
         )
 
 
+def active_yws_connection_total() -> int:
+    """Return active browser Yjs transports without touching any YDoc."""
+
+    with _ACTIVE_YWS_LOCK:
+        return sum(len(items) for items in _ACTIVE_YWS_CONNECTIONS.values())
+
+
 def _mark_room_bootstrap_stuck(
     webspace_id: str,
     bootstrap_attempt_id: str,

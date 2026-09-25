@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import time
 from collections import OrderedDict
@@ -35,8 +34,15 @@ def _webspace_token(webspace_id: str) -> str:
 
 
 def _fingerprint(update: bytes | bytearray | memoryview) -> tuple[int, str]:
-    payload = bytes(update or b"")
-    return len(payload), hashlib.sha1(payload).hexdigest()
+    # This token is process-local, short-lived correlation state; it is not a
+    # content address or a security boundary.  A cryptographic digest here made
+    # every backend Yjs update traverse its complete payload twice (mark and
+    # consume) on the owner loop.  Python's keyed bytes hash is cached on bytes
+    # objects and is sufficient when combined with the payload length and the
+    # per-process TTL-bounded table.
+    payload = update if isinstance(update, bytes) else bytes(update or b"")
+    token = hash(payload) & ((1 << 64) - 1)
+    return len(payload), f"{token:016x}"
 
 
 def _prune_locked(now: float) -> None:
@@ -90,7 +96,7 @@ def mark_backend_room_update(
             existing = {
                 "webspace_id": key[0],
                 "bytes": key[1],
-                "sha1": key[2],
+                "transient_hash": key[2],
                 "marked_at": now,
                 "source": str(source or "").strip() or "yjs.doc.room_update",
                 "owner": str(owner or "").strip() or None,

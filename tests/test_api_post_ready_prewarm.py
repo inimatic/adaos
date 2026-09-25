@@ -121,6 +121,39 @@ def test_catalog_and_materialization_prewarm_runs_after_readiness(monkeypatch) -
     }
 
 
+def test_catalog_and_materialization_prewarm_skips_for_interactive_browser(
+    monkeypatch,
+) -> None:
+    from adaos.services.yjs import gateway_ws
+
+    calls: list[str] = []
+    app = SimpleNamespace(state=SimpleNamespace())
+
+    async def _barrier(*, minimum_delay_sec: float) -> str:
+        assert minimum_delay_sec >= 0.0
+        return "first_paint_observed"
+
+    monkeypatch.setattr(
+        server,
+        "_wait_for_first_paint_before_post_ready_prewarm",
+        _barrier,
+    )
+    monkeypatch.setattr(gateway_ws, "active_yws_connection_total", lambda: 2)
+    monkeypatch.setattr(
+        builder_service.BuilderProjectCatalogService,
+        "from_context",
+        lambda: calls.append("catalog"),
+    )
+
+    asyncio.run(server._run_post_ready_catalog_and_materialization_prewarm(app))
+
+    assert calls == []
+    status = app.state.post_ready_catalog_materialization_prewarm
+    assert status["state"] == "skipped"
+    assert status["skip_reason"] == "interactive_yws_clients_active"
+    assert status["active_yws_connections"] == 2
+
+
 def test_yjs_gc_is_collected_on_owner_after_catalog_worker(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
     owner_thread = threading.current_thread().name
