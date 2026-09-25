@@ -10,8 +10,9 @@ the EIG1 broker/loopback implementation, and the repository implementation of
 EIG2's Root rendezvous, encrypted delivery, bounded retry, neutral response and
 exact Core acknowledgement are complete. The zone-aware isolated nginx/ACME
 configuration is committed for `integrations.inimatic.com` and
-`ru.integrations.inimatic.com`, but DNS, certificate issuance, WAF/rate-limit
-policy and a live Internet-to-Core proof remain deployment work. Accordingly
+`ru.integrations.inimatic.com`. Both DNS records resolve to their zone hosts;
+certificate issuance, vhost activation, WAF/rate-limit policy and a live
+Internet-to-Core proof remain deployment work. Accordingly
 `EIG2-01` and the live EIG3 items stay open; repository tests are not presented
 as external operational evidence.
 
