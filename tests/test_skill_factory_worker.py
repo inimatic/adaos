@@ -8283,6 +8283,61 @@ def test_worker_skips_candidate_already_absorbed_by_refreshed_snapshot(
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
 
 
+def test_candidate_absorption_accepts_only_compiled_skill_activation(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate"
+    current = tmp_path / "current"
+    for root in (candidate, current):
+        skill = root / "skills" / "demo"
+        (skill / "handlers").mkdir(parents=True)
+        (skill / "handlers" / "main.py").write_text(
+            "from adaos.sdk.core.decorators import tool\n"
+            "@tool(summary='Read demo', side_effects='none')\n"
+            "def read_demo():\n"
+            "    return {'ok': True}\n",
+            encoding="utf-8",
+        )
+        (skill / "skill.yaml").write_text(
+            "name: demo\n"
+            "version: 1.0.0\n"
+            "runtime:\n"
+            "  python: '3.11'\n"
+            "capabilities: []\n"
+            "exports:\n"
+            "  tools: []\n",
+            encoding="utf-8",
+        )
+
+    LocalSkillFactoryWorker._record_changed_skill_activation(
+        current,
+        changed_paths={"skills/demo/handlers/main.py"},
+    )
+    changed_paths = [
+        "skills/demo/handlers/main.py",
+        "skills/demo/skill.yaml",
+    ]
+
+    assert LocalSkillFactoryWorker._candidate_paths_match_workspace(
+        candidate,
+        current,
+        changed_paths,
+    )
+
+    manifest_path = current / "skills" / "demo" / "skill.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"] = ["workspace.write"]
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    assert not LocalSkillFactoryWorker._candidate_paths_match_workspace(
+        candidate,
+        current,
+        changed_paths,
+    )
+
+
 def test_worker_rejects_divergent_candidate_after_snapshot_refresh(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

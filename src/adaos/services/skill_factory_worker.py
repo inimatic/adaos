@@ -7100,6 +7100,74 @@ class LocalSkillFactoryWorker:
         }
 
     @staticmethod
+    def _compiled_skill_manifest_matches(
+        candidate: Path,
+        current: Path,
+    ) -> bool:
+        """Recognize only Builder-owned activation materialization.
+
+        Candidate validation compiles the handler-derived activation policy and
+        subscription inventory into ``skill.yaml`` before the source is copied
+        back to DEV.  A later chat turn may therefore capture a new immutable
+        source snapshot even though no authored candidate semantics changed.
+        Reproduce that exact projection in memory so continuation recovery does
+        not treat trusted compiler metadata as source divergence.
+        """
+
+        if candidate.name != "skill.yaml" or current.name != "skill.yaml":
+            return False
+        handler = candidate.parent / "handlers" / "main.py"
+        if not handler.is_file():
+            return False
+        try:
+            candidate_manifest = yaml.safe_load(
+                candidate.read_text(encoding="utf-8")
+            ) or {}
+            current_manifest = yaml.safe_load(current.read_text(encoding="utf-8")) or {}
+            if not isinstance(candidate_manifest, dict) or not isinstance(
+                current_manifest, Mapping
+            ):
+                return False
+
+            from adaos.services.skill.activation_assessment import (
+                inspect_handler_activation,
+                recommended_activation,
+            )
+
+            profile = inspect_handler_activation(handler)
+            events = candidate_manifest.get("events")
+            if not isinstance(events, dict):
+                events = {}
+                candidate_manifest["events"] = events
+            declared = [
+                str(item).strip()
+                for item in events.get("subscribe") or []
+                if isinstance(item, str) and str(item).strip()
+            ]
+            runtime = candidate_manifest.get("runtime")
+            if not isinstance(runtime, dict):
+                runtime = {}
+                candidate_manifest["runtime"] = runtime
+            preserve_declared = (
+                str(runtime.get("kind") or "").strip().lower() == "service"
+                or profile.dynamic_subscription_count > 0
+            )
+            events["subscribe"] = sorted(
+                (set(declared) if preserve_declared else set())
+                | set(profile.subscription_topics)
+            )
+            previous_activation = runtime.get("activation")
+            activation = recommended_activation(candidate_manifest, profile)
+            if isinstance(previous_activation, Mapping) and isinstance(
+                previous_activation.get("when"), Mapping
+            ):
+                activation["when"] = copy.deepcopy(previous_activation["when"])
+            runtime["activation"] = activation
+        except (OSError, UnicodeError, SyntaxError, TypeError, ValueError, yaml.YAMLError):
+            return False
+        return candidate_manifest == current_manifest
+
+    @staticmethod
     def _candidate_paths_match_workspace(
         candidate_workspace: Path,
         current_workspace: Path,
@@ -7137,7 +7205,12 @@ class LocalSkillFactoryWorker:
                 continue
             if not candidate.is_file() or not current.is_file():
                 return False
-            if candidate.read_bytes() != current.read_bytes():
+            if candidate.read_bytes() != current.read_bytes() and not (
+                LocalSkillFactoryWorker._compiled_skill_manifest_matches(
+                    candidate,
+                    current,
+                )
+            ):
                 return False
         return True
 
