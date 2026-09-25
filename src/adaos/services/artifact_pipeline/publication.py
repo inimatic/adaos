@@ -48,6 +48,7 @@ from adaos.services.artifact_pipeline.channels import (
 from adaos.services.artifact_pipeline.packages import (
     BuiltArtifactPackage,
     ContentAddressedPackageStore,
+    PackageVerificationError,
     artifact_source_snapshot,
     build_artifact_package,
     _assert_publishable_file,
@@ -835,6 +836,108 @@ class ArtifactPublicationService:
             "project": project_projection,
         }
 
+    def _verify_development_source_projection(
+        self,
+        projection: Mapping[str, Any],
+        *,
+        plan: ReleasePlan,
+    ) -> dict[str, Any]:
+        """Verify retained development-only source against its Workspace copy."""
+
+        packages = {item.key: item for item in plan.release.components}
+        checked_packages: list[dict[str, Any]] = []
+        for raw in projection.get("entries") or []:
+            if not isinstance(raw, Mapping):
+                raise PublicationError("invalid development source projection entry")
+            package_key = str(raw.get("package") or "")
+            package = packages.get(package_key)
+            if package is None:
+                raise PublicationError(
+                    "development source projection references an unknown package"
+                )
+            snapshot_root = Path(str(raw.get("snapshot_root") or "")).resolve()
+            target_root = self._workspace_package_target(package)
+            declared_roots = {
+                str(item or "").strip()
+                for item in raw.get("roots") or []
+                if str(item or "").strip()
+            }
+            if not declared_roots.issubset(_DEVELOPMENT_SOURCE_ROOTS):
+                raise PublicationError(
+                    "development source projection contains an unsafe root"
+                )
+            checked_roots = []
+            for name in _DEVELOPMENT_SOURCE_ROOTS:
+                expected = snapshot_root / name
+                actual = target_root / name
+                if name not in declared_roots:
+                    if actual.exists():
+                        raise PublicationError(
+                            f"Workspace contains undeclared development source for {package.key}: {name}"
+                        )
+                    continue
+                if not expected.is_dir() or not actual.is_dir():
+                    raise PublicationError(
+                        f"Workspace development source is missing for {package.key}: {name}"
+                    )
+                expected_digest = self._development_source_manifest(expected)["digest"]
+                actual_digest = self._development_source_manifest(actual)["digest"]
+                if actual_digest != expected_digest:
+                    raise PublicationError(
+                        f"Workspace development source differs for {package.key}: {name}"
+                    )
+                checked_roots.append({"name": name, "digest": actual_digest})
+            checked_packages.append(
+                {"package": package.key, "roots": checked_roots}
+            )
+
+        checked_project: dict[str, Any] | None = None
+        raw_project = projection.get("project")
+        if isinstance(raw_project, Mapping):
+            project_ref = str(raw_project.get("project_ref") or "").strip()
+            prefix, separator, project_id = project_ref.partition(":")
+            if separator != ":" or prefix != "project" or not project_id:
+                raise PublicationError(
+                    "development source projection has an invalid Project ref"
+                )
+            expected = Path(str(raw_project.get("snapshot_path") or "")).resolve()
+            actual = self.workspace_root / "projects" / project_id / "project.yaml"
+            expected_digest = str(raw_project.get("sha256") or "").strip().lower()
+            if (
+                not expected.is_file()
+                or not actual.is_file()
+                or hashlib.sha256(expected.read_bytes()).hexdigest() != expected_digest
+                or hashlib.sha256(actual.read_bytes()).hexdigest() != expected_digest
+            ):
+                raise PublicationError(
+                    "Workspace development Project source differs from retained projection"
+                )
+            for document in raw_project.get("public_documents") or []:
+                if not isinstance(document, Mapping):
+                    raise PublicationError("invalid public Project document projection")
+                name = str(document.get("name") or "")
+                expected_raw = _read_public_project_document(expected.parent, name)
+                actual_raw = _read_public_project_document(actual.parent, name)
+                digest = str(document.get("sha256") or "").strip().lower()
+                if (
+                    expected_raw is None
+                    or actual_raw is None
+                    or hashlib.sha256(expected_raw).hexdigest() != digest
+                    or hashlib.sha256(actual_raw).hexdigest() != digest
+                ):
+                    raise PublicationError(
+                        f"Workspace public Project document differs: {name}"
+                    )
+            checked_project = {
+                "project_ref": project_ref,
+                "sha256": expected_digest,
+            }
+        return {
+            "status": "passed",
+            "packages": checked_packages,
+            "project": checked_project,
+        }
+
     def _record_builder_repair(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         from adaos.services.builder.repair import BuilderRepairService
 
@@ -874,18 +977,27 @@ class ArtifactPublicationService:
         """Return only release components whose installed digest will change."""
 
         plan = self.get_candidate_release(candidate_id)
-        active_lock = load_workspace_lock(
-            self.workspace_root / ".adaos" / "workspace.lock.json"
+        activation_manager = WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
         )
+        active_lock = activation_manager.load_lock()
         active = {
             item.key: item.digest
             for item in (active_lock.components if active_lock is not None else ())
         }
-        return frozenset(
-            package.key
-            for package in plan.packages
-            if active.get(package.key) != package.digest
-        )
+        affected: set[str] = set()
+        for package in plan.packages:
+            if active.get(package.key) != package.digest:
+                affected.add(package.key)
+                continue
+            try:
+                activation_manager._verify_materialized_component(package)
+            except (ActivationError, PackageVerificationError, FileNotFoundError):
+                affected.add(package.key)
+        return frozenset(affected)
 
     def verify_promoted_workspace_source(self, candidate_id: str) -> dict[str, Any]:
         """Prove that Workspace source still matches the promoted candidate.
@@ -2800,7 +2912,15 @@ class ArtifactPublicationService:
             operation["phase"] = "completed"
             operation["source_projection_reconciled_at"] = _now()
             self._write_promotion(operation)
-            return self._completed_promotion_result(candidate, plan, operation)
+            return self._completed_promotion_result(
+                candidate,
+                plan,
+                operation,
+                reload_runtime=reload_runtime,
+                health_check=health_check,
+                reload_policy=reload_policy,
+                health_policy=health_policy,
+            )
         if operation is not None and terminal_receipts_complete and (
             operation.get("status") == "completed"
             or (
@@ -2814,7 +2934,15 @@ class ArtifactPublicationService:
                 operation.pop("error", None)
                 operation.pop("paused_at", None)
                 self._write_promotion(operation)
-            return self._completed_promotion_result(candidate, plan, operation)
+            return self._completed_promotion_result(
+                candidate,
+                plan,
+                operation,
+                reload_runtime=reload_runtime,
+                health_check=health_check,
+                reload_policy=reload_policy,
+                health_policy=health_policy,
+            )
 
         if operation is None:
             stable = self.current_stable(candidate.project_id)
@@ -3235,7 +3363,12 @@ class ArtifactPublicationService:
         self,
         candidate: CandidateRecord,
         plan: ReleasePlan,
-        operation: Mapping[str, Any],
+        operation: dict[str, Any],
+        *,
+        reload_runtime=None,
+        health_check=None,
+        reload_policy: Mapping[str, Any] | None = None,
+        health_policy: Mapping[str, Any] | None = None,
     ) -> PromotionResult:
         """Materialize a terminal promotion exclusively from durable receipts.
 
@@ -3287,6 +3420,17 @@ class ArtifactPublicationService:
                 "completed promotion dependency closure is no longer active: "
                 + ", ".join(sorted(missing_or_changed))
             )
+        self._reconcile_completed_promotion_workspace_source(
+            candidate,
+            plan,
+            operation,
+            manager=manager,
+            active_lock=active_lock,
+            reload_runtime=reload_runtime,
+            health_check=health_check,
+            reload_policy=reload_policy,
+            health_policy=health_policy,
+        )
         return PromotionResult(
             candidate,
             plan,
@@ -3300,6 +3444,162 @@ class ArtifactPublicationService:
             ),
             StableSubscription.from_mapping(raw_subscription),
         )
+
+    def _reconcile_completed_promotion_workspace_source(
+        self,
+        candidate: CandidateRecord,
+        plan: ReleasePlan,
+        operation: dict[str, Any],
+        *,
+        manager: WorkspaceActivationManager,
+        active_lock: WorkspaceLock,
+        reload_runtime=None,
+        health_check=None,
+        reload_policy: Mapping[str, Any] | None = None,
+        health_policy: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Repair exact immutable Workspace materialization on terminal replay.
+
+        A WorkspaceLock is not sufficient evidence that its package directories
+        still exist.  A crash, interrupted filesystem operation, or legacy
+        maintenance may leave a completed promotion with a missing source tree.
+        Replaying the terminal promotion must restore the exact CAS artifacts and
+        retained development projection before reporting success.
+        """
+
+        reconciliation = operation.get("workspace_source_reconciliation")
+        pending_reconciliation = isinstance(reconciliation, Mapping) and str(
+            reconciliation.get("status") or ""
+        ).strip().lower() in {"dispatching", "failed"}
+        drifted: list[ArtifactPackageRef] = []
+        for package in plan.packages:
+            try:
+                manager._verify_materialized_component(package)
+            except (ActivationError, PackageVerificationError, FileNotFoundError):
+                drifted.append(package)
+
+        receipts = operation.setdefault("receipts", {})
+        source_preparation = receipts.get("development_sources_prepared")
+        source_error: Exception | None = None
+        if not isinstance(source_preparation, Mapping):
+            source_error = PublicationError(
+                "completed promotion has no retained development source projection"
+            )
+        else:
+            try:
+                self._verify_development_source_projection(
+                    source_preparation,
+                    plan=plan,
+                )
+            except Exception as exc:  # exact verification below remains authoritative
+                source_error = exc
+
+        if not drifted and source_error is None and not pending_reconciliation:
+            return
+
+        started_at = _now()
+        operation["workspace_source_reconciliation"] = {
+            "status": "dispatching",
+            "started_at": started_at,
+            "drifted_components": [item.key for item in drifted],
+            "reason": (
+                f"{type(source_error).__name__}: {source_error}"[:1024]
+                if source_error is not None
+                else "incomplete_previous_reconciliation"
+            ),
+        }
+        self._write_promotion(operation)
+        try:
+            with mutation_lock(manager.writer_lock_path, timeout_s=30.0):
+                observed_lock = manager.load_lock()
+                if (
+                    observed_lock is None
+                    or observed_lock.to_dict()["lock_digest"]
+                    != active_lock.to_dict()["lock_digest"]
+                ):
+                    raise PublicationError(
+                        "WorkspaceLock changed during source reconciliation"
+                    )
+
+                repair_packages = {item.key: item for item in drifted}
+                if source_error is not None:
+                    repair_packages.update(
+                        {item.key: item for item in plan.release.components}
+                    )
+                repaired = []
+                for package in sorted(repair_packages.values(), key=lambda item: item.key):
+                    verified = self.package_store.materialize(
+                        package.digest,
+                        self._workspace_package_target(package),
+                    )
+                    if verified.ref != package:
+                        raise PublicationError(
+                            "reconciled package differs from promoted release: "
+                            f"{package.key}"
+                        )
+                    repaired.append(package.key)
+
+                source_preparation = receipts.get("development_sources_prepared")
+                if not isinstance(source_preparation, Mapping):
+                    source_preparation = self._prepare_development_source_projection(
+                        candidate=candidate,
+                        plan=plan,
+                    )
+                    receipts["development_sources_prepared"] = {
+                        **dict(source_preparation),
+                        "recorded_at": _now(),
+                    }
+                projected_sources = self._project_development_sources(
+                    source_preparation,
+                    plan=plan,
+                )
+                verification = self._verify_development_source_projection(
+                    source_preparation,
+                    plan=plan,
+                )
+                reload_receipt = manager._reload_receipt(
+                    reload_runtime,
+                    reload_policy,
+                    active_lock,
+                )
+                health_receipt = manager._health_receipt(
+                    health_check,
+                    health_policy,
+                    active_lock,
+                )
+
+            operation["workspace_source_reconciliation"] = {
+                "status": "completed",
+                "started_at": started_at,
+                "completed_at": _now(),
+                "repaired_components": repaired,
+                "development_sources": projected_sources,
+                "verification": verification,
+                "reload_receipt": reload_receipt,
+                "health_receipt": health_receipt,
+                "lock_digest": active_lock.to_dict()["lock_digest"],
+            }
+            operation.setdefault("events", []).append(
+                {"phase": "workspace_source_reconciled", "at": _now()}
+            )
+            operation["status"] = "completed"
+            operation["phase"] = "completed"
+            self._write_promotion(operation)
+        except Exception as exc:
+            operation["workspace_source_reconciliation"] = {
+                "status": "failed",
+                "started_at": started_at,
+                "failed_at": _now(),
+                "error": f"{type(exc).__name__}: {exc}"[:1024],
+            }
+            operation["status"] = "completed"
+            operation["phase"] = "completed"
+            self._write_promotion(operation)
+            if isinstance(exc, PublicationError):
+                raise
+            raise PublicationError(
+                f"completed promotion Workspace source reconciliation failed: {exc}"
+            ) from exc
 
     def _record_workspace_projection(self, plan: ReleasePlan) -> None:
         component = next(

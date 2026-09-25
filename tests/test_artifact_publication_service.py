@@ -2252,3 +2252,65 @@ def test_completed_promotion_replays_only_terminal_receipts(
     assert "paused_at" not in persisted
     assert repaired.activation.idempotent_replay is True
     assert remote.channel_writes == channel_writes
+
+
+def test_completed_promotion_repairs_missing_workspace_source_before_replay(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    (dev / "tests").mkdir()
+    (dev / "tests" / "test_scenario.py").write_text(
+        "def test_recipe_scenario():\n    assert True\n",
+        encoding="utf-8",
+    )
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-terminal-source-repair",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    _promote(service, prepared.candidate.candidate_id)
+    channel_writes = remote.channel_writes
+
+    installed = tmp_path / "workspace" / "scenarios" / "recipes"
+    shutil.rmtree(installed)
+    assert service.candidate_runtime_component_keys(
+        prepared.candidate.candidate_id
+    ) == frozenset({"scenario:recipes"})
+
+    reloads = []
+    health_checks = []
+    replayed = service.promote(
+        prepared.candidate.candidate_id,
+        reload_runtime=lambda lock: reloads.append(lock) or {"status": "reloaded"},
+        health_check=lambda lock: health_checks.append(lock) or {"status": "healthy"},
+    )
+
+    assert replayed.activation.idempotent_replay is True
+    assert remote.channel_writes == channel_writes
+    assert (installed / "scenario.yaml").is_file()
+    assert (installed / "tests" / "test_scenario.py").is_file()
+    assert len(reloads) == 1
+    assert len(health_checks) == 1
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+    assert operation is not None
+    reconciliation = operation["workspace_source_reconciliation"]
+    assert reconciliation["status"] == "completed"
+    assert reconciliation["repaired_components"] == ["scenario:recipes"]
+    assert service.candidate_runtime_component_keys(
+        prepared.candidate.candidate_id
+    ) == frozenset()
