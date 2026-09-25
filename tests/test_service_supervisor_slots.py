@@ -399,6 +399,40 @@ def test_service_supervisor_start_all_requires_explicit_manifest_opt_in(monkeypa
     assert supervisor._activated_services == {"autostart_service"}
 
 
+def test_service_supervisor_defers_lazy_services_even_when_startup_is_allowed(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    calls: list[str] = []
+
+    async def _refresh_discovered(*, force: bool = False) -> None:  # noqa: ARG001
+        return None
+
+    async def _ensure_started(name, spec, *, force: bool) -> None:  # noqa: ANN001, ARG001
+        calls.append(name)
+
+    supervisor._specs = {  # type: ignore[assignment]
+        "eager_service": SimpleNamespace(
+            startup_allowed=True,
+            activation_mode="eager",
+            distributed_membership=None,
+        ),
+        "lazy_service": SimpleNamespace(
+            startup_allowed=True,
+            activation_mode="lazy",
+            distributed_membership=None,
+        ),
+    }
+    supervisor.refresh_discovered = _refresh_discovered  # type: ignore[method-assign]
+    supervisor.ensure_started = _ensure_started  # type: ignore[method-assign]
+    supervisor._ensure_background_tasks = lambda: None  # type: ignore[method-assign]
+
+    asyncio.run(supervisor.start_all())
+
+    assert calls == ["eager_service"]
+    assert supervisor._activated_services == {"eager_service"}
+
+
 def test_service_supervisor_starts_distributed_memberships_first():
     from adaos.services.skill import service_supervisor as mod
 

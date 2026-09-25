@@ -118,6 +118,7 @@ class ServiceSpec:
     distributed_membership: ServiceMembershipSpec | None = None
     startup_ready_timeout_s: float = 10.0
     startup_allowed: bool = False
+    activation_mode: str = "eager"
 
     @property
     def base_url(self) -> str:
@@ -213,6 +214,9 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
     if not isinstance(activation, Mapping):
         activation = {}
     startup_allowed = activation.get("startup_allowed") is True
+    activation_mode = str(activation.get("mode") or "eager").strip().lower()
+    if activation_mode not in {"eager", "lazy", "on_demand"}:
+        activation_mode = "on_demand"
 
     service = manifest.get("service") or {}
     if not isinstance(service, Mapping):
@@ -442,6 +446,7 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         distributed_membership=distributed_membership,
         startup_ready_timeout_s=startup_ready_timeout_s,
         startup_allowed=startup_allowed,
+        activation_mode=activation_mode,
     )
 
 
@@ -1161,6 +1166,11 @@ class ServiceSkillSupervisor:
             "python_selector": spec.python_selector,
             "venv_dir": str(spec.venv_dir) if spec.venv_dir else None,
             "health_path": spec.health_path,
+            "activation": {
+                "mode": spec.activation_mode,
+                "startup_allowed": spec.startup_allowed,
+                "active": name in self._activated_services,
+            },
             "self_managed": {
                 "enabled": spec.self_managed_enabled,
                 "crash": {
@@ -1438,6 +1448,8 @@ class ServiceSkillSupervisor:
             (name, spec)
             for name, spec in discovered_specs
             if bool(getattr(spec, "startup_allowed", True))
+            and str(getattr(spec, "activation_mode", "eager") or "eager")
+            == "eager"
         ]
         skipped = len(discovered_specs) - len(specs)
         self._activated_services.update(name for name, _spec in specs)
@@ -2082,6 +2094,8 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             spec.ui_embedding,
             spec.ui_content_security_policy,
             spec.ui_max_request_bytes,
+            spec.activation_mode,
+            spec.startup_allowed,
             json.dumps(dict(spec.storage_relational or {}), sort_keys=True, default=str),
             json.dumps(dict(spec.storage_blob or {}), sort_keys=True, default=str),
         )

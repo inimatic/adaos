@@ -321,6 +321,10 @@ Implemented in the current pass:
     manifest explicitly declares `runtime.in_process_events: true`; the
     resolved delivery manifest is not used as a substitute for this authoring
     decision
+18. the service supervisor starts only `mode: eager` services during the
+    post-ready sweep; `lazy` and `on_demand` services start on their first
+    stable tool or authenticated service-UI request and then enter the ordinary
+    supervised health/restart lifecycle
 
 On the 2026-09-24 development workspace, cold runtime plus workspace discovery
 fell from approximately 8.8 seconds to 0.35 seconds (`runtime=74.954 ms`,
@@ -329,6 +333,19 @@ including declaration loading, policy assessment, safety checks and the actual
 imports, took 5.692 seconds: 52 skills were selected, 31 were imported and 21
 tool-only handlers were deferred. These values are an observed inventory, not
 a stable product limit.
+
+On the 2026-09-25 inventory all three previously auto-started service skills
+(`mlflow_tracker_skill`, `rasa_nlu_service_skill`, and
+`research_manager_skill`) declared `mode: lazy`. The old supervisor treated
+`startup_allowed: true` as an instruction to start the process and spent about
+25.8 seconds after first paint, including about 18.5 seconds on MLflow. Runtime
+now interprets the mode first: `startup_allowed` permits a startup activation
+but does not turn `lazy` into `eager`. Explicit tool and service-UI routes are
+the activation rails for these services. A clean restart then reported
+`attempted=0`, `skipped=8` for the service sweep; the remaining 4.1 seconds were
+discovery/status work, not provider process startup. A first stable-tool call
+subsequently started `research_manager_skill` on demand and reached its tool in
+about 2.7 seconds.
 
 Important current limitation:
 
@@ -364,7 +381,9 @@ Recommended migration order:
 Still required for the target architecture:
 
 1. introduce a shared activation runtime that tracks `loaded` vs `active`
-2. respect `startup_allowed`, `background_refresh`, and `client_presence` centrally
+2. complete per-webspace enforcement of `background_refresh`, scenario state,
+   and `client_presence`; service process startup now respects activation mode,
+   but a global activation authority still does not exist
 3. decide whether a later optimization should add truly deferred event
    subscription wiring; the current safe boundary defers only tool-only modules
 4. move more hot-path metadata reads from repository/git/config access into registry or SQLite-backed fast paths

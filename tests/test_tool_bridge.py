@@ -52,6 +52,32 @@ def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
     yield
 
 
+def test_on_demand_service_start_only_targets_discovered_service(monkeypatch) -> None:
+    from adaos.services.skill import service_supervisor as supervisor_module
+
+    started: list[str] = []
+
+    class _Supervisor:
+        _specs = {"service_skill": object()}
+
+        async def start(self, name: str) -> None:
+            started.append(name)
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "get_service_supervisor",
+        lambda: _Supervisor(),
+    )
+
+    assert asyncio.run(
+        tool_bridge_module._ensure_on_demand_service_started("ordinary_skill")
+    ) is False
+    assert asyncio.run(
+        tool_bridge_module._ensure_on_demand_service_started("service_skill")
+    ) is True
+    assert started == ["service_skill"]
+
+
 def test_skill_manager_registry_initialization_runs_off_event_loop(monkeypatch) -> None:
     main_thread_id = threading.get_ident()
     constructor_threads: list[int] = []

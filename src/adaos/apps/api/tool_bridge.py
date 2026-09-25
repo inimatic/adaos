@@ -88,6 +88,29 @@ async def _skill_manager_for_context(ctx: AgentContext) -> SkillManager:
     )
 
 
+async def _ensure_on_demand_service_started(skill_name: str) -> bool:
+    """Activate a selected service skill only when its stable tool is invoked."""
+
+    from adaos.services.skill.service_supervisor import get_service_supervisor
+
+    supervisor = get_service_supervisor()
+    if skill_name not in supervisor._specs:
+        return False
+    try:
+        await supervisor.start(skill_name)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "service_skill_start_failed",
+                "skill": skill_name,
+                "reason": type(exc).__name__,
+                "retryable": True,
+            },
+        ) from exc
+    return True
+
+
 _LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
     "cv_descriptor:cv_descriptor_configure_model",
     "cv_descriptor:cv_descriptor_save_descriptor",
@@ -3126,6 +3149,14 @@ async def _call_tool_impl(
     try:
         started_at = time.perf_counter()
         local_timings: Dict[str, float] = {}
+        if trial_runtime is None and not body.dev:
+            service_started_at = time.perf_counter()
+            service_started = await _ensure_on_demand_service_started(skill_name)
+            if service_started:
+                local_timings["service_startup_ms"] = (
+                    time.perf_counter() - service_started_at
+                ) * 1000.0
+
         def _run_local_tool_unlocked() -> Any:
             nonlocal local_execution_started
             if trial_runtime is not None:
@@ -3192,9 +3223,12 @@ async def _call_tool_impl(
                 "action_admission_ms",
             )
         )
+        skill_startup_ms = float(local_timings.get("service_startup_ms") or 0.0) + float(
+            local_timings.get("prepare_ms") or 0.0
+        )
         server_timing = (
             f"admission;dur={admission_ms:.1f}, "
-            f"skill-startup;dur={float(local_timings.get('prepare_ms') or 0.0):.1f}, "
+            f"skill-startup;dur={skill_startup_ms:.1f}, "
             f"skill-dispatch;dur={float(local_timings.get('run_tool_ms') or 0.0):.1f}"
         )
         response.headers["Server-Timing"] = server_timing
@@ -3224,7 +3258,7 @@ async def _call_tool_impl(
             float(phase_timings.get("action_admission_ms") or 0.0),
             float(local_timings.get("workspace_lock_ms") or 0.0),
             float(local_timings.get("autosync_ms") or 0.0),
-            float(local_timings.get("prepare_ms") or 0.0),
+            skill_startup_ms,
             float(local_timings.get("run_tool_ms") or 0.0),
         )
         if took_ms >= 2000 or total_ms >= 2000:

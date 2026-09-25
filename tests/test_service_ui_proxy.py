@@ -53,9 +53,14 @@ class _Supervisor:
     def __init__(self, spec) -> None:  # noqa: ANN001
         self._specs = {spec.skill: spec}
         self.refresh_total = 0
+        self.start_total = 0
 
     async def refresh_discovered(self) -> None:
         self.refresh_total += 1
+
+    async def start(self, name: str) -> None:
+        assert name in self._specs
+        self.start_total += 1
 
     def status(self, name: str, *, check_health: bool = False) -> dict:
         assert name in self._specs
@@ -178,6 +183,7 @@ def test_service_ui_proxy_requires_auth_and_replaces_provider_frame_policy(monke
         )
         assert foreign_origin.status_code == 403
         assert supervisor.refresh_total == 6
+        assert supervisor.start_total == 4
     finally:
         server.shutdown()
         server.server_close()

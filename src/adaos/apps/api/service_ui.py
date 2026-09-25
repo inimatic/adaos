@@ -68,6 +68,21 @@ def _service_spec(name: str) -> ServiceSpec:
     return spec
 
 
+async def _ensure_service_started(name: str, *, refresh: bool = True) -> ServiceSpec:
+    supervisor = get_service_supervisor()
+    if refresh:
+        await supervisor.refresh_discovered()
+    spec = _service_spec(name)
+    try:
+        await supervisor.start(name)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"service UI startup failed: {type(exc).__name__}",
+        ) from exc
+    return spec
+
+
 def _upstream_url(spec: ServiceSpec, path: str, request: Request) -> str:
     segments = [segment for segment in str(path or "").replace("\\", "/").split("/") if segment]
     if any(segment in {".", ".."} for segment in segments):
@@ -130,6 +145,7 @@ async def service_ui_bootstrap(
             or any(ord(char) < 32 or ord(char) == 127 for char in ui_fragment)
         ):
             raise HTTPException(status_code=400, detail="invalid service UI fragment")
+    await _ensure_service_started(name, refresh=False)
     response = RedirectResponse(
         f"/api/services/{name}/ui/{ui_fragment}",
         status_code=303,
@@ -154,8 +170,7 @@ async def service_ui_bootstrap(
 )
 async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
     _authorize(request)
-    await get_service_supervisor().refresh_discovered()
-    spec = _service_spec(name)
+    spec = await _ensure_service_started(name)
     status = get_service_supervisor().status(name, check_health=True) or {}
     if not bool(status.get("health_ok")):
         raise HTTPException(status_code=503, detail="service UI is unavailable")
