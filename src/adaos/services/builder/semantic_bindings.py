@@ -26,6 +26,17 @@ _PRODUCT_VIEW_CARDINALITY = re.compile(
     r"\s+(?:semantic\s+)?product\s+views?\b",
     re.IGNORECASE,
 )
+_AUTHORING_STATE_FALSE_POSITIVE = re.compile(
+    r"^(?:build|create|implement|develop|design|make|produce|correct|preserve|replace)\b",
+    re.IGNORECASE,
+)
+
+
+def _state_requirement_key(statement: object) -> str | None:
+    key = " ".join(str(statement or "").casefold().split())
+    if not key or _AUTHORING_STATE_FALSE_POSITIVE.match(key):
+        return None
+    return re.sub(r"\s+states?$", "", key).strip()
 
 
 def _product_view_cardinalities(brief: Mapping) -> set[int]:
@@ -130,10 +141,11 @@ def binding_findings(document: Mapping, brief: Mapping | None) -> list[dict]:
                 ),
             })
 
-    used_state_refs: dict[str, str] = {}
+    used_state_refs: dict[str, tuple[str, str]] = {}
     for requirement in prototype_state_requirements(brief):
         ref = str(requirement.get("id") or "")
-        if not ref or ref in gaps:
+        requirement_key = _state_requirement_key(requirement.get("statement"))
+        if not ref or ref in gaps or requirement_key is None:
             continue
         state_refs = sorted(
             item for item in bindings.get(ref, set()) if item.startswith("state:")
@@ -152,19 +164,19 @@ def binding_findings(document: Mapping, brief: Mapping | None) -> list[dict]:
             continue
         state_ref = state_refs[0]
         prior = used_state_refs.get(state_ref)
-        if prior is not None:
+        if prior is not None and prior[1] != requirement_key:
             findings.append({
                 "code": "semantic.representative_state_binding_reused",
                 "path": "$.requirement_bindings",
                 "requirement_ref": ref,
                 "semantic_refs": [state_ref],
                 "detail": (
-                    f"representative-state requirements {prior!r} and {ref!r} "
+                    f"representative-state requirements {prior[0]!r} and {ref!r} "
                     f"reuse {state_ref!r}; each accepted state needs independent proof"
                 ),
             })
-        else:
-            used_state_refs[state_ref] = ref
+        elif prior is None:
+            used_state_refs[state_ref] = (ref, requirement_key)
 
     for requirement in document.get("automation_requirements", []):
         ref = requirement["requirement_ref"]

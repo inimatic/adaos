@@ -1944,6 +1944,57 @@ def test_semantic_prototype_enforces_exact_product_view_count() -> None:
     assert finding["actual_count"] == 4
 
 
+def test_semantic_prototype_allows_state_wording_aliases_to_share_proof() -> None:
+    brief, semantic = _multi_resource_fixture()
+    brief = compile_prototype_brief("Represent success states.")
+    brief["representative_states"]["value"] = ["success states", "success"]
+    semantic["brief_ref"] = brief["brief_id"]
+    semantic["brief_digest"] = brief["digest"]
+    semantic["requirement_bindings"] = [
+        {
+            "requirement_ref": requirement_ref,
+            "semantic_refs": ["state:empty"],
+        }
+        for requirement_ref in (
+            "representative_state:01",
+            "representative_state:02",
+        )
+    ]
+
+    assert validate_semantic_prototype(semantic, brief=brief)["document_id"] == (
+        "work-review"
+    )
+    context = prototype_sdk.model_context(brief)
+    assert [item["id"] for item in context["state_requirements"]] == [
+        "representative_state:01"
+    ]
+
+
+def test_semantic_prototype_does_not_treat_authoring_sentence_as_state_proof() -> None:
+    brief, semantic = _multi_resource_fixture()
+    brief = compile_prototype_brief("Represent connected state.")
+    brief["representative_states"]["value"] = [
+        "Build the smallest complete viable queue",
+        "connected",
+    ]
+    semantic["brief_ref"] = brief["brief_id"]
+    semantic["brief_digest"] = brief["digest"]
+    semantic["requirement_bindings"] = [
+        {
+            "requirement_ref": "representative_state:01",
+            "semantic_refs": ["view:work-list"],
+        },
+        {
+            "requirement_ref": "representative_state:02",
+            "semantic_refs": ["state:empty"],
+        },
+    ]
+
+    assert validate_semantic_prototype(semantic, brief=brief)["document_id"] == (
+        "work-review"
+    )
+
+
 def test_capture_each_requires_collection_and_editor_bindings() -> None:
     brief, semantic = _fixture()
     binding = next(

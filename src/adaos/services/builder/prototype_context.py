@@ -107,21 +107,30 @@ def prototype_model_requirement_inventory(
     # without adding proof. Prefer the typed operation; similarly prefer any
     # already-retained requirement over an identical residual clause.
     operation_statements = {
-        " ".join(item["statement"].casefold().split())
+        _requirement_statement_key(item)
         for item in inventory
         if item["kind"] == "operation"
     }
     seen_statements: set[str] = set()
     result: list[dict[str, str]] = []
     for item in inventory:
-        statement_key = " ".join(item["statement"].casefold().split())
+        statement_key = _requirement_statement_key(item)
         if item["kind"] == "job" and statement_key in operation_statements:
             continue
-        if item["kind"] == "residual" and statement_key in seen_statements:
+        if item["kind"] in {"residual", "representative_state"} and statement_key in seen_statements:
             continue
         result.append(item)
         seen_statements.add(statement_key)
     return result
+
+
+def _requirement_statement_key(item: Mapping[str, Any]) -> str:
+    key = " ".join(str(item.get("statement") or "").casefold().split())
+    if item.get("kind") == "representative_state":
+        # Intent revisions often say both ``success states`` and ``success``.
+        # They are one state proof, not two independently materialized states.
+        key = re.sub(r"\s+states?$", "", key).strip()
+    return key
 
 
 def prototype_requirement_aliases(
@@ -139,13 +148,13 @@ def prototype_requirement_aliases(
     model_ids = {item["id"] for item in model}
     model_by_statement: dict[str, str] = {}
     for item in model:
-        key = " ".join(item["statement"].casefold().split())
+        key = _requirement_statement_key(item)
         model_by_statement.setdefault(key, item["id"])
     aliases: dict[str, list[str]] = {}
     for item in canonical:
         if item["id"] in model_ids:
             continue
-        key = " ".join(item["statement"].casefold().split())
+        key = _requirement_statement_key(item)
         source_ref = model_by_statement.get(key)
         if source_ref:
             aliases.setdefault(source_ref, []).append(item["id"])
@@ -278,9 +287,13 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
     state_requirements = prototype_state_requirements(value)
     process_constraints = prototype_process_constraints(value)
     process_ids = {item["id"] for item in process_constraints}
+    model_requirement_ids = {
+        item["id"] for item in prototype_model_requirement_inventory(value)
+    }
     jobs = [item for item in jobs if item["id"] not in process_ids]
     state_requirements = [item for item in state_requirements
-                          if item.get("id", item.get("job_ref")) not in process_ids]
+                          if item.get("id", item.get("job_ref")) not in process_ids
+                          and item.get("id", item.get("job_ref")) in model_requirement_ids]
 
     facts = {
         name: fact
