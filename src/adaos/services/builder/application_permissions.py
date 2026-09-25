@@ -16,6 +16,12 @@ from adaos.domain.application_access import (
 
 
 APPLICATION_PERMISSION_CONTEXT_SCHEMA = "adaos.builder.application_permissions.v1"
+SUPPORTED_APPROVAL_POLICIES = {
+    "ask_in_context",
+    "explicit",
+    "grant_on_install",
+    "owner_only",
+}
 
 
 def _authoring_contract() -> dict[str, Any]:
@@ -58,6 +64,15 @@ def _authoring_contract() -> dict[str, Any]:
             ),
             "privacy_labels": "human- and policy-facing summary derived from data_practices; it does not replace canonical data category IDs",
             "retention": "optional concise text, at most 120 characters; a stable identifier such as until_record_deleted is preferred",
+            "approval_policies": {
+                "allowed": sorted(SUPPORTED_APPROVAL_POLICIES),
+                "grant_on_install": (
+                    "the reviewed install or update operation provisions durable access"
+                ),
+                "explicit": "a separate explicit approval provisions access",
+                "ask_in_context": "request approval at the user interaction boundary",
+                "owner_only": "restrict approval and use to the Application owner",
+            },
         },
         "tool_runtime_contract": {
             "permissions": (
@@ -274,6 +289,20 @@ def application_permissions_context(
             project.get("application_roles") or (),
             known_permissions=profile.flat_permissions,
         )
+        unsupported_policies = sorted(
+            {
+                item.approval_policy
+                for item in (*profile.required, *profile.optional)
+                if item.approval_policy not in SUPPORTED_APPROVAL_POLICIES
+            }
+        )
+        if unsupported_policies:
+            raise ApplicationAccessContractError(
+                "unsupported approval_policy values: "
+                + ", ".join(unsupported_policies)
+                + "; allowed values: "
+                + ", ".join(sorted(SUPPORTED_APPROVAL_POLICIES))
+            )
     except ApplicationAccessContractError as exc:
         return {
             # Ownership is resolved, so the invalid declaration is safe to expose
@@ -334,6 +363,7 @@ def application_permissions_context(
             "Create tests/test_application_contract.py for every declared permission_profile. With application roles, test the owner/member/child/guest matrix; without roles, prove trusted Core/Root enforcement and no local role store. Trial admission recognizes this exact sealed artifact path.",
             "Create a separate tests/test_behavior_contract.py that exercises observable consumer behavior, failure states, and pending actions through admitted public interfaces or the provider-owned hermetic seam. Trial admission requires a sealed behavior checkpoint distinct from tests/test_application_contract.py.",
             "Record secrets, external providers, model use, notifications, background work and data practices explicitly.",
+            "Use only the approval policies listed by the compact authoring contract; install-time access is spelled grant_on_install.",
             "Use canonical machine identifiers for data-practice categories; keep prose in purposes, titles, retention policy, catalog copy or README.",
         ],
         "diagnostics": diagnostics,

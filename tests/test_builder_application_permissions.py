@@ -131,3 +131,40 @@ permission_profile:
     assert context["authority_status"] == "valid"
     assert context["project_ref"] == "project:mail_manager"
     assert context["declared"] == ["providers.google.gmail"]
+
+
+def test_permission_context_rejects_unknown_approval_policy(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    project = projects / "mail_reader"
+    project.mkdir(parents=True)
+    (project / "project.yaml").write_text(
+        """
+id: mail_reader
+components:
+  owned:
+    - ref: scenario:mail_reader
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: workspace.read
+      purpose: Read authorized messages.
+      approval_policy: on_install
+  optional: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    context = application_permissions_context(
+        component_ref="scenario:mail_reader",
+        requested_project_ref="project:mail_reader",
+        dev_projects_root=projects,
+        dev_skills_root=tmp_path / "skills",
+    )
+
+    assert context["declaration_status"] == "invalid"
+    assert context["authority_status"] == "invalid"
+    assert context["repair_required"] is True
+    assert context["authoring_contract"]["semantics"]["approval_policies"][
+        "allowed"
+    ] == ["ask_in_context", "explicit", "grant_on_install", "owner_only"]
+    assert "unsupported approval_policy values: on_install" in context["diagnostics"][0]

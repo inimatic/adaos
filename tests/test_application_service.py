@@ -1043,7 +1043,7 @@ def test_install_materializes_only_declared_grant_on_install_access(
                 {
                     "id": "workspace.write",
                     "purpose": "Modify shared workspace data",
-                    "approval_policy": "request_each_use",
+                    "approval_policy": "explicit",
                 },
             ],
             "optional": [],
