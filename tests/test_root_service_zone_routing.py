@@ -156,6 +156,84 @@ def test_project_candidate_keeps_exact_pushed_component_source_ref(
     assert captured["release_validation_evidence"][0]["builder"] == "adaos.dev.project.push"
 
 
+def test_project_trial_admits_the_exact_cbs_release_before_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    release_digest = "sha256:" + "1" * 64
+    package_store = object()
+    compilation = {"compilation_digest": "sha256:" + "2" * 64}
+    captured: dict[str, object] = {}
+
+    class _CBS:
+        def __init__(self, state_dir: Path) -> None:
+            assert state_dir == tmp_path / "state"
+
+        def inspect(self, application_ref: str):
+            assert application_ref == "scenario:mail_reader"
+            return compilation
+
+    class _Admissions:
+        def __init__(self, state_dir: Path) -> None:
+            assert state_dir == tmp_path / "state"
+
+        def find_by_project_release(self, digest: str):
+            assert digest == release_digest
+            return None
+
+        def admit(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "status": "admitted",
+                "admission_digest": "sha256:" + "3" * 64,
+                "compilation_digest": compilation["compilation_digest"],
+                "project_release_digest": release_digest,
+                "requirements_total": 1,
+                "requirements_resolved": 1,
+                "plans": [{"plan_digest": "sha256:" + "4" * 64}],
+                "unresolved": [],
+            }
+
+    monkeypatch.setattr("adaos.services.applications.cbs.ApplicationCBSService", _CBS)
+    monkeypatch.setattr(
+        "adaos.services.applications.cbs_admission.NativeApplicationCBSAdmissionService",
+        _Admissions,
+    )
+    service = object.__new__(RootDeveloperService)
+    service.ctx = SimpleNamespace(
+        paths=SimpleNamespace(state_dir=lambda: tmp_path / "state")
+    )
+    prepared = SimpleNamespace(
+        candidate=SimpleNamespace(candidate_id="candidate-mail"),
+        plan=SimpleNamespace(
+            release=SimpleNamespace(release_digest=release_digest)
+        ),
+    )
+
+    receipt = service._admit_project_candidate_cbs(
+        project_id="mail_reader",
+        source_kind="scenario",
+        source_name="mail_reader",
+        prepared=prepared,
+        publication=SimpleNamespace(package_store=package_store),
+    )
+
+    assert receipt == {
+        "status": "admitted",
+        "admission_digest": "sha256:" + "3" * 64,
+        "compilation_digest": "sha256:" + "2" * 64,
+        "project_release_digest": release_digest,
+        "requirements_total": 1,
+        "requirements_resolved": 1,
+        "plan_digests": ["sha256:" + "4" * 64],
+    }
+    assert captured["application_ref"] == "scenario:mail_reader"
+    assert captured["compilation"] is compilation
+    assert captured["release_plan"] is prepared.plan
+    assert captured["package_store"] is package_store
+    assert captured["workspace_ref"] == "trial:candidate-mail"
+
+
 def test_project_candidate_can_resolve_primary_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

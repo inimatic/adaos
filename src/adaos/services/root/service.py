@@ -2565,7 +2565,14 @@ class RootDeveloperService:
             idempotency_key=idempotency_key,
             permission_decision=permission_decision,
         )
-        return {
+        cbs_admission = self._admit_project_candidate_cbs(
+            project_id=project_id,
+            source_kind=source_kind,
+            source_name=source_name,
+            prepared=prepared,
+            publication=publication,
+        )
+        result = {
             "ok": True,
             "lifecycle_phase": "beta",
             "candidate": prepared.candidate.to_dict(),
@@ -2573,6 +2580,76 @@ class RootDeveloperService:
             "trial_workspace": str(prepared.trial_workspace),
             "trial_activation": dict(prepared.trial_activation),
         }
+        if cbs_admission is not None:
+            result["cbs_admission"] = cbs_admission
+        return result
+
+    def _admit_project_candidate_cbs(
+        self,
+        *,
+        project_id: str,
+        source_kind: Literal["skill", "scenario"],
+        source_name: str,
+        prepared: Any,
+        publication: ArtifactPublicationService,
+    ) -> dict[str, Any] | None:
+        """Admit an exact Project Trial before it can reach Workspace authority.
+
+        Legacy Projects without a semantic compilation continue through the
+        compatibility lifecycle. Once a Project has a compilation, however,
+        every immutable release receives its own admission; a previous
+        release's evidence must never authorize a new package closure.
+        """
+
+        if source_kind != "scenario":
+            return None
+
+        from adaos.services.applications.cbs import ApplicationCBSService
+        from adaos.services.applications.cbs_admission import (
+            NativeApplicationCBSAdmissionService,
+        )
+
+        application_ref = f"scenario:{source_name}"
+        state_dir = Path(self.ctx.paths.state_dir())
+        compilation = ApplicationCBSService(state_dir).inspect(application_ref)
+        if compilation is None:
+            return None
+
+        release_digest = str(prepared.plan.release.release_digest)
+        admissions = NativeApplicationCBSAdmissionService(state_dir)
+        admission = admissions.find_by_project_release(release_digest)
+        if admission is None:
+            admission = admissions.admit(
+                application_ref=application_ref,
+                compilation=compilation,
+                release_plan=prepared.plan,
+                package_store=publication.package_store,
+                workspace_ref=f"trial:{prepared.candidate.candidate_id}",
+                evidence_context={
+                    "candidate_id": prepared.candidate.candidate_id,
+                    "project_id": project_id,
+                    "source": "project.trial",
+                },
+            )
+        receipt = {
+            "status": admission["status"],
+            "admission_digest": admission["admission_digest"],
+            "compilation_digest": admission["compilation_digest"],
+            "project_release_digest": admission["project_release_digest"],
+            "requirements_total": admission["requirements_total"],
+            "requirements_resolved": admission["requirements_resolved"],
+            "plan_digests": [item["plan_digest"] for item in admission["plans"]],
+        }
+        if admission["status"] != "admitted":
+            unresolved = ", ".join(
+                str(item.get("requirement_ref") or "unknown")
+                for item in admission.get("unresolved") or []
+            )
+            raise RootServiceError(
+                "Project Trial CBS production admission is unresolved: "
+                + (unresolved or "unknown requirement")
+            )
+        return receipt
 
     def prepare_project_candidate_from_primary_checkpoint(
         self,
