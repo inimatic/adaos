@@ -44,7 +44,11 @@ from adaos.services.applications.update_batches import (
 )
 from adaos.services.builder.workbench import BuilderWorkbenchService
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
-from adaos.services.io_web.desktop import WebDesktopInstalled, WebDesktopService
+from adaos.services.io_web.desktop import (
+    WebDesktopInstalled,
+    WebDesktopService,
+    WebDesktopSnapshot,
+)
 from adaos.services.policy.skill_capabilities import require_skill_capability
 from adaos.services.project_deployment import (
     ProjectDeploymentStore,
@@ -462,6 +466,108 @@ def _application_home_aliases(model: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 _HOME_SNAPSHOT_UNSET = object()
+
+
+def _durable_home_snapshot(webspace_id: str) -> WebDesktopSnapshot:
+    """Read only the durable Home fields needed by compact catalog rows.
+
+    A summary row needs installed/pinned identity, not the complete live YDoc
+    materialization. Reading the full desktop snapshot here made the
+    Applications list contend with first sync and deserialize an unrelated
+    document solely to obtain these two lists.
+    """
+
+    desktop = WebDesktopService()
+    return WebDesktopSnapshot(
+        installed=desktop.get_installed(webspace_id),
+        pinned_widgets=[],
+        pinned_applications=desktop.get_pinned_applications(webspace_id),
+        topbar=[],
+        page_schema={},
+    )
+
+
+def _compact_release_projection(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {
+        key: deepcopy(value[key])
+        for key in (
+            "schema",
+            "application_id",
+            "version",
+            "release_digest",
+            "lifecycle",
+            "published_at",
+        )
+        if key in value
+    }
+
+
+def _compact_application_projection(
+    application: Mapping[str, Any], *, icon: str
+) -> dict[str, Any]:
+    display = (
+        dict(application.get("display") or {})
+        if isinstance(application.get("display"), Mapping)
+        else {}
+    )
+    publisher = (
+        dict(application.get("publisher") or {})
+        if isinstance(application.get("publisher"), Mapping)
+        else {}
+    )
+    compact = {
+        key: deepcopy(application[key])
+        for key in (
+            "schema",
+            "application_id",
+            "revision",
+            "legacy_project_id",
+            "publisher_ref",
+            "visibility",
+            "lifecycle",
+            "aggregate_backed",
+            "distribution",
+            "marketplace_listing",
+        )
+        if key in application
+    }
+    compact["display"] = {
+        key: deepcopy(display[key])
+        for key in ("title", "summary", "icon", "categories")
+        if key in display
+    }
+    compact["publisher"] = {
+        "display_name": publisher.get("display_name"),
+    }
+    compact["icon"] = icon
+    return compact
+
+
+def _compact_catalog_output(model: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop detail-only closure data after summary conditions are derived."""
+
+    compact = dict(model)
+    icon = str(compact.get("icon") or "apps-outline")
+    application = compact.get("application")
+    compact["application"] = _compact_application_projection(
+        application if isinstance(application, Mapping) else {},
+        icon=icon,
+    )
+    for field in (
+        "installed_release",
+        "active_release",
+        "marketplace_release",
+        "prerelease_release",
+    ):
+        compact[field] = _compact_release_projection(compact.get(field))
+    compact.pop("conditions", None)
+    compact.pop("local_beta_release", None)
+    compact.pop("local_beta_releases", None)
+    compact.pop("runtime_selections", None)
+    compact.pop("execution_placement", None)
+    return compact
 
 
 def _home_projection(
@@ -1167,7 +1273,11 @@ def _enrich_application_models(
     home_snapshot: Any = None
     if webspace:
         try:
-            home_snapshot = WebDesktopService().get_snapshot(webspace)
+            home_snapshot = (
+                _durable_home_snapshot(webspace)
+                if compact
+                else WebDesktopService().get_snapshot(webspace)
+            )
         except (OSError, RuntimeError, ValueError):
             home_snapshot = None
     application_ids = [
@@ -1259,7 +1369,9 @@ def _enrich_application_models(
             model["installation_summary"] = _installation_summary(
                 model, webspace_id=webspace_id
             )
-            enriched.append(enrich_application_conditions(model))
+            enriched.append(
+                _compact_catalog_output(enrich_application_conditions(model))
+            )
             continue
         if local is not None:
             entrypoints = application.get("entrypoints") or []

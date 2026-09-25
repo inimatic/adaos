@@ -1055,8 +1055,12 @@ Dev Ticket data are not returned by `ApplicationsPlane`.
 Catalog collection reads use `view=summary` by default. The summary carries
 only product identity, display/catalog metadata, lifecycle flags, exact release
 digests, compact installation/operation state, navigation, and condition
-summaries. Complete component closures, evidence bodies, migrations, and locks
-are read only by an explicit detail operation. `applications.list` is
+summaries. It derives attention before dropping the per-condition detail,
+projects release identities without repeating signed catalog/component data,
+and reads durable Home installed/pinned identity without opening the live
+desktop YDoc. Complete component closures, evidence bodies, migrations, locks,
+and condition detail are read only by an explicit detail operation.
+`applications.list` is
 server-paginated with a maximum page of 100 summaries (20 for an explicitly
 requested full view), returns `page.has_more`, and supports bounded query and
 offset inputs. This is a transport invariant: historical development inventory

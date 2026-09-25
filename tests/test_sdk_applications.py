@@ -1346,6 +1346,93 @@ def test_application_list_can_skip_development_enrichment(monkeypatch) -> None:
     assert models[0]["local_development"] is None
 
 
+def test_compact_application_home_snapshot_skips_live_ydoc(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Desktop:
+        def get_installed(self, webspace_id):
+            calls.append(("installed", webspace_id))
+            return applications.WebDesktopInstalled(
+                apps=["scenario:notes"],
+                widgets=[],
+            )
+
+        def get_pinned_applications(self, webspace_id):
+            calls.append(("pinned", webspace_id))
+            return ["scenario:notes"]
+
+        def get_snapshot(self, _webspace_id):
+            raise AssertionError("compact catalog must not read the live YDoc")
+
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+
+    snapshot = applications._durable_home_snapshot("desktop")
+
+    assert snapshot.installed.apps == ["scenario:notes"]
+    assert snapshot.pinned_applications == ["scenario:notes"]
+    assert calls == [("installed", "desktop"), ("pinned", "desktop")]
+
+
+def test_compact_catalog_output_keeps_list_identity_without_detail_closure() -> None:
+    digest = "sha256:" + "a" * 64
+    compact = applications._compact_catalog_output(
+        {
+            "application": {
+                "schema": "adaos.application.v1",
+                "application_id": "notes",
+                "revision": 3,
+                "display": {
+                    "title": "Notes",
+                    "summary": "Short summary",
+                    "categories": ["productivity"],
+                },
+                "publisher": {
+                    "display_name": "Local publisher",
+                    "release_key_ref": "must-not-leak-into-catalog-row",
+                },
+                "permission_profile": {"required": ["workspace.read"]},
+            },
+            "icon": "document-outline",
+            "active_release": {
+                "schema": "adaos.application.release_summary.v1",
+                "application_id": "notes",
+                "version": "1.0.0",
+                "release_digest": digest,
+                "project_release": {"components": [{"ref": "skill:notes"}]},
+            },
+            "installed_release": None,
+            "marketplace_release": None,
+            "prerelease_release": None,
+            "conditions": [{"type": "ready"}],
+            "runtime_selections": [{"release_digest": digest}],
+            "execution_placement": {"status": "active"},
+            "attention": {"status": "current"},
+        }
+    )
+
+    assert compact["application"] == {
+        "schema": "adaos.application.v1",
+        "application_id": "notes",
+        "revision": 3,
+        "display": {
+            "title": "Notes",
+            "summary": "Short summary",
+            "categories": ["productivity"],
+        },
+        "publisher": {"display_name": "Local publisher"},
+        "icon": "document-outline",
+    }
+    assert compact["active_release"] == {
+        "schema": "adaos.application.release_summary.v1",
+        "application_id": "notes",
+        "version": "1.0.0",
+        "release_digest": digest,
+    }
+    assert "conditions" not in compact
+    assert "runtime_selections" not in compact
+    assert "execution_placement" not in compact
+
+
 def test_application_list_includes_read_only_workspace_project_projection(
     monkeypatch, tmp_path: Path
 ) -> None:

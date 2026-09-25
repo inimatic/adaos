@@ -188,8 +188,12 @@ closures and returned about `2.23 MB` in roughly `8 s`; a development tab with
 1 MiB NATS route after envelope/base64 overhead. The default Root projection
 now reads immutable release summaries, omits component/evidence/lock bodies,
 and pages at no more than 100 rows. The measured installed page is 31 rows,
-about `209 KB`, and takes about `0.43 s` warm; update assessment is about
-`12.8 KB` and `0.37 s` warm. Full detail remains available through the
+about `102 KB`, and takes about `0.65 s` in an isolated cold process; update
+assessment takes about `0.44 s`. The earlier `209 KB` projection still repeated
+release catalog metadata and opened the complete desktop YDoc for Home identity.
+The bounded summary now keeps only the release/Application identity needed by
+the collection, derives attention before dropping condition detail, and reads
+durable installed/pinned Home fields. Full detail remains available through the
 single-Application read.
 
 Root MCP UI/control work also moved to a prestarted four-worker interactive

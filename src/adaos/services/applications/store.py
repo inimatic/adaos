@@ -391,6 +391,12 @@ class ApplicationStore:
         project = dict(project) if isinstance(project, Mapping) else {}
         catalog = project.get("catalog")
         catalog = dict(catalog) if isinstance(catalog, Mapping) else {}
+        # Catalog rows only need the icon before the SDK emits its compact
+        # release identity. Carrying the complete catalog through every active,
+        # installed and marketplace release duplicated descriptions,
+        # permissions and component metadata several times per Application.
+        catalog_icon = str(catalog.get("icon") or "").strip()
+        catalog_summary = {"icon": catalog_icon} if catalog_icon else {}
         summary: dict[str, Any] = {
             "schema": "adaos.application.release_summary.v1",
             "application_id": observed_application_id,
@@ -403,7 +409,7 @@ class ApplicationStore:
                 "project_id": project.get("project_id"),
                 "version": project.get("version"),
                 "release_digest": project.get("release_digest"),
-                "catalog": catalog,
+                "catalog": catalog_summary,
             },
         }
         if raw.get("published_at") is not None:

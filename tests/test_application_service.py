@@ -239,6 +239,9 @@ def test_catalog_summary_omits_full_release_closure(service: ApplicationService)
     assert summary["schema"] == "adaos.application.catalog_summary.v1"
     assert summary["marketplace_release"]["version"] == "1.0.0"
     assert "components" not in summary["marketplace_release"]["project_release"]
+    assert set(summary["marketplace_release"]["project_release"]["catalog"]) <= {
+        "icon"
+    }
     assert "release" not in summary["effective_release"]
     assert full["effective_release"]["release"]["release_digest"] == release.release_digest
 

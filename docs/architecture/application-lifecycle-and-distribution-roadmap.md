@@ -630,9 +630,11 @@ Builder development and consumes only public contracts.
   A 2026-09-25 intermediate step separates latency-sensitive Root MCP calls
   from the background executor, makes Applications collection reads compact by
   default, and bounds them to 100-row server pages (20 for explicit full view).
-  Installed collection reads fell to about 209 KB/0.43 s warm, but cold browser
-  readiness still contends with YRoom materialization and post-ready service
-  startup, so the milestone remains open.
+  Installed collection reads first fell to about 209 KB and then to about
+  102 KB/0.65 s in an isolated cold process after removing repeated release
+  catalogs and the unnecessary full-YDoc Home read. Cold browser readiness
+  still contends with YRoom materialization and post-ready service startup, so
+  the milestone remains open.
 - [ ] `[should]` `APP4-39` Expose the exact-checkpoint precondition before a
   Project release operation does expensive work. Report the required
   `checkpoint -> push -> trial` order, the stale component ref, and the last
