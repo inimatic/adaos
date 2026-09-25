@@ -39,10 +39,19 @@ def _import_semantic_registry(ctx, workspace_root: Path) -> dict[str, Any]:
         if callable(state_dir_resolver)
         else Path(getattr(ctx.settings, "base_dir")) / ".adaos" / "state"
     )
+    config = getattr(ctx, "config", None)
+    subnet_id = str(
+        getattr(config, "subnet_id_value", None)
+        or getattr(config, "subnet_id", None)
+        or ""
+    ).strip()
+    local_publisher_ref = (
+        subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
+    ) if subnet_id else None
     return SemanticRegistryProjection(
         registry_root=workspace_root,
         state_dir=state_dir,
-    ).import_to_local_catalog()
+    ).import_to_local_catalog(local_publisher_ref=local_publisher_ref)
 
 
 def _environment_type() -> str:

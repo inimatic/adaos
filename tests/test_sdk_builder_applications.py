@@ -198,6 +198,7 @@ def test_publish_to_registry_makes_stable_application_public_and_records_receipt
             "release_digest": "sha256:" + "a" * 64,
             "publisher_ref": "subnet:home",
             "release_notes": "First public beta",
+                "require_application_catalog": True,
         }
     ]
 

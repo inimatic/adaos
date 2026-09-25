@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from adaos.domain.application import Application, ApplicationRelease
 from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
 from adaos.domain.capability_binding_state import ApplicationRequirement
 from adaos.services.applications.cbs import ApplicationCBSService
@@ -23,6 +24,7 @@ from adaos.services.artifact_pipeline import (
     build_artifact_package,
     build_project_release,
 )
+from adaos.services.applications.store import ApplicationStore
 
 
 FIXED_NOW = datetime(2026, 9, 24, 6, 0, tzinfo=UTC)
@@ -301,6 +303,87 @@ def test_exact_release_publishes_and_imports_shared_semantic_registry(
     deliveries = catalog.deliveries_for_binding(bindings[0].digest)
     assert len(deliveries) == 1
     assert deliveries[0].to_dict()["package"]["id"] == "mail_provider"
+
+
+def test_public_application_catalog_imports_installable_aggregate_without_installing(
+    tmp_path: Path,
+) -> None:
+    plan, store = _release(tmp_path)
+    compilation = _compilation()
+    publisher_state = tmp_path / "publisher-state"
+    ApplicationCBSService(publisher_state).register(compilation)
+    NativeApplicationCBSAdmissionService(
+        publisher_state, now=lambda: FIXED_NOW
+    ).admit(
+        application_ref="scenario:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:candidate-mail",
+        evidence_context={"candidate_id": "candidate-mail"},
+    )
+    registry = tmp_path / "registry"
+    projection = SemanticRegistryProjection(registry, publisher_state)
+    semantic = projection.prepare_release(plan, package_store=store)
+    application = Application(
+        application_id="mail_client",
+        legacy_project_id="mail_client",
+        publisher_ref="subnet:publisher",
+        slug="mail-client",
+        display={"title": "Mail Client", "summary": "Portable mail client"},
+        visibility="public",
+        entrypoints=(
+            {
+                "entrypoint_id": "main",
+                "presentation_ref": "scenario:mail_client",
+            },
+        ),
+        publisher={
+            "publisher_ref": "subnet:publisher",
+            "display_name": "Publisher",
+            "subnet_short_ref": "publisher",
+            "release_key_ref": "key:publisher/releases",
+            "release_key_fingerprint": "sha256:" + "1" * 64,
+            "home_zone": "global",
+            "trust_relation": "trusted",
+        },
+        revision=2,
+        created_at=FIXED_NOW.isoformat(),
+        updated_at=FIXED_NOW.isoformat(),
+    )
+    release = ApplicationRelease(
+        application_id="mail_client",
+        publisher_ref="subnet:publisher",
+        project_release=plan.release,
+        accepted_candidate_id="candidate-mail",
+        acceptance_evidence=({"status": "passed", "validator": "test"},),
+        provenance_refs=(str(plan.release.release_digest),),
+        lifecycle="stable",
+        published_at=FIXED_NOW.isoformat(),
+    )
+    published = projection.prepare_public_application(application, release)
+
+    assert published["status"] == "prepared"
+    assert published["release_digest"] == plan.release.release_digest
+    assert semantic["application_projection_digest"]
+
+    consumer_state = tmp_path / "consumer-state"
+    imported = SemanticRegistryProjection(
+        registry, consumer_state
+    ).import_to_local_catalog(local_publisher_ref="subnet:consumer")
+    catalog_import = imported["application_catalog"]
+    assert catalog_import["application_count"] == 1
+    consumer_store = ApplicationStore(consumer_state)
+    assert consumer_store.get_application("mail_client") == application
+    assert (
+        consumer_store.get_release("mail_client", release.release_digest)
+        == release
+    )
+    assert consumer_store.get_channels("mail_client")["channels"] == {
+        "stable": release.release_digest
+    }
+    assert consumer_store.list_installations() == ()
+    assert consumer_store.list_runtime_selections() == ()
 
 
 def test_reissued_evidence_for_a_recompiled_release_has_a_distinct_identity(

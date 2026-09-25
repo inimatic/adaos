@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from adaos.domain.application import Application, ApplicationRelease
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.domain.capability_binding_state import (
     BINDING_DEFINITION_SCHEMA,
@@ -35,6 +36,7 @@ from adaos.services.applications.cbs import ApplicationCBSService
 from adaos.services.applications.cbs_admission import (
     NativeApplicationCBSAdmissionService,
 )
+from adaos.services.applications.store import ApplicationStore, ApplicationStoreError
 from adaos.services.artifact_pipeline.cbs_authoring import (
     BINDING_OUTPUT_PATH,
     CAPABILITY_OUTPUT_PATH,
@@ -49,6 +51,12 @@ from .catalog import PortableContractCatalog, portable_record_identity
 SEMANTIC_REGISTRY_SCHEMA = "adaos.semantic_registry.index.v1"
 SEMANTIC_APPLICATION_RELEASE_SCHEMA = (
     "adaos.semantic_registry.application_release.v1"
+)
+PUBLIC_APPLICATION_CATALOG_SCHEMA = (
+    "adaos.semantic_registry.public_application_catalog.v1"
+)
+PUBLIC_APPLICATION_RELEASE_SCHEMA = (
+    "adaos.semantic_registry.public_application_release.v1"
 )
 SEMANTIC_REGISTRY_DIRECTORY = "semantic"
 
@@ -119,6 +127,38 @@ def _empty_index() -> dict[str, Any]:
     return value
 
 
+def _empty_application_catalog() -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "schema": PUBLIC_APPLICATION_CATALOG_SCHEMA,
+        "applications": {},
+        "releases": {},
+    }
+    value["index_digest"] = canonical_payload_digest(value)
+    return value
+
+
+def _validate_application_catalog(value: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    if result.get("schema") != PUBLIC_APPLICATION_CATALOG_SCHEMA:
+        raise SemanticRegistryProjectionError(
+            "unsupported public Application catalog"
+        )
+    for field in ("applications", "releases"):
+        if not isinstance(result.get(field), Mapping):
+            raise SemanticRegistryProjectionError(
+                f"public Application catalog {field} must be an object"
+            )
+        result[field] = dict(result[field])
+    expected = str(result.get("index_digest") or "")
+    unsigned = dict(result)
+    unsigned.pop("index_digest", None)
+    if expected != canonical_payload_digest(unsigned):
+        raise SemanticRegistryProjectionError(
+            "public Application catalog digest mismatch"
+        )
+    return result
+
+
 def _validate_index(value: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(value)
     if result.get("schema") != SEMANTIC_REGISTRY_SCHEMA:
@@ -153,6 +193,14 @@ class SemanticRegistryProjection:
         return self.root / "index.json"
 
     @property
+    def application_catalog_root(self) -> Path:
+        return self.root / "catalog"
+
+    @property
+    def application_catalog_path(self) -> Path:
+        return self.application_catalog_root / "index.json"
+
+    @property
     def lock_path(self) -> Path:
         # Mutation locks are node-local runtime state and must never be committed.
         return (
@@ -176,6 +224,23 @@ class SemanticRegistryProjection:
             )
         return _validate_index(value)
 
+    def _read_application_catalog(self) -> dict[str, Any]:
+        if not self.application_catalog_path.is_file():
+            return _empty_application_catalog()
+        try:
+            value = json.loads(
+                self.application_catalog_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SemanticRegistryProjectionError(
+                "cannot read public Application catalog"
+            ) from exc
+        if not isinstance(value, Mapping):
+            raise SemanticRegistryProjectionError(
+                "public Application catalog must be an object"
+            )
+        return _validate_application_catalog(value)
+
     def _record_path(self, digest: str) -> Path:
         token = _digest_token(digest)
         return self.root / "records" / "sha256" / token[:2] / f"{token}.json"
@@ -183,6 +248,129 @@ class SemanticRegistryProjection:
     def _application_path(self, project_id: str, release_digest: str) -> Path:
         token = _digest_token(release_digest)
         return self.root / "applications" / str(project_id) / f"{token}.json"
+
+    def _public_application_release_path(
+        self, application_id: str, release_digest: str
+    ) -> Path:
+        token = _digest_token(release_digest)
+        return (
+            self.application_catalog_root
+            / "releases"
+            / str(application_id)
+            / f"{token}.json"
+        )
+
+    def prepare_public_application(
+        self,
+        application: Application | Mapping[str, Any],
+        release: ApplicationRelease | Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Add one installable stable Application to the shared registry index.
+
+        The record carries only portable product/release authority.  Installation,
+        credentials, BindingInstances, StateSpaces, RuntimeSelections, and grants
+        remain local to the consuming subnet.
+        """
+
+        app = (
+            application
+            if isinstance(application, Application)
+            else Application.from_mapping(application)
+        )
+        app_release = (
+            release
+            if isinstance(release, ApplicationRelease)
+            else ApplicationRelease.from_mapping(release)
+        )
+        if app.visibility != "public":
+            raise SemanticRegistryProjectionError(
+                "only public Applications may enter the shared catalog"
+            )
+        if (
+            app.application_id != app_release.application_id
+            or app.publisher_ref != app_release.publisher_ref
+            or app.legacy_project_id != app_release.project_release.project_id
+        ):
+            raise SemanticRegistryProjectionError(
+                "public Application and release identities differ"
+            )
+
+        semantic_index = self._read_index()
+        semantic_key = (
+            f"project:{app.legacy_project_id}@{app_release.release_digest}"
+        )
+        semantic_entry = semantic_index["application_releases"].get(semantic_key)
+        if not isinstance(semantic_entry, Mapping):
+            raise SemanticRegistryProjectionError(
+                "public Application release has no exact semantic projection"
+            )
+
+        payload: dict[str, Any] = {
+            "schema": PUBLIC_APPLICATION_RELEASE_SCHEMA,
+            "application": app.to_dict(),
+            "release": app_release.to_dict(),
+            "channels": {"stable": app_release.release_digest},
+            "semantic": {
+                "projection_digest": semantic_entry.get("projection_digest"),
+                "path": semantic_entry.get("path"),
+            },
+        }
+        payload["projection_digest"] = canonical_payload_digest(payload)
+        path = self._public_application_release_path(
+            app.application_id, app_release.release_digest
+        )
+
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            catalog = self._read_application_catalog()
+            if path.is_file():
+                try:
+                    existing = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise SemanticRegistryProjectionError(
+                        "public Application release is unreadable"
+                    ) from exc
+                if existing != payload:
+                    raise SemanticRegistryProjectionError(
+                        "public Application release is immutable"
+                    )
+
+            relative = path.relative_to(
+                Path(self.registry_root).resolve()
+            ).as_posix()
+            release_key = f"{app.application_id}@{app_release.release_digest}"
+            catalog["releases"][release_key] = {
+                "application_id": app.application_id,
+                "publisher_ref": app.publisher_ref,
+                "version": app_release.project_release.version,
+                "release_digest": app_release.release_digest,
+                "path": relative,
+                "projection_digest": payload["projection_digest"],
+            }
+            catalog["applications"][app.application_id] = {
+                "application_id": app.application_id,
+                "publisher_ref": app.publisher_ref,
+                "application_revision": app.revision,
+                "stable_release_digest": app_release.release_digest,
+                "release_key": release_key,
+                "projection_digest": payload["projection_digest"],
+            }
+            catalog.pop("index_digest", None)
+            catalog["index_digest"] = canonical_payload_digest(catalog)
+            if not path.is_file():
+                atomic_write_json(path, payload)
+            atomic_write_json(self.application_catalog_path, catalog)
+
+        return {
+            "schema": "adaos.semantic_registry.public_application_publication.v1",
+            "status": "prepared",
+            "application_id": app.application_id,
+            "application_revision": app.revision,
+            "release_digest": app_release.release_digest,
+            "projection_digest": payload["projection_digest"],
+            "index_digest": catalog["index_digest"],
+            "path": relative,
+            "paths": [f"{SEMANTIC_REGISTRY_DIRECTORY}/catalog"],
+        }
 
     @staticmethod
     def _portable_records_from_packages(
@@ -446,6 +634,8 @@ class SemanticRegistryProjection:
         self,
         *,
         digests: Iterable[str] | None = None,
+        application_store: ApplicationStore | None = None,
+        local_publisher_ref: str | None = None,
     ) -> dict[str, Any]:
         """Verify shared records and hydrate the node-local portable cache."""
 
@@ -499,17 +689,176 @@ class SemanticRegistryProjection:
                 )
             catalog.put(record)
             imported.append(digest)
+        application_catalog = self.import_public_applications(
+            application_store=application_store,
+            local_publisher_ref=local_publisher_ref,
+        )
         return {
             "schema": "adaos.semantic_registry.import.v1",
             "status": "imported",
             "index_digest": index["index_digest"],
             "record_count": len(imported),
             "record_digests": imported,
+            "application_catalog": application_catalog,
+        }
+
+    def import_public_applications(
+        self,
+        *,
+        application_store: ApplicationStore | None = None,
+        local_publisher_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Hydrate installable public Application facts from the same registry.
+
+        The Git registry is a transport/index authority.  Package bytes still
+        come from the existing content-addressed package store and are verified
+        by the ordinary install pipeline.
+        """
+
+        if not self.application_catalog_path.is_file():
+            return {
+                "schema": "adaos.semantic_registry.public_application_import.v1",
+                "status": "not_available",
+                "application_count": 0,
+                "release_count": 0,
+                "applications": [],
+            }
+        catalog = self._read_application_catalog()
+        store = application_store or ApplicationStore(Path(self.state_dir))
+        imported: list[dict[str, Any]] = []
+        registry_root = Path(self.registry_root).resolve()
+        for application_id, raw_application_entry in sorted(
+            catalog["applications"].items()
+        ):
+            if not isinstance(raw_application_entry, Mapping):
+                raise SemanticRegistryProjectionError(
+                    f"public Application catalog entry is invalid: {application_id}"
+                )
+            release_key = str(raw_application_entry.get("release_key") or "")
+            raw_release_entry = catalog["releases"].get(release_key)
+            if not isinstance(raw_release_entry, Mapping):
+                raise SemanticRegistryProjectionError(
+                    f"public Application release is not indexed: {release_key}"
+                )
+            relative = Path(str(raw_release_entry.get("path") or ""))
+            path = (registry_root / relative).resolve()
+            if registry_root != path and registry_root not in path.parents:
+                raise SemanticRegistryProjectionError(
+                    "public Application release path escapes registry root"
+                )
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise SemanticRegistryProjectionError(
+                    f"cannot read public Application release: {release_key}"
+                ) from exc
+            if (
+                not isinstance(payload, Mapping)
+                or payload.get("schema") != PUBLIC_APPLICATION_RELEASE_SCHEMA
+            ):
+                raise SemanticRegistryProjectionError(
+                    f"unsupported public Application release: {release_key}"
+                )
+            expected_projection = str(payload.get("projection_digest") or "")
+            unsigned = dict(payload)
+            unsigned.pop("projection_digest", None)
+            if (
+                expected_projection != canonical_payload_digest(unsigned)
+                or raw_release_entry.get("projection_digest")
+                != expected_projection
+                or raw_application_entry.get("projection_digest")
+                != expected_projection
+            ):
+                raise SemanticRegistryProjectionError(
+                    f"public Application projection digest mismatch: {release_key}"
+                )
+            application = Application.from_mapping(
+                payload.get("application") or {}
+            )
+            release = ApplicationRelease.from_mapping(payload.get("release") or {})
+            channels = payload.get("channels")
+            stable_digest = (
+                str(channels.get("stable") or "")
+                if isinstance(channels, Mapping)
+                else ""
+            )
+            if (
+                application.application_id != application_id
+                or raw_application_entry.get("application_id") != application_id
+                or raw_application_entry.get("publisher_ref")
+                != application.publisher_ref
+                or int(raw_application_entry.get("application_revision") or 0)
+                != application.revision
+                or raw_application_entry.get("stable_release_digest")
+                != stable_digest
+                or raw_release_entry.get("application_id") != application_id
+                or raw_release_entry.get("publisher_ref")
+                != application.publisher_ref
+                or raw_release_entry.get("release_digest")
+                != release.release_digest
+            ):
+                raise SemanticRegistryProjectionError(
+                    f"public Application catalog metadata mismatch: {application_id}"
+                )
+            semantic = payload.get("semantic")
+            if not isinstance(semantic, Mapping):
+                raise SemanticRegistryProjectionError(
+                    f"public Application has no semantic projection: {application_id}"
+                )
+            semantic_path = (
+                registry_root / Path(str(semantic.get("path") or ""))
+            ).resolve()
+            if (
+                (registry_root != semantic_path and registry_root not in semantic_path.parents)
+                or not semantic_path.is_file()
+            ):
+                raise SemanticRegistryProjectionError(
+                    f"public Application semantic projection is unavailable: {application_id}"
+                )
+            try:
+                semantic_payload = json.loads(
+                    semantic_path.read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError) as exc:
+                raise SemanticRegistryProjectionError(
+                    f"public Application semantic projection is unreadable: {application_id}"
+                ) from exc
+            if (
+                not isinstance(semantic_payload, Mapping)
+                or semantic_payload.get("projection_digest")
+                != semantic.get("projection_digest")
+                or semantic_payload.get("project_release_digest")
+                != release.release_digest
+            ):
+                raise SemanticRegistryProjectionError(
+                    f"public Application semantic projection differs: {application_id}"
+                )
+            try:
+                result = store.import_public_registry_release(
+                    application,
+                    release,
+                    stable_release_digest=stable_digest,
+                    local_publisher_ref=local_publisher_ref,
+                )
+            except ApplicationStoreError as exc:
+                raise SemanticRegistryProjectionError(
+                    f"public Application import failed for {application_id}: {exc}"
+                ) from exc
+            imported.append(result)
+        return {
+            "schema": "adaos.semantic_registry.public_application_import.v1",
+            "status": "imported",
+            "index_digest": catalog["index_digest"],
+            "application_count": len(imported),
+            "release_count": len(catalog["releases"]),
+            "applications": imported,
         }
 
 
 __all__ = [
     "SEMANTIC_APPLICATION_RELEASE_SCHEMA",
+    "PUBLIC_APPLICATION_CATALOG_SCHEMA",
+    "PUBLIC_APPLICATION_RELEASE_SCHEMA",
     "SEMANTIC_REGISTRY_DIRECTORY",
     "SEMANTIC_REGISTRY_SCHEMA",
     "SemanticRegistryProjection",

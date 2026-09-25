@@ -2267,6 +2267,51 @@ class RootDeveloperService:
             state_dir=Path(self.ctx.paths.state_dir()),
         )
 
+    def _public_application_for_candidate(
+        self,
+        candidate_id: str,
+        *,
+        project_id: str,
+        release_digest: str,
+    ) -> tuple[Any, Any] | None:
+        """Resolve an exact public Application envelope for source publication."""
+
+        from adaos.services.applications import get_application_service
+
+        state_dir_resolver = getattr(self.ctx.paths, "state_dir", None)
+        if not callable(state_dir_resolver):
+            return None
+        service = get_application_service(Path(state_dir_resolver()))
+        matches: list[tuple[Any, Any]] = []
+        for application in service.store.list_applications():
+            if application.legacy_project_id != project_id:
+                continue
+            try:
+                release = service.store.get_release(
+                    application.application_id, release_digest
+                )
+            except FileNotFoundError:
+                continue
+            if release.accepted_candidate_id == candidate_id:
+                matches.append((application, release))
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise RootServiceError(
+                "candidate maps to more than one Application aggregate"
+            )
+        application, release = matches[0]
+        if application.visibility != "public":
+            return None
+        channels = service.store.get_channels(application.application_id).get(
+            "channels"
+        ) or {}
+        if channels.get("stable") != release_digest:
+            raise RootServiceError(
+                "public Application registry projection requires the exact stable release"
+            )
+        return application, release
+
     @staticmethod
     def _workspace_lock_components(
         lock: Any,
@@ -3026,10 +3071,23 @@ class RootDeveloperService:
                 "Workspace registry is not a Git checkout; run `adaos skill sync` first"
             )
 
-        semantic_publication = self._semantic_registry_projection().prepare_release(
+        semantic_projection = self._semantic_registry_projection()
+        semantic_publication = semantic_projection.prepare_release(
             plan,
             package_store=publication.package_store,
         )
+        public_application = self._public_application_for_candidate(
+            token,
+            project_id=plan.release.project_id,
+            release_digest=str(plan.release.release_digest),
+        )
+        application_catalog_publication = None
+        if public_application is not None:
+            application_catalog_publication = (
+                semantic_projection.prepare_public_application(
+                    public_application[0], public_application[1]
+                )
+            )
 
         paths = [f"projects/{plan.release.project_id}"]
         for package in plan.release.components:
@@ -3037,6 +3095,11 @@ class RootDeveloperService:
             paths.append(f"{plural}/{package.artifact_id}")
         paths.append("registry.json")
         paths.extend(semantic_publication.get("paths") or ("semantic",))
+        if application_catalog_publication is not None:
+            paths.extend(
+                application_catalog_publication.get("paths")
+                or ("semantic/catalog",)
+            )
         bounded_paths = tuple(dict.fromkeys(paths))
         changed = sorted(
             {
@@ -3091,6 +3154,7 @@ class RootDeveloperService:
             "verification": verification,
             "changed_files": changed,
             "semantic_publication": semantic_publication,
+            "application_catalog_publication": application_catalog_publication,
             "publication": receipt,
         }
 

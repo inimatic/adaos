@@ -81,6 +81,10 @@ class GitStableSourcePublisher:
         }
         if isinstance(result.get("semantic_publication"), Mapping):
             projected["semantic_publication"] = dict(result["semantic_publication"])
+        if isinstance(result.get("application_catalog_publication"), Mapping):
+            projected["application_catalog_publication"] = dict(
+                result["application_catalog_publication"]
+            )
         return projected
 
 
@@ -117,6 +121,7 @@ class StableSourceProjectionService:
         *,
         publisher_ref: str,
         release_notes: str,
+        require_application_catalog: bool = False,
     ) -> dict[str, Any]:
         application = self.applications.store.get_application(application_id)
         if application.publisher_ref != publisher_ref:
@@ -135,7 +140,10 @@ class StableSourceProjectionService:
                     raise StableSourceProjectionError(
                         "stable source projection identity mismatch"
                     )
-                return payload
+                if not require_application_catalog or isinstance(
+                    payload.get("application_catalog_publication"), Mapping
+                ):
+                    return payload
             result = dict(
                 self.publisher(
                     application=application.to_dict(),
@@ -164,6 +172,13 @@ class StableSourceProjectionService:
             semantic_publication = result.get("semantic_publication")
             if isinstance(semantic_publication, Mapping):
                 receipt["semantic_publication"] = dict(semantic_publication)
+            application_catalog_publication = result.get(
+                "application_catalog_publication"
+            )
+            if isinstance(application_catalog_publication, Mapping):
+                receipt["application_catalog_publication"] = dict(
+                    application_catalog_publication
+                )
             atomic_write_json(path, receipt)
         return receipt
 

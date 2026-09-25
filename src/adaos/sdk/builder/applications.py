@@ -1783,6 +1783,7 @@ def _publish_to_registry_effect(
         release_digest,
         publisher_ref=subnet_ref,
         release_notes=release_notes,
+        require_application_catalog=True,
     )
     return {
         "ok": True,

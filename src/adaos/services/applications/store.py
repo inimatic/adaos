@@ -224,6 +224,149 @@ class ApplicationStore:
             atomic_write_json(path, payload)
         return value
 
+    def import_public_registry_release(
+        self,
+        application: Application,
+        release: ApplicationRelease,
+        *,
+        stable_release_digest: str,
+        local_publisher_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Import one verified public registry projection into local authority.
+
+        This is a catalog hydration boundary, not an installation.  It never
+        creates an ApplicationInstallation, RuntimeSelection, grant, credential,
+        or local provider binding.  Locally published aggregates cannot be
+        overwritten by a registry observation.
+        """
+
+        if application.visibility != "public":
+            raise ApplicationStoreError(
+                "registry Application visibility must be public"
+            )
+        if (
+            application.application_id != release.application_id
+            or application.publisher_ref != release.publisher_ref
+            or application.legacy_project_id != release.project_release.project_id
+            or stable_release_digest != release.release_digest
+        ):
+            raise ApplicationStoreError(
+                "registry Application, release, and stable channel identities differ"
+            )
+        local_publisher = str(local_publisher_ref or "").strip().lower()
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            try:
+                current = self.get_application(application.application_id)
+            except FileNotFoundError:
+                current = None
+
+            definition_status = "imported"
+            if current is not None:
+                if (
+                    current.publisher_ref != application.publisher_ref
+                    or current.legacy_project_id != application.legacy_project_id
+                ):
+                    raise ApplicationStoreError(
+                        "registry Application conflicts with local identity"
+                    )
+                if current.publisher_ref.lower() == local_publisher:
+                    if current.to_dict() != application.to_dict():
+                        raise ApplicationStoreError(
+                            "registry cannot overwrite a locally published Application"
+                        )
+                    definition_status = "local_exact"
+                elif current.revision > application.revision:
+                    definition_status = "newer_local_observation"
+                elif current.revision == application.revision:
+                    if current.to_dict() != application.to_dict():
+                        raise ApplicationStoreError(
+                            "registry Application revision has conflicting content"
+                        )
+                    definition_status = "unchanged"
+                else:
+                    atomic_write_json(
+                        self._current_path(
+                            "definitions", application.application_id
+                        ),
+                        application.to_dict(),
+                    )
+                    definition_status = "updated"
+            else:
+                for item in self.list_applications():
+                    if item.legacy_project_id == application.legacy_project_id:
+                        raise ApplicationStoreError(
+                            "registry Project is already mapped to another Application"
+                        )
+                atomic_write_json(
+                    self._current_path("definitions", application.application_id),
+                    application.to_dict(),
+                )
+
+            release_path = self._release_path(
+                application.application_id, release.release_digest
+            )
+            release_payload = release.to_dict()
+            if release_path.is_file():
+                existing_release = ApplicationRelease.from_mapping(
+                    _read(release_path)
+                )
+                if existing_release.to_dict() != release_payload:
+                    raise ApplicationStoreError(
+                        "immutable registry ApplicationRelease conflict"
+                    )
+                release_status = "unchanged"
+            else:
+                release_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(release_path, release_payload)
+                release_status = "imported"
+
+            channels_path = self._channel_path(application.application_id)
+            channels = (
+                self.get_channels(application.application_id)
+                if channels_path.is_file()
+                else {
+                    "schema": "adaos.application.channel_set.v1",
+                    "application_id": application.application_id,
+                    "revision": 0,
+                    "channels": {},
+                }
+            )
+            observed_stable = (channels.get("channels") or {}).get("stable")
+            if (
+                current is not None
+                and current.publisher_ref.lower() == local_publisher
+                and observed_stable not in {None, stable_release_digest}
+            ):
+                raise ApplicationStoreError(
+                    "registry cannot move a locally published stable channel"
+                )
+            channel_status = "unchanged"
+            if observed_stable != stable_release_digest:
+                updated_channels = dict(channels.get("channels") or {})
+                updated_channels["stable"] = stable_release_digest
+                updated_channels.pop("prerelease", None)
+                atomic_write_json(
+                    channels_path,
+                    {
+                        "schema": "adaos.application.channel_set.v1",
+                        "application_id": application.application_id,
+                        "revision": int(channels.get("revision") or 0) + 1,
+                        "channels": {
+                            key: updated_channels[key]
+                            for key in sorted(updated_channels)
+                        },
+                    },
+                )
+                channel_status = "updated"
+
+        return {
+            "application_id": application.application_id,
+            "release_digest": release.release_digest,
+            "definition_status": definition_status,
+            "release_status": release_status,
+            "channel_status": channel_status,
+        }
+
     def get_release(self, application_id: str, release_digest: str) -> ApplicationRelease:
         path = self._release_path(application_id, release_digest)
         if not path.is_file():
