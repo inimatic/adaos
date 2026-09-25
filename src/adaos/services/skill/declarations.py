@@ -106,12 +106,22 @@ def load_runtime_skill_declarations(
         _append_receiver(patterns, pattern)
     projections = manifest.get("data_projections")
     routes = manifest.get("data_routes")
+    runtime = manifest.get("runtime")
+    runtime = runtime if isinstance(runtime, Mapping) else {}
+    activation = runtime.get("activation")
+    activation = activation if isinstance(activation, Mapping) else {}
+    activation_mode = str(activation.get("mode") or "eager").strip().lower()
+    if activation_mode not in {"eager", "lazy", "on_demand"}:
+        activation_mode = "on_demand"
     record = {
         "skill": name,
         "artifact_root": str(root),
         "projection_total": len(projections) if isinstance(projections, list) else 0,
         "route_total": len(routes) if isinstance(routes, list) else 0,
         "receiver_patterns": tuple(patterns),
+        "runtime_kind": str(runtime.get("kind") or "module").strip().lower(),
+        "activation_mode": activation_mode,
+        "startup_allowed": activation.get("startup_allowed") is True,
         "loaded_at": time.time(),
     }
     with _LOCK:
@@ -140,6 +150,27 @@ def runtime_skill_declarations_snapshot(skill_name: str | None = None) -> dict[s
         return {name: dict(record) for (root, name), record in _RUNTIME_DECLARATIONS.items() if root == scope}
 
 
+def runtime_service_activation_summary() -> dict[str, Any]:
+    """Return the already-loaded service activation inventory without I/O."""
+
+    snapshot = runtime_skill_declarations_snapshot()
+    services = [
+        record
+        for record in snapshot.values()
+        if str(record.get("runtime_kind") or "").strip().lower() == "service"
+    ]
+    eager = [
+        str(record.get("skill") or "").strip()
+        for record in services
+        if bool(record.get("startup_allowed"))
+        and str(record.get("activation_mode") or "eager").strip().lower() == "eager"
+    ]
+    return {
+        "known_service_total": len(services),
+        "eager_startup_skills": tuple(sorted(name for name in eager if name)),
+    }
+
+
 def clear_runtime_skill_declarations(skill_name: str | None = None) -> None:
     token = str(skill_name or "").strip()
     with _LOCK:
@@ -156,6 +187,7 @@ __all__ = [
     "clear_runtime_skill_declarations",
     "load_runtime_skill_declarations",
     "receiver_patterns_from_webui_payload",
+    "runtime_service_activation_summary",
     "runtime_skill_declarations_snapshot",
     "runtime_stream_receiver_patterns",
 ]

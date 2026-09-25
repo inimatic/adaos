@@ -28,7 +28,11 @@ if "ypy_websocket" not in sys.modules:
 
 from adaos.services import skills_loader_importlib as skills_loader_module
 from adaos.sdk.core import decorators as sdk_decorators
-from adaos.services.skill.declarations import runtime_stream_receiver_patterns
+from adaos.services.skill.declarations import (
+    clear_runtime_skill_declarations,
+    runtime_skill_declarations_snapshot,
+    runtime_stream_receiver_patterns,
+)
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 
 
@@ -329,9 +333,17 @@ def test_importlib_loader_keeps_service_handler_out_of_process_by_default(
     loader = ImportlibSkillsLoader()
     monkeypatch.setattr(loader, "_load_handler", lambda path, **_kwargs: loaded.append(path))
 
-    asyncio.run(loader.import_all_handlers(tmp_path))
+    clear_runtime_skill_declarations("service_skill")
+    try:
+        asyncio.run(loader.import_all_handlers(tmp_path))
 
-    assert loaded == []
+        assert loaded == []
+        declaration = runtime_skill_declarations_snapshot("service_skill")
+        assert declaration["runtime_kind"] == "service"
+        assert declaration["activation_mode"] == "eager"
+        assert declaration["startup_allowed"] is False
+    finally:
+        clear_runtime_skill_declarations("service_skill")
 
 
 def test_importlib_loader_imports_service_handler_when_in_process_events_are_explicit(

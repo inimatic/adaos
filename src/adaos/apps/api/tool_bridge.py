@@ -95,7 +95,9 @@ async def _ensure_on_demand_service_started(skill_name: str) -> bool:
 
     supervisor = get_service_supervisor()
     if skill_name not in supervisor._specs:
-        return False
+        await supervisor.refresh_discovered()
+        if skill_name not in supervisor._specs:
+            return False
     try:
         await supervisor.start(skill_name)
     except Exception as exc:

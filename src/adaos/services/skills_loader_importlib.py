@@ -737,12 +737,28 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             if manifest_path is not None and self._is_service_manifest(
                 manifest_path
             ) and not self._service_allows_in_process_events(manifest_path):
+                if skill_name:
+                    # Claim the selected runtime source and retain its compact
+                    # activation declaration even though the service handler
+                    # itself must not execute in the API process.
+                    selected.add(skill_name)
+                declaration_started_at = time.perf_counter()
+                await asyncio.to_thread(
+                    self._load_skill_declarations,
+                    handler,
+                    loaded_declaration_manifests,
+                    skill_name=skill_name,
+                )
+                declaration_ms = (
+                    time.perf_counter() - declaration_started_at
+                ) * 1000.0
                 timings.append(
                     self._handler_import_timing(
                         handler=handler,
                         skill_name=skill_name,
                         source=source,
                         elapsed_ms=(time.perf_counter() - handler_started_at) * 1000.0,
+                        declaration_ms=declaration_ms,
                         loaded=False,
                     )
                 )

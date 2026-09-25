@@ -56,9 +56,13 @@ def test_on_demand_service_start_only_targets_discovered_service(monkeypatch) ->
     from adaos.services.skill import service_supervisor as supervisor_module
 
     started: list[str] = []
+    refreshed: list[bool] = []
 
     class _Supervisor:
         _specs = {"service_skill": object()}
+
+        async def refresh_discovered(self) -> None:
+            refreshed.append(True)
 
         async def start(self, name: str) -> None:
             started.append(name)
@@ -76,6 +80,7 @@ def test_on_demand_service_start_only_targets_discovered_service(monkeypatch) ->
         tool_bridge_module._ensure_on_demand_service_started("service_skill")
     ) is True
     assert started == ["service_skill"]
+    assert refreshed == [True]
 
 
 def test_skill_manager_registry_initialization_runs_off_event_loop(monkeypatch) -> None:

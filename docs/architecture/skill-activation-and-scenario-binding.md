@@ -347,6 +347,16 @@ discovery/status work, not provider process startup. A first stable-tool call
 subsequently started `research_manager_skill` on demand and reached its tool in
 about 2.7 seconds.
 
+The loader now retains a compact `runtime.kind`/activation declaration even for
+service handlers that are correctly excluded from the API process. When this
+already-loaded inventory contains services but no eager startup service, the
+post-first-paint supervisor sweep is omitted entirely; service discovery moves
+to the first stable tool or authenticated service-UI request. That request
+refreshes supervisor discovery before deciding that a skill is not a service,
+so removing the empty startup sweep does not break lazy activation. A managed
+NLU install that actually adds a service still triggers the normal post-install
+sweep.
+
 Important current limitation:
 
 - AdaOS does not yet have a global activation service.

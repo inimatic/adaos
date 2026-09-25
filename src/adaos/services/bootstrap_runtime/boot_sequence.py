@@ -75,10 +75,12 @@ async def _start_services_before_managed_nlu(
     start_service_skills: Any,
     ensure_managed_nlu_service_skills: Any,
     log: logging.Logger,
+    start_initial_service_skills: bool = True,
 ) -> None:
     # Distributed and other already-installed services must not wait for an
     # optional model install or dependency repair on a slow node.
-    await start_service_skills("post_ready_start_service_skills")
+    if start_initial_service_skills:
+        await start_service_skills("post_ready_start_service_skills")
 
     install_started_at = time.time()
     state.managed_nlu_install_status = {
@@ -237,11 +239,32 @@ class BootstrapBootCoordinator:
             # Let the listener bind and reserve CPU/disk for the first desktop
             # materialization before external process discovery begins.
             await _wait_for_first_paint_before_services(log=service._log)
+            from adaos.services.skill.declarations import (
+                runtime_service_activation_summary,
+            )
+
+            service_activation = runtime_service_activation_summary()
+            known_service_total = int(
+                service_activation.get("known_service_total") or 0
+            )
+            eager_startup_skills = tuple(
+                service_activation.get("eager_startup_skills") or ()
+            )
+            start_initial_service_skills = not (
+                known_service_total > 0 and not eager_startup_skills
+            )
+            if not start_initial_service_skills:
+                service._log.info(
+                    "service skill startup discovery deferred until demand "
+                    "known_services=%s eager_services=0",
+                    known_service_total,
+                )
             await _start_services_before_managed_nlu(
                 state=app.state,
                 start_service_skills=_start_service_skills,
                 ensure_managed_nlu_service_skills=operations.ensure_managed_nlu_service_skills,
                 log=service._log,
+                start_initial_service_skills=start_initial_service_skills,
             )
 
         async def _run_release_validation_autorun(trigger: str) -> None:
