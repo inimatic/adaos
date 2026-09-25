@@ -124,31 +124,34 @@ class ApplicationDistributionService:
             if channels.get("stable")
             else None
         )
-        if stable is None:
-            observed = self._channel_or_none(candidate.project_id, "stable")
-            if observed is not None:
-                if observed.release_digest == candidate.release_digest:
-                    # Compatibility publication may already have moved the
-                    # shared Project channel before the Application aggregate
-                    # existed.  Validate the accepted Candidate against its
-                    # recorded base, then let _move_channel adopt the observed
-                    # exact release into the local Application channel set.
-                    if candidate.base_release_digest != GENESIS_RELEASE_DIGEST:
-                        try:
-                            stable = self.applications.store.get_release(
-                                application_id,
-                                candidate.base_release_digest,
-                            ).project_release
-                        except FileNotFoundError:
-                            stable = self.releases.get_release(
-                                candidate.project_id,
-                                candidate.base_release_digest,
-                            ).release
-                else:
-                    stable = self.remote.get_release(
+        observed = (
+            self._channel_or_none(candidate.project_id, "stable")
+            if stable is None or stable.release_digest != candidate.release_digest
+            else None
+        )
+        if observed is not None and observed.release_digest == candidate.release_digest:
+            # Compatibility/Workspace publication may move the shared Project
+            # channel before the Application aggregate catches up. Validate the
+            # accepted Candidate against its recorded Project base, then let
+            # _move_channel adopt the observed exact release into the lagging
+            # local Application channel. This also supports skipping a
+            # Project-only source release without inventing an ApplicationRelease.
+            if candidate.base_release_digest != GENESIS_RELEASE_DIGEST:
+                try:
+                    stable = self.applications.store.get_release(
+                        application_id,
+                        candidate.base_release_digest,
+                    ).project_release
+                except FileNotFoundError:
+                    stable = self.releases.get_release(
                         candidate.project_id,
-                        observed.release_digest,
+                        candidate.base_release_digest,
                     ).release
+        elif stable is None and observed is not None:
+            stable = self.remote.get_release(
+                candidate.project_id,
+                observed.release_digest,
+            ).release
         if stable is not None and stable.release_digest == candidate.release_digest:
             operation = self._load_operation(candidate_id)
             stable_state = (
@@ -160,6 +163,19 @@ class ApplicationDistributionService:
                 return candidate, plan
         assert_promotable(candidate, plan.release, stable)
         return candidate, plan
+
+    def project_release_is_current(self, candidate_id: str) -> bool:
+        """Verify that the exact Candidate is already the shared Project stable."""
+
+        candidate = self.candidates.load(candidate_id)
+        plan = self.releases.get_release(candidate.project_id, candidate.release_digest)
+        observed = self._channel_or_none(candidate.project_id, "stable")
+        if observed is None or observed.release_digest != candidate.release_digest:
+            return False
+        if self._remote_release(plan) is None:
+            return False
+        self._provenance(plan)
+        return True
 
     def _provenance(self, plan: ReleasePlan) -> tuple[dict[str, Any], ReleaseAttestationSet]:
         receipt = dict(self.admission.verify_release_plan(plan))

@@ -157,6 +157,11 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
         )
 
         @staticmethod
+        def project_release_is_current(candidate_id):
+            calls.append(("project_observation", candidate_id))
+            return False
+
+        @staticmethod
         def publish_trial(application_id, candidate_id, **kwargs):
             calls.append(("trial", (application_id, candidate_id, kwargs)))
             return {"mode": kwargs["mode"]}
@@ -198,8 +203,13 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
         idempotency_key="promote-mail-reader-1",
     )
 
-    assert [item[0] for item in calls] == ["project", "trial", "stable"]
-    assert calls[1][1][2]["mode"] == "link_only"
+    assert [item[0] for item in calls] == [
+        "project_observation",
+        "project",
+        "trial",
+        "stable",
+    ]
+    assert calls[2][1][2]["mode"] == "link_only"
     assert result["project_publication"]["status"] == "promoted"
     assert result["trial_publication"]["mode"] == "link_only"
     assert result["publication_verification"]["publication_allowed"] is True

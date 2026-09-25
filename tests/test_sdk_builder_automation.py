@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from adaos.sdk.builder import automation
 
@@ -224,3 +225,107 @@ def test_trial_verification_evidence_blocks_without_access_matrix_test(
         "reason": "access_matrix_test_missing",
         "task_id": task_id,
     }
+
+
+def test_trial_verification_evidence_marks_external_effects_not_applicable(
+    monkeypatch, tmp_path
+) -> None:
+    task_id = "task.01INTERNAL"
+    run_root = tmp_path / task_id
+    output = run_root / "output"
+    output.mkdir(parents=True)
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (output / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "commit_hash": "d" * 40,
+                "tests": {"status": "passed"},
+                "evidence": {
+                    "schema": "adaos.skill_factory.task_evidence_manifest.v1",
+                    "artifacts": [
+                        {
+                            "kind": "test_report",
+                            "logical_path": "test_report.json",
+                            "digest": "sha256:" + "b" * 64,
+                        },
+                        {
+                            "kind": "provenance",
+                            "logical_path": "provenance.json",
+                            "digest": "sha256:" + "c" * 64,
+                        },
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / "test_report.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "errors": [],
+                "checks": [
+                    {
+                        "kind": "checkpoint_test_contract",
+                        "path": "scenarios/applications/tests/test_application_contract.py",
+                        "ok": True,
+                    },
+                    {
+                        "kind": "checkpoint_test_contract",
+                        "path": "scenarios/applications/tests/test_behavior_contract.py",
+                        "ok": True,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    project = {
+        "components": {
+            "owned": [{"ref": "scenario:applications"}],
+            "dependencies": [],
+        },
+        "permission_profile": {"external_providers": []},
+    }
+    committed = {
+        "projects/applications/project.yaml": json.dumps(project),
+        "scenarios/applications/webui.json": "{}",
+    }
+
+    def fake_run(command, **_kwargs):
+        relative = str(command[-1]).split(":", 1)[1]
+        return SimpleNamespace(stdout=committed[relative])
+
+    service = _Service(background=True)
+    service.runs_root = tmp_path
+    service.state_dir = tmp_path / "state"
+    service.projection = lambda **_kwargs: {
+        "automation": {"status": "completed", "terminal": True, "task_id": task_id}
+    }
+    monkeypatch.setattr(automation, "_service", lambda: service)
+    monkeypatch.setattr(automation.subprocess, "run", fake_run)
+
+    evidence = automation.trial_verification_evidence(
+        object_type="scenario", object_id="applications"
+    )
+
+    assert evidence["status"] == "ready"
+    assert evidence["disclosure_evidence"] == [
+        "suite:external-effects:not-applicable:projects/applications/project.yaml"
+    ]
+
+
+def test_project_external_effect_disclosure_tracks_provider_surfaces() -> None:
+    assert not automation._project_requires_external_effect_disclosure(
+        {
+            "components": {"owned": [{"ref": "scenario:applications"}]},
+            "permission_profile": {"external_providers": []},
+        }
+    )
+    assert automation._project_requires_external_effect_disclosure(
+        {"components": {"dependencies": [{"ref": "skill:mail_provider"}]}}
+    )
+    assert automation._project_requires_external_effect_disclosure(
+        {"permission_profile": {"external_providers": [{"id": "gmail"}]}}
+    )

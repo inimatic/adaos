@@ -493,6 +493,11 @@ def trial_verification_evidence(
             "shared_delivery.public_tool_effects.strict",
         }
     ]
+    # Fail closed until the immutable Project proves that this Application has
+    # no provider-owned effect surface.  Root MCP writes are governed by their
+    # own access/plan/apply contracts and are not, by themselves, external
+    # provider effects.
+    disclosure_required = True
     if not disclosure_checks:
         source_commit = str(result.get("commit_hash") or "").strip().lower()
         workspace = run_root / "workspace"
@@ -535,6 +540,9 @@ def trial_verification_evidence(
                 )
                 webui = json.loads(committed_text(f"scenarios/{target_id}/webui.json"))
                 if isinstance(project, Mapping) and isinstance(webui, Mapping):
+                    disclosure_required = _project_requires_external_effect_disclosure(
+                        project
+                    )
                     reconstructed, reconstruction_errors = (
                         shared_delivery_effect_checks(
                             Path(service.state_dir),
@@ -580,6 +588,14 @@ def trial_verification_evidence(
                 yaml.YAMLError,
             ):
                 disclosure_checks = []
+    if not disclosure_checks and not disclosure_required:
+        disclosure_checks = [
+            {
+                "kind": "project.external_effects.not_applicable",
+                "path": f"projects/{object_id}/project.yaml",
+                "ok": True,
+            }
+        ]
     if not disclosure_checks:
         return {
             "ok": False,
@@ -603,7 +619,13 @@ def trial_verification_evidence(
             "task_id": task_id,
         }
     behavior_path = str(behavior_checks[0].get("path") or "").strip()
-    disclosure_path = str(disclosure_checks[0].get("path") or "").strip()
+    disclosure_check = disclosure_checks[0]
+    disclosure_path = str(disclosure_check.get("path") or "").strip()
+    disclosure_prefix = (
+        "suite:external-effects:not-applicable:"
+        if disclosure_check.get("kind") == "project.external_effects.not_applicable"
+        else "suite:external-effects:"
+    )
     return {
         "ok": True,
         "status": "ready",
@@ -619,10 +641,38 @@ def trial_verification_evidence(
         ),
         "pending_action_evidence": ["suite:pending-action:" + behavior_path],
         "audit_evidence": [artifact_ref(provenance_artifact, "provenance")],
-        "disclosure_evidence": ["suite:external-effects:" + disclosure_path],
+        "disclosure_evidence": [disclosure_prefix + disclosure_path],
         "redaction_evidence": ["suite:redaction:" + behavior_path],
         "evidence_manifest_schema": manifest.get("schema"),
     }
+
+
+def _project_requires_external_effect_disclosure(
+    project: Mapping[str, Any],
+) -> bool:
+    """Return whether an immutable Project owns or consumes provider effects."""
+
+    components = project.get("components")
+    if isinstance(components, Mapping):
+        for collection in ("owned", "dependencies"):
+            for item in components.get(collection) or ():
+                if not isinstance(item, Mapping):
+                    continue
+                if str(item.get("ref") or "").strip().startswith("skill:"):
+                    return True
+
+    profile = project.get("permission_profile")
+    if not isinstance(profile, Mapping):
+        return False
+    return any(
+        bool(profile.get(field))
+        for field in (
+            "external_providers",
+            "llm_model_use",
+            "notifications",
+            "background_actions",
+        )
+    )
 
 
 def reconcile_checkpoint(*, object_type: str, object_id: str) -> dict[str, Any]:

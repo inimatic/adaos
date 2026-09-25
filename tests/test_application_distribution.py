@@ -517,6 +517,84 @@ def test_adopts_compatibility_published_stable_into_application_channel(
     assert remote.upload_writes == 2
 
 
+def test_adopts_project_stable_across_application_channel_lag(
+    tmp_path: Path,
+) -> None:
+    distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
+    first, first_plan = _accepted_candidate(
+        tmp_path,
+        version="1.0.0",
+        base=None,
+        candidates=candidates,
+        releases=releases,
+        packages=packages,
+        admission=admission,
+    )
+    distribution.publish_trial(
+        "app_recipes", first.candidate_id,
+        publisher_ref="subnet:publisher", mode="link_only",
+    )
+    distribution.promote_stable(
+        "app_recipes", first.candidate_id,
+        publisher_ref="subnet:publisher", expected_stable_digest=None,
+    )
+    source_only, source_only_plan = _accepted_candidate(
+        tmp_path,
+        version="1.0.1",
+        base=first_plan,
+        candidates=candidates,
+        releases=releases,
+        packages=packages,
+        admission=admission,
+    )
+    remote.put_release(
+        source_only_plan,
+        {
+            package.digest: packages.read(package.digest)
+            for package in source_only_plan.packages
+        },
+    )
+    remote.set_channel(
+        source_only_plan,
+        "stable",
+        expected_release_digest=first.release_digest,
+    )
+    candidate, plan = _accepted_candidate(
+        tmp_path,
+        version="1.0.2",
+        base=source_only_plan,
+        candidates=candidates,
+        releases=releases,
+        packages=packages,
+        admission=admission,
+    )
+    remote.put_release(
+        plan,
+        {package.digest: packages.read(package.digest) for package in plan.packages},
+    )
+    remote.set_channel(
+        plan,
+        "stable",
+        expected_release_digest=source_only.release_digest,
+    )
+
+    assert distribution.project_release_is_current(candidate.candidate_id)
+    distribution.publish_trial(
+        "app_recipes", candidate.candidate_id,
+        publisher_ref="subnet:publisher", mode="prerelease",
+    )
+    promoted = distribution.promote_stable(
+        "app_recipes", candidate.candidate_id,
+        publisher_ref="subnet:publisher",
+        expected_stable_digest=first.release_digest,
+    )
+
+    assert promoted["channel"]["completed_via"] == "observation"
+    assert distribution.applications.store.get_channels("app_recipes")["channels"] == {
+        "stable": candidate.release_digest
+    }
+
+
 def test_unknown_upload_is_observed_before_retry(tmp_path: Path) -> None:
     distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
     candidate, _ = _accepted_candidate(

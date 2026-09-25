@@ -1,5 +1,4 @@
 from contextlib import closing
-from dataclasses import replace
 import json
 from pathlib import Path
 import sqlite3
@@ -227,8 +226,9 @@ def setup(tmp_path):
                 exposure="application", lifecycle="bound", relations=("realizes",)),),
             project_dependencies=(), entrypoints=(), compatibility={}, lifecycle={})
         release = ProjectRelease(project_id="sample", version=version, source_ref=source, components=(package,), composition_lock=composition).seal()
-        service.register_release(ApplicationRelease(application_id="sample", publisher_ref="subnet:home", project_release=release,
-            accepted_candidate_id="candidate-sample", acceptance_evidence=({"status": "passed"},), provenance_refs=(release.release_digest,), lifecycle="trial"))
+        if version == "0.1.0":
+            service.register_release(ApplicationRelease(application_id="sample", publisher_ref="subnet:home", project_release=release,
+                accepted_candidate_id="candidate-sample", acceptance_evidence=({"status": "passed"},), provenance_refs=(release.release_digest,), lifecycle="trial"))
         releases.append(release)
     old, new = releases
 
@@ -253,7 +253,8 @@ def setup(tmp_path):
     packages.materialize(new.components[0].digest, trial / "skills/worker")
     activations = TrialActivationStore(state / "artifact_pipeline/trial-activations")
     activations.save({"schema": "adaos.trial.activation.v1", "status": "active", "data_mode": "empty",
-        "candidate_ref": {"candidate_id": "candidate-sample", "release_digest": new.release_digest},
+        "candidate_ref": {"candidate_id": "candidate-sample", "release_digest": new.release_digest,
+                          "package_digest": new.components[0].digest},
         "release_ref": {"project_id": "sample", "digest": new.release_digest},
         "target": {"webspace_id": "desktop", "space_kind": "workspace"},
         "runtime_binding": {"authority": "immutable_candidate", "kind": "isolated_trial_workspace",
@@ -299,7 +300,14 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
         "version": old.version, "status": "published"}})
     refreshes = []
     def refresh(value):
-        notice = ComponentUpdateService(owner.paths.state_dir()).current_component_metadata("scenario", "sample")
+        notices = ComponentUpdateService(owner.paths.state_dir()).list_notices(
+            component_type="scenario", component_id="sample", status="active"
+        )
+        notice = next(
+            item
+            for item in notices
+            if item.get("candidate", {}).get("id") == "candidate-sample"
+        )
         assert notice["stage"] == "beta"
         assert notice["candidate"]["id"] == "candidate-sample"
         assert notice["candidate"]["release_digest"] == new.release_digest

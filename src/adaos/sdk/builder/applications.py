@@ -1723,15 +1723,25 @@ def promote_stable(
         # closure, attestations and exact attestation-set binding.  Application
         # distribution intentionally verifies those remote facts, so Finalize
         # must establish them before it creates the link/prerelease projection.
-        project_publication = projects.promote_candidate(
-            candidate_id,
-            permission_decision={
-                "approved": True,
-                "actor": actor_ref,
-                "actor_type": "user",
-                "approval_id": f"application:{application_id}:{candidate_id}:stable",
-            },
-        )
+        if distribution.project_release_is_current(candidate_id):
+            project_publication = {
+                "ok": True,
+                "status": "already_promoted",
+                "completed_via": "exact_project_channel_observation",
+                "candidate_id": candidate_id,
+                "release_digest": candidate.release_digest,
+                "package_digest": candidate.package_digest,
+            }
+        else:
+            project_publication = projects.promote_candidate(
+                candidate_id,
+                permission_decision={
+                    "approved": True,
+                    "actor": actor_ref,
+                    "actor_type": "user",
+                    "approval_id": f"application:{application_id}:{candidate_id}:stable",
+                },
+            )
         project_status = str(project_publication.get("status") or "").strip().lower()
         if project_status == "stale" or project_publication.get("error"):
             raise ValueError(
