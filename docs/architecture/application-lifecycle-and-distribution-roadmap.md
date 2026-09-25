@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-22.
+Last reviewed: 2026-09-25.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
