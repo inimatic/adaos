@@ -305,7 +305,11 @@ class NativeApplicationCBSAdmissionService:
             },
             authorities=authorities,
         )
-        catalog.put(profile)
+        # EnvironmentProfile is an installation-local observation.  The exact
+        # snapshot and digest are embedded in this admission below, but the
+        # stable ``profile:local/default`` identity must not enter the portable
+        # contract catalog: different Applications legitimately observe
+        # different provider/authority subsets on the same node.
 
         delivery_by_definition = {
             item.binding_definition_digest: item for item in deliveries

@@ -158,9 +158,10 @@ def _release(
     *,
     version: str = "1.0.0",
     updated: bool = False,
+    roleless: bool = False,
 ) -> ApplicationRelease:
     profile = _profile(updated=updated)
-    roles = _roles(updated=updated)
+    roles = () if roleless else _roles(updated=updated)
     source = ArtifactSourceRef(
         forge="github",
         repository="inimatic/family_tasks",
@@ -227,6 +228,53 @@ def _services(
     release = _release(applications)
     management = ApplicationAccessManagementService(applications)
     return applications, management, release
+
+
+def test_approved_pending_action_creates_exact_roleless_runtime_grant(
+    tmp_path: Path,
+) -> None:
+    applications = ApplicationService(ApplicationStore(tmp_path / "state"))
+    applications.register(_application())
+    release = _release(applications, roleless=True)
+    management = ApplicationAccessManagementService(applications)
+
+    grant = management.approve_missing_runtime_grant(
+        application_id=release.application_id,
+        release_digest=release.release_digest,
+        permission_profile_digest=release.permission_profile.digest,
+        subject_ref="user:owner",
+        permission_id="workspace.read",
+        approval_id="pa.runtime_action.example",
+        issuer_ref="user:owner",
+    )
+    replay = management.approve_missing_runtime_grant(
+        application_id=release.application_id,
+        release_digest=release.release_digest,
+        permission_profile_digest=release.permission_profile.digest,
+        subject_ref="user:owner",
+        permission_id="workspace.read",
+        approval_id="pa.runtime_action.example",
+        issuer_ref="user:owner",
+    )
+
+    assert grant.permission_ceiling == ("workspace.read",)
+    assert grant.constraints["managed_by"] == "runtime.pending_action"
+    assert replay.grant_id == grant.grant_id
+
+
+def test_pending_action_does_not_choose_an_application_role(tmp_path: Path) -> None:
+    _, management, release = _services(tmp_path)
+
+    with pytest.raises(ApplicationAccessError, match="role selection is required"):
+        management.approve_missing_runtime_grant(
+            application_id=release.application_id,
+            release_digest=release.release_digest,
+            permission_profile_digest=release.permission_profile.digest,
+            subject_ref="user:owner",
+            permission_id="workspace.read",
+            approval_id="pa.runtime_action.roleful",
+            issuer_ref="user:owner",
+        )
 
 
 def _expires(hours: int = 2) -> str:

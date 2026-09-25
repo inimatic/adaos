@@ -936,6 +936,58 @@ class ApplicationAccessManagementService:
         )
         return _redacted_account(record)
 
+    def approve_missing_runtime_grant(
+        self,
+        *,
+        application_id: str,
+        release_digest: str,
+        permission_profile_digest: str,
+        subject_ref: str,
+        permission_id: str,
+        approval_id: str,
+        issuer_ref: str,
+    ) -> ApplicationAccessGrant:
+        """Materialize an explicitly approved, least-privilege runtime grant.
+
+        The generic runtime-action approval is not itself Application access
+        authority.  For a release without an access-role matrix, an exact
+        Pending Action may create a durable grant for only the reviewed
+        permission.  Role-bearing releases remain fail-closed because choosing
+        an Application role requires the dedicated Applications access UI.
+        """
+
+        release = self.store.get_release(application_id, release_digest)
+        profile = release.permission_profile
+        if profile.digest != str(permission_profile_digest or "").strip():
+            raise ApplicationAccessError(
+                "pending action reviewed another Application permission profile"
+            )
+        permission = str(permission_id or "").strip()
+        if permission not in profile.flat_permissions:
+            raise ApplicationAccessError(
+                "pending action permission is not declared by the Application release"
+            )
+        if release.application_roles:
+            raise ApplicationAccessError(
+                "Application role selection is required before granting runtime access"
+            )
+        approval = str(approval_id or "").strip()
+        if not approval:
+            raise ApplicationAccessError("pending action approval identity is required")
+        return self.access.grant_access(
+            application_id,
+            release_digest=release_digest,
+            subject_ref=subject_ref,
+            application_roles=(),
+            issuer_ref=issuer_ref,
+            idempotency_key=f"runtime-pending:{approval}",
+            permission_ceiling=(permission,),
+            constraints={
+                "managed_by": "runtime.pending_action",
+                "approval_id": approval,
+            },
+        )
+
     def connected_accounts(
         self,
         application_id: str | None = None,

@@ -50,7 +50,14 @@ class WebspaceBuilderPublicationService:
         stage = target["stage"]
         selected = str(target.get("scenario_id") or target.get("object_id") or "").strip()
         revision = str(target.get("candidate_id") or target.get("revision") or "").strip()
-        if not selected or not revision or (scenario_id and scenario_id != selected):
+        if scenario_id and selected and scenario_id != selected:
+            # A Preview pin belongs to the scenario it was created for.  When
+            # the webspace explicitly opens another scenario, the old pin is
+            # merely stale input and must not block ordinary materialization.
+            # Returning no override is fail-closed: bytes from the mismatched
+            # preview can never leak into the requested scenario.
+            return {}
+        if not selected or not revision:
             raise ValueError("selected preview identity does not match the requested scenario")
         if stage in {"prototype", "automation"}:
             from adaos.services.resources.prototype import prototype_webui_digest

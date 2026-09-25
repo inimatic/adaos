@@ -589,6 +589,19 @@ def test_explicit_application_manager_recipe_is_a_typed_selection_hint() -> None
     assert "recipe.kanban_board" not in {item["id"] for item in selected["items"]}
 
 
+def test_application_manager_maintenance_request_does_not_reapply_full_recipe() -> None:
+    request = (
+        "Qualify Applications publication, move Application actions into the "
+        "toolbar, remove Versions, and render the README inline."
+    )
+
+    selected = selected_ui_capabilities(request)
+
+    assert selected["qualification"]["surface_kind"] == "unspecified"
+    assert "application_manager" not in selected["qualification"]["requirements"]
+    assert "recipe.application_manager" not in selected["root_item_ids"]
+
+
 def test_application_manager_iteration_focuses_the_selected_recipe() -> None:
     request = (
         "Prototype phase 2/6: build Applications as an Extensions-style "

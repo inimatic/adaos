@@ -508,8 +508,27 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
     text = _normalized_text(request)
     literal_text_change = _literal_text_change(request)
     prototype_iteration = _prototype_iteration(request)
+    application_manager_creation = _contains_any(
+        text,
+        {
+            "create",
+            "build",
+            "implement",
+            "design",
+            "develop",
+            "complete",
+            "from scratch",
+            "full-screen",
+            "создай",
+            "создать",
+            "построй",
+            "реализуй",
+            "реализовать",
+        },
+    )
     application_manager = "recipe.application_manager" in text or (
         "applications" in text
+        and application_manager_creation
         and _contains_any(
             text,
             {"application", "mcp", "market", "installed", "extensions", "lifecycle"},
@@ -675,6 +694,10 @@ def selected_ui_capabilities(request: str, *, limit: int = 8) -> dict[str, Any]:
             str(item.get("id") or "")
             for item in search_ui_capabilities(request, limit=limit).get("items") or []
             if str(item.get("id") or "")
+            and (
+                str(item.get("id") or "") != "recipe.application_manager"
+                or bool(requirements.get("application_manager"))
+            )
         )
     root_ids = selected_ids[: max(1, limit)]
     expanded_ids = list(root_ids)

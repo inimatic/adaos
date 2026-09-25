@@ -31,6 +31,9 @@ def production_host(monkeypatch):
 def _checkpoint_state() -> dict:
     return {
         "automation": {"status": "completed", "head_task_id": "task-1"},
+        "prototype": {
+            "acceptance": {"digest": "sha256:" + "9" * 64},
+        },
         "delivery": {
             "status": "checkpoint",
             "checkpoint_change_id": "change-1",
@@ -137,6 +140,7 @@ def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> N
             "candidate_id": "candidate-1",
             "release_digest": "sha256:" + "c" * 64,
             "task_id": "task-1",
+            "source_acceptance_digest": "sha256:" + "9" * 64,
         }
     ]
     assert verification_calls == [

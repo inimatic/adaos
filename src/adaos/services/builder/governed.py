@@ -41,12 +41,16 @@ def legacy_state(workflow: Mapping[str, Any]) -> str:
     change = dict(workflow.get("change") or workflow.get("change_set") or {})
     if not change:
         return "ready"
-    publication = dict(workflow.get("publication") or {})
     delivery = dict(workflow.get("delivery") or {})
     automation = dict(workflow.get("automation") or {})
     prototype = dict(workflow.get("prototype") or {})
     change_status = str(change.get("status") or "")
-    if change_status == "published" or str(publication.get("status") or "") == "published":
+    # ``publication`` describes the stable head and may legitimately remain
+    # published while a newer Change is being prepared.  Once a Change exists,
+    # its own status and delivery are the lifecycle authority; inheriting the
+    # previous publication state would make failed Trial preparation impossible
+    # to reconcile or supersede.
+    if change_status == "published":
         return "published"
     if change_status == "superseded":
         return "superseded"

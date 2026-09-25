@@ -2261,6 +2261,101 @@ def test_call_tool_allows_approved_runtime_pending_action_retry(monkeypatch) -> 
     assert calls.count("files_skill:write_file") == 1
 
 
+def test_application_pending_approval_materializes_access_grant(monkeypatch) -> None:
+    pending_by_id: dict[str, dict[str, object]] = {}
+    materialized: list[dict[str, object]] = []
+
+    async def _list_pending_actions(
+        *, webspace_id: str | None = None, include_terminal: bool = True
+    ) -> dict[str, object]:
+        return {"by_id": pending_by_id, "active_items": [], "active": []}
+
+    async def _publish_pending_action(**kwargs) -> dict[str, object]:
+        action = {
+            "id": kwargs.get("action_id"),
+            "kind": kwargs.get("kind"),
+            "status": "pending",
+            "webspace_id": kwargs.get("webspace_id"),
+            "domain_ref": kwargs.get("domain_ref"),
+        }
+        pending_by_id[str(action["id"])] = action
+        return action
+
+    async def _materialize(**kwargs) -> dict[str, object]:
+        materialized.append(dict(kwargs))
+        return {"grant_id": "appgrant.approved"}
+
+    monkeypatch.setattr(
+        tool_bridge_module, "list_pending_actions_async", _list_pending_actions
+    )
+    monkeypatch.setattr(
+        tool_bridge_module, "publish_pending_action_async", _publish_pending_action
+    )
+    monkeypatch.setattr(
+        tool_bridge_module, "_materialize_approved_application_grant", _materialize
+    )
+    verified = {
+        "application_id": "mail_focus_reader",
+        "application_title": "Mail Focus Reader",
+        "release_digest": "sha256:" + "a" * 64,
+        "permission_profile_digest": "sha256:" + "b" * 64,
+        "subject_ref": "user:owner",
+        "holder_ref": "user:owner",
+        "permission_id": "providers.google.gmail",
+        "app_capability": "mail.messages.manage",
+    }
+    body = tool_bridge_module.ToolCall(
+        tool="gmail_provider:list_labels",
+        arguments={},
+        context={
+            "webspace_id": "desktop",
+            "_verified_application_access": verified,
+        },
+    )
+    application_gate = {
+        "decision": {
+            **verified,
+            "decision": "pending_action",
+            "reason_code": "application_grant_missing",
+        },
+        "context": verified,
+    }
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module._enforce_runtime_action_gate(
+                body=body,
+                skill_name="gmail_provider",
+                public_tool="list_labels",
+                payload=dict(body.arguments),
+                application_access=application_gate,
+                ctx=_fake_ctx(),
+            )
+        )
+
+    pending_id = excinfo.value.detail["pending_action_id"]
+    assert pending_by_id[pending_id]["webspace_id"] == "desktop"
+    pending_by_id[pending_id]["status"] = "responded"
+    pending_by_id[pending_id]["response"] = {
+        "response_action_id": "approve",
+        "responder": {"type": "user", "user_id": "owner"},
+    }
+    accepted = asyncio.run(
+        tool_bridge_module._enforce_runtime_action_gate(
+            body=body,
+            skill_name="gmail_provider",
+            public_tool="list_labels",
+            payload=dict(body.arguments),
+            application_access=application_gate,
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert accepted["approval"]["source"] == "application_pending_action"
+    assert accepted["approval"]["application_grant_id"] == "appgrant.approved"
+    assert len(materialized) == 1
+
+
 def test_scoped_runtime_action_approval_becomes_a_durable_target_grant(
     monkeypatch, tmp_path
 ) -> None:

@@ -11,6 +11,7 @@ import yaml
 
 from adaos.domain.application import Application, utc_now
 from adaos.sdk.core._ctx import require_ctx
+from adaos.sdk.developer import compositions, projects
 from adaos.services.applications import (
     ApplicationAccessManagementService,
     ApplicationDevelopmentCoordinator,
@@ -84,7 +85,6 @@ def _ensure_application_for_project(project_id: str, *, actor_ref: str) -> Appli
     application = _application_for_project(project_id)
     if application is not None:
         return application
-    from adaos.sdk.developer import compositions
 
     project = compositions.get(project_id)
     catalog = project.get("catalog") or {}
@@ -1688,12 +1688,79 @@ def promote_stable(
         application = _application(application_id, expected_revision)
         if application.publisher_ref != subnet_ref:
             raise ValueError("only the local Application publisher may promote stable")
-        return _distribution_service().promote_stable(
+        distribution = _distribution_service()
+        candidate = distribution.candidates.load(candidate_id)
+        selections = [
+            item
+            for item in distribution.applications.store.list_runtime_selections()
+            if item.application_id == application_id
+            and item.release_digest == candidate.release_digest
+            and item.source in {"local_trial", "stable_installation"}
+        ]
+        if len(selections) != 1:
+            raise ValueError(
+                "Application stable promotion requires one unambiguous exact Trial "
+                "RuntimeSelection"
+            )
+        publication_verification = _promote_local_trial_final_verification(
+            ApplicationAccessManagementService(distribution.applications),
+            application_id=application_id,
+            webspace_id=selections[0].webspace_id,
+            candidate_id=candidate_id,
+            candidate_digest=candidate.package_digest,
+            release_digest=candidate.release_digest,
+            actor_ref=actor_ref,
+            allow_completed=True,
+        )
+        channels = (
+            distribution.applications.store.get_channels(application_id).get(
+                "channels"
+            )
+            or {}
+        )
+        # A Builder Candidate initially exists only in the publisher's local
+        # release cache.  Project publication is what uploads its immutable
+        # closure, attestations and exact attestation-set binding.  Application
+        # distribution intentionally verifies those remote facts, so Finalize
+        # must establish them before it creates the link/prerelease projection.
+        project_publication = projects.promote_candidate(
+            candidate_id,
+            permission_decision={
+                "approved": True,
+                "actor": actor_ref,
+                "actor_type": "user",
+                "approval_id": f"application:{application_id}:{candidate_id}:stable",
+            },
+        )
+        project_status = str(project_publication.get("status") or "").strip().lower()
+        if project_status == "stale" or project_publication.get("error"):
+            raise ValueError(
+                "Application stable promotion could not publish the exact Project "
+                f"Candidate: {project_status or project_publication.get('error')}"
+            )
+
+        mode = "prerelease" if channels.get("stable") else "link_only"
+        trial_publication = distribution.publish_trial(
+            application_id,
+            candidate_id,
+            publisher_ref=subnet_ref,
+            mode=mode,
+            expected_prerelease_digest=(
+                str(channels.get("prerelease") or "").strip() or None
+            ),
+        )
+        promoted = distribution.promote_stable(
             application_id,
             candidate_id,
             publisher_ref=subnet_ref,
             expected_stable_digest=expected_stable_digest,
         )
+        return {
+            **dict(promoted),
+            "publication_verification": dict(publication_verification),
+            "project_publication": dict(project_publication),
+            "trial_publication": dict(trial_publication),
+        }
 
     return _execute_development(
         "promote_stable", application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,

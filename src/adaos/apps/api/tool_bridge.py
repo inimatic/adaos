@@ -481,7 +481,9 @@ def _runtime_action_fingerprint_payload(
             "tool": str(body.tool or ""),
             "skill": skill_name,
             "public_tool": public_tool,
-            "webspace_id": _resolve_tool_webspace_id(payload),
+            "webspace_id": _resolve_tool_webspace_id(
+                payload, context=body.context
+            ),
             "target_node_id": str(target_node_id or _resolve_target_node_id(payload) or "").strip(),
             "local_node_id": str(local_node_id or "").strip(),
             "dev": bool(body.dev),
@@ -697,7 +699,9 @@ def _runtime_action_domain_ref(
             "tool": str(body.tool or ""),
             "skill": skill_name,
             "public_tool": public_tool,
-            "webspace_id": _resolve_tool_webspace_id(payload),
+            "webspace_id": _resolve_tool_webspace_id(
+                payload, context=body.context
+            ),
             "target_node_id": str(target_node_id or _resolve_target_node_id(payload) or "").strip(),
             "risk_class": str(action_risk.get("risk_class") or "").strip(),
             "arguments_sha256": fingerprint,
@@ -834,6 +838,80 @@ def _pending_action_approval(action: Dict[str, Any], action_risk: Dict[str, Any]
     return None
 
 
+def _approval_actor_ref(approval: Mapping[str, Any]) -> str:
+    responder = _mapping(approval.get("responder"))
+    explicit = _first_text(
+        responder.get("ref"),
+        approval.get("approved_by"),
+        responder.get("actor_ref"),
+    )
+    if explicit:
+        return explicit if ":" in explicit else f"user:{explicit}"
+    kind = _first_text(responder.get("kind"), responder.get("type"), "user")
+    identifier = _first_text(
+        responder.get("user_id"),
+        responder.get("actor_id"),
+        responder.get("id"),
+    )
+    return f"{kind}:{identifier}" if identifier else "user:approved-operator"
+
+
+async def _materialize_approved_application_grant(
+    *,
+    application_gate: Mapping[str, Any],
+    approval: Mapping[str, Any],
+    ctx: AgentContext | None,
+) -> Dict[str, Any]:
+    decision = _mapping(application_gate.get("decision"))
+    verified = _mapping(application_gate.get("context"))
+    if str(decision.get("reason_code") or "").strip() != "application_grant_missing":
+        return {}
+    application_id = _first_text(verified.get("application_id"))
+    release_digest = _first_text(verified.get("release_digest"))
+    profile_digest = _first_text(verified.get("permission_profile_digest"))
+    subject_ref = _first_text(verified.get("subject_ref"))
+    permission_id = _first_text(verified.get("permission_id"))
+    approval_id = _first_text(approval.get("pending_action_id"), approval.get("approval_id"))
+    if not all(
+        (
+            application_id,
+            release_digest,
+            profile_digest,
+            subject_ref,
+            permission_id,
+            approval_id,
+        )
+    ):
+        return {}
+    effective_ctx = ctx or get_ctx()
+    paths = getattr(effective_ctx, "paths", None)
+    state_dir_getter = getattr(paths, "state_dir", None)
+    state_dir = getattr(effective_ctx, "authority_state_dir", None)
+    if not state_dir and callable(state_dir_getter):
+        state_dir = state_dir_getter()
+    if not state_dir:
+        return {}
+    from adaos.services.applications.access_management import (
+        ApplicationAccessManagementService,
+    )
+    from adaos.services.applications.runtime import get_application_service
+
+    management = ApplicationAccessManagementService(
+        get_application_service(Path(state_dir))
+    )
+    grant = await asyncio.to_thread(
+        management.approve_missing_runtime_grant,
+        application_id=application_id,
+        release_digest=release_digest,
+        permission_profile_digest=profile_digest,
+        subject_ref=subject_ref,
+        permission_id=permission_id,
+        approval_id=approval_id,
+        issuer_ref=_approval_actor_ref(approval),
+    )
+    return grant.to_dict()
+
+
 async def _find_runtime_action_pending_action(
     *,
     webspace_id: str,
@@ -870,7 +948,12 @@ async def _ensure_runtime_action_pending_action(
     approval_scope: Mapping[str, Any] | None = None,
     ctx: AgentContext | None = None,
 ) -> Dict[str, Any]:
-    webspace_id = _resolve_tool_webspace_id(payload)
+    # The browser keeps the active webspace in the trusted call context.  Many
+    # provider tools have no webspace argument of their own; dropping the
+    # context here publishes an approval into the process default webspace and
+    # makes an approval performed in the Application UI impossible to observe
+    # on retry.
+    webspace_id = _resolve_tool_webspace_id(payload, context=body.context)
     domain_ref = _runtime_action_domain_ref(
         body=body,
         skill_name=skill_name,
@@ -1098,13 +1181,28 @@ async def _enforce_runtime_action_gate(
         approval = _pending_action_approval(pending_action, action_risk)
         if approval:
             pending_reason = str(application_decision.get("reason_code") or "")
-            if application_decision and pending_reason not in {
-                "permission_not_granted",
-                "guardian_approval_required",
-                "device_trust_required",
-                "session_trust_required",
-            }:
-                approval = None
+            if application_decision:
+                if pending_reason == "application_grant_missing":
+                    application_grant = await _materialize_approved_application_grant(
+                        application_gate=application_gate,
+                        approval=approval,
+                        ctx=ctx,
+                    )
+                    if application_grant:
+                        approval = {
+                            **approval,
+                            "source": "application_pending_action",
+                            "application_grant_id": application_grant.get("grant_id"),
+                        }
+                    else:
+                        approval = None
+                elif pending_reason not in {
+                    "permission_not_granted",
+                    "guardian_approval_required",
+                    "device_trust_required",
+                    "session_trust_required",
+                }:
+                    approval = None
         if approval:
             if grant_ref:
                 grant = await asyncio.to_thread(
@@ -2954,7 +3052,6 @@ async def _call_tool_impl(
         )
 
     trace = attach_http_trace_headers(request.headers, response.headers)
-    setup_done_at = time.perf_counter()
     context = _mapping(body.context)
     meta = _project_tool_context_meta(_mapping(payload.get("_meta")), context)
     action_source = _first_text(meta.get("action_source"), context.get("action_source"))

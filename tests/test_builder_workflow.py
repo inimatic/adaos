@@ -487,6 +487,7 @@ def test_development_summary_is_bounded_and_read_only(
             "status": "idle",
             "candidate_id": None,
             "candidate_digest": None,
+            "release_digest": None,
             "version": None,
             "accepted": False,
             "decided_at": None,
@@ -511,6 +512,7 @@ def test_development_summary_exposes_only_matching_accepted_trial_navigation(
     service, root = workflow_project
     candidate_id = "recipes-0-2-0-candidate"
     candidate_digest = "sha256:" + "a" * 64
+    release_digest = "sha256:" + "d" * 64
     (root / "prompt_state.json").write_text(
         json.dumps(
             {
@@ -539,6 +541,7 @@ def test_development_summary_exposes_only_matching_accepted_trial_navigation(
                         "status": "accepted",
                         "candidate_id": candidate_id,
                         "package_digest": candidate_digest,
+                        "release_digest": release_digest,
                         "version": "0.2.0-beta.1",
                         "decided_at": "2026-09-07T13:00:00Z",
                     },
@@ -572,6 +575,7 @@ def test_development_summary_exposes_only_matching_accepted_trial_navigation(
         "status": "accepted",
         "candidate_id": candidate_id,
         "candidate_digest": candidate_digest,
+        "release_digest": release_digest,
         "version": "0.2.0-beta.1",
         "accepted": True,
         "decided_at": "2026-09-07T13:00:00Z",
@@ -3298,6 +3302,29 @@ def test_return_to_prototype_uses_a_new_immutable_revision(
     assert returned["automation"]["status"] == "frozen"
     assert returned["prototype"]["derived_from_automation_task"] == "task.2"
     assert returned["capabilities"]["can_preview_automation"] is True
+
+
+def test_snapshot_current_prototype_preserves_embedded_revision_sequence(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    revision_dir = root / "ui_revisions"
+    (revision_dir / "current.txt").unlink()
+    (revision_dir / "001.json").unlink()
+    webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    webui["ui"]["application"]["desktop"]["pageSchema"]["meta"] = {
+        "builder": {"proto": "034", "ui_revision": "034"}
+    }
+    (root / "webui.json").write_text(
+        json.dumps(webui),
+        encoding="utf-8",
+    )
+
+    snapshot = service.snapshot_current_prototype("scenario", "recipes")
+
+    assert snapshot["revision"] == "035"
+    assert (revision_dir / "035.json").is_file()
+    assert (revision_dir / "current.txt").read_text(encoding="utf-8").strip() == "035"
 
 
 def test_return_to_prototype_marks_checkpoint_delivery_stale(

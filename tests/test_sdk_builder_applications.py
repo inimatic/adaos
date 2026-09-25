@@ -9,7 +9,7 @@ import pytest
 from adaos.sdk.builder import applications
 from adaos.sdk.builder import automation
 from adaos.sdk.core.exporter import export
-from adaos.sdk.developer import compositions
+from adaos.sdk.developer import compositions, projects
 from adaos.domain.application import Application
 from adaos.services.applications import ApplicationDevelopmentCoordinator, ApplicationService, ApplicationStore
 
@@ -123,6 +123,86 @@ def test_create_trial_derives_and_persists_sealed_automation_evidence(
             "webspace_id": "desktop-dev",
         },
     }
+
+
+def test_promote_stable_publishes_attested_project_and_link_trial_first(
+    monkeypatch,
+) -> None:
+    application = SimpleNamespace(publisher_ref="subnet:home")
+    calls: list[tuple[str, object]] = []
+
+    class _Store:
+        @staticmethod
+        def get_channels(_application_id):
+            return {"channels": {}}
+
+        @staticmethod
+        def list_runtime_selections():
+            return (
+                SimpleNamespace(
+                    application_id="mail_reader",
+                    release_digest="sha256:" + "c" * 64,
+                    source="local_trial",
+                    webspace_id="desktop",
+                ),
+            )
+
+    class _Distribution:
+        applications = SimpleNamespace(store=_Store())
+        candidates = SimpleNamespace(
+            load=lambda _candidate_id: SimpleNamespace(
+                release_digest="sha256:" + "c" * 64,
+                package_digest="sha256:" + "d" * 64,
+            )
+        )
+
+        @staticmethod
+        def publish_trial(application_id, candidate_id, **kwargs):
+            calls.append(("trial", (application_id, candidate_id, kwargs)))
+            return {"mode": kwargs["mode"]}
+
+        @staticmethod
+        def promote_stable(application_id, candidate_id, **kwargs):
+            calls.append(("stable", (application_id, candidate_id, kwargs)))
+            return {"channel": {"release_digest": "sha256:" + "a" * 64}}
+
+    monkeypatch.setattr(applications, "_application", lambda *_args: application)
+    monkeypatch.setattr(applications, "_distribution_service", _Distribution)
+    monkeypatch.setattr(
+        applications,
+        "_promote_local_trial_final_verification",
+        lambda *_args, **_kwargs: {"publication_allowed": True},
+    )
+    monkeypatch.setattr(
+        projects,
+        "promote_candidate",
+        lambda candidate_id, **kwargs: (
+            calls.append(("project", (candidate_id, kwargs)))
+            or {"ok": True, "status": "promoted"}
+        ),
+    )
+
+    def execute(_action, _application_id, **arguments):
+        return arguments["callback"]()
+
+    monkeypatch.setattr(applications, "_execute_development", execute)
+
+    result = applications.promote_stable(
+        "mail_reader",
+        "mail-reader-0-1-0-candidate",
+        expected_stable_digest=None,
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.publish",
+        expected_revision=3,
+        idempotency_key="promote-mail-reader-1",
+    )
+
+    assert [item[0] for item in calls] == ["project", "trial", "stable"]
+    assert calls[1][1][2]["mode"] == "link_only"
+    assert result["project_publication"]["status"] == "promoted"
+    assert result["trial_publication"]["mode"] == "link_only"
+    assert result["publication_verification"]["publication_allowed"] is True
 
 
 def test_publish_to_registry_makes_stable_application_public_and_records_receipt(

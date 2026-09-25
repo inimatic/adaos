@@ -14,7 +14,9 @@ from adaos.domain.artifact_release import ArtifactSourceRef, WorkspaceLock
 from adaos.services.artifact_pipeline import BuiltArtifactPackage, build_artifact_package
 from adaos.services.builder.governed import (
     builder_change_definition,
+    canonical_command,
     compiled_builder_change_definition,
+    legacy_state,
 )
 from adaos.services.builder import workflow as builder_workflow
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
@@ -111,6 +113,26 @@ def _plan(service: BuilderWorkflowService, *, lane: str = "prototype") -> dict[s
             ],
         },
     )["workflow"]
+
+
+def test_active_change_reconciliation_is_not_masked_by_previous_publication() -> None:
+    workflow = {
+        "change": {
+            "change_id": "CH-next",
+            "status": "reconciliation_required",
+        },
+        "delivery": {"status": "unknown"},
+        "publication": {
+            "status": "published",
+            "release": "recipes@0.1.0",
+        },
+    }
+
+    assert legacy_state(workflow) == "reconciliation_required"
+    assert (
+        canonical_command("supersede_change", workflow, {})
+        == "supersede_from_reconciliation_required"
+    )
 
 
 def test_normative_builder_definition_is_compiled_and_explainable() -> None:

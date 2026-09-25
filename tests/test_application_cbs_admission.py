@@ -233,6 +233,10 @@ def test_exact_application_release_admits_every_requirement_and_plan(tmp_path: P
     )
     assert "capability:mail.messages.manage@1.0.0" in catalog["identities"]
     assert "binding-definition:mail.messages.google-gmail@1.0.0" in catalog["identities"]
+    assert all(
+        item["schema"] != "adaos.environment.profile.v1"
+        for item in catalog["records"].values()
+    )
 
     projection = ApplicationCBSService(tmp_path / "state").lifecycle_projection(
         "scenario:mail_client",

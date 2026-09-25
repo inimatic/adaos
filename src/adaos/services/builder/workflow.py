@@ -3388,6 +3388,7 @@ class BuilderWorkflowService:
                 "status": delivery_status,
                 "candidate_id": candidate_id or None,
                 "candidate_digest": candidate_digest or None,
+                "release_digest": delivery.get("release_digest"),
                 "version": delivery.get("version") or delivery.get("base_release"),
                 "accepted": trial_accepted,
                 "decided_at": delivery.get("decided_at"),
@@ -8466,7 +8467,28 @@ class BuilderWorkflowService:
             for path in revision_dir.glob("*.json")
             if path.stem.isdigit()
         ]
-        revision = f"{(max(numbers) + 1) if numbers else 1:03d}"
+        application = _mapping(_mapping(webui.get("ui")).get("application"))
+        desktop = _mapping(application.get("desktop"))
+        page_schema = _mapping(desktop.get("pageSchema"))
+        builder_meta = _mapping(_mapping(page_schema.get("meta")).get("builder"))
+        embedded_revisions = [
+            int(token)
+            for token in (
+                str(builder_meta.get("ui_revision") or "").strip(),
+                str(builder_meta.get("proto") or "").strip(),
+            )
+            if token.isdigit() and int(token) <= 999_999
+        ]
+        workflow_revision = str(
+            _mapping(self.describe(kind, object_id).get("prototype")).get(
+                "head_revision"
+            )
+            or ""
+        ).strip()
+        if workflow_revision.isdigit() and int(workflow_revision) <= 999_999:
+            embedded_revisions.append(int(workflow_revision))
+        known_revisions = [*numbers, *embedded_revisions]
+        revision = f"{(max(known_revisions) + 1) if known_revisions else 1:03d}"
         created_at = _now()
         payload = {
             "schema": "adaos.builder.ui_revision.v1",

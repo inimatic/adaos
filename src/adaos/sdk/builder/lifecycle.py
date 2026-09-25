@@ -85,6 +85,7 @@ def _admit_native_cbs_trial(
     candidate_id: str,
     release_digest: str,
     task_id: str,
+    source_acceptance_digest: str,
 ) -> dict[str, Any] | None:
     """Admit an exact CBS release before it receives Trial runtime authority."""
 
@@ -101,6 +102,15 @@ def _admit_native_cbs_trial(
     compilation = ApplicationCBSService(state_dir).inspect(application_ref)
     if compilation is None:
         return None
+    expected_acceptance = str(source_acceptance_digest or "").strip()
+    compiled_acceptance = str(
+        compilation.get("source_acceptance_digest") or ""
+    ).strip()
+    if expected_acceptance and compiled_acceptance != expected_acceptance:
+        raise ValueError(
+            "Builder Trial CBS compilation does not match the accepted Prototype; "
+            "recompile the exact accepted revision before Trial"
+        )
     artifact_root = state_dir / "artifact_pipeline"
     release_plan = ReleaseRepository(
         artifact_root / "release-cache"
@@ -162,6 +172,8 @@ def prepare_trial(
     delivery = _mapping(state.get("delivery"))
     automation_state = _mapping(state.get("automation"))
     change = _mapping(state.get("change") or state.get("change_set"))
+    prototype = _mapping(state.get("prototype"))
+    prototype_acceptance = _mapping(prototype.get("acceptance"))
     if str(automation_state.get("status") or "") != "completed":
         raise ValueError("Trial requires completed Automation")
     delivery_status = str(delivery.get("status") or "")
@@ -348,6 +360,9 @@ def prepare_trial(
                 candidate_id=candidate_id,
                 release_digest=release_digest,
                 task_id=str(automation_state.get("head_task_id") or "").strip(),
+                source_acceptance_digest=str(
+                    prototype_acceptance.get("digest") or ""
+                ).strip(),
             )
         except Exception as exc:
             workflow.transition(

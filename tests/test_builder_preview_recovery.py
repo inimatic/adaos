@@ -29,5 +29,6 @@ def test_preview_recovery_keeps_project_primary_scenario_and_revision(monkeypatc
     assert result["scenario_content_override"] == content
     assert result["materialization_identity"]["revision"] == revision
     assert result["materialization_identity"]["source_fingerprint"].startswith(stage + ":")
-    with pytest.raises(ValueError, match="identity does not match"):
-        service.selected_preview_inputs("desktop-dev", scenario_id="another", operations=None)
+    assert service.selected_preview_inputs(
+        "desktop-dev", scenario_id="another", operations=None
+    ) == {}

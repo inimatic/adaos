@@ -407,6 +407,7 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
     assert installation["required"] == ["revision"]
     development = record["properties"]["local_development"]["oneOf"][1]
     trial = development["properties"]["trial"]
+    assert "release_digest" in trial["required"]
     target = trial["properties"]["navigation_target"]["oneOf"][1]
     assert target["required"] == [
         "intent",
