@@ -611,6 +611,18 @@ class GoogleGmailProvider:
             and item.get("account_id") == declared_account_id
             and item.get("status") in {"connected", "expired"}
         ]
+        # A clean subnet has no redacted connected-account record and therefore
+        # cannot have a credential that is eligible for reuse.  Return the
+        # normal empty discovery result without touching the credential vault.
+        # Besides avoiding needless secret-store IO, this keeps an unavailable
+        # or unconfigured vault from turning "no reusable connection" into a
+        # provider outage on an Application setup surface.
+        if not shared:
+            return {
+                "ok": True,
+                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "accounts": [],
+            }
         credential = self._vault_get_json(
             self._account_key(subject, declared_account_id)
         )

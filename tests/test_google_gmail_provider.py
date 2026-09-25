@@ -381,6 +381,27 @@ def test_second_application_explicitly_attaches_the_same_vault_credential(
     assert transport.calls == []
 
 
+def test_reusable_connection_discovery_skips_vault_when_no_account_is_shared(
+    tmp_path: Path,
+) -> None:
+    provider, _vault, _transport, release = _provider(tmp_path, [])
+    vault = CountingVault()
+    provider.vault = vault
+
+    available = provider.reusable_connections(
+        application_id="gmail_mail_client",
+        release_digest=release.release_digest,
+        subject_ref="user:owner",
+    )
+
+    assert available == {
+        "ok": True,
+        "provider_id": "google.gmail",
+        "accounts": [],
+    }
+    assert vault.reads == []
+
+
 def test_dev_preview_uses_pinned_verified_provider_declaration_without_release(
     tmp_path: Path,
 ) -> None:
