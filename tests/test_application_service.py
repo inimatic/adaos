@@ -15,6 +15,7 @@ from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
     ProjectRelease,
+    ResolvedDependency,
 )
 from adaos.services.applications import (
     ApplicationPlanConflict,
@@ -69,6 +70,7 @@ def _release(
     lifecycle: str = "trial",
     permissions: tuple[str, ...] = ("workspace.read", "workspace.write"),
     with_worker: bool = False,
+    with_shared_dependency: bool = False,
 ) -> ApplicationRelease:
     source = ArtifactSourceRef(
         forge="github",
@@ -102,6 +104,19 @@ def _release(
         version=version,
         source_ref=source,
         components=components,
+        resolved_dependencies=(
+            (
+                ResolvedDependency(
+                    kind="skill",
+                    artifact_id="shared-mail-provider",
+                    version="1.0.0",
+                    package_digest=DIGEST_C,
+                    version_spec="^1",
+                ),
+            )
+            if with_shared_dependency
+            else ()
+        ),
         permissions=permissions,
         validation_evidence=({"status": "passed"},),
     ).seal()
@@ -1002,6 +1017,97 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(
     )
     assert removed.status == "succeeded"
     assert removed.result["installation"]["status"] == "removed"
+
+
+def test_install_plans_exact_shared_dependencies_and_reuses_active_reference(
+    service: ApplicationService,
+) -> None:
+    publisher_release = service.register_release(
+        _release(with_shared_dependency=True)
+    )
+    publisher_plan = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="shared-provider-publisher-install",
+        expected_revision=0,
+        release_digest=publisher_release.release_digest,
+    )
+    publisher_dependency = next(
+        item
+        for item in publisher_plan.plan["components"]
+        if item["component_ref"] == "skill:shared-mail-provider"
+    )
+    assert publisher_dependency == {
+        "component_ref": "skill:shared-mail-provider",
+        "package_digest": DIGEST_C,
+        "lifecycle": "shared",
+        "materialization": "activate",
+        "reused_from_application_ids": [],
+    }
+    service.apply_operation(
+        publisher_plan.operation_id,
+        plan_digest=publisher_plan.plan_digest,
+        idempotency_key="shared-provider-publisher-install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    service.register(_application("app_consumer", "consumer"))
+    consumer_release = service.register_release(
+        _release(
+            application_id="app_consumer",
+            project_id="consumer",
+            with_shared_dependency=True,
+        )
+    )
+    consumer_plan = service.plan_operation(
+        "app_consumer",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="shared-provider-consumer-install",
+        expected_revision=0,
+        release_digest=consumer_release.release_digest,
+    )
+    consumer_dependency = next(
+        item
+        for item in consumer_plan.plan["components"]
+        if item["component_ref"] == "skill:shared-mail-provider"
+    )
+    assert consumer_dependency["lifecycle"] == "shared"
+    assert consumer_dependency["materialization"] == "reuse"
+    assert consumer_dependency["reused_from_application_ids"] == ["app_recipes"]
+
+
+def test_workspace_adoption_requires_resolved_dependency_closure(
+    service: ApplicationService,
+) -> None:
+    from adaos.domain.artifact_release import WorkspaceLock, WorkspaceSlot
+
+    release = service.register_release(_release(with_shared_dependency=True))
+    lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-09-15T00:00:00Z",
+        slots=(
+            WorkspaceSlot(
+                slot_id="main",
+                project_id="recipes",
+                release="recipes@1.0.0",
+                release_digest=release.release_digest,
+            ),
+        ),
+        components=release.project_release.components,
+    )
+
+    with pytest.raises(ApplicationServiceError, match="dependency closure"):
+        service.reconcile_workspace_installation(
+            "app_recipes", release.release_digest, lock
+        )
 
 
 def test_protected_system_application_rejects_remove_before_plan(

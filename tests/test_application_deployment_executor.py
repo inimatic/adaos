@@ -7,6 +7,7 @@ from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
     ProjectRelease,
+    ResolvedDependency,
 )
 from adaos.domain.project_deployment import ComponentActivation, NodeInventoryRecord
 from adaos.services.applications.deployment_executor import (
@@ -80,6 +81,47 @@ def _multi_release(version: str, character: str) -> ReleasePlan:
         packages=(scenario, worker),
         bindings=(),
         reverse_consumers={},
+    )
+
+
+def _release_with_shared_dependency() -> ReleasePlan:
+    scenario = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="app",
+        version="1.0.0",
+        digest="sha256:" + "a" * 64,
+        manifest_digest="sha256:" + "f" * 64,
+        source_ref=SOURCE,
+    )
+    provider = ArtifactPackageRef(
+        kind="skill",
+        artifact_id="shared_mail_provider",
+        version="1.0.0",
+        digest="sha256:" + "c" * 64,
+        manifest_digest="sha256:" + "e" * 64,
+        source_ref=SOURCE,
+    )
+    release = ProjectRelease(
+        project_id="app",
+        version="1.0.0",
+        source_ref=SOURCE,
+        components=(scenario,),
+        resolved_dependencies=(
+            ResolvedDependency(
+                kind="skill",
+                artifact_id="shared_mail_provider",
+                version="1.0.0",
+                package_digest=provider.digest,
+                version_spec="^1",
+            ),
+        ),
+        validation_evidence=({"status": "passed"},),
+    ).seal()
+    return ReleasePlan(
+        release=release,
+        packages=(scenario, provider),
+        bindings=(),
+        reverse_consumers={"skill:shared_mail_provider": ("scenario:app",)},
     )
 
 
@@ -210,6 +252,133 @@ def test_executor_runs_install_update_remove_through_project_deployment(
         runtime.store.get_deployment("application-deployment:app_test").status
         == "removed"
     )
+
+
+def test_executor_materializes_resolved_dependency_from_exact_release_closure(
+    tmp_path: Path,
+) -> None:
+    release = _release_with_shared_dependency()
+    runtime = ProjectDeploymentRuntime(
+        store=ProjectDeploymentStore(state_dir=tmp_path),
+        releases=Releases(release),
+        inventory=Inventory(),
+        adapter=Adapter(),
+        local_node_id="node-local",
+    )
+    executor = ApplicationDeploymentExecutor(runtime=runtime, state_dir=tmp_path)
+    plan = _plan("install", release)
+    plan["components"].append(
+        {
+            "component_ref": "skill:shared_mail_provider",
+            "package_digest": release.packages[1].digest,
+            "lifecycle": "shared",
+            "materialization": "activate",
+        }
+    )
+
+    installed = executor(plan)
+
+    assert installed["status"] == "active"
+    activations, cursor = runtime.store.list_activations(
+        deployment_id="application-deployment:app_test",
+        limit=20,
+    )
+    assert cursor is None
+    assert {
+        (item.component_ref, item.package_digest, item.status)
+        for item in activations
+    } == {
+        ("scenario:app", release.packages[0].digest, "active"),
+        ("skill:shared_mail_provider", release.packages[1].digest, "active"),
+    }
+
+
+def test_executor_retains_shared_dependency_until_last_application_reference(
+    tmp_path: Path,
+) -> None:
+    release = _release_with_shared_dependency()
+    runtime = ProjectDeploymentRuntime(
+        store=ProjectDeploymentStore(state_dir=tmp_path),
+        releases=Releases(release),
+        inventory=Inventory(),
+        adapter=Adapter(),
+        local_node_id="node-local",
+    )
+    executor = ApplicationDeploymentExecutor(runtime=runtime, state_dir=tmp_path)
+    publisher_plan = _plan("install", release)
+    publisher_plan["application_id"] = "provider_publisher"
+    publisher_plan["idempotency_key"] = "publisher-install"
+    publisher_plan["components"].append(
+        {
+            "component_ref": "skill:shared_mail_provider",
+            "package_digest": release.packages[1].digest,
+            "lifecycle": "shared",
+            "materialization": "activate",
+        }
+    )
+    assert executor(publisher_plan)["status"] == "active"
+
+    publisher_remove = {
+        **publisher_plan,
+        "kind": "remove",
+        "idempotency_key": "publisher-remove",
+        "removal": {
+            "components": [
+                {
+                    "component_ref": "scenario:app",
+                    "package_digest": release.packages[0].digest,
+                    "remove_package": True,
+                },
+                {
+                    "component_ref": "skill:shared_mail_provider",
+                    "package_digest": release.packages[1].digest,
+                    "remove_package": False,
+                },
+            ]
+        },
+    }
+    assert executor(publisher_remove)["status"] == "removed"
+    retained = next(
+        item
+        for item in runtime.store.list_activations(limit=20)[0]
+        if item.component_ref == "skill:shared_mail_provider"
+    )
+    assert retained.status == "active"
+
+    consumer_plan = _plan("install", release)
+    consumer_plan["application_id"] = "provider_consumer"
+    consumer_plan["idempotency_key"] = "consumer-install"
+    consumer_plan["components"].append(
+        {
+            "component_ref": "skill:shared_mail_provider",
+            "package_digest": release.packages[1].digest,
+            "lifecycle": "shared",
+            "materialization": "reuse",
+        }
+    )
+    assert executor(consumer_plan)["status"] == "active"
+    consumer_remove = {
+        **consumer_plan,
+        "kind": "remove",
+        "idempotency_key": "consumer-remove",
+        "removal": {
+            "components": [
+                {
+                    "component_ref": "scenario:app",
+                    "package_digest": release.packages[0].digest,
+                    "remove_package": True,
+                },
+                {
+                    "component_ref": "skill:shared_mail_provider",
+                    "package_digest": release.packages[1].digest,
+                    "remove_package": True,
+                },
+            ]
+        },
+    }
+
+    assert executor(consumer_remove)["status"] == "removed"
+    assert runtime.store.get_activation(retained.activation_id).status == "removed"
 
 
 def test_executor_applies_reviewed_component_relocation_and_uninstall(

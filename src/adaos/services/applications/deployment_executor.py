@@ -379,10 +379,26 @@ class ApplicationDeploymentExecutor:
         placements = tuple(
             ComponentPlacementPolicy(
                 component_ref=str(item["component_ref"]),
-                mode="singleton",
-                required_capabilities=("project.activate",),
-                min_instances=1,
-                max_instances=1,
+                mode=(
+                    "disabled"
+                    if str(item.get("materialization") or "") == "reuse"
+                    else "singleton"
+                ),
+                required_capabilities=(
+                    ()
+                    if str(item.get("materialization") or "") == "reuse"
+                    else ("project.activate",)
+                ),
+                min_instances=(
+                    0
+                    if str(item.get("materialization") or "") == "reuse"
+                    else 1
+                ),
+                max_instances=(
+                    None
+                    if str(item.get("materialization") or "") == "reuse"
+                    else 1
+                ),
             )
             for item in plan.get("components") or ()
         )
@@ -552,6 +568,48 @@ class ApplicationDeploymentExecutor:
                     "Application activation inventory cannot be enumerated safely"
                 )
             cursor = page.activation_cursor
+        removal_policy = {
+            str(item.get("component_ref") or ""): dict(item)
+            for item in (plan.get("removal") or {}).get("components") or ()
+            if isinstance(item, Mapping)
+            and str(item.get("component_ref") or "").strip()
+        }
+        activations = [
+            item
+            for item in activations
+            if removal_policy.get(item.component_ref, {}).get(
+                "remove_package", True
+            )
+        ]
+        globally_removable = {
+            component_ref: str(policy.get("package_digest") or "")
+            for component_ref, policy in removal_policy.items()
+            if bool(policy.get("remove_package"))
+        }
+        if globally_removable:
+            observed_ids = {item.activation_id for item in activations}
+            global_cursor = None
+            while True:
+                page, next_cursor = self.runtime.store.list_activations(
+                    cursor=global_cursor,
+                    limit=200,
+                )
+                for activation in page:
+                    if (
+                        activation.activation_id not in observed_ids
+                        and activation.component_ref in globally_removable
+                        and activation.package_digest
+                        == globally_removable[activation.component_ref]
+                    ):
+                        activations.append(activation)
+                        observed_ids.add(activation.activation_id)
+                if next_cursor is None:
+                    break
+                if next_cursor == global_cursor or len(observed_ids) > 10_000:
+                    raise ApplicationDeploymentExecutorError(
+                        "shared component activation inventory cannot be enumerated safely"
+                    )
+                global_cursor = next_cursor
         results = []
         for activation in activations:
             if activation.status in {"removed", "inactive"}:

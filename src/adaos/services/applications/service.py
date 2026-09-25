@@ -117,6 +117,13 @@ class ApplicationService:
             raise ApplicationServiceError(
                 "Workspace Application package closure differs from the release"
             )
+        if any(
+            packages.get(item.key) != item.package_digest
+            for item in release.project_release.resolved_dependencies
+        ):
+            raise ApplicationServiceError(
+                "Workspace Application dependency closure differs from the release"
+            )
         refs = tuple(self._release_components(release))
         try:
             current = self.store.get_installation(application_id)
@@ -440,7 +447,7 @@ class ApplicationService:
             lifecycle_by_ref = {
                 member.ref: member.lifecycle for member in composition.members
             }
-        return [
+        components = [
             {
                 "component_ref": component.key,
                 "package_digest": component.digest,
@@ -448,6 +455,53 @@ class ApplicationService:
             }
             for component in release.project_release.components
         ]
+        by_ref = {item["component_ref"]: item for item in components}
+        for dependency in release.project_release.resolved_dependencies:
+            candidate = {
+                "component_ref": dependency.key,
+                "package_digest": dependency.package_digest,
+                "lifecycle": "shared",
+            }
+            previous = by_ref.get(dependency.key)
+            if previous is not None and previous != candidate:
+                raise ApplicationServiceError(
+                    "resolved dependency conflicts with an owned release component"
+                )
+            if previous is None:
+                components.append(candidate)
+                by_ref[dependency.key] = candidate
+        return sorted(components, key=lambda item: item["component_ref"])
+
+    def _shared_component_materialization(
+        self,
+        application_id: str,
+        components: list[dict[str, Any]],
+        *,
+        allow_reuse: bool,
+    ) -> list[dict[str, Any]]:
+        references = self.component_references()["components"]
+        result: list[dict[str, Any]] = []
+        for raw in components:
+            item = dict(raw)
+            providers = [
+                ref
+                for ref in references.get(item["component_ref"], ())
+                if ref.get("application_id") != application_id
+                and ref.get("package_digest") == item["package_digest"]
+            ]
+            reusable = bool(
+                allow_reuse and item.get("lifecycle") == "shared" and providers
+            )
+            item["materialization"] = "reuse" if reusable else "activate"
+            item["reused_from_application_ids"] = sorted(
+                {
+                    str(ref.get("application_id") or "")
+                    for ref in providers
+                    if str(ref.get("application_id") or "")
+                }
+            )
+            result.append(item)
+        return result
 
     def _component_conflicts(
         self,
@@ -778,7 +832,11 @@ class ApplicationService:
                     raise ApplicationServiceError(
                         "Trial access redemption does not authorize this installation"
                     )
-            components = self._release_components(release)
+            components = self._shared_component_materialization(
+                application_id,
+                self._release_components(release),
+                allow_reuse=operation_kind == "install",
+            )
             conflicts = self._component_conflicts(application_id, components)
             compatibility = self._compatibility_summary(release)
             if operation_kind == "update" and current is not None:

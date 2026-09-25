@@ -329,7 +329,7 @@ class ProjectDeploymentExecutor:
         release_plan: ReleasePlan,
         nodes: Mapping[str, NodeInventoryRecord],
     ) -> DeploymentOperation:
-        package_by_ref = {item.key: item for item in release_plan.release.components}
+        package_by_ref = {item.key: item for item in release_plan.packages}
         completed = {
             (node.node_id, component.component_ref)
             for node in operation.node_results

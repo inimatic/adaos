@@ -151,10 +151,10 @@ class ProjectDeploymentPlanner:
             raise ProjectDeploymentPlanningError(
                 "deployment release_digest does not match ProjectRelease"
             )
-        package_by_ref = {item.key: item for item in release.components}
-        if len(package_by_ref) != len(release.components):
+        package_by_ref = {item.key: item for item in release_plan.packages}
+        if len(package_by_ref) != len(release_plan.packages):
             raise ProjectDeploymentPlanningError(
-                "ProjectRelease components are not unique"
+                "resolved Project package closure is not unique"
             )
 
         nodes = {
@@ -184,7 +184,8 @@ class ProjectDeploymentPlanner:
             if placement.mode == "selected_nodes"
             for node_id in placement.selected_node_ids
         }
-        missing = sorted(set(package_by_ref).difference(placements))
+        owned_refs = {item.key for item in release.components}
+        missing = sorted(owned_refs.difference(placements))
         extra = sorted(set(placements).difference(package_by_ref))
         warnings.extend(f"blocked:{item}:missing_placement" for item in missing)
         warnings.extend(f"blocked:{item}:not_in_project_release" for item in extra)
