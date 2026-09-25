@@ -117,3 +117,40 @@ def test_yjs_gc_is_collected_on_owner_after_catalog_worker(monkeypatch) -> None:
     assert calls[1][1] != owner_thread
     assert calls[2][1] == owner_thread
     assert calls[3][1] == owner_thread
+
+
+def test_api_runtime_routes_cyclic_gc_to_yjs_owner_thread(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+    owner_thread = threading.current_thread().name
+    monkeypatch.setitem(sys.modules, "y_py", SimpleNamespace())
+    monkeypatch.setattr(server.gc, "isenabled", lambda: True)
+    monkeypatch.setattr(server, "_yjs_owner_gc_interval_sec", lambda: 0.0)
+    monkeypatch.setattr(
+        server.gc,
+        "disable",
+        lambda: calls.append(("disable", threading.current_thread().name)),
+    )
+    monkeypatch.setattr(
+        server.gc,
+        "collect",
+        lambda: calls.append(("collect", threading.current_thread().name)) or 1,
+    )
+    monkeypatch.setattr(
+        server.gc,
+        "enable",
+        lambda: calls.append(("enable", threading.current_thread().name)),
+    )
+    app = SimpleNamespace(state=SimpleNamespace())
+
+    async def _exercise() -> None:
+        async with server._yjs_owner_gc_runtime(app):
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+    asyncio.run(_exercise())
+
+    assert calls[0] == ("disable", owner_thread)
+    assert calls[-1] == ("enable", owner_thread)
+    assert any(name == "collect" for name, _thread in calls)
+    assert all(thread == owner_thread for _name, thread in calls)
+    assert app.state.yjs_owner_gc["active"] is False

@@ -641,6 +641,78 @@ async def _to_thread_without_yjs_cyclic_gc(func, /, *args, **kwargs):
                 gc.enable()
 
 
+def _yjs_owner_gc_interval_sec() -> float:
+    raw = str(os.getenv("ADAOS_YJS_OWNER_GC_INTERVAL_SEC") or "30").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 30.0
+    return max(5.0, min(value, 300.0))
+
+
+def _y_py_loaded() -> bool:
+    return any(name == "y_py" or name.startswith("y_py.") for name in sys.modules)
+
+
+async def _yjs_owner_gc_worker(app: FastAPI) -> None:
+    """Collect cyclic Yjs wrappers only from the API event-loop owner thread."""
+
+    owner_thread_id = threading.get_ident()
+    interval_sec = _yjs_owner_gc_interval_sec()
+    app.state.yjs_owner_gc = {
+        "active": True,
+        "owner_thread_id": owner_thread_id,
+        "interval_sec": interval_sec,
+        "collections": 0,
+        "collected": 0,
+    }
+    while True:
+        await asyncio.sleep(interval_sec)
+        started = time.perf_counter()
+        collected = int(gc.collect() or 0)
+        duration_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        state = app.state.yjs_owner_gc
+        state["collections"] = int(state.get("collections") or 0) + 1
+        state["collected"] = int(state.get("collected") or 0) + collected
+        state["last_collected"] = collected
+        state["last_duration_ms"] = duration_ms
+        state["last_completed_at"] = time.time()
+        if threading.get_ident() != owner_thread_id:
+            raise RuntimeError("Yjs cyclic collection left its owner thread")
+        if duration_ms >= 250.0:
+            logging.getLogger("adaos.yjs.owner_gc").warning(
+                "Yjs owner-thread cyclic collection slow duration_ms=%.1f collected=%d",
+                duration_ms,
+                collected,
+            )
+
+
+@asynccontextmanager
+async def _yjs_owner_gc_runtime(app: FastAPI):
+    """Prevent CPython workers from finalizing thread-affine Yjs cycles."""
+
+    if not _y_py_loaded():
+        yield
+        return
+    restore_automatic_gc = gc.isenabled()
+    if restore_automatic_gc:
+        gc.disable()
+    task = asyncio.create_task(_yjs_owner_gc_worker(app), name="yjs-owner-gc")
+    try:
+        yield
+    finally:
+        await _cancel_background_task(task)
+        try:
+            gc.collect()
+        finally:
+            app.state.yjs_owner_gc = {
+                **dict(getattr(app.state, "yjs_owner_gc", {}) or {}),
+                "active": False,
+            }
+            if restore_automatic_gc:
+                gc.enable()
+
+
 async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> None:
     """Warm optional catalogs after the API can serve persisted state."""
     started = time.perf_counter()
@@ -1967,11 +2039,12 @@ async def lifespan(app: FastAPI):
     install_yjs_unraisablehook()
     lifecycle = RuntimeApplicationLifecycle(app, runtime_context_factory=_runtime_context)
     try:
-        await lifecycle.start()
-        try:
-            yield
-        finally:
-            await lifecycle.stop()
+        async with _yjs_owner_gc_runtime(app):
+            await lifecycle.start()
+            try:
+                yield
+            finally:
+                await lifecycle.stop()
     finally:
         uninstall_yjs_unraisablehook()
 
