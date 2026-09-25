@@ -79,6 +79,24 @@ def model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[st
     return compile_prototype_model_context(brief, compact=compact)
 
 
+def semantic_revision_context(
+    document: Mapping[str, Any],
+    brief: Mapping[str, Any],
+    *,
+    source_ref: str,
+    revision: Any,
+) -> dict[str, Any]:
+    """Return a digest-addressed compact view of an existing semantic revision."""
+
+    from adaos.services.builder.prototype_context import (
+        compile_semantic_revision_model_context,
+    )
+
+    return compile_semantic_revision_model_context(
+        document, brief, source_ref=source_ref, revision=revision
+    )
+
+
 def output_locales(instruction: str, *, locale: str, existing: list[str] = (),
                    brief: Mapping[str, Any] | None = None) -> tuple[str, ...]:
     from adaos.services.builder.prototype_context import prototype_output_locales
@@ -127,6 +145,18 @@ def compile_semantic_candidate(
         brief=brief,
         project_ref=project_ref,
     )
+
+
+def expand_requirement_aliases(
+    candidate: Mapping[str, Any], *, brief: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Expand compact model coverage to the full canonical requirement set."""
+
+    from adaos.services.builder.prototype_context import (
+        expand_prototype_requirement_aliases,
+    )
+
+    return expand_prototype_requirement_aliases(candidate, brief)
 
 
 def prepare_binding_repair(candidate: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -271,9 +301,11 @@ __all__ = [
     "check_spatial_constraint",
     "compile_semantic",
     "compile_semantic_candidate",
+    "expand_requirement_aliases",
     "composition_slice",
     "automation_handoff",
     "model_context",
+    "semantic_revision_context",
     "output_locales",
     "merge_briefs",
     "normalize_semantic_candidate",

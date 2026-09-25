@@ -47,6 +47,7 @@ def process_constraint_kind(statement: str) -> str | None:
             r"(?:do not|don't|never) (?:inspect|read|copy|access)(?: (?:or|and) (?:inspect|read|copy|access))* (?:the )?(?:(?:installed|workspace|trial|stable|production|live|current)[ /]+)+(?:records|data|settings(?: values)?|configuration|credentials|secrets)(?:[, /]*(?:or |and )?(?:records|data|settings(?: values)?|configuration|credentials|secrets))*",
             r"(?:do not|don't|never) (?:inspect|read|copy|access) (?:the )?(?:installed|workspace|trial|stable|production|live|current) (?:records|data|settings|configuration|credentials|secrets)(?:[, /]*(?:or |and )?(?:records|data|settings|configuration|credentials|secrets))*?(?: into .+)?",
             r"use (?:only )?synthetic .{0,80}(?:records|data|fixtures) only",
+            r"prototype must never call .{1,160} or contain (?:real )?.{1,160}(?:credentials|tokens|mail|secrets)",
             r"(?:не читай|не копируй|не просматривай) (?:установленные|рабочие|реальные|пользовательские) (?:данные|записи|настройки|секреты)(?:[, ]+(?:и |или )?(?:данные|записи|настройки|секреты))*",
         ),
         "source_preservation": (
@@ -59,6 +60,11 @@ def process_constraint_kind(statement: str) -> str | None:
             r"make exactly one copy edit in widget [a-z0-9_.-]+(?:,? item [a-z0-9_.-]+)?: .{1,360}",
             r"(?:in )?widget [a-z0-9_.-]+(?: item [a-z0-9_.-]+)?,? change (?:only )?.{1,360}",
             r"produce one coherent prototype revision(?: containing only .{1,240})?",
+            r"correct the current .{1,160} revision \d+ after .{1,160} review",
+            r"keep all requirements and synthetic records,? but make .{1,240} changes in one revision",
+            r"the (?:wide|compact|desktop|mobile|browser) review (?:showed|found|observed|revealed) .{1,320}",
+            r"this is the single allowed chat correction",
+            r"fix (?:both|the) observed failures without expanding the product",
             r"(?:сохрани|используй) (?:существующие|текущие) языки(?: интерфейса)?",
             r"не переименовывай (?:существующие )?идентификаторы полей",
         ),
@@ -84,6 +90,9 @@ _REF_PATTERN = re.compile(
 _INLINE_CODE_PATTERN = re.compile(r"`[^`\r\n]+`")
 _DOTTED_IDENTIFIER_PATTERN = re.compile(
     r"\b[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+\b"
+)
+_VERSION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:[vV])?\d+\.\d+(?:\.\d+)*(?![A-Za-z0-9_])"
 )
 _CYRILLIC_PATTERN = re.compile(r"[\u0400-\u04ff]")
 _AUTHORING_PATTERNS = (
@@ -317,6 +326,7 @@ def _clauses(statement: str) -> list[tuple[str, int, int]]:
         *_REF_PATTERN.finditer(statement),
         *_INLINE_CODE_PATTERN.finditer(statement),
         *_DOTTED_IDENTIFIER_PATTERN.finditer(statement),
+        *_VERSION_PATTERN.finditer(statement),
     )
     for reference in protected:
         end = reference.end()
@@ -329,6 +339,13 @@ def _clauses(statement: str) -> list[tuple[str, int, int]]:
         raw = statement[match.start():match.end()]
         leading = len(raw) - len(raw.lstrip(" \t\r\n,;:-"))
         value = raw.strip(" \t\r\n,;:-.!?")
+        # A numbered-list marker terminates the preceding prose but is not a
+        # requirement of its own. Preserve offsets for the retained clause.
+        value = re.sub(r"(?:\r?\n\s*)+\d+\s*$", "", value).rstrip(
+            " \t\r\n,;:-.!?"
+        )
+        if re.fullmatch(r"\d+", value):
+            continue
         if value:
             start = match.start() + leading
             result.append((value, start, start + len(value)))
@@ -386,6 +403,25 @@ def _operation_mentions(
     ):
         matched = match.group(0).lower()
         prefix = clause[: match.start()]
+        suffix = clause[match.end():]
+        if kind == "update" and re.search(
+            r"\b(?:remove|delete)\s+(?:the\s+)?(?:generic\s+)?$",
+            prefix,
+            flags=re.IGNORECASE,
+        ):
+            # "Remove the generic Update Message modal": Update Message is a
+            # UI label, not a second mutation requested by the user.
+            continue
+        if kind in {"create", "update", "delete"} and (
+            (
+                re.search(r"\bany\s+$", prefix, flags=re.IGNORECASE)
+                and re.match(r"\s*/", suffix)
+            )
+            or re.search(r"/\s*$", prefix)
+        ):
+            # Slash-separated UI nouns under an enclosing removal request are
+            # scope, not independent create/delete operations.
+            continue
         if re.search(
             r"\b(?:must\s+not|should\s+not)\s+(?:(?:[\w-]+)\s+){0,8}$",
             prefix,
@@ -399,7 +435,6 @@ def _operation_mentions(
         ):
             continue
         if kind in {"create", "update", "assign", "transition", "delete", "archive"}:
-            suffix = clause[match.end():]
             if re.match(r"\s+no\b", suffix, flags=re.IGNORECASE):
                 continue
         # ``records`` is overwhelmingly a collection noun in product briefs.
@@ -510,6 +545,8 @@ def _extract_operations(
     jobs: list[dict[str, Any]] = []
     seen_operations: set[tuple[str, str]] = set()
     for clause, clause_start, _clause_end in _clauses(statement):
+        if process_constraint_kind(clause):
+            continue
         authoring_spans = _authoring_spans(clause)
         operation_exclusion_spans = [
             *authoring_spans,
@@ -611,7 +648,8 @@ def _extract_residual_requirements(statement: str) -> list[dict[str, Any]]:
         value_start = clause.find(value)
         if value_start < 0:
             continue
-        if _operation_mentions(
+        process_kind = process_constraint_kind(value)
+        if not process_kind and _operation_mentions(
             clause,
             [
                 *authoring_spans,
@@ -623,7 +661,7 @@ def _extract_residual_requirements(statement: str) -> list[dict[str, Any]]:
             continue
         if _REPEATED_COLLECTION_PATTERN.search(value):
             continue
-        if _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
+        if not process_kind and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
             continue
         start = clause_start + value_start
         end = start + len(value)
@@ -654,6 +692,11 @@ def _extract_representative_states(
     for pattern in _WORKFLOW_STATES_PATTERNS:
         for match in pattern.finditer(statement):
             raw = match.group("states")
+            if (
+                re.search(r"\b(?:fixtures?|definitions?)\b", raw, re.IGNORECASE)
+                and not _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(raw)
+            ):
+                continue
             states = [
                 item.strip(" \t\r\n,;:-")
                 for item in re.split(r",|\band\b|\bи\b", raw, flags=re.IGNORECASE)
@@ -683,6 +726,14 @@ def _extract_representative_states(
     for clause, _start, _end in _clauses(statement):
         value = _without_spans(clause, _authoring_spans(clause))
         if not value or not _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
+            continue
+        if process_constraint_kind(value) or re.search(
+            r"\b(?:no\s+(?:horizontal|vertical)\s+overflow|"
+            r"no\s+folders?/|without\s+expanding\s+the\s+product|"
+            r"do\s+not\s+render\s+a\s+repeated)\b",
+            value,
+            flags=re.IGNORECASE,
+        ):
             continue
         if any(state_job in value for state_job in state_jobs):
             continue

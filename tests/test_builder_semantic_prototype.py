@@ -259,6 +259,7 @@ def test_many_to_many_requires_an_explicit_link_resource() -> None:
 
 def test_generation_guidance_exposes_nested_authoring_bounds() -> None:
     guidance = semantic_prototype_generation_guidance()
+    assert "wide supporting pane" in guidance["ux_recommendations"]["editor_surface"]
     contract = semantic_prototype_candidate_contract(version="v2")
     constraints = guidance["authoring_constraints"]
     assert constraints["#/$defs/relationship/properties/label_field_refs"] == {
@@ -542,6 +543,48 @@ def test_provider_grammar_limits_requirement_refs_to_the_active_inventory() -> N
     assert brief["operations"][0]["id"] not in automation_refs
     assert brief["principal_jobs"][0]["id"] in automation_refs
     assert defs["localizedText"]["required"] == ["ru"]
+
+
+def test_compact_requirement_aliases_restore_canonical_coverage() -> None:
+    from adaos.services.builder.prototype_context import (
+        expand_prototype_requirement_aliases,
+        prototype_model_requirement_inventory,
+        prototype_requirement_inventory,
+    )
+
+    brief = compile_prototype_brief(
+        "List messages and archive the selected message."
+    )
+    full = prototype_requirement_inventory(brief)
+    compact = prototype_model_requirement_inventory(brief)
+    archive = next(
+        item
+        for item in compact
+        if item["kind"] == "operation" and "archive" in item["statement"].lower()
+    )
+    semantic_ref = {"kind": "command", "id": "archive_message"}
+
+    expanded = expand_prototype_requirement_aliases(
+        {
+            "requirement_bindings": [
+                {"requirement_ref": archive["id"], "semantic_refs": [semantic_ref]}
+            ],
+            "capability_gaps": [],
+        },
+        brief,
+    )
+
+    equivalent_refs = {
+        item["id"]
+        for item in full
+        if item["statement"].casefold() == archive["statement"].casefold()
+    }
+    bindings = {
+        item["requirement_ref"]: item["semantic_refs"]
+        for item in expanded["requirement_bindings"]
+    }
+    assert equivalent_refs == set(bindings)
+    assert all(refs == [semantic_ref] for refs in bindings.values())
 
 
 def _fixture() -> tuple[dict, dict]:

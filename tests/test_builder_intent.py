@@ -667,6 +667,101 @@ def test_brief_merge_does_not_add_confidence_to_duplicate_operations() -> None:
     assert archive["evidence"]
 
 
+def test_compact_requirement_inventory_does_not_duplicate_jobs_as_operations() -> None:
+    from adaos.services.builder.prototype_context import (
+        prototype_model_requirement_inventory,
+    )
+
+    brief = compile_prototype_brief(
+        "List messages, open one message and archive the selected message."
+    )
+    inventory = prototype_model_requirement_inventory(brief)
+
+    operation_statements = {
+        item["statement"] for item in inventory if item["kind"] == "operation"
+    }
+    assert operation_statements
+    assert not any(
+        item["kind"] == "job" and item["statement"] in operation_statements
+        for item in inventory
+    )
+
+
+def test_semantic_revision_context_is_digest_addressed_and_omits_aliases() -> None:
+    from adaos.services.builder.prototype_context import (
+        compile_semantic_revision_model_context,
+        prototype_model_requirement_inventory,
+        prototype_requirement_inventory,
+    )
+
+    brief = compile_prototype_brief(
+        "List messages and archive the selected message."
+    )
+    full = prototype_requirement_inventory(brief)
+    document = {
+        "schema": "adaos.webui.semantic.v2",
+        "requirement_bindings": [
+            {
+                "requirement_ref": item["id"],
+                "semantic_refs": [{"kind": "command", "id": "archive_message"}],
+            }
+            for item in full
+        ],
+        "capability_gaps": [],
+    }
+
+    context = compile_semantic_revision_model_context(
+        document, brief, source_ref="semantic.webui.json", revision="003"
+    )
+
+    assert context["digest"].startswith("sha256:")
+    assert context["view_digest"].startswith("sha256:")
+    assert context["view_digest"] in context["registry_ref"]
+    assert context["coverage"]["canonical_count"] == len(full)
+    assert len(context["document"]["requirement_bindings"]) == len(
+        prototype_model_requirement_inventory(brief)
+    )
+    assert context["coverage"]["omitted_alias_count"] > 0
+
+
+def test_numbered_review_correction_keeps_versions_and_drops_review_noise() -> None:
+    from adaos.services.builder.prototype_context import (
+        prototype_process_constraints,
+        prototype_requirement_inventory,
+    )
+
+    brief = compile_prototype_brief(
+        "Correct the current Mail Follow-up Queue revision 002 after the exact "
+        "wide and compact browser review. Keep all requirements and synthetic "
+        "records, but make these bounded changes in one revision:\n\n"
+        "1. The UI must expose exactly two product views. "
+        "2. Remove the generic Update Message modal and any create/delete/form "
+        "editor UI. Keep capability:mail.messages.manage ^1.0.0 provider-neutral. "
+        "This is the single allowed chat correction. The wide review showed a "
+        "repeated Connection States column. Fix both observed failures without "
+        "expanding the product."
+    )
+
+    all_requirements = [
+        item
+        for group in ("principal_jobs", "residual_requirements", "operations")
+        for item in brief[group]
+    ]
+    statements = [item["statement"] for item in all_requirements]
+    assert not any(statement.isdigit() for statement in statements)
+    assert any("^1.0.0" in statement for statement in statements)
+    assert not any(statement == "Update Message modal" for statement in statements)
+
+    process_statements = {
+        item["statement"] for item in prototype_process_constraints(brief)
+    }
+    assert any("wide review showed" in item.lower() for item in process_statements)
+    inventory_statements = {
+        item["statement"] for item in prototype_requirement_inventory(brief)
+    }
+    assert process_statements.isdisjoint(inventory_statements)
+
+
 def test_dashboard_refinement_does_not_invent_create_or_transition_jobs() -> None:
     brief = compile_prototype_brief(
         "Refine the dashboard. Do not add another top bar. "
