@@ -821,7 +821,7 @@ def test_activity_dispatch_builds_implementation_brief_from_change(monkeypatch) 
     assert "Search is deterministic." in captured["implementation_brief"]
 
 
-def test_activity_dispatch_preserves_project_composition_for_trial(monkeypatch) -> None:
+def test_activity_dispatch_infers_project_composition_for_trial(monkeypatch) -> None:
     captured: dict = {}
     sealed_evidence = {
         "ok": True,
@@ -842,6 +842,15 @@ def test_activity_dispatch_preserves_project_composition_for_trial(monkeypatch) 
         "trial_verification_evidence",
         lambda **_kwargs: sealed_evidence,
     )
+    monkeypatch.setattr(
+        lifecycle.compositions,
+        "project_for_component",
+        lambda component_ref: (
+            {"ref": "project:gmail_cbs_cleanroom"}
+            if component_ref == "scenario:gmail_cbs_cleanroom"
+            else None
+        ),
+    )
 
     lifecycle.invoke_activity_command(
         "start_trial",
@@ -851,7 +860,6 @@ def test_activity_dispatch_preserves_project_composition_for_trial(monkeypatch) 
         idempotency_key="trial-1",
         input_value={
             "webspace_id": "desktop-dev",
-            "publication_project_ref": "project:gmail_cbs_cleanroom",
             "permission_decision": True,
         },
     )

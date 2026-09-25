@@ -817,6 +817,15 @@ def invoke_activity_command(
                     or "unknown"
                 )
             )
+        publication_project_ref = str(
+            details.get("publication_project_ref") or ""
+        ).strip()
+        if not publication_project_ref:
+            project = compositions.project_for_component(
+                f"{object_type}:{object_id}"
+            )
+            if isinstance(project, Mapping):
+                publication_project_ref = str(project.get("ref") or "").strip()
         return prepare_trial(
             object_type,
             object_id,
@@ -825,10 +834,7 @@ def invoke_activity_command(
             source_webspace_id=webspace_id,
             target_webspace_id=str(details.get("target_webspace_id") or "").strip()
             or None,
-            publication_project_ref=str(
-                details.get("publication_project_ref") or ""
-            ).strip()
-            or None,
+            publication_project_ref=publication_project_ref or None,
             permission_decision=(
                 details.get("permission_decision")
                 if isinstance(details.get("permission_decision"), (bool, Mapping))
