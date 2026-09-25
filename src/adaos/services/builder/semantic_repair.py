@@ -273,6 +273,71 @@ def _state_repair_contexts(
     return contexts
 
 
+def _tighten_state_repair_predicate_schema(
+    definitions: dict[str, Any], contexts: Sequence[Mapping[str, Any]]
+) -> None:
+    """Bind repair literals to the field type and declared choice options."""
+
+    base = definitions.get("statePredicate")
+    if not isinstance(base, Mapping):
+        return
+    fields: dict[str, dict[str, Any]] = {}
+    for context in contexts:
+        for raw in context.get("fields") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            field_id = str(raw.get("id") or "").strip()
+            value_type = str(raw.get("value_type") or "").strip()
+            if not field_id or value_type not in {
+                "boolean",
+                "choice",
+                "date",
+                "number",
+                "short_text",
+            }:
+                continue
+            entry = fields.setdefault(
+                field_id, {"value_types": set(), "option_values": []}
+            )
+            entry["value_types"].add(value_type)
+            for value in raw.get("option_values") or []:
+                if value not in entry["option_values"]:
+                    entry["option_values"].append(copy.deepcopy(value))
+    if not fields:
+        return
+
+    variants: list[dict[str, Any]] = []
+    for field_id, descriptor in sorted(fields.items()):
+        value_types = set(descriptor["value_types"])
+        option_values = list(descriptor["option_values"])
+        if value_types == {"choice"} and option_values:
+            value_schema: dict[str, Any] = {"enum": option_values}
+        elif value_types == {"boolean"}:
+            value_schema = {"type": "boolean"}
+        elif value_types == {"number"}:
+            value_schema = {"type": "number"}
+        elif value_types <= {"date", "short_text"}:
+            value_schema = {"type": "string"}
+        else:
+            value_schema = {"$ref": "#/$defs/scalar"}
+        variant = copy.deepcopy(dict(base))
+        variant["properties"]["field_ref"] = {
+            "type": "string",
+            "enum": [field_id],
+        }
+        operand_variants = variant["properties"]["operand"]["anyOf"]
+        for operand in operand_variants:
+            kind = (
+                operand.get("properties", {}).get("kind", {}).get("enum")
+                if isinstance(operand, Mapping)
+                else None
+            )
+            if kind == ["value"]:
+                operand["properties"]["value"] = value_schema
+        variants.append(variant)
+    definitions["statePredicate"] = {"anyOf": variants}
+
+
 def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]], *, legacy: bool = False, version: int | None = None) -> dict[str, Any] | None:
     if version is not None and version not in (1, 2, 3, 4):
         raise BuilderWorkflowError("unsupported state repair version")
@@ -333,6 +398,7 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     definitions["view"]["properties"]["id"] = {"type": "string", "enum": [view["id"] for view in views]}
     digest = _digest(candidate)
     state_contexts = _state_repair_contexts(candidate, states, views)
+    _tighten_state_repair_predicate_schema(definitions, state_contexts)
     plan = {
         "base_sha256": digest,
         "allowed_state_ids": [state["id"] for state in states],

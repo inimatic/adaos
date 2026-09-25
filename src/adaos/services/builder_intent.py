@@ -229,6 +229,8 @@ _WORKFLOW_STATES_PATTERNS = (
 )
 _REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
     r"\b(?:empty|no|none|without|unassigned|unfinished|incomplete|draft|completed?|"
+    r"authorization[-_ ]required|auth[-_ ]required|reusable[-_ ]account[-_ ]available|"
+    r"connected|permission[-_ ]denied|provider[-_ ]error|success|"
     r"unfilled|understaffed|fully\s+staffed|blocked|disabled|loading|offline|error|failed?|forbid|prevent|overdue|late|"
     r"conflict\w*|unavailable|busy|"
     r"пуст\w*|нет|без|неназнач\w*|не\s+назнач\w*|незаверш\w*|чернов\w*|"

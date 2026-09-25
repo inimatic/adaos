@@ -790,6 +790,26 @@ def test_product_view_cardinality_and_complete_viable_are_not_operations() -> No
     assert brief["operations"] == []
 
 
+def test_explicit_provider_states_are_independent_representative_requirements() -> None:
+    brief = compile_prototype_brief(
+        "Represent loading, empty, authorization-required, "
+        "reusable-account-available, connected, offline, permission-denied, "
+        "provider-error and success states."
+    )
+
+    assert brief["representative_states"]["value"] == [
+        "loading",
+        "empty",
+        "authorization-required",
+        "reusable-account-available",
+        "connected",
+        "offline",
+        "permission-denied",
+        "provider-error",
+        "success states",
+    ]
+
+
 def test_dashboard_refinement_does_not_invent_create_or_transition_jobs() -> None:
     brief = compile_prototype_brief(
         "Refine the dashboard. Do not add another top bar. "

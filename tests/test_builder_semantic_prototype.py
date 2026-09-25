@@ -2552,6 +2552,18 @@ def test_state_repair_context_exposes_exact_typed_options_and_fixtures() -> None
     }
     assert context["fixtures"][0]["values"]["result"] == "issue"
     assert "declared option_value" in plan["task"]
+    predicate_variants = plan["output_schema"]["$defs"]["statePredicate"]["anyOf"]
+    result_predicate = next(
+        item
+        for item in predicate_variants
+        if item["properties"]["field_ref"]["enum"] == ["result"]
+    )
+    value_operand = next(
+        item
+        for item in result_predicate["properties"]["operand"]["anyOf"]
+        if item["properties"]["kind"]["enum"] == ["value"]
+    )
+    assert value_operand["properties"]["value"] == {"enum": ["ok", "issue"]}
 
 
 def test_state_repair_completes_visible_predicates_already_rendered_by_view() -> None:
