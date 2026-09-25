@@ -2,7 +2,7 @@
 
 Status: executable CRUD-first implementation and adoption guide.
 
-Last verified: 2026-09-23.
+Last verified: 2026-09-26.
 
 This document records the implemented CRUD-first scope of `CBS1` through
 `CBS5`. All non-deferred items through `CBS5` have validated-local evidence. The
@@ -301,12 +301,16 @@ setup requirement from the immutable release declaration, and Builder receives
 the exact provider authoring contract only for Gmail-related Automation.
 
 The vault key is provider/user/account scoped rather than Application scoped,
-so a credential can later be attached to a second admitted consumer without
-being copied into either package. That attachment/consent operation, the
-package-independent mail `CapabilityContract`, contract curation, registry
-reference, and resolver selection remain subsequent work. The present adapter
-must not be counted as a native reusable CBS provider in the installed-skill
-inventory or the CBS9 reuse metric.
+so a credential can be attached to another admitted consumer without being
+copied into either package. The follow-up native provider package now publishes
+the package-independent mail `CapabilityContract`, `BindingDefinition`, exact
+delivery, and portable evidence through the shared semantic registry. Local
+reuse by Gmail Mail Client, Inbox Triage, and Mail Focus Reader has exercised
+one provider-owned connected account without exposing the credential to any
+consumer. A clean subnet imported and activated the same portable identities
+and delivery without receiving a credential. This provider may now be counted
+as the first native reusable CBS provider; cross-subnet account attachment
+remains a local setup step and is not registry portability.
 
 ## Skill Adoption
 
@@ -357,7 +361,9 @@ The originally planned continuation is now validated locally:
 
 1. Builder/Application APIs expose native compilation, viability, exact
    evidence explanations, and the read-only lifecycle projection;
-2. 52 installed skills are classified; none is yet a native CBS provider;
+2. 52 installed skills are classified; the curated Gmail package is now the
+   first native reusable CBS provider, while the other classifications remain
+   inventory rather than implied contracts;
 3. `CBS6` freshness and external dependency invalidation are executable;
 4. `CBS7` proves `booking.reserve` concurrency, idempotency, partial effects,
    compensation, evidence admission, and planning;
@@ -367,9 +373,11 @@ The originally planned continuation is now validated locally:
    benchmark. Its primary cost-reduction claim is not supported by the current
    Application-local inventory.
 
-The next delivery step is therefore native capability curation with at least
-two independent consumers, followed by the unchanged benchmark. Builder
-automatic migration remains a later, separately qualified program.
+The next delivery step is therefore to expand native capability curation only
+where independent consumers justify it, then prove thin online resolution,
+resolved offline bundles, and registry explanations. The matched benchmark is
+rerun only after that usable inventory exists. Builder automatic migration
+remains a later, separately qualified program.
 
 ## Verification
 
