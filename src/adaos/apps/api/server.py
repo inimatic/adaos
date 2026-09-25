@@ -250,6 +250,16 @@ def _background_boot_enabled() -> bool:
     return _truthy_value(os.getenv("ADAOS_SUPERVISOR_ENABLED")) or _truthy_value(os.getenv("ADAOS_AUTOSTART_MODE"))
 
 
+def _post_ready_prewarm_delay_sec() -> float:
+    """Leave the first browser requests uncontended after API readiness."""
+    raw = str(os.getenv("ADAOS_POST_READY_PREWARM_DELAY_SEC") or "1.5").strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = 1.5
+    return min(30.0, max(0.0, value))
+
+
 def _runtime_event_loop_lag_monitor_enabled() -> bool:
     raw = os.getenv("ADAOS_RUNTIME_EVENT_LOOP_LAG_MONITOR")
     if raw is None:
@@ -601,6 +611,140 @@ async def _cancel_background_task(task: asyncio.Task[Any] | None, *, timeout: fl
         pass
     except Exception:
         _startup_log.warning("background startup task did not stop cleanly", exc_info=True)
+
+
+async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> None:
+    """Warm optional catalogs after the API can serve persisted state."""
+    started = time.perf_counter()
+    delay_sec = _post_ready_prewarm_delay_sec()
+    status: dict[str, Any] = {
+        "state": "waiting",
+        "started_at": time.time(),
+        "completed_at": None,
+        "delay_sec": delay_sec,
+        "phases_ms": {},
+        "errors": [],
+    }
+    app.state.post_ready_catalog_materialization_prewarm = status
+    try:
+        if delay_sec:
+            await asyncio.sleep(delay_sec)
+    except asyncio.CancelledError:
+        status["state"] = "cancelled"
+        status["completed_at"] = time.time()
+        status["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        raise
+    status["state"] = "running"
+
+    phase_started = time.perf_counter()
+    try:
+        from adaos.services.builder import BuilderProjectCatalogService
+
+        with _StartupTimer("post_ready_prewarm_builder_project_catalog"):
+            await asyncio.to_thread(
+                BuilderProjectCatalogService.from_context().list_projects,
+                limit=5000,
+            )
+    except asyncio.CancelledError:
+        status["state"] = "cancelled"
+        raise
+    except Exception as exc:
+        status["errors"].append(
+            {"phase": "builder_project_catalog", "error_type": type(exc).__name__}
+        )
+        logging.getLogger("adaos.api.server").debug(
+            "failed to prewarm Builder project catalog", exc_info=True
+        )
+    finally:
+        status["phases_ms"]["builder_project_catalog"] = round(
+            (time.perf_counter() - phase_started) * 1000.0, 3
+        )
+
+    try:
+        from adaos.services.scenario.webspace_runtime import (
+            hydrate_webspace_materialization_statuses,
+            prewarm_webspace_materialization_sources,
+        )
+
+        phase_started = time.perf_counter()
+        with _StartupTimer("post_ready_prewarm_webspace_materialization_sources"):
+            materialization_prewarm = await prewarm_webspace_materialization_sources()
+            app.state.webspace_materialization_source_prewarm = materialization_prewarm
+        status["phases_ms"]["materialization_sources"] = round(
+            (time.perf_counter() - phase_started) * 1000.0, 3
+        )
+
+        phase_started = time.perf_counter()
+        with _StartupTimer("post_ready_hydrate_webspace_materialization_statuses"):
+            hydration = await hydrate_webspace_materialization_statuses(materialization_prewarm)
+            app.state.webspace_materialization_hydration = hydration
+        status["phases_ms"]["materialization_hydration"] = round(
+            (time.perf_counter() - phase_started) * 1000.0, 3
+        )
+        hydration_items = [
+            item for item in hydration.get("webspaces") or [] if isinstance(item, dict)
+        ]
+        hydration_profile_items = [
+            item
+            for item in hydration_items
+            if not bool(item.get("deferred")) or not bool(item.get("ok", True))
+        ]
+        hydration_profile_ids = {
+            str(item.get("webspace_id") or "") for item in hydration_profile_items
+        }
+        hydration_profile_items.extend(
+            sorted(
+                (
+                    item
+                    for item in hydration_items
+                    if str(item.get("webspace_id") or "") not in hydration_profile_ids
+                ),
+                key=lambda item: float(item.get("duration_ms") or 0.0),
+                reverse=True,
+            )[:5]
+        )
+        logging.getLogger("adaos.startup").info(
+            "post-ready webspace materialization hydration profile duration_ms=%s "
+            "phases_ms=%s webspace_total=%s sampled_webspaces=%s",
+            hydration.get("duration_ms"),
+            hydration.get("phases_ms"),
+            len(hydration_items),
+            [
+                {
+                    "webspace_id": item.get("webspace_id"),
+                    "duration_ms": item.get("duration_ms"),
+                    "timings_ms": item.get("timings_ms"),
+                    "rebuild_timings_ms": item.get("rebuild_timings_ms"),
+                    "semantic_rebuild_timings_ms": item.get(
+                        "semantic_rebuild_timings_ms"
+                    ),
+                    "ydoc_timings_ms": item.get("ydoc_timings_ms"),
+                    "phase_timings_ms": item.get("phase_timings_ms"),
+                }
+                for item in hydration_profile_items
+            ],
+        )
+    except asyncio.CancelledError:
+        status["state"] = "cancelled"
+        raise
+    except Exception as exc:
+        status["errors"].append(
+            {"phase": "webspace_materialization", "error_type": type(exc).__name__}
+        )
+        logging.getLogger("adaos.api.server").warning(
+            "failed to initialize webspace materialization runtime", exc_info=True
+        )
+    finally:
+        if status["state"] != "cancelled":
+            status["state"] = "complete" if not status["errors"] else "degraded"
+        status["completed_at"] = time.time()
+        status["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        logging.getLogger("adaos.startup").info(
+            "post-ready catalog/materialization prewarm finished state=%s duration_ms=%s phases_ms=%s",
+            status["state"],
+            status["duration_ms"],
+            status["phases_ms"],
+        )
 
 
 def _artifact_observation_poll_seconds() -> float:
@@ -1229,76 +1373,6 @@ async def _runtime_context(app: FastAPI):
     # 3.6) стартуем RouterService с локальной шиной
     _mount_browser_assets_static(app)
 
-    try:
-        from adaos.services.builder import BuilderProjectCatalogService
-
-        with _StartupTimer("prewarm_builder_project_catalog"):
-            await asyncio.to_thread(BuilderProjectCatalogService.from_context().list_projects, limit=5000)
-    except Exception:
-        logging.getLogger("adaos.api.server").debug("failed to prewarm Builder project catalog", exc_info=True)
-
-    try:
-        from adaos.services.scenario.webspace_runtime import (
-            hydrate_webspace_materialization_statuses,
-            prewarm_webspace_materialization_sources,
-        )
-
-        with _StartupTimer("prewarm_webspace_materialization_sources"):
-            materialization_prewarm = await prewarm_webspace_materialization_sources()
-            app.state.webspace_materialization_source_prewarm = materialization_prewarm
-        with _StartupTimer("hydrate_webspace_materialization_statuses"):
-            hydration = await hydrate_webspace_materialization_statuses(materialization_prewarm)
-            app.state.webspace_materialization_hydration = hydration
-            hydration_items = [
-                item
-                for item in hydration.get("webspaces") or []
-                if isinstance(item, dict)
-            ]
-            hydration_profile_items = [
-                item
-                for item in hydration_items
-                if not bool(item.get("deferred")) or not bool(item.get("ok", True))
-            ]
-            hydration_profile_ids = {
-                str(item.get("webspace_id") or "") for item in hydration_profile_items
-            }
-            slow_deferred = sorted(
-                (
-                    item
-                    for item in hydration_items
-                    if str(item.get("webspace_id") or "") not in hydration_profile_ids
-                ),
-                key=lambda item: float(item.get("duration_ms") or 0.0),
-                reverse=True,
-            )[:5]
-            hydration_profile_items.extend(slow_deferred)
-            logging.getLogger("adaos.startup").info(
-                "webspace materialization hydration profile duration_ms=%s phases_ms=%s "
-                "webspace_total=%s sampled_webspaces=%s",
-                hydration.get("duration_ms"),
-                hydration.get("phases_ms"),
-                len(hydration_items),
-                [
-                    {
-                        "webspace_id": item.get("webspace_id"),
-                        "duration_ms": item.get("duration_ms"),
-                        "timings_ms": item.get("timings_ms"),
-                        "rebuild_timings_ms": item.get("rebuild_timings_ms"),
-                        "semantic_rebuild_timings_ms": item.get(
-                            "semantic_rebuild_timings_ms"
-                        ),
-                        "ydoc_timings_ms": item.get("ydoc_timings_ms"),
-                        "phase_timings_ms": item.get("phase_timings_ms"),
-                    }
-                    for item in hydration_profile_items
-                ],
-            )
-    except Exception:
-        logging.getLogger("adaos.api.server").warning(
-            "failed to initialize webspace materialization runtime",
-            exc_info=True,
-        )
-
     router_service = RouterService(eventbus=app.state.bus, base_dir=app.state.ctx.paths.base_dir())
     app.state.router_service = router_service
     # Periodic liveness staler (hub only)
@@ -1693,6 +1767,11 @@ async def _runtime_context(app: FastAPI):
             "failed to start delayed artifact verification worker",
             exc_info=True,
         )
+
+    _schedule_startup_tail(
+        _run_post_ready_catalog_and_materialization_prewarm(app),
+        name="post-ready-catalog-materialization-prewarm",
+    )
 
     try:
         yield
