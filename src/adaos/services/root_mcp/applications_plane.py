@@ -236,7 +236,18 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Create one immutable Candidate and isolated local Trial from reviewed DEV source.",
             input_schema=schema_object(
-                properties={**mutation, "source_webspace_id": source_webspace},
+                properties={
+                    **mutation,
+                    "source_webspace_id": source_webspace,
+                    "permission_decision": {
+                        "type": "boolean",
+                        "description": (
+                            "Explicit decision for permissions introduced by the Trial. "
+                            "The authenticated actor is recorded by AdaOS and cannot be "
+                            "supplied by the caller."
+                        ),
+                    },
+                },
                 required=mutation_required,
             ),
             output_schema=deepcopy(response),
@@ -3769,10 +3780,30 @@ def _handle_development_create_trial(
 ) -> dict[str, Any]:
     if dry_run:
         return {"would_create_trial": True, "request": _builder_request(arguments)}
+    permission_decision: dict[str, Any] | None = None
+    if isinstance(arguments.get("permission_decision"), bool):
+        actor_ref, _ = _context(arguments)
+        approved = arguments["permission_decision"] is True
+        permission_decision = {
+            "approved": approved,
+            "actor": actor_ref,
+            "actor_type": "user" if actor_ref.startswith("user:") else "service",
+            "approval_id": (
+                "application-trial:"
+                f"{_application_id(arguments)}:"
+                f"{str(arguments.get('idempotency_key') or '').strip()}"
+            ),
+            "reason": (
+                "explicit_trial_permission_approval"
+                if approved
+                else "explicit_trial_permission_rejection"
+            ),
+        }
     return _builder_sdk().create_trial(
         _application_id(arguments),
         source_webspace_id=str(arguments.get("source_webspace_id") or "desktop"),
         expected_revision=int(arguments.get("expected_revision") or 0),
+        permission_decision=permission_decision,
         **_mcp_mutation_context(arguments, "applications.develop"),
     )
 

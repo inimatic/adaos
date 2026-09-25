@@ -253,6 +253,10 @@ class _StubBuilderSdk:
         self.calls.append(("delete_application_development", args, kwargs))
         return {"operation_id": "appdevop.3", "status": "succeeded"}
 
+    def create_trial(self, *args, **kwargs):
+        self.calls.append(("create_trial", args, kwargs))
+        return {"operation_id": "appdevop.trial", "status": "succeeded"}
+
     def publish_to_registry(self, *args, **kwargs):
         self.calls.append(("publish_to_registry", args, kwargs))
         return {"operation_id": "appdevop.4", "status": "succeeded"}
@@ -1201,6 +1205,56 @@ def test_builder_development_mcp_forwards_narrow_authority(monkeypatch) -> None:
     assert recovered["operation"]["status"] == "succeeded"
     assert stub.calls[4][2]["capability"] == "applications.recover"
     assert stub.calls[4][2]["subnet_ref"] == "subnet:sn_home"
+
+
+def test_builder_trial_records_authenticated_permission_decision(monkeypatch) -> None:
+    stub = _StubBuilderSdk()
+    monkeypatch.setattr(applications_plane, "_builder_sdk", lambda: stub)
+
+    result = applications_plane.handlers()[
+        "applications.development.create_trial"
+    ](
+        {
+            "application_id": "gmail_cbs_cleanroom",
+            "source_webspace_id": "desktop-dev",
+            "permission_decision": True,
+            "expected_revision": 2,
+            "idempotency_key": "gmail-trial-019",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["status"] == "succeeded"
+    assert stub.calls[0][0] == "create_trial"
+    decision = stub.calls[0][2]["permission_decision"]
+    assert decision == {
+        "approved": True,
+        "actor": "user:owner",
+        "actor_type": "user",
+        "approval_id": (
+            "application-trial:gmail_cbs_cleanroom:gmail-trial-019"
+        ),
+        "reason": "explicit_trial_permission_approval",
+    }
+    assert stub.calls[0][2]["capability"] == "applications.develop"
+
+
+def test_builder_trial_omits_permission_decision_when_not_supplied(monkeypatch) -> None:
+    stub = _StubBuilderSdk()
+    monkeypatch.setattr(applications_plane, "_builder_sdk", lambda: stub)
+
+    applications_plane.handlers()["applications.development.create_trial"](
+        {
+            "application_id": "permissionless_app",
+            "expected_revision": 1,
+            "idempotency_key": "permissionless-trial-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert stub.calls[0][2]["permission_decision"] is None
 
 
 def test_applications_contract_descriptor_and_capability_profile_are_published() -> (
