@@ -42,6 +42,16 @@ class _FakeBus:
     def publish(self, event) -> None:
         self.events.append(event)
 
+    def latest_event(self, event_type: str):
+        return next(
+            (
+                event
+                for event in reversed(self.events)
+                if getattr(event, "type", None) == event_type
+            ),
+            None,
+        )
+
 
 class _FailingBus:
     def publish(self, _event) -> None:
@@ -1026,6 +1036,41 @@ def test_broadcast_event_routes_canonical_target_to_matching_member() -> None:
     assert member_1_ws.messages == []
     assert len(member_2_ws.messages) == 1
     assert member_2_ws.messages[0]["event"]["payload"]["target_node_id"] == "member:member-2"
+
+
+def test_reconnected_member_receives_retained_application_registry_revision(
+    monkeypatch,
+) -> None:
+    bus = _FakeBus()
+    bus.publish(
+        mod.DomainEvent(
+            type="applications.registry.updated",
+            payload={"index_digest": "sha256:" + "a" * 64},
+            source="registry-ci",
+            ts=123.0,
+        )
+    )
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(bus))
+    manager = mod.HubLinkManager()
+    ws = _FakeWebSocket()
+    manager._links["member-1"] = mod.HubMemberLink(
+        node_id="member-1",
+        websocket=ws,
+    )
+
+    asyncio.run(manager._push_current_application_registry_status("member-1"))
+
+    assert ws.messages == [
+        {
+            "t": "hub.event",
+            "event": {
+                "type": "applications.registry.updated",
+                "payload": {"index_digest": "sha256:" + "a" * 64},
+                "source": "registry-ci",
+                "ts": 123.0,
+            },
+        }
+    ]
 
 
 def test_register_requests_initial_member_refresh_after_ack(monkeypatch) -> None:

@@ -899,6 +899,31 @@ class HubLinkManager:
         link.last_hub_core_update_state = str(payload.get("state") or "").strip() or None
         link.last_hub_core_update_action = str(payload.get("action") or "").strip() or None
 
+    async def _push_current_application_registry_status(self, node_id: str) -> None:
+        link = await self._get_link(node_id)
+        if not link:
+            return
+        try:
+            event = get_ctx().bus.latest_event("applications.registry.updated")
+        except Exception:
+            event = None
+        if event is None:
+            return
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        await link.send_json(
+            {
+                "t": "hub.event",
+                "event": {
+                    "type": "applications.registry.updated",
+                    "payload": payload,
+                    "source": str(event.source or "hub.register"),
+                    "ts": float(event.ts or time.time()),
+                },
+            }
+        )
+        link.last_hub_event_at = time.time()
+        link.last_hub_event_type = "applications.registry.updated"
+
     async def _reconcile_member_core_update(
         self,
         node_id: str,
@@ -1032,6 +1057,14 @@ class HubLinkManager:
             await self._push_current_core_update_status(node_id)
         except Exception:
             _log.debug("failed to push current core.update.status after connect node_id=%s", node_id, exc_info=True)
+        try:
+            await self._push_current_application_registry_status(node_id)
+        except Exception:
+            _log.debug(
+                "failed to push current applications.registry.updated after connect node_id=%s",
+                node_id,
+                exc_info=True,
+            )
         try:
             await self._reconcile_member_core_update(node_id, reason="hub.member_reconcile.connect")
         except Exception:

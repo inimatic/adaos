@@ -54,6 +54,84 @@ def _import_semantic_registry(ctx, workspace_root: Path) -> dict[str, Any]:
     ).import_to_local_catalog(local_publisher_ref=local_publisher_ref)
 
 
+def _apply_automatic_application_updates(
+    ctx,
+    semantic_registry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Apply safe auto-compatible updates after the registry import commits."""
+
+    if not isinstance(semantic_registry, dict):
+        return {
+            "schema": "adaos.application.auto_update_run.v1",
+            "status": "skipped",
+            "reason": "semantic_registry_unavailable",
+        }
+    application_catalog = semantic_registry.get("application_catalog")
+    if (
+        not isinstance(application_catalog, dict)
+        or application_catalog.get("status") != "imported"
+    ):
+        return {
+            "schema": "adaos.application.auto_update_run.v1",
+            "status": "skipped",
+            "reason": "application_catalog_unavailable",
+        }
+    from adaos.services.applications import get_application_service
+    from adaos.services.applications.auto_update import ApplicationAutoUpdateService
+
+    state_dir_resolver = getattr(ctx.paths, "state_dir", None)
+    state_dir = (
+        Path(state_dir_resolver())
+        if callable(state_dir_resolver)
+        else Path(getattr(ctx.settings, "base_dir")) / ".adaos" / "state"
+    )
+    authority_state_dir = getattr(ctx, "authority_state_dir", None)
+    if authority_state_dir:
+        state_dir = Path(authority_state_dir)
+    config = getattr(ctx, "config", None)
+    subnet_id = str(
+        getattr(config, "subnet_id_value", None)
+        or getattr(config, "subnet_id", None)
+        or ""
+    ).strip()
+    if not subnet_id:
+        return {
+            "schema": "adaos.application.auto_update_run.v1",
+            "status": "skipped",
+            "reason": "subnet_identity_unavailable",
+        }
+    subnet_ref = subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
+    return ApplicationAutoUpdateService(
+        state_dir,
+        get_application_service(state_dir),
+    ).run(
+        subnet_ref=subnet_ref,
+        trigger="registry_sync",
+        registry_index_digest=str(
+            application_catalog.get("index_digest")
+            or semantic_registry.get("index_digest")
+            or ""
+        )
+        or None,
+    )
+
+
+def _automatic_application_update_result(
+    ctx,
+    semantic_registry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    try:
+        return _apply_automatic_application_updates(ctx, semantic_registry)
+    except Exception as exc:
+        _LOG.warning("automatic Application update failed after registry import", exc_info=True)
+        return {
+            "schema": "adaos.application.auto_update_run.v1",
+            "status": "failed",
+            "reason": "auto_update_runner_failed",
+            "error": {"type": type(exc).__name__, "message": str(exc)[:500]},
+        }
+
+
 def _environment_type() -> str:
     return str(os.getenv("ENV_TYPE") or os.getenv("ADAOS_ENV_TYPE") or "prod").strip().lower()
 
@@ -534,6 +612,10 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             semantic_registry = _import_semantic_registry(ctx, workspace_root)
         except Exception as exc:
             errors.append(f"semantic registry: {exc}")
+        application_auto_update = _automatic_application_update_result(
+            ctx,
+            semantic_registry,
+        )
         return {
             "ok": len(errors) == 0,
             "mode": "archive",
@@ -550,6 +632,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "errors": errors,
             "reconcile": reconcile_result,
             "semantic_registry": semantic_registry,
+            "application_auto_update": application_auto_update,
             "patterns": desired,
             "source_alignment": source_alignment,
         }
@@ -670,6 +753,11 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
             "patterns": desired,
         }
 
+    application_auto_update = _automatic_application_update_result(
+        ctx,
+        semantic_registry,
+    )
+
     return {
         "ok": True,
         "skills": skills,
@@ -684,6 +772,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         "project_materialization": project_materialization,
         "reconcile": reconcile_result,
         "semantic_registry": semantic_registry,
+        "application_auto_update": application_auto_update,
         "patterns": desired,
         "source_alignment": source_alignment,
     }

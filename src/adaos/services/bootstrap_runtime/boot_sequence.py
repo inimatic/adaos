@@ -426,6 +426,25 @@ class BootstrapBootCoordinator:
                     except Exception:
                         service._log.debug("failed to mirror core.update.status to members", exc_info=True)
 
+                def _forward_application_registry_updated_to_members(ev: Event) -> None:
+                    payload = ev.payload if isinstance(ev.payload, dict) else {}
+                    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+                    if bool(meta.get("subnet_hub_mirrored")):
+                        return
+                    try:
+                        asyncio.get_running_loop().create_task(
+                            _get_hub_link_manager().broadcast_event(
+                                event_type="applications.registry.updated",
+                                payload=payload,
+                                source=str(ev.source or "hub"),
+                            )
+                        )
+                    except Exception:
+                        service._log.debug(
+                            "failed to mirror applications.registry.updated to members",
+                            exc_info=True,
+                        )
+
                 def _forward_supervisor_update_status_raw_to_members(ev: Event) -> None:
                     payload = ev.payload if isinstance(ev.payload, dict) else {}
                     try:
@@ -521,6 +540,10 @@ class BootstrapBootCoordinator:
                         service._log.debug("failed to mirror node-targeted event=%s to members", event_type, exc_info=True)
 
                 core_bus.subscribe("core.update.status", _forward_core_update_status_to_members)
+                core_bus.subscribe(
+                    "applications.registry.updated",
+                    _forward_application_registry_updated_to_members,
+                )
                 core_bus.subscribe("supervisor.update.status.raw", _forward_supervisor_update_status_raw_to_members)
                 core_bus.subscribe("node.status", _forward_node_status_to_members)
                 core_bus.subscribe("desktop.webspace.reload", _forward_desktop_reload_to_members)

@@ -127,7 +127,7 @@ def _bounded_event_topics() -> tuple[str, ...]:
             "io.out.stream.publish,"
             "subnet.member.snapshot.changed,browser.session.changed,"
             "operations.*,"
-            "core.update.status,hub.core_update.status,"
+            "core.update.status,hub.core_update.status,applications.registry.updated,"
             "adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
         or ""
@@ -144,6 +144,7 @@ def _bounded_supersede_by_handler_topics() -> tuple[str, ...]:
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
             "io.out.stream.publish,"
             "browser.session.changed,operations.*,core.update.status,hub.core_update.status,"
+            "applications.registry.updated,"
             "adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
         or ""
@@ -172,7 +173,8 @@ def _retained_event_topics() -> tuple[str, ...]:
     raw = str(
         os.getenv(
             "ADAOS_EVENTBUS_RETAINED_TOPICS",
-            "core.update.status,hub.core_update.status,supervisor.update.status.raw",
+            "core.update.status,hub.core_update.status,supervisor.update.status.raw,"
+            "applications.registry.updated",
         )
         or ""
     ).strip()

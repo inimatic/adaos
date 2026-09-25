@@ -701,7 +701,7 @@ Builder development and consumes only public contracts.
   resumable deep link. Browser and Node pairing already complete inline;
   Telegram pairing correctly creates a network-risk Pending Action but still
   leaves its originating modal in a generic preparing state.
-- [ ] `[must]` `APP4-46` Apply auto-update and prerelease-following changes as
+- [~] `[must]` `APP4-46` Apply auto-update and prerelease-following changes as
   direct idempotent commands with disabled/in-progress/error/retry states. Do
   not expose `Save update settings` or a plan-review modal for preferences.
   When changing the effective track requires migration, snapshot restore, or
@@ -713,9 +713,19 @@ Builder development and consumes only public contracts.
   toggles update optimistically and invalidate the authoritative summary. A
   local browser/API qualification changed Family Tasks through revisions 2-5,
   observed the persisted values after each refresh, and restored the defaults
-  (`auto_update=true`, `use_prerelease=false`). The item remains open for the
-  failure/retry presentation and for a real track change that exercises the
-  migration handoff rather than only preference persistence.
+  (`auto_update=true`, `use_prerelease=false`). Core now also consumes a
+  successfully imported public Application catalog after `sys.ready` or a
+  retained `applications.registry.updated` event and runs the ordinary exact
+  Application plan/apply protocol for every enabled subscription. Automatic
+  apply is fail-closed: component conflicts, missing compatibility or
+  permission assessments, elevated authority, uncertain operations, and
+  required migrations produce a durable `review_required`/failed outcome
+  instead of changing the installation. Safe outcomes and skipped decisions
+  are recorded under `state/applications/auto_update_runs`, and registry events
+  are retained and replayed to reconnecting subnet members. Startup schedules
+  this work after readiness so it does not extend desktop first paint. The
+  item remains open for the failure/retry presentation and for a real
+  permission-elevation or migration handoff through Applications UI.
 - [x] `[must]` `APP4-47` Carry universal Application icon metadata from
   `project.yaml` through Project composition, registry projection and SDK read
   models. `ProjectRelease.catalog` is the immutable ABI boundary, so build,

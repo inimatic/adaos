@@ -728,6 +728,17 @@ Smallest coherent change set:
 
 ## Backward Compatibility and Migration Risks
 
+Implementation update (2026-09-25): a successful semantic/public Application
+catalog import now feeds a fail-closed automatic-update runner through the
+ordinary Application plan/apply service. `applications.registry.updated` is a
+bounded retained event, is forwarded by hubs, and is replayed to reconnecting
+members. `sys.ready` also schedules a post-readiness registry poll, which
+closes the Core-update path without delaying first paint. Durable receipts make
+safe applies, review gates, failures, and skips inspectable. The remaining
+distribution gap is the public Root/registry-CI emitter that publishes the new
+catalog digest into the existing root-to-zone event rail; polling remains the
+compatibility fallback until that emitter is deployed.
+
 - Keep `registry.json` backward compatible by preserving `skills` and
   `scenarios` arrays while adding Application entries and legacy Project aliases
   additively.

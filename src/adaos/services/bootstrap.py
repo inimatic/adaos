@@ -47,6 +47,7 @@ from adaos.services import named_entity_projection as _named_entity_projection  
 from adaos.services import pending_actions as _pending_actions  # ensure Pending Actions subscriptions
 from adaos.services import development_tickets as _development_tickets  # ensure Development Ticket response subscriptions
 from adaos.services import context_events as _context_events  # ensure Context Control Plane invalidation subscriptions
+from adaos.services.applications import auto_update_runtime as _application_auto_update_runtime  # ensure registry update subscriptions
 from adaos.services.bootstrap_runtime import (
     BootstrapBootCoordinator,
     BootstrapBootOperations,

@@ -389,8 +389,13 @@ install, grant, runtime, audit, and revoke flows.
   guardian approval.
 - [ ] `[must]` `AAPR6-03` Owner grants guest access through a TTL link with a
   readonly app role, proves no profile binding, and revokes live access.
-- [ ] `[must]` `AAPR6-04` Application update adds or elevates a permission and
+- [~] `[must]` `AAPR6-04` Application update adds or elevates a permission and
   a role capability; auto-update pauses for review and shows affected users.
+  The Core automatic-update runner now uses the canonical permission review
+  and refuses to apply when `approval_required=true`; the durable run receipt
+  records `permission_approval_required`. The item remains open until a real
+  published permission elevation proves affected-user presentation and the
+  reviewed resume path in Applications.
 - [ ] `[must]` `AAPR6-05` Secret/connected-account use shows missing,
   connected, revoked, and denied states without exposing secret values.
 - [ ] `[must]` `AAPR6-06` Users & Access shows the same facts from a user,
