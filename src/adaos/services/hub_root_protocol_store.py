@@ -4,9 +4,12 @@ import hashlib
 import json
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+from adaos.services.artifact_pipeline.storage import atomic_write_json
+from adaos.services.mutation_lock import mutation_lock
 from adaos.services.runtime_paths import current_state_dir
 
 _LOCK = threading.RLock()
@@ -26,6 +29,19 @@ def _streams_path() -> Path:
     return _state_root() / "streams.json"
 
 
+def _streams_lock_path() -> Path:
+    return _state_root() / "streams.lock"
+
+
+@contextmanager
+def _stream_state_lock() -> Iterator[None]:
+    """Serialize the streams read/modify/write cycle across API generations."""
+
+    with _LOCK:
+        with mutation_lock(_streams_lock_path(), timeout_s=10.0):
+            yield
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -35,10 +51,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_json(path, payload)
 
 
 def _stable_payload_hash(payload: Any) -> str:
@@ -107,7 +120,7 @@ def prepare_stream_message(
     now = time.time()
     payload_hash = _stable_payload_hash(payload)
     operation_key = f"{sid}:{payload_hash[:24]}"
-    with _LOCK:
+    with _stream_state_lock():
         state = _read_json(_streams_path())
         streams = state.setdefault("streams", {})
         entry = streams.get(sid)
@@ -197,7 +210,7 @@ def ack_stream_message(
     if not sid:
         raise ValueError("stream_id is required")
     now = time.time()
-    with _LOCK:
+    with _stream_state_lock():
         state = _read_json(_streams_path())
         streams = state.setdefault("streams", {})
         entry = streams.get(sid)
@@ -239,7 +252,7 @@ def ack_stream_message(
 
 def protocol_streams_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
     now = time.time() if now_ts is None else float(now_ts)
-    with _LOCK:
+    with _stream_state_lock():
         state = _read_json(_streams_path())
     streams = state.get("streams")
     if not isinstance(streams, dict):
