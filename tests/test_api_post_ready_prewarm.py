@@ -150,7 +150,7 @@ def test_catalog_and_materialization_prewarm_skips_for_interactive_browser(
     assert calls == []
     status = app.state.post_ready_catalog_materialization_prewarm
     assert status["state"] == "skipped"
-    assert status["skip_reason"] == "interactive_yws_clients_active"
+    assert status["skip_reason"] == "interactive_first_paint_observed"
     assert status["active_yws_connections"] == 2
 
 

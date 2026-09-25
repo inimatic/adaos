@@ -349,7 +349,7 @@ interactive window. When first paint was produced for an attached Yjs browser,
 the prewarm is skipped: the browser's on-demand reads populate the same caches.
 A headless runtime still performs it after the bounded grace period. The
 runtime exposes this decision as `state=skipped` with
-`skip_reason=interactive_yws_clients_active` rather than silently competing for
+`skip_reason=interactive_first_paint_observed` rather than silently competing for
 executor, filesystem, and SQLite capacity.
 
 ## CRDT Checkpoint Direction

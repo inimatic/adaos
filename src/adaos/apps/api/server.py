@@ -795,25 +795,24 @@ async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> N
             active_connections = active_yws_connection_total()
         except Exception:
             active_connections = 0
-        if active_connections > 0:
-            status.update(
-                {
-                    "state": "skipped",
-                    "skip_reason": "interactive_yws_clients_active",
-                    "active_yws_connections": active_connections,
-                    "completed_at": time.time(),
-                    "duration_ms": round(
-                        (time.perf_counter() - started) * 1000.0,
-                        3,
-                    ),
-                }
-            )
-            logging.getLogger("adaos.startup").info(
-                "post-ready catalog/materialization prewarm skipped "
-                "reason=interactive_yws_clients_active connections=%s",
-                active_connections,
-            )
-            return
+        status.update(
+            {
+                "state": "skipped",
+                "skip_reason": "interactive_first_paint_observed",
+                "active_yws_connections": active_connections,
+                "completed_at": time.time(),
+                "duration_ms": round(
+                    (time.perf_counter() - started) * 1000.0,
+                    3,
+                ),
+            }
+        )
+        logging.getLogger("adaos.startup").info(
+            "post-ready catalog/materialization prewarm skipped "
+            "reason=interactive_first_paint_observed connections=%s",
+            active_connections,
+        )
+        return
     status["state"] = "running"
 
     phase_started = time.perf_counter()
