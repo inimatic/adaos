@@ -433,11 +433,14 @@ def _source_fingerprint_payload(target: Path, dependencies: list[str]) -> dict[s
     return payload
 
 
-def _remove_legacy_managed_metadata(root: Path) -> None:
+def _remove_legacy_managed_metadata(root: Path) -> bool:
+    marker = root / _LEGACY_MANAGED_META
     try:
-        (root / _LEGACY_MANAGED_META).unlink(missing_ok=True)
+        existed = marker.exists()
+        marker.unlink(missing_ok=True)
+        return existed
     except OSError:
-        pass
+        return False
 
 
 def _active_runtime_selection(ctx: Any) -> tuple[SkillRuntimeEnvironment, str, str, Path] | None:
@@ -483,10 +486,10 @@ def _record_runtime_fingerprint(ctx: Any, version: str, slot: str, fingerprint: 
     env.write_version_metadata(version, metadata)
 
 
-def _prepare_slotted_runtime(target: Path, fingerprint: str) -> None:
+def _prepare_slotted_runtime(target: Path, fingerprint: str) -> bool:
     ctx = get_ctx()
     if _runtime_matches(ctx, fingerprint):
-        return
+        return False
 
     registry = None
     try:
@@ -509,6 +512,7 @@ def _prepare_slotted_runtime(target: Path, fingerprint: str) -> None:
         slot=runtime.slot,
         space="default",
     )
+    return True
 
 
 def ensure_rasa_service_skill_installed() -> Path | None:
@@ -532,19 +536,22 @@ def ensure_rasa_service_skill_installed() -> Path | None:
 
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
+        changed = False
         with resources.as_file(src_dir) as src:
             src_path = Path(src)
             if _should_refresh_template(src_path, target):
                 _copy_template_tree(src_path, target)
                 dependencies = _write_rasa_port_dependency(target, ctx)
+                changed = True
             else:
                 dependencies = _manifest_dependencies(target)
                 if not dependencies or _dependencies_need_rasa_port_refresh(dependencies, ctx):
                     dependencies = _write_rasa_port_dependency(target, ctx)
-        _remove_legacy_managed_metadata(target)
+                    changed = True
+        changed = _remove_legacy_managed_metadata(target) or changed
         meta = _source_fingerprint_payload(target, dependencies)
-        _prepare_slotted_runtime(target, str(meta["fingerprint"]))
+        changed = bool(_prepare_slotted_runtime(target, str(meta["fingerprint"]))) or changed
     except Exception:
         _log.warning("failed to install rasa_nlu_service_skill", exc_info=True)
         return None
-    return target
+    return target if changed else None

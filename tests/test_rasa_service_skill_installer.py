@@ -65,6 +65,13 @@ def test_ensure_rasa_service_skill_installed_refreshes_managed_files():
     assert (target / "custom.txt").read_text(encoding="utf-8").strip() == "keep me"
 
 
+def test_ensure_rasa_service_skill_installed_reports_noop_after_first_ensure():
+    from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed
+
+    assert ensure_rasa_service_skill_installed() is not None
+    assert ensure_rasa_service_skill_installed() is None
+
+
 def test_ensure_rasa_service_skill_installed_does_not_downgrade_newer_workspace_skill(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import rasa_skill_installer as installer

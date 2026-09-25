@@ -1216,8 +1216,17 @@ def _debug_autosync_enabled() -> bool:
     return level == "DEBUG"
 
 
-def _should_autosync_workspace_runtime(*, tool_name: str) -> bool:
+def _should_autosync_workspace_runtime(
+    *, tool_name: str, declared_read_only: bool = False
+) -> bool:
     if not _debug_autosync_enabled():
+        return False
+    # The resolved manifest is authoritative. Name heuristics only exist for
+    # legacy calls that do not carry a declared contract; a provider may use a
+    # logical entrypoint such as ``portable_list_messages`` which is read-only
+    # even though its prefix is not in the legacy vocabulary. Re-syncing such
+    # calls serializes independent provider reads behind the workspace lock.
+    if declared_read_only:
         return False
     if _is_readonly_snapshot_tool(tool_name):
         return False
@@ -1240,8 +1249,17 @@ def _workspace_runtime_lock(skill_name: str) -> threading.RLock:
         return lock
 
 
-def _workspace_runtime_guard_required(ctx: AgentContext, skill_name: str, *, tool_name: str) -> bool:
-    if not _should_autosync_workspace_runtime(tool_name=tool_name):
+def _workspace_runtime_guard_required(
+    ctx: AgentContext,
+    skill_name: str,
+    *,
+    tool_name: str,
+    declared_read_only: bool = False,
+) -> bool:
+    if not _should_autosync_workspace_runtime(
+        tool_name=tool_name,
+        declared_read_only=declared_read_only,
+    ):
         return False
     return _workspace_skill_source_exists(ctx, skill_name)
 
@@ -2053,6 +2071,7 @@ async def _authorize_application_tool_call(
             "context": verified,
             "component_capabilities": list(component_capabilities),
         }
+    from adaos.services.applications.access import ApplicationAccessError
     from adaos.services.applications.access_management import ApplicationAccessManagementService
     from adaos.services.applications.runtime import get_application_service
     from adaos.services.personalization_runtime import personalization_access_service
@@ -2078,14 +2097,33 @@ async def _authorize_application_tool_call(
         return body, None
     state_dir = Path(getattr(ctx, "authority_state_dir", None) or state_dir_getter())
     management = ApplicationAccessManagementService(get_application_service(state_dir))
-    runtime = await asyncio.to_thread(
-        management.resolve_runtime_context,
-        skill_name=skill_name,
-        requested_application_id=requested_application_id,
-        requested_release_digest=requested_release_digest,
-        requested_scenario_id=requested_scenario_id,
-        webspace_id=_resolve_tool_webspace_id(body.arguments or {}, context=body.context),
-    )
+    try:
+        runtime = await asyncio.to_thread(
+            management.resolve_runtime_context,
+            skill_name=skill_name,
+            requested_application_id=requested_application_id,
+            requested_release_digest=requested_release_digest,
+            requested_scenario_id=requested_scenario_id,
+            webspace_id=_resolve_tool_webspace_id(body.arguments or {}, context=body.context),
+        )
+    except ApplicationAccessError as exc:
+        ambiguous = "ambiguous" in str(exc).lower()
+        raise HTTPException(
+            status_code=409 if ambiguous else 403,
+            detail={
+                "error": (
+                    "application_context_ambiguous"
+                    if ambiguous
+                    else "application_context_invalid"
+                ),
+                "retryable": False,
+                "technical_detail": {
+                    "tool": body.tool,
+                    "requested_application_id": requested_application_id or None,
+                    "requested_scenario_id": requested_scenario_id or None,
+                },
+            },
+        ) from exc
     if runtime is None:
         if requested_application_id:
             raise HTTPException(
@@ -2616,6 +2654,8 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
     from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 
+    request_started_at = time.perf_counter()
+    outer_timings: dict[str, float] = {"request_started_at": request_started_at}
     request_context = _mapping(body.context)
     webspace = str(request_context.get("webspace_id") or "").strip() or _resolve_tool_webspace_id(
         body.arguments or {}, context=body.context
@@ -2627,6 +2667,7 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
         _webspace_uses_dev_runtime,
         routing,
     )
+    stage_started = time.perf_counter()
     try:
         # A DEV webspace is authoritative for its preview rail. Selecting a
         # production Trial first can otherwise bind one declarative read to an
@@ -2648,6 +2689,11 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
             response.headers["X-AdaOS-Package-Digest"] = context["runtime_selection"]["package_digest"]
     except (TrialRuntimeUnavailable, FileNotFoundError, RuntimeChannelConflict) as exc:
         raise HTTPException(status_code=409, detail={"error": "trial_runtime_unavailable", "message": str(exc)}) from exc
+    finally:
+        outer_timings["runtime_selection_ms"] = (
+            time.perf_counter() - stage_started
+        ) * 1000.0
+    stage_started = time.perf_counter()
     if resolved_manager is None:
         await _authorize_scoped_tool_call(body, ctx, trial_runtime)
     else:
@@ -2657,7 +2703,14 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
             trial_runtime,
             resolved_manager=resolved_manager,
         )
+    outer_timings["scope_admission_ms"] = (
+        time.perf_counter() - stage_started
+    ) * 1000.0
+    stage_started = time.perf_counter()
     await asyncio.to_thread(_reject_unavailable_trial_execution, body, ctx)
+    outer_timings["availability_admission_ms"] = (
+        time.perf_counter() - stage_started
+    ) * 1000.0
     resolved_timeout = _request_tool_call_timeout_s(body, request)
     if resolved_timeout is not None and resolved_timeout != body.timeout:
         body = body.model_copy(update={"timeout": resolved_timeout})
@@ -2667,7 +2720,10 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     if mode == "wait" and entry is not None:
         return await _tool_call_idempotency_wait(entry, response)
     if mode != "owner" or entry is None:
-        impl_options = {"trial_runtime": trial_runtime}
+        impl_options = {
+            "trial_runtime": trial_runtime,
+            "outer_timings": outer_timings,
+        }
         if resolved_manager is not None:
             impl_options["resolved_manager"] = resolved_manager
         return await _call_tool_impl(body, request, response, ctx, **impl_options)
@@ -2676,7 +2732,10 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     except Exception:
         pass
     try:
-        impl_options = {"trial_runtime": trial_runtime}
+        impl_options = {
+            "trial_runtime": trial_runtime,
+            "outer_timings": outer_timings,
+        }
         if resolved_manager is not None:
             impl_options["resolved_manager"] = resolved_manager
         result = await _call_tool_impl(body, request, response, ctx, **impl_options)
@@ -2736,9 +2795,17 @@ async def _call_tool_impl(
     *,
     trial_runtime=None,
     resolved_manager=None,
+    outer_timings: Mapping[str, float] | None = None,
 ):
     from adaos.services.applications.runtime_channel import RuntimeChannelConflict
-    call_started_at = time.perf_counter()
+    call_started_at = float(
+        _mapping(outer_timings).get("request_started_at") or time.perf_counter()
+    )
+    phase_timings: dict[str, float] = {
+        key: float(value)
+        for key, value in _mapping(outer_timings).items()
+        if key != "request_started_at"
+    }
     # Разбираем "<skill_name>:<public_tool_name>"
     if ":" not in body.tool:
         raise HTTPException(status_code=400, detail="tool must be in '<skill_name>:<public_tool_name>' format")
@@ -2761,11 +2828,15 @@ async def _call_tool_impl(
     if current_caller_scope() is not None and (body.dev or implicit_dev_webspace):
         raise HTTPException(status_code=403, detail="scoped_caller_dev_runtime_not_supported")
 
+    phase_started = time.perf_counter()
     mgr = resolved_manager or (
         await asyncio.to_thread(trial_runtime.ready_manager, skill_name)
         if trial_runtime is not None
         else await _skill_manager_for_context(ctx)
     )
+    phase_timings["manager_resolution_ms"] = (
+        time.perf_counter() - phase_started
+    ) * 1000.0
     if trial_runtime is not None:
         implicit_dev_webspace = False
     if implicit_dev_webspace and await asyncio.to_thread(
@@ -2795,6 +2866,7 @@ async def _call_tool_impl(
         declared_component_permissions: tuple[str, ...] = ()
         declared_application_access: dict[str, Any] = {}
     else:
+        phase_started = time.perf_counter()
         declared_contract = await asyncio.to_thread(
             _declared_tool_contract,
             mgr,
@@ -2818,6 +2890,9 @@ async def _call_tool_impl(
             if isinstance(declared_contract.get("application_access"), Mapping)
             else {}
         )
+        phase_timings["contract_resolution_ms"] = (
+            time.perf_counter() - phase_started
+        ) * 1000.0
     trusted_read_only = _declared_side_effects_are_read_only(declared_side_effects)
     if body.intent == "read" and not trusted_read_only:
         runtime_contract = await asyncio.to_thread(
@@ -2876,6 +2951,7 @@ async def _call_tool_impl(
     target_node_id = _resolve_target_node_id(payload, local_node_id=local_node_id)
     if trial_runtime is not None and target_node_id and target_node_id != local_node_id:
         raise HTTPException(status_code=409, detail={"error": "trial_runtime_unavailable", "message": "Trial node forwarding is not admitted"})
+    phase_started = time.perf_counter()
     body, application_access = await _authorize_application_tool_call(
         body=body,
         request=request,
@@ -2887,6 +2963,9 @@ async def _call_tool_impl(
         component_capabilities=declared_component_permissions,
         application_contract=declared_application_access,
     )
+    phase_timings["application_admission_ms"] = (
+        time.perf_counter() - phase_started
+    ) * 1000.0
     _apply_application_runtime_headers(response, application_access)
     gate_started_at = time.perf_counter()
     action_risk = await _enforce_runtime_action_gate(
@@ -2903,6 +2982,9 @@ async def _call_tool_impl(
     )
     mutating_call = _action_risk_may_mutate(action_risk)
     gate_done_at = time.perf_counter()
+    phase_timings["action_admission_ms"] = (
+        gate_done_at - gate_started_at
+    ) * 1000.0
     if conf and _should_proxy_tool_call_to_target(
         conf=conf,
         tool_name=body.tool,
@@ -2931,7 +3013,10 @@ async def _call_tool_impl(
                 local_execution_started = True
                 with use_ctx(mgr.ctx):
                     return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
-            if not body.dev and _should_autosync_workspace_runtime(tool_name=body.tool):
+            if not body.dev and _should_autosync_workspace_runtime(
+                tool_name=body.tool,
+                declared_read_only=trusted_read_only,
+            ):
                 stage_started = time.perf_counter()
                 _maybe_sync_workspace_runtime(ctx, mgr, skill_name)
                 local_timings["autosync_ms"] = (time.perf_counter() - stage_started) * 1000.0
@@ -2964,6 +3049,7 @@ async def _call_tool_impl(
                 ctx,
                 skill_name,
                 tool_name=body.tool,
+                declared_read_only=trusted_read_only,
             )
             if body.dev or not guard_required:
                 return _run_local_tool_unlocked()
@@ -2975,15 +3061,62 @@ async def _call_tool_impl(
         result = await anyio.to_thread.run_sync(_run_local_tool)
         took_ms = (time.perf_counter() - started_at) * 1000.0
         total_ms = (time.perf_counter() - call_started_at) * 1000.0
+        admission_ms = sum(
+            float(phase_timings.get(key) or 0.0)
+            for key in (
+                "runtime_selection_ms",
+                "scope_admission_ms",
+                "availability_admission_ms",
+                "application_admission_ms",
+                "action_admission_ms",
+            )
+        )
+        server_timing = (
+            f"admission;dur={admission_ms:.1f}, "
+            f"skill-startup;dur={float(local_timings.get('prepare_ms') or 0.0):.1f}, "
+            f"skill-dispatch;dur={float(local_timings.get('run_tool_ms') or 0.0):.1f}"
+        )
+        response.headers["Server-Timing"] = server_timing
+        _log.debug(
+            "tools.call profile tool=%s total_ms=%.1f runtime_selection_ms=%.1f "
+            "scope_admission_ms=%.1f availability_admission_ms=%.1f "
+            "manager_resolution_ms=%.1f contract_resolution_ms=%.1f "
+            "application_admission_ms=%.1f action_admission_ms=%.1f "
+            "workspace_lock_ms=%.1f autosync_ms=%.1f skill_startup_ms=%.1f "
+            "skill_dispatch_ms=%.1f",
+            body.tool,
+            total_ms,
+            float(phase_timings.get("runtime_selection_ms") or 0.0),
+            float(phase_timings.get("scope_admission_ms") or 0.0),
+            float(phase_timings.get("availability_admission_ms") or 0.0),
+            float(phase_timings.get("manager_resolution_ms") or 0.0),
+            float(phase_timings.get("contract_resolution_ms") or 0.0),
+            float(phase_timings.get("application_admission_ms") or 0.0),
+            float(phase_timings.get("action_admission_ms") or 0.0),
+            float(local_timings.get("workspace_lock_ms") or 0.0),
+            float(local_timings.get("autosync_ms") or 0.0),
+            float(local_timings.get("prepare_ms") or 0.0),
+            float(local_timings.get("run_tool_ms") or 0.0),
+        )
         if took_ms >= 2000 or total_ms >= 2000:
             _log.warning(
-                "tools.call slow tool=%s dev=%s total_ms=%.1f pre_local_ms=%.1f setup_ms=%.1f gate_ms=%.1f local_total_ms=%.1f workspace_lock_ms=%.1f autosync_ms=%.1f prepare_ms=%.1f run_tool_ms=%.1f",
+                "tools.call slow tool=%s dev=%s total_ms=%.1f pre_local_ms=%.1f "
+                "runtime_selection_ms=%.1f scope_admission_ms=%.1f "
+                "availability_admission_ms=%.1f manager_resolution_ms=%.1f "
+                "contract_resolution_ms=%.1f application_admission_ms=%.1f "
+                "action_admission_ms=%.1f local_total_ms=%.1f workspace_lock_ms=%.1f "
+                "autosync_ms=%.1f prepare_ms=%.1f run_tool_ms=%.1f",
                 body.tool,
                 body.dev,
                 total_ms,
                 (started_at - call_started_at) * 1000.0,
-                (setup_done_at - call_started_at) * 1000.0,
-                (gate_done_at - gate_started_at) * 1000.0,
+                float(phase_timings.get("runtime_selection_ms") or 0.0),
+                float(phase_timings.get("scope_admission_ms") or 0.0),
+                float(phase_timings.get("availability_admission_ms") or 0.0),
+                float(phase_timings.get("manager_resolution_ms") or 0.0),
+                float(phase_timings.get("contract_resolution_ms") or 0.0),
+                float(phase_timings.get("application_admission_ms") or 0.0),
+                float(phase_timings.get("action_admission_ms") or 0.0),
                 took_ms,
                 float(local_timings.get("workspace_lock_ms") or 0.0),
                 float(local_timings.get("autosync_ms") or 0.0),

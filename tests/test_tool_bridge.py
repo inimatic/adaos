@@ -316,6 +316,21 @@ def test_workspace_autosync_skips_slideshow_runtime_tools(monkeypatch) -> None:
     ) is False
 
 
+def test_workspace_autosync_trusts_declared_read_only_provider_contract(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(tool_bridge_module, "_debug_autosync_enabled", lambda: True)
+
+    assert tool_bridge_module._should_autosync_workspace_runtime(
+        tool_name="gmail_cbs_cleanroom_skill:portable_list_messages",
+        declared_read_only=True,
+    ) is False
+    assert tool_bridge_module._should_autosync_workspace_runtime(
+        tool_name="gmail_cbs_cleanroom_skill:portable_list_messages",
+        declared_read_only=False,
+    ) is True
+
+
 def _patch_runtime_approval_pending_actions(monkeypatch) -> list[dict[str, object]]:
     published: list[dict[str, object]] = []
 
@@ -1640,6 +1655,56 @@ permission_profile:
     assert excinfo.value.detail["technical_detail"]["undeclared_permissions"] == [
         "providers.google.gmail"
     ]
+
+
+def test_production_application_context_ambiguity_is_a_bounded_conflict(
+    tmp_path, monkeypatch
+) -> None:
+    from adaos.services.applications.access import ApplicationAccessError
+    from adaos.services.applications.access_management import (
+        ApplicationAccessManagementService,
+    )
+
+    monkeypatch.setattr(
+        ApplicationAccessManagementService,
+        "resolve_runtime_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ApplicationAccessError("Application runtime context is ambiguous")
+        ),
+    )
+    ctx = SimpleNamespace(authority_state_dir=tmp_path, paths=None)
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module._authorize_application_tool_call(
+                body=tool_bridge_module.ToolCall(
+                    tool="gmail_provider:list_messages",
+                    arguments={"webspace_id": "desktop"},
+                ),
+                request=SimpleNamespace(headers={}),
+                ctx=ctx,
+                skill_name="gmail_provider",
+                public_tool="list_messages",
+                manager=object(),
+                declared_side_effects="none",
+                component_capabilities=("providers.google.gmail",),
+                application_contract={
+                    "permission": "providers.google.gmail",
+                    "capability": "mail.read",
+                },
+            )
+        )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail == {
+        "error": "application_context_ambiguous",
+        "retryable": False,
+        "technical_detail": {
+            "tool": "gmail_provider:list_messages",
+            "requested_application_id": None,
+            "requested_scenario_id": None,
+        },
+    }
 
 
 def test_dev_runtime_sync_skips_source_older_than_active_marker(tmp_path) -> None:

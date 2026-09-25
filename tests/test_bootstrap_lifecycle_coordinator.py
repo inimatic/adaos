@@ -121,6 +121,28 @@ async def test_installed_services_start_before_managed_nlu_maintenance() -> None
     assert state.managed_nlu_install_status["state"] == "ready"
 
 
+async def test_unchanged_managed_nlu_does_not_repeat_service_startup() -> None:
+    calls: list[str] = []
+    state = SimpleNamespace()
+
+    async def _start(stage: str) -> None:
+        calls.append(stage)
+
+    def _ensure(_log: object) -> dict[str, object]:
+        calls.append("ensure_managed_nlu")
+        return {"ok": True, "enabled": True, "installed": False}
+
+    await _start_services_before_managed_nlu(
+        state=state,
+        start_service_skills=_start,
+        ensure_managed_nlu_service_skills=_ensure,
+        log=SimpleNamespace(warning=lambda *args, **kwargs: None),
+    )
+
+    assert calls == ["post_ready_start_service_skills", "ensure_managed_nlu"]
+    assert state.managed_nlu_install_status["installed"] is False
+
+
 async def test_lifecycle_coordinator_serializes_boot_attempts() -> None:
     lifecycle = BootstrapLifecycleCoordinator()
     entered = asyncio.Event()

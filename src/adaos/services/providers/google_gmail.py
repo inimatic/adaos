@@ -15,6 +15,7 @@ from email import policy as email_policy
 from email.parser import BytesParser
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -28,6 +29,9 @@ from adaos.services.applications import (
     ApplicationAccessManagementService,
     get_application_service,
 )
+
+
+_log = logging.getLogger("adaos.provider.google_gmail")
 
 
 GOOGLE_GMAIL_PROVIDER_ID = "google.gmail"
@@ -109,6 +113,15 @@ class GmailOperationResult:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _mapping_round_trips(value: Mapping[str, Any]) -> int:
+    result = value.get("result")
+    source = result if isinstance(result, Mapping) else value
+    try:
+        return max(0, int(source.get("network_round_trips") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _utc_iso(epoch: float) -> str:
@@ -1005,10 +1018,13 @@ class GoogleGmailProvider:
         arguments: Mapping[str, Any] | None = None,
         candidate_permission_profile: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        operation_started = time.perf_counter()
+        timings_ms: dict[str, float] = {}
         op = _text(operation).lower()
         if op not in _OPERATIONS:
             raise GoogleGmailProviderError("gmail_operation_not_supported")
         args = dict(arguments or {})
+        stage_started = time.perf_counter()
         credential, _account = self._authorized_credential(
             application_id=application_id,
             release_digest=release_digest,
@@ -1016,19 +1032,40 @@ class GoogleGmailProvider:
             account_id=_text(account_id),
             candidate_permission_profile=candidate_permission_profile,
         )
+        timings_ms["credential_admission_ms"] = (
+            time.perf_counter() - stage_started
+        ) * 1000.0
+
+        def finish(payload: dict[str, Any]) -> dict[str, Any]:
+            total_ms = (time.perf_counter() - operation_started) * 1000.0
+            logger = _log.warning if total_ms >= 1000.0 else _log.debug
+            logger(
+                "gmail provider operation profile operation=%s total_ms=%.1f "
+                "credential_admission_ms=%.1f list_io_ms=%.1f batch_io_ms=%.1f "
+                "response_decode_ms=%.1f provider_io_ms=%.1f network_round_trips=%s",
+                op,
+                total_ms,
+                float(timings_ms.get("credential_admission_ms") or 0.0),
+                float(timings_ms.get("list_io_ms") or 0.0),
+                float(timings_ms.get("batch_io_ms") or 0.0),
+                float(timings_ms.get("response_decode_ms") or 0.0),
+                float(timings_ms.get("provider_io_ms") or 0.0),
+                _mapping_round_trips(payload),
+            )
+            return payload
         method = "GET"
         url = ""
         params: dict[str, Any] | None = None
         body: dict[str, Any] | None = None
         if op == "connection_status":
-            return {
+            return finish({
                 "ok": True,
                 "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
                 "account_id": account_id,
                 "status": "connected",
                 "email_address": _text(credential.get("email_address")),
                 "scopes": [GMAIL_MODIFY_SCOPE],
-            }
+            })
         if op == "list_messages":
             max_results = int(args.get("max_results") or 50)
             if not 1 <= max_results <= 100:
@@ -1094,12 +1131,16 @@ class GoogleGmailProvider:
                 list_params["labelIds"] = labels
             if _text(args.get("page_token")):
                 list_params["pageToken"] = _text(args["page_token"])[:2048]
+            stage_started = time.perf_counter()
             listed = self._authorized_json_request(
                 "GET",
                 f"{GMAIL_API_ORIGIN}/gmail/v1/users/me/messages",
                 headers=headers,
                 params=list_params,
             )
+            timings_ms["list_io_ms"] = (
+                time.perf_counter() - stage_started
+            ) * 1000.0
             message_ids = [
                 self._message_id(str(item.get("id") or ""))
                 for item in (listed.get("messages") or [])[:max_results]
@@ -1112,6 +1153,7 @@ class GoogleGmailProvider:
                 # endpoint so the provider performs two network round trips
                 # instead of a parallel-but-still-expensive N+1 request set.
                 boundary = f"adaos_gmail_{secrets.token_hex(12)}"
+                stage_started = time.perf_counter()
                 batch_response = self._transport_request(
                     "POST",
                     f"{GMAIL_API_ORIGIN}/batch/gmail/v1",
@@ -1123,6 +1165,9 @@ class GoogleGmailProvider:
                     data=_gmail_metadata_batch_body(message_ids, boundary),
                     timeout=(5.0, 20.0),
                 )
+                timings_ms["batch_io_ms"] = (
+                    time.perf_counter() - stage_started
+                ) * 1000.0
                 batch_status = int(
                     getattr(batch_response, "status_code", 0) or 0
                 )
@@ -1144,10 +1189,14 @@ class GoogleGmailProvider:
                     raise GoogleGmailProviderError(
                         "gmail_request_failed", status_code=batch_status
                     )
+                stage_started = time.perf_counter()
                 messages, omitted_message_ids = _gmail_metadata_batch_payloads(
                     batch_response,
                     requested_message_ids=message_ids,
                 )
+                timings_ms["response_decode_ms"] = (
+                    time.perf_counter() - stage_started
+                ) * 1000.0
             else:
                 messages = []
                 omitted_message_ids = []
@@ -1160,8 +1209,9 @@ class GoogleGmailProvider:
                 payload["omitted_message_ids"] = omitted_message_ids
             if _text(listed.get("nextPageToken")):
                 payload["nextPageToken"] = _text(listed["nextPageToken"])[:2048]
-            return GmailOperationResult(op, payload).to_dict()
+            return finish(GmailOperationResult(op, payload).to_dict())
 
+        stage_started = time.perf_counter()
         payload = self._authorized_json_request(
             method,
             url,
@@ -1169,7 +1219,10 @@ class GoogleGmailProvider:
             json=body,
             headers=headers,
         )
-        return GmailOperationResult(op, payload).to_dict()
+        timings_ms["provider_io_ms"] = (
+            time.perf_counter() - stage_started
+        ) * 1000.0
+        return finish(GmailOperationResult(op, payload).to_dict())
 
     def _authorized_json_request(
         self,
