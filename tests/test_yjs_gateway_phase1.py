@@ -2132,10 +2132,15 @@ def test_finalize_materialized_room_bootstrap_persists_ready_marker() -> None:
     class _Store:
         def __init__(self) -> None:
             self.updates: list[bytes] = []
+            self.snapshots: list[dict[str, object]] = []
 
         async def write_update(self, update: bytes, **_kwargs) -> bool:
             self.updates.append(bytes(update))
             return True
+
+        async def replace_snapshot_update(self, snapshot: bytes, **kwargs) -> dict[str, object]:
+            self.snapshots.append({"snapshot": bytes(snapshot), **kwargs})
+            return {"ok": True}
 
     store = _Store()
     room = SimpleNamespace(ydoc=y_py.YDoc())
@@ -2154,11 +2159,21 @@ def test_finalize_materialized_room_bootstrap_persists_ready_marker() -> None:
     assert result["ready"] is True
     assert result["persisted"] is True
     assert result["update_bytes"] > 0
-    assert len(store.updates) == 1
+    assert result["snapshot_bytes"] >= result["update_bytes"]
+    assert result["persistence_mode"] == "snapshot_replace"
+    assert store.updates == []
+    assert len(store.snapshots) == 1
+    assert store.snapshots[0]["backup_kind"] == "room_bootstrap.materialized_ready"
+    assert store.snapshots[0]["persist_snapshot"] is True
+    assert store.snapshots[0]["notify"] is False
+    restored = y_py.YDoc()
+    y_py.apply_update(restored, store.snapshots[0]["snapshot"])
+    restored_marker = dict(restored.get_map("runtime").get("bootstrap") or {})
     assert marker["scenario_id"] == "todo_list"
     assert marker["state"] == "ready"
     assert marker["stage"] == "room_bootstrap_ready"
     assert marker["mode"] == "materialized_payload"
+    assert restored_marker == marker
 
 
 def test_get_room_uses_workspace_current_overlay_before_home(monkeypatch) -> None:
@@ -3140,10 +3155,21 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
 
     key = "materialized-selector-authority"
     gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    reset_backend_room_update_markers()
     ydoc = y_py.YDoc()
     room = SimpleNamespace(ydoc=ydoc, clients=[])
     observed_authority: list[str | None] = []
     observed_verification: list[bool] = []
+
+    class _FakeStore:
+        def __init__(self) -> None:
+            self.writes: list[dict[str, object]] = []
+
+        async def write_update(self, update: bytes, **kwargs) -> bool:
+            self.writes.append({"update": bytes(update), **kwargs})
+            return True
+
+    store = _FakeStore()
 
     def _fake_apply(
         self,
@@ -3165,10 +3191,10 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
         _fake_apply,
     )
 
-    _update, result = asyncio.run(
+    update, result = asyncio.run(
         gateway_module._apply_room_materialized_payload(
             key,
-            None,
+            store,
             room,
             {
                 "scenario_id": "test04_recipes",
@@ -3179,14 +3205,22 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
                 },
             },
             reason="semantic_rebuild:scenario_switch_rebuild",
+            persist_before_observers=True,
         )
     )
 
+    assert update
     assert result["ready"] is True
+    assert result["bootstrap_update_persisted"] is True
+    assert store.writes == [{"update": update, "update_kind": "diff", "notify": False}]
+    marker = gateway_module.consume_backend_room_update(key, update)
+    assert marker is not None
+    assert marker["already_persisted"] is True
     assert observed_authority == ["test04_recipes"]
     assert observed_verification == [True]
     assert gateway_module._authoritative_current_scenario(key) == "test04_recipes"
     gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    reset_backend_room_update_markers()
 
 
 def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypatch) -> None:

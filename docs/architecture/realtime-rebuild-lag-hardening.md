@@ -348,6 +348,24 @@ materialization is needed, `last_open_resolver_timings_ms` and
 `last_open_payload_apply_timings_ms` split that stage further into isolated
 semantic resolution, branch mutation/encoding, persistence, and broadcast work.
 
+Cold materialization has a stricter persistence order than an update to an
+already-running room. Room observers are attached only after bootstrap, so the
+bootstrap path must write its materialized diff directly to the YStore before it
+persists `room_bootstrap_ready` and exposes the room. Relying on the later
+observer leaves a durable ready marker without the effective branches and forces
+the next process start through the resolver again. The required order is:
+
+```text
+apply effective payload
+  -> persist effective diff
+  -> persist full ready snapshot
+  -> attach observers / expose room
+```
+
+The full ready snapshot is the restart durability boundary. The preceding diff
+protects the pre-observer in-memory log, but a periodic or debounced backup is
+not allowed to decide whether a subsequent process can reuse the materialization.
+
 Backend-update origin matching follows the same hot-path rule. Its marker is a
 TTL-bounded, process-local correlation table, not a portable content address;
 it uses the payload length plus Python's per-process keyed bytes hash. Reusing a

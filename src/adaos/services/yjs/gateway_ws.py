@@ -6764,6 +6764,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                     bootstrap_materialization["payload"],
                                     reason=str(bootstrap_materialization.get("reason") or "room_bootstrap"),
                                     persist_repair=bool(bootstrap_materialization.get("persist_repair", True)),
+                                    persist_before_observers=True,
                                     force_full_state_update=bool(
                                         bootstrap_materialization.get("force_full_state_update", False)
                                     ),
@@ -6794,7 +6795,11 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 {
                                     "mode": "materialized_payload",
                                     "room_effective_materialized": True,
-                                    "room_effective_materialized_persisted": bool(materialized_update),
+                                    "room_effective_materialized_persisted": bool(
+                                        materialized_result.get("bootstrap_update_persisted")
+                                        or materialized_result.get("full_state_snapshot_persisted")
+                                        or not materialized_update
+                                    ),
                                     "room_effective_materialized_bytes": len(materialized_update or b""),
                                     "room_bootstrap_marker_persisted": bool(
                                         (bootstrap_ready or {}).get("persisted")
@@ -7442,6 +7447,7 @@ async def _apply_room_materialized_payload_on_owner_loop(
     *,
     reason: str,
     persist_repair: bool = True,
+    persist_before_observers: bool = False,
     force_full_state_update: bool = False,
     materialization_identity: Mapping[str, Any] | None = None,
 ) -> tuple[bytes, str, dict[str, Any]]:
@@ -7472,6 +7478,7 @@ async def _apply_room_materialized_payload_on_owner_loop(
                 payload,
                 reason=reason,
                 persist_repair=bool(persist_repair),
+                persist_before_observers=bool(persist_before_observers),
                 force_full_state_update=bool(force_full_state_update),
                 materialization_identity=materialization_identity,
             ),
@@ -7499,6 +7506,7 @@ async def _apply_room_materialized_payload_on_owner_loop(
                 payload,
                 reason=reason,
                 persist_repair=bool(persist_repair),
+                persist_before_observers=bool(persist_before_observers),
                 force_full_state_update=bool(force_full_state_update),
                 materialization_identity=materialization_identity,
             ),
@@ -7519,6 +7527,7 @@ async def _apply_room_materialized_payload_on_owner_loop(
         payload,
         reason=reason,
         persist_repair=bool(persist_repair),
+        persist_before_observers=bool(persist_before_observers),
         force_full_state_update=bool(force_full_state_update),
         materialization_identity=materialization_identity,
     )
@@ -7538,6 +7547,7 @@ async def _apply_room_materialized_payload(
     *,
     reason: str,
     persist_repair: bool = True,
+    persist_before_observers: bool = False,
     force_full_state_update: bool = False,
     materialization_identity: Mapping[str, Any] | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
@@ -7727,6 +7737,41 @@ async def _apply_room_materialized_payload(
             phase_timings_ms["broadcast_full_state_fallback"] = 1.0
         else:
             phase_timings_ms["broadcast_full_state_fallback"] = 0.0
+        bootstrap_update_persisted = False
+        if (
+            update
+            and persist_before_observers
+            and persist_repair
+            and ystore is not None
+            and not full_state_snapshot_persisted
+        ):
+            stage_started = time.perf_counter()
+            async with ystore_write_metadata(
+                root_names=["ui", "data", "registry", "runtime"],
+                source=f"yjs.gateway_ws.{reason}.materialized_payload_bootstrap",
+                owner="core:yjs_gateway",
+                channel="core.yjs.gateway.materialized_payload_bootstrap",
+                governed=True,
+            ):
+                bootstrap_update_persisted = bool(
+                    await ystore.write_update(
+                        update,
+                        update_kind="diff",
+                        notify=False,
+                    )
+                )
+            phase_timings_ms["persist_bootstrap_update"] = _elapsed_ms_since(stage_started)
+            if not bootstrap_update_persisted:
+                phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+                return b"", {
+                    "ok": False,
+                    "ready": False,
+                    "error": "room_bootstrap_materialized_update_not_persisted",
+                    "snapshot": snapshot,
+                    "phase_timings_ms": phase_timings_ms,
+                }
+        else:
+            phase_timings_ms["persist_bootstrap_update"] = 0.0
         broadcast_marker: dict[str, Any] = {}
         if update:
             stage_started = time.perf_counter()
@@ -7737,7 +7782,11 @@ async def _apply_room_materialized_payload(
                 owner="core:yjs_gateway",
                 channel="core.yjs.gateway.materialized_payload",
                 root_names=["ui", "data", "registry", "runtime"],
-                already_persisted=bool((not persist_repair) or full_state_snapshot_persisted),
+                already_persisted=bool(
+                    (not persist_repair)
+                    or full_state_snapshot_persisted
+                    or bootstrap_update_persisted
+                ),
                 governed=True,
             )
             phase_timings_ms["mark_backend_update"] = _elapsed_ms_since(stage_started)
@@ -7803,6 +7852,7 @@ async def _apply_room_materialized_payload(
             "broadcast_diagnostics": broadcast_marker,
             "force_full_state_update": bool(force_full_state_update),
             "full_state_snapshot_persisted": bool(full_state_snapshot_persisted),
+            "bootstrap_update_persisted": bool(bootstrap_update_persisted),
             "full_state_snapshot_result": full_state_snapshot_result,
             "broadcast_update_bytes": len(update or b""),
             "full_state_update_bytes": len(full_state_update or b""),
@@ -8547,6 +8597,7 @@ async def _ensure_room_effective_materialized(
             payload,
             reason="room_bootstrap.resolve_apply",
             persist_repair=True,
+            persist_before_observers=True,
         )
         if not bool(apply_result.get("ready")):
             raise RuntimeError(
@@ -8565,7 +8616,11 @@ async def _ensure_room_effective_materialized(
                 {
                     "mode": "resolved_payload",
                     "room_effective_materialized": True,
-                    "room_effective_materialized_persisted": bool(update),
+                    "room_effective_materialized_persisted": bool(
+                        apply_result.get("bootstrap_update_persisted")
+                        or apply_result.get("full_state_snapshot_persisted")
+                        or not update
+                    ),
                     "room_effective_materialized_bytes": len(update or b""),
                     "room_bootstrap_marker_persisted": bool(ready_result.get("persisted")),
                     "room_resolver_timings_ms": dict(runtime._last_rebuild_timings_ms or {}),
@@ -8608,7 +8663,14 @@ async def _finalize_materialized_room_bootstrap(
     space: str,
     mode: str = "materialized_payload",
 ) -> dict[str, Any]:
-    """Persist the ready marker after a payload-owned cold room bootstrap."""
+    """Persist a durable ready snapshot after a payload-owned cold bootstrap.
+
+    Cold materialization happens before room observers are attached. Appending
+    only the marker update therefore leaves the effective branches dependent on
+    the in-memory replay log and its deferred backup. Persist the complete
+    document, including the ready marker, as the durable base snapshot whenever
+    the store supports replacement semantics.
+    """
 
     ydoc = getattr(room, "ydoc", None)
     if ydoc is None:
@@ -8632,20 +8694,43 @@ async def _finalize_materialized_room_bootstrap(
         )
         update = Y.encode_state_as_update(ydoc, before) if changed else b""
         persisted = False
-        if update and ystore is not None:
+        snapshot = b""
+        persistence_mode = "none"
+        if ystore is not None:
             async with ystore_write_metadata(
-                root_names=["runtime"],
+                root_names=["ui", "data", "registry", "runtime"],
                 source="yjs.gateway_ws.room_bootstrap.materialized_ready",
                 owner="core:yjs_gateway",
                 channel="core.yjs.gateway.bootstrap",
                 governed=True,
             ):
-                persisted = bool(await ystore.write_update(update, update_kind="diff", notify=False))
+                replace_snapshot = getattr(ystore, "replace_snapshot_update", None)
+                if callable(replace_snapshot):
+                    snapshot = Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
+                    state_vector = Y.encode_state_vector(ydoc)  # type: ignore[arg-type]
+                    replace_result = await replace_snapshot(
+                        snapshot,
+                        state_vector=state_vector,
+                        backup_kind="room_bootstrap.materialized_ready",
+                        persist_snapshot=True,
+                        notify=False,
+                    )
+                    persisted = bool(
+                        replace_result.get("ok")
+                        if isinstance(replace_result, Mapping)
+                        else replace_result is not None
+                    )
+                    persistence_mode = "snapshot_replace"
+                elif update:
+                    persisted = bool(await ystore.write_update(update, update_kind="diff", notify=False))
+                    persistence_mode = "marker_diff"
         return {
             "ready": True,
             "changed": bool(changed),
             "persisted": bool(persisted),
             "update_bytes": len(update or b""),
+            "snapshot_bytes": len(snapshot or b""),
+            "persistence_mode": persistence_mode,
         }
     except Exception as exc:
         _ylog.warning(
