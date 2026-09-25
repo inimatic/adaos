@@ -9624,6 +9624,42 @@ def test_worker_revalidates_owned_tests_for_unchanged_retry(tmp_path: Path) -> N
     }
 
 
+def test_worker_reseals_named_release_contracts_for_narrow_continuation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario_tests = workspace / "scenarios" / "mail_reader" / "tests"
+    project_tests = workspace / "projects" / "mail_reader" / "tests"
+    scenario_tests.mkdir(parents=True)
+    project_tests.mkdir(parents=True)
+    for path in (
+        scenario_tests / "test_application_contract.py",
+        scenario_tests / "test_behavior_contract.py",
+        project_tests / "test_application_contract.py",
+    ):
+        path.write_text("def test_contract():\n    assert True\n", encoding="utf-8")
+    (scenario_tests / "test_unrelated_legacy.py").write_text(
+        "def test_legacy():\n    assert True\n", encoding="utf-8"
+    )
+    request = {
+        "target": {"type": "scenario", "id": "mail_reader"},
+        "artifacts": {"validation_scope": "changed_paths"},
+    }
+
+    selected = LocalSkillFactoryWorker._contract_test_paths(
+        request,
+        workspace,
+        changed_paths={"projects/mail_reader/project.yaml"},
+    )
+
+    assert selected == {
+        "projects/mail_reader/project.yaml",
+        "projects/mail_reader/tests/test_application_contract.py",
+        "scenarios/mail_reader/tests/test_application_contract.py",
+        "scenarios/mail_reader/tests/test_behavior_contract.py",
+    }
+
+
 def test_worker_does_not_admit_attachment_bindings_from_system_context(
     tmp_path: Path,
 ) -> None:

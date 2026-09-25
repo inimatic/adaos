@@ -10563,9 +10563,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         """Select tests that own release evidence for this exact run.
 
         Normal implementation turns inspect changed tests only so unrelated
-        legacy dependencies cannot block a bounded patch. An unchanged retry
-        has no diff by design, but must still emit fresh Trial evidence for
-        the target and its owned companion skills.
+        legacy dependencies cannot block a bounded patch. The target's named
+        release-contract tests are the exception: Trial admission consumes
+        their evidence for the exact completed task, so a narrow continuation
+        must reseal them even when only a manifest changed. An unchanged retry
+        additionally revalidates every owned test for the target and its
+        companion skills.
         """
 
         result = set(changed_paths)
@@ -10574,16 +10577,30 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             if isinstance(request.get("artifacts"), Mapping)
             else {}
         )
-        if str(artifacts.get("validation_scope") or "") != "owned_artifacts":
-            return result
         target = (
             request.get("target")
             if isinstance(request.get("target"), Mapping)
             else {}
         )
-        owned_test_roots: set[Path] = set()
         target_kind = str(target.get("type") or "").strip().lower().rstrip("s")
         target_id = str(target.get("id") or "").strip()
+        if target_id and Path(target_id).name == target_id:
+            target_roots = [workspace / f"{target_kind}s" / target_id]
+            if target_kind == "scenario":
+                target_roots.append(workspace / "projects" / target_id)
+            result.update(
+                path.relative_to(workspace).as_posix()
+                for root in target_roots
+                for name in (
+                    "test_application_contract.py",
+                    "test_behavior_contract.py",
+                )
+                for path in (root / "tests" / name,)
+                if path.is_file()
+            )
+        if str(artifacts.get("validation_scope") or "") != "owned_artifacts":
+            return result
+        owned_test_roots: set[Path] = set()
         if target_id and Path(target_id).name == target_id:
             if target_kind == "skill":
                 result.add(f"skills/{target_id}/skill.yaml")
