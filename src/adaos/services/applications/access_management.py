@@ -7,6 +7,8 @@ import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import RLock
+import time
 from typing import Any, Iterable, Mapping, Sequence
 
 from adaos.domain.application import ApplicationRelease, utc_now
@@ -31,6 +33,41 @@ from .store import _read
 
 
 _log = logging.getLogger("adaos.applications.access")
+_RUNTIME_CONTEXT_CACHE_LOCK = RLock()
+_RUNTIME_CONTEXT_CACHE: dict[
+    tuple[str, str, str, str, str, str],
+    tuple[tuple[tuple[str, int, int], ...], dict[str, Any] | None],
+] = {}
+
+
+def _runtime_authority_signature(root: Path) -> tuple[tuple[str, int, int], ...]:
+    """Cheap, cross-process invalidation for the runtime authority projection."""
+
+    values: list[tuple[str, int, int]] = []
+    for collection in (
+        "definitions",
+        "releases",
+        "installations",
+        "runtime_selections",
+        "runtime_channels",
+    ):
+        parent = root / collection
+        if not parent.is_dir():
+            values.append((collection, 0, 0))
+            continue
+        for path in sorted(item for item in parent.rglob("*") if item.is_file()):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            values.append(
+                (
+                    path.relative_to(root).as_posix(),
+                    int(stat.st_mtime_ns),
+                    int(stat.st_size),
+                )
+            )
+    return tuple(values)
 
 
 def _verification_now() -> str:
@@ -338,7 +375,7 @@ class ApplicationAccessManagementService:
             )
         return candidate_release
 
-    def resolve_runtime_context(
+    def _resolve_runtime_context_uncached(
         self,
         *,
         skill_name: str,
@@ -451,6 +488,75 @@ class ApplicationAccessManagementService:
         if len(candidates) != 1:
             raise ApplicationAccessError("Application runtime context is ambiguous")
         return candidates[0]
+
+    def resolve_runtime_context(
+        self,
+        *,
+        skill_name: str,
+        requested_application_id: str = "",
+        requested_release_digest: str = "",
+        requested_scenario_id: str = "",
+        webspace_id: str = "",
+    ) -> dict[str, Any] | None:
+        """Resolve against a digest-like filesystem projection with single-flight reuse.
+
+        First-paint data sources commonly ask the same shared provider for labels
+        and records in parallel. Re-reading every Application release for both
+        calls adds contention but no authority. The signature covers every
+        collection that can change the answer and therefore also invalidates
+        across a CLI or another process.
+        """
+
+        key = (
+            str(self.store.root),
+            str(skill_name),
+            str(requested_application_id),
+            str(requested_release_digest),
+            str(requested_scenario_id),
+            str(webspace_id),
+        )
+        started = time.perf_counter()
+        with _RUNTIME_CONTEXT_CACHE_LOCK:
+            signature = _runtime_authority_signature(self.store.root)
+            cached = _RUNTIME_CONTEXT_CACHE.get(key)
+            if cached is not None and cached[0] == signature:
+                _log.debug(
+                    "application runtime context profile skill=%s cache_hit=true duration_ms=%.1f",
+                    skill_name,
+                    (time.perf_counter() - started) * 1000.0,
+                )
+                return dict(cached[1]) if cached[1] is not None else None
+
+            result = self._resolve_runtime_context_uncached(
+                skill_name=skill_name,
+                requested_application_id=requested_application_id,
+                requested_release_digest=requested_release_digest,
+                requested_scenario_id=requested_scenario_id,
+                webspace_id=webspace_id,
+            )
+            stable_signature = _runtime_authority_signature(self.store.root)
+            if stable_signature != signature:
+                result = self._resolve_runtime_context_uncached(
+                    skill_name=skill_name,
+                    requested_application_id=requested_application_id,
+                    requested_release_digest=requested_release_digest,
+                    requested_scenario_id=requested_scenario_id,
+                    webspace_id=webspace_id,
+                )
+                stable_signature = _runtime_authority_signature(self.store.root)
+            for cache_key in tuple(_RUNTIME_CONTEXT_CACHE):
+                if cache_key[0] == key[0] and _RUNTIME_CONTEXT_CACHE[cache_key][0] != stable_signature:
+                    _RUNTIME_CONTEXT_CACHE.pop(cache_key, None)
+            _RUNTIME_CONTEXT_CACHE[key] = (
+                stable_signature,
+                dict(result) if result is not None else None,
+            )
+            _log.debug(
+                "application runtime context profile skill=%s cache_hit=false duration_ms=%.1f",
+                skill_name,
+                (time.perf_counter() - started) * 1000.0,
+            )
+            return dict(result) if result is not None else None
 
     @staticmethod
     def runtime_permission(

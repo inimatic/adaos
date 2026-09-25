@@ -1951,6 +1951,7 @@ async def _authorize_application_tool_call(
     declared_side_effects: str,
     component_capabilities: tuple[str, ...],
     application_contract: Mapping[str, Any],
+    phase_timings: dict[str, float] | None = None,
 ) -> tuple[ToolCall, dict[str, Any] | None]:
     """Resolve and enforce trusted Application context before action approval."""
 
@@ -2097,6 +2098,8 @@ async def _authorize_application_tool_call(
         return body, None
     state_dir = Path(getattr(ctx, "authority_state_dir", None) or state_dir_getter())
     management = ApplicationAccessManagementService(get_application_service(state_dir))
+    admission_timings = phase_timings if phase_timings is not None else {}
+    stage_started = time.perf_counter()
     try:
         runtime = await asyncio.to_thread(
             management.resolve_runtime_context,
@@ -2124,6 +2127,10 @@ async def _authorize_application_tool_call(
                 },
             },
         ) from exc
+    finally:
+        admission_timings["application_runtime_resolution_ms"] = (
+            time.perf_counter() - stage_started
+        ) * 1000.0
     if runtime is None:
         if requested_application_id:
             raise HTTPException(
@@ -2164,6 +2171,7 @@ async def _authorize_application_tool_call(
             dev=False,
         )
 
+    stage_started = time.perf_counter()
     actor = current_caller()
     if actor is None:
         raise HTTPException(status_code=403, detail={"error": "application_actor_missing"})
@@ -2199,6 +2207,9 @@ async def _authorize_application_tool_call(
         device_id = device_ref.partition(":")[2]
         device = await asyncio.to_thread(access_store.get_device_key, device_id)
         device_trusted = bool(device and str(device.get("status") or "active") == "active")
+    admission_timings["application_identity_resolution_ms"] = (
+        time.perf_counter() - stage_started
+    ) * 1000.0
     holder_ref = session_ref or device_ref or actor.ref()
     permission_id, app_capability = management.runtime_permission(
         side_effects=declared_side_effects,
@@ -2231,6 +2242,7 @@ async def _authorize_application_tool_call(
         "resource_ref": _first_text(payload.get(resource_argument)) if resource_argument else "",
         "external_provider_ref": _first_text(payload.get(provider_argument)) if provider_argument else "",
     }
+    stage_started = time.perf_counter()
     decision = await asyncio.to_thread(
         management.access.decide,
         runtime["application_id"],
@@ -2241,6 +2253,10 @@ async def _authorize_application_tool_call(
         actor_chain=actor_chain,
         component_capabilities=component_capabilities,
     )
+    admission_timings["application_access_decision_ms"] = (
+        time.perf_counter() - stage_started
+    ) * 1000.0
+    stage_started = time.perf_counter()
     application = management.store.get_application(runtime["application_id"])
     runtime_selection = _mapping(runtime.get("runtime_selection"))
     runtime_root_ref = _first_text(runtime_selection.get("runtime_root_ref"), "workspace")
@@ -2282,10 +2298,14 @@ async def _authorize_application_tool_call(
         verified["durable_approval_allowed"] = bool(
             grant.constraints.get("durable_approvals", True)
         )
+    admission_timings["application_projection_ms"] = (
+        time.perf_counter() - stage_started
+    ) * 1000.0
     from adaos.services.policy.application import bind_application
 
     bind_application(verified)
     updated_context = {**request_context, "_verified_application_access": verified}
+    stage_started = time.perf_counter()
     await asyncio.to_thread(
         management.record_runtime_observation,
         application_id=runtime["application_id"],
@@ -2296,6 +2316,9 @@ async def _authorize_application_tool_call(
         grant_id=str(decision.grant_id or ""),
         network_destination=str(actor_chain.get("external_provider_ref") or ""),
     )
+    admission_timings["application_observation_ms"] = (
+        time.perf_counter() - stage_started
+    ) * 1000.0
     return body.model_copy(update={"context": updated_context}), {
         "decision": decision.to_dict(),
         "context": verified,
@@ -2962,6 +2985,7 @@ async def _call_tool_impl(
         declared_side_effects=declared_side_effects,
         component_capabilities=declared_component_permissions,
         application_contract=declared_application_access,
+        phase_timings=phase_timings,
     )
     phase_timings["application_admission_ms"] = (
         time.perf_counter() - phase_started
@@ -3081,7 +3105,10 @@ async def _call_tool_impl(
             "tools.call profile tool=%s total_ms=%.1f runtime_selection_ms=%.1f "
             "scope_admission_ms=%.1f availability_admission_ms=%.1f "
             "manager_resolution_ms=%.1f contract_resolution_ms=%.1f "
-            "application_admission_ms=%.1f action_admission_ms=%.1f "
+            "application_admission_ms=%.1f application_runtime_resolution_ms=%.1f "
+            "application_identity_resolution_ms=%.1f application_access_decision_ms=%.1f "
+            "application_projection_ms=%.1f application_observation_ms=%.1f "
+            "action_admission_ms=%.1f "
             "workspace_lock_ms=%.1f autosync_ms=%.1f skill_startup_ms=%.1f "
             "skill_dispatch_ms=%.1f",
             body.tool,
@@ -3092,6 +3119,11 @@ async def _call_tool_impl(
             float(phase_timings.get("manager_resolution_ms") or 0.0),
             float(phase_timings.get("contract_resolution_ms") or 0.0),
             float(phase_timings.get("application_admission_ms") or 0.0),
+            float(phase_timings.get("application_runtime_resolution_ms") or 0.0),
+            float(phase_timings.get("application_identity_resolution_ms") or 0.0),
+            float(phase_timings.get("application_access_decision_ms") or 0.0),
+            float(phase_timings.get("application_projection_ms") or 0.0),
+            float(phase_timings.get("application_observation_ms") or 0.0),
             float(phase_timings.get("action_admission_ms") or 0.0),
             float(local_timings.get("workspace_lock_ms") or 0.0),
             float(local_timings.get("autosync_ms") or 0.0),

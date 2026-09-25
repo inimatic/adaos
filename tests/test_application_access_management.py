@@ -314,6 +314,50 @@ def test_trial_runtime_context_resolves_without_stable_installation(
     assert resolved["runtime_selection"]["source"] == "local_trial"
 
 
+def test_runtime_context_cache_reuses_stable_authority_and_invalidates_on_selection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    applications, management, release = _services(tmp_path)
+    applications.store.save_runtime_selection(
+        RuntimeSelection(
+            webspace_id="desktop",
+            application_id=release.application_id,
+            source="local_trial",
+            release_digest=release.release_digest,
+            runtime_root_ref="trial://family-tasks",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+    original = management._resolve_runtime_context_uncached
+    calls = 0
+
+    def tracked(**kwargs):
+        nonlocal calls
+        calls += 1
+        return original(**kwargs)
+
+    monkeypatch.setattr(management, "_resolve_runtime_context_uncached", tracked)
+    query = {
+        "skill_name": "family_tasks_skill",
+        "requested_application_id": "family_tasks",
+        "webspace_id": "desktop",
+    }
+
+    assert management.resolve_runtime_context(**query) is not None
+    assert management.resolve_runtime_context(**query) is not None
+    assert calls == 1
+
+    current = applications.store.get_runtime_selection("desktop", "family_tasks")
+    applications.store.save_runtime_selection(
+        RuntimeSelection.from_mapping({**current.to_dict(), "revision": 2}),
+        expected_revision=1,
+    )
+    assert management.resolve_runtime_context(**query) is not None
+    assert calls == 2
+
+
 def test_runtime_context_resolves_shared_skill_dependency(
     tmp_path: Path,
 ) -> None:
