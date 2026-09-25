@@ -3063,7 +3063,7 @@ class RootDeveloperService:
 
         cfg = self._load_config()
         publication = self._artifact_publication_service(cfg)
-        verification = publication.verify_promoted_workspace_source(token)
+        publication.verify_promoted_workspace_source(token)
         plan = publication.get_candidate_release(token)
         workspace = Path(self.ctx.paths.workspace_dir()).resolve()
         if not (workspace / ".git").exists():
@@ -3161,11 +3161,21 @@ class RootDeveloperService:
             author_email=self.ctx.settings.git_author_email,
             signoff=signoff,
         )
+        # The runtime Workspace is also a sparse checkout of the source registry.
+        # A component activated from an immutable package can therefore exist on
+        # disk while its path is still marked skip-worktree.  The pull performed
+        # by GitClient.push would then prune the live component immediately after
+        # publication.  Add the exact bounded publication closure after it has
+        # been committed (so Git cannot replace accepted bytes with an older
+        # index entry) and before the pull/push round trip.
+        for path in bounded_paths:
+            self.ctx.git.sparse_add(str(workspace), path)
         self.ctx.git.push(
             str(workspace),
             remote=remote_name,
             branch=branch_name,
         )
+        post_push_verification = publication.verify_promoted_workspace_source(token)
         if commit == "nothing-to-commit":
             commit = self.ctx.git.current_commit(str(workspace))
         else:
@@ -3190,7 +3200,7 @@ class RootDeveloperService:
             "project_id": plan.release.project_id,
             "version": plan.release.version,
             "release_digest": plan.release.release_digest,
-            "verification": verification,
+            "verification": post_push_verification,
             "changed_files": changed,
             "semantic_publication": semantic_publication,
             "application_catalog_publication": application_catalog_publication,

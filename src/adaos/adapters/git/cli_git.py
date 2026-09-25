@@ -633,10 +633,11 @@ class CliGitClient(GitClient):
         d = Path(dir)
         d.mkdir(parents=True, exist_ok=True)
         git_dir = d / ".git"
+        managed_repo_created = not git_dir.exists()
         if not git_dir.exists():
             # Prefer clone into empty directory; if directory is non-empty, fall back to init+fetch
             try:
-                args = ["clone", url, str(d)]
+                args = ["-c", "core.autocrlf=false", "clone", url, str(d)]
                 if self._depth > 0:
                     args += [f"--depth={self._depth}"]
                 if branch:
@@ -649,6 +650,7 @@ class CliGitClient(GitClient):
             except GitError:
                 # Non-empty destination — initialize in place and attach remote
                 _run_git(["init"], cwd=str(d))
+                _run_git(["config", "core.autocrlf", "false"], cwd=str(d))
                 try:
                     _run_git(["remote", "add", "origin", url], cwd=str(d))
                 except GitError:
@@ -674,6 +676,12 @@ class CliGitClient(GitClient):
                     _run_git(["sparse-checkout", "init", "--cone"], cwd=str(d))
                 except Exception:
                     pass
+        if managed_repo_created and git_dir.exists():
+            # Persist the clone-time setting for later sparse rehydration and
+            # source verification. Existing repositories are left untouched:
+            # changing their checkout filter after files exist can manufacture
+            # a dirty worktree from line-ending conversions.
+            _run_git(["config", "core.autocrlf", "false"], cwd=str(d))
         _append_exclude(
             dir,
             [

@@ -300,6 +300,9 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
             git_calls.append(("commit", kwargs))
             return "b" * 40
 
+        def sparse_add(self, _root, path):
+            git_calls.append(("sparse_add", path))
+
         def push(self, _root, **kwargs):
             git_calls.append(("push", kwargs))
 
@@ -381,7 +384,14 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         "registry.json",
         "semantic",
     )
-    assert git_calls[1] == ("push", {"remote": "registry", "branch": "main"})
+    assert git_calls[1:6] == [
+        ("sparse_add", "projects/media"),
+        ("sparse_add", "scenarios/media"),
+        ("sparse_add", "skills/media_skill"),
+        ("sparse_add", "registry.json"),
+        ("sparse_add", "semantic"),
+    ]
+    assert git_calls[6] == ("push", {"remote": "registry", "branch": "main"})
     assert receipt_calls[0]["commit"] == "b" * 40
     assert receipt_calls[0]["paths"] == commit["subpath"]
 

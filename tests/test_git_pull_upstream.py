@@ -52,6 +52,7 @@ def test_pull_works_without_upstream(tmp_path):
 
     git = CliGitClient(depth=0)
     git.ensure_repo(dest, str(remote), branch="main")
+    assert _run(["git", "config", "--get", "core.autocrlf"], cwd=dest) == "false"
     before = git.current_commit(dest)
 
     (seed / "readme.txt").write_text("v2\n", encoding="utf-8")

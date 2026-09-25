@@ -105,6 +105,37 @@ REBASE_PLAN_SCHEMA = "adaos.artifact.rebase_plan.v1"
 PROMOTION_OPERATION_SCHEMA = "adaos.artifact.promotion_operation.v1"
 _DEVELOPMENT_SOURCE_ROOTS = ("tests",)
 _PROJECT_PUBLIC_DOCUMENTS = ("README.md",)
+_DEVELOPMENT_SOURCE_IGNORE = shutil.ignore_patterns(
+    "__pycache__",
+    ".pytest_cache",
+    "*.pyc",
+    "*.pyo",
+)
+_DEVELOPMENT_SOURCE_TEXT_SUFFIXES = {
+    ".json",
+    ".md",
+    ".py",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+
+
+def _canonical_development_source_bytes(path: Path) -> bytes:
+    data = path.read_bytes()
+    if path.suffix.lower() in _DEVELOPMENT_SOURCE_TEXT_SUFFIXES:
+        data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return data
+
+
+def _normalize_development_source_tree(root: Path) -> None:
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        if path.suffix.lower() not in _DEVELOPMENT_SOURCE_TEXT_SUFFIXES:
+            continue
+        canonical = _canonical_development_source_bytes(path)
+        if canonical != path.read_bytes():
+            atomic_write_bytes(path, canonical)
 
 
 class PublicationError(RuntimeError):
@@ -522,7 +553,14 @@ class ArtifactPublicationService:
         files = []
         for path in sorted(item for item in root.rglob("*") if item.is_file()):
             relative = path.relative_to(root).as_posix()
-            data = path.read_bytes()
+            relative_parts = Path(relative).parts
+            if (
+                "__pycache__" in relative_parts
+                or ".pytest_cache" in relative_parts
+                or path.suffix.lower() in {".pyc", ".pyo"}
+            ):
+                continue
+            data = _canonical_development_source_bytes(path)
             files.append(
                 {
                     "path": relative,
@@ -552,7 +590,12 @@ class ArtifactPublicationService:
             for name in _DEVELOPMENT_SOURCE_ROOTS:
                 source = Path(artifact_dir).resolve() / name
                 if source.is_dir():
-                    shutil.copytree(source, staging / name)
+                    shutil.copytree(
+                        source,
+                        staging / name,
+                        ignore=_DEVELOPMENT_SOURCE_IGNORE,
+                    )
+                    _normalize_development_source_tree(staging / name)
             target.parent.mkdir(parents=True, exist_ok=True)
             replace_with_retry(staging, target)
         except Exception:
@@ -594,7 +637,12 @@ class ArtifactPublicationService:
                 for name in _DEVELOPMENT_SOURCE_ROOTS:
                     source = source_root / name
                     if source.is_dir():
-                        shutil.copytree(source, package_root / name)
+                        shutil.copytree(
+                            source,
+                            package_root / name,
+                            ignore=_DEVELOPMENT_SOURCE_IGNORE,
+                        )
+                        _normalize_development_source_tree(package_root / name)
             target.parent.mkdir(parents=True, exist_ok=True)
             replace_with_retry(staging, target)
         except Exception:
@@ -643,7 +691,12 @@ class ArtifactPublicationService:
                 if source.is_dir():
                     if not target.exists():
                         target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copytree(source, target)
+                        shutil.copytree(
+                            source,
+                            target,
+                            ignore=_DEVELOPMENT_SOURCE_IGNORE,
+                        )
+                        _normalize_development_source_tree(target)
                     copied.append(name)
             entries.append(
                 {
@@ -715,7 +768,12 @@ class ArtifactPublicationService:
                     raise PublicationError("development source projection item is missing")
                 if target.exists():
                     shutil.rmtree(target)
-                shutil.copytree(source, target)
+                shutil.copytree(
+                    source,
+                    target,
+                    ignore=_DEVELOPMENT_SOURCE_IGNORE,
+                )
+                _normalize_development_source_tree(target)
                 roots.append(name)
             for name in _DEVELOPMENT_SOURCE_ROOTS:
                 if name in declared_roots:

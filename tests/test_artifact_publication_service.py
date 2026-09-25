@@ -254,9 +254,12 @@ def test_project_candidate_uses_full_owned_component_closure(tmp_path: Path) -> 
         encoding="utf-8",
     )
     (skill_dir / "tests").mkdir()
-    (skill_dir / "tests" / "test_demo.py").write_text(
-        "def test_demo():\n    assert True\n",
-        encoding="utf-8",
+    (skill_dir / "tests" / "test_demo.py").write_bytes(
+        b"def test_demo():\r\n    assert True\r\n"
+    )
+    (skill_dir / "tests" / "__pycache__").mkdir()
+    (skill_dir / "tests" / "__pycache__" / "test_demo.cpython-311.pyc").write_bytes(
+        b"transient-bytecode"
     )
     project_dir = source_workspace / "projects" / "recipes_project"
     project_dir.mkdir(parents=True)
@@ -369,6 +372,17 @@ lifecycle:
         prepared.candidate.candidate_id
     )
     assert (snapshot / "skill" / "shopping_skill" / "tests" / "test_demo.py").is_file()
+    assert (
+        snapshot / "skill" / "shopping_skill" / "tests" / "test_demo.py"
+    ).read_bytes() == b"def test_demo():\n    assert True\n"
+    assert not (
+        snapshot
+        / "skill"
+        / "shopping_skill"
+        / "tests"
+        / "__pycache__"
+        / "test_demo.cpython-311.pyc"
+    ).exists()
     assert (snapshot / "project" / "recipes_project" / "project.yaml").read_text(
         encoding="utf-8"
     ) == (project_dir / "project.yaml").read_text(encoding="utf-8")
