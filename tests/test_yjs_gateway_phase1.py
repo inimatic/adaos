@@ -820,6 +820,72 @@ def test_gateway_effective_guard_accepts_y_map_effective_branches(monkeypatch) -
     assert snapshot["materialized_scenario"] == "todo"
 
 
+def test_gateway_effective_guard_hot_path_uses_point_reads(monkeypatch) -> None:
+    class _NoEnumerationMap(dict[str, object]):
+        def keys(self):  # type: ignore[override]
+            raise AssertionError("hot-path readiness must not enumerate Yjs maps")
+
+    class _Doc:
+        def __init__(self) -> None:
+            self._state = {
+                "ui": _NoEnumerationMap(
+                    {
+                        "application": _NoEnumerationMap(
+                            {
+                                "desktop": _NoEnumerationMap(
+                                    {"pageSchema": _NoEnumerationMap({"widgets": []})}
+                                ),
+                                "modals": _NoEnumerationMap(
+                                    {"apps_catalog": {}, "widgets_catalog": {}}
+                                ),
+                            }
+                        )
+                    }
+                ),
+                "data": _NoEnumerationMap(
+                    {
+                        "catalog": {"apps": [], "widgets": []},
+                        "installed": {"apps": [], "widgets": []},
+                        "desktop": {},
+                        "webio": {},
+                        "routing": {},
+                    }
+                ),
+                "registry": _NoEnumerationMap({"merged": {}}),
+                "runtime": {
+                    "environment": {
+                        "materialization": {
+                            "required_branches": [
+                                "ui.application",
+                                "data.catalog",
+                                "data.installed",
+                                "data.desktop",
+                                "data.webio",
+                                "data.routing",
+                            ]
+                        }
+                    }
+                },
+            }
+
+        def get_map(self, name: str) -> dict[str, object]:
+            return self._state.setdefault(name, {})
+
+    doc = _Doc()
+    monkeypatch.setattr(
+        gateway_module,
+        "_room_branch_keys",
+        lambda value: (_ for _ in ()).throw(
+            AssertionError("hot-path readiness must not enumerate branches")
+        ),
+    )
+
+    assert gateway_module._room_effective_application_ready(
+        doc.get_map("ui").get("application")
+    ) is True
+    assert gateway_module._room_effective_top_level_ready(doc) is True
+
+
 def test_gateway_effective_guard_rejects_materialization_scenario_mismatch(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
 

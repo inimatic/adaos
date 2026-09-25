@@ -322,6 +322,21 @@ Relevant fields:
 Use these counters to distinguish real write churn from harmless
 generation-current skips.
 
+### Effective-Document Readiness Hot Path
+
+The readiness guard must validate required Yjs branches with point reads. It
+must not enumerate `YMap.keys()` for `ui.application`, `ui.application.desktop`,
+or top-level required branches. A desktop application projection can be
+hundreds of kilobytes; enumerating it on every update decodes the branch on the
+event-loop/owner thread and was observed to stall browser admission for roughly
+0.5 seconds per check.
+
+The guard therefore reads only the contract fields it needs: `desktop`,
+`pageSchema`, modal catalogs, required root children, and the small installed
+arrays. Full branch enumeration remains diagnostic-only and must stay out of
+the normal readiness/update path. `test_gateway_effective_guard_hot_path_uses_point_reads`
+locks this invariant by using maps that reject key enumeration.
+
 ## CRDT Checkpoint Direction
 
 YStore replay compaction bounds the replay tail but cannot remove Yjs struct

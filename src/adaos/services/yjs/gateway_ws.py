@@ -1534,7 +1534,6 @@ class DiagnosticYRoom(YRoom):
             return
         snapshot = self._diag_snapshot()
         send_stream = snapshot.get("send_stream") if isinstance(snapshot.get("send_stream"), dict) else {}
-        receive_stream = snapshot.get("receive_stream") if isinstance(snapshot.get("receive_stream"), dict) else {}
         ystore = snapshot.get("ystore") if isinstance(snapshot.get("ystore"), dict) else {}
         buffer_used = int(send_stream.get("current_buffer_used") or 0)
         waiting_send = int(send_stream.get("tasks_waiting_send") or 0)
@@ -5874,9 +5873,7 @@ def _untrack_yws_connection(webspace_id: str, websocket: WebSocket) -> None:
     remaining_connections = 0
     with _ACTIVE_YWS_LOCK:
         items = _ACTIVE_YWS_CONNECTIONS.get(key)
-        if not items:
-            device_key = None
-        else:
+        if items:
             try:
                 items.remove(websocket)
             except ValueError:
@@ -7055,11 +7052,16 @@ def _room_effective_branches_ready(ydoc: Any) -> bool:
 
 
 def _room_effective_application_ready(application: Any) -> bool:
-    if not _room_branch_is_mapping(application) or not _room_branch_keys(application):
+    # This check runs on the Yjs update hot path.  Enumerating a YMap with
+    # ``keys()`` decodes the whole branch and can stall the event loop for a
+    # large desktop document.  The required point reads below are both cheaper
+    # and a stronger readiness assertion than checking that the maps are merely
+    # non-empty.
+    if not _room_branch_is_mapping(application):
         return False
     desktop = _room_branch_get(application, "desktop")
     modals = _room_branch_get(application, "modals")
-    if not _room_branch_is_mapping(desktop) or not _room_branch_keys(desktop):
+    if not _room_branch_is_mapping(desktop):
         return False
     if not _room_branch_is_mapping(_room_branch_get(desktop, "pageSchema")):
         return False
@@ -7174,17 +7176,17 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
     try:
         if _room_materialization_mismatch(ydoc):
             return False
-        root_keys: dict[str, set[str]] = {}
+        checked: set[tuple[str, str]] = set()
         for path in _room_effective_required_branches(ydoc):
             parts = [part for part in str(path or "").split(".") if part]
             if len(parts) < 2:
                 return False
             root_name, key = parts[:2]
-            keys = root_keys.get(root_name)
-            if keys is None:
-                keys = set(_room_branch_keys(ydoc.get_map(root_name)))
-                root_keys[root_name] = keys
-            if key not in keys:
+            branch = (root_name, key)
+            if branch in checked:
+                continue
+            checked.add(branch)
+            if _room_branch_get(ydoc.get_map(root_name), key) is None:
                 return False
         # Installed state is small and its arrays are part of the public
         # desktop contract, so retain this shallow semantic check without
