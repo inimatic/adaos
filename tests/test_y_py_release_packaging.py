@@ -14,14 +14,15 @@ def test_packaged_runtime_resolves_patched_y_py_release_wheels() -> None:
     wheels = sorted(wheel_dir.glob("*.whl"))
 
     assert requirements == ["y-py==0.6.2+adaos.1"]
-    assert wheel_index.count("/releases/download/y-py-v0.6.2-adaos.1/") == 4
-    assert wheel_index.count("y_py-0.6.2%2Badaos.1-cp311-cp311-") == 4
+    assert wheel_index.count("/releases/download/y-py-v0.6.2-adaos.1/") == 5
+    assert wheel_index.count("y_py-0.6.2%2Badaos.1-cp311-cp311-") == 5
     assert "manylinux_2_17_x86_64.manylinux2014_x86_64.whl" in wheel_index
+    assert "manylinux_2_17_aarch64.manylinux2014_aarch64.whl" in wheel_index
     assert "win_amd64.whl" in wheel_index
     assert "macosx_11_0_arm64.whl" in wheel_index
     assert "macosx_10_15_x86_64.whl" in wheel_index
-    assert wheel_index.count("#sha256=") == 4
-    assert len(wheels) == 4
+    assert wheel_index.count("#sha256=") == 5
+    assert len(wheels) == 5
     for wheel in wheels:
         digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
         assert f"{wheel.name.replace('+', '%2B')}#sha256={digest}" in wheel_index
@@ -56,6 +57,7 @@ def test_repository_default_does_not_override_release_y_py_wheels() -> None:
     assert 'source = { directory = "vendor/y-py" }' not in runtime_lock
     assert 'source = { registry = "vendor/y-py/wheels" }' in runtime_lock
     assert "y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_x86_64" in runtime_lock
+    assert "y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_aarch64" in runtime_lock
 
 
 def test_user_install_does_not_require_vosk_or_dev_dependencies() -> None:
@@ -115,3 +117,14 @@ def test_wheel_workflow_builds_both_macos_architectures() -> None:
     assert "macosx_10_15_x86_64.whl" in workflow
     assert 'MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}' in workflow
     assert "Verify macOS minimum deployment target" in workflow
+
+
+def test_wheel_workflow_builds_manylinux_2014_arm64() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workflow = (repo_root / ".github" / "workflows" / "y-py-wheels.yml").read_text(encoding="utf-8")
+
+    assert "os: ubuntu-24.04-arm" in workflow
+    assert "label: linux-arm64" in workflow
+    assert "machine: aarch64" in workflow
+    assert "manylinux_2_17_aarch64.manylinux2014_aarch64.whl" in workflow
+    assert "manylinux: 2014" in workflow

@@ -862,6 +862,22 @@ def _uv_link_mode_snapshot(*, uv: str, venv_dir: Path) -> dict[str, object]:
         }
 
 
+def _pip_project_install_command(
+    python_bin: Path,
+    checkout_dir: Path,
+    *,
+    no_build_isolation: bool = False,
+) -> list[str]:
+    command = [str(python_bin), "-m", "pip", "install"]
+    if no_build_isolation:
+        command.append("--no-build-isolation")
+    wheel_dir = checkout_dir / "vendor" / "y-py" / "wheels"
+    if wheel_dir.is_dir():
+        command.extend(["--find-links", str(wheel_dir)])
+    command.append(str(checkout_dir))
+    return command
+
+
 def _install_slot_project(
     *,
     checkout_dir: Path,
@@ -1034,10 +1050,10 @@ def _install_slot_project(
                     "packages": toolchain.get("packages"),
                 }
             )
-            _run([str(py), "-m", "pip", "install", "--no-build-isolation", str(checkout_dir)])
+            _run(_pip_project_install_command(py, checkout_dir, no_build_isolation=True))
         else:
             _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-            _run([str(py), "-m", "pip", "install", str(checkout_dir)])
+            _run(_pip_project_install_command(py, checkout_dir))
     except Exception as first_exc:
         attempts.append(
             {
@@ -1053,7 +1069,7 @@ def _install_slot_project(
             _run([sys.executable, "-m", "venv", str(venv_dir)])
             py = _venv_python(venv_dir)
             _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-            _run([str(py), "-m", "pip", "install", str(checkout_dir)])
+            _run(_pip_project_install_command(py, checkout_dir))
         else:
             raise
     attempts.append({"installer": "pip", "returncode": 0})

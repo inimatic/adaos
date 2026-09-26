@@ -673,6 +673,47 @@ def test_install_slot_project_reuses_seeded_build_toolchain_without_online_upgra
     assert result["attempts"][0]["bootstrap_skipped"] is True
 
 
+def test_install_slot_project_exposes_checked_in_wheels_to_pip(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    wheel_dir = checkout / "vendor" / "y-py" / "wheels"
+    wheel_dir.mkdir(parents=True)
+    venv = tmp_path / "venv"
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(mod, "_venv_is_usable", lambda _path: True)
+    monkeypatch.setattr(
+        mod,
+        "_venv_build_toolchain_snapshot",
+        lambda _path: {
+            "ready": True,
+            "packages": {"pip": "24", "setuptools": "79", "wheel": "0.45"},
+        },
+    )
+    monkeypatch.setattr(mod, "_run", lambda cmd, *, cwd=None: commands.append(list(cmd)))
+
+    result = mod._install_slot_project(
+        checkout_dir=checkout,
+        venv_dir=venv,
+        seed={"seeded": True, "copy_method": "cp_archive"},
+    )
+
+    assert commands == [
+        [
+            str(mod._venv_python(venv)),
+            "-m",
+            "pip",
+            "install",
+            "--no-build-isolation",
+            "--find-links",
+            str(wheel_dir),
+            str(checkout),
+        ]
+    ]
+    assert result["ok"] is True
+
+
 def test_install_slot_project_reseeds_hardlink_copy_before_pip_fallback(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

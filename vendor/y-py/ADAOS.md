@@ -51,7 +51,8 @@ release URLs and SHA-256 digests. Release automation must update both the
 published assets and these verified distribution copies together.
 Use the bootstrap `--build-vendored-y-py`/`-BuildVendoredYPy` option only when
 developing the fork itself. Release wheels are built by
-`.github/workflows/y-py-wheels.yml` for Windows, Linux, and macOS.
+`.github/workflows/y-py-wheels.yml` for Windows, Linux x86_64 and aarch64,
+and macOS.
 
 The published binary set is available from the GitHub release
 [`y-py-v0.6.2-adaos.1`](https://github.com/inimatic/adaos/releases/tag/y-py-v0.6.2-adaos.1).

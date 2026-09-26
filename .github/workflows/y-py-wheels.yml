@@ -27,6 +27,10 @@ jobs:
             label: linux-x86_64
             machine: x86_64
             asset: y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+            machine: aarch64
+            asset: y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
           - os: windows-latest
             label: windows-x86_64
             machine: AMD64
@@ -70,7 +74,7 @@ jobs:
             --out dist
             --manifest-path vendor/y-py/Cargo.toml
             --interpreter python3.11
-          manylinux: auto
+          manylinux: 2014
 
       - name: Verify wheel filename
         shell: bash
