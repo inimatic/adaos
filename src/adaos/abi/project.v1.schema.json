@@ -136,7 +136,7 @@
         "type": "object", "required": ["id", "presentation", "bindings"],
         "properties": {
           "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,79}$"},
-          "presentation": {"type": "string", "pattern": "^scenario:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+          "presentation": {"type": "string", "pattern": "^(?:skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
           "default": {"type": "boolean"},
           "bindings": {"type": "object", "maxProperties": 50, "additionalProperties": {"type": ["string", "number", "boolean", "null"]}}
         },

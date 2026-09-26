@@ -20,7 +20,11 @@ from adaos.domain.capability_binding_state import (
 )
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.cbs import ApplicationCBSConflict, ApplicationCBSService
-from adaos.services.builder.cbs import cbs_compiler_view, compile_prototype_cbs
+from adaos.services.builder.cbs import (
+    cbs_compiler_view,
+    compile_project_cbs,
+    compile_prototype_cbs,
+)
 from adaos.services.builder.workflow import BuilderWorkflowError
 from adaos.services.capability_binding_state import LocalIdentityStore
 
@@ -203,6 +207,64 @@ def test_compiler_expands_compact_package_neutral_cbs_intent() -> None:
     }
     assert "googleapis" not in str(mail).lower()
     assert "package" not in str(mail).lower()
+
+
+def test_project_compiler_uses_portable_contract_refs_for_skill_application() -> None:
+    project = {
+        "id": "subscriptions",
+        "version": "1.2.0",
+        "entrypoints": [
+            {
+                "id": "main",
+                "presentation": "skill:subscription_status_skill",
+                "default": True,
+                "bindings": {"surface": "subscription_status"},
+            }
+        ],
+        "compatibility": {
+            "required_contracts": [
+                "capability:subscriptions.status.inspect@^1.0.0",
+                "adaos.legacy.contract.v1",
+            ]
+        },
+    }
+
+    compilation = compile_project_cbs(project)
+
+    assert compilation["application_ref"] == "skill:subscription_status_skill"
+    assert [item["capability_ref"] for item in compilation["requirements"]] == [
+        "capability:subscriptions.status.inspect"
+    ]
+    assert compilation["requirements"][0]["contract_range"] == "^1.0.0"
+    assert compilation["environment_target"]["allowed_modes"] == ["production"]
+    assert compilation["authoring_telemetry"] == {
+        "human_authored_requirements": 1,
+        "builder_inferred_requirements": 0,
+        "compiler_generated_requirements": 0,
+    }
+
+
+def test_project_compiler_generates_scenario_ui_requirement() -> None:
+    compilation = compile_project_cbs(
+        {
+            "id": "media",
+            "version": "1.0.0",
+            "entrypoints": [
+                {
+                    "id": "main",
+                    "presentation": "scenario:media",
+                    "default": True,
+                    "bindings": {},
+                }
+            ],
+            "compatibility": {},
+        }
+    )
+
+    assert [item["capability_ref"] for item in compilation["requirements"]] == [
+        "capability:application.ui.render"
+    ]
+    assert compilation["authoring_telemetry"]["compiler_generated_requirements"] == 1
 
 
 def test_compiler_rejects_tampered_acceptance() -> None:

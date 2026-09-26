@@ -363,9 +363,29 @@ class ComponentUpdateService:
                 continue
             if application.publisher_ref != publisher:
                 continue
-            scenario = applications._primary_scenario(application)
+            entrypoints = getattr(application, "entrypoints", ())
+            presentation_ref = str(
+                (entrypoints[0] if entrypoints else {}).get(
+                    "presentation_ref"
+                )
+                or ""
+            )
+            if not presentation_ref:
+                try:
+                    presentation_ref = (
+                        "scenario:" + applications._primary_scenario(application)
+                    )
+                except ValueError:
+                    continue
+            component_type, _, component_id = presentation_ref.partition(":")
+            if component_type not in {"skill", "scenario"} or not component_id:
+                continue
             try:
-                state = workflow.get_state("scenario", scenario)
+                state = (
+                    workflow.get_state("scenario", component_id)
+                    if component_type == "scenario"
+                    else {}
+                )
             except FileNotFoundError:
                 # Component notices outlive mutable DEV checkouts. Immutable
                 # Candidate and activation records below remain sufficient to
@@ -466,7 +486,7 @@ class ComponentUpdateService:
                 # A completed publication whose derived stable projection has
                 # not reconciled yet must remain visible as publishing Beta.
                 trial_status = "accepted"
-            notice = self.record_aprobation(component_type="scenario", component_id=scenario,
+            notice = self.record_aprobation(component_type=component_type, component_id=component_id,
                 aprobation={"source_kind": "builder_local_trial", "trial": {
                     "candidate_id": candidate_id, "candidate_digest": candidate_digest,
                     "release_digest": release.release_digest, "version": release.project_release.version,

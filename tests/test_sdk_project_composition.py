@@ -362,6 +362,35 @@ def test_project_can_adopt_an_existing_unowned_builder_component(project_space) 
     )
 
 
+def test_project_can_expose_a_skill_owned_application_entrypoint(project_space) -> None:
+    _skill(project_space["skills"], "notebook_skill")
+
+    result = compositions.create_for_existing_component(
+        "notebook",
+        kind="skill",
+        component_id="notebook_skill",
+        title="Notebook",
+        entrypoints=(
+            {
+                "id": "notes",
+                "presentation": "skill:notebook_skill",
+                "default": True,
+                "bindings": {"surface": "notebook"},
+            },
+        ),
+        member={"role": "primary", "exposure": "application"},
+    )
+
+    assert result["project"]["entrypoints"] == [
+        {
+            "id": "notes",
+            "presentation": "skill:notebook_skill",
+            "default": True,
+            "bindings": {"surface": "notebook"},
+        }
+    ]
+
+
 def test_project_component_lookup_uses_registry_projection(
     project_space, monkeypatch
 ) -> None:

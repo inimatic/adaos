@@ -356,12 +356,149 @@ def compile_prototype_cbs(
     return validate_cbs_compilation(result)
 
 
+def compile_project_cbs(
+    project: Mapping[str, Any],
+    *,
+    environment_profile_ref: str = "profile:local/default",
+) -> dict[str, Any]:
+    """Compile portable Project contract declarations without Builder state.
+
+    ``compatibility.required_contracts`` predates CBS and remains useful as a
+    compact authoring surface.  Entries with the closed
+    ``capability:<stable-ref>@<semver-range>`` form become package-neutral
+    requirements.  Scenario presentation also receives the generated UI
+    requirement used by Builder prototypes; skill-owned presentation is
+    already rendered by the skill surface and therefore does not pretend to
+    be a scenario WebUI provider.
+    """
+
+    source = copy.deepcopy(dict(project))
+    project_id = str(source.get("id") or "").strip()
+    version = str(source.get("version") or "").strip()
+    if not project_id or not version:
+        raise BuilderWorkflowError("Project CBS compilation requires id and version")
+    entrypoints = [
+        dict(item)
+        for item in source.get("entrypoints") or []
+        if isinstance(item, Mapping)
+    ]
+    selected = next(
+        (item for item in entrypoints if item.get("default") is True),
+        entrypoints[0] if entrypoints else None,
+    )
+    application_ref = str((selected or {}).get("presentation") or "").strip()
+    if not re.fullmatch(r"(?:scenario|skill):[A-Za-z0-9_.-]+", application_ref):
+        raise BuilderWorkflowError(
+            "Project CBS compilation requires one scenario or skill entrypoint"
+        )
+    profile_ref = str(environment_profile_ref or "").strip()
+    if not profile_ref.startswith("profile:"):
+        raise BuilderWorkflowError("CBS environment profile must be a profile: reference")
+    environment_target = {
+        "profile_ref": profile_ref,
+        "allowed_modes": ["production"],
+    }
+    application_token = _token(application_ref.replace(":", "."), fallback=project_id)
+    requirements: list[dict[str, Any]] = []
+    generated = 0
+    if application_ref.startswith("scenario:"):
+        requirements.append(
+            _requirement(
+                requirement_ref=f"requirement:{application_token}.ui",
+                capability_ref="capability:application.ui.render",
+                environment_target=environment_target,
+            )
+        )
+        generated = 1
+
+    authored = 0
+    seen_capabilities = {str(item["capability_ref"]) for item in requirements}
+    for raw in dict(source.get("compatibility") or {}).get("required_contracts") or []:
+        declaration = str(raw or "").strip()
+        if not declaration.startswith("capability:") or "@" not in declaration:
+            continue
+        capability_ref, contract_range = declaration.rsplit("@", 1)
+        capability_ref = capability_ref.strip()
+        contract_range = contract_range.strip()
+        if not capability_ref or not contract_range:
+            raise BuilderWorkflowError(
+                f"invalid Project capability contract declaration: {declaration}"
+            )
+        if capability_ref in seen_capabilities:
+            continue
+        seen_capabilities.add(capability_ref)
+        capability_token = _token(
+            capability_ref.removeprefix("capability:"), fallback="capability"
+        ).replace("/", ".")
+        requirements.append(
+            _requirement(
+                requirement_ref=(
+                    f"requirement:{application_token}.{capability_token}"
+                ),
+                capability_ref=capability_ref,
+                contract_range=contract_range,
+                environment_target=environment_target,
+            )
+        )
+        authored += 1
+    if not requirements:
+        raise BuilderWorkflowError("Project has no compilable CBS requirements")
+
+    source_digest = canonical_payload_digest(
+        {
+            "schema": "adaos.project.cbs_source.v1",
+            "project_id": project_id,
+            "version": version,
+            "entrypoint": selected,
+            "required_contracts": list(
+                dict(source.get("compatibility") or {}).get("required_contracts")
+                or []
+            ),
+        }
+    )
+    semantic_revision_digest = canonical_payload_digest(
+        {
+            "application_ref": application_ref,
+            "project_id": project_id,
+            "version": version,
+            "requirements": requirements,
+        }
+    )
+    result: dict[str, Any] = {
+        "schema": BUILDER_CBS_COMPILATION_SCHEMA,
+        "compiler_version": BUILDER_CBS_COMPILER_VERSION,
+        "application_ref": application_ref,
+        "source_acceptance_digest": source_digest,
+        "semantic_revision_digest": semantic_revision_digest,
+        "environment_target": environment_target,
+        "requirements": requirements,
+        "simulation_attachments": [],
+        "automation_obligations": [],
+        "authoring_telemetry": {
+            "human_authored_requirements": authored,
+            "builder_inferred_requirements": 0,
+            "compiler_generated_requirements": generated,
+        },
+        "viability": {
+            "semantic": "compiled",
+            "simulation": "pending",
+            "production": "unresolved",
+            "unresolved_requirement_refs": [
+                str(item["requirement_ref"]) for item in requirements
+            ],
+        },
+    }
+    result["compilation_digest"] = canonical_payload_digest(result)
+    return validate_cbs_compilation(result)
+
+
 __all__ = [
     "BUILDER_CBS_COMPILATION_SCHEMA",
     "BUILDER_CBS_COMPILER_VERSION",
     "BUILDER_CBS_COMPILER_VIEW_SCHEMA",
     "cbs_compilation_registry_ref",
     "cbs_compiler_view",
+    "compile_project_cbs",
     "compile_prototype_cbs",
     "validate_cbs_compilation",
 ]

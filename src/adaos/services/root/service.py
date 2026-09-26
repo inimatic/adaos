@@ -2569,6 +2569,10 @@ class RootDeveloperService:
             project_id=project_id,
             source_kind=source_kind,
             source_name=source_name,
+            project_manifest=(
+                yaml.safe_load((project_dir / "project.yaml").read_text(encoding="utf-8-sig"))
+                or {}
+            ),
             prepared=prepared,
             publication=publication,
         )
@@ -2590,6 +2594,7 @@ class RootDeveloperService:
         project_id: str,
         source_kind: Literal["skill", "scenario"],
         source_name: str,
+        project_manifest: Mapping[str, Any] | None = None,
         prepared: Any,
         publication: ArtifactPublicationService,
     ) -> dict[str, Any] | None:
@@ -2601,17 +2606,64 @@ class RootDeveloperService:
         release's evidence must never authorize a new package closure.
         """
 
-        if source_kind != "scenario":
-            return None
-
         from adaos.services.applications.cbs import ApplicationCBSService
         from adaos.services.applications.cbs_admission import (
             NativeApplicationCBSAdmissionService,
         )
+        from adaos.services.builder.cbs import compile_project_cbs
+        from adaos.services.builder.workflow import BuilderWorkflowError
 
-        application_ref = f"scenario:{source_name}"
         state_dir = Path(self.ctx.paths.state_dir())
-        compilation = ApplicationCBSService(state_dir).inspect(application_ref)
+        cbs = ApplicationCBSService(state_dir)
+        entrypoints = [
+            dict(item)
+            for item in (project_manifest or {}).get("entrypoints") or []
+            if isinstance(item, Mapping)
+        ]
+        selected = next(
+            (item for item in entrypoints if item.get("default") is True),
+            entrypoints[0] if entrypoints else None,
+        )
+        presentation_ref = str((selected or {}).get("presentation") or "").strip()
+        application_ref = (
+            presentation_ref
+            if presentation_ref.startswith(("scenario:", "skill:"))
+            else f"{source_kind}:{source_name}"
+        )
+        compilation = cbs.inspect(application_ref)
+        declarations = [
+            str(item or "").strip()
+            for item in dict((project_manifest or {}).get("compatibility") or {}).get(
+                "required_contracts"
+            )
+            or []
+        ]
+        has_explicit_capabilities = any(
+            item.startswith("capability:") and "@" in item
+            for item in declarations
+        )
+        should_compile_project = bool(project_manifest) and (
+            compilation is None or has_explicit_capabilities
+        )
+        if should_compile_project:
+            try:
+                compiled = compile_project_cbs(project_manifest or {})
+            except BuilderWorkflowError as exc:
+                if source_kind == "skill" and not has_explicit_capabilities:
+                    return None
+                raise RootServiceError(str(exc)) from exc
+            if compilation is None or (
+                compilation.get("compilation_digest")
+                != compiled.get("compilation_digest")
+            ):
+                compilation = cbs.register(
+                    compiled,
+                    expected_previous_digest=(
+                        str(compilation.get("compilation_digest"))
+                        if compilation is not None
+                        else None
+                    ),
+                )
         if compilation is None:
             return None
 

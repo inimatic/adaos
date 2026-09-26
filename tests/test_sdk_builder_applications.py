@@ -330,6 +330,8 @@ def test_candidate_verification_adopts_project_before_release_gate(monkeypatch) 
         compositions,
         "get",
         lambda _project_id: {
+            "version": "1.2.3",
+            "entrypoints": [{"id": "desktop", "presentation": "scenario:desktop"}],
             "catalog": {"title": "Desktop", "description": "Home desktop"}
         },
     )
@@ -355,10 +357,57 @@ def test_candidate_verification_adopts_project_before_release_gate(monkeypatch) 
                 "subnet_ref": "subnet:home",
                 "capability": "applications.develop",
                 "expected_revision": 0,
-                "idempotency_key": "trial-adopt:desktop",
+                "idempotency_key": "trial-adopt:desktop:1.2.3",
             },
         )
     ]
+
+
+def test_adoption_accepts_skill_owned_application_entrypoint(monkeypatch, tmp_path: Path) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        applications,
+        "publisher_context",
+        lambda: {
+            "publisher_ref": "subnet:home",
+            "display_name": "Home Lab",
+            "subnet_short_ref": "home",
+            "home_zone": "local",
+            "release_key_ref": "artifact-signing:home:key",
+            "release_key_fingerprint": "sha256:" + "f" * 64,
+            "release_key_algorithm": "ed25519",
+            "release_key_issuer": "home",
+            "trust_relation": "local",
+        },
+    )
+    project = {
+        "id": "notebook",
+        "version": "1.0.0",
+        "catalog": {"title": "Notebook", "description": "Notes"},
+        "entrypoints": [{"id": "notes", "presentation": "skill:notebook_skill"}],
+        "components": {
+            "owned": [
+                {
+                    "ref": "skill:notebook_skill",
+                    "role": "primary",
+                    "exposure": "application",
+                }
+            ]
+        },
+    }
+    monkeypatch.setattr(compositions, "get", lambda _project_id: project)
+
+    created = applications._ensure_application_for_project(
+        "notebook", actor_ref="builder.user"
+    )
+
+    assert created.entrypoints == (
+        {"entrypoint_id": "notes", "presentation_ref": "skill:notebook_skill"},
+    )
 
 
 def test_builder_application_sdk_has_no_raw_authority_parameters() -> None:

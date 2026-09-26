@@ -79,15 +79,118 @@ def _application_for_project(project_id: str) -> Application | None:
     return matches[0] if matches else None
 
 
-def _ensure_application_for_project(project_id: str, *, actor_ref: str) -> Application:
+def _adopt_legacy_workspace_installation(
+    application: Application, *, webspace_id: str = "desktop"
+) -> Application:
+    """Bind an exact pre-aggregate Workspace slot to its Application identity.
+
+    Project installations predate the Application aggregate on existing
+    developer machines.  A later Trial must retain that release as its data
+    transition base instead of requiring operators to remove a working slot.
+    Adoption records explicit compatibility evidence and verifies the exact
+    active package closure before creating the local installation record.
+    """
+
+    from adaos.domain.application import ApplicationRelease
+    from adaos.domain.artifact_release import WorkspaceLock
+
+    service = _application_service()
+    lock_path = Path(_ctx().paths.workspace_dir()) / ".adaos" / "workspace.lock.json"
+    if not lock_path.is_file():
+        return application
+    lock = WorkspaceLock.from_mapping(json.loads(lock_path.read_text(encoding="utf-8")))
+    slots = [
+        slot
+        for slot in lock.slots
+        if slot.project_id == application.legacy_project_id
+    ]
+    if not slots:
+        return application
+    if len(slots) != 1:
+        raise ValueError("Legacy Workspace contains ambiguous Project slots")
+    slot = slots[0]
+    try:
+        release = _distribution_service().releases.get_release(
+            application.legacy_project_id, slot.release_digest
+        ).release
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "Legacy Workspace release metadata is unavailable for Application adoption"
+        ) from exc
+    try:
+        service.store.get_release(application.application_id, slot.release_digest)
+    except FileNotFoundError:
+        service.register_release(
+            ApplicationRelease(
+                application_id=application.application_id,
+                publisher_ref=application.publisher_ref,
+                project_release=release,
+                accepted_candidate_id=(
+                    f"legacy-workspace-{application.legacy_project_id}-{release.version}"
+                ),
+                acceptance_evidence=(
+                    {
+                        "status": "passed",
+                        "kind": "exact_workspace_compatibility_adoption",
+                        "release_digest": slot.release_digest,
+                    },
+                ),
+                provenance_refs=(slot.release_digest,),
+                lifecycle="stable",
+                published_at=utc_now(),
+            )
+        )
+    channels = service.store.get_channels(application.application_id).get("channels") or {}
+    if not channels.get("stable"):
+        service.move_channel(
+            application.application_id,
+            "stable",
+            slot.release_digest,
+            publisher_ref=application.publisher_ref,
+            expected_release_digest=None,
+        )
+    service.reconcile_workspace_installation(
+        application.application_id, slot.release_digest, lock
+    )
+    try:
+        selection = service.store.get_runtime_selection(
+            webspace_id, application.application_id
+        )
+    except FileNotFoundError:
+        selection = None
+    if selection is None:
+        service.select_runtime(
+            webspace_id=webspace_id,
+            application_id=application.application_id,
+            source="stable_installation",
+            release_digest=slot.release_digest,
+            runtime_root_ref="workspace",
+            expected_revision=0,
+            actor_ref="system:legacy-workspace-adoption",
+            subnet_ref=application.publisher_ref,
+            capability="applications.apply",
+        )
+    return application
+
+
+def _ensure_application_for_project(
+    project_id: str, *, actor_ref: str, webspace_id: str = "desktop"
+) -> Application:
     """Adopt an existing DEV Project before release-bound verification."""
 
     application = _application_for_project(project_id)
     if application is not None:
-        return application
+        return _adopt_legacy_workspace_installation(
+            application, webspace_id=webspace_id
+        )
 
     project = compositions.get(project_id)
     catalog = project.get("catalog") or {}
+    # Adoption is idempotent for one exact Project revision, not for the
+    # lifetime of a logical Project id.  A failed/abandoned adoption may have
+    # recorded an intent with older catalog metadata; reusing that key would
+    # make a later immutable revision permanently unadoptable.
+    project_version = str(project.get("version") or "unversioned").strip()
     publisher = publisher_context()
     create_application(
         project_id,
@@ -98,12 +201,12 @@ def _ensure_application_for_project(project_id: str, *, actor_ref: str) -> Appli
         subnet_ref=publisher["publisher_ref"],
         capability="applications.develop",
         expected_revision=0,
-        idempotency_key=f"trial-adopt:{project_id}",
+        idempotency_key=f"trial-adopt:{project_id}:{project_version}",
     )
     application = _application_for_project(project_id)
     if application is None:
         raise ValueError("Created Project has no Application aggregate")
-    return application
+    return _adopt_legacy_workspace_installation(application, webspace_id=webspace_id)
 
 
 def _publisher_owner_role_ids(release) -> tuple[tuple[str, ...], str]:
@@ -265,10 +368,13 @@ def verify_candidate_access(
     *,
     evidence: Mapping[str, Any] | None,
     actor_ref: str,
+    webspace_id: str = "desktop",
 ) -> dict[str, Any]:
     """Run access-aware Builder verification before a Candidate becomes Trial."""
 
-    application = _ensure_application_for_project(project_id, actor_ref=actor_ref)
+    application = _ensure_application_for_project(
+        project_id, actor_ref=actor_ref, webspace_id=webspace_id
+    )
     distribution = _distribution_service()
     release = distribution.candidate_release_projection(
         application.application_id,
@@ -449,6 +555,43 @@ def _primary_scenario(application: Application) -> str:
     if not refs:
         raise ValueError("Application has no scenario entrypoint for Builder Preview")
     return refs[0].split(":", 1)[1]
+
+
+def _project_application_entrypoints(project: Mapping[str, Any]) -> tuple[dict[str, str], ...]:
+    """Project entrypoints projected into the portable Application identity.
+
+    Application presentations may be owned by either a Scenario or a Skill.
+    Builder's interactive preview remains Scenario-specific, but adoption and
+    release distribution must not manufacture a Scenario for a skill-owned UI.
+    """
+
+    result: list[dict[str, str]] = []
+    for raw in project.get("entrypoints") or ():
+        if not isinstance(raw, Mapping):
+            continue
+        entrypoint_id = str(raw.get("id") or "").strip()
+        presentation_ref = str(raw.get("presentation") or "").strip()
+        if not entrypoint_id or not presentation_ref.startswith(("scenario:", "skill:")):
+            continue
+        result.append(
+            {
+                "entrypoint_id": entrypoint_id,
+                "presentation_ref": presentation_ref,
+            }
+        )
+    if not result:
+        owned = [
+            str(item.get("ref") or "").strip()
+            for item in ((project.get("components") or {}).get("owned") or ())
+            if isinstance(item, Mapping)
+            and str(item.get("ref") or "").startswith(("scenario:", "skill:"))
+            and str(item.get("exposure") or "") in {"application", "advanced"}
+        ]
+        if len(owned) == 1:
+            result.append({"entrypoint_id": "main", "presentation_ref": owned[0]})
+    if not result:
+        raise ValueError("existing Project has no unambiguous Application entrypoint")
+    return tuple(result)
 
 
 def publisher_context() -> dict[str, Any]:
@@ -945,10 +1088,18 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
     _admit_builder_mutation("promote_stable", application_id, subnet_ref=publisher, capability="applications.publish")
     service = _application_service()
     application = service.store.get_application(application_id)
-    scenario_id = _primary_scenario(application)
-    try:
-        state = workflow.get_state("scenario", scenario_id)
-    except FileNotFoundError:
+    scenario_refs = [
+        str(item.get("presentation_ref") or "").removeprefix("scenario:")
+        for item in application.entrypoints
+        if str(item.get("presentation_ref") or "").startswith("scenario:")
+    ]
+    scenario_id = scenario_refs[0] if scenario_refs else ""
+    if scenario_id:
+        try:
+            state = workflow.get_state("scenario", scenario_id)
+        except FileNotFoundError:
+            state = {}
+    else:
         state = {}
     try:
         selected_release_digest = service.store.get_runtime_selection(
@@ -1007,7 +1158,7 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
                 expected_revision=selection.revision if selection else 0, actor_ref=actor_ref,
                 subnet_ref=publisher, capability="applications.apply")
     existing = (state.get("project") or {}).get("placements") or []
-    if workflow_published and not any(item.get("kind") == "stable" and item.get("status") == "active"
+    if scenario_id and workflow_published and not any(item.get("kind") == "stable" and item.get("status") == "active"
                                       and (item.get("target") or {}).get("webspace_id") == webspace_id
                                       and (item.get("result_ref") or {}).get("digest") == digest for item in existing):
         state = workflow.record_project_placement("scenario", scenario_id, {
@@ -1017,7 +1168,7 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
             "scenario_id": scenario_id, "data_mode": "real", "runtime_binding": dict(record["activation"]),
             "safety": {"status": "verified", "source": "publication_activation"}},
             expected_generation=int(state["generation"]))["workflow"]
-    if workflow_published:
+    if scenario_id and workflow_published:
         for item in (state.get("project") or {}).get("placements") or []:
             if (item.get("kind") == "trial" and item.get("status") == "active"
                 and (item.get("target") or {}).get("webspace_id") == webspace_id
@@ -1071,6 +1222,19 @@ def _create_application_effect(
         existing = service.store.get_application(application_id)
     except FileNotFoundError:
         existing = None
+    project: Mapping[str, Any] | None = None
+    if existing is None:
+        try:
+            project = compositions.get(application_id)
+        except compositions.ProjectCompositionNotFound:
+            pass
+    expected_entrypoints = (
+        tuple(existing.entrypoints)
+        if existing is not None
+        else _project_application_entrypoints(project)
+        if project is not None
+        else ({"entrypoint_id": "main", "presentation_ref": f"scenario:{application_id}"},)
+    )
     if existing is not None:
         expected_identity = (
             existing.revision == 1
@@ -1081,7 +1245,7 @@ def _create_application_effect(
             and existing.visibility == visibility
             and existing.display.get("title") == title
             and existing.display.get("summary") == summary
-            and _primary_scenario(existing) == application_id
+            and tuple(existing.entrypoints) == expected_entrypoints
             and dict(existing.protection) == dict(Application(
                 application_id=application_id,
                 legacy_project_id=application_id,
@@ -1089,7 +1253,7 @@ def _create_application_effect(
                 slug=application_id,
                 display={"title": title, "summary": summary},
                 visibility=visibility,  # type: ignore[arg-type]
-                entrypoints=({"entrypoint_id": "main", "presentation_ref": f"scenario:{application_id}"},),
+                entrypoints=expected_entrypoints,
                 publisher={key: publisher[key] for key in (
                     "publisher_ref", "display_name", "subnet_short_ref", "release_key_ref",
                     "release_key_fingerprint", "home_zone", "trust_relation",
@@ -1102,15 +1266,9 @@ def _create_application_effect(
         return {"ok": True, "duplicate": True, "application": existing.to_dict()}
     if expected_revision != 0:
         raise ValueError("new Application expected_revision must be zero")
-    try:
-        project = compositions.get(application_id)
-        component_ref = f"scenario:{application_id}"
-        if component_ref not in {
-            str(item.get("ref") or "") for item in project["components"]["owned"]
-        }:
-            raise ValueError("existing Project does not own the Application scenario")
+    if project is not None:
         composition = {"ok": True, "project": project, "created_component": False}
-    except compositions.ProjectCompositionNotFound:
+    else:
         composition = compositions.create_with_primary_component(
             application_id,
             kind="scenario",
@@ -1136,9 +1294,7 @@ def _create_application_effect(
         slug=application_id,
         display={"title": title, "summary": summary},
         visibility=visibility,  # type: ignore[arg-type]
-        entrypoints=(
-            {"entrypoint_id": "main", "presentation_ref": f"scenario:{application_id}"},
-        ),
+        entrypoints=expected_entrypoints,
         publisher={
             key: publisher[key]
             for key in (

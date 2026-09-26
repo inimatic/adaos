@@ -21,6 +21,10 @@
         "execution": {
           "const": "native_tools"
         },
+        "legacy_adoption": {
+          "enum": ["reconstructible_empty"],
+          "description": "One-time bridge for a pre-lifecycle package only when its exact runtime data root contains no files."
+        },
         "databases": {
           "type": "array",
           "maxItems": 32,

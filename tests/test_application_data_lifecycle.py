@@ -266,6 +266,90 @@ def test_stateless_event_subscriber_with_declared_drain_is_admitted(tmp_path):
     assert result["runtime_selection"]["source"] == "local_trial"
 
 
+def test_empty_legacy_subscriber_can_be_adopted_as_reconstructible(tmp_path):
+    seed(tmp_path)
+    stable = tmp_path / "workspace/legacy-empty"
+    stable.mkdir(parents=True)
+    target = {
+        "events": {"subscribe": ["timer.tick"]},
+        "lifecycle": {"drain": "runtime_drain", "rehydrate": "runtime_rehydrate"},
+        "tools": [
+            {"name": "runtime_drain", "entry": "handlers.main:runtime_drain"},
+            {"name": "runtime_rehydrate", "entry": "handlers.main:runtime_rehydrate"},
+        ],
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+            "legacy_adoption": "reconstructible_empty",
+        },
+    }
+
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state",
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate-legacy-adoption",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(
+            OwnedDataComponent(
+                "skill:worker",
+                stable,
+                tmp_path / "beta-legacy/data",
+                tmp_path / "workspace/target-data",
+                {"events": {"subscribe": ["timer.tick"]}},
+                target,
+            ),
+        ),
+    )
+
+    assert lifecycle.prepare_beta(
+        webspace_id="desktop", activate=lambda _key: {"ok": True}
+    )["completed"] is True
+
+
+def test_reconstructible_legacy_adoption_rejects_any_owned_file(tmp_path):
+    seed(tmp_path)
+    stable = tmp_path / "workspace/legacy-data"
+    stable.mkdir(parents=True)
+    (stable / "unknown.json").write_text("{}", encoding="utf-8")
+    target = {
+        "events": {"subscribe": ["timer.tick"]},
+        "lifecycle": {"drain": "runtime_drain", "rehydrate": "runtime_rehydrate"},
+        "tools": [
+            {"name": "runtime_drain", "entry": "handlers.main:runtime_drain"},
+            {"name": "runtime_rehydrate", "entry": "handlers.main:runtime_rehydrate"},
+        ],
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+            "legacy_adoption": "reconstructible_empty",
+        },
+    }
+
+    with pytest.raises(ValueError, match="verified owner drain"):
+        LocalApplicationDataLifecycle(
+            state_root=tmp_path / "state",
+            private_root=tmp_path,
+            application_id="sample",
+            candidate_id="candidate-legacy-data",
+            release_digest="sha256:" + "1" * 64,
+            stable_digest=DIGEST,
+            components=(
+                OwnedDataComponent(
+                    "skill:worker",
+                    stable,
+                    tmp_path / "beta-legacy-data/data",
+                    tmp_path / "workspace/target-data",
+                    {"events": {"subscribe": ["timer.tick"]}},
+                    target,
+                ),
+            ),
+        )
+
+
 def test_declared_core_skill_memory_is_preserved_across_beta_acceptance(tmp_path):
     state = tmp_path / "state"
     stable = tmp_path / "workspace/data"

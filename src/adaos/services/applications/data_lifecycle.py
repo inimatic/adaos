@@ -171,8 +171,13 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
     declaration = manifest.get("data_lifecycle")
     if not isinstance(declaration, dict) or declaration.get("schema") != "adaos.skill.data_lifecycle.v1":
         raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
-    if set(declaration) != {"schema", "execution", "databases"} or declaration["execution"] != "native_tools":
+    if (
+        set(declaration) - {"schema", "execution", "databases", "legacy_adoption"}
+        or declaration["execution"] != "native_tools"
+    ):
         raise ValueError("Data cutover currently requires declared native_tools execution")
+    if declaration.get("legacy_adoption") not in {None, "reconstructible_empty"}:
+        raise ValueError("Unsupported legacy data adoption policy")
     databases = declaration["databases"]
     if not isinstance(databases, list) or len(databases) > 32:
         raise ValueError("Data lifecycle databases must be a bounded list")
@@ -281,6 +286,34 @@ def require_native_tools(manifest: Mapping[str, Any]) -> None:
         raise ValueError("Background/lifecycle execution requires a verified owner drain adapter before data cutover")
 
 
+def _allows_reconstructible_legacy_adoption(
+    stable_root: Path | None, target_manifest: Mapping[str, Any]
+) -> bool:
+    """Allow one explicit empty-state bridge from pre-lifecycle packages.
+
+    This is intentionally narrower than general backward compatibility: the
+    target must declare native lifecycle tools, no owned databases, and the
+    exact old runtime bucket must contain no files.  The new release therefore
+    starts from a reconstructible projection while ordinary stateful upgrades
+    remain fail-closed.
+    """
+
+    declaration = target_manifest.get("data_lifecycle")
+    if not isinstance(declaration, Mapping):
+        return False
+    if declaration.get("legacy_adoption") != "reconstructible_empty":
+        return False
+    if declaration.get("databases") != []:
+        return False
+    try:
+        require_native_tools(target_manifest)
+    except ValueError:
+        return False
+    if stable_root is None or not stable_root.exists():
+        return True
+    return not any(path.is_file() for path in stable_root.rglob("*"))
+
+
 def inventory(
     root: Path | None,
     declared: Mapping[str, Any],
@@ -352,8 +385,11 @@ class LocalApplicationDataLifecycle:
                     or component.target_root.is_relative_to(component.beta_root)):
                 raise ValueError("Beta requires an isolated data root")
             owned_roots.extend(root for root in (component.stable_root, component.beta_root, component.target_root) if root is not None)
-            require_native_tools(component.stable_manifest)
             require_native_tools(component.target_manifest)
+            if not _allows_reconstructible_legacy_adoption(
+                component.stable_root, component.target_manifest
+            ):
+                require_native_tools(component.stable_manifest)
             if component.stable_manifest.get("configuration") and not component.target_manifest.get("configuration"):
                 raise ValueError("Removing configuration requires an explicit migration contract")
             databases = declared_databases(component.target_manifest)
