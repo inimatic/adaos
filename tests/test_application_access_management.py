@@ -56,6 +56,28 @@ def test_runtime_permission_supports_simple_and_domain_role_actions() -> None:
     assert domain == ("workspace.write", "roster.manage")
 
 
+def test_runtime_permission_prefers_tool_effect_over_broad_skill_capability() -> None:
+    read = ApplicationAccessManagementService.runtime_permission(
+        side_effects="read_only",
+        application_access={},
+        component_capabilities=("workspace.read", "secrets.read"),
+    )
+    external = ApplicationAccessManagementService.runtime_permission(
+        side_effects="external_io",
+        application_access={},
+        component_capabilities=("secrets.read",),
+    )
+    destructive = ApplicationAccessManagementService.runtime_permission(
+        side_effects="destructive",
+        application_access={},
+        component_capabilities=(),
+    )
+
+    assert read == ("workspace.read", "workspace.read")
+    assert external == ("network.egress", "network.egress")
+    assert destructive == ("workspace.write", "workspace.write")
+
+
 def _profile(*, updated: bool = False) -> ApplicationPermissionProfile:
     required = [
         {"id": "workspace.read", "purpose": "Read assigned household tasks."},

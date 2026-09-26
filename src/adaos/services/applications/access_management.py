@@ -690,6 +690,8 @@ class ApplicationAccessManagementService:
             "ui_navigation": "workspace.read",
             "local_write": "workspace.write",
             "runtime_write": "workspace.write",
+            "destructive": "workspace.write",
+            "external_io": "network.egress",
             "external_write": "network.egress",
             "network": "network.egress",
             "cross_node": "network.egress",
@@ -714,10 +716,15 @@ class ApplicationAccessManagementService:
             "llm.generate",
             "model.use",
         )
-        permission = explicit_permission or next(
+        # Tool-level declarations are the narrowest authority.  A skill can
+        # advertise broad implementation capabilities (for example
+        # ``secrets.read``) without making every read-only tool a secret read.
+        # Prefer the concrete tool effect and use component capabilities only
+        # when the tool has no mappable effect.
+        permission = explicit_permission or permission_by_effect.get(effects, "")
+        permission = permission or next(
             (item for item in preferred if item in admitted), ""
         )
-        permission = permission or permission_by_effect.get(effects, "")
         # A simple Application may use its permission IDs as role actions. More
         # expressive applications can override this with a domain capability in
         # the tool's application_access declaration.
