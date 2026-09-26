@@ -2519,7 +2519,7 @@ class SkillManager:
         lifecycle["legacy_state"] = self._adopt_legacy_skill_state(
             skill_name=name,
             target_state_dir=slot_paths.state_dir,
-            marker_path=slot_paths.internal_data_dir / "legacy-state-adoption.json",
+            marker_path=slot_paths.legacy_state_adoption_marker,
             refresh=True,
         )
         env.set_active_slot(target_version, target_slot)
@@ -2600,7 +2600,7 @@ class SkillManager:
             lifecycle["legacy_state_archive"] = self._archive_adopted_legacy_skill_state(
                 skill_name=name,
                 target_state_dir=slot_paths.state_dir,
-                marker_path=slot_paths.internal_data_dir / "legacy-state-adoption.json",
+                marker_path=slot_paths.legacy_state_adoption_marker,
             )
         except Exception as exc:
             _log.warning(
@@ -4548,10 +4548,27 @@ class SkillManager:
             "target": str(target_state_dir),
             "marker": str(marker_path),
         }
+        marker = self._read_json_dict(marker_path)
+        legacy_marker_path = (
+            target_state_dir.parent / "internal" / "legacy-state-adoption.json"
+        )
+        if (
+            not marker
+            and legacy_marker_path != marker_path
+            and legacy_marker_path.is_file()
+        ):
+            legacy_marker = self._read_json_dict(legacy_marker_path)
+            if (
+                legacy_marker.get("schema") == result["schema"]
+                and str(legacy_marker.get("skill") or "") == skill_name
+                and str(legacy_marker.get("source") or "") == str(source)
+            ):
+                marker = {**legacy_marker, "marker": str(marker_path)}
+                self._write_json_object(marker_path, marker)
+                legacy_marker_path.unlink(missing_ok=True)
         if not source.is_dir():
             return {**result, "ok": True, "skipped": True, "reason": "legacy_state_absent"}
 
-        marker = self._read_json_dict(marker_path)
         existing = list(target_state_dir.iterdir()) if target_state_dir.is_dir() else []
         adopted_before = (
             marker.get("schema") == result["schema"]
@@ -5550,7 +5567,7 @@ class SkillManager:
             legacy_state = self._adopt_legacy_skill_state(
                 skill_name=slot.skill_name,
                 target_state_dir=slot.state_dir,
-                marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+                marker_path=slot.legacy_state_adoption_marker,
             )
             return {
                 **base_result,
@@ -5569,7 +5586,7 @@ class SkillManager:
                 legacy_state = self._adopt_legacy_skill_state(
                     skill_name=slot.skill_name,
                     target_state_dir=slot.state_dir,
-                    marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+                    marker_path=slot.legacy_state_adoption_marker,
                 )
                 return {
                     **base_result,
@@ -5593,7 +5610,7 @@ class SkillManager:
             legacy_state = self._adopt_legacy_skill_state(
                 skill_name=slot.skill_name,
                 target_state_dir=slot.state_dir,
-                marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+                marker_path=slot.legacy_state_adoption_marker,
             )
             _log.warning(
                 "skill data migration file missing; copied bucket data without schema mutation skill=%s source_version=%s target_version=%s source_bucket=%s target_bucket=%s",
@@ -5667,7 +5684,7 @@ class SkillManager:
         legacy_state = self._adopt_legacy_skill_state(
             skill_name=slot.skill_name,
             target_state_dir=slot.state_dir,
-            marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+            marker_path=slot.legacy_state_adoption_marker,
         )
         return {
             **base_result,

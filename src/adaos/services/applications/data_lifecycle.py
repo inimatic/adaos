@@ -457,14 +457,19 @@ def inventory(
         return
     if root.absolute() != root.resolve():
         raise ValueError("Linked runtime data requires an explicit storage adapter")
-    # Written by Core's quarantine manager, outside the skill's state
-    # authority.  It remains in the operational evidence plane and is neither
-    # copied nor interpreted as Application data during cutover.
+    # Written by Core, outside the skill's state authority. These exact files
+    # remain in the operational metadata plane and are neither copied nor
+    # interpreted as Application data during cutover. The adoption receipt is
+    # a compatibility allowance for runtimes created before Core moved it out
+    # of the version data root.
     permitted = (
         set(declared)
         | set(coordination_files)
         | set(operational_evidence_files)
-        | {"logs/quarantine.jsonl"}
+        | {
+            "logs/quarantine.jsonl",
+            "internal/legacy-state-adoption.json",
+        }
     )
     if skill_memory:
         permitted.add(_SKILL_MEMORY_PATH)

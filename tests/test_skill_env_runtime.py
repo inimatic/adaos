@@ -154,6 +154,10 @@ def test_slot_skill_env_uses_shared_runtime_store() -> None:
     assert slot.data_root == env.version_root("1.0.0") / "data"
     assert slot.internal_data_dir == env.internal_root("1.0.0")
     assert slot.state_dir == env.state_dir("1.0.0")
+    assert (
+        slot.legacy_state_adoption_marker
+        == env.version_root("1.0.0") / "legacy-state-adoption.json"
+    )
     assert slot.state_dir.exists()
     assert slot.vendor_dir == env.version_root("1.0.0") / "vendor"
     assert slot.venv_dir == env.version_root("1.0.0") / "venv"
@@ -1446,19 +1450,59 @@ def test_prepare_runtime_stages_legacy_skill_state_and_archives_only_after_cutov
     refreshed = mgr._adopt_legacy_skill_state(
         skill_name=skill_name,
         target_state_dir=slot.state_dir,
-        marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+        marker_path=slot.legacy_state_adoption_marker,
         refresh=True,
     )
     archived = mgr._archive_adopted_legacy_skill_state(
         skill_name=skill_name,
         target_state_dir=slot.state_dir,
-        marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+        marker_path=slot.legacy_state_adoption_marker,
     )
 
     assert refreshed["phase"] == "activation_refresh"
     assert archived["ok"] is True
     assert not legacy.exists()
     assert (Path(archived["archive"]) / "cursor.json").read_text(encoding="utf-8") == '{"cursor": 11}'
+
+
+def test_legacy_adoption_receipt_moves_out_of_application_data() -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "legacy_receipt_owner_skill"
+    legacy = Path(ctx.paths.state_dir()) / "skills" / skill_name
+    legacy.mkdir(parents=True)
+    (legacy / "cursor.json").write_text('{"cursor": 12}', encoding="utf-8")
+    env = SkillRuntimeEnvironment(
+        skills_root=Path(ctx.paths.skills_dir()),
+        skill_name=skill_name,
+    )
+    env.prepare_version("1.0.0")
+    slot = env.build_slot_paths("1.0.0", "A")
+    (slot.state_dir / "cursor.json").write_text('{"cursor": 12}', encoding="utf-8")
+    old_marker = slot.internal_data_dir / "legacy-state-adoption.json"
+    old_marker.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.skill_state.legacy_adoption.v1",
+                "skill": skill_name,
+                "source": str(legacy.resolve()),
+                "target": str(slot.state_dir),
+                "marker": str(old_marker),
+                "ok": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adopted = mgr._adopt_legacy_skill_state(
+        skill_name=skill_name,
+        target_state_dir=slot.state_dir,
+        marker_path=slot.legacy_state_adoption_marker,
+    )
+
+    assert adopted["reason"] == "already_staged"
+    assert slot.legacy_state_adoption_marker.is_file()
+    assert not old_marker.exists()
 
 
 def test_activate_runtime_loads_declarations_before_handlers(monkeypatch) -> None:

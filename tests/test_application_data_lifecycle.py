@@ -642,6 +642,22 @@ def test_core_quarantine_log_is_operational_evidence_not_application_state(tmp_p
         inventory(root, {})
 
 
+def test_legacy_state_adoption_receipt_is_core_metadata_not_application_state(tmp_path):
+    root = tmp_path / "data"
+    receipt = root / "internal/legacy-state-adoption.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(
+        '{"schema":"adaos.skill_state.legacy_adoption.v1"}',
+        encoding="utf-8",
+    )
+
+    inventory(root, {})
+
+    (root / "internal/skill-owned.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="Undeclared runtime data"):
+        inventory(root, {})
+
+
 def test_declared_skill_log_is_operational_evidence_not_application_state(tmp_path):
     root = tmp_path / "data"
     path = root / "internal/worker/logs/failures.jsonl"

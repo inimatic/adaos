@@ -139,6 +139,12 @@ class SkillSlotPaths:
     def state_dir(self) -> Path:
         return self.data_root / "state"
 
+    @property
+    def legacy_state_adoption_marker(self) -> Path:
+        """Core-owned adoption receipt, deliberately outside Application data."""
+
+        return self.data_root.parent / "legacy-state-adoption.json"
+
 
 class SkillRuntimeEnvironment:
     """Encapsulates filesystem layout for skill runtime deployments."""
