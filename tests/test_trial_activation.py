@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
+import yaml
 
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
@@ -20,6 +23,7 @@ from adaos.services.artifact_pipeline.trial_activation import (
     ensure_trial_workspace_shape,
     legacy_runtime_trial_root,
     legacy_runtime_trial_workspace,
+    legacy_cbs_shared_skill_rebindings,
     legacy_workspace_trial_root,
     shared_skill_conflicts,
     trial_workspace_root,
@@ -220,6 +224,101 @@ def test_contract_change_keeps_shared_skill_conflict_fail_closed() -> None:
 
     assert admitted == []
     assert unresolved[0]["reason"] == "shared_skill_version_conflict"
+
+
+def test_explicit_legacy_digest_and_preserved_tool_abi_bridge_into_cbs() -> None:
+    active = _skill("a")
+    candidate = _skill("b")
+    lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-08-06T00:00:00+00:00",
+        components=(active,),
+        bindings=(
+            DependencyBinding(
+                consumer="scenario:other",
+                dependency=active.key,
+                package_digest=active.digest,
+            ),
+        ),
+    )
+    active_tool = {
+        "name": "run",
+        "input_schema": {"type": "object"},
+    }
+    candidate_tool = {
+        **active_tool,
+        "output_schema": {"type": "object"},
+    }
+
+    def archive(manifest):
+        payload = BytesIO()
+        with ZipFile(payload, "w", compression=ZIP_DEFLATED) as bundle:
+            bundle.writestr("skill.yaml", yaml.safe_dump(manifest))
+        return payload.getvalue()
+
+    active_archive = archive(
+        {"name": "shared_skill", "version": "1.0.0", "default_tool": "run", "tools": [active_tool]}
+    )
+    candidate_archive = archive(
+        {
+            "name": "shared_skill",
+            "version": "2.0.0",
+            "default_tool": "run",
+            "tools": [candidate_tool, {"name": "new", "input_schema": {}, "output_schema": {}}],
+            "compatibility": {
+                "legacy_cbs_rebinding": {"package_digests": [active.digest]}
+            },
+        }
+    )
+
+    class _Delivery:
+        binding_definition_ref = "binding-definition:shared.v1"
+        binding_definition_digest = "sha256:" + "d" * 64
+
+        @staticmethod
+        def to_dict():
+            return {
+                "logical_entrypoint": "shared.v1",
+                "physical_member": "handlers/main.py",
+            }
+
+    class _Store:
+        @staticmethod
+        def read_verified(digest):
+            if digest == active.digest:
+                return active_archive, SimpleNamespace(
+                    ref=active,
+                    package_manifest={"files": [{"path": "skill.yaml", "digest": active.manifest_digest}]},
+                    binding_deliveries=(),
+                )
+            return candidate_archive, SimpleNamespace(
+                ref=candidate,
+                package_manifest={
+                    "files": [
+                        {
+                            "path": "contracts/capability.contract.json",
+                            "digest": "sha256:" + "1" * 64,
+                        },
+                        {
+                            "path": "contracts/binding.definition.json",
+                            "digest": "sha256:" + "2" * 64,
+                        },
+                    ]
+                },
+                binding_deliveries=(_Delivery(),),
+            )
+
+    plan = SimpleNamespace(packages=(candidate,))
+    bridge = legacy_cbs_shared_skill_rebindings(plan, lock, _Store())
+    unresolved, admitted = unresolved_shared_skill_conflicts(plan, lock, _Store())
+
+    assert unresolved == []
+    assert admitted == bridge
+    assert bridge[0]["schema"] == "adaos.artifact.legacy_cbs_rebinding.v1"
+    assert bridge[0]["preserved_tools"] == ["run"]
+    assert bridge[0]["policy"] == (
+        "exact_legacy_digest_and_consumer_enforceable_tool_abi_superset"
+    )
 
 
 def test_trial_preview_resolves_exact_candidate_as_well_as_legacy_version(tmp_path):

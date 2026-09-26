@@ -1,4 +1,5 @@
 from contextlib import closing
+from dataclasses import replace
 import json
 from pathlib import Path
 import sqlite3
@@ -7,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from adaos.domain.application import Application, ApplicationRelease
+from adaos.domain.application import Application, ApplicationInstallation, ApplicationRelease
 from adaos.domain.artifact_release import ArtifactSourceRef, ProjectRelease, ProjectCompositionLock, ProjectMemberLock, WorkspaceLock, WorkspaceSlot
 from adaos.services.applications.data_lifecycle import declared_databases
 from adaos.services.applications.local_release_transition import (
@@ -331,6 +332,156 @@ def setup(tmp_path):
     return owner, service, old, new, activations, lock
 
 
+def _register_component_consumer(
+    service: ApplicationService,
+    *,
+    package_digest: str,
+    lifecycle: str,
+) -> None:
+    service.register(
+        Application(
+            application_id="consumer",
+            legacy_project_id="consumer",
+            slug="consumer",
+            publisher_ref="subnet:home",
+            display={"title": "Consumer", "summary": None},
+            visibility="private",
+            entrypoints=(
+                {"entrypoint_id": "main", "presentation_ref": "scenario:consumer"},
+            ),
+            publisher={
+                "publisher_ref": "subnet:home",
+                "display_name": "Home",
+                "subnet_short_ref": "home",
+                "release_key_ref": "key:home",
+                "release_key_fingerprint": "sha256:" + "c" * 64,
+                "home_zone": "local",
+                "trust_relation": "local",
+            },
+        )
+    )
+    service.store.save_installation(
+        ApplicationInstallation(
+            installation_id="installation:consumer",
+            application_id="consumer",
+            installed_release_digest="sha256:" + "d" * 64,
+            component_refs=(
+                {
+                    "component_ref": "skill:worker",
+                    "package_digest": package_digest,
+                    "lifecycle": lifecycle,
+                },
+            ),
+            data_policy="retain",
+            status="active",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+
+
+def test_bound_owner_rejects_a_second_application_owner(setup) -> None:
+    owner, service, _old, new, _activations, _lock = setup
+    _register_component_consumer(
+        service,
+        package_digest=new.components[0].digest,
+        lifecycle="bound",
+    )
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+
+    with pytest.raises(ValueError, match="referenced by another installation"):
+        bind_local_data_lifecycle(owner, runtime, new)
+
+
+def test_exact_shared_consumer_allows_owner_adoption_with_state_continuity(setup) -> None:
+    owner, service, _old, new, _activations, lock = setup
+    current = service.store.get_installation("sample")
+    service.store.save_installation(
+        replace(
+            current,
+            status="removed",
+            revision=current.revision + 1,
+        ),
+        expected_revision=current.revision,
+    )
+    _register_component_consumer(
+        service,
+        package_digest=new.components[0].digest,
+        lifecycle="shared",
+    )
+    atomic_write_json(
+        owner.paths.workspace_dir() / ".adaos/workspace.lock.json",
+        lock(new).to_dict(),
+    )
+    adopted = (
+        owner.paths.workspace_dir()
+        / "skills/.runtime/worker/v0.2/data/entries.sqlite"
+    )
+    adopted.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(adopted)) as connection:
+        connection.execute("CREATE TABLE entries(id INTEGER PRIMARY KEY, label TEXT)")
+        connection.execute("INSERT INTO entries VALUES(7, 'shared state')")
+        connection.commit()
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+
+    assert lifecycle.stable_digest is None
+    assert lifecycle.components[0].stable_root == adopted.parent
+    assert rows(lifecycle.components[0].stable_root / "entries.sqlite") == [
+        (7, "shared state")
+    ]
+
+
+def test_explicit_legacy_cbs_bridge_allows_shared_owner_adoption(
+    setup, monkeypatch
+) -> None:
+    from adaos.services.applications import local_release_transition
+
+    owner, service, old, new, _activations, lock = setup
+    current = service.store.get_installation("sample")
+    service.store.save_installation(
+        replace(current, status="removed", revision=current.revision + 1),
+        expected_revision=current.revision,
+    )
+    _register_component_consumer(
+        service,
+        package_digest=old.components[0].digest,
+        lifecycle="shared",
+    )
+    atomic_write_json(
+        owner.paths.workspace_dir() / ".adaos/workspace.lock.json",
+        lock(old).to_dict(),
+    )
+    monkeypatch.setattr(
+        local_release_transition,
+        "legacy_cbs_shared_skill_rebindings",
+        lambda *_args: [
+            {
+                "skill_ref": "skill:worker",
+                "active_package_digest": old.components[0].digest,
+                "candidate_package_digest": new.components[0].digest,
+            }
+        ],
+    )
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+
+    assert lifecycle.components[0].stable_root == (
+        owner.paths.workspace_dir() / "skills/.runtime/worker/v0.1/data"
+    )
+    assert rows(lifecycle.components[0].stable_root / "entries.sqlite") == [
+        (1, "private stable")
+    ]
+
+
 def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup, monkeypatch):
     from adaos.sdk.builder import applications, workflow
     from adaos.sdk.developer import projects
@@ -473,3 +624,32 @@ def test_sdk_recovery_verifies_stable_identity_before_unfencing(setup, monkeypat
         pass
     with pytest.raises(TrialRuntimeUnavailable, match="pending or aborted"):
         NativeTrialRuntime.resolve(owner, "candidate-sample", new.release_digest)
+
+
+def test_sdk_aborts_exact_trial_rejected_before_data_transition(setup, monkeypatch):
+    from adaos.sdk.builder import applications
+
+    owner, service, old, new, activations, _lock = setup
+    monkeypatch.setattr(applications, "_ctx", lambda: owner)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
+    monkeypatch.setattr(
+        applications,
+        "_refresh_application_placements",
+        lambda _application_id: {"ok": True, "webspaces": {}},
+    )
+
+    result = applications.abort_local_trial_preparation(
+        "candidate-sample",
+        release_digest=new.release_digest,
+        actor_ref="user:owner",
+    )
+
+    assert result["status"] == "aborted_before_data_transition"
+    assert activations.load("candidate-sample")["status"] == "failed"
+    assert not (
+        trial_workspace_root(owner.paths.workspace_dir(), "candidate-sample")
+        / ".adaos/data-transition.json"
+    ).exists()
+    selection = service.store.get_runtime_selection("desktop", "sample")
+    assert selection.release_digest == old.release_digest
+    assert selection.runtime_root_ref == "workspace"

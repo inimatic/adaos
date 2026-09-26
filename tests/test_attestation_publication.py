@@ -154,6 +154,30 @@ def test_absent_asset_keeps_unknown_outcome_blocked_without_retry(tmp_path: Path
     assert store.put_calls == 1
 
 
+def test_explicit_absent_retry_rechecks_subject_and_resumes_exact_signed_item(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(tmp_path / "source")
+    store = _OutcomeStore(first_outcome="raise_without_commit")
+    publisher = _publisher(tmp_path / "state", store)
+    key = "release-recipes-1.2.3"
+
+    with pytest.raises(AttestationPublicationUncertain) as failure:
+        publisher.publish(plan, idempotency_key=key)
+
+    authorized = publisher.authorize_absent_retry(
+        failure.value.operation_id,
+        item_id=failure.value.item_id,
+    )
+    completed = publisher.publish(plan, idempotency_key=key)
+
+    assert authorized.status == "ready"
+    assert authorized.attestations[0].status == "pending"
+    assert completed.status == "completed"
+    assert store.list_calls == 1
+    assert store.put_calls == 3
+
+
 def test_idempotency_key_cannot_be_rebound_to_a_different_plan(tmp_path: Path) -> None:
     first = _plan(tmp_path / "first", version="1.2.3")
     second = _plan(tmp_path / "second", version="1.2.4")

@@ -296,6 +296,7 @@ class ArtifactAttestationPublisher:
                 "uncertain_since",
                 "last_error",
                 "store_digest",
+                "retry_authorized_at",
             }
             if not required.issubset(item) or set(item) - required - optional:
                 raise AttestationPublicationError("attestation publication item has invalid fields")
@@ -509,6 +510,76 @@ class ArtifactAttestationPublisher:
                 changed = True
             if changed:
                 self._save(operation)
+            return self._result(operation)
+
+    def authorize_absent_retry(
+        self,
+        operation_id: str,
+        *,
+        item_id: str,
+    ) -> AttestationPublicationResult:
+        """Authorize one exact immutable retry after a fresh absence check.
+
+        An unknown write outcome remains fail-closed by default.  This explicit
+        recovery operation performs another authoritative subject read while
+        holding the journal lock.  If the signed digest is now visible it is
+        reconciled; otherwise only the requested item returns to ``pending``.
+        Repeating the write is safe because attestation storage is addressed
+        and deduplicated by the sealed attestation digest.
+        """
+
+        token = str(operation_id or "").strip().lower()
+        expected_item_id = str(item_id or "").strip().lower()
+        if not _OPERATION_ID_RE.fullmatch(expected_item_id):
+            raise AttestationPublicationError(
+                "item_id must contain 64 lowercase hex characters"
+            )
+        with mutation_lock(self.operation_lock_path(token)):
+            operation = self._load(token)
+            matches = [
+                item
+                for item in operation["items"]
+                if item["item_id"] == expected_item_id
+            ]
+            if len(matches) != 1:
+                raise AttestationPublicationError(
+                    "attestation publication item does not exist"
+                )
+            item = matches[0]
+            if item["status"] != "uncertain":
+                raise AttestationPublicationConflict(
+                    "only an uncertain attestation item can authorize a retry"
+                )
+            expected = ArtifactAttestation.from_mapping(item["attestation"])
+            observed = self.store.list_for_subject(
+                expected.subject_kind,
+                expected.subject_digest,
+            )
+            exact = [
+                candidate
+                for candidate in observed
+                if candidate.attestation_digest == expected.attestation_digest
+            ]
+            if exact and exact[0] != expected:
+                raise AttestationPublicationError(
+                    "external attestation digest resolves to different signed content"
+                )
+            if exact:
+                item["status"] = "completed"
+                item["completed_at"] = self._timestamp()
+                item["completed_via"] = "reconciliation"
+                item["store_digest"] = str(expected.attestation_digest)
+            else:
+                item["status"] = "pending"
+                item["retry_authorized_at"] = self._timestamp()
+                item.pop("dispatch_started_at", None)
+            item.pop("uncertain_since", None)
+            item.pop("last_error", None)
+            statuses = {str(candidate["status"]) for candidate in operation["items"]}
+            operation["status"] = (
+                "completed" if statuses == {"completed"} else "ready"
+            )
+            self._save(operation)
             return self._result(operation)
 
     def load(self, operation_id: str) -> AttestationPublicationResult:

@@ -5,9 +5,10 @@ import sqlite3
 import pytest
 
 from adaos.domain.application import RuntimeSelection
+from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.applications.configuration import ApplicationConfigurationStore
 from adaos.services.applications.blob_data_transition import BlobDataTransition
-from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases, declared_coordination_files, inventory
+from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases, declared_coordination_files, declared_operational_evidence_files, inventory
 from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 
 
@@ -350,6 +351,99 @@ def test_reconstructible_legacy_adoption_rejects_any_owned_file(tmp_path):
         )
 
 
+def test_legacy_core_skill_memory_can_be_adopted_without_claiming_other_state(
+    tmp_path,
+):
+    seed(tmp_path)
+    stable = tmp_path / "workspace/legacy-core-memory"
+    (stable / "db").mkdir(parents=True)
+    (stable / "db/skill_env.json").write_text(
+        '{"schema":"adaos.skill.env.v1","values":{}}', encoding="utf-8"
+    )
+    target = {
+        "events": {"subscribe": ["timer.tick"]},
+        "lifecycle": {"drain": "runtime_drain", "rehydrate": "runtime_rehydrate"},
+        "tools": [
+            {"name": "runtime_drain", "entry": "handlers.main:runtime_drain"},
+            {"name": "runtime_rehydrate", "entry": "handlers.main:runtime_rehydrate"},
+        ],
+        "memory_budget": {
+            "caches": [{"name": "session", "storage": "skill_memory"}]
+        },
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+            "legacy_adoption": "core_managed_only",
+        },
+    }
+
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state",
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate-core-memory",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(OwnedDataComponent(
+            "skill:worker",
+            stable,
+            tmp_path / "beta-core-memory/data",
+            tmp_path / "workspace/target-data",
+            {"events": {"subscribe": ["timer.tick"]}},
+            target,
+        ),),
+    )
+
+    assert lifecycle.prepare_beta(
+        webspace_id="desktop", activate=lambda _key: {"ok": True}
+    )["completed"] is True
+    assert (tmp_path / "beta-core-memory/data/db/skill_env.json").is_file()
+
+
+def test_legacy_core_skill_memory_bridge_rejects_foreign_state(tmp_path):
+    seed(tmp_path)
+    stable = tmp_path / "workspace/legacy-core-memory-with-foreign-state"
+    (stable / "db").mkdir(parents=True)
+    (stable / "db/skill_env.json").write_text("{}", encoding="utf-8")
+    (stable / "db/foreign.sqlite").write_bytes(b"not-owned")
+    target = {
+        "events": {"subscribe": ["timer.tick"]},
+        "lifecycle": {"drain": "runtime_drain", "rehydrate": "runtime_rehydrate"},
+        "tools": [
+            {"name": "runtime_drain", "entry": "handlers.main:runtime_drain"},
+            {"name": "runtime_rehydrate", "entry": "handlers.main:runtime_rehydrate"},
+        ],
+        "memory_budget": {
+            "caches": [{"name": "session", "storage": "skill_memory"}]
+        },
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+            "legacy_adoption": "core_managed_only",
+        },
+    }
+
+    with pytest.raises(ValueError, match="verified owner drain"):
+        LocalApplicationDataLifecycle(
+            state_root=tmp_path / "state",
+            private_root=tmp_path,
+            application_id="sample",
+            candidate_id="candidate-foreign-state",
+            release_digest="sha256:" + "1" * 64,
+            stable_digest=DIGEST,
+            components=(OwnedDataComponent(
+                "skill:worker",
+                stable,
+                tmp_path / "beta-foreign-state/data",
+                tmp_path / "workspace/target-data",
+                {"events": {"subscribe": ["timer.tick"]}},
+                target,
+            ),),
+        )
+
+
 def test_declared_core_skill_memory_is_preserved_across_beta_acceptance(tmp_path):
     state = tmp_path / "state"
     stable = tmp_path / "workspace/data"
@@ -534,6 +628,48 @@ def test_unrelated_mutex_file_is_not_admitted(tmp_path):
         inventory(root, {"db/records.sqlite": ()})
 
 
+def test_core_quarantine_log_is_operational_evidence_not_application_state(tmp_path):
+    root = tmp_path / "data"
+    (root / "logs").mkdir(parents=True)
+    (root / "logs/quarantine.jsonl").write_text(
+        '{"reason":"runtime_policy"}\n', encoding="utf-8"
+    )
+
+    inventory(root, {})
+
+    (root / "logs/skill-owned.log").write_text("not declared", encoding="utf-8")
+    with pytest.raises(ValueError, match="Undeclared runtime data"):
+        inventory(root, {})
+
+
+def test_declared_skill_log_is_operational_evidence_not_application_state(tmp_path):
+    root = tmp_path / "data"
+    path = root / "internal/worker/logs/failures.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"reason":"provider_failure"}\n', encoding="utf-8")
+    manifest_value = manifest(1)
+    manifest_value["data_lifecycle"]["operational_evidence_files"] = [
+        "internal/worker/logs/failures.jsonl"
+    ]
+
+    inventory(
+        root,
+        declared_databases(manifest_value),
+        operational_evidence_files=declared_operational_evidence_files(manifest_value),
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["../failures.jsonl", "C:/logs/failures.jsonl", "failures.jsonl", "logs/state.db"],
+)
+def test_operational_evidence_paths_are_exact_logs(path):
+    value = manifest(1)
+    value["data_lifecycle"]["operational_evidence_files"] = [path]
+    with pytest.raises(ValueError, match="relative .* below logs"):
+        declared_operational_evidence_files(value)
+
+
 @pytest.mark.parametrize(
     "path", ["../mutex.lock", "C:/mutex.lock", "db/mutex.txt", "db/../mutex.lock"]
 )
@@ -675,6 +811,25 @@ def test_data_declaration_is_consistent_with_both_skill_schemas():
         for path in ("../records.sqlite", "a/../b", "a//b", "/outside", "C:/outside"):
             with pytest.raises(jsonschema.ValidationError):
                 jsonschema.validate({**declaration, "databases": [{"path": path, "migrations": []}]}, schema)
+
+
+def test_data_declaration_preserves_runtime_migration_checksum_fields():
+    declaration = manifest(1)
+    migration = declaration["data_lifecycle"]["databases"][0]["migrations"][0]
+    migration["idempotent"] = True
+    migration["dialects"] = ["sqlite", "postgresql"]
+
+    parsed = declared_databases(declaration)["records.sqlite"][0]
+
+    assert parsed.idempotent is True
+    assert parsed.dialects == ("sqlite", "postgresql")
+    assert parsed.checksum == RelationalMigration(
+        version=1,
+        name="field1",
+        statements=("ALTER TABLE records ADD COLUMN field1 TEXT",),
+        idempotent=True,
+        dialects=("sqlite", "postgresql"),
+    ).checksum
 
 
 def test_failed_beta_activation_can_restore_stable_settings_without_touching_data(tmp_path):

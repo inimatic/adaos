@@ -249,11 +249,20 @@ class NativeApplicationCBSAdmissionService:
             and item.get("capability_ref") == "capability:application.ui.render"
         ]
         if ui_requirements:
-            if len(scenario_packages) != 1:
+            ui_packages = scenario_packages
+            application_kind, separator, application_id = application_ref.partition(":")
+            if separator and application_kind == "scenario":
+                matching_packages = [
+                    item for item in scenario_packages if item.artifact_id == application_id
+                ]
+                if matching_packages:
+                    ui_packages = matching_packages
+            if len(ui_packages) != 1:
                 raise NativeApplicationCBSAdmissionError(
-                    "application.ui.render requires one exact scenario package with webui.json"
+                    "application.ui.render requires one exact entrypoint scenario "
+                    "package with webui.json"
                 )
-            capability, binding, delivery = _ui_provider(scenario_packages[0])
+            capability, binding, delivery = _ui_provider(ui_packages[0])
             contracts.append(capability)
             bindings.append(binding)
             deliveries.append(delivery)

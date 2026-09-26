@@ -1189,6 +1189,19 @@ class ArtifactPublicationService:
             raise PublicationError("artifact attestation publication is not configured")
         return self.attestation_publisher.reconcile(operation_id)
 
+    def authorize_absent_attestation_retry(
+        self,
+        operation_id: str,
+        *,
+        item_id: str,
+    ) -> AttestationPublicationResult:
+        if self.attestation_publisher is None:
+            raise PublicationError("artifact attestation publication is not configured")
+        return self.attestation_publisher.authorize_absent_retry(
+            operation_id,
+            item_id=item_id,
+        )
+
     def reconcile_release_attestation_binding(
         self,
         candidate_id: str,

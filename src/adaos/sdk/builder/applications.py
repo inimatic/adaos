@@ -15,6 +15,7 @@ from adaos.sdk.developer import compositions, projects
 from adaos.services.applications import (
     ApplicationAccessManagementService,
     ApplicationDevelopmentCoordinator,
+    ApplicationServiceError,
     StableSourceProjectionService,
     compile_setup_contract,
     get_application_distribution_service,
@@ -124,6 +125,16 @@ def _adopt_legacy_workspace_installation(
     if len(slots) != 1:
         raise ValueError("Legacy Workspace contains ambiguous Project slots")
     slot = slots[0]
+    if (
+        existing_installation is not None
+        and existing_installation.status == "active"
+        and existing_installation.installed_release_digest == slot.release_digest
+    ):
+        # Adoption already established the immutable release boundary. Shared
+        # packages may subsequently be rebound by another Application, so
+        # revalidating the historical closure against today's merged lock
+        # would incorrectly prevent this Application's next reviewed update.
+        return application
     try:
         registered_release = service.store.get_release(
             application.application_id, slot.release_digest
@@ -162,6 +173,22 @@ def _adopt_legacy_workspace_installation(
             raise ValueError(
                 "Legacy Workspace release metadata does not match its Application identity"
             )
+    try:
+        service.reconcile_workspace_installation(
+            application.application_id, slot.release_digest, lock
+        )
+    except ApplicationServiceError as exc:
+        closure_drift = str(exc) in {
+            "Workspace Application package closure differs from the release",
+            "Workspace Application dependency closure differs from the release",
+        }
+        if existing_installation is not None or not closure_drift:
+            raise
+        # A pre-aggregate slot can outlive its original package closure when a
+        # shared dependency is independently upgraded.  It is no longer exact
+        # adoption evidence, so leave channels and runtime selection untouched.
+        # The reviewed candidate may still replace the stale slot atomically.
+        return application
     channels = service.store.get_channels(application.application_id).get("channels") or {}
     if not channels.get("stable"):
         service.move_channel(
@@ -171,9 +198,6 @@ def _adopt_legacy_workspace_installation(
             publisher_ref=application.publisher_ref,
             expected_release_digest=None,
         )
-    service.reconcile_workspace_installation(
-        application.application_id, slot.release_digest, lock
-    )
     try:
         selection = service.store.get_runtime_selection(
             webspace_id, application.application_id
@@ -855,6 +879,73 @@ def abort_local_trial_preparation(candidate_id: str, *, release_digest: str, act
     _admit_builder_mutation("recover", application.application_id, subnet_ref=subnet, capability="applications.recover")
     if application.publisher_ref.lower() != subnet.lower():
         raise ValueError("Only the local publisher may recover its Beta preparation")
+    binding_path = runtime.root / ".adaos/data-transition.json"
+    if not binding_path.is_file():
+        # The immutable Trial may have been materialized and registered before
+        # ownership/data admission rejected it.  In that case no migration
+        # intent, runtime selection, or Workspace mutation exists to roll back.
+        # Prove those negatives and retire only the exact activation record;
+        # attempting to reconstruct a lifecycle here would repeat the original
+        # admission failure and make the failed Candidate unrecoverable.
+        selections = _application_service().store.list_runtime_selections()
+        if any(
+            item.application_id == application.application_id
+            and (
+                item.release_digest == release_digest
+                or item.runtime_root_ref == f"trial:{candidate_id}"
+            )
+            for item in selections
+        ):
+            raise ValueError(
+                "Trial runtime selection exists without a data-transition binding"
+            )
+        lock_path = Path(_ctx().paths.workspace_dir()) / ".adaos/workspace.lock.json"
+        if lock_path.is_file():
+            lock = WorkspaceLock.from_mapping(
+                json.loads(lock_path.read_text(encoding="utf-8"))
+            )
+            if any(
+                slot.project_id == release.project_id
+                and slot.release_digest == release_digest
+                for slot in lock.slots
+            ):
+                raise ValueError(
+                    "Workspace contains the failed release without a data-transition binding"
+                )
+        from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+
+        activations = TrialActivationStore(
+            _state_dir() / "artifact_pipeline/trial-activations"
+        )
+        activation = activations.load(candidate_id)
+        candidate_ref = (
+            activation.get("candidate_ref") if isinstance(activation, dict) else None
+        )
+        if (
+            not isinstance(candidate_ref, Mapping)
+            or candidate_ref.get("candidate_id") != candidate_id
+            or candidate_ref.get("release_digest") != release_digest
+        ):
+            raise ValueError("Exact failed TrialActivation record is missing")
+        activations.update(
+            candidate_id,
+            status="failed",
+            detached_at=utc_now(),
+            safety_evidence={
+                **dict(activation.get("safety_evidence") or {}),
+                "status": "aborted_before_data_transition",
+                "reason": "ownership_or_data_admission_rejected_before_mutation",
+                "actor_ref": actor_ref,
+            },
+        )
+        return {
+            "ok": True,
+            "status": "aborted_before_data_transition",
+            "operation_id": None,
+            "runtime_refresh": _refresh_application_placements(
+                application.application_id
+            ),
+        }
     lifecycle = bind_local_data_lifecycle(_ctx(), runtime, release)
     metadata = Path(_ctx().paths.workspace_dir()) / ".adaos"
 

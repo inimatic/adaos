@@ -132,10 +132,11 @@ def automation_data_contract() -> dict[str, Any]:
             "shape": "skill.yaml capabilities is a flat unique string array, not an object with required/optional fields. Merge required SDK tokens without removing existing declarations.",
             "example": {"capabilities": ["storage.relational", "configuration.read", "configuration.write"]},
         },
-        "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [], "coordination_files": []},
+        "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [], "coordination_files": [], "operational_evidence_files": []},
         "database_fields": {"path": "relative SQLite filename under this skill's SDK data root",
             "migrations": "full ordered list of {version: positive integer, name: string, statements: SQL string[]}"},
         "coordination_files": "Exact owner-relative *.lock mutex files; admitted by inventory but never copied as Application state.",
+        "operational_evidence_files": "Exact owner-relative *.log/*.jsonl files below a logs directory; admitted as operational evidence but never copied as Application state.",
         "initialization_contract": {
             "call": "adaos.sdk.data.lifecycle.ensure_database(path) before opening the declared SQLite file; requires storage.relational.",
             "async": "Async handlers use a_ensure_database(path).",
@@ -163,7 +164,8 @@ def automation_data_contract() -> dict[str, Any]:
             "Core snapshots accepted Stable and runs the pinned chain for each new Beta; Stable acceptance adopts Beta writes. Do not implement channel copying/resetting in handlers.",
             "Use adaos.sdk.data.configuration for declared non-secret settings; DEV is isolated and lifecycle inherits/adopts real settings. Secrets are separate scoped bindings.",
             "For new secret slots declare configuration.credentials.<name>.purpose and secrets.read/write, then use sdk.data.secrets. Values stay in the node vault; this adapter currently admits only the verified local owner, not delegated/background callers.",
-            "Local storage.blob attachments use the verified Core content-addressed adapter. Background services, shared mutable stores, remote blob providers and credential files require qualified adapters; report a platform gap instead of claiming migration support."
+            "Local storage.blob attachments use the verified Core content-addressed adapter. Background services, shared mutable stores, remote blob providers and credential files require qualified adapters; report a platform gap instead of claiming migration support.",
+            "Use legacy_adoption: core_managed_only only for an explicit pre-lifecycle bridge whose old bucket contains Core skill memory and Core quarantine evidence, and whose target declares the skill_memory adapter. Any other file fails closed."
         ],
     }
 
@@ -173,11 +175,15 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
     if not isinstance(declaration, dict) or declaration.get("schema") != "adaos.skill.data_lifecycle.v1":
         raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
     if (
-        set(declaration) - {"schema", "execution", "databases", "legacy_adoption", "coordination_files"}
+        set(declaration) - {"schema", "execution", "databases", "legacy_adoption", "coordination_files", "operational_evidence_files"}
         or declaration["execution"] != "native_tools"
     ):
         raise ValueError("Data cutover currently requires declared native_tools execution")
-    if declaration.get("legacy_adoption") not in {None, "reconstructible_empty"}:
+    if declaration.get("legacy_adoption") not in {
+        None,
+        "reconstructible_empty",
+        "core_managed_only",
+    }:
         raise ValueError("Unsupported legacy data adoption policy")
     databases = declaration["databases"]
     if not isinstance(databases, list) or len(databases) > 32:
@@ -196,12 +202,39 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
             raise ValueError("SQLite migration chain must be a bounded list")
         migrations = []
         for item in chain:
-            if not isinstance(item, dict) or set(item) != {"version", "name", "statements"}:
-                raise ValueError("Migration requires version, name and SQL statements")
+            required = {"version", "name", "statements"}
+            optional = {"idempotent", "dialects"}
+            if (
+                not isinstance(item, dict)
+                or not required.issubset(item)
+                or set(item) - required - optional
+            ):
+                raise ValueError(
+                    "Migration requires version, name and SQL statements with only "
+                    "optional idempotent/dialects checksum fields"
+                )
             if (type(item["version"]) is not int or not isinstance(item["statements"], list)
                     or any(not isinstance(sql, str) or len(sql.encode("utf-8")) > 1024 * 1024 for sql in item["statements"])):
                 raise ValueError("Invalid migration version or SQL statements")
-            migrations.append(RelationalMigration(**item, dialects=("sqlite",)))
+            if "idempotent" in item and type(item["idempotent"]) is not bool:
+                raise ValueError("Migration idempotent must be a boolean")
+            dialects = item.get("dialects", ["sqlite"])
+            if (
+                not isinstance(dialects, list)
+                or not dialects
+                or len(dialects) > 2
+                or any(not isinstance(value, str) for value in dialects)
+            ):
+                raise ValueError("Migration dialects must be a non-empty bounded list")
+            migrations.append(
+                RelationalMigration(
+                    version=item["version"],
+                    name=item["name"],
+                    statements=tuple(item["statements"]),
+                    idempotent=item.get("idempotent", False),
+                    dialects=tuple(dialects),
+                )
+            )
         if len({item.version for item in migrations}) != len(migrations):
             raise ValueError("Migration versions must be unique")
         result[path] = tuple(migrations)
@@ -238,6 +271,35 @@ def declared_coordination_files(manifest: Mapping[str, Any]) -> frozenset[str]:
         sqlite_path = PurePosixPath(database)
         normalized.add(sqlite_path.with_suffix(".schema.lock").as_posix())
         normalized.add(sqlite_path.with_suffix(".root-mutation.lock").as_posix())
+    return frozenset(normalized)
+
+
+def declared_operational_evidence_files(manifest: Mapping[str, Any]) -> frozenset[str]:
+    declaration = manifest.get("data_lifecycle")
+    if not isinstance(declaration, Mapping):
+        raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
+    values = declaration.get("operational_evidence_files", [])
+    if not isinstance(values, list) or len(values) > 32:
+        raise ValueError("Data lifecycle operational_evidence_files must be a bounded list")
+    normalized: set[str] = set()
+    for value in values:
+        parts = value.split("/") if isinstance(value, str) else []
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > 240
+            or not value.endswith((".log", ".jsonl"))
+            or "logs" not in parts[:-1]
+            or "\\" in value
+            or ":" in value
+            or PurePosixPath(value).is_absolute()
+            or any(part in {".", "..", ""} for part in parts)
+            or value in normalized
+        ):
+            raise ValueError(
+                "Operational evidence requires a unique relative *.log/*.jsonl path below logs"
+            )
+        normalized.add(value)
     return frozenset(normalized)
 
 
@@ -310,7 +372,7 @@ def require_native_tools(manifest: Mapping[str, Any]) -> None:
     declared_coordination_files(manifest)
 
 
-def _allows_reconstructible_legacy_adoption(
+def _allows_legacy_adoption(
     stable_root: Path | None, target_manifest: Mapping[str, Any]
 ) -> bool:
     """Allow one explicit empty-state bridge from pre-lifecycle packages.
@@ -325,7 +387,8 @@ def _allows_reconstructible_legacy_adoption(
     declaration = target_manifest.get("data_lifecycle")
     if not isinstance(declaration, Mapping):
         return False
-    if declaration.get("legacy_adoption") != "reconstructible_empty":
+    policy = declaration.get("legacy_adoption")
+    if policy not in {"reconstructible_empty", "core_managed_only"}:
         return False
     if declaration.get("databases") != []:
         return False
@@ -335,7 +398,16 @@ def _allows_reconstructible_legacy_adoption(
         return False
     if stable_root is None or not stable_root.exists():
         return True
-    return not any(path.is_file() for path in stable_root.rglob("*"))
+    files = {
+        path.relative_to(stable_root).as_posix()
+        for path in stable_root.rglob("*")
+        if path.is_file()
+    }
+    if policy == "reconstructible_empty":
+        return not files
+    return _uses_skill_memory(target_manifest) and files.issubset(
+        {_SKILL_MEMORY_PATH, "logs/quarantine.jsonl"}
+    )
 
 
 def inventory(
@@ -345,12 +417,21 @@ def inventory(
     blobs: BlobDataTransition | None = None,
     skill_memory: bool = False,
     coordination_files: frozenset[str] = frozenset(),
+    operational_evidence_files: frozenset[str] = frozenset(),
 ) -> None:
     if root is None or not root.exists():
         return
     if root.absolute() != root.resolve():
         raise ValueError("Linked runtime data requires an explicit storage adapter")
-    permitted = set(declared) | set(coordination_files)
+    # Written by Core's quarantine manager, outside the skill's state
+    # authority.  It remains in the operational evidence plane and is neither
+    # copied nor interpreted as Application data during cutover.
+    permitted = (
+        set(declared)
+        | set(coordination_files)
+        | set(operational_evidence_files)
+        | {"logs/quarantine.jsonl"}
+    )
     if skill_memory:
         permitted.add(_SKILL_MEMORY_PATH)
     for name in declared:
@@ -396,6 +477,7 @@ class LocalApplicationDataLifecycle:
         self.recovery = self.private / "recovery/applications" / key
         self.contracts = {}
         self.coordination_contracts = {}
+        self.operational_evidence_contracts = {}
         self.blob_contracts = {}
         self.stable_blob_contracts = {}
         self.skill_memory_contracts = {}
@@ -415,7 +497,7 @@ class LocalApplicationDataLifecycle:
                 raise ValueError("Beta requires an isolated data root")
             owned_roots.extend(root for root in (component.stable_root, component.beta_root, component.target_root) if root is not None)
             require_native_tools(component.target_manifest)
-            if not _allows_reconstructible_legacy_adoption(
+            if not _allows_legacy_adoption(
                 component.stable_root, component.target_manifest
             ):
                 require_native_tools(component.stable_manifest)
@@ -430,6 +512,10 @@ class LocalApplicationDataLifecycle:
             if set(coordination_files) & set(databases):
                 raise ValueError("Coordination files cannot also be declared SQLite stores")
             self.coordination_contracts[component.component_ref] = coordination_files
+            operational_evidence = declared_operational_evidence_files(component.target_manifest)
+            if set(operational_evidence) & (set(databases) | set(coordination_files)):
+                raise ValueError("Operational evidence cannot also be declared Application state")
+            self.operational_evidence_contracts[component.component_ref] = operational_evidence
             stable_blobs = "storage.blob" in set(component.stable_manifest.get("capabilities") or [])
             target_blobs = "storage.blob" in set(component.target_manifest.get("capabilities") or [])
             if stable_blobs and not target_blobs:
@@ -530,10 +616,11 @@ class LocalApplicationDataLifecycle:
             for component in self.components:
                 databases = self.contracts[component.component_ref]
                 coordination_files = self.coordination_contracts[component.component_ref]
+                operational_evidence = self.operational_evidence_contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
-                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
-                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
+                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
+                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
                 for name, migrations in databases.items():
                     source = component.stable_root / name if component.stable_root else None
                     base = self._root(component, "stable") / name
@@ -600,11 +687,12 @@ class LocalApplicationDataLifecycle:
             for component in self.components:
                 databases = self.contracts[component.component_ref]
                 coordination_files = self.coordination_contracts[component.component_ref]
+                operational_evidence = self.operational_evidence_contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
-                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
-                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
-                inventory(component.target_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
+                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
+                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
+                inventory(component.target_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
                 for name in databases:
                     base = self._root(component, "stable") / name
                     if component.stable_root and (component.stable_root / name).exists():

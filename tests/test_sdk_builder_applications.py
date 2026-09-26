@@ -11,7 +11,13 @@ from adaos.sdk.builder import automation
 from adaos.sdk.core.exporter import export
 from adaos.sdk.developer import compositions, projects
 from adaos.domain.application import Application
-from adaos.services.applications import ApplicationDevelopmentCoordinator, ApplicationService, ApplicationStore
+from adaos.domain.artifact_release import WorkspaceLock, WorkspaceSlot
+from adaos.services.applications import (
+    ApplicationDevelopmentCoordinator,
+    ApplicationService,
+    ApplicationServiceError,
+    ApplicationStore,
+)
 
 
 def test_legacy_workspace_adoption_honors_removed_installation_tombstone(
@@ -34,6 +40,119 @@ def test_legacy_workspace_adoption_honors_removed_installation_tombstone(
         "_ctx",
         lambda: (_ for _ in ()).throw(
             AssertionError("removed installation must not inspect WorkspaceLock")
+        ),
+    )
+
+    assert applications._adopt_legacy_workspace_installation(application) is application
+
+
+def test_legacy_workspace_adoption_skips_stale_preaggregate_closure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    digest = "sha256:" + "a" * 64
+    application = SimpleNamespace(
+        application_id="web_desktop",
+        legacy_project_id="web_desktop",
+        publisher_ref="subnet:home",
+    )
+    lock = WorkspaceLock(
+        lock_revision=7,
+        updated_at="2026-09-26T00:00:00Z",
+        slots=(
+            WorkspaceSlot(
+                slot_id="desktop",
+                project_id="web_desktop",
+                release="web_desktop@0.3.52",
+                release_digest=digest,
+            ),
+        ),
+    )
+    metadata = tmp_path / ".adaos"
+    metadata.mkdir()
+    (metadata / "workspace.lock.json").write_text(
+        __import__("json").dumps(lock.to_dict()), encoding="utf-8"
+    )
+
+    def missing_installation(_application_id):
+        raise FileNotFoundError
+
+    def stale_closure(*_args):
+        raise ApplicationServiceError(
+            "Workspace Application dependency closure differs from the release"
+        )
+
+    store = SimpleNamespace(
+        get_installation=missing_installation,
+        get_release=lambda *_args: SimpleNamespace(
+            project_release=SimpleNamespace(project_id="web_desktop")
+        ),
+        get_channels=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("stale adoption must not inspect or move channels")
+        ),
+    )
+    service = SimpleNamespace(
+        store=store,
+        reconcile_workspace_installation=stale_closure,
+        move_channel=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("stale adoption must not move channels")
+        ),
+        select_runtime=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("stale adoption must not select a runtime")
+        ),
+    )
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(
+        applications,
+        "_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(workspace_dir=lambda: str(tmp_path))
+        ),
+    )
+
+    assert applications._adopt_legacy_workspace_installation(application) is application
+
+
+def test_legacy_workspace_adoption_reuses_matching_active_installation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    digest = "sha256:" + "b" * 64
+    application = SimpleNamespace(
+        application_id="web_desktop",
+        legacy_project_id="web_desktop",
+    )
+    lock = WorkspaceLock(
+        lock_revision=8,
+        updated_at="2026-09-26T00:00:00Z",
+        slots=(
+            WorkspaceSlot(
+                slot_id="desktop",
+                project_id="web_desktop",
+                release="web_desktop@0.3.52",
+                release_digest=digest,
+            ),
+        ),
+    )
+    metadata = tmp_path / ".adaos"
+    metadata.mkdir()
+    (metadata / "workspace.lock.json").write_text(
+        __import__("json").dumps(lock.to_dict()), encoding="utf-8"
+    )
+    service = SimpleNamespace(
+        store=SimpleNamespace(
+            get_installation=lambda _application_id: SimpleNamespace(
+                status="active", installed_release_digest=digest
+            ),
+            get_release=lambda *_args: (_ for _ in ()).throw(
+                AssertionError("established adoption must not be repeated")
+            ),
+        )
+    )
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(
+        applications,
+        "_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(workspace_dir=lambda: str(tmp_path))
         ),
     )
 

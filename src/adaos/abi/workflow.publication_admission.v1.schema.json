@@ -70,13 +70,15 @@
           "active_package_digest",
           "candidate_package_digest",
           "active_consumers",
-          "contract_fingerprint",
           "policy",
           "evidence_digest"
         ],
         "properties": {
           "schema": {
-            "const": "adaos.artifact.contract_preserving_rebinding.v1"
+            "enum": [
+              "adaos.artifact.contract_preserving_rebinding.v1",
+              "adaos.artifact.legacy_cbs_rebinding.v1"
+            ]
           },
           "status": { "const": "admissible" },
           "skill_ref": { "type": "string", "pattern": "^skill:[^\\s]+$" },
@@ -110,11 +112,74 @@
             },
             "additionalProperties": false
           },
+          "candidate_contract_fingerprint": {
+            "type": "object",
+            "required": ["contract_members", "entrypoints"],
+            "properties": {
+              "contract_members": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": { "$ref": "#/$defs/digest" }
+              },
+              "entrypoints": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": { "type": "string" }
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "preserved_tools": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+          },
+          "declaration_digest": { "$ref": "#/$defs/digest" },
           "policy": {
-            "const": "exact_capability_binding_and_entrypoint_equivalence"
+            "enum": [
+              "exact_capability_binding_and_entrypoint_equivalence",
+              "exact_legacy_digest_and_consumer_enforceable_tool_abi_superset"
+            ]
           },
           "evidence_digest": { "$ref": "#/$defs/digest" }
         },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "schema": { "const": "adaos.artifact.contract_preserving_rebinding.v1" }
+              }
+            },
+            "then": {
+              "required": ["contract_fingerprint"],
+              "properties": {
+                "policy": { "const": "exact_capability_binding_and_entrypoint_equivalence" }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "schema": { "const": "adaos.artifact.legacy_cbs_rebinding.v1" }
+              }
+            },
+            "then": {
+              "required": [
+                "candidate_contract_fingerprint",
+                "preserved_tools",
+                "declaration_digest"
+              ],
+              "properties": {
+                "policy": { "const": "exact_legacy_digest_and_consumer_enforceable_tool_abi_superset" }
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       }
     },

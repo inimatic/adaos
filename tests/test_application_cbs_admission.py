@@ -43,19 +43,23 @@ def _source(scope: str) -> ArtifactSourceRef:
     )
 
 
-def _scenario(root: Path):
-    source = root / "mail_client"
+def _scenario_named(root: Path, name: str):
+    source = root / name
     source.mkdir(parents=True)
     (source / "scenario.yaml").write_text(
-        "id: mail_client\nversion: 1.0.0\n", encoding="utf-8"
+        f"id: {name}\nversion: 1.0.0\n", encoding="utf-8"
     )
     (source / "webui.json").write_text(
         json.dumps({"schema": "adaos.webui.v1", "title": "Mail"}),
         encoding="utf-8",
     )
     return build_artifact_package(
-        source, kind="scenario", source_ref=_source("scenarios/mail_client/")
+        source, kind="scenario", source_ref=_source(f"scenarios/{name}/")
     )
+
+
+def _scenario(root: Path):
+    return _scenario_named(root, "mail_client")
 
 
 def _provider(root: Path):
@@ -183,9 +187,16 @@ def _compilation() -> dict:
     return value
 
 
-def _release(tmp_path: Path, *, include_provider: bool = True):
+def _release(
+    tmp_path: Path,
+    *,
+    include_provider: bool = True,
+    include_supporting_scenario: bool = False,
+):
     scenario = _scenario(tmp_path / "source")
     packages = [scenario]
+    if include_supporting_scenario:
+        packages.append(_scenario_named(tmp_path / "source", "mail_settings"))
     if include_provider:
         packages.append(_provider(tmp_path / "source"))
     store = ContentAddressedPackageStore(tmp_path / "packages")
@@ -201,6 +212,27 @@ def _release(tmp_path: Path, *, include_provider: bool = True):
         validation_evidence=({"validator": "pytest", "status": "passed"},),
     )
     return plan, store
+
+
+def test_ui_admission_selects_application_entrypoint_from_multiple_scenarios(
+    tmp_path: Path,
+) -> None:
+    plan, store = _release(tmp_path, include_supporting_scenario=True)
+    compilation = _compilation()
+
+    admitted = NativeApplicationCBSAdmissionService(
+        tmp_path / "state", now=lambda: FIXED_NOW
+    ).admit(
+        application_ref="scenario:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:candidate-mail",
+        evidence_context={"candidate_id": "candidate-mail"},
+    )
+
+    assert admitted["status"] == "admitted"
+    assert admitted["requirements_total"] == admitted["requirements_resolved"] == 2
 
 
 def test_exact_application_release_admits_every_requirement_and_plan(tmp_path: Path) -> None:

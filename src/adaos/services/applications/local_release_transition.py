@@ -3,13 +3,18 @@
 from io import BytesIO
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import yaml
 
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
+from adaos.services.artifact_pipeline.trial_activation import (
+    legacy_cbs_shared_skill_rebindings,
+    load_workspace_lock,
+    shared_skill_contract_fingerprint,
+)
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from .data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent
 from .runtime_channel import ApplicationRuntimeChannel
@@ -113,6 +118,30 @@ def bind_local_data_lifecycle(owner, runtime, release):
             binding = {**identity, "stable_release_digest": stable_digest}
         stable = store.get_release(application_id, stable_digest).project_release if stable_digest else None
         packages = ContentAddressedPackageStore(state / "artifact_pipeline/packages")
+        active_lock_path = workspace / ".adaos/workspace.lock.json"
+        active_lock = (
+            load_workspace_lock(active_lock_path)
+            if active_lock_path.is_file()
+            else None
+        )
+
+        def shared_components(value):
+            """Return exact package identities consumed without data ownership."""
+
+            if value is None:
+                return {}
+            result = {
+                item.key: item.package_digest
+                for item in getattr(value, "resolved_dependencies", ())
+            }
+            if value.composition_lock is None:
+                return result
+            members = {item.ref: item for item in value.composition_lock.members}
+            for package in value.components:
+                member = members.get(package.key)
+                if member is not None and member.lifecycle == "shared":
+                    result[package.key] = package.digest
+            return result
 
         def skills(value):
             if value is None:
@@ -124,8 +153,13 @@ def bind_local_data_lifecycle(owner, runtime, release):
             for package in value.components:
                 if package.kind != "skill":
                     continue
-                if members[package.key].lifecycle != "bound":
-                    raise ValueError("Shared skills require a qualified shared-data cutover adapter")
+                member = members.get(package.key)
+                # Shared dependencies are materialized by the package resolver,
+                # but their state authority belongs to another Application.
+                # They must therefore remain outside this Application's data
+                # transition instead of being treated as an unsupported owner.
+                if member is None or member.lifecycle == "shared":
+                    continue
                 archive, verified = packages.read_verified(package.digest)
                 if verified.ref != package:
                     raise ValueError("Data transition package identity mismatch")
@@ -137,22 +171,105 @@ def bind_local_data_lifecycle(owner, runtime, release):
             return result
 
         previous, target = skills(stable), skills(release)
-        if previous.keys() - target.keys():
+        legacy_rebindings = {
+            str(item.get("skill_ref") or ""): item
+            for item in legacy_cbs_shared_skill_rebindings(
+                SimpleNamespace(packages=release.components),
+                active_lock,
+                packages,
+            )
+        }
+        target_shared = shared_components(release)
+        relinquished = previous.keys() - target.keys()
+        unsafe_relinquished = []
+        for ref in sorted(relinquished):
+            previous_package = previous[ref][0]
+            target_digest = target_shared.get(ref)
+            if target_digest == previous_package.digest:
+                continue
+            try:
+                _archive, verified = packages.read_verified(target_digest)
+                equivalent = (
+                    verified.ref.kind == "skill"
+                    and verified.ref.key == ref
+                    and shared_skill_contract_fingerprint(
+                        previous_package, packages
+                    )
+                    == shared_skill_contract_fingerprint(verified.ref, packages)
+                )
+            except Exception:
+                equivalent = False
+            if not equivalent:
+                unsafe_relinquished.append(ref)
+        if unsafe_relinquished:
             raise ValueError("Removing owned skill data requires an explicit retention/migration adapter")
+        shared_adoptions = {}
         for installation in store.list_installations():
             if installation.application_id == application_id or installation.status == "removed":
                 continue
-            if any(item["component_ref"] in target for item in installation.component_refs):
-                raise ValueError("Owned skill is referenced by another installation; reconcile ownership before cutover")
+            for item in installation.component_refs:
+                ref = item["component_ref"]
+                if ref not in target:
+                    continue
+                if item["lifecycle"] == "bound":
+                    raise ValueError("Owned skill is referenced by another installation; reconcile ownership before cutover")
+                active_package = next(
+                    (
+                        package
+                        for package in (active_lock.components if active_lock else ())
+                        if package.key == ref
+                        and package.digest == item["package_digest"]
+                    ),
+                    None,
+                )
+                if active_package is None:
+                    raise ValueError("Shared skill package is absent from the active Workspace lock")
+                try:
+                    archive, verified = packages.read_verified(active_package.digest)
+                    if verified.ref != active_package:
+                        raise ValueError("Shared skill package identity changed")
+                    with ZipFile(BytesIO(archive)) as bundle:
+                        active_manifest = yaml.safe_load(
+                            bundle.read("skill.yaml").decode("utf-8")
+                        )
+                    if not isinstance(active_manifest, dict):
+                        raise ValueError("Shared skill package has no valid manifest")
+                    if active_package.digest != target[ref][0].digest:
+                        legacy_proof = legacy_rebindings.get(ref)
+                        legacy_equivalent = bool(
+                            legacy_proof
+                            and legacy_proof.get("active_package_digest")
+                            == active_package.digest
+                            and legacy_proof.get("candidate_package_digest")
+                            == target[ref][0].digest
+                        )
+                        if not legacy_equivalent and (
+                            shared_skill_contract_fingerprint(active_package, packages)
+                            != shared_skill_contract_fingerprint(target[ref][0], packages)
+                        ):
+                            raise ValueError(
+                                "Shared skill package differs from the proposed owner delivery"
+                            )
+                except (FileNotFoundError, KeyError, ValueError):
+                    raise
+                except Exception as exc:
+                    raise ValueError(
+                        "Shared skill package differs from the proposed owner delivery"
+                    ) from exc
+                shared_adoptions[ref] = (active_package, active_manifest)
         components = []
         for ref, (package, manifest) in target.items():
             environment = SkillRuntimeEnvironment(skills_root=workspace / "skills", skill_name=package.artifact_id)
             old = previous.get(ref)
             beta_environment = SkillRuntimeEnvironment(skills_root=runtime.root / "skills", skill_name=package.artifact_id)
+            adopted_shared = shared_adoptions.get(ref) if old is None else None
             components.append(OwnedDataComponent(ref,
-                environment.data_root(old[0].version) if old else None,
+                environment.data_root(old[0].version) if old else (
+                    environment.data_root(adopted_shared[0].version)
+                    if adopted_shared else None
+                ),
                 beta_environment.data_root(package.version), environment.data_root(package.version),
-                old[1] if old else {}, manifest))
+                old[1] if old else (adopted_shared[1] if adopted_shared else {}), manifest))
         lifecycle = LocalApplicationDataLifecycle(state_root=state, private_root=workspace.parent,
             application_id=application_id, candidate_id=runtime.candidate_id,
             release_digest=release.release_digest, stable_digest=stable_digest, components=tuple(components))

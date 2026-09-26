@@ -22,7 +22,7 @@
           "const": "native_tools"
         },
         "legacy_adoption": {
-          "enum": ["reconstructible_empty"],
+          "enum": ["reconstructible_empty", "core_managed_only"],
           "description": "One-time bridge for a pre-lifecycle package only when its exact runtime data root contains no files."
         },
         "coordination_files": {
@@ -35,6 +35,18 @@
             "minLength": 1,
             "maxLength": 240,
             "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])[^/]+(?:/[^/]+)*\\.lock$"
+          }
+        },
+        "operational_evidence_files": {
+          "description": "Exact owner-relative log files admitted as operational evidence but never copied as Application state.",
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])(?=.*(?:^|/)logs/)[^/]+(?:/[^/]+)*\\.(?:log|jsonl)$"
           }
         },
         "databases": {
@@ -83,6 +95,20 @@
                         "minLength": 1,
                         "maxLength": 1048576
                       }
+                    },
+                    "idempotent": {
+                      "type": "boolean",
+                      "description": "Part of the immutable Core migration checksum; must match the runtime RelationalMigration."
+                    },
+                    "dialects": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 2,
+                      "uniqueItems": true,
+                      "items": {
+                        "enum": ["sqlite", "postgresql"]
+                      },
+                      "description": "Part of the immutable Core migration checksum; defaults to sqlite-only for legacy declarations."
                     }
                   }
                 }

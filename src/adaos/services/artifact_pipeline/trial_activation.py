@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from io import BytesIO
 import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from zipfile import ZipFile
+
+import yaml
 
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
@@ -624,6 +628,90 @@ def contract_preserving_shared_skill_rebindings(
     return evidence
 
 
+def legacy_cbs_shared_skill_rebindings(
+    plan: ReleasePlan,
+    active_lock: WorkspaceLock | None,
+    package_store: Any,
+) -> list[dict[str, Any]]:
+    """Bridge an explicitly enumerated legacy package into native CBS ownership.
+
+    This is intentionally narrower than semantic contract equivalence: the old
+    package has no portable CBS artifacts to compare.  The new package must name
+    the exact legacy digest and preserve every legacy tool ABI byte-for-byte,
+    while also supplying complete canonical CBS contracts.  The resulting proof
+    is durable migration evidence, not a general compatibility guess.
+    """
+
+    if active_lock is None:
+        return []
+    active_by_key = {item.key: item for item in active_lock.components}
+    candidate_by_key = {item.key: item for item in plan.packages}
+    evidence: list[dict[str, Any]] = []
+    for conflict in shared_skill_conflicts(plan, active_lock):
+        skill_ref = str(conflict.get("skill") or "")
+        active_package = active_by_key.get(skill_ref)
+        candidate_package = candidate_by_key.get(skill_ref)
+        if active_package is None or candidate_package is None:
+            continue
+        try:
+            active_archive, active_verified = package_store.read_verified(
+                active_package.digest
+            )
+            candidate_archive, candidate_verified = package_store.read_verified(
+                candidate_package.digest
+            )
+            if (
+                active_verified.ref != active_package
+                or candidate_verified.ref != candidate_package
+            ):
+                continue
+            candidate_fingerprint = _shared_skill_contract_fingerprint(
+                candidate_package, package_store
+            )
+            active_manifest = _skill_manifest(active_archive)
+            candidate_manifest = _skill_manifest(candidate_archive)
+            bridge = dict(
+                (candidate_manifest.get("compatibility") or {}).get(
+                    "legacy_cbs_rebinding"
+                )
+                or {}
+            )
+            admitted_digests = {
+                str(item or "").strip()
+                for item in bridge.get("package_digests") or ()
+            }
+            if active_package.digest not in admitted_digests:
+                continue
+            active_tools = _skill_tool_abi(active_manifest)
+            candidate_tools = _skill_tool_abi(candidate_manifest)
+            if any(
+                not _legacy_tool_abi_preserved(abi, candidate_tools.get(name))
+                for name, abi in active_tools.items()
+            ):
+                continue
+            if active_manifest.get("default_tool") != candidate_manifest.get(
+                "default_tool"
+            ):
+                continue
+        except Exception:
+            continue
+        record: dict[str, Any] = {
+            "schema": "adaos.artifact.legacy_cbs_rebinding.v1",
+            "status": "admissible",
+            "skill_ref": skill_ref,
+            "active_package_digest": active_package.digest,
+            "candidate_package_digest": candidate_package.digest,
+            "active_consumers": list(conflict.get("active_consumers") or []),
+            "preserved_tools": sorted(active_tools),
+            "candidate_contract_fingerprint": candidate_fingerprint,
+            "declaration_digest": canonical_payload_digest(bridge),
+            "policy": "exact_legacy_digest_and_consumer_enforceable_tool_abi_superset",
+        }
+        record["evidence_digest"] = canonical_payload_digest(record)
+        evidence.append(record)
+    return evidence
+
+
 def unresolved_shared_skill_conflicts(
     plan: ReleasePlan,
     active_lock: WorkspaceLock | None,
@@ -635,6 +723,18 @@ def unresolved_shared_skill_conflicts(
     admitted = contract_preserving_shared_skill_rebindings(
         plan, active_lock, package_store
     )
+    legacy_admitted = legacy_cbs_shared_skill_rebindings(
+        plan, active_lock, package_store
+    )
+    admitted = [
+        *admitted,
+        *(
+            item
+            for item in legacy_admitted
+            if str(item.get("skill_ref") or "")
+            not in {str(value.get("skill_ref") or "") for value in admitted}
+        ),
+    ]
     admitted_refs = {str(item.get("skill_ref") or "") for item in admitted}
     return (
         [
@@ -644,6 +744,54 @@ def unresolved_shared_skill_conflicts(
         ],
         admitted,
     )
+
+
+def _skill_manifest(archive: bytes) -> dict[str, Any]:
+    with ZipFile(BytesIO(archive)) as bundle:
+        value = yaml.safe_load(bundle.read("skill.yaml").decode("utf-8"))
+    if not isinstance(value, Mapping):
+        raise TrialActivationError("skill package has no valid skill.yaml")
+    return copy.deepcopy(dict(value))
+
+
+def _skill_tool_abi(manifest: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for raw in manifest.get("tools") or ():
+        if not isinstance(raw, Mapping):
+            raise TrialActivationError("skill tool declaration must be an object")
+        name = str(raw.get("name") or "").strip()
+        if not name or name in result:
+            raise TrialActivationError("skill tool names must be present and unique")
+        result[name] = {
+            "input_schema": copy.deepcopy(raw.get("input_schema")),
+            "output_schema": copy.deepcopy(raw.get("output_schema")),
+            "side_effects": raw.get("side_effects"),
+            "side_effect_class": raw.get("side_effect_class"),
+        }
+    return result
+
+
+def _legacy_tool_abi_preserved(
+    active: Mapping[str, Any], candidate: Mapping[str, Any] | None
+) -> bool:
+    """Preserve every ABI property that legacy consumers could enforce.
+
+    A missing legacy output schema was not a contract and cannot be compared
+    byte-for-byte.  Native CBS authoring requires one, so adding it is the only
+    admitted enrichment.  Existing input/output schemas and effect labels stay
+    exact; a missing tool or any other change remains fail-closed.
+    """
+
+    if candidate is None:
+        return False
+    if active.get("input_schema") != candidate.get("input_schema"):
+        return False
+    if active.get("side_effects") != candidate.get("side_effects"):
+        return False
+    if active.get("side_effect_class") != candidate.get("side_effect_class"):
+        return False
+    active_output = active.get("output_schema")
+    return active_output is None or active_output == candidate.get("output_schema")
 
 
 def _shared_skill_contract_fingerprint(
@@ -684,6 +832,15 @@ def _shared_skill_contract_fingerprint(
         "contract_members": contract_members,
         "entrypoints": [list(item) for item in entrypoints],
     }
+
+
+def shared_skill_contract_fingerprint(
+    package: ArtifactPackageRef,
+    package_store: Any,
+) -> dict[str, Any]:
+    """Return the exact portable contract/delivery identity for a skill package."""
+
+    return _shared_skill_contract_fingerprint(package, package_store)
 
 
 def build_trial_activation(
@@ -902,6 +1059,7 @@ __all__ = [
     "build_trial_activation",
     "contract_preserving_shared_skill_rebindings",
     "ensure_trial_workspace_shape",
+    "legacy_cbs_shared_skill_rebindings",
     "legacy_runtime_trial_root",
     "legacy_runtime_trial_workspace",
     "legacy_workspace_trial_root",
@@ -909,6 +1067,7 @@ __all__ = [
     "runtime_trial_root",
     "runtime_trial_workspace",
     "shared_skill_conflicts",
+    "shared_skill_contract_fingerprint",
     "trial_workspace_root",
     "unresolved_shared_skill_conflicts",
 ]
