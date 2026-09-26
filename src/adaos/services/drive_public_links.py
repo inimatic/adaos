@@ -20,7 +20,12 @@ from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 
 from adaos.services.agent_context import AgentContext, get_ctx
-from adaos.services.media_core import file_range_iter, media_content_response_parts, parse_media_range
+from adaos.services.media_core import (
+    attachment_content_disposition,
+    file_range_iter,
+    media_content_response_parts,
+    parse_media_range,
+)
 from adaos.services.public_grants import (
     FOLDER_READ_ONLY_CAPABILITIES,
     PUBLIC_GRANT_SCHEMA,
@@ -1274,13 +1279,6 @@ def list_hub_public_link(
     }
 
 
-def _attachment_content_disposition(filename: str) -> str:
-    safe = str(filename or "download").replace("\\", "_").replace("/", "_")
-    safe = safe.replace('"', "'").replace("\r", "").replace("\n", "").strip() or "download"
-    encoded = quote(safe, safe="")
-    return f'attachment; filename="{safe}"; filename*=UTF-8\'\'{encoded}'
-
-
 def _public_download_file_iter(
     record: Mapping[str, Any],
     target: Path,
@@ -1422,7 +1420,7 @@ def stream_hub_public_link(
     headers["X-AdaOS-Resource-Scope"] = "drive-public-link"
     headers["X-AdaOS-Drive-Public-Link"] = str(record.get("public_token_hint") or "")
     if download:
-        headers["Content-Disposition"] = _attachment_content_disposition(filename)
+        headers["Content-Disposition"] = attachment_content_disposition(filename)
     if request.method.upper() == "HEAD" or int(headers.get("Content-Length") or 0) <= 0:
         if request.method.upper() != "HEAD":
             record_hub_public_download_event(

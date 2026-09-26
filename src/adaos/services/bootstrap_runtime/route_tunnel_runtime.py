@@ -2489,6 +2489,7 @@ class NatsRouteTunnelRuntime:
             ) -> int | None:
                 from adaos.services.media_core import (
                     ROOT_MEDIA_RELAY_CHUNK_BYTES,
+                    attachment_content_disposition,
                     guess_media_type,
                     media_content_response_parts,
                     parse_media_range,
@@ -2533,9 +2534,7 @@ class NatsRouteTunnelRuntime:
                     lower_case_headers=True,
                 )
                 if download:
-                    safe_name = response_name.replace("\\", "_").replace("/", "_").replace('"', "'")
-                    safe_name = safe_name.replace("\r", "").replace("\n", "").strip() or "download"
-                    headers["content-disposition"] = f'attachment; filename="{safe_name}"'
+                    headers["content-disposition"] = attachment_content_disposition(response_name)
                 length = int(headers.get("content-length") or 0)
                 flow = media_relay_flow_windows.get(key)
                 flow_meta = (

@@ -613,13 +613,21 @@ def parse_media_range(raw: str | None, *, size: int) -> tuple[int, int] | None:
     return start, min(end, int(size) - 1)
 
 
-def inline_content_disposition(filename: str) -> str:
+def _content_disposition(filename: str, *, disposition: str) -> str:
     safe = str(filename or "media").replace("\\", "_").replace("/", "_")
     safe = safe.replace('"', "'").replace("\r", "").replace("\n", "").strip() or "media"
     fallback = safe.encode("ascii", errors="ignore").decode("ascii").strip() or "media"
     if fallback == safe:
-        return f'inline; filename="{fallback}"'
-    return f'inline; filename="{fallback}"; filename*=UTF-8\'\'{quote(safe, safe="")}'
+        return f'{disposition}; filename="{fallback}"'
+    return f'{disposition}; filename="{fallback}"; filename*=UTF-8\'\'{quote(safe, safe="")}'
+
+
+def inline_content_disposition(filename: str) -> str:
+    return _content_disposition(filename, disposition="inline")
+
+
+def attachment_content_disposition(filename: str) -> str:
+    return _content_disposition(filename or "download", disposition="attachment")
 
 
 def media_content_response_parts(
@@ -708,6 +716,7 @@ __all__ = [
     "SUPPORTED_MEDIA_PACKAGE_EXTENSIONS",
     "SUPPORTED_MEDIA_DELIVERY_EXTENSIONS",
     "MediaResource",
+    "attachment_content_disposition",
     "file_range_iter",
     "guess_media_type",
     "inline_content_disposition",

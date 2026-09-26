@@ -52,6 +52,14 @@ def test_inline_content_disposition_encodes_unicode_filename_for_http_headers() 
     value.encode("latin-1")
 
 
+def test_attachment_content_disposition_encodes_unicode_filename_for_node_relay() -> None:
+    value = media_core.attachment_content_disposition("Проверка имени Drive.txt")
+
+    assert value.startswith('attachment; filename="Drive.txt"; filename*=UTF-8\'\'')
+    assert "%D0%9F%D1%80%D0%BE%D0%B2%D0%B5%D1%80%D0%BA%D0%B0" in value
+    value.encode("latin-1")
+
+
 def test_media_core_range_parser_matches_http_range_semantics() -> None:
     assert media_core.parse_media_range(None, size=10) is None
     assert media_core.parse_media_range("bytes=2-5", size=10) == (2, 5)
