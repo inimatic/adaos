@@ -578,6 +578,7 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
             "devices": [
                 {
                     "device_id": "phone-1",
+                    "label": "Sasha's phone",
                     "status": "active",
                     "public_key": "must-not-be-projected",
                 }
@@ -625,14 +626,18 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
         }
     )
     assert users_view["diagnostics"]["content_redacted"] is True
-    assert users_view["devices"] == [{"device_id": "phone-1", "status": "active"}]
+    assert users_view["devices"] == [
+        {"device_id": "phone-1", "label": "Sasha's phone", "status": "active"}
+    ]
     assert users_view["sessions"] == [
         {
             "session_id": "session-1",
             "device_id": "phone-1",
+            "device_name": "Sasha's phone",
             "status": "active",
             "expires_at": "2030-03-17T17:46:40+00:00",
             "subject_ref": "user:sasha",
+            "subject_display_name": "Sasha",
             "scope_ref": "skill:family_tasks_skill",
             "opened_at": "2027-01-15T08:00:00+00:00",
             "authentication_source": "invitation",
@@ -653,6 +658,12 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
         "approval_policy": "grant_on_install",
         "active_grant_count": 3,
         "explicit_deny_count": 0,
+        "access_enabled": True,
+        "access_mutable": False,
+        "readonly_reason": (
+            "Application permission declarations are immutable release contracts; "
+            "change subject grants from the Application access editor."
+        ),
     }
     assert any(item["subject_ref"] == "user:sasha" for item in users_view["children"])
     sasha = next(

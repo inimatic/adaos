@@ -1406,11 +1406,34 @@ class ApplicationAccessManagementService:
             for item in directory.get("devices") or ()
             if isinstance(item, Mapping)
         ]
+        device_names = {
+            str(item.get("device_id") or ""): str(
+                item.get("label") or item.get("device_id") or ""
+            )
+            for item in devices
+            if str(item.get("device_id") or "")
+        }
+        subject_names = {
+            str(item.get("subject_ref") or ""): str(
+                _person_projection(item).get("display_label") or ""
+            )
+            for item in people.values()
+            if str(item.get("subject_ref") or "")
+        }
         sessions = [
             _redacted_session(item)
             for item in directory.get("sessions") or ()
             if isinstance(item, Mapping)
         ]
+        for session in sessions:
+            device_id = str(session.get("device_id") or "")
+            subject_ref = str(session.get("subject_ref") or "")
+            session["device_name"] = device_names.get(device_id) or device_id
+            session["subject_display_name"] = (
+                subject_names.get(subject_ref)
+                or subject_ref.partition(":")[2]
+                or subject_ref
+            )
         audit_limit = max(1, min(int(activity_limit), 200))
         activity_values = self.store.list_application_access_audit(
             limit=audit_limit + 1
@@ -1528,6 +1551,13 @@ class ApplicationAccessManagementService:
                         "approval_policy": declaration.get("approval_policy"),
                         "active_grant_count": grant_count,
                         "explicit_deny_count": deny_count,
+                        "access_enabled": grant_count > 0 and deny_count == 0,
+                        "access_mutable": False,
+                        "readonly_reason": (
+                            "Application permission declarations are immutable release "
+                            "contracts; change subject grants from the Application access "
+                            "editor."
+                        ),
                     }
                 )
         for entry in by_permission.values():
