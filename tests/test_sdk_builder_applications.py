@@ -119,6 +119,7 @@ def test_legacy_workspace_adoption_reuses_matching_active_installation(
     application = SimpleNamespace(
         application_id="web_desktop",
         legacy_project_id="web_desktop",
+        publisher_ref="subnet:home",
     )
     lock = WorkspaceLock(
         lock_revision=8,
@@ -145,7 +146,17 @@ def test_legacy_workspace_adoption_reuses_matching_active_installation(
             get_release=lambda *_args: (_ for _ in ()).throw(
                 AssertionError("established adoption must not be repeated")
             ),
-        )
+            get_channels=lambda *_args: {"channels": {"stable": digest}},
+            get_runtime_selection=lambda *_args: SimpleNamespace(
+                source="stable_installation",
+                runtime_root_ref="workspace",
+                release_digest=digest,
+                revision=3,
+            ),
+        ),
+        select_runtime=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("matching runtime selection must not be rewritten")
+        ),
     )
     monkeypatch.setattr(applications, "_application_service", lambda: service)
     monkeypatch.setattr(
@@ -157,6 +168,74 @@ def test_legacy_workspace_adoption_reuses_matching_active_installation(
     )
 
     assert applications._adopt_legacy_workspace_installation(application) is application
+
+
+def test_legacy_workspace_adoption_recovers_stale_stable_selection(
+    monkeypatch, tmp_path: Path
+) -> None:
+    old_digest = "sha256:" + "a" * 64
+    digest = "sha256:" + "b" * 64
+    application = SimpleNamespace(
+        application_id="adaos_builder",
+        legacy_project_id="adaos_builder",
+        publisher_ref="subnet:home",
+    )
+    lock = WorkspaceLock(
+        lock_revision=9,
+        updated_at="2026-09-26T00:00:00Z",
+        slots=(
+            WorkspaceSlot(
+                slot_id="builder",
+                project_id="adaos_builder",
+                release="adaos_builder@0.3.11",
+                release_digest=digest,
+            ),
+        ),
+    )
+    metadata = tmp_path / ".adaos"
+    metadata.mkdir()
+    (metadata / "workspace.lock.json").write_text(
+        __import__("json").dumps(lock.to_dict()), encoding="utf-8"
+    )
+    selected = []
+    service = SimpleNamespace(
+        store=SimpleNamespace(
+            get_installation=lambda _application_id: SimpleNamespace(
+                status="active", installed_release_digest=digest
+            ),
+            get_channels=lambda *_args: {"channels": {"stable": old_digest}},
+            get_runtime_selection=lambda *_args: SimpleNamespace(
+                source="stable_installation",
+                runtime_root_ref="workspace",
+                release_digest=old_digest,
+                revision=4,
+            ),
+        ),
+        select_runtime=lambda **kwargs: selected.append(kwargs),
+    )
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(
+        applications,
+        "_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(workspace_dir=lambda: str(tmp_path))
+        ),
+    )
+
+    assert applications._adopt_legacy_workspace_installation(application) is application
+    assert selected == [
+        {
+            "webspace_id": "desktop",
+            "application_id": "adaos_builder",
+            "source": "stable_installation",
+            "release_digest": digest,
+            "runtime_root_ref": "workspace",
+            "expected_revision": 4,
+            "actor_ref": "system:legacy-workspace-adoption",
+            "subnet_ref": "subnet:home",
+            "capability": "applications.apply",
+        }
+    ]
 
 
 def test_builder_application_create_uses_bounded_composition_and_core(monkeypatch, tmp_path: Path) -> None:

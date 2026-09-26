@@ -125,70 +125,66 @@ def _adopt_legacy_workspace_installation(
     if len(slots) != 1:
         raise ValueError("Legacy Workspace contains ambiguous Project slots")
     slot = slots[0]
-    if (
+    installation_matches_slot = (
         existing_installation is not None
         and existing_installation.status == "active"
         and existing_installation.installed_release_digest == slot.release_digest
-    ):
-        # Adoption already established the immutable release boundary. Shared
-        # packages may subsequently be rebound by another Application, so
-        # revalidating the historical closure against today's merged lock
-        # would incorrectly prevent this Application's next reviewed update.
-        return application
-    try:
-        registered_release = service.store.get_release(
-            application.application_id, slot.release_digest
-        )
-    except FileNotFoundError:
+    )
+    if not installation_matches_slot:
         try:
-            release = _distribution_service().releases.get_release(
-                application.legacy_project_id, slot.release_digest
-            ).release
-        except FileNotFoundError as exc:
-            raise ValueError(
-                "Legacy Workspace release metadata is unavailable for Application adoption"
-            ) from exc
-        service.register_release(
-            ApplicationRelease(
-                application_id=application.application_id,
-                publisher_ref=application.publisher_ref,
-                project_release=release,
-                accepted_candidate_id=(
-                    f"legacy-workspace-{application.legacy_project_id}-{release.version}"
-                ),
-                acceptance_evidence=(
-                    {
-                        "status": "passed",
-                        "kind": "exact_workspace_compatibility_adoption",
-                        "release_digest": slot.release_digest,
-                    },
-                ),
-                provenance_refs=(slot.release_digest,),
-                lifecycle="stable",
-                published_at=utc_now(),
+            registered_release = service.store.get_release(
+                application.application_id, slot.release_digest
             )
-        )
-    else:
-        if registered_release.project_release.project_id != application.legacy_project_id:
-            raise ValueError(
-                "Legacy Workspace release metadata does not match its Application identity"
+        except FileNotFoundError:
+            try:
+                release = _distribution_service().releases.get_release(
+                    application.legacy_project_id, slot.release_digest
+                ).release
+            except FileNotFoundError as exc:
+                raise ValueError(
+                    "Legacy Workspace release metadata is unavailable for Application adoption"
+                ) from exc
+            service.register_release(
+                ApplicationRelease(
+                    application_id=application.application_id,
+                    publisher_ref=application.publisher_ref,
+                    project_release=release,
+                    accepted_candidate_id=(
+                        f"legacy-workspace-{application.legacy_project_id}-{release.version}"
+                    ),
+                    acceptance_evidence=(
+                        {
+                            "status": "passed",
+                            "kind": "exact_workspace_compatibility_adoption",
+                            "release_digest": slot.release_digest,
+                        },
+                    ),
+                    provenance_refs=(slot.release_digest,),
+                    lifecycle="stable",
+                    published_at=utc_now(),
+                )
             )
-    try:
-        service.reconcile_workspace_installation(
-            application.application_id, slot.release_digest, lock
-        )
-    except ApplicationServiceError as exc:
-        closure_drift = str(exc) in {
-            "Workspace Application package closure differs from the release",
-            "Workspace Application dependency closure differs from the release",
-        }
-        if existing_installation is not None or not closure_drift:
-            raise
-        # A pre-aggregate slot can outlive its original package closure when a
-        # shared dependency is independently upgraded.  It is no longer exact
-        # adoption evidence, so leave channels and runtime selection untouched.
-        # The reviewed candidate may still replace the stale slot atomically.
-        return application
+        else:
+            if registered_release.project_release.project_id != application.legacy_project_id:
+                raise ValueError(
+                    "Legacy Workspace release metadata does not match its Application identity"
+                )
+        try:
+            service.reconcile_workspace_installation(
+                application.application_id, slot.release_digest, lock
+            )
+        except ApplicationServiceError as exc:
+            closure_drift = str(exc) in {
+                "Workspace Application package closure differs from the release",
+                "Workspace Application dependency closure differs from the release",
+            }
+            if existing_installation is not None or not closure_drift:
+                raise
+            # A pre-aggregate slot can outlive its original package closure when a
+            # shared dependency is independently upgraded.  It is no longer exact
+            # adoption evidence, so leave channels and runtime selection untouched.
+            # The reviewed candidate may still replace the stale slot atomically.
+            return application
     channels = service.store.get_channels(application.application_id).get("channels") or {}
     if not channels.get("stable"):
         service.move_channel(
@@ -212,6 +208,37 @@ def _adopt_legacy_workspace_installation(
             release_digest=slot.release_digest,
             runtime_root_ref="workspace",
             expected_revision=0,
+            actor_ref="system:legacy-workspace-adoption",
+            subnet_ref=application.publisher_ref,
+            capability="applications.apply",
+        )
+    elif selection.release_digest != slot.release_digest:
+        if selection.source == "local_trial" and selection.runtime_root_ref.startswith(
+            "trial:"
+        ):
+            # Re-entering the same or a newer Trial must preserve the explicit
+            # Beta selection. Its lifecycle journal will decide whether the
+            # operation is idempotent, replaceable, or requires recovery.
+            return application
+        if (
+            selection.source != "stable_installation"
+            or selection.runtime_root_ref != "workspace"
+        ):
+            raise ValueError(
+                "Legacy Workspace adoption cannot replace an active Trial runtime"
+            )
+        # A prior Project-only promotion can commit the Workspace lock and
+        # installation before the Application lifecycle observes the result.
+        # Exact slot evidence makes this a deterministic recovery, not a new
+        # release choice.  Keep it compare-and-swap so concurrent placement
+        # still fails closed.
+        service.select_runtime(
+            webspace_id=webspace_id,
+            application_id=application.application_id,
+            source="stable_installation",
+            release_digest=slot.release_digest,
+            runtime_root_ref="workspace",
+            expected_revision=selection.revision,
             actor_ref="system:legacy-workspace-adoption",
             subnet_ref=application.publisher_ref,
             capability="applications.apply",
