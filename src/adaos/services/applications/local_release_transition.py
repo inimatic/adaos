@@ -81,6 +81,13 @@ def bind_local_data_lifecycle(owner, runtime, release):
                 installed = store.get_installation(application_id)
             except FileNotFoundError:
                 installed = None
+            removed_tombstone = bool(installed and installed.status == "removed")
+            if removed_tombstone:
+                # A reviewed removal is the current local authority.  The
+                # workspace lock can still carry its historical slot until a
+                # later materialization commit; a new Trial must start from a
+                # clean data identity instead of treating that slot as Stable.
+                installed = None
             if installed and installed.status != "active":
                 raise ValueError("Resolve the in-progress Application installation before data cutover")
             stable_digest = installed.installed_release_digest if installed else None
@@ -97,7 +104,7 @@ def bind_local_data_lifecycle(owner, runtime, release):
                     for slot in workspace_lock.slots
                 )
             )
-            if not installed and has_installed_slot:
+            if not installed and has_installed_slot and not removed_tombstone:
                 raise ValueError(
                     "Reconcile the existing Workspace installation before preparing migrated Beta"
                 )
