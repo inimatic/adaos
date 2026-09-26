@@ -59,3 +59,12 @@ The published binary set is available from the GitHub release
 The Linux wheel must retain a `manylinux_2_17` or older compatibility tag; a
 wheel linked directly on a newer Linux host is not an acceptable release
 artifact even when its filename is manually tagged.
+
+## Core update invariant
+
+Seeded A/B environments must remove the copied AdaOS package and every stale
+`adaos-*.dist-info` directory before installing a candidate. Slot preparation
+then requires exactly one AdaOS distribution at the checkout's declared
+version. This keeps dependency reuse fast without allowing historical package
+metadata to accumulate or make `importlib.metadata.version("adaos")`
+nondeterministic.
