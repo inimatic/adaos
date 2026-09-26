@@ -216,6 +216,22 @@ Do not substitute `adaos skill push`: that command writes the stable
 commit. The corresponding distinction for scenarios is `adaos dev scenario
 push` versus `adaos scenario push`.
 
+For a composed Application, edit the canonical DEV project under
+`.adaos/dev/<node>/projects/<project-id>` and checkpoint all owned components
+as one source-plane operation:
+
+```powershell
+.venv\Scripts\python.exe -m adaos dev project checkpoint <project-id> `
+  --change-id <stable-change-id> -m "message" --json
+```
+
+Do not reconstruct a missing or stale DEV component from the installed runtime
+by assumption. Compare the DEV tree, the installed immutable release, and the
+last canonical Forge/registry revision, select the authoritative source with
+recorded provenance, then checkpoint that recovered tree. In particular, keep
+the full applied database migration chain byte-for-byte compatible; a newly
+invented version-1 schema is not a replacement for an installed v1-v7 chain.
+
 Workspace skills are runtime artifacts, not plain source folders. Do not rely on
 `git push` alone to make a workspace skill available to the local runtime.
 

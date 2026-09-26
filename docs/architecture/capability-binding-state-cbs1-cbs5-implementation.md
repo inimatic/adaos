@@ -312,6 +312,34 @@ and delivery without receiving a credential. This provider may now be counted
 as the first native reusable CBS provider; cross-subnet account attachment
 remains a local setup step and is not registry portability.
 
+### Native research provider reuse
+
+The 2026-09-26 maintained-Application qualification added a second independent
+native provider family. `research_platform@0.1.20` publishes and activates four
+exact requirements: the generated UI capability plus
+`research.workbench.manage`, `research.lifecycle.manage`, and
+`research.tracking.manage`. Its stable public release is
+`sha256:00565bcd5abcf282b2fd1478ade556d02dc0461452867c3a42bb3789c608a02e`.
+
+`research_tlp@0.3.16` is a distinct consumer. Its semantic composition requires
+`research.tlp.evaluate`, `research.lifecycle.manage`, and
+`research.tracking.manage`; admission resolved all four requirements exactly.
+The lifecycle and tracking bindings are delivered by the shared Research
+Manager and MLflow packages rather than redefined by TLP. Trial, acceptance,
+stable activation, Workspace authority commit, attestations, and registry
+publication completed for release
+`sha256:24a333824da7d24e70058e78713374972f01d5ea5ea914869454c80c8defe8b6`.
+
+This run also qualified two data-lifecycle rails. Research Manager evidence was
+moved to Core `storage.blob` without exposing its contents, and Research
+Orchestrator declares its derived backup directory reconstructible while
+retaining the exact immutable v1-v7 database migration chain. Rejection now
+aborts a retained failed-preparation journal even when failure happened before
+Trial selection. The remaining performance debt is physical materialization:
+the semantic/package closure is reused, but an immutable MLflow vendor tree is
+still copied into each new Candidate runtime instead of using a verified
+content-addressed cache/reflink layer.
+
 ## Skill Adoption
 
 Existing skills need no bulk rewrite. Native adoption should proceed per skill:

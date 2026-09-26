@@ -12,6 +12,8 @@ Each owned native request/response skill declares its stores in `skill.yaml`:
 data_lifecycle:
   schema: adaos.skill.data_lifecycle.v1
   execution: native_tools
+  reconstructible_directories:
+    - db/backups
   databases:
     - path: records.sqlite3
       migrations:
@@ -30,6 +32,15 @@ and never edit applied versions or checksums. Core owns the migration transactio
 SQL cannot attach other databases, control the transaction or load extensions.
 Fresh-install initialization must produce the same schema. Do not rerun additive
 DDL unconditionally in a request handler. A stateless skill declares `databases: []`.
+
+`reconstructible_directories` is an explicit allow-list for derived files that
+can be rebuilt from authoritative inputs. Core admits files below these roots
+to the runtime inventory but does not transfer them between Stable and Beta.
+The directories cannot overlap each other or contain a declared database. Do
+not use this declaration for user data, evidence, credentials, the only copy of
+an external object, or an expensive cache without a deterministic rebuild
+contract. For example, Research Orchestrator declares `db/backups` while its
+authoritative SQLite database remains in `databases`.
 
 Development and migration tests use synthetic records only. Existing Stable data,
 configuration values and secrets must not enter model inputs, DEV, packages,
@@ -52,6 +63,13 @@ the exact intent. An aborted operation is not completed migration evidence and
 cannot be reused. This operation cannot undo a started Stable adoption or a
 successful channel transition; recover publication or use a separately reviewed
 snapshot rollback for those cases.
+
+Rejecting an archived Candidate also reconciles an unfinished preparation that
+failed before `RuntimeSelection` could point at Trial. The retained transition
+journal is aborted against the still-current Stable source before a newer
+Candidate is allowed to prepare data. A missing archive with no exact Trial
+selection remains a harmless superseded decision; an existing archive is not
+silently ignored.
 
 Settings use [Application Configuration](application-configuration.md); no
 credential value is copied as ordinary data. Initial cutover supports only

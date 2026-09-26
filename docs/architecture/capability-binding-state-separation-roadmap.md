@@ -73,6 +73,20 @@ that exact Application publication can reuse the registry notification and
 ordinary plan/apply rails; it does not change the remaining local-credential
 boundary in `CBS10-07`.
 
+Maintained-Application follow-up, 2026-09-26: Research Platform was recovered
+from its last canonical Forge source, preserved its immutable v1-v7 migration
+chain, moved evidence to Core blob storage, and completed Trial through public
+registry as `research_platform@0.1.20` with 4-of-4 exact admission. TLP then
+published `research_tlp@0.3.16` as an independent consumer of the shared
+research lifecycle and tracking contracts; its 4-of-4 admission, Trial,
+acceptance, stable authority commit, and public registry publication passed.
+The exact release digests and lifecycle findings are recorded in
+[CBS1-CBS5 Implementation](capability-binding-state-cbs1-cbs5-implementation.md).
+The run exposed one operational rather than semantic bottleneck: Candidate
+materialization still recopies a large immutable MLflow vendor layer. A
+verified content-addressed materialization cache/reflink optimization is
+required before treating this latency as inherent CBS cost.
+
 ## Outcome
 
 AdaOS can preserve Application and eligible state identities while changing a
