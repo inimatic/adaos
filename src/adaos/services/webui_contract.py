@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-import json
 import logging
 import re
 import time
@@ -306,14 +305,23 @@ def validate_production_attachment_fields(
     issues: list[WebUiContractIssue] = []
     for path, field in _walk_mappings(_mapping(webui)):
         field_type = str(field.get("type") or "").strip()
-        storage = str(field.get("fileStorage") or field.get("file_storage") or "").strip()
-        if field_type not in {"fileUpload", "file_upload", "file"} or storage != "skill":
+        attachment = (
+            _mapping(field.get("inputs"))
+            if field_type == "input.fileUpload"
+            else field
+        )
+        storage = str(
+            attachment.get("fileStorage") or attachment.get("file_storage") or ""
+        ).strip()
+        if field_type not in {"fileUpload", "file_upload", "file", "input.fileUpload"} or storage != "skill":
             continue
         upload = _production_attachment_target(
-            field.get("uploadTarget") or field.get("upload_target")
+            attachment.get("uploadTarget") or attachment.get("upload_target")
         )
-        read = _production_attachment_target(field.get("readTarget") or field.get("read_target"))
-        raw_max = field.get("maxBytes", field.get("max_bytes"))
+        read = _production_attachment_target(
+            attachment.get("readTarget") or attachment.get("read_target")
+        )
+        raw_max = attachment.get("maxBytes", attachment.get("max_bytes"))
         valid_max = (
             isinstance(raw_max, int)
             and not isinstance(raw_max, bool)
@@ -359,12 +367,19 @@ def validate_skill_tool_references(
     issues: list[WebUiContractIssue] = []
     for path, item in _walk_mappings(raw):
         field_type = str(item.get("type") or "").strip()
-        storage = str(item.get("fileStorage") or item.get("file_storage") or "").strip()
-        if field_type in {"fileUpload", "file_upload", "file"} and storage == "skill":
+        attachment = (
+            _mapping(item.get("inputs"))
+            if field_type == "input.fileUpload"
+            else item
+        )
+        storage = str(
+            attachment.get("fileStorage") or attachment.get("file_storage") or ""
+        ).strip()
+        if field_type in {"fileUpload", "file_upload", "file", "input.fileUpload"} and storage == "skill":
             for key in ("uploadTarget", "readTarget"):
                 target = str(
-                    item.get(key)
-                    or item.get("upload_target" if key == "uploadTarget" else "read_target")
+                    attachment.get(key)
+                    or attachment.get("upload_target" if key == "uploadTarget" else "read_target")
                     or ""
                 ).strip()
                 parsed = _production_attachment_target(target)

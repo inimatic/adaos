@@ -315,3 +315,27 @@ def test_production_attachment_tools_must_be_declared_by_owned_skill() -> None:
         "webui.form.production_attachment_tool_unknown"
     ]
     assert "roster.read_attachment" in issues[0].message
+
+
+def test_production_attachment_contract_supports_standalone_file_upload_widget() -> None:
+    webui = {
+        "widgets": [
+            {
+                "id": "note-file",
+                "type": "input.fileUpload",
+                "inputs": {
+                    "fileStorage": "skill",
+                    "uploadTarget": "notebook.upload_attachment",
+                    "readTarget": "notebook.read_attachment",
+                    "maxBytes": 10485760,
+                },
+            }
+        ]
+    }
+
+    assert validate_production_attachment_fields(webui) == []
+    assert validate_skill_tool_references(
+        webui,
+        skill_id="notebook",
+        declared_tools={"upload_attachment", "read_attachment"},
+    ) == []
