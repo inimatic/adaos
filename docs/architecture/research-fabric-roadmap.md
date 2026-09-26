@@ -2072,6 +2072,12 @@ cost, trust, and restart reconstruction without a provider transcript.
   independent subnet authorities. Resume only with distributed ACL, conflict,
   revocation, retention, sealed-data, and offline reconciliation contracts;
   immutable portable snapshots remain the interim exchange mechanism.
+- [ ] `[must]` `ARF7.4-48` Adopt the shared managed Project contract in Research
+  Workbench. Create implementation Applications with `kind=project` and
+  `owner_application_id=research_workbench`; add an owner-scoped **Projects**
+  section and shared multi-Webspace Pin/Unpin actions. Keep Direction, Task,
+  Track, candidate, Study, and experiment identities distinct, and prove
+  reload/restart, owner-removal blocking, and no direct Desktop/store writes.
 
 #### ARF7.4 implementation checkpoint (2026-08-18)
 

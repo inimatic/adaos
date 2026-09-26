@@ -128,6 +128,19 @@ class ApplicationStore:
     def list_applications(self) -> tuple[Application, ...]:
         return tuple(sorted(self._list_current("definitions", Application.from_mapping), key=lambda item: item.application_id))
 
+    def list_managed_applications(
+        self, owner_application_id: str
+    ) -> tuple[Application, ...]:
+        owner_id = str(owner_application_id or "").strip().lower()
+        if not owner_id:
+            return ()
+        return tuple(
+            item
+            for item in self.list_applications()
+            if item.kind == "project"
+            and item.owner_application_id == owner_id
+        )
+
     def save_application(self, value: Application, *, expected_revision: int) -> Application:
         with mutation_lock(self.lock_path, timeout_s=30.0):
             try:
@@ -141,6 +154,38 @@ class ApplicationStore:
                 raise ApplicationStoreError("Application revision must advance by exactly one")
             if current is not None and current.legacy_project_id != value.legacy_project_id:
                 raise ApplicationStoreError("legacy Project identity is immutable")
+            if current is not None and (
+                current.kind != value.kind
+                or current.owner_application_id != value.owner_application_id
+            ):
+                raise ApplicationStoreError(
+                    "Application kind and owner relationship are immutable"
+                )
+            if value.kind == "project":
+                try:
+                    owner = self.get_application(str(value.owner_application_id))
+                except FileNotFoundError as exc:
+                    raise ApplicationStoreError(
+                        "managed Project owner Application is not registered"
+                    ) from exc
+                if owner.kind != "application":
+                    raise ApplicationStoreError(
+                        "managed Project owner must be an ordinary Application"
+                    )
+                if owner.publisher_ref != value.publisher_ref:
+                    raise ApplicationStoreError(
+                        "managed Project and owner must have the same publisher"
+                    )
+                if owner.lifecycle != "active":
+                    raise ApplicationStoreError(
+                        "managed Project owner Application must be active"
+                    )
+            elif value.lifecycle != "active" and self.list_managed_applications(
+                value.application_id
+            ):
+                raise ApplicationStoreError(
+                    "Application with managed Projects cannot be retired or archived"
+                )
             for item in self.list_applications():
                 if item.application_id != value.application_id and item.legacy_project_id == value.legacy_project_id:
                     raise ApplicationStoreError("legacy Project is already mapped to another Application")
@@ -170,6 +215,11 @@ class ApplicationStore:
             if self.list_releases(application_id):
                 raise ApplicationStoreError(
                     "published Application releases cannot be deleted as local development"
+                )
+            managed = self.list_managed_applications(application_id)
+            if managed:
+                raise ApplicationStoreError(
+                    "Application with managed Projects cannot be deleted"
                 )
             channels_path = self._channel_path(application_id)
             if channels_path.is_file() and (self.get_channels(application_id).get("channels") or {}):
@@ -243,6 +293,10 @@ class ApplicationStore:
         if application.visibility != "public":
             raise ApplicationStoreError(
                 "registry Application visibility must be public"
+            )
+        if application.kind == "project":
+            raise ApplicationStoreError(
+                "managed Projects cannot be imported as standalone Catalog Applications"
             )
         if (
             application.application_id != release.application_id

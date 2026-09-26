@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-09-22.
+Last reviewed: 2026-09-26.
 
 This document defines the canonical AdaOS model for creating, testing,
 publishing, discovering, installing, updating, removing, and improving an
@@ -149,6 +149,12 @@ component-scoped preview slots, for example
     final verification evidence before Trial, publication, or external install
     review can treat it as ready. The verification report is evidence, not a
     substitute for lifecycle operations, human approval, or runtime policy.
+21. An Application may own managed Applications presented as Projects. The
+    relationship is explicit (`kind=project`, `owner_application_id`), is not a
+    package dependency, and never grants implicit storage or permission access.
+    Projects are omitted from ordinary inventory/Catalog by default and follow
+    the lifecycle invariants in
+    [Managed Applications and Projects](managed-applications-and-projects.md).
 
 ## Current Implementation Boundary
 
@@ -303,6 +309,7 @@ Minimum target shape:
 ```yaml
 application:
   application_id: app_01...
+  kind: application
   publisher_ref: subnet:sn_...
   slug: research-workbench
   display:
@@ -324,6 +331,13 @@ scenario-specific code must not infer it from an id, title, Webspace or owning
 skill. The initial value may be a known vector icon name. Future raster or
 generated artwork extends the same metadata object with media identity and crop
 information rather than adding a product-specific desktop field.
+
+An owner-managed Project uses the same aggregate with `kind: project` and an
+immutable `owner_application_id`. Existing v1 records without `kind` are
+ordinary Applications. Project creation, discovery, installation admission,
+owner-removal blocking, inverse detail projections, and Home behavior are
+defined by
+[Managed Applications and Projects](managed-applications-and-projects.md).
 
 ### Semantic Application Revision
 
@@ -915,6 +929,10 @@ uninstall removes the obsolete launcher projection. Applications exposes the
 same `home.pinned` state and a direct pin/unpin control for installed products.
 This presentation state is not copied into `ProjectDeployment` and is never
 used as evidence that a component is running.
+
+Managed Projects are hidden from ordinary Applications/Desktop discovery by
+default. A per-user `Show projects` preference may reveal them, while an
+explicit Home pin always remains visible regardless of that preference.
 
 Application pin, unpin, and reorder mutations execute at the Root-owned
 Applications plane. A scenario skill worker may render the projection but must

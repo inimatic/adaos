@@ -140,6 +140,10 @@ later implementation shares one object and state model.
   delivery closure, local installation, runtime selection, state spaces, and
   observed placement as separate refs and projections. No display model may
   collapse them into one component or provider field.
+- [x] `[must]` `APP0-15` Define managed Applications as Projects with
+  `kind=project` and one immutable `owner_application_id`. Keep the relation
+  distinct from package dependencies and research-domain objects; missing
+  `kind` in an existing v1 record means an ordinary Application.
 
 **Exit proof:** schema round trips and compatibility fixtures distinguish all
 seven Application objects, preserve legacy release identity, and reject
@@ -276,6 +280,13 @@ Project/Application identity collapse.
   install/update operation journal; qualify restart, denial, stale revision,
   revoked secret, required versus optional inputs and failed verification in a
   real Beta before marking complete.
+- [x] `[must]` `APP1-19` Enforce the first managed Project lifecycle slice:
+  registered ordinary owner, same publisher, no nested/system Project,
+  owner-present install admission with apply-time recheck, no independent
+  update track, active-child owner-removal block, inverse detail projections,
+  default list/Catalog filtering, registry projection, and Builder/MCP create
+  fields. Joint owner-plus-Project install remains a future reviewed aggregate
+  plan; the implemented path is owner-first provisioning.
 - [x] `[must]` Qualify the `APP1-14` failed-preparation recovery primitive:
   exact Candidate/contract, unchanged Stable verification, durable interrupted
   recovery, retained evidence and no false completed-migration admission.
@@ -830,6 +841,11 @@ Builder development and consumes only public contracts.
   including secret non-retention, primary relocation, eligible-node install and
   reviewed distributed-component uninstall. SDK/MCP adapter wiring and a real
   Beta install/update/restart cycle remain open under `APP1-18`.
+- [ ] `[must]` `APP4-54` Add managed Project UX to Applications: default-hidden
+  inventory with **Show projects**, owner **Projects** section, Project
+  **Managed by** link, and suppression of standalone install/update-track/
+  Catalog actions. Prove search, pagination, direct navigation, restart, and
+  owner-removal blocker rendering against the public Applications plane.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed

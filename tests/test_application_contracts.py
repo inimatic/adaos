@@ -297,3 +297,53 @@ def test_non_removable_application_requires_system_identity_and_recovery() -> No
 
     with pytest.raises(ApplicationContractError, match="only a system Application"):
         Application.from_mapping(payload)
+
+
+def test_managed_project_requires_an_explicit_owner_and_round_trips() -> None:
+    payload = _application().to_dict()
+    payload.update(
+        {
+            "application_id": "research_project_tlp",
+            "legacy_project_id": "research_project_tlp",
+            "slug": "research_project_tlp",
+            "kind": "project",
+            "owner_application_id": "research_workbench",
+        }
+    )
+
+    project = Application.from_mapping(payload)
+
+    assert project.kind == "project"
+    assert project.owner_application_id == "research_workbench"
+    assert Application.from_mapping(project.to_dict()) == project
+
+    payload.pop("owner_application_id")
+    with pytest.raises(ApplicationContractError, match="requires owner_application_id"):
+        Application.from_mapping(payload)
+
+
+def test_legacy_application_defaults_to_standalone_kind() -> None:
+    payload = _application().to_dict()
+    payload.pop("kind")
+
+    application = Application.from_mapping(payload)
+
+    assert application.kind == "application"
+    assert application.owner_application_id is None
+
+
+def test_ordinary_application_cannot_claim_an_owner() -> None:
+    payload = _application().to_dict()
+    payload["owner_application_id"] = "research_workbench"
+
+    with pytest.raises(ApplicationContractError, match="ordinary Application"):
+        Application.from_mapping(payload)
+
+    payload.update(
+        {
+            "kind": "project",
+            "owner_application_id": payload["application_id"],
+        }
+    )
+    with pytest.raises(ApplicationContractError, match="cannot own itself"):
+        Application.from_mapping(payload)

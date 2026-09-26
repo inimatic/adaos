@@ -96,6 +96,54 @@ class ApplicationService:
     def register_release(self, release: ApplicationRelease) -> ApplicationRelease:
         return self.store.put_release(release)
 
+    def _application_is_present(self, application_id: str) -> bool:
+        try:
+            installation = self.store.get_installation(application_id)
+        except FileNotFoundError:
+            installation = None
+        if installation is not None and installation.status != "removed":
+            return True
+        return any(
+            item.application_id == application_id
+            for item in self.store.list_runtime_selections()
+        )
+
+    def _present_managed_projects(
+        self, owner_application_id: str
+    ) -> tuple[Application, ...]:
+        return tuple(
+            item
+            for item in self.store.list_managed_applications(owner_application_id)
+            if self._application_is_present(item.application_id)
+        )
+
+    def _assert_management_preconditions(
+        self, application: Application, operation_kind: str
+    ) -> None:
+        if application.kind == "project":
+            if operation_kind == "select_track":
+                raise ApplicationServiceError(
+                    "managed Project update track is controlled by its owner Application"
+                )
+            if operation_kind == "install" and not self._application_is_present(
+                str(application.owner_application_id)
+            ):
+                raise ApplicationServiceError(
+                    "managed Project requires its owner Application to be installed or selected"
+                )
+        if application.kind == "application" and operation_kind == "remove":
+            present_projects = self._present_managed_projects(
+                application.application_id
+            )
+            if present_projects:
+                project_ids = ", ".join(
+                    item.application_id for item in present_projects
+                )
+                raise ApplicationServiceError(
+                    "owner Application cannot be removed while managed Projects are active: "
+                    + project_ids
+                )
+
     def ensure_install_access(
         self,
         application_id: str,
@@ -744,6 +792,7 @@ class ApplicationService:
         if data_policy not in {"retain", "delete", "snapshot_then_delete"}:
             raise ApplicationServiceError("data_policy is invalid")
         application = self.store.get_application(application_id)
+        self._assert_management_preconditions(application, operation_kind)
         try:
             current_subscription = self.store.get_subscription(application_id)
         except FileNotFoundError:
@@ -970,7 +1019,11 @@ class ApplicationService:
                 revision=expected_revision + 1,
             ).to_dict()
         subscription_default = None
-        if operation_kind == "install" and current_subscription is None:
+        if (
+            operation_kind == "install"
+            and current_subscription is None
+            and application.kind == "application"
+        ):
             subscription_default = {
                 "update_track": "stable",
                 "update_policy": "auto_compatible",
@@ -994,6 +1047,8 @@ class ApplicationService:
             "schema": "adaos.application.operation_plan.v1",
             "application_id": application_id,
             "legacy_project_id": application.legacy_project_id,
+            "application_kind": application.kind,
+            "owner_application_id": application.owner_application_id,
             "actor_ref": actor_ref,
             "subnet_ref": subnet_ref,
             "authority": authority,
@@ -1116,6 +1171,8 @@ class ApplicationService:
         conflicts = list(operation.plan.get("conflicts") or [])
         if conflicts:
             raise ApplicationPlanConflict(conflicts)
+        application = self.store.get_application(operation.application_id)
+        self._assert_management_preconditions(application, operation.kind)
         if operation.kind == "select_track":
             raw_subscription = operation.plan.get("subscription_change")
             if not isinstance(raw_subscription, Mapping):
@@ -1695,7 +1752,7 @@ class ApplicationService:
             if item.application_id == application_id
         ]
         operations = self.store.list_operations(application_id)
-        return self._read_model(
+        model = self._read_model(
             application,
             installation=installation,
             subscription=subscription,
@@ -1703,6 +1760,27 @@ class ApplicationService:
             operation=operations[0] if operations else None,
             subscriber_subnet_ref=subscriber_subnet_ref,
         )
+        if application.kind == "project":
+            owner = self.store.get_application(str(application.owner_application_id))
+            model["owner_application"] = owner.to_dict()
+            model["managed_projects"] = []
+        else:
+            model["owner_application"] = None
+            project_summaries = []
+            for project in self.store.list_managed_applications(
+                application.application_id
+            ):
+                project_summaries.append(
+                    {
+                        "schema": "adaos.application.managed_project_summary.v1",
+                        "application": project.to_dict(),
+                        "installed": self._application_is_present(
+                            project.application_id
+                        ),
+                    }
+                )
+            model["managed_projects"] = project_summaries
+        return model
 
     def list_models(
         self,

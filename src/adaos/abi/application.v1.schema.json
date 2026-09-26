@@ -11,6 +11,8 @@
     "legacy_project_id": {"$ref": "#/$defs/id"},
     "publisher_ref": {"$ref": "#/$defs/publisherRef"},
     "slug": {"$ref": "#/$defs/id"},
+    "kind": {"enum": ["application", "project"], "default": "application"},
+    "owner_application_id": {"$ref": "#/$defs/id"},
     "display": {
       "type": "object", "additionalProperties": false, "required": ["title", "summary"],
       "properties": {

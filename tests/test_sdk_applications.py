@@ -1433,6 +1433,55 @@ def test_compact_catalog_output_keeps_list_identity_without_detail_closure() -> 
     assert "execution_placement" not in compact
 
 
+def test_application_list_hides_projects_unless_requested_or_owner_scoped(
+    monkeypatch,
+) -> None:
+    models = [
+        {
+            "application": {
+                "application_id": "research_workbench",
+                "kind": "application",
+            }
+        },
+        {
+            "application": {
+                "application_id": "research_project_tlp",
+                "kind": "project",
+                "owner_application_id": "research_workbench",
+            }
+        },
+        {
+            "application": {
+                "application_id": "other_project",
+                "kind": "project",
+                "owner_application_id": "other_workbench",
+            }
+        },
+    ]
+    monkeypatch.setattr(applications, "_application_models", lambda **_kwargs: models)
+    monkeypatch.setattr(applications, "_local_development_index", dict)
+    monkeypatch.setattr(
+        applications,
+        "_enrich_application_models",
+        lambda values, **_kwargs: list(values),
+    )
+
+    assert [
+        item["application"]["application_id"]
+        for item in applications.list_applications()
+    ] == ["research_workbench"]
+    assert {
+        item["application"]["application_id"]
+        for item in applications.list_applications(include_projects=True)
+    } == {"research_workbench", "research_project_tlp", "other_project"}
+    assert [
+        item["application"]["application_id"]
+        for item in applications.list_applications(
+            owner_application_id="research_workbench"
+        )
+    ] == ["research_project_tlp"]
+
+
 def test_application_list_includes_read_only_workspace_project_projection(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1489,6 +1538,7 @@ def test_application_list_includes_read_only_workspace_project_projection(
     assert len(listed) == 1
     assert listed[0]["application"]["application_id"] == "legacy_notes"
     assert listed[0]["application"]["aggregate_backed"] is False
+    assert listed[0]["application"]["kind"] == "application"
     assert listed[0]["installed"] is True
     assert listed[0]["icon"] == "book-outline"
     assert listed[0]["installed_release"]["version"] == "1.2.3"

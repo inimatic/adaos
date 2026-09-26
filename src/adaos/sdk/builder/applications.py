@@ -1343,6 +1343,8 @@ def _create_application_effect(
     expected_revision: int,
     publisher: Mapping[str, Any],
     protection: Mapping[str, Any] | None,
+    kind: str,
+    owner_application_id: str | None,
 ) -> Mapping[str, Any]:
     from adaos.sdk.developer import compositions
 
@@ -1372,6 +1374,8 @@ def _create_application_effect(
             and existing.publisher_ref == subnet_ref
             and existing.slug == application_id
             and existing.visibility == visibility
+            and existing.kind == kind
+            and existing.owner_application_id == owner_application_id
             and existing.display.get("title") == title
             and existing.display.get("summary") == summary
             and tuple(existing.entrypoints) == expected_entrypoints
@@ -1382,6 +1386,8 @@ def _create_application_effect(
                 slug=application_id,
                 display={"title": title, "summary": summary},
                 visibility=visibility,  # type: ignore[arg-type]
+                kind=kind,  # type: ignore[arg-type]
+                owner_application_id=owner_application_id,
                 entrypoints=expected_entrypoints,
                 publisher={key: publisher[key] for key in (
                     "publisher_ref", "display_name", "subnet_short_ref", "release_key_ref",
@@ -1423,6 +1429,8 @@ def _create_application_effect(
         slug=application_id,
         display={"title": title, "summary": summary},
         visibility=visibility,  # type: ignore[arg-type]
+        kind=kind,  # type: ignore[arg-type]
+        owner_application_id=owner_application_id,
         entrypoints=expected_entrypoints,
         publisher={
             key: publisher[key]
@@ -1449,6 +1457,8 @@ def create_application(
     summary: str,
     template: str = "empty",
     visibility: str = "private",
+    kind: str = "application",
+    owner_application_id: str | None = None,
     protection: Mapping[str, Any] | None = None,
     source_webspace_id: str = "desktop",
     actor_ref: str,
@@ -1465,6 +1475,8 @@ def create_application(
         "summary": str(summary),
         "template": str(template),
         "visibility": str(visibility),
+        "kind": str(kind),
+        "owner_application_id": str(owner_application_id or "").strip() or None,
         "publisher_key_fingerprint": publisher["release_key_fingerprint"],
         "publisher": dict(publisher),
         "protection": dict(protection or {}),
@@ -1478,6 +1490,10 @@ def create_application(
             summary=summary,
             template=template,
             visibility=visibility,
+            kind=str(kind),
+            owner_application_id=(
+                str(owner_application_id or "").strip() or None
+            ),
             actor_ref=actor_ref,
             subnet_ref=subnet_ref,
             expected_revision=expected_revision,
@@ -2246,6 +2262,10 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
             summary=str(intent.get("summary") or ""),
             template=str(intent.get("template") or "empty"),
             visibility=str(intent.get("visibility") or "private"),
+            kind=str(intent.get("kind") or "application"),
+            owner_application_id=(
+                str(intent.get("owner_application_id") or "").strip() or None
+            ),
             actor_ref=actor_ref,
             subnet_ref=subnet_ref,
             expected_revision=expected_revision,

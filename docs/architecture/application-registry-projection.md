@@ -142,7 +142,7 @@ concepts.
 | --- | --- |
 | `projection_epoch` | Runtime epoch, schema version, open/dirty/closed state, trusted seal receipt, startup and shutdown evidence. |
 | `projection_source` | Source identity, path or store ref, source kind, mtime, size, content digest, schema digest, parse status, and last observed time. |
-| `application_index` | Application display, identity, publisher, visibility, lifecycle, channel pointers, installed state, local beta state, search fields, and payload digest. |
+| `application_index` | Application display, identity, `application|project` kind, managed owner ref, publisher, visibility, lifecycle, channel pointers, installed state, local beta state, search fields, and payload digest. |
 | `application_semantic_revision_index` | Immutable semantic revision ref/digest, Application relation, source/provenance, requirement and entrypoint counts, validation state, and compatibility-projection marker. |
 | `application_component_index` | Application to component refs, package digests, component roles, lifecycle, exposure, and reverse ownership lookup. |
 | `application_entrypoint_index` | Launch targets, presentation refs, default entrypoint, supported surfaces, and binding summaries. |

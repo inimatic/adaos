@@ -118,6 +118,7 @@ from .artifact_release import (
 from .application import (
     Application,
     ApplicationContractError,
+    ApplicationKind,
     ApplicationInstallation,
     ApplicationOperation,
     ApplicationRelease,
@@ -313,6 +314,7 @@ __all__ = [
     "WorkflowAdapterLock",
     "Application",
     "ApplicationContractError",
+    "ApplicationKind",
     "ApplicationInstallation",
     "ApplicationOperation",
     "ApplicationRelease",

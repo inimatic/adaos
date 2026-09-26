@@ -461,6 +461,7 @@ def test_registry_projection_indexes_application_store_inventory(tmp_path: Path)
     summaries = service.installed_summaries()
     assert len(summaries) == 1
     assert summaries[0]["application_id"] == "app_demo"
+    assert summaries[0]["kind"] == "application"
     assert summaries[0]["title"] == "Demo App"
     assert summaries[0]["installed"] is True
     assert summaries[0]["local_beta_active"] is True

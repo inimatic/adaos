@@ -113,6 +113,15 @@ def _builder_contracts() -> list[RootMcpToolContract]:
                         "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$",
                     },
                     "visibility": {"enum": ["private", "public"]},
+                    "kind": {
+                        "enum": ["application", "project"],
+                        "default": "application",
+                    },
+                    "owner_application_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                    },
                     "protection": {
                         "type": "object",
                         "additionalProperties": False,
@@ -404,6 +413,8 @@ def contracts() -> list[RootMcpToolContract]:
     application_identity = schema_object(
         properties={
             "application_id": {"type": "string", "minLength": 1},
+            "kind": {"enum": ["application", "project"]},
+            "owner_application_id": {"type": ["string", "null"]},
             "revision": {"type": "integer", "minimum": 0},
             "display": {"type": "object"},
             "publisher": {"type": "object"},
@@ -1248,6 +1259,15 @@ def contracts() -> list[RootMcpToolContract]:
                     "catalog_only": {"type": "boolean"},
                     "available_only": {"type": "boolean"},
                     "developed_only": {"type": "boolean"},
+                    "include_projects": {
+                        "type": "boolean",
+                        "default": False,
+                    },
+                    "owner_application_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                    },
                     "view": {
                         "type": "string",
                         "enum": ["summary", "full"],
@@ -2954,6 +2974,11 @@ def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
         catalog_only=bool(arguments.get("catalog_only", False)),
         available_only=bool(arguments.get("available_only", False)),
         developed_only=bool(arguments.get("developed_only", False)),
+        include_projects=bool(arguments.get("include_projects", False)),
+        owner_application_id=str(
+            arguments.get("owner_application_id") or ""
+        ).strip()
+        or None,
         webspace_id=_webspace_id(arguments),
         view=view,
         query=str(arguments.get("query") or "").strip() or None,
@@ -3737,6 +3762,11 @@ def _handle_development_create(
         summary=str(arguments.get("summary") or ""),
         template=str(arguments.get("template") or "empty"),
         visibility=str(arguments.get("visibility") or "private"),
+        kind=str(arguments.get("kind") or "application"),
+        owner_application_id=str(
+            arguments.get("owner_application_id") or ""
+        ).strip()
+        or None,
         protection=(
             dict(arguments["protection"])
             if isinstance(arguments.get("protection"), Mapping)

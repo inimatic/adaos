@@ -24,11 +24,21 @@ retains the current `Project*` implementation vocabulary during migration.
 
 ## Primary Model
 
-The user-facing hierarchy is:
+The primary user-facing hierarchy is:
 
 ```text
 Assistant -> Webspace -> Application -> Panel
 ```
+
+An Application that creates launchable subordinate work may additionally
+present managed Projects:
+
+```text
+Application -> Project -> Panel
+```
+
+A Project is a managed Application kind, not a new top-level Catalog product.
+See [Managed Applications and Projects](managed-applications-and-projects.md).
 
 The runtime/device hierarchy is:
 
@@ -114,6 +124,9 @@ The Research Workbench is the Application. Its home surface is the direction
 portfolio. Individual directions are selected domain workspaces/deep links,
 not automatically Desktop Applications. The same rule should be reused by
 future workbenches whose domain instances outnumber useful launchable apps.
+When a direction produces a launchable and independently versioned
+implementation, Research Workbench may own it as a managed **Project**. The
+Project is not identical to the direction, task, candidate, or experiment.
 
 ## Term Mapping
 
@@ -133,6 +146,7 @@ future workbenches whose domain instances outnumber useful launchable apps.
 | `application_resolution` | Resolved composition | Immutable admitted mapping from requirements to contracts, implementations, exact packages, local bindings/state obligations, and evidence. |
 | `package_release`, `ArtifactPackageRef` | Implementation package | Immutable delivery bytes. Do not confuse this with a Capability, Application, or portfolio-level Solution pack. |
 | `project` | Application source composition (compatibility) | Current internal physical ownership/composition of skills/scenarios, launch targets, and lifecycle policy. New semantic Application source declares requirements; keep Project for compatibility diagnostics and APIs. |
+| `managed Application`, `kind=project` | Project | Launchable/versioned Application owned and governed through another Application; hidden from ordinary inventory and Catalog by default. Do not use it for every domain record. |
 | `project_release` | Application release (compatibility) | Current immutable component/dependency-locked release record. Native `ApplicationRelease` binds the semantic revision and portable delivery metadata; the environment-specific exact selection belongs to `ApplicationResolution` and `WorkspaceLock`. Preserve legacy digest identity. |
 | `builder development session` | Development session | Mutable Builder overlay with explicit targets and read-only context. Never shown as an installed application. |
 | `presentation` | Application view or launch target | Explicit scenario host/binding for a skill or Project entry point. |

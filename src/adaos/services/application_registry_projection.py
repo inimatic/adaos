@@ -1419,6 +1419,10 @@ class ApplicationRegistryProjection:
                 "application_id": application_id,
                 "source_ref": f"application:{application_id}",
                 "legacy_project_id": application_payload.get("legacy_project_id"),
+                "kind": application_payload.get("kind") or "application",
+                "owner_application_id": application_payload.get(
+                    "owner_application_id"
+                ),
                 "publisher_ref": application_payload.get("publisher_ref"),
                 "title": title,
                 "description": description,
@@ -2422,7 +2426,7 @@ class ApplicationRegistryProjection:
                 application_id,
                 f"application:{application_id}",
                 source_id,
-                "application",
+                str(payload.get("kind") or "application"),
                 title,
                 description,
                 str((payload.get("application") or {}).get("version") or ""),

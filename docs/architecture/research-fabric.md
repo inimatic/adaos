@@ -1674,6 +1674,15 @@ The primary UI is a native AdaOS Research Workbench generated from canonical
 study and evidence state. It covers protocol review, trial matrix, progress,
 comparisons, evidence, and approvals.
 
+Research Workbench may create launchable/versioned implementations as managed
+Projects under the shared
+[Managed Applications and Projects](managed-applications-and-projects.md)
+contract. It remains the owning Application and exposes its Projects section
+and shared Home Pin/Unpin actions. A ResearchDirection, ResearchTask,
+ImplementationTrack, candidate, Study, or experiment is not automatically a
+Project; the relation is used only when a distinct managed Application identity
+and entry point are useful.
+
 The TLP Workbench opens MLflow in a separate top-level tab so the experiment
 composition remains native and compact. AdaOS also supports optional embedding
 after introducing an authenticated same-origin proxy with authorization,

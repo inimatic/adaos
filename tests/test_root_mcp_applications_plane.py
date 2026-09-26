@@ -534,6 +534,8 @@ def test_applications_plane_forwards_catalog_and_development_filters(
                 "catalog_only": True,
                 "available_only": True,
                 "developed_only": True,
+                "include_projects": False,
+                "owner_application_id": None,
                 "webspace_id": "desktop",
                 "view": "summary",
                 "query": None,
@@ -548,6 +550,35 @@ def test_applications_plane_forwards_catalog_and_development_filters(
         "returned": 1,
         "has_more": False,
     }
+
+    contract = {item.id: item for item in applications_plane.contracts()}[
+        "applications.list"
+    ]
+    assert "include_projects" in contract.input_schema["properties"]
+    assert "owner_application_id" in contract.input_schema["properties"]
+
+
+def test_builder_create_forwards_managed_project_relationship(monkeypatch) -> None:
+    stub = _StubBuilderSdk()
+    monkeypatch.setattr(applications_plane, "_builder_sdk", lambda: stub)
+
+    applications_plane.handlers()["applications.development.create"](
+        {
+            "application_id": "research_project_tlp",
+            "title": "TLP project",
+            "summary": "Managed research implementation",
+            "kind": "project",
+            "owner_application_id": "research_workbench",
+            "expected_revision": 0,
+            "idempotency_key": "create-managed-project-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert stub.calls[0][0] == "create_application"
+    assert stub.calls[0][2]["kind"] == "project"
+    assert stub.calls[0][2]["owner_application_id"] == "research_workbench"
 
 
 def test_applications_plane_exposes_reviewed_bulk_update_flow(monkeypatch) -> None:

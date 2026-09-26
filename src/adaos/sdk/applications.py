@@ -524,6 +524,8 @@ def _compact_application_projection(
             "application_id",
             "revision",
             "legacy_project_id",
+            "kind",
+            "owner_application_id",
             "publisher_ref",
             "visibility",
             "lifecycle",
@@ -919,6 +921,7 @@ def _workspace_project_read_models(
                         "summary": str(project.get("description") or ""),
                         "categories": list(project.get("categories") or ()),
                     },
+                    "kind": "application",
                     "metadata": {
                         "readme": str(project.get("readme") or ""),
                     },
@@ -1553,6 +1556,8 @@ def list_applications(
     available_only: bool = False,
     developed_only: bool = False,
     include_development: bool = True,
+    include_projects: bool = False,
+    owner_application_id: str | None = None,
     webspace_id: str | None = None,
     view: str = "full",
     query: str | None = None,
@@ -1569,6 +1574,25 @@ def list_applications(
         else {}
     )
     models = _application_models(installed_only=installed_only, summary=compact)
+    owner_id = str(owner_application_id or "").strip().lower()
+    if owner_id:
+        models = [
+            item
+            for item in models
+            if str((item.get("application") or {}).get("kind") or "application")
+            == "project"
+            and str(
+                (item.get("application") or {}).get("owner_application_id") or ""
+            ).lower()
+            == owner_id
+        ]
+    elif not include_projects:
+        models = [
+            item
+            for item in models
+            if str((item.get("application") or {}).get("kind") or "application")
+            != "project"
+        ]
     if available_only:
         models = [
             item
@@ -1584,7 +1608,9 @@ def list_applications(
         models = [
             item
             for item in models
-            if item["application"]["visibility"] == "public"
+            if str(item["application"].get("kind") or "application")
+            == "application"
+            and item["application"]["visibility"] == "public"
             and bool(item.get("channels", {}).get("stable"))
         ]
     if developed_only:

@@ -795,6 +795,8 @@ Additions:
 - desktop-scoped canonical state for:
   - installed apps/widgets
   - pinned widgets
+  - `show_projects` discovery preference, default `false`; this never filters
+    an explicitly pinned managed Project from Home
 
 Intentionally untouched scope:
 

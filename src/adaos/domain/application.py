@@ -29,6 +29,7 @@ APPLICATION_OPERATION_SCHEMA = "adaos.application.operation.v1"
 
 ApplicationVisibility = Literal["private", "link", "public"]
 ApplicationLifecycle = Literal["active", "retired", "archived"]
+ApplicationKind = Literal["application", "project"]
 UpdateTrack = Literal["stable", "prerelease"]
 UpdatePolicy = Literal["notify", "auto_compatible", "pinned"]
 RuntimeSelectionSource = Literal[
@@ -165,6 +166,8 @@ class Application:
     visibility: ApplicationVisibility
     entrypoints: tuple[Mapping[str, Any], ...]
     publisher: Mapping[str, Any]
+    kind: ApplicationKind = "application"
+    owner_application_id: str | None = None
     protection: Mapping[str, Any] = field(default_factory=dict)
     lifecycle: ApplicationLifecycle = "active"
     derived_from: Mapping[str, Any] | None = None
@@ -183,6 +186,27 @@ class Application:
         )
         object.__setattr__(self, "publisher_ref", _publisher_ref(self.publisher_ref))
         object.__setattr__(self, "slug", _identifier(self.slug, "slug"))
+        if self.kind not in {"application", "project"}:
+            raise ApplicationContractError("application kind must be application or project")
+        owner_application_id = (
+            _identifier(self.owner_application_id, "owner_application_id")
+            if self.owner_application_id is not None
+            else None
+        )
+        if self.kind == "project":
+            if owner_application_id is None:
+                raise ApplicationContractError(
+                    "project Application requires owner_application_id"
+                )
+            if owner_application_id == self.application_id:
+                raise ApplicationContractError(
+                    "project Application cannot own itself"
+                )
+        elif owner_application_id is not None:
+            raise ApplicationContractError(
+                "ordinary Application cannot declare owner_application_id"
+            )
+        object.__setattr__(self, "owner_application_id", owner_application_id)
         display = _mapping(self.display, "display")
         normalized_display: dict[str, Any] = {
             "title": _text(display.get("title"), "display.title", maximum=160),
@@ -342,6 +366,10 @@ class Application:
             raise ApplicationContractError(
                 "a protected active installation requires a recovery surface"
             )
+        if self.kind == "project" and normalized_protection["system_application"]:
+            raise ApplicationContractError(
+                "managed Project cannot be a system Application"
+            )
         object.__setattr__(self, "protection", normalized_protection)
         if self.derived_from is not None:
             derived = _mapping(self.derived_from, "derived_from")
@@ -374,6 +402,7 @@ class Application:
             "publisher_ref": self.publisher_ref,
             "slug": self.slug,
             "display": dict(self.display),
+            "kind": self.kind,
             "visibility": self.visibility,
             "entrypoints": [dict(item) for item in self.entrypoints],
             "publisher": dict(self.publisher),
@@ -383,6 +412,8 @@ class Application:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+        if self.owner_application_id is not None:
+            payload["owner_application_id"] = self.owner_application_id
         if self.derived_from is not None:
             payload["derived_from"] = dict(self.derived_from)
         return payload
@@ -399,6 +430,8 @@ class Application:
                 "publisher_ref",
                 "slug",
                 "display",
+                "kind",
+                "owner_application_id",
                 "visibility",
                 "entrypoints",
                 "publisher",
@@ -427,6 +460,7 @@ class Application:
             field_name="Application",
         )
         payload.pop("schema")
+        payload.setdefault("kind", "application")
         return cls(**payload)
 
 

@@ -1533,6 +1533,265 @@ def test_read_models_separate_catalog_and_installed_state(
     assert service.list_models(installed_only=True) == []
 
 
+def test_managed_project_lifecycle_requires_and_preserves_owner(
+    service: ApplicationService,
+) -> None:
+    child_payload = _application("research_project_tlp", "research_project_tlp").to_dict()
+    child_payload.update(
+        {
+            "visibility": "private",
+            "kind": "project",
+            "owner_application_id": "app_recipes",
+        }
+    )
+    child = service.register(Application.from_mapping(child_payload))
+    child_release = service.register_release(
+        _release(
+            application_id=child.application_id,
+            project_id=child.legacy_project_id,
+        )
+    )
+
+    with pytest.raises(ApplicationServiceError, match="requires its owner"):
+        service.plan_operation(
+            child.application_id,
+            "install",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.plan",
+            idempotency_key="install-managed-before-owner",
+            expected_revision=0,
+            release_digest=child_release.release_digest,
+        )
+
+    owner_release = service.register_release(_release())
+    owner_install = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-owner",
+        expected_revision=0,
+        release_digest=owner_release.release_digest,
+    )
+    service.apply_operation(
+        owner_install.operation_id,
+        plan_digest=owner_install.plan_digest,
+        idempotency_key="install-owner",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    child_install = service.plan_operation(
+        child.application_id,
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-managed-after-owner",
+        expected_revision=0,
+        release_digest=child_release.release_digest,
+    )
+    assert child_install.plan["owner_application_id"] == "app_recipes"
+    assert child_install.plan["subscription_default"] is None
+    service.apply_operation(
+        child_install.operation_id,
+        plan_digest=child_install.plan_digest,
+        idempotency_key="install-managed-after-owner",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        service.store.get_subscription(child.application_id)
+    with pytest.raises(ApplicationServiceError, match="managed Projects are active"):
+        service.plan_operation(
+            "app_recipes",
+            "remove",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.plan",
+            idempotency_key="remove-owner-with-project",
+            expected_revision=1,
+        )
+    with pytest.raises(ApplicationServiceError, match="controlled by its owner"):
+        service.plan_operation(
+            child.application_id,
+            "select_track",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.plan",
+            idempotency_key="track-managed-project",
+            expected_revision=0,
+            update_track="prerelease",
+        )
+
+    model = service.get_model("app_recipes")
+    assert [
+        item["application"]["application_id"]
+        for item in model["managed_projects"]
+    ] == ["research_project_tlp"]
+    assert service.get_model(child.application_id)["owner_application"][
+        "application_id"
+    ] == "app_recipes"
+
+
+def test_store_rejects_unknown_or_mutated_managed_project_owner(
+    tmp_path: Path,
+) -> None:
+    store = ApplicationStore(tmp_path)
+    payload = _application("research_project_tlp", "research_project_tlp").to_dict()
+    payload.update(
+        {
+            "kind": "project",
+            "owner_application_id": "research_workbench",
+        }
+    )
+    project = Application.from_mapping(payload)
+
+    with pytest.raises(ApplicationStoreError, match="owner Application is not registered"):
+        store.save_application(project, expected_revision=0)
+
+    store.save_application(_application("research_workbench", "research_workbench"), expected_revision=0)
+    saved = store.save_application(project, expected_revision=0)
+    assert store.list_managed_applications("research_workbench") == (saved,)
+
+    nested_payload = _application("nested_project", "nested_project").to_dict()
+    nested_payload.update(
+        {
+            "kind": "project",
+            "owner_application_id": saved.application_id,
+        }
+    )
+    with pytest.raises(ApplicationStoreError, match="ordinary Application"):
+        store.save_application(
+            Application.from_mapping(nested_payload), expected_revision=0
+        )
+
+    foreign_payload = _application("foreign_project", "foreign_project").to_dict()
+    foreign_payload.update(
+        {
+            "kind": "project",
+            "owner_application_id": "research_workbench",
+            "publisher_ref": "subnet:foreign",
+            "publisher": {
+                **foreign_payload["publisher"],
+                "publisher_ref": "subnet:foreign",
+            },
+        }
+    )
+    with pytest.raises(ApplicationStoreError, match="same publisher"):
+        store.save_application(
+            Application.from_mapping(foreign_payload), expected_revision=0
+        )
+
+    with pytest.raises(ApplicationStoreError, match="kind and owner relationship"):
+        store.save_application(
+            Application.from_mapping(
+                {
+                    **saved.to_dict(),
+                    "kind": "application",
+                    "owner_application_id": None,
+                    "revision": 2,
+                }
+            ),
+            expected_revision=1,
+        )
+    with pytest.raises(ApplicationStoreError, match="with managed Projects"):
+        store.delete_unpublished_application(
+            "research_workbench", expected_revision=1
+        )
+
+
+def test_managed_project_install_rechecks_owner_at_apply(tmp_path: Path) -> None:
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+    )
+    service.register(_application("research_workbench", "research_workbench"))
+    project_payload = _application(
+        "research_project_tlp", "research_project_tlp"
+    ).to_dict()
+    project_payload.update(
+        {
+            "kind": "project",
+            "owner_application_id": "research_workbench",
+            "visibility": "private",
+        }
+    )
+    service.register(Application.from_mapping(project_payload))
+    owner_release = service.register_release(
+        _release(
+            application_id="research_workbench",
+            project_id="research_workbench",
+        )
+    )
+    project_release = service.register_release(
+        _release(
+            application_id="research_project_tlp",
+            project_id="research_project_tlp",
+        )
+    )
+    owner_install = service.plan_operation(
+        "research_workbench",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-research-owner",
+        expected_revision=0,
+        release_digest=owner_release.release_digest,
+    )
+    service.apply_operation(
+        owner_install.operation_id,
+        plan_digest=owner_install.plan_digest,
+        idempotency_key="install-research-owner",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+    project_install = service.plan_operation(
+        "research_project_tlp",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-research-project",
+        expected_revision=0,
+        release_digest=project_release.release_digest,
+    )
+    owner_remove = service.plan_operation(
+        "research_workbench",
+        "remove",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="remove-research-owner",
+        expected_revision=1,
+    )
+    service.apply_operation(
+        owner_remove.operation_id,
+        plan_digest=owner_remove.plan_digest,
+        idempotency_key="remove-research-owner",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    with pytest.raises(ApplicationServiceError, match="requires its owner"):
+        service.apply_operation(
+            project_install.operation_id,
+            plan_digest=project_install.plan_digest,
+            idempotency_key="install-research-project",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.apply",
+        )
+
+
 def test_update_track_is_a_reviewed_operation_and_does_not_require_runtime_executor(
     tmp_path: Path,
 ) -> None:
