@@ -379,8 +379,12 @@ v1 registry validators during a rolling Root/Core upgrade.
 The provider compiler also reports `human_authored`, `builder_inferred`, and
 `compiler_generated` counts independently from Application-requirement
 authoring. Generated canonical JSON is included in source snapshots used by
-Forge checkpoints but remains compiler-owned: authors may not supply or
-override those output paths.
+Forge checkpoints but remains compiler-owned. A promoted Workspace or source
+registry may retain an exact byte-for-byte compiler cache at those paths; the
+next build removes and deterministically regenerates it before hashing. A
+missing cache is equivalent, while any cache differing from
+`provider.cbs.yaml` is rejected. Authors therefore cannot give the generated
+paths independent semantics or override the compact source of truth.
 
 The first retained use is Gmail Mail Client Prototype revision `007`, whose
 accepted intent requires `capability:mail.messages.manage` at `^1.0.0` while

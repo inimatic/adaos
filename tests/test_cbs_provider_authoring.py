@@ -230,7 +230,7 @@ def test_verifier_recompiles_generated_contracts_instead_of_trusting_package(
     )
 
     with pytest.raises(
-        PackageVerificationError, match="generated CBS contract does not match"
+        PackageVerificationError, match="compiler-owned CBS outputs differ"
     ):
         verify_artifact_package(tampered)
 
@@ -252,8 +252,11 @@ def test_promoted_materialization_can_be_rebuilt_with_compiler_outputs(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(archive.read(name))
 
-    with pytest.raises(PackageBuildError, match="must not be authored directly"):
-        build_artifact_package(materialized, kind="skill", source_ref=_source())
+    default_rebuilt = build_artifact_package(
+        materialized,
+        kind="skill",
+        source_ref=_source(),
+    )
 
     rebuilt = build_artifact_package(
         materialized,
@@ -266,6 +269,8 @@ def test_promoted_materialization_can_be_rebuilt_with_compiler_outputs(
         accept_compiler_outputs=True,
     )
 
+    assert default_rebuilt.ref == built.ref
+    assert default_rebuilt.archive_bytes == built.archive_bytes
     assert rebuilt.ref == built.ref
     assert rebuilt.archive_bytes == built.archive_bytes
     paths = [item["path"] for item in snapshot["files"]]
@@ -280,7 +285,7 @@ def test_compiler_rejects_owned_outputs_and_undeclared_authority(
         tmp_path, name="gmail_invalid_provider", physical_member="handlers/main.py"
     )
     (skill / CAPABILITY_OUTPUT_PATH).write_text("{}", encoding="utf-8")
-    with pytest.raises(PackageBuildError, match="must not be authored directly"):
+    with pytest.raises(PackageBuildError, match="differ from compact source"):
         build_artifact_package(skill, kind="skill", source_ref=_source())
 
     (skill / CAPABILITY_OUTPUT_PATH).unlink()

@@ -111,13 +111,7 @@ def compile_cbs_provider_files(
         raise CBSProviderAuthoringError(
             "compact CBS provider authoring is supported only for skill packages"
         )
-    if not allow_generated_outputs:
-        collisions = sorted(path for path in _GENERATED_PATHS if path in files)
-        if collisions:
-            raise CBSProviderAuthoringError(
-                "compiler-owned CBS outputs must not be authored directly: "
-                + ", ".join(collisions)
-            )
+    collisions = sorted(path for path in _GENERATED_PATHS if path in files)
     try:
         descriptor = yaml.load(
             raw_descriptor.decode("utf-8"), Loader=_UniqueKeyLoader
@@ -280,6 +274,16 @@ def compile_cbs_provider_files(
         CAPABILITY_OUTPUT_PATH: canonical_json_bytes(capability.to_dict()),
         BINDING_OUTPUT_PATH: canonical_json_bytes(binding.to_dict()),
     }
+    mismatched_outputs = [
+        path
+        for path in collisions
+        if files.get(path) != generated_files.get(path)
+    ]
+    if mismatched_outputs:
+        raise CBSProviderAuthoringError(
+            "compiler-owned CBS outputs differ from compact source: "
+            + ", ".join(mismatched_outputs)
+        )
     origin = str(_mapping(descriptor["authorship"], field="authorship")["origin"])
     metadata = {
         "schema": CBS_PROVIDER_COMPILATION_SCHEMA,

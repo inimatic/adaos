@@ -446,9 +446,8 @@ def artifact_source_snapshot(
         except CBSProviderAuthoringError as exc:
             raise PackageBuildError(f"invalid compact CBS authoring: {exc}") from exc
         if compilation is not None:
-            if accept_compiler_outputs:
-                generated_paths = set(compilation.generated_files)
-                files = [item for item in files if item[0] not in generated_paths]
+            generated_paths = set(compilation.generated_files)
+            files = [item for item in files if item[0] not in generated_paths]
             files = sorted(
                 [*files, *compilation.generated_files.items()], key=lambda item: item[0]
             )
@@ -510,9 +509,8 @@ def build_artifact_package(
     except CBSProviderAuthoringError as exc:
         raise PackageBuildError(f"invalid compact CBS authoring: {exc}") from exc
     if cbs_compilation is not None:
-        if accept_compiler_outputs:
-            generated_paths = set(cbs_compilation.generated_files)
-            files = [item for item in files if item[0] not in generated_paths]
+        generated_paths = set(cbs_compilation.generated_files)
+        files = [item for item in files if item[0] not in generated_paths]
         files = sorted(
             [*files, *cbs_compilation.generated_files.items()], key=lambda item: item[0]
         )
