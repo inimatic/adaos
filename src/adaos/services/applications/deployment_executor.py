@@ -650,6 +650,37 @@ class ApplicationDeploymentExecutor:
     def _remove(
         self, plan: Mapping[str, Any], *, principal: DeploymentPrincipal
     ) -> Mapping[str, Any]:
+        deployment_id = (
+            f"application-deployment:{str(plan.get('application_id') or '').strip()}"
+        )
+        try:
+            self.runtime.store.get_deployment(deployment_id)
+        except FileNotFoundError:
+            # Compatibility installations adopted before ProjectDeployment
+            # existed have an authoritative ApplicationInstallation but no
+            # distributed desired-placement record.  There is consequently no
+            # activation authority for this executor to drain or remove.  A
+            # reviewed Application removal must still be able to retire that
+            # installation; data handling remains explicit and bounded below.
+            data_policy = str(plan.get("data_policy") or "retain")
+            snapshot_receipt = None
+            if data_policy == "snapshot_then_delete":
+                snapshot_receipt = self.snapshots.create(
+                    str(plan["application_id"]),
+                    source_release_digest=str(plan.get("release_digest") or ""),
+                    consistency_boundary="legacy_application_removal",
+                )
+                self.snapshots.delete_data(str(plan["application_id"]))
+            elif data_policy == "delete":
+                self.snapshots.delete_data(str(plan["application_id"]))
+            return {
+                "ok": True,
+                "status": "removed",
+                "deployment": None,
+                "deployment_operations": [],
+                "snapshot_receipt": snapshot_receipt,
+                "compatibility_removal": "installation_without_project_deployment",
+            }
         desired, _, previous = self._desired(plan, status="removing")
         if previous is None:
             raise ApplicationDeploymentExecutorError(

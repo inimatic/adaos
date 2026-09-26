@@ -95,6 +95,21 @@ def _adopt_legacy_workspace_installation(
     from adaos.domain.artifact_release import WorkspaceLock
 
     service = _application_service()
+    try:
+        existing_installation = service.store.get_installation(
+            application.application_id
+        )
+    except FileNotFoundError:
+        existing_installation = None
+    if (
+        existing_installation is not None
+        and existing_installation.status == "removed"
+    ):
+        # A removed installation is an explicit local authority tombstone.
+        # The historical WorkspaceLock may still contain its old slot until a
+        # later materialization commit rewrites the lock; compatibility
+        # adoption must never resurrect it behind the reviewed remove plan.
+        return application
     lock_path = Path(_ctx().paths.workspace_dir()) / ".adaos" / "workspace.lock.json"
     if not lock_path.is_file():
         return application

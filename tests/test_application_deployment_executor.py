@@ -256,6 +256,33 @@ def test_executor_runs_install_update_remove_through_project_deployment(
     )
 
 
+def test_executor_removes_legacy_installation_without_project_deployment(
+    tmp_path: Path,
+) -> None:
+    release = _release("1.0.0", "a")
+    runtime = ProjectDeploymentRuntime(
+        store=ProjectDeploymentStore(state_dir=tmp_path),
+        releases=Releases(release),
+        inventory=Inventory(),
+        adapter=Adapter(),
+        local_node_id="node-local",
+    )
+    executor = ApplicationDeploymentExecutor(runtime=runtime, state_dir=tmp_path)
+
+    removed = executor(_plan("remove", release, data_policy="retain"))
+
+    assert removed == {
+        "ok": True,
+        "status": "removed",
+        "deployment": None,
+        "deployment_operations": [],
+        "snapshot_receipt": None,
+        "compatibility_removal": "installation_without_project_deployment",
+    }
+    with pytest.raises(FileNotFoundError):
+        runtime.store.get_deployment("application-deployment:app_test")
+
+
 def test_executor_refuses_unadmitted_cbs_before_deployment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

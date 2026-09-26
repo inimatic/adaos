@@ -14,6 +14,32 @@ from adaos.domain.application import Application
 from adaos.services.applications import ApplicationDevelopmentCoordinator, ApplicationService, ApplicationStore
 
 
+def test_legacy_workspace_adoption_honors_removed_installation_tombstone(
+    monkeypatch,
+) -> None:
+    application = SimpleNamespace(
+        application_id="cv_descriptor_lab",
+        legacy_project_id="cv_descriptor_lab",
+    )
+    service = SimpleNamespace(
+        store=SimpleNamespace(
+            get_installation=lambda _application_id: SimpleNamespace(
+                status="removed"
+            )
+        )
+    )
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(
+        applications,
+        "_ctx",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("removed installation must not inspect WorkspaceLock")
+        ),
+    )
+
+    assert applications._adopt_legacy_workspace_installation(application) is application
+
+
 def test_builder_application_create_uses_bounded_composition_and_core(monkeypatch, tmp_path: Path) -> None:
     service = ApplicationService(ApplicationStore(tmp_path))
     coordinator = ApplicationDevelopmentCoordinator(tmp_path)
