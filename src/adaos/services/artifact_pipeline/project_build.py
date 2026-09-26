@@ -191,6 +191,7 @@ def project_source_snapshot(
     *,
     project_dir: Path,
     workspace_root: Path,
+    accept_compiler_outputs: bool = False,
 ) -> dict[str, Any]:
     """Identify the exact mutable Project source closure before release build."""
 
@@ -207,7 +208,10 @@ def project_source_snapshot(
     components: dict[str, dict[str, Any]] = {}
     for ref in owned_refs:
         root = _component_root(workspace, ref)
-        snapshot = artifact_source_snapshot(root)
+        snapshot = artifact_source_snapshot(
+            root,
+            accept_compiler_outputs=accept_compiler_outputs,
+        )
         components[ref] = {
             "ref": ref,
             "path": root.relative_to(workspace).as_posix() + "/",

@@ -380,6 +380,7 @@ def status(
             workspace_source = project_source_snapshot(
                 project_dir=workspace_project,
                 workspace_root=Path(service.workspace_root),
+                accept_compiler_outputs=True,
             )
             relation = (
                 "unchanged"

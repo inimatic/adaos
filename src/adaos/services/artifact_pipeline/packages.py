@@ -419,6 +419,7 @@ def artifact_source_snapshot(
     artifact_dir: Path,
     *,
     limits: PackageLimits | None = None,
+    accept_compiler_outputs: bool = False,
 ) -> dict[str, Any]:
     """Return the canonical source identity used by the package builder.
 
@@ -437,10 +438,17 @@ def artifact_source_snapshot(
     kind = "skill" if "skill.yaml" in names else "scenario" if "scenario.yaml" in names else None
     if kind is not None:
         try:
-            compilation = compile_cbs_provider_files(dict(files), kind=kind)
+            compilation = compile_cbs_provider_files(
+                dict(files),
+                kind=kind,
+                allow_generated_outputs=accept_compiler_outputs,
+            )
         except CBSProviderAuthoringError as exc:
             raise PackageBuildError(f"invalid compact CBS authoring: {exc}") from exc
         if compilation is not None:
+            if accept_compiler_outputs:
+                generated_paths = set(compilation.generated_files)
+                files = [item for item in files if item[0] not in generated_paths]
             files = sorted(
                 [*files, *compilation.generated_files.items()], key=lambda item: item[0]
             )

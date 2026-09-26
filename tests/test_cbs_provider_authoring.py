@@ -261,9 +261,16 @@ def test_promoted_materialization_can_be_rebuilt_with_compiler_outputs(
         source_ref=_source(),
         accept_compiler_outputs=True,
     )
+    snapshot = artifact_source_snapshot(
+        materialized,
+        accept_compiler_outputs=True,
+    )
 
     assert rebuilt.ref == built.ref
     assert rebuilt.archive_bytes == built.archive_bytes
+    paths = [item["path"] for item in snapshot["files"]]
+    assert paths.count(CAPABILITY_OUTPUT_PATH) == 1
+    assert paths.count(BINDING_OUTPUT_PATH) == 1
 
 
 def test_compiler_rejects_owned_outputs_and_undeclared_authority(
