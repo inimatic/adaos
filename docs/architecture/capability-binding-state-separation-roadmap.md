@@ -87,6 +87,33 @@ materialization still recopies a large immutable MLflow vendor layer. A
 verified content-addressed materialization cache/reflink optimization is
 required before treating this latency as inherent CBS cost.
 
+Maintained-Application batch qualification, 2026-09-26: Desktop plus the 15
+selected maintained Applications were republished through the native
+Application lifecycle and independently installed on subnet `192.168.0.30`.
+Every installed model reports `auto_update=true`, `update_available=false`,
+and the derived read-only CBS stages `compiled -> admitted -> ready -> active
+-> committed`. The exact versions and release digests are recorded in
+[CBS1-CBS5 Implementation](capability-binding-state-cbs1-cbs5-implementation.md).
+Runtime receipts cover Applications scenario selection, Drive navigation,
+Media Center's provider-owned library agent, and a byte-identical Notebook
+binary attachment upload/download. The subnet runs one `api serve` listener on
+`127.0.0.1:8777` and no production supervisor.
+
+The batch also exercised a real Application auto-update failure chain. A
+topology-incomplete Media Center update first failed closed, then a retry
+exposed lock inversion between registry synchronization and the Application
+deployment worker. Registry import/source alignment now remains under the
+global component lock, while automatic Application updates run only after that
+lock is released. Failed and known-partial terminal operations are
+deterministically retried. The final run advanced Media Center from `0.6.110`
+to `0.6.111` with one applied update, no failures, and no uncertain result.
+This validates delivery and recovery semantics; it does not make startup
+latency acceptable. The same run measured approximately 74 seconds to runtime
+context entry, 19 seconds in router initialization, and 6.5 seconds in
+materialization-status hydration. Duplicate `adaos_connect` view
+materialization and SQLite/fsync pressure remain explicit runtime performance
+debt.
+
 ## Outcome
 
 AdaOS can preserve Application and eligible state identities while changing a

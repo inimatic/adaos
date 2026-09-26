@@ -195,6 +195,75 @@ real Trial and public component-update acceptance path. The stable
 `RuntimeSelection` pins the accepted release and `WorkspaceLock`; the derived
 view did not participate in either authority decision.
 
+### Maintained Application batch qualification
+
+The 2026-09-26 independent-subnet run qualified Desktop and the requested
+maintained Application set against Core commit
+`e4ed1f10c9857e061fa1bbacdb29aacc6a3ea2b8`. The following exact releases are
+active on `192.168.0.30`:
+
+| Application id | Version | Application release digest |
+| --- | --- | --- |
+| `web_desktop` | `0.3.54` | `sha256:641531165944c32c224c12fcecde6fceb53967fab816ce02f22bb8d48c06f88d` |
+| `adaos_drive` | `0.1.18` | `sha256:9983881b57191e9a45700f929a5df5ef9b35593df5418377d824b56cd650ea8f` |
+| `adaos_builder` | `0.3.15` | `sha256:88cf68a2859338d97fd38e0784062bbecbe736efde096cb6d82cca4cc75a77aa` |
+| `applications` | `0.1.39` | `sha256:c662fbb8ca92dde442ddaf88d1128e7c36599d3656e5e20595a51d430731588d` |
+| `cv_descriptor_lab` | `0.1.19` | `sha256:c1ce20e76249515da99dd3e24cc37e5b5fb4592496fc1b481319e09de7788396` |
+| `semantic_ui_demo` | `0.10.28` | `sha256:675f32d34f00fbc0ec6e68f61997fe0d1bb7aecacbd3e51d1ae3ac0f0627efc0` |
+| `flowboard_lab_for_safely_prototyping_a_r_17528146` | `0.1.17` | `sha256:9794e4f50c83b45d7772b4c7d5832c39b4fe89c6b0872d6b281acb03756080f4` |
+| `media_center` | `0.6.111` | `sha256:a9205da153f254dc02e0c29aaf6629233b0125605268d06990a1351816e6cf34` |
+| `notebook` | `0.1.2` | `sha256:5af5487a9fdddf83fb0566255d3b1e98e5daf60e72b05ae9a5339cccaf5a9275` |
+| `redevice_control` | `0.1.22` | `sha256:c15939868394b4de6e4fc1de7b1db28379eb9470123b96692fcbc5f014428fb8` |
+| `research_platform` | `0.1.21` | `sha256:758e6dac8a7bbf92b46400fd6de9680ce5f5277ae5c5a2ab3bf4eb20d08e40f7` |
+| `slideshow` | `0.1.5` | `sha256:f0ff99f653c0ea864fee7401afef43b9b6aacfe9548b8d89b29f3451632ef410` |
+| `subscription_status` | `0.1.17` | `sha256:fa91fb66a431e7336be9369d50c0d2a1850b6d14d4f407346e677ae7b32844b8` |
+| `research_tlp` | `0.3.18` | `sha256:ad8c1d22fb71bb4d1a15809765f2dc8194a4f10fb9571de8afda2d50eb477e39` |
+| `voice` | `0.1.7` | `sha256:0b891e2da738e254317eb958eda533333ba2a5d17752ed3c75850f19e0dede55` |
+| `users_access` | `0.1.21` | `sha256:56b4a980eacf222cadea789e1fc506aeee7a327db83771f808ee53257bb8f256` |
+
+For every row the installed model is active, matches the registry track,
+reports `update_available=false` and `auto_update=true`, and exposes the
+non-authoritative `derived_read_only` lifecycle projection with requirement
+`compiled`, resolution `admitted`, plan `ready`, activation `active`, and lock
+`committed`. The runtime smoke additionally proves:
+
+- Desktop accepts the `applications` scenario instead of returning
+  `scenario_not_found`;
+- Drive's `select_item` call succeeds without the former undeclared
+  `workspace.write` denial;
+- the Media Center `media_library_agent` is callable from its published
+  permission closure;
+- Notebook's governed `workspace.read`/`workspace.write` grant permits a
+  binary attachment upload and byte-identical download;
+- one `api serve` process owns port `8777`; no supervisor is running.
+
+The Media Center update was a deliberate recovery proof rather than a clean
+happy path. Topology admission first rejected an incomplete provider closure.
+After topology correction, an update worker deadlocked behind the global
+component lock still held by registry synchronization and left a known-partial
+terminal operation. Commit `92b49f603d036cb87eb60e057e36d35b6824f3a3`
+made failed automatic operations retryable; commit `01ad3d88e` moved
+auto-update execution after the registry lock handoff and made known-partial
+results converge. The published Core merge commit is
+`e4ed1f10c9857e061fa1bbacdb29aacc6a3ea2b8`. The next run applied exactly one
+update with zero failed and zero uncertain operations, advancing Media Center
+to `0.6.111`.
+
+Four publication/CBS reuse development tickets for Builder and ReDevice are
+verified against exact release, deployment, CBS lifecycle, and independent
+node evidence. The separate MUST tickets for managed-Project UX in
+Applications, Desktop, and Research Workbench remain open: their acceptance
+criteria require a dedicated Project lifecycle implementation and wide/
+compact EN/RU browser receipts, which this batch does not pretend to provide.
+
+Startup remains a measured operational debt. The post-update node observed
+about 74 seconds before runtime context entry, 19 seconds in router
+initialization, and 6.469 seconds in
+`hydrate_webspace_materialization_statuses`. Duplicate `adaos_connect` UI-view
+materialization and SQLite/fsync contention were also observed. These timings
+do not invalidate CBS authority or recovery proofs, but they block any claim
+that the current maintained-Application startup path is optimized.
+
 ## Adoption And Migration Policy
 
 `CBS1-CBS5` keeps the current runtime readable and recoverable:
