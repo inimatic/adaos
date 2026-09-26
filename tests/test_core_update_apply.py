@@ -714,6 +714,66 @@ def test_install_slot_project_exposes_checked_in_wheels_to_pip(monkeypatch, tmp_
     assert result["ok"] is True
 
 
+def test_cleanup_seeded_adaos_install_preserves_dependencies(tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    site_packages = tmp_path / "venv" / "lib" / "python3.11" / "site-packages"
+    site_packages.mkdir(parents=True)
+    stale_artifacts = (
+        site_packages / "adaos",
+        site_packages / "adaos-0.1.900.dist-info",
+        site_packages / "adaos-0.1.1086.dist-info",
+        site_packages / "adaos-0.1.1086.data",
+    )
+    for path in stale_artifacts:
+        path.mkdir()
+        (path / "stale.txt").write_text("stale", encoding="utf-8")
+    (site_packages / "__editable___adaos_0_1_900_finder.py").write_text(
+        "stale", encoding="utf-8"
+    )
+    dependency = site_packages / "y_py"
+    dependency.mkdir()
+    (dependency / "native.so").write_text("keep", encoding="utf-8")
+    dependency_metadata = site_packages / "y_py-0.6.2+adaos.1.dist-info"
+    dependency_metadata.mkdir()
+
+    result = mod._cleanup_seeded_adaos_install(tmp_path / "venv")
+
+    assert result["ok"] is True
+    assert result["removed_total"] == 5
+    assert all(not path.exists() for path in stale_artifacts)
+    assert dependency.is_dir()
+    assert dependency_metadata.is_dir()
+
+
+def test_verify_adaos_distribution_metadata_requires_one_expected_version(tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.1087"\n', encoding="utf-8"
+    )
+    site_packages = tmp_path / "venv" / "lib" / "python3.11" / "site-packages"
+    current = site_packages / "adaos-0.1.1087.dist-info"
+    current.mkdir(parents=True)
+    (current / "METADATA").write_text(
+        "Metadata-Version: 2.4\nName: adaos\nVersion: 0.1.1087\n", encoding="utf-8"
+    )
+
+    snapshot = mod._verify_adaos_distribution_metadata(tmp_path / "venv", checkout)
+    assert snapshot["ok"] is True
+    assert snapshot["entries"][0]["version"] == "0.1.1087"
+
+    stale = site_packages / "adaos-0.1.900.dist-info"
+    stale.mkdir()
+    (stale / "METADATA").write_text(
+        "Metadata-Version: 2.4\nName: adaos\nVersion: 0.1.900\n", encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="distribution metadata validation failed"):
+        mod._verify_adaos_distribution_metadata(tmp_path / "venv", checkout)
+
+
 def test_install_slot_project_reseeds_hardlink_copy_before_pip_fallback(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

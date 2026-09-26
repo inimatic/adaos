@@ -327,6 +327,26 @@ def _venv_is_usable(venv_dir: Path) -> bool:
     return venv_dir.exists() and python_bin.exists()
 
 
+def _venv_site_package_roots(venv_dir: Path) -> list[Path]:
+    venv_root = Path(venv_dir).expanduser().resolve()
+    candidates = list(venv_root.glob("lib/python*/site-packages"))
+    candidates.extend(venv_root.glob("Lib/site-packages"))
+    roots: list[Path] = []
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(venv_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"venv site-packages escapes candidate environment: {candidate} -> {resolved}"
+            ) from exc
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
 def _rewrite_text_file(path: Path, *, old: str, new: str) -> bool:
     try:
         raw = path.read_bytes()
@@ -401,11 +421,7 @@ def _venv_text_repair_paths(venv_dir: Path) -> list[Path]:
     pyvenv_cfg = venv_dir / "pyvenv.cfg"
     if pyvenv_cfg.exists():
         paths.append(pyvenv_cfg)
-    site_package_roots = list(venv_dir.glob("lib/python*/site-packages"))
-    site_package_roots.extend(venv_dir.glob("Lib/site-packages"))
-    for site_packages in site_package_roots:
-        if not site_packages.is_dir():
-            continue
+    for site_packages in _venv_site_package_roots(venv_dir):
         # Absolute environment/source paths are generated only in launchers,
         # environment metadata, editable-install finders, and direct-url
         # metadata. Walking and reading every package source file made slot
@@ -878,6 +894,105 @@ def _pip_project_install_command(
     return command
 
 
+def _is_adaos_install_artifact(path: Path) -> bool:
+    name = path.name.lower()
+    if name == "adaos":
+        return True
+    if name in {"adaos.egg-info", "adaos.egg-link", "adaos.pth"}:
+        return True
+    if name.startswith("adaos-") and name.endswith((".dist-info", ".data")):
+        return True
+    return name.startswith("__editable__") and "adaos" in name
+
+
+def _cleanup_seeded_adaos_install(venv_dir: Path) -> dict[str, object]:
+    """Remove only the copied AdaOS install before reinstalling the candidate."""
+    started_at = time.time()
+    roots = _venv_site_package_roots(venv_dir)
+    removed: list[str] = []
+    for site_packages in roots:
+        for child in list(site_packages.iterdir()):
+            if not _is_adaos_install_artifact(child):
+                continue
+            # Operate on the directory entry itself. In particular, never
+            # resolve a package symlink and remove a target outside the venv.
+            if child.is_symlink() or child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                _force_remove_tree(child)
+            else:
+                child.unlink(missing_ok=True)
+            if child.exists() or child.is_symlink():
+                raise RuntimeError(f"stale AdaOS install artifact survived cleanup: {child}")
+            removed.append(str(child))
+    return {
+        "ok": True,
+        "site_package_roots": [str(path) for path in roots],
+        "removed_total": len(removed),
+        "removed_sample": removed[:20],
+        "elapsed_s": round(time.time() - started_at, 3),
+    }
+
+
+def _adaos_distribution_metadata_snapshot(
+    venv_dir: Path,
+    *,
+    expected_version: str,
+) -> dict[str, object]:
+    roots = _venv_site_package_roots(venv_dir)
+    entries: list[dict[str, str]] = []
+    for site_packages in roots:
+        for child in site_packages.iterdir():
+            name = child.name.lower()
+            if not child.is_dir() or not (name.startswith("adaos-") and name.endswith(".dist-info")):
+                continue
+            metadata_name = ""
+            metadata_version = ""
+            try:
+                for line in (child / "METADATA").read_text(encoding="utf-8").splitlines():
+                    if line.startswith("Name:"):
+                        metadata_name = line.partition(":")[2].strip()
+                    elif line.startswith("Version:"):
+                        metadata_version = line.partition(":")[2].strip()
+                    if metadata_name and metadata_version:
+                        break
+            except (OSError, UnicodeError):
+                pass
+            entries.append(
+                {
+                    "path": str(child),
+                    "name": metadata_name,
+                    "version": metadata_version,
+                }
+            )
+    skipped = not roots
+    ok = skipped or (
+        len(entries) == 1
+        and entries[0]["name"].lower() == "adaos"
+        and entries[0]["version"] == expected_version
+    )
+    return {
+        "ok": ok,
+        "skipped": skipped,
+        "reason": "site_packages_unavailable" if skipped else "",
+        "expected_version": expected_version,
+        "entries": entries,
+    }
+
+
+def _verify_adaos_distribution_metadata(venv_dir: Path, checkout_dir: Path) -> dict[str, object]:
+    snapshot = _adaos_distribution_metadata_snapshot(
+        venv_dir,
+        expected_version=_checkout_base_version(checkout_dir),
+    )
+    if not bool(snapshot.get("ok")):
+        raise RuntimeError(
+            "candidate AdaOS distribution metadata validation failed: "
+            + json.dumps(snapshot, ensure_ascii=True, sort_keys=True)
+        )
+    return snapshot
+
+
 def _install_slot_project(
     *,
     checkout_dir: Path,
@@ -1038,7 +1153,16 @@ def _install_slot_project(
     if not _venv_is_usable(venv_dir):
         _run([sys.executable, "-m", "venv", str(venv_dir)])
     py = _venv_python(venv_dir)
+    seed_cleanup: dict[str, object] = {
+        "ok": True,
+        "skipped": True,
+        "reason": "fresh_environment",
+        "removed_total": 0,
+    }
+    if bool(effective_seed.get("seeded")):
+        seed_cleanup = _cleanup_seeded_adaos_install(venv_dir)
     toolchain = _venv_build_toolchain_snapshot(venv_dir)
+    metadata_snapshot: dict[str, object] | None = None
     try:
         if bool(toolchain.get("ready")):
             attempts.append(
@@ -1054,6 +1178,7 @@ def _install_slot_project(
         else:
             _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
             _run(_pip_project_install_command(py, checkout_dir))
+        metadata_snapshot = _verify_adaos_distribution_metadata(venv_dir, checkout_dir)
     except Exception as first_exc:
         attempts.append(
             {
@@ -1070,6 +1195,7 @@ def _install_slot_project(
             py = _venv_python(venv_dir)
             _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
             _run(_pip_project_install_command(py, checkout_dir))
+            metadata_snapshot = _verify_adaos_distribution_metadata(venv_dir, checkout_dir)
         else:
             raise
     attempts.append({"installer": "pip", "returncode": 0})
@@ -1080,6 +1206,8 @@ def _install_slot_project(
         "finished_at": time.time(),
         "elapsed_s": round(time.time() - started_at, 3),
         "seed": effective_seed,
+        "seed_cleanup": seed_cleanup,
+        "distribution_metadata": metadata_snapshot,
         "attempts": attempts,
     }
 
