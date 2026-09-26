@@ -7,7 +7,7 @@ import pytest
 from adaos.domain.application import RuntimeSelection
 from adaos.services.applications.configuration import ApplicationConfigurationStore
 from adaos.services.applications.blob_data_transition import BlobDataTransition
-from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases
+from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases, declared_coordination_files, inventory
 from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 
 
@@ -417,16 +417,18 @@ def test_declared_core_skill_memory_is_preserved_across_beta_acceptance(tmp_path
     "change",
     [
         {"lifecycle": {"drain": "missing_tool"}},
-        {"service": {"run": "worker"}},
-        {"data_lifecycle": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [{"path": "records.sqlite", "migrations": []}]}},
+        {"lifecycle": {"drain": "runtime_drain"}},
     ],
 )
-def test_background_drain_does_not_admit_unverified_or_stateful_workers(tmp_path, change):
+def test_background_drain_does_not_admit_unverified_workers(tmp_path, change):
     seed(tmp_path)
     target = {
         "events": {"subscribe": ["timer.tick"]},
-        "lifecycle": {"drain": "runtime_drain"},
-        "tools": [{"name": "runtime_drain", "entry": "handlers.main:runtime_drain"}],
+        "lifecycle": {"drain": "runtime_drain", "rehydrate": "runtime_rehydrate"},
+        "tools": [
+            {"name": "runtime_drain", "entry": "handlers.main:runtime_drain"},
+            {"name": "runtime_rehydrate", "entry": "handlers.main:runtime_rehydrate"},
+        ],
         "data_lifecycle": {
             "schema": "adaos.skill.data_lifecycle.v1",
             "execution": "native_tools",
@@ -453,12 +455,93 @@ def test_background_drain_does_not_admit_unverified_or_stateful_workers(tmp_path
         )
 
 
+def test_stateful_native_worker_with_declared_store_and_hooks_is_admitted(tmp_path):
+    target = {
+        "service": {"run": "worker"},
+        "lifecycle": {"drain": "runtime_drain", "rehydrate": "runtime_rehydrate"},
+        "tools": [
+            {"name": "runtime_drain", "entry": "handlers.main:runtime_drain"},
+            {"name": "runtime_rehydrate", "entry": "handlers.main:runtime_rehydrate"},
+        ],
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [{"path": "records.sqlite", "migrations": []}],
+        },
+    }
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state",
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate-stateful",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=None,
+        components=(OwnedDataComponent(
+            "skill:worker",
+            None,
+            tmp_path / "beta-stateful/data",
+            tmp_path / "workspace/stateful-data",
+            {},
+            target,
+        ),),
+    )
+
+    result = lifecycle.prepare_beta(
+        webspace_id="desktop",
+        activate=lambda _key: {"ok": True},
+    )
+
+    assert result["completed"] is True
+    assert result["runtime_selection"]["source"] == "local_trial"
+
+
 def test_undeclared_data_remains_untouched(tmp_path):
     _state, stable, _channel = seed(tmp_path)
     (stable / "attachment.txt").write_text("private attachment", encoding="utf-8")
     with pytest.raises(ValueError, match="Undeclared runtime data"):
         coordinator(tmp_path, 1).prepare_beta(webspace_id="desktop", activate=lambda _: pytest.fail("Must not activate"))
     assert (stable / "attachment.txt").read_text() == "private attachment"
+
+
+def test_declared_sqlite_schema_mutex_is_coordination_metadata(tmp_path):
+    root = tmp_path / "data"
+    (root / "db").mkdir(parents=True)
+    (root / "db/records.schema.lock").write_bytes(b"0")
+
+    inventory(
+        root,
+        {"db/records.sqlite": ()},
+        coordination_files=declared_coordination_files(
+            {
+                "data_lifecycle": {
+                    "schema": "adaos.skill.data_lifecycle.v1",
+                    "execution": "native_tools",
+                    "databases": [
+                        {"path": "db/records.sqlite", "migrations": []}
+                    ],
+                }
+            }
+        ),
+    )
+
+
+def test_unrelated_mutex_file_is_not_admitted(tmp_path):
+    root = tmp_path / "data"
+    (root / "db").mkdir(parents=True)
+    (root / "db/unrelated.schema.lock").write_bytes(b"0")
+
+    with pytest.raises(ValueError, match="Undeclared runtime data"):
+        inventory(root, {"db/records.sqlite": ()})
+
+
+@pytest.mark.parametrize(
+    "path", ["../mutex.lock", "C:/mutex.lock", "db/mutex.txt", "db/../mutex.lock"]
+)
+def test_coordination_file_paths_are_exact_owner_mutexes(path):
+    value = manifest(1)
+    value["data_lifecycle"]["coordination_files"] = [path]
+    with pytest.raises(ValueError, match="relative owner"):
+        declared_coordination_files(value)
 
 
 def test_declared_local_blob_objects_follow_the_fenced_data_cutover(tmp_path):

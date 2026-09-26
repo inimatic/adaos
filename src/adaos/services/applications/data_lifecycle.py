@@ -1,10 +1,10 @@
 """Release-pinned, private data/configuration effects for local channel cutover.
 
-This initial adapter admits request/response skills, declared SQLite stores,
-and stateless native event subscribers with an explicit runtime drain hook.
-Workers with owned mutable data, external stores and undeclared mutable files
-require explicit adapters; an empty drain receipt must never authorize their
-migration.
+The local adapter admits request/response skills and native lifecycle runtimes
+whose complete local SQLite ownership is declared and whose drain/rehydrate
+hooks are real exported tools. External stores and undeclared mutable files
+still require explicit adapters; an empty or undeclared hook must never
+authorize their migration.
 """
 
 from __future__ import annotations
@@ -132,9 +132,10 @@ def automation_data_contract() -> dict[str, Any]:
             "shape": "skill.yaml capabilities is a flat unique string array, not an object with required/optional fields. Merge required SDK tokens without removing existing declarations.",
             "example": {"capabilities": ["storage.relational", "configuration.read", "configuration.write"]},
         },
-        "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": []},
+        "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [], "coordination_files": []},
         "database_fields": {"path": "relative SQLite filename under this skill's SDK data root",
             "migrations": "full ordered list of {version: positive integer, name: string, statements: SQL string[]}"},
+        "coordination_files": "Exact owner-relative *.lock mutex files; admitted by inventory but never copied as Application state.",
         "initialization_contract": {
             "call": "adaos.sdk.data.lifecycle.ensure_database(path) before opening the declared SQLite file; requires storage.relational.",
             "async": "Async handlers use a_ensure_database(path).",
@@ -172,7 +173,7 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
     if not isinstance(declaration, dict) or declaration.get("schema") != "adaos.skill.data_lifecycle.v1":
         raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
     if (
-        set(declaration) - {"schema", "execution", "databases", "legacy_adoption"}
+        set(declaration) - {"schema", "execution", "databases", "legacy_adoption", "coordination_files"}
         or declaration["execution"] != "native_tools"
     ):
         raise ValueError("Data cutover currently requires declared native_tools execution")
@@ -205,6 +206,39 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
             raise ValueError("Migration versions must be unique")
         result[path] = tuple(migrations)
     return result
+
+
+def declared_coordination_files(manifest: Mapping[str, Any]) -> frozenset[str]:
+    declaration = manifest.get("data_lifecycle")
+    if not isinstance(declaration, Mapping):
+        raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
+    values = declaration.get("coordination_files", [])
+    if not isinstance(values, list) or len(values) > 32:
+        raise ValueError("Data lifecycle coordination_files must be a bounded list")
+    normalized: set[str] = set()
+    for value in values:
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > 240
+            or not value.endswith(".lock")
+            or "\\" in value
+            or ":" in value
+            or PurePosixPath(value).is_absolute()
+            or any(part in {".", "..", ""} for part in value.split("/"))
+            or value in normalized
+        ):
+            raise ValueError("Coordination file requires a unique relative owner *.lock path")
+        normalized.add(value)
+    # Transitional inference for the two deterministic mutex names used by
+    # maintained SQLite runtimes before coordination_files became part of v1.
+    # No arbitrary *.lock file is admitted, and newly authored manifests emit
+    # the explicit list through automation_data_contract.
+    for database in declared_databases(manifest):
+        sqlite_path = PurePosixPath(database)
+        normalized.add(sqlite_path.with_suffix(".schema.lock").as_posix())
+        normalized.add(sqlite_path.with_suffix(".root-mutation.lock").as_posix())
+    return frozenset(normalized)
 
 
 def _declared_tool_names(manifest: Mapping[str, Any]) -> set[str]:
@@ -256,34 +290,24 @@ def require_native_tools(manifest: Mapping[str, Any]) -> None:
     declared_databases_value = (
         declaration.get("databases") if isinstance(declaration, Mapping) else None
     )
-    capabilities = {
-        str(item).strip()
-        for item in manifest.get("capabilities") or ()
-        if str(item).strip()
-    }
-    stateless_native_subscriber = bool(
-        subscriptions
-        and not manifest.get("service")
-        and not manifest.get("services")
-        and not manifest.get("workflow")
-        and not manifest.get("conversational")
-        and not any(
-            runtime.get(key)
-            for key in ("services", "service", "lifecycle", "after_activate")
-        )
-        and isinstance(declaration, Mapping)
+    native_lifecycle = bool(
+        isinstance(declaration, Mapping)
         and declaration.get("schema") == "adaos.skill.data_lifecycle.v1"
         and declaration.get("execution") == "native_tools"
-        and declared_databases_value == []
-        and not manifest.get("configuration")
-        and "storage.blob" not in capabilities
+        and isinstance(declared_databases_value, list)
         and drain_tool
         and drain_tool in _declared_tool_names(manifest)
         and rehydrate_tool
         and rehydrate_tool in _declared_tool_names(manifest)
     )
-    if not stateless_native_subscriber:
+    if not native_lifecycle:
         raise ValueError("Background/lifecycle execution requires a verified owner drain adapter before data cutover")
+
+    # Validate the complete store declaration before a lifecycle receipt can
+    # authorize any data movement. Runtime inventory later proves that no
+    # additional owner files were omitted.
+    declared_databases(manifest)
+    declared_coordination_files(manifest)
 
 
 def _allows_reconstructible_legacy_adoption(
@@ -320,12 +344,13 @@ def inventory(
     *,
     blobs: BlobDataTransition | None = None,
     skill_memory: bool = False,
+    coordination_files: frozenset[str] = frozenset(),
 ) -> None:
     if root is None or not root.exists():
         return
     if root.absolute() != root.resolve():
         raise ValueError("Linked runtime data requires an explicit storage adapter")
-    permitted = set(declared)
+    permitted = set(declared) | set(coordination_files)
     if skill_memory:
         permitted.add(_SKILL_MEMORY_PATH)
     for name in declared:
@@ -335,7 +360,10 @@ def inventory(
             raise ValueError("Linked runtime data requires an explicit storage adapter")
         relative = path.relative_to(root).as_posix()
         if path.is_file() and relative not in permitted and not (blobs is not None and relative.startswith("files/")):
-            raise ValueError("Undeclared runtime data requires a data/configuration/credential adapter")
+            raise ValueError(
+                "Undeclared runtime data requires a data/configuration/credential "
+                f"adapter: {relative}"
+            )
         if path.is_file() and relative == _SKILL_MEMORY_PATH:
             _bounded_json_bytes(path)
     if blobs is not None:
@@ -367,6 +395,7 @@ class LocalApplicationDataLifecycle:
         key = hashlib.sha256(json.dumps([application_id, candidate_id, release_digest]).encode()).hexdigest()
         self.recovery = self.private / "recovery/applications" / key
         self.contracts = {}
+        self.coordination_contracts = {}
         self.blob_contracts = {}
         self.stable_blob_contracts = {}
         self.skill_memory_contracts = {}
@@ -397,6 +426,10 @@ class LocalApplicationDataLifecycle:
                 if any(child.startswith(parent + "/") for child in databases):
                     raise ValueError("SQLite store paths overlap")
             self.contracts[component.component_ref] = databases
+            coordination_files = declared_coordination_files(component.target_manifest)
+            if set(coordination_files) & set(databases):
+                raise ValueError("Coordination files cannot also be declared SQLite stores")
+            self.coordination_contracts[component.component_ref] = coordination_files
             stable_blobs = "storage.blob" in set(component.stable_manifest.get("capabilities") or [])
             target_blobs = "storage.blob" in set(component.target_manifest.get("capabilities") or [])
             if stable_blobs and not target_blobs:
@@ -496,10 +529,11 @@ class LocalApplicationDataLifecycle:
         def transfer(key):
             for component in self.components:
                 databases = self.contracts[component.component_ref]
+                coordination_files = self.coordination_contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
-                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
-                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
+                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
+                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
                 for name, migrations in databases.items():
                     source = component.stable_root / name if component.stable_root else None
                     base = self._root(component, "stable") / name
@@ -565,11 +599,12 @@ class LocalApplicationDataLifecycle:
         def transfer(key):
             for component in self.components:
                 databases = self.contracts[component.component_ref]
+                coordination_files = self.coordination_contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
-                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
-                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
-                inventory(component.target_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
+                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
+                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
+                inventory(component.target_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files)
                 for name in databases:
                     base = self._root(component, "stable") / name
                     if component.stable_root and (component.stable_root / name).exists():

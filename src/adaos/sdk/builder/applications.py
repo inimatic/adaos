@@ -110,16 +110,18 @@ def _adopt_legacy_workspace_installation(
         raise ValueError("Legacy Workspace contains ambiguous Project slots")
     slot = slots[0]
     try:
-        release = _distribution_service().releases.get_release(
-            application.legacy_project_id, slot.release_digest
-        ).release
-    except FileNotFoundError as exc:
-        raise ValueError(
-            "Legacy Workspace release metadata is unavailable for Application adoption"
-        ) from exc
-    try:
-        service.store.get_release(application.application_id, slot.release_digest)
+        registered_release = service.store.get_release(
+            application.application_id, slot.release_digest
+        )
     except FileNotFoundError:
+        try:
+            release = _distribution_service().releases.get_release(
+                application.legacy_project_id, slot.release_digest
+            ).release
+        except FileNotFoundError as exc:
+            raise ValueError(
+                "Legacy Workspace release metadata is unavailable for Application adoption"
+            ) from exc
         service.register_release(
             ApplicationRelease(
                 application_id=application.application_id,
@@ -140,6 +142,11 @@ def _adopt_legacy_workspace_installation(
                 published_at=utc_now(),
             )
         )
+    else:
+        if registered_release.project_release.project_id != application.legacy_project_id:
+            raise ValueError(
+                "Legacy Workspace release metadata does not match its Application identity"
+            )
     channels = service.store.get_channels(application.application_id).get("channels") or {}
     if not channels.get("stable"):
         service.move_channel(
@@ -1905,6 +1912,31 @@ def promote_stable(
                 f"Candidate: {project_status or project_publication.get('error')}"
             )
 
+        visibility_transition = None
+        if channels.get("stable") and application.visibility != "public":
+            # A previously private/compatibility Application may already have
+            # a stable channel.  Its first public release still has to travel
+            # through the exact prerelease channel, but publishing the old
+            # compatibility release just to unlock that channel would falsely
+            # require CBS evidence it never had.  Make the catalog identity
+            # public as part of this governed promotion; the new stable source
+            # and semantic projection are published immediately afterwards by
+            # publish_to_registry.
+            application = distribution.applications.register(
+                replace(
+                    application,
+                    visibility="public",
+                    revision=application.revision + 1,
+                    updated_at=utc_now(),
+                ),
+                expected_revision=application.revision,
+            )
+            visibility_transition = {
+                "from": "private",
+                "to": "public",
+                "application_revision": application.revision,
+                "reason": "qualified_existing_stable_promotion",
+            }
         mode = "prerelease" if channels.get("stable") else "link_only"
         trial_publication = distribution.publish_trial(
             application_id,
@@ -1926,6 +1958,7 @@ def promote_stable(
             "publication_verification": dict(publication_verification),
             "project_publication": dict(project_publication),
             "trial_publication": dict(trial_publication),
+            "visibility_transition": visibility_transition,
         }
 
     return _execute_development(

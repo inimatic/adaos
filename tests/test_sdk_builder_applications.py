@@ -215,6 +215,104 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
     assert result["publication_verification"]["publication_allowed"] is True
 
 
+def test_promote_existing_private_stable_opens_public_prerelease_channel(
+    monkeypatch,
+) -> None:
+    application = Application(
+        application_id="mail_reader",
+        legacy_project_id="mail_reader",
+        publisher_ref="subnet:home",
+        slug="mail_reader",
+        display={"title": "Mail Reader", "summary": "Mail"},
+        visibility="private",
+        entrypoints=(
+            {"entrypoint_id": "main", "presentation_ref": "scenario:mail_reader"},
+        ),
+        publisher={
+            "publisher_ref": "subnet:home",
+            "display_name": "Home",
+            "subnet_short_ref": "home",
+            "release_key_ref": "artifact-signing:home:key",
+            "release_key_fingerprint": "sha256:" + "f" * 64,
+            "home_zone": "local",
+            "trust_relation": "local",
+        },
+        revision=4,
+        updated_at="2026-09-26T00:00:00+00:00",
+    )
+    registered = []
+    published = []
+
+    class _Applications:
+        store = SimpleNamespace(
+            get_channels=lambda _application_id: {
+                "channels": {"stable": "sha256:" + "a" * 64}
+            },
+            list_runtime_selections=lambda: (
+                SimpleNamespace(
+                    application_id="mail_reader",
+                    release_digest="sha256:" + "c" * 64,
+                    source="stable_installation",
+                    webspace_id="desktop",
+                ),
+            ),
+        )
+
+        @staticmethod
+        def register(value, *, expected_revision):
+            registered.append((value, expected_revision))
+            return value
+
+    class _Distribution:
+        applications = _Applications()
+        candidates = SimpleNamespace(
+            load=lambda _candidate_id: SimpleNamespace(
+                release_digest="sha256:" + "c" * 64,
+                package_digest="sha256:" + "d" * 64,
+            )
+        )
+        project_release_is_current = staticmethod(lambda _candidate_id: True)
+
+        @staticmethod
+        def publish_trial(_application_id, _candidate_id, **kwargs):
+            published.append(kwargs)
+            return {"mode": kwargs["mode"]}
+
+        @staticmethod
+        def promote_stable(*_args, **_kwargs):
+            return {"channel": {"release_digest": "sha256:" + "c" * 64}}
+
+    monkeypatch.setattr(applications, "_application", lambda *_args: application)
+    monkeypatch.setattr(applications, "_distribution_service", _Distribution)
+    monkeypatch.setattr(
+        applications,
+        "_promote_local_trial_final_verification",
+        lambda *_args, **_kwargs: {"publication_allowed": True},
+    )
+    monkeypatch.setattr(
+        applications,
+        "_execute_development",
+        lambda _action, _application_id, **arguments: arguments["callback"](),
+    )
+
+    result = applications.promote_stable(
+        "mail_reader",
+        "mail-reader-0-2-0-candidate",
+        expected_stable_digest="sha256:" + "a" * 64,
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.publish",
+        expected_revision=4,
+        idempotency_key="promote-mail-reader-existing-private",
+    )
+
+    assert registered[0][1] == 4
+    assert registered[0][0].visibility == "public"
+    assert registered[0][0].revision == 5
+    assert published[0]["mode"] == "prerelease"
+    assert result["visibility_transition"]["application_revision"] == 5
+
+
 def test_publish_to_registry_makes_stable_application_public_and_records_receipt(
     monkeypatch, tmp_path: Path
 ) -> None:

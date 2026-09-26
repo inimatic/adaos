@@ -24,6 +24,18 @@
 		      "enum": ["reconstructible_empty"],
 		      "description": "One-time bridge for a pre-lifecycle package only when its exact runtime data root contains no files."
 		    },
+        "coordination_files": {
+          "description": "Exact owner-relative process mutex files. They are admitted by inventory but never copied as Application data.",
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])[^/]+(?:/[^/]+)*\\.lock$"
+          }
+        },
 		    "databases": {
 		      "type": "array",
 		      "maxItems": 32,
