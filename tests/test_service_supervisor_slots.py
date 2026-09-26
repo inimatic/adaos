@@ -1,7 +1,9 @@
 import asyncio
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -1594,6 +1596,94 @@ def test_service_supervisor_installs_changed_dependencies_for_existing_venv(tmp_
 
     assert supervisor._select_python(_spec(["demo-dep==2"])) == python
     assert installs == [["demo-dep==1"], ["demo-dep==2"]]
+
+
+def test_service_supervisor_repairs_only_missing_dependencies_in_existing_venv(tmp_path, monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "skills" / "dep_service"
+    skill_root.mkdir(parents=True)
+    venv_dir = tmp_path / "venv"
+    venv_dir.mkdir()
+    spec = mod.ServiceSpec(
+        skill="dep_service",
+        skill_root=skill_root,
+        host="127.0.0.1",
+        port=18111,
+        command=["-m", "handlers.main"],
+        workdir=skill_root,
+        env_mode="venv",
+        python_selector="3.11",
+        venv_dir=venv_dir,
+        dependencies=["packaging>=1", "adaos-definitely-missing==1"],
+        requirements_file=None,
+        health_path="/health",
+        health_timeout_ms=1000,
+        self_managed_enabled=False,
+        crash_max_in_window=3,
+        crash_window_s=60,
+        crash_cooloff_s=60,
+        health_interval_s=10,
+        health_failures_before_issue=3,
+        hook_on_issue=None,
+        hook_on_self_heal=None,
+        hook_timeout_s=10.0,
+        doctor_enabled=False,
+        doctor_cooldown_s=300,
+        doctor_issue_types=[],
+        doctor_include_log_tail_lines=0,
+    )
+    marker_path = venv_dir / ".adaos-service-deps.json"
+    marker_path.write_text(
+        mod.ServiceSkillSupervisor()._dependency_marker(
+            replace(spec, dependencies=["packaging>=1"])
+        ),
+        encoding="utf-8",
+    )
+    installs: list[list[str]] = []
+    budgets: list[dict[str, object]] = []
+    supervisor = mod.ServiceSkillSupervisor()
+    monkeypatch.setattr(
+        supervisor,
+        "_missing_dependency_specs",
+        lambda _python, _dependencies: ["adaos-definitely-missing==1"],
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_install_deps",
+        lambda _python, candidate: installs.append(list(candidate.dependencies)),
+    )
+    monkeypatch.setattr(
+        mod,
+        "ensure_dependency_disk_budget",
+        lambda _path, dependencies, **kwargs: budgets.append(
+            {"dependencies": list(dependencies), **kwargs}
+        ),
+    )
+
+    supervisor._install_deps_if_needed(Path(sys.executable), spec, venv_dir)
+
+    assert installs == [["adaos-definitely-missing==1"]]
+    assert budgets == [
+        {
+            "dependencies": ["adaos-definitely-missing==1"],
+            "has_requirements_file": False,
+            "skill_name": "dep_service",
+            "incremental": True,
+        }
+    ]
+    assert marker_path.read_text(encoding="utf-8") == supervisor._dependency_marker(spec)
+
+
+def test_service_supervisor_detects_satisfied_distributions_without_importing_them():
+    from adaos.services.skill import service_supervisor as mod
+
+    pending = mod.ServiceSkillSupervisor._missing_dependency_specs(
+        Path(sys.executable),
+        ["packaging>=1", "adaos-definitely-missing==1"],
+    )
+
+    assert pending == ["adaos-definitely-missing==1"]
 
 
 def test_service_dependency_marker_ignores_runtime_slot_paths(tmp_path):

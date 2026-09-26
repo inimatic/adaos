@@ -37,6 +37,20 @@ def test_dependency_disk_guard_uses_fixed_default_budget_for_heavy_installs(monk
     assert required == 12 * 1024 * 1024 * 1024
 
 
+def test_dependency_disk_guard_scales_incremental_native_repairs(monkeypatch):
+    monkeypatch.delenv("ADAOS_SKILL_DEP_DISK_INCREMENTAL_HEAVY_GIB", raising=False)
+    monkeypatch.delenv("ADAOS_SKILL_DEP_DISK_INCREMENTAL_LARGE_GIB", raising=False)
+
+    native_delta = guard.dependency_disk_budget_bytes(
+        ["easyocr==1.7.2", "opencv-python==4.13.0.92"],
+        incremental=True,
+    )
+    large_delta = guard.dependency_disk_budget_bytes(["torch==2.10.0"], incremental=True)
+
+    assert native_delta == 4 * 1024 * 1024 * 1024
+    assert large_delta == 8 * 1024 * 1024 * 1024
+
+
 def test_dependency_disk_guard_can_be_disabled(monkeypatch, tmp_path):
     monkeypatch.setenv("ADAOS_SKILL_DEP_DISK_GUARD", "0")
     monkeypatch.setattr(guard.shutil, "disk_usage", lambda _path: SimpleNamespace(free=0))

@@ -40,6 +40,16 @@ _HEAVY_IMPORT_DEPENDENCIES = {
     "transformers": "transformers",
 }
 
+_LARGE_HEAVY_DEP_NAMES = {
+    "tensorflow",
+    "tensorflow-cpu",
+    "tensorflow-gpu",
+    "tensorflow-intel",
+    "torch",
+    "torchaudio",
+    "torchvision",
+}
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = str(os.getenv(name) or "").strip().lower()
@@ -129,9 +139,22 @@ def heavy_import_dependency_names(import_roots: Iterable[str]) -> list[str]:
     )
 
 
-def dependency_disk_budget_bytes(args: Iterable[str], *, has_requirements_file: bool = False) -> int:
+def dependency_disk_budget_bytes(
+    args: Iterable[str],
+    *,
+    has_requirements_file: bool = False,
+    incremental: bool = False,
+) -> int:
     specs = _install_specs(args)
-    if dependency_args_contain_heavy_packages(specs):
+    heavy = heavy_dependency_names(specs)
+    if heavy and incremental:
+        # An existing service venv can already contain most of a native stack.
+        # Keep a conservative reserve for the missing delta without requiring
+        # enough disk for a second copy of the entire closure.
+        if set(heavy) & _LARGE_HEAVY_DEP_NAMES:
+            return _env_bytes("ADAOS_SKILL_DEP_DISK_INCREMENTAL_LARGE_GIB", 8.0)
+        return _env_bytes("ADAOS_SKILL_DEP_DISK_INCREMENTAL_HEAVY_GIB", 4.0)
+    if heavy:
         return _env_bytes("ADAOS_SKILL_DEP_DISK_HEAVY_FREE_GIB", 12.0)
 
     # Ordinary wheel installs are bounded by a modest operational reserve plus
@@ -149,10 +172,15 @@ def ensure_dependency_disk_budget(
     *,
     has_requirements_file: bool = False,
     skill_name: str = "",
+    incremental: bool = False,
 ) -> None:
     if not _env_bool("ADAOS_SKILL_DEP_DISK_GUARD", True):
         return
-    required = dependency_disk_budget_bytes(args, has_requirements_file=has_requirements_file)
+    required = dependency_disk_budget_bytes(
+        args,
+        has_requirements_file=has_requirements_file,
+        incremental=incremental,
+    )
     if required <= 0:
         return
     probe = Path(target_path)

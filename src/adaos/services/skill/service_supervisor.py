@@ -15,7 +15,7 @@ import sys
 import sysconfig
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.request import Request, urlopen
@@ -39,6 +39,32 @@ from adaos.services.storage.blob import get_blob_storage_broker
 from adaos.services.storage.relational import get_relational_storage_broker
 
 _log = logging.getLogger("adaos.skill.service")
+
+_DEPENDENCY_STATUS_SCRIPT = r"""
+import importlib.metadata
+import json
+import sys
+
+from packaging.requirements import InvalidRequirement, Requirement
+
+pending = []
+for raw in json.loads(sys.argv[1]):
+    try:
+        requirement = Requirement(str(raw))
+    except InvalidRequirement:
+        pending.append(raw)
+        continue
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        continue
+    try:
+        installed = importlib.metadata.version(requirement.name)
+    except importlib.metadata.PackageNotFoundError:
+        pending.append(raw)
+        continue
+    if requirement.specifier and not requirement.specifier.contains(installed, prereleases=True):
+        pending.append(raw)
+print(json.dumps(pending))
+"""
 
 
 def _bounded_env_seconds(name: str, *, default: float, minimum: float, maximum: float) -> float:
@@ -2135,17 +2161,64 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                     exc_info=True,
                 )
             return
+        install_spec = spec
+        incremental = False
+        if not spec.requirements_file and spec.dependencies:
+            pending = self._missing_dependency_specs(python, spec.dependencies)
+            if not pending:
+                try:
+                    marker_path.write_text(marker, encoding="utf-8")
+                except Exception:
+                    _log.warning(
+                        "failed to write reconciled service dependency marker skill=%s path=%s",
+                        spec.skill,
+                        marker_path,
+                        exc_info=True,
+                    )
+                return
+            install_spec = replace(spec, dependencies=pending)
+            incremental = bool(current) and len(pending) < len(spec.dependencies)
         ensure_dependency_disk_budget(
             venv_dir,
-            spec.dependencies,
+            install_spec.dependencies,
             has_requirements_file=bool(spec.requirements_file),
             skill_name=spec.skill,
+            incremental=incremental,
         )
-        self._install_deps(python, spec)
+        self._install_deps(python, install_spec)
         try:
             marker_path.write_text(marker, encoding="utf-8")
         except Exception:
             _log.warning("failed to write service dependency marker skill=%s path=%s", spec.skill, marker_path, exc_info=True)
+
+    @staticmethod
+    def _missing_dependency_specs(python: Path, dependencies: list[str]) -> list[str]:
+        """Return only requirements not already satisfied by the service venv."""
+
+        requested = [str(item) for item in dependencies if str(item or "").strip()]
+        if not requested:
+            return []
+        try:
+            completed = subprocess.run(
+                [str(python), "-c", _DEPENDENCY_STATUS_SCRIPT, json.dumps(requested)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30.0,
+            )
+            payload = json.loads(str(completed.stdout or "[]").strip() or "[]")
+            if not isinstance(payload, list):
+                raise ValueError("dependency status result is not a list")
+            pending = [str(item) for item in payload]
+            if any(item not in requested for item in pending):
+                raise ValueError("dependency status returned an unknown requirement")
+            return pending
+        except Exception:
+            _log.warning(
+                "failed to inspect installed service dependencies; using full declared closure",
+                exc_info=True,
+            )
+            return requested
 
     def _dependency_marker(self, spec: ServiceSpec) -> str:
         requirement_sha256: str | None = None
