@@ -4926,7 +4926,11 @@ class RouterService:
                 current = dialog_runtime.get_active_channel(ws)
                 current_id = str(current.channel_id).strip().lower() if current is not None else "general"
                 if channel_id == "general":
-                    _persist_general_dialog_channel(ws, event="manual_select_general")
+                    await asyncio.to_thread(
+                        _persist_general_dialog_channel,
+                        ws,
+                        event="manual_select_general",
+                    )
                     if current is not None:
                         general_meta = _general_agent_metadata()
                         dialog_runtime.deactivate_channel(
@@ -4954,8 +4958,11 @@ class RouterService:
                     continue
                 if channel_id != "conversational":
                     try:
-                        _seed_manifest_dialog_channels(ws)
-                        channel = conversation_store.get_dialog_channel(ws, channel_id)
+                        def _load_persisted_channel() -> Any:
+                            _seed_manifest_dialog_channels(ws)
+                            return conversation_store.get_dialog_channel(ws, channel_id)
+
+                        channel = await asyncio.to_thread(_load_persisted_channel)
                     except Exception:
                         channel = None
                     if not isinstance(channel, dict) and channel_id == "builder":
@@ -4985,28 +4992,31 @@ class RouterService:
                     conversation_id = str(channel.get("conversation_id") or _skill_conversation_id(default_skill, ws)).strip()
                     owner = owner or f"skill:{default_skill}"
                     try:
-                        conversation_store.upsert_conversation(
-                            conversation_id=conversation_id,
-                            webspace_id=ws,
-                            owner=owner,
-                            kind="dialog",
-                            title=str(channel.get("label") or _dialog_channel_label(channel_id)),
-                            active_agent_id=str(channel.get("active_agent_id") or "").strip() or None,
-                            meta={"route_id": channel.get("route_id") or "voice_chat", "channel_id": channel_id},
-                        )
-                        conversation_store.upsert_dialog_channel(
-                            webspace_id=ws,
-                            channel_id=channel_id,
-                            label=str(channel.get("label") or _dialog_channel_label(channel_id)),
-                            owner=owner,
-                            conversation_id=conversation_id,
-                            active_agent_id=str(channel.get("active_agent_id") or "").strip() or None,
-                            default_skill=default_skill,
-                            default_tool=default_tool,
-                            route_id=str(channel.get("route_id") or "voice_chat"),
-                            policy=channel.get("policy") if isinstance(channel.get("policy"), dict) else {},
-                            meta=channel.get("meta") if isinstance(channel.get("meta"), dict) else {},
-                        )
+                        def _persist_selected_channel() -> None:
+                            conversation_store.upsert_conversation(
+                                conversation_id=conversation_id,
+                                webspace_id=ws,
+                                owner=owner,
+                                kind="dialog",
+                                title=str(channel.get("label") or _dialog_channel_label(channel_id)),
+                                active_agent_id=str(channel.get("active_agent_id") or "").strip() or None,
+                                meta={"route_id": channel.get("route_id") or "voice_chat", "channel_id": channel_id},
+                            )
+                            conversation_store.upsert_dialog_channel(
+                                webspace_id=ws,
+                                channel_id=channel_id,
+                                label=str(channel.get("label") or _dialog_channel_label(channel_id)),
+                                owner=owner,
+                                conversation_id=conversation_id,
+                                active_agent_id=str(channel.get("active_agent_id") or "").strip() or None,
+                                default_skill=default_skill,
+                                default_tool=default_tool,
+                                route_id=str(channel.get("route_id") or "voice_chat"),
+                                policy=channel.get("policy") if isinstance(channel.get("policy"), dict) else {},
+                                meta=channel.get("meta") if isinstance(channel.get("meta"), dict) else {},
+                            )
+
+                        await asyncio.to_thread(_persist_selected_channel)
                     except Exception:
                         logging.getLogger("adaos.router.dialog").debug(
                             "failed to persist selected dialog channel webspace=%s channel=%s",
