@@ -99,8 +99,15 @@ def restore_project_owned_materializations(ctx: Any) -> dict[str, Any]:
     ):
         previous = by_component.get(activation.component_ref)
         if previous is not None and previous.activation_id != activation.activation_id:
-            conflicts.append(activation.component_ref)
-            continue
+            # Multiple Applications may legitimately reuse the exact same
+            # immutable package.  Their deployment-local activation records
+            # share one canonical materialization and therefore do not create
+            # competing ownership.  Only different package identities are a
+            # real conflict; retain the newest equivalent activation as the
+            # repair source.
+            if previous.package_digest != activation.package_digest:
+                conflicts.append(activation.component_ref)
+                continue
         by_component[activation.component_ref] = activation
     if conflicts:
         return {

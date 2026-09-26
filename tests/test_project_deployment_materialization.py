@@ -104,3 +104,71 @@ def test_restore_project_owned_materialization_removes_workspace_sync_drift(
         "skill:media_center_skill",
         operation="skill install",
     )
+
+
+def test_restore_allows_shared_ownership_of_the_same_immutable_package(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    source = tmp_path / "source" / "voice_chat_skill"
+    source.mkdir(parents=True)
+    (source / "skill.yaml").write_text(
+        "name: voice_chat_skill\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    built = build_artifact_package(
+        source,
+        kind="skill",
+        source_ref=ArtifactSourceRef(
+            forge="github",
+            repository="inimatic/adaos-registry",
+            revision="0123456789abcdef0123456789abcdef01234567",
+            path_scope=("skills/voice_chat_skill/",),
+        ),
+    )
+    package_store = ContentAddressedPackageStore(
+        state_dir / "artifact_pipeline" / "packages"
+    )
+    package_store.put(built.archive_bytes, expected_digest=built.ref.digest)
+    target = workspace / "skills" / "voice_chat_skill"
+    package_store.materialize(built.ref.digest, target)
+    extra = target / "tests" / "test_source_only.py"
+    extra.parent.mkdir()
+    extra.write_text("assert True\n", encoding="utf-8")
+
+    store = ProjectDeploymentStore(state_dir=state_dir)
+    for generation, deployment_id in enumerate(
+        ("application-deployment:voice", "application-deployment:adaos_builder"),
+        start=1,
+    ):
+        store.put_activation(
+            ComponentActivation(
+                activation_id=f"activation.shared-{generation}",
+                deployment_id=deployment_id,
+                component_ref="skill:voice_chat_skill",
+                node_id="node-a",
+                release_digest="sha256:" + str(generation) * 64,
+                package_digest=built.ref.digest,
+                generation=generation,
+                status="active",
+                health={"ready": True},
+                evidence={},
+                created_at=_NOW,
+                updated_at=_NOW,
+            )
+        )
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(node_id="node-a"),
+        paths=SimpleNamespace(
+            state_dir=lambda: state_dir,
+            workspace_dir=lambda: workspace,
+        ),
+    )
+
+    result = restore_project_owned_materializations(ctx)
+
+    assert result["ok"] is True
+    assert result["checked"] == ["skill:voice_chat_skill"]
+    assert result["repaired"] == ["skill:voice_chat_skill"]
+    assert not extra.exists()
