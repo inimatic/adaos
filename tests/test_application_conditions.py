@@ -105,6 +105,23 @@ def test_incomplete_placement_requires_action_before_update_notice():
     assert projection["attention"]["reason"] == "PlacementIncomplete"
 
 
+def test_ready_component_count_takes_precedence_over_active_instance_count():
+    projection = application_condition_projection(
+        _model(
+            execution_placement={
+                "managed": True,
+                "status": "planned",
+                "desired_component_count": 2,
+                "observed_active_count": 1,
+                "observed_ready_component_count": 2,
+            },
+        )
+    )
+
+    assert projection["attention"]["status"] == "current"
+    assert projection["attention"]["reason"] == "Ready"
+
+
 def test_uninstalled_catalog_application_is_available_not_unknown():
     projection = application_condition_projection(
         _model(installed=False, installation=None, operation=None)

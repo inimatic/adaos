@@ -717,6 +717,24 @@ def _execution_placement_payload(
     *,
     partial: bool,
 ) -> dict[str, Any]:
+    required_placements = tuple(
+        item
+        for item in desired.placements
+        if item.mode != "disabled" and int(item.min_instances or 0) > 0
+    )
+    active_instances_by_component: dict[str, int] = {}
+    for activation in activations:
+        if activation.status != "active":
+            continue
+        active_instances_by_component[activation.component_ref] = (
+            active_instances_by_component.get(activation.component_ref, 0) + 1
+        )
+    ready_component_count = sum(
+        1
+        for placement in required_placements
+        if active_instances_by_component.get(placement.component_ref, 0)
+        >= placement.min_instances
+    )
     return {
         "schema": "adaos.application.execution_placement.v1",
         "installation_scope": "subnet",
@@ -745,7 +763,9 @@ def _execution_placement_payload(
             }
             for item in activations
         ],
-        "desired_component_count": len(desired.placements),
+        "declared_component_count": len(desired.placements),
+        "desired_component_count": len(required_placements),
+        "observed_ready_component_count": ready_component_count,
         "observed_instance_count": len(activations),
         "observed_active_count": sum(
             1 for item in activations if item.status == "active"

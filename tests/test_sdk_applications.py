@@ -943,6 +943,94 @@ def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -
     ]
 
 
+def test_execution_placement_ignores_disabled_components_for_readiness() -> None:
+    desired = SimpleNamespace(
+        deployment_id="application-deployment:builder",
+        project_ref="project:builder",
+        status="planned",
+        revision=1,
+        updated_at="2026-09-26T10:00:00+00:00",
+        placements=(
+            SimpleNamespace(
+                component_ref="scenario:builder",
+                mode="singleton",
+                selected_node_ids=(),
+                min_instances=1,
+                max_instances=1,
+            ),
+            SimpleNamespace(
+                component_ref="skill:voice",
+                mode="disabled",
+                selected_node_ids=(),
+                min_instances=0,
+                max_instances=None,
+            ),
+        ),
+    )
+    activations = (
+        SimpleNamespace(
+            component_ref="scenario:builder",
+            node_id="node-1",
+            status="active",
+            generation=1,
+            updated_at="2026-09-26T10:00:01+00:00",
+        ),
+    )
+
+    placement = applications._execution_placement_payload(
+        desired, activations, partial=False
+    )
+
+    assert placement["declared_component_count"] == 2
+    assert placement["desired_component_count"] == 1
+    assert placement["observed_ready_component_count"] == 1
+    assert placement["observed_active_count"] == 1
+
+
+def test_execution_placement_readiness_counts_components_not_raw_instances() -> None:
+    desired = SimpleNamespace(
+        deployment_id="application-deployment:replicated",
+        project_ref="project:replicated",
+        status="planned",
+        revision=1,
+        updated_at="2026-09-26T10:00:00+00:00",
+        placements=(
+            SimpleNamespace(
+                component_ref="skill:replicated",
+                mode="per_endpoint",
+                selected_node_ids=(),
+                min_instances=2,
+                max_instances=3,
+            ),
+            SimpleNamespace(
+                component_ref="skill:missing",
+                mode="singleton",
+                selected_node_ids=(),
+                min_instances=1,
+                max_instances=1,
+            ),
+        ),
+    )
+    activations = tuple(
+        SimpleNamespace(
+            component_ref="skill:replicated",
+            node_id=f"node-{index}",
+            status="active",
+            generation=1,
+            updated_at="2026-09-26T10:00:01+00:00",
+        )
+        for index in (1, 2)
+    )
+
+    placement = applications._execution_placement_payload(
+        desired, activations, partial=False
+    )
+
+    assert placement["desired_component_count"] == 2
+    assert placement["observed_active_count"] == 2
+    assert placement["observed_ready_component_count"] == 1
+
+
 def test_application_show_enriches_only_the_requested_model(monkeypatch) -> None:
     models = [
         {

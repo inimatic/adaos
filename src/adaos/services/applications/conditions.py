@@ -229,7 +229,12 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
         bool(placement.get("partial"))
         or (
             int(placement.get("desired_component_count") or 0) > 0
-            and int(placement.get("observed_active_count") or 0)
+            and int(
+                placement.get(
+                    "observed_ready_component_count",
+                    placement.get("observed_active_count") or 0,
+                )
+            )
             < int(placement.get("desired_component_count") or 0)
         )
     ):
