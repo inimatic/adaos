@@ -166,16 +166,35 @@ class ApplicationAutoUpdateService:
                 "idempotency_key": idempotency_key,
             }
             try:
-                operation = self.application_service.plan_operation(
-                    app_id,
-                    "update",
-                    release_digest=target_digest,
-                    expected_revision=candidate["installation_revision"],
-                    actor_ref=actor_ref,
-                    subnet_ref=subnet,
-                    capability="applications.plan",
-                    idempotency_key=idempotency_key,
-                )
+                retry_chain: list[str] = []
+                for _attempt in range(16):
+                    operation = self.application_service.plan_operation(
+                        app_id,
+                        "update",
+                        release_digest=target_digest,
+                        expected_revision=candidate["installation_revision"],
+                        actor_ref=actor_ref,
+                        subnet_ref=subnet,
+                        capability="applications.plan",
+                        idempotency_key=idempotency_key,
+                    )
+                    if _text(getattr(operation, "status", "planned")) != "failed":
+                        break
+                    retry_chain.append(_text(operation.operation_id))
+                    retry_identity = hashlib.sha256(
+                        (
+                            f"{idempotency_key}\0{operation.operation_id}\0"
+                            f"{getattr(operation, 'revision', 0)}"
+                        ).encode("utf-8")
+                    ).hexdigest()[:20]
+                    idempotency_key = (
+                        f"application-auto-update:{child_identity}:retry:{retry_identity}"
+                    )
+                else:
+                    raise RuntimeError("automatic update retry chain exhausted")
+                item["idempotency_key"] = idempotency_key
+                if retry_chain:
+                    item["retried_failed_operation_ids"] = retry_chain
                 item["operation_id"] = operation.operation_id
                 item["plan_digest"] = operation.plan_digest
                 blockers = automatic_update_blockers(operation.plan)

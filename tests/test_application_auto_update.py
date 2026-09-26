@@ -43,6 +43,8 @@ class _ApplicationService:
             operation_id="appop.safe",
             plan_digest="sha256:" + "c" * 64,
             plan=self.plan,
+            status="planned",
+            revision=1,
         )
 
     def apply_operation(self, operation_id, **kwargs):
@@ -107,3 +109,48 @@ def test_automatic_update_blockers_fail_closed_for_incomplete_plan() -> None:
         "permission_review_unavailable",
         "compatibility_unavailable",
     ]
+
+
+def test_automatic_update_retries_after_a_failed_idempotent_operation(tmp_path) -> None:
+    class RetryApplicationService(_ApplicationService):
+        def __init__(self) -> None:
+            super().__init__(_plan())
+            self.plan_keys: list[str] = []
+
+        def plan_operation(self, application_id, kind, **kwargs):
+            self.plan_keys.append(kwargs["idempotency_key"])
+            if len(self.plan_keys) == 1:
+                return SimpleNamespace(
+                    operation_id="appop.failed",
+                    plan_digest="sha256:" + "d" * 64,
+                    plan=self.plan,
+                    status="failed",
+                    revision=3,
+                )
+            return SimpleNamespace(
+                operation_id="appop.retry",
+                plan_digest="sha256:" + "e" * 64,
+                plan=self.plan,
+                status="planned",
+                revision=1,
+            )
+
+    application_service = RetryApplicationService()
+    result = ApplicationAutoUpdateService(
+        tmp_path,
+        application_service,  # type: ignore[arg-type]
+    ).run(
+        subnet_ref="subnet:test",
+        trigger="applications.registry.updated",
+    )
+
+    outcome = result["outcomes"][0]
+    assert result["status"] == "completed"
+    assert outcome["status"] == "succeeded"
+    assert outcome["operation_id"] == "appop.retry"
+    assert outcome["retried_failed_operation_ids"] == ["appop.failed"]
+    assert len(set(application_service.plan_keys)) == 2
+    assert application_service.plan_keys[1].startswith(
+        application_service.plan_keys[0] + ":retry:"
+    )
+    assert [call[0] for call in application_service.applied] == ["appop.retry"]
