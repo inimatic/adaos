@@ -334,6 +334,26 @@ def _is_runtime_migration_transient_deactivation(value: Mapping[str, Any] | None
     return bool(payload.get("deactivated")) and bool(payload.get("transient")) and reason == "runtime_migration_in_progress"
 
 
+def _is_explicit_reinstall_deactivation(value: Mapping[str, Any] | None) -> bool:
+    """Return whether an explicit deployment install may replace the stopped runtime.
+
+    Project removal deliberately leaves a deactivation marker so discovery and
+    boot cannot resurrect the skill.  A later governed project deployment is
+    the authority that may prepare the same semantic version again (including
+    a different immutable package digest) and clear that marker on commit.
+    Quarantine/failure markers remain fail-closed.
+    """
+
+    payload = _mapping_or_empty(value)
+    return (
+        bool(payload.get("deactivated"))
+        and not bool(payload.get("transient"))
+        and str(payload.get("reason") or "").strip() == "project_deployment_removed"
+        and str(payload.get("source") or "").strip() == "project_deployment"
+        and str(payload.get("status") or "").strip() == "removed"
+    )
+
+
 def _is_newer_quarantine_recovery(
     value: Mapping[str, Any] | None,
     target_version: str,
@@ -2434,7 +2454,10 @@ class SkillManager:
                     version_override=target_version,
                     run_tests=False,
                     preferred_slot=target_slot,
-                    allow_deactivated=_is_runtime_migration_transient_deactivation(previous_deactivation),
+                    allow_deactivated=(
+                        _is_runtime_migration_transient_deactivation(previous_deactivation)
+                        or _is_explicit_reinstall_deactivation(previous_deactivation)
+                    ),
                     source_manifest_digest=source_manifest_digest,
                 )
             except SkillCoreCompatibilityError as exc:
