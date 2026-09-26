@@ -629,6 +629,16 @@ def _hub_route_should_resend_http_resp(path: Any) -> bool:
         "/api/node/yjs/runtime",
     ):
         return True
+    # Development-ticket mutations are durably committed before the response
+    # crosses the Root request/reply bridge.  A short NATS reconnect can
+    # therefore lose the only reply while leaving the ticket applied.  The
+    # bridge consumes the first reply and the generic payload-size guard keeps
+    # large projections out, so resending this small acknowledgement family is
+    # safe and avoids the misleading "failed, but created" outcome.
+    if path_norm == "/api/development-tickets" or path_norm.startswith(
+        "/api/development-tickets/"
+    ):
+        return True
     return bool(re.match(r"^/api/node/yjs/webspaces/[^/]+/materialization$", path_norm))
 
 

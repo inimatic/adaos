@@ -950,6 +950,13 @@ def test_hub_route_should_resend_http_resp_only_for_critical_control_paths() -> 
         )
         is True
     )
+    assert _hub_route_proxy._hub_route_should_resend_http_resp("/api/development-tickets") is True
+    assert (
+        _hub_route_proxy._hub_route_should_resend_http_resp(
+            "/api/development-tickets/dticket_123/comment?projection=summary"
+        )
+        is True
+    )
     assert _hub_route_proxy._hub_route_should_resend_http_resp("/api/media/files/example.bin") is False
 
 
