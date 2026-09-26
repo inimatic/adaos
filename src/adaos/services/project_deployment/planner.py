@@ -288,7 +288,7 @@ class ProjectDeploymentPlanner:
             if (
                 pair in target_pairs
                 or pair in retained_pairs
-                or observed.status == "removed"
+                or observed.status in {"inactive", "removed"}
             ):
                 continue
             approvals.add("component_remove")

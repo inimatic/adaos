@@ -638,6 +638,25 @@ class ProjectDeploymentExecutor:
             self.store.put_activation(
                 replace(current, status="inactive", updated_at=now)
             )
+        # One canonical workspace target cannot truthfully expose two package
+        # identities on the same node.  A successfully verified commit is the
+        # observation boundary that retires older deployment-local ownership
+        # records while preserving other references to this exact package.
+        cursor: str | None = None
+        while True:
+            page, cursor = self.store.list_activations(cursor=cursor, limit=200)
+            for observed in page:
+                if (
+                    observed.status == "active"
+                    and observed.node_id == change.node_id
+                    and observed.component_ref == change.component_ref
+                    and observed.package_digest != package.digest
+                ):
+                    self.store.put_activation(
+                        replace(observed, status="inactive", updated_at=now)
+                    )
+            if cursor is None:
+                break
         receipts = {item.phase: dict(item.receipt) for item in phases if item.receipt}
         health = dict(receipts.get("health") or {})
         activation = ComponentActivation(

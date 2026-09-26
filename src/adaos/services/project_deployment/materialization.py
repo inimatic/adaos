@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from adaos.domain.application import utc_now
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.storage import mutation_lock
 
@@ -91,39 +93,64 @@ def restore_project_owned_materializations(ctx: Any) -> dict[str, Any]:
         if cursor is None:
             break
 
-    by_component: dict[str, Any] = {}
-    conflicts: list[str] = []
+    candidates_by_component: dict[str, list[Any]] = {}
     for activation in sorted(
         active,
         key=lambda item: (item.component_ref, item.generation, item.updated_at),
     ):
-        previous = by_component.get(activation.component_ref)
-        if previous is not None and previous.activation_id != activation.activation_id:
-            # Multiple Applications may legitimately reuse the exact same
-            # immutable package.  Their deployment-local activation records
-            # share one canonical materialization and therefore do not create
-            # competing ownership.  Only different package identities are a
-            # real conflict; retain the newest equivalent activation as the
-            # repair source.
-            if previous.package_digest != activation.package_digest:
-                conflicts.append(activation.component_ref)
-                continue
-        by_component[activation.component_ref] = activation
-    if conflicts:
-        return {
-            "ok": False,
-            "configured": True,
-            "checked": [],
-            "repaired": [],
-            "error": "project_component_ownership_conflict",
-            "components": sorted(set(conflicts)),
-        }
+        candidates_by_component.setdefault(activation.component_ref, []).append(
+            activation
+        )
 
     checked: list[str] = []
     repaired: list[str] = []
+    reconciled: list[str] = []
+    conflicts: list[str] = []
     errors: list[dict[str, str]] = []
     lock_path = state_dir / "project_deployments" / "component_operations" / ".mutation.lock"
     with mutation_lock(lock_path, timeout_s=60.0):
+        by_component: dict[str, Any] = {}
+        for component_ref, candidates in sorted(candidates_by_component.items()):
+            by_digest: dict[str, list[Any]] = {}
+            for activation in candidates:
+                by_digest.setdefault(activation.package_digest, []).append(activation)
+            if len(by_digest) == 1:
+                by_component[component_ref] = candidates[-1]
+                continue
+
+            kind, component_id = component_ref.split(":", 1)
+            expected_relative = f"{kind}s/{component_id}"
+            target = (workspace_root / expected_relative).resolve()
+            matching_digests: list[str] = []
+            for package_digest in sorted(by_digest):
+                try:
+                    verified = package_store.verify(package_digest)
+                    if verified.ref.materialization_path != expected_relative:
+                        continue
+                    verify_materialized_component_target(
+                        package_store,
+                        verified.ref,
+                        target,
+                    )
+                except Exception:
+                    continue
+                matching_digests.append(package_digest)
+            if len(matching_digests) != 1:
+                conflicts.append(component_ref)
+                continue
+
+            selected_digest = matching_digests[0]
+            selected = by_digest[selected_digest][-1]
+            now = utc_now()
+            for activation in candidates:
+                if activation.package_digest == selected_digest:
+                    continue
+                store.put_activation(
+                    replace(activation, status="inactive", updated_at=now)
+                )
+            by_component[component_ref] = selected
+            reconciled.append(component_ref)
+
         for component_ref, activation in sorted(by_component.items()):
             kind, component_id = component_ref.split(":", 1)
             expected_relative = f"{kind}s/{component_id}"
@@ -163,10 +190,13 @@ def restore_project_owned_materializations(ctx: Any) -> dict[str, Any]:
                 )
 
     return {
-        "ok": not errors,
+        "ok": not errors and not conflicts,
         "configured": True,
         "checked": checked,
         "repaired": repaired,
+        "reconciled": reconciled,
+        "conflicts": conflicts,
+        "error": "project_component_ownership_conflict" if conflicts else None,
         "errors": errors,
     }
 

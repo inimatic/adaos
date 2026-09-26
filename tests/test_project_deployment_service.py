@@ -630,6 +630,122 @@ def test_executor_does_not_retry_or_rollback_uncertain_state(tmp_path: Path) -> 
     assert "rollback" not in [item["phase"] for item in adapter.calls]
 
 
+def test_executor_commit_retires_superseded_shared_package_observations(
+    tmp_path: Path,
+) -> None:
+    release_plan = _release((("skill", "media_center_coordinator", "b"),))
+    desired = ProjectDeployment(
+        deployment_id="media-center-home",
+        project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest),
+        subnet_id="home",
+        revision=1,
+        placements=(
+            ComponentPlacementPolicy(
+                component_ref="skill:media_center_coordinator",
+                mode="singleton",
+            ),
+        ),
+        status="planned",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    inventory = (_node("node-a"),)
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.save_deployment(
+        desired,
+        expected_revision=0,
+        actor_ref="user:owner",
+        reason="replacement topology",
+    )
+    stale = ComponentActivation(
+        activation_id="activation.stale-shared-owner",
+        deployment_id="application-deployment:old-consumer",
+        component_ref="skill:media_center_coordinator",
+        node_id="node-a",
+        release_digest=_digest("8"),
+        package_digest=_digest("a"),
+        generation=1,
+        status="active",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    exact = replace(
+        stale,
+        activation_id="activation.exact-shared-owner",
+        deployment_id="application-deployment:current-consumer",
+        package_digest=release_plan.packages[0].digest,
+    )
+    store.put_activation(stale)
+    store.put_activation(exact)
+    plan = ProjectDeploymentPlanner().plan(
+        desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        local_node_id="node-a",
+    )
+
+    operation = ProjectDeploymentExecutor(
+        store=store,
+        adapter=FakeDeploymentAdapter(),
+    ).execute(
+        plan,
+        desired=desired,
+        release_plan=release_plan,
+        inventory=inventory,
+        principal=_principal(plan.required_approvals),
+        idempotency_key="apply:replace-shared-package:2",
+    )
+
+    assert operation.state == "succeeded"
+    assert store.get_activation(stale.activation_id).status == "inactive"
+    assert store.get_activation(exact.activation_id).status == "active"
+
+
+def test_planner_does_not_remove_already_inactive_activation() -> None:
+    release_plan = _release((("skill", "media_center_coordinator", "b"),))
+    desired = ProjectDeployment(
+        deployment_id="media-center-home",
+        project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest),
+        subnet_id="home",
+        revision=1,
+        placements=(
+            ComponentPlacementPolicy(
+                component_ref="skill:media_center_coordinator",
+                mode="disabled",
+                min_instances=0,
+            ),
+        ),
+        status="planned",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    inactive = ComponentActivation(
+        activation_id="activation.inactive-shared-owner",
+        deployment_id=desired.deployment_id,
+        component_ref="skill:media_center_coordinator",
+        node_id="node-a",
+        release_digest=desired.release_digest,
+        package_digest=release_plan.packages[0].digest,
+        generation=1,
+        status="inactive",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    plan = ProjectDeploymentPlanner().plan(
+        desired,
+        release_plan=release_plan,
+        inventory=(_node("node-a"),),
+        activations=(inactive,),
+        local_node_id="node-a",
+    )
+
+    assert plan.changes == ()
+    assert "component_remove" not in plan.required_approvals
+
+
 def test_executor_rejects_inventory_drift_after_review(tmp_path: Path) -> None:
     release_plan = _release()
     desired = _deployment(release_plan)
