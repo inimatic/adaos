@@ -926,10 +926,15 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
         # workflow projection. Their exact immutable Candidate and selected
         # Trial evidence form the publication authority below.
         state = {}
-    workflow_matches = bool(scenario_id) and lifecycle._candidate_identity(state) == (
-        candidate_id,
-        candidate_digest,
-    )
+    try:
+        workflow_matches = bool(scenario_id) and lifecycle._candidate_identity(
+            state
+        ) == (candidate_id, candidate_digest)
+    except ValueError:
+        # A Scenario may predate the governed Builder workflow, or its mutable
+        # workflow projection may have been compacted. The immutable selected
+        # Candidate is verified by the generic path below.
+        workflow_matches = False
     candidate: Mapping[str, Any] = {}
     if not workflow_matches:
         # A selected immutable Trial can outlive or advance independently from

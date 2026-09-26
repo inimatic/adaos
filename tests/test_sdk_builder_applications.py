@@ -841,10 +841,24 @@ def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publ
 
 
 @pytest.mark.parametrize(
-    "presentation_ref", ["scenario:test", "skill:test_skill"]
+    ("presentation_ref", "workflow_state"),
+    [
+        (
+            "scenario:test",
+            {
+                "delivery": {
+                    "candidate_id": "stale-candidate",
+                    "package_digest": "sha256:stale-package",
+                    "status": "stale",
+                }
+            },
+        ),
+        ("scenario:test", {}),
+        ("skill:test_skill", {}),
+    ],
 )
 def test_local_trial_acceptance_resumes_exact_selected_candidate_when_workflow_is_stale(
-    monkeypatch, presentation_ref,
+    monkeypatch, presentation_ref, workflow_state,
 ):
     from adaos.sdk.builder import workflow
     from adaos.sdk.developer import projects
@@ -865,11 +879,7 @@ def test_local_trial_acceptance_resumes_exact_selected_candidate_when_workflow_i
     monkeypatch.setattr(applications, "_application_service", lambda: service)
     monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:test")
     monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(workflow, "get_state", lambda *_args: {"delivery": {
-        "candidate_id": "stale-candidate",
-        "package_digest": "sha256:stale-package",
-        "status": "stale",
-    }})
+    monkeypatch.setattr(workflow, "get_state", lambda *_args: workflow_state)
     monkeypatch.setattr(projects, "get_candidate", lambda _candidate_id: {"candidate": {
         "candidate_id": "selected-candidate",
         "package_digest": "sha256:selected-package",
