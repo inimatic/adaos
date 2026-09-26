@@ -462,6 +462,21 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
     # cache. Never reuse it as an active skill handler.
     if existing is not None:
         sys.modules.pop(synthetic_name, None)
+    # Import the real parent package before installing a manual child module.
+    # A package initializer may legitimately re-export a callable from the
+    # child (``from .main import dispose``).  Installing an unexecuted child
+    # first makes that normal import observe a half-initialized module.
+    _ensure_skill_module_parents(skill_path, module_name)
+    parent_loaded = sys.modules.get(synthetic_name)
+    if parent_loaded is not None and _module_file_is_under(parent_loaded, skill_path):
+        setattr(parent_loaded, _MODULE_LOAD_COMPLETE, True)
+        from adaos.sdk.core.decorators import retire_module_declarations
+
+        retire_module_declarations(
+            {name for name in sys.modules if name.startswith(namespace + ".")}
+            | {synthetic_name}
+        )
+        return parent_loaded
     spec = importlib.util.spec_from_file_location(synthetic_name, candidate_file)
     if spec is None or spec.loader is None:
         return None
@@ -469,7 +484,6 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
     configure_skill_module_logging(synthetic_name)
     sys.modules[synthetic_name] = module
     try:
-        _ensure_skill_module_parents(skill_path, module_name)
         spec.loader.exec_module(module)
     except BaseException:
         if sys.modules.get(synthetic_name) is module:

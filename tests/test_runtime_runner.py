@@ -121,6 +121,32 @@ def test_execute_tool_isolates_generic_handlers_main_between_skills(tmp_path: Pa
     assert second["marker"] == "beta"
 
 
+def test_execute_tool_allows_parent_package_to_reexport_lifecycle_hook(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "lifecycle_skill"
+    handlers = skill_dir / "handlers"
+    handlers.mkdir(parents=True)
+    (handlers / "__init__.py").write_text(
+        "from .main import dispose\n",
+        encoding="utf-8",
+    )
+    (handlers / "main.py").write_text(
+        "def dispose(reason=None, **_kwargs):\n"
+        "    return {'status': 'ok', 'reason': reason}\n",
+        encoding="utf-8",
+    )
+
+    result = runtime_runner_module.execute_tool(
+        skill_dir,
+        module="handlers.main",
+        attr="dispose",
+        payload={"reason": "slot_switch"},
+    )
+
+    assert result == {"status": "ok", "reason": "slot_switch"}
+
+
 def test_execute_tool_reuses_active_subscription_module_for_lifecycle_state(tmp_path: Path) -> None:
     skill_dir = tmp_path / "stateful_skill"
     handler = skill_dir / "handlers" / "main.py"
