@@ -44,6 +44,7 @@ skills/.runtime/<name>/v<major>.<minor>/
             secrets.json        # per-bucket secrets/artifacts
             .skill_env.json     # optional persisted environment snapshot
         internal/               # schema-bound internal data for this bucket
+        state/                  # skill-owned durable application/runtime state
     slots/<A|B>/
         src/                    # snapshot of the skill sources
             skills/<name>/
@@ -63,6 +64,15 @@ skills/.runtime/<name>/v<major>.<minor>/
 
 Runtime isolation is keyed by semantic `major.minor`, not full SemVer. For example, `0.14.0` and `0.14.3` share `v0.14`; `0.15.0` uses `v0.15`.
 Slots are A/B code deployments inside the same bucket. Data, `vendor/`, and `venv/` are not A/B-slotted inside a bucket.
+
+Skill code must resolve its writable owner-local state through
+`adaos.sdk.data.skill_state_dir()` (or the injected
+`ADAOS_SKILL_STATE_DIR`) and must not construct a path under the global
+`.adaos/state` tree. The canonical target is
+`.adaos/workspace/skills/.runtime/<skill_id>/v<major>.<minor>/data/state`.
+The global `.adaos/state` namespace remains core authority; application-visible
+shared state belongs there only behind an explicit core-owned shared-state
+service or capability binding.
 
 ## Version policy
 
@@ -217,6 +227,14 @@ Use `data/internal` only for state that must evolve together with runtime schema
 If a skill has no migration file, AdaOS does not copy data during patch prepare. The prepared slot uses the same bucket-level `data/` directory as the currently active slot.
 
 When preparing a new minor/major bucket without a migration file, AdaOS writes a warning to the AdaOS log and copies the previous bucket `data/` tree into the target bucket without schema mutation.
+
+During prepare and immediately before a healthy activation, AdaOS also adopts
+the former managed layout `.adaos/state/skills/<skill_id>` into the target
+bucket's `data/state`. The source remains authoritative until activation and
+rehydration succeed; only then is it moved into the private recovery archive.
+An arbitrary `.adaos/state/<name>` directory is not adopted automatically,
+because that namespace can contain core or explicitly shared authority. Such a
+legacy directory must first be classified and mapped to a concrete skill id.
 
 ### Reserved migration file
 
