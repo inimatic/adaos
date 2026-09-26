@@ -60,6 +60,30 @@
             "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])[^/]+(?:/[^/]+)*$"
           }
         },
+        "state_files": {
+          "description": "Exact bounded mutable files copied transactionally between Stable and Beta.",
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "format", "max_bytes"],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240,
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])[^/]+(?:/[^/]+)*$"
+              },
+              "format": { "enum": ["json", "opaque"] },
+              "max_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 67108864
+              }
+            }
+          }
+        },
 		    "databases": {
 		      "type": "array",
 		      "maxItems": 32,

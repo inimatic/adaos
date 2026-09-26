@@ -39,6 +39,14 @@ class OwnedDataComponent:
 
 _SKILL_MEMORY_PATH = "db/skill_env.json"
 _SKILL_MEMORY_MAX_BYTES = 16 * 1024 * 1024
+_STATE_FILE_MAX_BYTES = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class StateFileContract:
+    path: str
+    format: str
+    max_bytes: int
 
 
 def _uses_skill_memory(manifest: Mapping[str, Any]) -> bool:
@@ -122,6 +130,103 @@ class _SkillMemoryTransition:
         return {"ok": True, "staged_digest": digest}
 
 
+def _bounded_state_file_bytes(
+    path: Path,
+    contract: StateFileContract,
+) -> tuple[bytes, str]:
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size > contract.max_bytes
+    ):
+        raise ValueError("Declared state file must be one bounded regular file")
+    payload = path.read_bytes()
+    if contract.format == "json":
+        try:
+            json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Declared JSON state file must contain valid UTF-8 JSON") from exc
+    return payload, "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+class _StateFileTransition:
+    """Checksum-pinned transfer for an exact manifest-owned state file."""
+
+    def __init__(self, private_root: Path):
+        self.root = private_root.resolve()
+
+    def _path(self, path: Path) -> Path:
+        absolute = path.absolute()
+        resolved = path.resolve()
+        if (
+            absolute != resolved
+            or not resolved.is_relative_to(self.root)
+            or resolved == self.root
+        ):
+            raise ValueError("State file escaped its private owner root or used a link")
+        return resolved
+
+    def snapshot(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        contract: StateFileContract,
+        operation_key: str,
+    ) -> dict[str, Any]:
+        source, destination = self._path(source), self._path(destination)
+        if source == destination or not operation_key or len(operation_key) > 256:
+            raise ValueError("State-file snapshot requires distinct paths and a bounded operation key")
+        identity = {
+            "kind": "declared_state_file_snapshot",
+            "operation_key": operation_key,
+            "source": str(source.relative_to(self.root)),
+            "contract": {
+                "path": contract.path,
+                "format": contract.format,
+                "max_bytes": contract.max_bytes,
+            },
+        }
+        receipt_path = destination.with_suffix(destination.suffix + ".receipt.json")
+        with mutation_lock(receipt_path.with_suffix(".lock")):
+            if receipt_path.is_file():
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                _payload, digest = _bounded_state_file_bytes(destination, contract)
+                if receipt.get("identity") != identity or receipt.get("digest") != digest:
+                    raise ValueError("Retained state-file staging evidence changed")
+                return receipt
+            if destination.exists():
+                raise ValueError("Unrecognized state-file staging data requires explicit recovery")
+            payload, digest = _bounded_state_file_bytes(source, contract)
+            atomic_write_bytes(destination, payload)
+            receipt = {
+                "ok": True,
+                "identity": identity,
+                "digest": digest,
+                "bytes": len(payload),
+            }
+            atomic_write_json(receipt_path, receipt)
+            return receipt
+
+    def install(
+        self,
+        staged: Path,
+        target: Path,
+        *,
+        contract: StateFileContract,
+        staged_digest: str,
+    ) -> dict[str, Any]:
+        staged, target = self._path(staged), self._path(target)
+        payload, digest = _bounded_state_file_bytes(staged, contract)
+        if staged == target or digest != staged_digest:
+            raise ValueError("Staged state-file identity mismatch")
+        atomic_write_bytes(target, payload)
+        _installed, installed_digest = _bounded_state_file_bytes(target, contract)
+        if installed_digest != digest:
+            raise ValueError("Installed state-file identity mismatch")
+        return {"ok": True, "staged_digest": digest}
+
+
 def automation_data_contract() -> dict[str, Any]:
     """Small generic authoring capsule; contains no installation values or paths."""
     return {
@@ -132,9 +237,14 @@ def automation_data_contract() -> dict[str, Any]:
             "shape": "skill.yaml capabilities is a flat unique string array, not an object with required/optional fields. Merge required SDK tokens without removing existing declarations.",
             "example": {"capabilities": ["storage.relational", "configuration.read", "configuration.write"]},
         },
-        "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [], "coordination_files": [], "operational_evidence_files": [], "reconstructible_directories": []},
+        "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [], "state_files": [], "coordination_files": [], "operational_evidence_files": [], "reconstructible_directories": []},
         "database_fields": {"path": "relative SQLite filename under this skill's SDK data root",
             "migrations": "full ordered list of {version: positive integer, name: string, statements: SQL string[]}"},
+        "state_file_fields": {
+            "path": "exact relative regular-file path under this skill's SDK data root",
+            "format": "json or opaque; json is parsed before every snapshot/install",
+            "max_bytes": "positive immutable size ceiling, at most 67108864 bytes",
+        },
         "coordination_files": "Exact owner-relative *.lock mutex files; admitted by inventory but never copied as Application state.",
         "operational_evidence_files": "Exact owner-relative *.log/*.jsonl files below a logs directory; admitted as operational evidence but never copied as Application state.",
         "reconstructible_directories": "Explicit owner-relative derived-data roots; admitted by inventory but intentionally omitted from Stable/Beta transfer because authoritative inputs can rebuild them.",
@@ -158,7 +268,7 @@ def automation_data_contract() -> dict[str, Any]:
             "behavior": "The local lifecycle verifies object paths and bytes, snapshots Stable into Beta, and adopts Beta objects with the same fenced data cutover. Remote blob providers require a provider-native adapter.",
         },
         "rules": [
-            "Declare each owned SQLite store; use an empty databases list only when the skill has no mutable stores.",
+            "Declare each owned SQLite store and exact mutable state file; use empty lists only when the skill has no corresponding mutable state.",
             "Preserve applied migration versions/checksums. Append forward SQL migrations; keep fresh-install initialization compatible with the same schema.",
             "Core owns the adaos_schema_migrations checksum ledger during cutover. SQL statements may not modify it, change transaction boundaries, issue PRAGMA, attach databases or load extensions. A first chain must also handle an existing legacy schema without that ledger; test both empty and legacy databases with synthetic records.",
             "Develop and test with synthetic records only. Never inspect/copy Workspace or Trial records, configuration values or secrets into DEV, fixtures, packages or model input.",
@@ -176,7 +286,7 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
     if not isinstance(declaration, dict) or declaration.get("schema") != "adaos.skill.data_lifecycle.v1":
         raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
     if (
-        set(declaration) - {"schema", "execution", "databases", "legacy_adoption", "coordination_files", "operational_evidence_files", "reconstructible_directories"}
+        set(declaration) - {"schema", "execution", "databases", "state_files", "legacy_adoption", "coordination_files", "operational_evidence_files", "reconstructible_directories"}
         or declaration["execution"] != "native_tools"
     ):
         raise ValueError("Data cutover currently requires declared native_tools execution")
@@ -240,6 +350,44 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
             raise ValueError("Migration versions must be unique")
         result[path] = tuple(migrations)
     return result
+
+
+def declared_state_files(manifest: Mapping[str, Any]) -> dict[str, StateFileContract]:
+    declaration = manifest.get("data_lifecycle")
+    if not isinstance(declaration, Mapping):
+        raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
+    values = declaration.get("state_files", [])
+    if not isinstance(values, list) or len(values) > 32:
+        raise ValueError("Data lifecycle state_files must be a bounded list")
+    normalized: dict[str, StateFileContract] = {}
+    for value in values:
+        if not isinstance(value, Mapping) or set(value) != {"path", "format", "max_bytes"}:
+            raise ValueError("State file requires path, format and max_bytes")
+        path = value.get("path")
+        file_format = value.get("format")
+        max_bytes = value.get("max_bytes")
+        if (
+            not isinstance(path, str)
+            or not path
+            or len(path) > 240
+            or "\\" in path
+            or ":" in path
+            or PurePosixPath(path).is_absolute()
+            or any(part in {".", "..", ""} for part in path.split("/"))
+            or path in normalized
+            or path in {"files/secrets.json", _SKILL_MEMORY_PATH}
+        ):
+            raise ValueError("State file requires a unique relative owner data path")
+        if file_format not in {"json", "opaque"}:
+            raise ValueError("State file format must be json or opaque")
+        if (
+            type(max_bytes) is not int
+            or max_bytes <= 0
+            or max_bytes > _STATE_FILE_MAX_BYTES
+        ):
+            raise ValueError("State file max_bytes must be a positive bounded integer")
+        normalized[path] = StateFileContract(path, file_format, max_bytes)
+    return normalized
 
 
 def declared_coordination_files(manifest: Mapping[str, Any]) -> frozenset[str]:
@@ -447,6 +595,7 @@ def inventory(
     root: Path | None,
     declared: Mapping[str, Any],
     *,
+    state_files: Mapping[str, StateFileContract] | None = None,
     blobs: BlobDataTransition | None = None,
     skill_memory: bool = False,
     coordination_files: frozenset[str] = frozenset(),
@@ -464,6 +613,7 @@ def inventory(
     # of the version data root.
     permitted = (
         set(declared)
+        | set(state_files or {})
         | set(coordination_files)
         | set(operational_evidence_files)
         | {
@@ -490,6 +640,8 @@ def inventory(
             )
         if path.is_file() and relative == _SKILL_MEMORY_PATH:
             _bounded_json_bytes(path)
+        if path.is_file() and relative in (state_files or {}):
+            _bounded_state_file_bytes(path, (state_files or {})[relative])
     if blobs is not None:
         blobs.inventory(root / "files")
 
@@ -514,11 +666,13 @@ class LocalApplicationDataLifecycle:
         self.components = components
         self.channel = ApplicationRuntimeChannel(self.state, application_id)
         self.data = SQLiteDataTransition(self.private)
+        self.state_files = _StateFileTransition(self.private)
         self.skill_memory = _SkillMemoryTransition(self.private)
         self.blobs = BlobDataTransition(self.private)
         key = hashlib.sha256(json.dumps([application_id, candidate_id, release_digest]).encode()).hexdigest()
         self.recovery = self.private / "recovery/applications" / key
         self.contracts = {}
+        self.state_file_contracts = {}
         self.coordination_contracts = {}
         self.operational_evidence_contracts = {}
         self.reconstructible_contracts = {}
@@ -552,21 +706,41 @@ class LocalApplicationDataLifecycle:
                 if any(child.startswith(parent + "/") for child in databases):
                     raise ValueError("SQLite store paths overlap")
             self.contracts[component.component_ref] = databases
+            state_files = declared_state_files(component.target_manifest)
+            if set(state_files) & set(databases):
+                raise ValueError("State files cannot also be declared SQLite stores")
+            for parent in state_files:
+                if any(
+                    child.startswith(parent + "/") or parent.startswith(child + "/")
+                    for child in (*state_files, *databases)
+                    if child != parent
+                ):
+                    raise ValueError("Declared state paths cannot overlap")
+            stable_state_files = (
+                declared_state_files(component.stable_manifest)
+                if isinstance(component.stable_manifest.get("data_lifecycle"), Mapping)
+                else {}
+            )
+            if set(stable_state_files) - set(state_files):
+                raise ValueError("Removing a declared state file requires an explicit migration contract")
+            self.state_file_contracts[component.component_ref] = state_files
             coordination_files = declared_coordination_files(component.target_manifest)
-            if set(coordination_files) & set(databases):
-                raise ValueError("Coordination files cannot also be declared SQLite stores")
+            if set(coordination_files) & (set(databases) | set(state_files)):
+                raise ValueError("Coordination files cannot also be declared Application state")
             self.coordination_contracts[component.component_ref] = coordination_files
             operational_evidence = declared_operational_evidence_files(component.target_manifest)
-            if set(operational_evidence) & (set(databases) | set(coordination_files)):
+            if set(operational_evidence) & (
+                set(databases) | set(state_files) | set(coordination_files)
+            ):
                 raise ValueError("Operational evidence cannot also be declared Application state")
             self.operational_evidence_contracts[component.component_ref] = operational_evidence
             reconstructible = declared_reconstructible_directories(component.target_manifest)
             if any(
                 database == directory or database.startswith(directory + "/")
                 for directory in reconstructible
-                for database in databases
+                for database in (*databases, *state_files)
             ):
-                raise ValueError("Reconstructible directories cannot contain declared databases")
+                raise ValueError("Reconstructible directories cannot contain declared Application state")
             self.reconstructible_contracts[component.component_ref] = reconstructible
             stable_blobs = "storage.blob" in set(component.stable_manifest.get("capabilities") or [])
             target_blobs = "storage.blob" in set(component.target_manifest.get("capabilities") or [])
@@ -601,6 +775,34 @@ class LocalApplicationDataLifecycle:
                 raise RuntimeChannelConflict("Target data already exists without recovery provenance; refusing to overwrite")
             atomic_write_json(marker, intent)
         self.data.install(staged, target, staged_digest=digest)
+
+    def _install_state_file_new(
+        self,
+        component,
+        mode,
+        name,
+        staged,
+        digest,
+        target,
+        contract,
+    ):
+        marker = self._root(component, mode + "_state_file_install") / (name + ".json")
+        intent = {"digest": digest, "target": str(target)}
+        if marker.exists():
+            if json.loads(marker.read_text(encoding="utf-8")) != intent:
+                raise RuntimeChannelConflict("Retained state-file installation intent changed")
+        else:
+            if target.exists():
+                raise RuntimeChannelConflict(
+                    "Target state file already exists without recovery provenance; refusing to overwrite"
+                )
+            atomic_write_json(marker, intent)
+        self.state_files.install(
+            staged,
+            target,
+            contract=contract,
+            staged_digest=digest,
+        )
 
     def _install_blobs_new(self, component, mode, staged, digest, target):
         marker = self._root(component, mode + "_blob_install") / "files.json"
@@ -667,13 +869,14 @@ class LocalApplicationDataLifecycle:
         def transfer(key):
             for component in self.components:
                 databases = self.contracts[component.component_ref]
+                state_files = self.state_file_contracts[component.component_ref]
                 coordination_files = self.coordination_contracts[component.component_ref]
                 operational_evidence = self.operational_evidence_contracts[component.component_ref]
                 reconstructible = self.reconstructible_contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
-                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
-                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                inventory(component.stable_root, databases, state_files=state_files, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                inventory(component.beta_root, databases, state_files=state_files, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
                 for name, migrations in databases.items():
                     source = component.stable_root / name if component.stable_root else None
                     base = self._root(component, "stable") / name
@@ -688,6 +891,26 @@ class LocalApplicationDataLifecycle:
                     migrated = self.data.migrate(base, staged, snapshot_digest=snapshot["digest"],
                         migrations=migrations, operation_key=key + ":migrate:" + name)
                     self._install_new(component, "beta", name, staged, migrated["digest"], component.beta_root / name)
+                for name, contract in state_files.items():
+                    source = component.stable_root / name if component.stable_root else None
+                    if source is None or not source.is_file():
+                        continue
+                    staged = self._root(component, "stable_state_files") / name
+                    snapshot = self.state_files.snapshot(
+                        source,
+                        staged,
+                        contract=contract,
+                        operation_key=key + ":base-state-file:" + name,
+                    )
+                    self._install_state_file_new(
+                        component,
+                        "beta",
+                        name,
+                        staged,
+                        snapshot["digest"],
+                        component.beta_root / name,
+                        contract,
+                    )
                 if blob_adapter is not None:
                     source = component.stable_root / "files" if component.stable_root else None
                     staged = self._root(component, "stable_blobs") / "files"
@@ -739,14 +962,15 @@ class LocalApplicationDataLifecycle:
         def transfer(key):
             for component in self.components:
                 databases = self.contracts[component.component_ref]
+                state_files = self.state_file_contracts[component.component_ref]
                 coordination_files = self.coordination_contracts[component.component_ref]
                 operational_evidence = self.operational_evidence_contracts[component.component_ref]
                 reconstructible = self.reconstructible_contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
-                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
-                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
-                inventory(component.target_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                inventory(component.beta_root, databases, state_files=state_files, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                inventory(component.stable_root, databases, state_files=state_files, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                inventory(component.target_root, databases, state_files=state_files, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
                 for name in databases:
                     base = self._root(component, "stable") / name
                     if component.stable_root and (component.stable_root / name).exists():
@@ -762,6 +986,59 @@ class LocalApplicationDataLifecycle:
                         self.data.install(accepted, target, staged_digest=snapshot["digest"])
                     else:
                         self._install_new(component, "stable", name, accepted, snapshot["digest"], target)
+                for name, contract in state_files.items():
+                    source = component.beta_root / name
+                    stable_source = (
+                        component.stable_root / name
+                        if component.stable_root is not None
+                        else None
+                    )
+                    base = self._root(component, "stable_state_files") / name
+                    base_receipt = base.with_suffix(base.suffix + ".receipt.json")
+                    if stable_source is not None and stable_source.is_file():
+                        if not base_receipt.is_file():
+                            raise RuntimeChannelConflict("Stable state-file snapshot evidence is missing")
+                        _payload, current_digest = _bounded_state_file_bytes(
+                            stable_source,
+                            contract,
+                        )
+                        expected_digest = json.loads(
+                            base_receipt.read_text(encoding="utf-8")
+                        )["digest"]
+                        if current_digest != expected_digest:
+                            raise RuntimeChannelConflict(
+                                "Stable state file changed while Beta was selected; explicit reconciliation required"
+                            )
+                    if source.is_file():
+                        accepted = self._root(component, "accepted_state_files") / name
+                        snapshot = self.state_files.snapshot(
+                            source,
+                            accepted,
+                            contract=contract,
+                            operation_key=key + ":accepted-state-file:" + name,
+                        )
+                        target = component.target_root / name
+                        if component.target_root == component.stable_root:
+                            self.state_files.install(
+                                accepted,
+                                target,
+                                contract=contract,
+                                staged_digest=snapshot["digest"],
+                            )
+                        else:
+                            self._install_state_file_new(
+                                component,
+                                "stable",
+                                name,
+                                accepted,
+                                snapshot["digest"],
+                                target,
+                                contract,
+                            )
+                    elif stable_source is not None and stable_source.is_file():
+                        raise RuntimeChannelConflict(
+                            "Beta removed a declared state file without an explicit migration contract"
+                        )
                 if blob_adapter is not None:
                     base = self._root(component, "stable_blobs") / "files"
                     base_receipt_path = base.parent / f"{base.name}.receipt.json"
@@ -865,6 +1142,70 @@ class LocalApplicationDataLifecycle:
             TransitionStep("deactivate_configuration", configure), TransitionStep("verify_source", verify_source)],
             source_guard=source_guard)
 
+    def abort_stable_adoption_before_effects(
+        self,
+        *,
+        verify_source: Callable[[str], Mapping[str, Any]],
+        source_guard: Callable = nullcontext,
+    ) -> dict[str, Any]:
+        """Retire a Stable cutover that failed in its read-only preflight.
+
+        This is intentionally narrower than publication rollback. It is admitted
+        only while the first step has no receipt and none of the coordinator's
+        accepted/install/result paths exist, proving that no Stable data,
+        configuration, code, or channel effect was materialized.
+        """
+
+        runner = ApplicationRuntimeTransition(self.channel)
+        operation = f"application-stable:{self.application_id}:{self.candidate_id}"
+        record = runner.get(operation)
+        if (
+            not record
+            or record.get("completed")
+            or record.get("receipts")
+            or record.get("running_step") != "protect_and_adopt_data"
+        ):
+            raise RuntimeChannelConflict(
+                "Only a Stable adoption stopped in its read-only preflight can be aborted"
+            )
+        forbidden_names = {
+            "accepted",
+            "accepted_blobs",
+            "accepted_skill_memory",
+            "accepted_state_files",
+            "stable_install",
+            "stable_blob_install",
+            "stable_skill_memory_install",
+            "stable_state_file_install",
+        }
+        for component in self.components:
+            component_root = self._root(component, "probe").parent
+            if any((component_root / name).exists() for name in forbidden_names):
+                raise RuntimeChannelConflict(
+                    "Stable adoption has retained effect evidence; recover the exact publication"
+                )
+        if (self.recovery / "publication-result.json").exists():
+            raise RuntimeChannelConflict(
+                "Stable publication result exists; recover the exact publication"
+            )
+
+        def prove_no_effects(_key: str) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "status": "preflight_failed_before_effects",
+                "checked_components": len(self.components),
+            }
+
+        return runner.abort(
+            operation,
+            contract_digest=self._contract(),
+            steps=[
+                TransitionStep("prove_no_stable_effects", prove_no_effects),
+                TransitionStep("verify_source", verify_source),
+            ],
+            source_guard=source_guard,
+        )
+
     def reject_beta(self, *, webspace_id: str,
                     verify_source: Callable[[str], Mapping[str, Any]],
                     source_guard: Callable = nullcontext):
@@ -877,7 +1218,7 @@ class LocalApplicationDataLifecycle:
                 or record["intent"]["target"]["runtime_root_ref"] != f"trial:{self.candidate_id}"):
             raise RuntimeChannelConflict("Reject only the exact completed Beta selection")
         stable = runner.get(f"application-stable:{self.application_id}:{self.candidate_id}")
-        if stable is not None:
+        if stable is not None and not stable.get("aborted"):
             raise RuntimeChannelConflict("Stable adoption has started; recover that exact publication instead")
 
         def configure(_key):

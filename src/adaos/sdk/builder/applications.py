@@ -994,6 +994,97 @@ def abort_local_trial_preparation(candidate_id: str, *, release_digest: str, act
             "runtime_refresh": _refresh_application_placements(application.application_id)}
 
 
+def retire_failed_local_publication_preflight(
+    candidate_id: str,
+    *,
+    release_digest: str,
+    actor_ref: str,
+) -> dict[str, Any]:
+    """Retire an exact Stable adoption that failed before its first effect."""
+
+    import json
+
+    from adaos.domain.artifact_release import ProjectRelease, WorkspaceLock
+    from adaos.services.applications.local_release_transition import bind_local_data_lifecycle
+    from adaos.services.applications.trial_runtime import NativeTrialRuntime
+    from adaos.services.artifact_pipeline.storage import mutation_lock
+
+    if not actor_ref.strip():
+        raise ValueError("Recovery requires an actor")
+    runtime = NativeTrialRuntime._resolve_immutable(_ctx(), candidate_id, release_digest)
+    release_path = (
+        runtime.root
+        / ".adaos/releases"
+        / f"{runtime.release_digest.split(':')[1]}.json"
+    )
+    release = ProjectRelease.from_mapping(
+        json.loads(release_path.read_text(encoding="utf-8"))
+    ).seal()
+    application = _application_service().store.get_application(release.project_id)
+    subnet = _local_subnet_ref()
+    _admit_builder_mutation(
+        "recover",
+        application.application_id,
+        subnet_ref=subnet,
+        capability="applications.recover",
+    )
+    if application.publisher_ref.lower() != subnet.lower():
+        raise ValueError("Only the local publisher may recover its Stable preflight")
+    lifecycle = bind_local_data_lifecycle(_ctx(), runtime, release)
+    metadata = Path(_ctx().paths.workspace_dir()) / ".adaos"
+
+    def verify(_key):
+        lock = WorkspaceLock.from_mapping(
+            json.loads((metadata / "workspace.lock.json").read_text(encoding="utf-8"))
+        )
+        slots = [slot for slot in lock.slots if slot.project_id == release.project_id]
+        if lifecycle.stable_digest:
+            installation = _application_service().store.get_installation(
+                application.application_id
+            )
+            if (
+                installation.status != "active"
+                or installation.installed_release_digest != lifecycle.stable_digest
+                or len(slots) != 1
+                or slots[0].release_digest != lifecycle.stable_digest
+            ):
+                raise ValueError(
+                    "Stable code/installation changed; explicit publication recovery required"
+                )
+        elif slots:
+            raise ValueError("Workspace installation appeared after Beta preparation")
+        return {"ok": True, "release_digest": lifecycle.stable_digest}
+
+    guard = lambda: mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30)
+    retired = lifecycle.abort_stable_adoption_before_effects(
+        verify_source=verify,
+        source_guard=guard,
+    )
+    selections = [
+        item
+        for item in lifecycle.channel.read() or ()
+        if item.application_id == application.application_id
+        and item.runtime_root_ref == f"trial:{candidate_id}"
+        and item.release_digest == release_digest
+    ]
+    if len(selections) != 1:
+        raise ValueError("Exact failed Trial selection is unavailable")
+    rejected = lifecycle.reject_beta(
+        webspace_id=selections[0].webspace_id,
+        verify_source=verify,
+        source_guard=guard,
+    )
+    return {
+        "ok": True,
+        "status": "retired_before_effects",
+        "stable_recovery": retired,
+        "beta_rejection": rejected,
+        "runtime_refresh": _refresh_application_placements(
+            application.application_id
+        ),
+    }
+
+
 def refresh_placement(webspace_id: str) -> dict[str, Any]:
     """Refresh derived room state through its owner, without changing navigation."""
     import requests
@@ -2494,6 +2585,7 @@ __all__ = [
     "place_local_trial",
     "place_local_stable",
     "refresh_placement",
+    "retire_failed_local_publication_preflight",
     "open_trial_placement",
     "create_application",
     "delete_application_development",

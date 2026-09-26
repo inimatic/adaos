@@ -8,7 +8,7 @@ from adaos.domain.application import RuntimeSelection
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.applications.configuration import ApplicationConfigurationStore
 from adaos.services.applications.blob_data_transition import BlobDataTransition
-from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases, declared_coordination_files, declared_operational_evidence_files, declared_reconstructible_directories, inventory
+from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases, declared_state_files, declared_coordination_files, declared_operational_evidence_files, declared_reconstructible_directories, inventory
 from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 
 
@@ -59,6 +59,23 @@ def skill_memory_manifest():
             "execution": "native_tools",
             "databases": [],
         },
+    }
+
+
+def state_file_manifest():
+    return {
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+            "state_files": [
+                {
+                    "path": "state/state.json",
+                    "format": "json",
+                    "max_bytes": 1024 * 1024,
+                }
+            ],
+        }
     }
 
 
@@ -128,6 +145,63 @@ def test_two_complete_local_data_cutovers_preserve_records_and_settings(tmp_path
         assert channel.read()[0].runtime_root_ref == "workspace"
     assert len(calls) == 4
     assert sql(stable / "records.sqlite", "SELECT id,value FROM records ORDER BY id") == [(1, "original"), (2, "beta1"), (3, "beta2")]
+
+
+def test_declared_json_state_file_is_adopted_atomically(tmp_path):
+    stable = tmp_path / "workspace/data"
+    state_file = stable / "state/state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text('{"records":["stable"]}', encoding="utf-8")
+    state = tmp_path / "state"
+    channel = ApplicationRuntimeChannel(state, "state-file-app")
+    channel.select(
+        RuntimeSelection(
+            webspace_id="desktop",
+            application_id="state-file-app",
+            source="stable_installation",
+            release_digest=DIGEST,
+            runtime_root_ref="workspace",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+    beta = tmp_path / "beta/data"
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=state,
+        private_root=tmp_path,
+        application_id="state-file-app",
+        candidate_id="candidate-state-file",
+        release_digest="sha256:" + "b" * 64,
+        stable_digest=DIGEST,
+        components=(
+            OwnedDataComponent(
+                "skill:state-file",
+                stable,
+                beta,
+                stable,
+                state_file_manifest(),
+                state_file_manifest(),
+            ),
+        ),
+    )
+
+    def activate(_key):
+        assert (beta / "state/state.json").read_text(encoding="utf-8") == '{"records":["stable"]}'
+        (beta / "state/state.json").write_text(
+            '{"records":["stable","beta"]}',
+            encoding="utf-8",
+        )
+        return {"ok": True}
+
+    lifecycle.prepare_beta(webspace_id="desktop", activate=activate)
+    lifecycle.accept_beta(
+        webspace_id="desktop",
+        publish=lambda _key: {"ok": True},
+    )
+
+    assert json.loads(state_file.read_text(encoding="utf-8")) == {
+        "records": ["stable", "beta"]
+    }
 
 
 def test_explicit_beta_replacement_reseeds_from_stable_and_retains_old_beta(tmp_path):
@@ -949,6 +1023,30 @@ def test_recovery_cannot_cancel_after_stable_adoption_started(tmp_path):
         lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": False})
     with pytest.raises(RuntimeChannelConflict, match="adoption has started"):
         lifecycle.abort_beta_preparation(verify_source=lambda _: pytest.fail("Recover publication instead"))
+
+
+def test_read_only_stable_preflight_failure_can_be_retired_before_new_candidate(tmp_path):
+    _state, stable, channel = seed(tmp_path)
+    lifecycle = coordinator(tmp_path, 1)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    beta = tmp_path / "beta1/data"
+    (beta / "undeclared.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Undeclared runtime data"):
+        lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: pytest.fail("No publish"))
+
+    retired = lifecycle.abort_stable_adoption_before_effects(
+        verify_source=lambda _: {"ok": True}
+    )
+    rejected = lifecycle.reject_beta(
+        webspace_id="desktop",
+        verify_source=lambda _: {"ok": True},
+    )
+
+    assert retired["aborted"] is True
+    assert rejected["completed"] is True
+    assert channel.read()[0].runtime_root_ref == "workspace"
+    assert sql(stable / "records.sqlite", "SELECT * FROM records") == [(1, "original")]
 
 
 def test_beta_does_not_silently_inherit_credentials_for_a_changed_purpose(tmp_path):

@@ -12,6 +12,10 @@ Each owned native request/response skill declares its stores in `skill.yaml`:
 data_lifecycle:
   schema: adaos.skill.data_lifecycle.v1
   execution: native_tools
+  state_files:
+    - path: state/preferences.json
+      format: json
+      max_bytes: 1048576
   reconstructible_directories:
     - db/backups
   databases:
@@ -32,6 +36,15 @@ and never edit applied versions or checksums. Core owns the migration transactio
 SQL cannot attach other databases, control the transaction or load extensions.
 Fresh-install initialization must produce the same schema. Do not rerun additive
 DDL unconditionally in a request handler. A stateless skill declares `databases: []`.
+
+Small non-relational state can be declared through `state_files`. Each entry is
+an exact owner-relative path with an immutable size ceiling and either `json`
+or `opaque` validation. Core snapshots the accepted Stable bytes, checks their
+digest before acceptance, and installs the reviewed Beta bytes atomically. A
+removed file or a changed Stable digest fails closed. Use SQLite for collections,
+queries, or schema evolution; `state_files` deliberately has no implicit schema
+migration language, so a format-changing release must migrate the Beta copy in
+its declared lifecycle hook before acceptance.
 
 `reconstructible_directories` is an explicit allow-list for derived files that
 can be rebuilt from authoritative inputs. Core admits files below these roots
@@ -72,8 +85,8 @@ selection remains a harmless superseded decision; an existing archive is not
 silently ignored.
 
 Settings use [Application Configuration](application-configuration.md); no
-credential value is copied as ordinary data. Initial cutover supports only
-explicit owned SQLite stores and native tools. Shared mutable stores, background
+credential value is copied as ordinary data. Initial cutover supports explicit
+owned SQLite stores, bounded state files, and native tools. Shared mutable stores, background
 workers, attachments, legacy credential files, Beta-to-Beta loss-confirmed reseeding
 and post-cutover snapshot rollback need their own qualified adapters. Do not advertise them
 as supported or silently omit their data.
