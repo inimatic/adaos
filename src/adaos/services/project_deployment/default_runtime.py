@@ -329,6 +329,9 @@ class AdaOSComponentLifecycleHooks:
                 "operation_id": operation_id,
                 "expected_version": version,
                 "expected_slot": slot,
+                # Project deployment owns service convergence below. Mark the
+                # event so the API subscriber does not schedule a second restart.
+                "service_convergence_owner": "project_deployment",
             },
             "project.deployment",
         )
@@ -337,6 +340,37 @@ class AdaOSComponentLifecycleHooks:
             "topic": "skills.activated",
             "expected_version": version,
             "expected_slot": slot,
+            "service_convergence_owner": "project_deployment",
+        }
+
+    def _converge_skill_service(self, component_id: str) -> dict[str, Any]:
+        """Converge service skills in the deployment authority process.
+
+        Official CLI deployments have a process-local event bus, so they cannot
+        delegate service startup to the API runtime's ``skills.activated``
+        subscriber. Deployment therefore owns restart and readiness in both
+        execution modes.
+        """
+
+        if not self._workspace_skill_requires_service(component_id):
+            return {
+                "managed": False,
+                "requested": False,
+                "reason": "not_a_service_skill",
+            }
+
+        from adaos.services.skill.service_supervisor import get_service_supervisor
+
+        supervisor = get_service_supervisor()
+        supervisor.ensure_discovered(force=True)
+        if component_id not in supervisor.list():
+            raise RuntimeError(f"service skill is not discoverable: {component_id}")
+        _run_async_from_sync(supervisor.restart(component_id))
+        return {
+            "managed": True,
+            "requested": True,
+            "operation": "restart",
+            "owner": "project_deployment",
         }
 
     def _workspace_skill_requires_service(self, component_id: str) -> bool:
@@ -514,6 +548,7 @@ class AdaOSComponentLifecycleHooks:
                 except Exception as exc:
                     raise RuntimeError("skill_activation_event_failed") from exc
                 try:
+                    service_convergence = self._converge_skill_service(component_id)
                     service = self._wait_for_skill_service_ready(
                         component_id,
                         previous=previous_service,
@@ -528,6 +563,7 @@ class AdaOSComponentLifecycleHooks:
                 "slot": slot,
                 "handler_reload": handler_reload,
                 "activation_event": activation_event,
+                "service_convergence": service_convergence,
                 "service": service,
             }
         if kind == "scenario":

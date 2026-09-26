@@ -69,6 +69,23 @@ def test_service_supervisor_runtime_forces_discovery_on_skill_activation(monkeyp
     assert fake.events == [("restart", "service_skill")]
 
 
+def test_service_supervisor_skips_project_deployment_owned_convergence(monkeypatch) -> None:
+    fake = _FakeSupervisor()
+    monkeypatch.setattr(runtime_module, "get_service_supervisor", lambda: fake)
+
+    asyncio.run(
+        runtime_module._on_skill_activated(
+            {
+                "skill_name": "service_skill",
+                "service_convergence_owner": "project_deployment",
+            }
+        )
+    )
+
+    assert fake.discovery_forces == []
+    assert fake.events == []
+
+
 def test_service_activation_restart_does_not_block_event_handler(monkeypatch) -> None:
     fake = _FakeSupervisor()
     restart_started = asyncio.Event()

@@ -173,6 +173,14 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         AdaOSComponentLifecycleHooks,
+        "_converge_skill_service",
+        lambda _self, component_id: (
+            events.append(("converge", component_id))
+            or {"managed": True, "requested": True}
+        ),
+    )
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
         "_wait_for_skill_service_ready",
         lambda _self, component_id, **_kwargs: (
             events.append(("service", component_id))
@@ -197,13 +205,51 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
         ("slot", "media_center_skill:0.8.23"),
         ("handlers", "media_center_skill"),
         ("event", "media_center_skill"),
+        ("converge", "media_center_skill"),
         ("service", "media_center_skill"),
     ]
     assert receipt["slot"] == "B"
     assert receipt["handler_reload"]["ok"] is True
     assert receipt["activation_event"]["emitted"] is True
+    assert receipt["service_convergence"]["requested"] is True
     assert receipt["service"]["ready"] is True
     assert receipt["manifest_digest"] == manifest_digest
+
+
+def test_project_deployment_converges_service_skill_inline(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class Supervisor:
+        def ensure_discovered(self, *, force: bool = False) -> None:
+            calls.append(("discover", force))
+
+        def list(self) -> list[str]:
+            return ["media_library_agent"]
+
+        async def restart(self, name: str) -> None:
+            calls.append(("restart", name))
+
+    monkeypatch.setattr(
+        AdaOSComponentLifecycleHooks,
+        "_workspace_skill_requires_service",
+        lambda _self, _component_id: True,
+    )
+    monkeypatch.setattr(
+        "adaos.services.skill.service_supervisor.get_service_supervisor",
+        lambda: Supervisor(),
+    )
+
+    receipt = AdaOSComponentLifecycleHooks(SimpleNamespace())._converge_skill_service(
+        "media_library_agent"
+    )
+
+    assert calls == [("discover", True), ("restart", "media_library_agent")]
+    assert receipt == {
+        "managed": True,
+        "requested": True,
+        "operation": "restart",
+        "owner": "project_deployment",
+    }
 
 
 def test_skill_component_activation_fails_when_live_handlers_do_not_activate(monkeypatch) -> None:

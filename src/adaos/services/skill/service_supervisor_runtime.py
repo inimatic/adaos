@@ -395,6 +395,9 @@ async def _on_runtime_recovery_response(evt: Any) -> None:
 
 @subscribe("skills.activated")
 async def _on_skill_activated(payload: Dict[str, Any]) -> None:
+    convergence_owner = str(payload.get("service_convergence_owner") or "").strip()
+    if convergence_owner == "project_deployment":
+        return
     _schedule_activation_restart(payload.get("skill_name"), reason="skills.activated")
 
 
