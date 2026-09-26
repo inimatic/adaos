@@ -65,6 +65,7 @@ def run_tests(
     if skill_env_path:
         env_template["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
         env_template["ADAOS_SKILL_MEMORY_PATH"] = str(skill_env_path)
+        env_template["ADAOS_SKILL_STATE_DIR"] = str(skill_env_path.parent.parent / "state")
 
     # стабильные переменные для тестов
     if skill_name:

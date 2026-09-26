@@ -32,6 +32,7 @@ skills/.runtime/<name>/<runtime-bucket>/       # v<major>.<minor>
         db/                       # persistent structured skill state
         files/                    # physical file artifacts/blobs
         internal/                 # schema-bound skill data for this bucket
+        state/                    # skill-owned application/runtime state
 current_version                   # active full semantic version
 current_runtime.json              # active version/slot selection
 previous_runtime.json             # previous version/slot selection for rollback
@@ -134,6 +135,10 @@ class SkillSlotPaths:
     def legacy_skill_memory_path(self) -> Path:
         return self.runtime_dir / ".skill_memory.json"
 
+    @property
+    def state_dir(self) -> Path:
+        return self.data_root / "state"
+
 
 class SkillRuntimeEnvironment:
     """Encapsulates filesystem layout for skill runtime deployments."""
@@ -194,6 +199,9 @@ class SkillRuntimeEnvironment:
 
     def internal_root(self, version: str | None = None) -> Path:
         return self.data_root(version) / "internal"
+
+    def state_dir(self, version: str | None = None) -> Path:
+        return self.data_root(version) / "state"
 
     def skill_env_store_path(self, version: str | None = None) -> Path:
         return self.db_dir(version) / "skill_env.json"
@@ -333,6 +341,7 @@ class SkillRuntimeEnvironment:
             self.db_dir(version),
             self.files_dir(version),
             self.internal_root(version),
+            self.state_dir(version),
         ):
             path.mkdir(parents=True, exist_ok=True)
 

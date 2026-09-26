@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -69,6 +69,7 @@ class DevTicketCreateRequest(BaseModel):
     status: str = "proposed"
     priority: str | None = Field(default=None, pattern="^(must|should|could|deferred)$")
     dedup_key: str | None = None
+    request_id: str | None = Field(default=None, min_length=1, max_length=200)
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     relation_refs: list[dict[str, Any]] = Field(default_factory=list)
@@ -221,6 +222,7 @@ class DevTicketCommentRequest(BaseModel):
     actor: str = "ui"
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     expected_revision: int | None = Field(default=None, ge=1)
+    assist: bool = True
 
 
 class DevTicketVerifyRequest(BaseModel):
@@ -1271,6 +1273,18 @@ def create_ticket(
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
+        replay = service.replay_create_ticket_request(body.request_id)
+        if replay:
+            ticket = replay["ticket"]
+            return {
+                "ok": True,
+                "signal": replay["signal"],
+                "ticket": ticket,
+                "detail": _ticket_detail(service, ticket),
+                "signal_duplicate": True,
+                "ticket_duplicate": True,
+                "request_replayed": True,
+            }
         ticket_kind = _ticket_kind_for_create(body.kind, body.ticket_kind)
         signal_kind = _signal_kind_for_create(body.kind, body.signal_kind, ticket_kind)
         signal_result = service.capture_signal(
@@ -1307,6 +1321,11 @@ def create_ticket(
             relation_refs=body.relation_refs,
         )
         ticket = ticket_result["ticket"]
+        service.record_create_ticket_request(
+            body.request_id,
+            signal_id=str(signal_result["signal"].get("signal_id") or ""),
+            ticket_id=str(ticket.get("ticket_id") or ""),
+        )
         return {
             "ok": True,
             "signal": signal_result["signal"],
@@ -1314,6 +1333,7 @@ def create_ticket(
             "detail": _ticket_detail(service, ticket),
             "signal_duplicate": bool(signal_result.get("duplicate")),
             "ticket_duplicate": bool(ticket_result.get("duplicate")),
+            "request_replayed": False,
         }
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -1880,6 +1900,7 @@ def start_ticket(
 def comment_ticket(
     ticket_id: str,
     body: DevTicketCommentRequest,
+    background_tasks: BackgroundTasks,
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
@@ -1889,8 +1910,24 @@ def comment_ticket(
             actor=body.actor,
             evidence_refs=body.evidence_refs,
             expected_revision=body.expected_revision,
+            assistant_requested=body.assist,
         )
-        return {"ok": True, "ticket": ticket, "detail": _ticket_detail(service, ticket)}
+        comments = ticket.get("comments") if isinstance(ticket, Mapping) else []
+        comment = comments[-1] if isinstance(comments, list) and comments else {}
+        comment_id = str(comment.get("id") or "") if isinstance(comment, Mapping) else ""
+        if body.assist and comment_id:
+            background_tasks.add_task(
+                service.assist_ticket_comment,
+                ticket_id,
+                comment_id=comment_id,
+            )
+        return {
+            "ok": True,
+            "ticket": ticket,
+            "detail": _ticket_detail(service, ticket),
+            "assistant_pending": bool(body.assist and comment_id),
+            "comment_id": comment_id or None,
+        }
     except KeyError as exc:
         raise _not_found(ticket_id) from exc
     except ValueError as exc:

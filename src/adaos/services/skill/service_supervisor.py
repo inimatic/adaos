@@ -1073,6 +1073,7 @@ class ServiceSkillSupervisor:
         if bucket_root is not None:
             skill_env_path = bucket_root / "data" / "db" / "skill_env.json"
             internal_data = bucket_root / "data" / "internal"
+            skill_state = bucket_root / "data" / "state"
             # Owner identity and storage paths are capabilities of this service,
             # never ambient values inherited from the parent runtime.
             env["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
@@ -1080,6 +1081,7 @@ class ServiceSkillSupervisor:
             env["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(internal_data)
             env["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(internal_data)
             env["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(internal_data)
+            env["ADAOS_SKILL_STATE_DIR"] = str(skill_state)
             env.update(self._service_storage_environment(spec, bucket_root))
         env["ADAOS_SKILL_NAME"] = name
         env["ADAOS_SKILL_PACKAGE"] = f"skills.{name}"

@@ -11980,6 +11980,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "ADAOS_SKILL_ENV_PATH": str(
                             internal_data_root / "db" / "skill_env.json"
                         ),
+                        "ADAOS_SKILL_STATE_DIR": str(internal_data_root / "state"),
                     }
                 )
             validation_budget = _generated_test_budget(assignment)

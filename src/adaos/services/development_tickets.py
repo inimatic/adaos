@@ -2236,6 +2236,57 @@ class DevelopmentTicketService:
             self._write(state)
             return {"ok": True, "duplicate": False, "signal": _clone(signal)}
 
+    def replay_create_ticket_request(self, request_id: str | None) -> dict[str, Any] | None:
+        """Return the durable result of an already-applied create command."""
+        command_id = _text(request_id)
+        if not command_id:
+            return None
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            receipt = _mapping(state.get("command_receipts", {}).get(command_id))
+            signal = state["signals"].get(_text(receipt.get("signal_id")))
+            ticket = state["tickets"].get(_text(receipt.get("ticket_id")))
+            if not isinstance(signal, Mapping) or not isinstance(ticket, Mapping):
+                return None
+            return {
+                "signal": _clone(signal),
+                "ticket": _normalized_ticket(ticket),
+            }
+
+    def record_create_ticket_request(
+        self,
+        request_id: str | None,
+        *,
+        signal_id: str,
+        ticket_id: str,
+    ) -> None:
+        """Persist an idempotency receipt after the ticket transaction succeeds."""
+        command_id = _text(request_id)
+        signal_ref = _text(signal_id)
+        ticket_ref = _text(ticket_id)
+        if not command_id or not signal_ref or not ticket_ref:
+            return
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            receipts = dict(state.get("command_receipts") or {})
+            receipts[command_id] = {
+                "kind": "development_ticket.create",
+                "signal_id": signal_ref,
+                "ticket_id": ticket_ref,
+                "recorded_at": _now(),
+            }
+            # Receipts only bridge transport retries. Keep the newest bounded
+            # set so an abandoned browser cannot grow the canonical state.
+            if len(receipts) > 2048:
+                ordered = sorted(
+                    receipts.items(),
+                    key=lambda item: _text(_mapping(item[1]).get("recorded_at")),
+                    reverse=True,
+                )
+                receipts = dict(ordered[:2048])
+            state["command_receipts"] = receipts
+            self._write(state)
+
     def ensure_ticket_for_signal(
         self,
         signal: Mapping[str, Any],
@@ -5436,6 +5487,7 @@ class DevelopmentTicketService:
         actor: str,
         evidence_refs: Sequence[Mapping[str, Any]] = (),
         expected_revision: int | None = None,
+        assistant_requested: bool = False,
     ) -> dict[str, Any]:
         text = _text(body)
         if not text:
@@ -5457,6 +5509,7 @@ class DevelopmentTicketService:
                 "actor": actor_token,
                 "evidence_refs": refs,
                 "created_at": now,
+                **({"assistant_status": "pending"} if assistant_requested else {}),
             }
             comments = [dict(item) for item in ticket.get("comments") or [] if isinstance(item, Mapping)]
             comments.append(comment)
@@ -5470,6 +5523,203 @@ class DevelopmentTicketService:
                     "kind": "commented",
                     "comment_id": comment["id"],
                     "actor": actor_token,
+                    "recorded_at": now,
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
+    def assist_ticket_comment(
+        self,
+        ticket_id: str,
+        *,
+        comment_id: str,
+        llm_call: Callable[..., Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        """Classify a human comment and append one bounded assistant reply."""
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            return None
+        source_comment = next(
+            (
+                dict(item)
+                for item in ticket.get("comments") or []
+                if isinstance(item, Mapping) and _text(item.get("id")) == _text(comment_id)
+            ),
+            None,
+        )
+        if not source_comment or _text(source_comment.get("assistant_status")) == "completed":
+            return ticket
+        request_id = _fingerprint("dev-ticket-comment-assist", ticket_id, comment_id)
+        caller = llm_call
+        if caller is None:
+            from adaos.sdk.llm.llm_client import send_response
+
+            caller = send_response
+        response: Mapping[str, Any] = {}
+        try:
+            response = caller(
+                self._comment_assistance_messages(ticket, source_comment),
+                max_tokens=700,
+                reasoning={"effort": "low"},
+                text={"format": {"type": "json_object"}, "verbosity": "low"},
+                request_id=request_id,
+                prompt_cache_key="adaos.dev-ticket.comment-assistance.v1",
+                timeout=45,
+            )
+            if not isinstance(response, Mapping):
+                raise ValueError("Root LLM comment assistance response must be an object")
+            proposal = _parse_language_qualification_output(response.get("output_text"))
+            intent = _text(proposal.get("intent")).lower()
+            if intent not in {"question", "remark", "uncertain"}:
+                raise ValueError("comment assistance intent is invalid")
+            confidence = float(proposal.get("confidence") or 0.0)
+            if not 0.0 <= confidence <= 1.0:
+                raise ValueError("comment assistance confidence is invalid")
+            message = _text(proposal.get("message"))[:4000]
+            qualification = _text(proposal.get("qualification"))[:2000]
+            clarification = _text(proposal.get("clarification_question"))[:2000]
+            if intent == "uncertain":
+                reply = clarification or message
+            elif intent == "remark":
+                reply = qualification or message
+            else:
+                reply = message
+            if not reply:
+                raise ValueError("comment assistance reply is empty")
+            usage = _language_qualification_usage_receipt(
+                response,
+                request_id=request_id,
+                status="completed",
+            )
+            usage["accounting_scope"] = "development_ticket_comment_assistance"
+            analysis = {
+                "schema": "adaos.dev_ticket.comment_assistance.v1",
+                "intent": intent,
+                "confidence": confidence,
+                "qualification": qualification or None,
+                "clarification_question": clarification or None,
+                "usage": usage,
+            }
+            return self._record_comment_assistance(
+                ticket_id,
+                comment_id=comment_id,
+                status="completed",
+                reply=reply,
+                analysis=analysis,
+            )
+        except Exception as exc:
+            usage = _language_qualification_usage_receipt(
+                response,
+                request_id=request_id,
+                status="failed",
+            )
+            usage["accounting_scope"] = "development_ticket_comment_assistance"
+            _log.warning(
+                "dev-ticket comment assistance failed ticket_id=%s comment_id=%s error=%s",
+                ticket_id,
+                comment_id,
+                exc,
+            )
+            return self._record_comment_assistance(
+                ticket_id,
+                comment_id=comment_id,
+                status="failed",
+                reply="",
+                analysis={
+                    "schema": "adaos.dev_ticket.comment_assistance.v1",
+                    "error_type": type(exc).__name__,
+                    "error": _text(exc)[:1000],
+                    "usage": usage,
+                },
+            )
+
+    @staticmethod
+    def _comment_assistance_messages(
+        ticket: Mapping[str, Any],
+        comment: Mapping[str, Any],
+    ) -> list[dict[str, str]]:
+        recent = [
+            {
+                "actor": _text(item.get("actor"))[:100],
+                "body": _text(item.get("body"))[:1200],
+            }
+            for item in _sequence_of_mappings(ticket.get("comments") or [])[-8:]
+        ]
+        payload = {
+            "ticket": {
+                "summary": _text(ticket.get("summary"))[:1600],
+                "status": _text(ticket.get("status")),
+                "priority": _text(ticket.get("priority")),
+                "target_scope": _mapping(ticket.get("target_scope")),
+            },
+            "recent_comments": recent,
+            "new_comment": _text(comment.get("body"))[:4000],
+        }
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You assist inside an AdaOS Dev Ticket discussion. Classify the new human comment as "
+                    "question, remark, or uncertain. For a question, answer immediately using only the supplied "
+                    "ticket context and say what is unknown. For a remark, provide a concise engineering "
+                    "qualification that preserves the user's intent. If essential meaning is ambiguous, use "
+                    "uncertain and ask exactly one focused clarification question. Reply in the language of the "
+                    "new comment. Do not claim implementation or verification that is not in the context. Return "
+                    "one JSON object with intent, message, qualification, clarification_question, confidence."
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ]
+
+    def _record_comment_assistance(
+        self,
+        ticket_id: str,
+        *,
+        comment_id: str,
+        status: str,
+        reply: str,
+        analysis: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                return None
+            comments = [dict(item) for item in ticket.get("comments") or [] if isinstance(item, Mapping)]
+            source = next((item for item in comments if _text(item.get("id")) == _text(comment_id)), None)
+            if not source:
+                return _normalized_ticket(ticket)
+            existing_reply = _text(source.get("assistant_comment_id"))
+            if existing_reply:
+                return _normalized_ticket(ticket)
+            now = _now()
+            source["assistant_status"] = status
+            source["assistant_analysis"] = dict(analysis)
+            if status == "completed" and reply:
+                assistant_comment_id = f"dcomment.{new_id()}"
+                source["assistant_comment_id"] = assistant_comment_id
+                comments.append(
+                    {
+                        "id": assistant_comment_id,
+                        "body": reply,
+                        "actor": "assistant:dev_ticket",
+                        "actor_type": "assistant",
+                        "reply_to_comment_id": _text(comment_id),
+                        "evidence_refs": [],
+                        "analysis": dict(analysis),
+                        "created_at": now,
+                    }
+                )
+            ticket["comments"] = comments[-100:]
+            ticket["updated_at"] = now
+            self._append_history(
+                ticket,
+                {
+                    "kind": f"comment_assistance_{status}",
+                    "comment_id": _text(comment_id),
+                    "assistant_comment_id": _text(source.get("assistant_comment_id")) or None,
                     "recorded_at": now,
                 },
             )
@@ -7758,14 +8008,17 @@ class DevelopmentTicketService:
 
     def _read(self) -> dict[str, Any]:
         if not self.state_path.is_file():
-            return {"schema": STATE_SCHEMA, "signals": {}, "tickets": {}}
+            return {"schema": STATE_SCHEMA, "signals": {}, "tickets": {}, "command_receipts": {}}
         value = json.loads(self.state_path.read_text(encoding="utf-8"))
         if not isinstance(value, Mapping):
             raise ValueError("development ticket state is corrupt")
         signals = value.get("signals")
         tickets = value.get("tickets")
+        receipts = value.get("command_receipts") or {}
         if not isinstance(signals, Mapping) or not isinstance(tickets, Mapping):
             raise ValueError("development ticket state is corrupt")
+        if not isinstance(receipts, Mapping):
+            receipts = {}
         normalized_tickets: dict[str, Any] = {}
         for ticket_id, raw_ticket in tickets.items():
             ticket = dict(raw_ticket) if isinstance(raw_ticket, Mapping) else raw_ticket
@@ -7784,6 +8037,11 @@ class DevelopmentTicketService:
             "tickets": {
                 ticket_id: _portable_structured_paths(ticket)
                 for ticket_id, ticket in normalized_tickets.items()
+            },
+            "command_receipts": {
+                str(request_id): dict(receipt)
+                for request_id, receipt in receipts.items()
+                if isinstance(receipt, Mapping)
             },
         }
 

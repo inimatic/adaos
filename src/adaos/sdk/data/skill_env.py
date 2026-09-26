@@ -22,6 +22,8 @@ __all__ = [
     "skill_env_path",
     "skill_data_root",
     "skill_data_root_path",
+    "skill_state_dir",
+    "skill_state_dir_path",
     "async_get_env",
     "async_set_env",
     "async_delete_env",
@@ -368,6 +370,23 @@ def skill_data_root_path() -> Path:
             )
     # The canonical env store is always ``<data-root>/db/skill_env.json``.
     return path.expanduser().resolve().parent.parent
+
+
+def skill_state_dir() -> Path:
+    """Return the current skill's versioned owner-local state directory."""
+
+    path = skill_state_dir_path()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def skill_state_dir_path() -> Path:
+    """Resolve ``<runtime-bucket>/data/state`` without creating it."""
+
+    explicit = str(os.getenv("ADAOS_SKILL_STATE_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return skill_data_root_path() / "state"
 
 
 def _legacy_paths(target: Path) -> list[Path]:

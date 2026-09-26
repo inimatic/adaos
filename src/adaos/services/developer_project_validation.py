@@ -382,6 +382,7 @@ def execute_dev_spec(
             "ADAOS_SKILL_INTERNAL_ACTIVE_PATH": str(data_root),
             "ADAOS_SKILL_INTERNAL_TARGET_PATH": str(data_root),
             "ADAOS_SKILL_ENV_PATH": str(data_root / "db" / "skill_env.json"),
+            "ADAOS_SKILL_STATE_DIR": str(data_root / "state"),
             "PYTHONPATH": os.pathsep.join((str(runtime_root), str(ctx.paths.package_path()))),
         }
     )

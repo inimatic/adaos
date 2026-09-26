@@ -235,6 +235,29 @@ def test_development_ticket_api_create_accepts_signal_kind_with_ticket_kind(tmp_
     ]
 
 
+def test_development_ticket_api_replays_create_request_without_new_occurrence(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+    body = {
+        "request_id": "browser:create:stable-1",
+        "summary": "Keep the dialog width",
+        "kind": "feedback",
+        "target_scope": {"type": "scenario", "id": "builder"},
+    }
+
+    created = client.post("/api/development-tickets", headers=_headers(), json=body)
+    replayed = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={**body, "summary": "A retry must not replace the accepted command"},
+    )
+
+    assert created.status_code == 201, created.text
+    assert replayed.status_code == 201, replayed.text
+    assert replayed.json()["request_replayed"] is True
+    assert replayed.json()["ticket"]["ticket_id"] == created.json()["ticket"]["ticket_id"]
+    assert replayed.json()["ticket"]["occurrence_count"] == 1
+
+
 def test_development_ticket_api_updates_and_filters_priority(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
 
@@ -646,11 +669,57 @@ def test_development_ticket_api_uploads_document_as_comment_evidence(tmp_path: P
     commented = client.post(
         f"/api/development-tickets/{created['ticket_id']}/comment",
         headers=_headers(),
-        json={"actor": "browser", "body": "Attached file.", "evidence_refs": [ref]},
+        json={"actor": "browser", "body": "Attached file.", "evidence_refs": [ref], "assist": False},
     )
 
     assert commented.status_code == 200, commented.text
     assert commented.json()["ticket"]["comments"][-1]["evidence_refs"] == [ref]
+
+
+def test_development_ticket_comment_assistant_answers_in_same_thread(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="Clarify desktop update behavior",
+        target_scope={"type": "scenario", "id": "applications"},
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(signal, kind="feedback")["ticket"]
+    commented = service.comment_ticket(
+        ticket["ticket_id"],
+        body="Обновится ли приложение автоматически?",
+        actor="browser",
+        assistant_requested=True,
+    )
+    comment_id = commented["comments"][-1]["id"]
+
+    assisted = service.assist_ticket_comment(
+        ticket["ticket_id"],
+        comment_id=comment_id,
+        llm_call=lambda *_args, **_kwargs: {
+            "id": "resp_comment_1",
+            "output_text": json.dumps(
+                {
+                    "intent": "question",
+                    "message": "Да, если для приложения включено автообновление.",
+                    "qualification": "",
+                    "clarification_question": "",
+                    "confidence": 0.9,
+                },
+                ensure_ascii=False,
+            ),
+            "usage": {"input_tokens": 120, "output_tokens": 24},
+        },
+    )
+
+    assert assisted is not None
+    comments = assisted["comments"]
+    assert comments[-2]["assistant_status"] == "completed"
+    assert comments[-1]["actor"] == "assistant:dev_ticket"
+    assert comments[-1]["reply_to_comment_id"] == comment_id
+    assert comments[-1]["body"].startswith("Да")
+    assert comments[-1]["analysis"]["usage"]["accounting_scope"] == (
+        "development_ticket_comment_assistance"
+    )
 
 
 def test_development_ticket_api_projects_direct_resolution_as_development_work(tmp_path: Path) -> None:
@@ -1745,6 +1814,7 @@ def test_development_ticket_api_rejects_stale_revision(tmp_path: Path) -> None:
             "body": "This was loaded before the edit",
             "actor": "builder:worker",
             "expected_revision": created["revision"],
+            "assist": False,
         },
     )
 

@@ -7,7 +7,7 @@ import json
 from pathlib import PurePosixPath
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, ClassVar, Mapping, Sequence
+from typing import Any, ClassVar, Mapping
 
 from .ownership import validate_owner_ref
 from .runtime_bindings import ContentRef
@@ -24,6 +24,7 @@ EXECUTION_PROTECTED_ENVIRONMENT_KEYS = frozenset(
         "ADAOS_SKILL_INTERNAL_DATA_ROOT",
         "ADAOS_SKILL_INTERNAL_ACTIVE_PATH",
         "ADAOS_SKILL_INTERNAL_TARGET_PATH",
+        "ADAOS_SKILL_STATE_DIR",
         "ADAOS_SKILL_NAME",
         "ADAOS_SKILL_PACKAGE",
         "ADAOS_SKILL_ROOT",

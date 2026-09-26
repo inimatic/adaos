@@ -9,14 +9,26 @@ share one presentation state, including modals initially declared fullscreen.
 
 Saved sizes belong to the current user. Device-local values use scoped browser
 storage; all-device values use current-user preferences. Scope selectors cover
-the current scenario/modal or all scenarios, and the current desktop or all
-desktops. Exact scopes override wildcard defaults; the local device wins an
-otherwise equal scope. Switching user or desktop invalidates an open save form.
+the current scenario/modal only, and the current desktop or all desktops. A
+modal-size action never rewrites other scenarios. Exact scopes override wildcard
+desktop defaults; the local device wins an otherwise equal scope. Switching user
+or desktop invalidates an open save form.
 
-Alpha/beta can offer an additional application-default action. It resolves an
-existing DEV declaration, shows its destination, and requires explicit consent
-and an unchanged source digest. It never creates a development fork implicitly,
-edits a sealed Trial, or silently publishes the modified application.
+When both `all devices` and `all desktops` are selected, the dialog may offer a
+separate `Dev Ticket` checkbox. It is off by default. Selecting it preserves the
+user preference and creates a governed request to change the width in a future
+development release; it never edits a sealed Trial or application declaration
+from the browser.
+
+## Presentation Vocabulary
+
+`Desktop` is the preferred user-facing name for the canonical `Webspace`
+aggregate. `Management` is the preferred title of the built-in `web_desktop`
+home and management Application. This is a presentation alias, not an immediate
+schema or API rename: persisted `webspace_id`, `web_desktop`, `WorkspaceLock`,
+and source-workspace identifiers retain their technical meaning until a separate
+versioned migration is approved. In particular, an authoring/runtime workspace
+is not the same identity as a user's Desktop.
 
 Typed content generation is specified in [Content Generation](content-generation.md).
 Form consumers review drafts and explicitly apply/save them; the renderer does

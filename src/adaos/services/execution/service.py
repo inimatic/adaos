@@ -76,6 +76,7 @@ class ExecutionService:
             "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(data_root),
             "ADAOS_SKILL_INTERNAL_ACTIVE_PATH": str(data_root),
             "ADAOS_SKILL_INTERNAL_TARGET_PATH": str(data_root),
+            "ADAOS_SKILL_STATE_DIR": str(data_root / "state"),
             "ADAOS_SKILL_NAME": data_owner_name,
             "ADAOS_SKILL_PACKAGE": f"skills.{data_owner_name}",
             "ADAOS_SKILL_ROOT": str(skill_root),

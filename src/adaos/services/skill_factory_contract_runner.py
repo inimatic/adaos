@@ -28,6 +28,7 @@ _PROTECTED_ENV = {
     "ADAOS_CURRENT_SKILL",
     "ADAOS_SKILL_ENV_PATH",
     "ADAOS_SKILL_INTERNAL_DATA_ROOT",
+    "ADAOS_SKILL_STATE_DIR",
     "ADAOS_SKILL_NAME",
     "ADAOS_SKILL_ROOT",
     "ADAOS_TASK_RUNTIME_DIR",
@@ -327,6 +328,7 @@ def _run_execution_spec(
             "ADAOS_SKILL_ROOT": str(skill_dir),
             "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(data_root),
             "ADAOS_SKILL_ENV_PATH": str(data_root / "db" / "skill_env.json"),
+            "ADAOS_SKILL_STATE_DIR": str(data_root / "state"),
             "ADAOS_TASK_RUNTIME_DIR": str(runtime_root),
         }
     )
@@ -390,6 +392,7 @@ def run_sequence(request: Mapping[str, Any]) -> dict[str, Any]:
             "ADAOS_SKILL_ROOT": str(skill_dir),
             "ADAOS_SKILL_INTERNAL_DATA_ROOT": str(data_root),
             "ADAOS_SKILL_ENV_PATH": str(data_root / "db" / "skill_env.json"),
+            "ADAOS_SKILL_STATE_DIR": str(data_root / "state"),
             "ADAOS_TASK_RUNTIME_DIR": str(runtime_root),
         }
     )

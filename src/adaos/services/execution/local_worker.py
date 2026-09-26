@@ -8,7 +8,6 @@ import json
 import math
 import os
 import subprocess
-import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -24,6 +23,7 @@ _PROTECTED_SKILL_ENVIRONMENT = {
     "ADAOS_SKILL_INTERNAL_DATA_ROOT",
     "ADAOS_SKILL_INTERNAL_ACTIVE_PATH",
     "ADAOS_SKILL_INTERNAL_TARGET_PATH",
+    "ADAOS_SKILL_STATE_DIR",
     "ADAOS_SKILL_NAME",
     "ADAOS_SKILL_PACKAGE",
     "ADAOS_SKILL_ROOT",

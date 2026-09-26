@@ -153,6 +153,8 @@ def test_slot_skill_env_uses_shared_runtime_store() -> None:
     assert slot.legacy_skill_memory_path == slot.runtime_dir / ".skill_memory.json"
     assert slot.data_root == env.version_root("1.0.0") / "data"
     assert slot.internal_data_dir == env.internal_root("1.0.0")
+    assert slot.state_dir == env.state_dir("1.0.0")
+    assert slot.state_dir.exists()
     assert slot.vendor_dir == env.version_root("1.0.0") / "vendor"
     assert slot.venv_dir == env.version_root("1.0.0") / "venv"
 
@@ -1399,6 +1401,7 @@ def test_prepare_runtime_copies_bucket_data_when_migration_file_missing(monkeypa
     env.prepare_version("1.0.0")
     (env.data_root("1.0.0") / "internal" / "state.txt").write_text("old", encoding="utf-8")
     (env.data_root("1.0.0") / "files" / "blob.txt").write_text("blob", encoding="utf-8")
+    (env.state_dir("1.0.0") / "session.json").write_text('{"cursor": 7}', encoding="utf-8")
 
     monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
 
@@ -1410,6 +1413,52 @@ def test_prepare_runtime_copies_bucket_data_when_migration_file_missing(monkeypa
     assert result.data_migration["target_runtime_bucket"] == "v1.1"
     assert (env.data_root("1.1.0") / "internal" / "state.txt").read_text(encoding="utf-8") == "old"
     assert (env.data_root("1.1.0") / "files" / "blob.txt").read_text(encoding="utf-8") == "blob"
+    assert (env.state_dir("1.1.0") / "session.json").read_text(encoding="utf-8") == '{"cursor": 7}'
+
+
+def test_prepare_runtime_stages_legacy_skill_state_and_archives_only_after_cutover(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "legacy_state_owner_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text(
+        "def handle(payload=None):\n    return payload or {}\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "name: legacy_state_owner_skill\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    legacy = Path(ctx.paths.state_dir()) / "skills" / skill_name
+    legacy.mkdir(parents=True, exist_ok=True)
+    (legacy / "cursor.json").write_text('{"cursor": 11}', encoding="utf-8")
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+
+    result = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
+    slot = env.build_slot_paths("1.0.0", "B")
+
+    assert result.data_migration["legacy_state"]["phase"] == "prepare"
+    assert (slot.state_dir / "cursor.json").read_text(encoding="utf-8") == '{"cursor": 11}'
+    assert legacy.is_dir(), "prepare must retain state for the active legacy runtime"
+
+    refreshed = mgr._adopt_legacy_skill_state(
+        skill_name=skill_name,
+        target_state_dir=slot.state_dir,
+        marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+        refresh=True,
+    )
+    archived = mgr._archive_adopted_legacy_skill_state(
+        skill_name=skill_name,
+        target_state_dir=slot.state_dir,
+        marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+    )
+
+    assert refreshed["phase"] == "activation_refresh"
+    assert archived["ok"] is True
+    assert not legacy.exists()
+    assert (Path(archived["archive"]) / "cursor.json").read_text(encoding="utf-8") == '{"cursor": 11}'
 
 
 def test_activate_runtime_loads_declarations_before_handlers(monkeypatch) -> None:

@@ -657,6 +657,7 @@ def _invoke_skill_quarantine_hook(
     previous = ctx.skill_ctx.get()
     prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
     prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
+    prev_state = os.environ.get("ADAOS_SKILL_STATE_DIR")
     prev_secrets = ctx.secrets
     timeout_s = _quarantine_hook_timeout(hook_spec)
 
@@ -676,6 +677,7 @@ def _invoke_skill_quarantine_hook(
         ctx.secrets = SecretsService(SkillSecretsBackend(secrets_path), ctx.caps)
         os.environ["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
         os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(skill_memory_path)
+        os.environ["ADAOS_SKILL_STATE_DIR"] = str(skill_env_path.parent.parent / "state")
 
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
         from contextvars import copy_context
@@ -712,6 +714,10 @@ def _invoke_skill_quarantine_hook(
             os.environ.pop("ADAOS_SKILL_MEMORY_PATH", None)
         else:
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
+        if prev_state is None:
+            os.environ.pop("ADAOS_SKILL_STATE_DIR", None)
+        else:
+            os.environ["ADAOS_SKILL_STATE_DIR"] = prev_state
 
 
 @dataclass(slots=True)
@@ -2510,6 +2516,12 @@ class SkillManager:
             previous_active_version=previous_active_version,
             previous_active_slot=previous_active_slot,
         )
+        lifecycle["legacy_state"] = self._adopt_legacy_skill_state(
+            skill_name=name,
+            target_state_dir=slot_paths.state_dir,
+            marker_path=slot_paths.internal_data_dir / "legacy-state-adoption.json",
+            refresh=True,
+        )
         env.set_active_slot(target_version, target_slot)
         env.active_version_marker().write_text(target_version, encoding="utf-8")
         env.record_active_selection(
@@ -2584,6 +2596,25 @@ class SkillManager:
             history["last_activation_error_at"] = datetime.now(timezone.utc).isoformat()
             env.write_version_metadata(target_version, metadata)
             raise RuntimeError(f"activation rehydrate failed: {exc}") from exc
+        try:
+            lifecycle["legacy_state_archive"] = self._archive_adopted_legacy_skill_state(
+                skill_name=name,
+                target_state_dir=slot_paths.state_dir,
+                marker_path=slot_paths.internal_data_dir / "legacy-state-adoption.json",
+            )
+        except Exception as exc:
+            _log.warning(
+                "legacy skill state archive deferred skill=%s target=%s error=%s",
+                name,
+                slot_paths.state_dir,
+                exc,
+            )
+            lifecycle["legacy_state_archive"] = {
+                "ok": False,
+                "skipped": True,
+                "reason": "archive_deferred",
+                "error": str(exc),
+            }
         history = metadata.setdefault("history", {})
         history["last_active_slot"] = target_slot
         history["last_active_version"] = target_version
@@ -3500,6 +3531,7 @@ class SkillManager:
         previous = ctx.skill_ctx.get()
         prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
         prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
+        prev_state = os.environ.get("ADAOS_SKILL_STATE_DIR")
         prev_secrets = ctx.secrets
         execution_timeout = timeout or tool_spec.get("timeout_seconds")
         admission = (
@@ -3589,6 +3621,9 @@ class SkillManager:
                 raise RuntimeError(f"failed to establish context for skill '{name}'")
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(skill_memory_path)
+            os.environ["ADAOS_SKILL_STATE_DIR"] = str(
+                Path(getattr(slot, "state_dir", slot_data_root / "state"))
+            )
             execution_submitted_at = time.perf_counter()
 
             if execution_timeout:
@@ -3626,6 +3661,10 @@ class SkillManager:
                 os.environ.pop("ADAOS_SKILL_MEMORY_PATH", None)
             else:
                 os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
+            if prev_state is None:
+                os.environ.pop("ADAOS_SKILL_STATE_DIR", None)
+            else:
+                os.environ["ADAOS_SKILL_STATE_DIR"] = prev_state
 
             total_ms = (time.perf_counter() - run_started) * 1000.0
             if total_ms >= 250.0:
@@ -3730,6 +3769,7 @@ class SkillManager:
         previous = ctx.skill_ctx.get()
         prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
         prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
+        prev_state = os.environ.get("ADAOS_SKILL_STATE_DIR")
         prev_secrets = ctx.secrets
         execution_timeout = timeout or tool_spec.get("timeout_seconds")
         admission = _admit_skill_tool_yjs_work(name, target_tool, payload, tool_spec)
@@ -3798,6 +3838,9 @@ class SkillManager:
         try:
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(skill_memory_path)
+            os.environ["ADAOS_SKILL_STATE_DIR"] = str(
+                Path(getattr(slot, "state_dir", slot_data_root / "state"))
+            )
             if execution_timeout and not _dev_tool_requires_caller_thread(tool_spec):
                 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
                 from contextvars import copy_context
@@ -3832,6 +3875,10 @@ class SkillManager:
                 os.environ.pop("ADAOS_SKILL_MEMORY_PATH", None)
             else:
                 os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
+            if prev_state is None:
+                os.environ.pop("ADAOS_SKILL_STATE_DIR", None)
+            else:
+                os.environ["ADAOS_SKILL_STATE_DIR"] = prev_state
 
         self._persist_skill_env(env, slot)
         return result
@@ -4471,6 +4518,101 @@ class SkillManager:
             copied += 1
         return copied
 
+    def _adopt_legacy_skill_state(
+        self,
+        *,
+        skill_name: str,
+        target_state_dir: Path,
+        marker_path: Path,
+        refresh: bool = False,
+    ) -> dict[str, Any]:
+        """Stage one legacy core-state directory into the versioned skill runtime.
+
+        The legacy directory remains authoritative until activation succeeds. A
+        second, refresh copy immediately before the runtime pointer switch closes
+        the prepare-to-activate window without making a failed candidate consume
+        or mutate the old runtime's state.
+        """
+
+        state_root = Path(self.ctx.paths.state_dir()).expanduser().resolve()
+        legacy_root = (state_root / "skills").resolve()
+        source = (legacy_root / skill_name).resolve()
+        try:
+            source.relative_to(legacy_root)
+        except ValueError:
+            raise ValueError(f"invalid skill identity for legacy state adoption: {skill_name}") from None
+        result: dict[str, Any] = {
+            "schema": "adaos.skill_state.legacy_adoption.v1",
+            "skill": skill_name,
+            "source": str(source),
+            "target": str(target_state_dir),
+            "marker": str(marker_path),
+        }
+        if not source.is_dir():
+            return {**result, "ok": True, "skipped": True, "reason": "legacy_state_absent"}
+
+        marker = self._read_json_dict(marker_path)
+        existing = list(target_state_dir.iterdir()) if target_state_dir.is_dir() else []
+        adopted_before = (
+            marker.get("schema") == result["schema"]
+            and str(marker.get("source") or "") == str(source)
+        )
+        if existing and not adopted_before:
+            raise RuntimeError(
+                "legacy skill state conflicts with an independently initialized versioned state; "
+                f"skill={skill_name} source={source} target={target_state_dir}"
+            )
+        if adopted_before and not refresh:
+            return {**result, "ok": True, "skipped": True, "reason": "already_staged"}
+
+        copied = self._copy_tree_contents(source, target_state_dir)
+        receipt = {
+            **result,
+            "ok": True,
+            "skipped": False,
+            "phase": "activation_refresh" if refresh else "prepare",
+            "copied_entries": copied,
+            "staged_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._write_json_object(marker_path, receipt)
+        return receipt
+
+    def _archive_adopted_legacy_skill_state(
+        self,
+        *,
+        skill_name: str,
+        target_state_dir: Path,
+        marker_path: Path,
+    ) -> dict[str, Any]:
+        """Move adopted legacy state out of core state after a healthy activation."""
+
+        marker = self._read_json_dict(marker_path)
+        source_text = str(marker.get("source") or "").strip()
+        if marker.get("schema") != "adaos.skill_state.legacy_adoption.v1" or not source_text:
+            return {"ok": True, "skipped": True, "reason": "no_staged_legacy_state"}
+        source = Path(source_text).expanduser().resolve()
+        expected = (Path(self.ctx.paths.state_dir()).expanduser().resolve() / "skills" / skill_name).resolve()
+        if source != expected or not source.is_dir():
+            return {"ok": True, "skipped": True, "reason": "legacy_state_absent"}
+        source_has_entries = any(source.iterdir())
+        target_has_entries = target_state_dir.is_dir() and any(target_state_dir.iterdir())
+        if source_has_entries and not target_has_entries:
+            raise RuntimeError(f"refusing to archive legacy state without materialized target: {skill_name}")
+
+        base_dir = Path(self.ctx.paths.base_dir()).expanduser().resolve()
+        archive_root = (base_dir / "private" / "skill-state-migrations" / skill_name).resolve()
+        archive_root.mkdir(parents=True, exist_ok=True)
+        archive = archive_root / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        source.replace(archive)
+        receipt = {
+            **marker,
+            "archived": True,
+            "archived_at": datetime.now(timezone.utc).isoformat(),
+            "archive": str(archive),
+        }
+        self._write_json_object(marker_path, receipt)
+        return {"ok": True, "skipped": False, "source": str(source), "archive": str(archive)}
+
     def _data_migration_config(self, resolved_manifest: Mapping[str, Any]) -> dict[str, Any]:
         config = resolved_manifest.get("data_migration")
         if isinstance(config, Mapping):
@@ -4563,6 +4705,7 @@ class SkillManager:
         previous = ctx.skill_ctx.get()
         prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
         prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
+        prev_state = os.environ.get("ADAOS_SKILL_STATE_DIR")
         prev_internal_root = os.environ.get("ADAOS_SKILL_INTERNAL_DATA_ROOT")
         prev_internal_active = os.environ.get("ADAOS_SKILL_INTERNAL_ACTIVE_PATH")
         prev_internal_target = os.environ.get("ADAOS_SKILL_INTERNAL_TARGET_PATH")
@@ -4585,6 +4728,7 @@ class SkillManager:
                 raise RuntimeError(f"failed to establish context for skill '{slot.skill_name}'")
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(slot.skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(slot.skill_memory_path)
+            os.environ["ADAOS_SKILL_STATE_DIR"] = str(slot.state_dir)
             os.environ["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(slot.internal_data_dir)
@@ -4604,6 +4748,10 @@ class SkillManager:
                 os.environ.pop("ADAOS_SKILL_MEMORY_PATH", None)
             else:
                 os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
+            if prev_state is None:
+                os.environ.pop("ADAOS_SKILL_STATE_DIR", None)
+            else:
+                os.environ["ADAOS_SKILL_STATE_DIR"] = prev_state
             if prev_internal_root is None:
                 os.environ.pop("ADAOS_SKILL_INTERNAL_DATA_ROOT", None)
             else:
@@ -4642,6 +4790,7 @@ class SkillManager:
         previous = ctx.skill_ctx.get()
         prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
         prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
+        prev_state = os.environ.get("ADAOS_SKILL_STATE_DIR")
         prev_internal_root = os.environ.get("ADAOS_SKILL_INTERNAL_DATA_ROOT")
         prev_internal_active = os.environ.get("ADAOS_SKILL_INTERNAL_ACTIVE_PATH")
         prev_internal_target = os.environ.get("ADAOS_SKILL_INTERNAL_TARGET_PATH")
@@ -4663,6 +4812,7 @@ class SkillManager:
                 raise RuntimeError(f"failed to establish context for skill '{slot.skill_name}'")
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(slot.skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(slot.skill_memory_path)
+            os.environ["ADAOS_SKILL_STATE_DIR"] = str(slot.state_dir)
             os.environ["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(payload.get("source_internal_dir") or "")
             os.environ["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(payload.get("target_internal_dir") or "")
@@ -4682,6 +4832,10 @@ class SkillManager:
                 os.environ.pop("ADAOS_SKILL_MEMORY_PATH", None)
             else:
                 os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
+            if prev_state is None:
+                os.environ.pop("ADAOS_SKILL_STATE_DIR", None)
+            else:
+                os.environ["ADAOS_SKILL_STATE_DIR"] = prev_state
             if prev_internal_root is None:
                 os.environ.pop("ADAOS_SKILL_INTERNAL_DATA_ROOT", None)
             else:
@@ -4720,6 +4874,7 @@ class SkillManager:
         previous = ctx.skill_ctx.get()
         prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
         prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
+        prev_state = os.environ.get("ADAOS_SKILL_STATE_DIR")
         prev_internal_root = os.environ.get("ADAOS_SKILL_INTERNAL_DATA_ROOT")
         prev_internal_active = os.environ.get("ADAOS_SKILL_INTERNAL_ACTIVE_PATH")
         prev_internal_target = os.environ.get("ADAOS_SKILL_INTERNAL_TARGET_PATH")
@@ -4731,6 +4886,7 @@ class SkillManager:
                 raise RuntimeError(f"failed to establish context for skill '{slot.skill_name}'")
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(slot.skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(slot.skill_memory_path)
+            os.environ["ADAOS_SKILL_STATE_DIR"] = str(slot.state_dir)
             os.environ["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(slot.internal_data_dir)
             os.environ["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(payload.get("source_internal_dir") or "")
             os.environ["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(payload.get("target_internal_dir") or "")
@@ -4759,6 +4915,10 @@ class SkillManager:
                 os.environ.pop("ADAOS_SKILL_MEMORY_PATH", None)
             else:
                 os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
+            if prev_state is None:
+                os.environ.pop("ADAOS_SKILL_STATE_DIR", None)
+            else:
+                os.environ["ADAOS_SKILL_STATE_DIR"] = prev_state
             if prev_internal_root is None:
                 os.environ.pop("ADAOS_SKILL_INTERNAL_DATA_ROOT", None)
             else:
@@ -5387,6 +5547,11 @@ class SkillManager:
             "bucket_migration": False,
         }
         if not active_version or active_bucket == target_bucket:
+            legacy_state = self._adopt_legacy_skill_state(
+                skill_name=slot.skill_name,
+                target_state_dir=slot.state_dir,
+                marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+            )
             return {
                 **base_result,
                 "mode": "shared",
@@ -5394,12 +5559,18 @@ class SkillManager:
                 "reason": "same_runtime_bucket" if active_version else "no_active_version",
                 "source_version": str(active_version or ""),
                 "source_runtime_bucket": str(active_bucket or ""),
+                "legacy_state": legacy_state,
             }
 
         metadata = env.read_version_metadata(target_version)
         previous_migration = metadata.get("bucket_data_migration")
         if isinstance(previous_migration, Mapping) and previous_migration.get("ok") is True:
             if previous_migration.get("source_runtime_bucket") == active_bucket:
+                legacy_state = self._adopt_legacy_skill_state(
+                    skill_name=slot.skill_name,
+                    target_state_dir=slot.state_dir,
+                    marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+                )
                 return {
                     **base_result,
                     "mode": "already_migrated",
@@ -5408,6 +5579,7 @@ class SkillManager:
                     "source_version": active_version,
                     "source_runtime_bucket": active_bucket,
                     "previous": dict(previous_migration),
+                    "legacy_state": legacy_state,
                 }
 
         tool_name = str(config.get("tool") or "").strip()
@@ -5418,6 +5590,11 @@ class SkillManager:
         if not tool_name and migration_file is None:
             copied = self._copy_tree_contents(source_data_root, target_data_root)
             env.ensure_data_dirs(target_version)
+            legacy_state = self._adopt_legacy_skill_state(
+                skill_name=slot.skill_name,
+                target_state_dir=slot.state_dir,
+                marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+            )
             _log.warning(
                 "skill data migration file missing; copied bucket data without schema mutation skill=%s source_version=%s target_version=%s source_bucket=%s target_bucket=%s",
                 slot.skill_name,
@@ -5438,6 +5615,7 @@ class SkillManager:
                 "target_data_root": str(target_data_root),
                 "copied_entries": copied,
                 "bucket_migration": True,
+                "legacy_state": legacy_state,
             }
 
         self._remove_tree_contents(target_data_root)
@@ -5486,6 +5664,11 @@ class SkillManager:
             env.ensure_data_dirs(target_version)
             raise
 
+        legacy_state = self._adopt_legacy_skill_state(
+            skill_name=slot.skill_name,
+            target_state_dir=slot.state_dir,
+            marker_path=slot.internal_data_dir / "legacy-state-adoption.json",
+        )
         return {
             **base_result,
             "mode": mode,
@@ -5500,6 +5683,7 @@ class SkillManager:
             "target_data_root": str(target_data_root),
             "bucket_migration": True,
             "result": result,
+            "legacy_state": legacy_state,
         }
 
     def _persist_skill_env(self, env: SkillRuntimeEnvironment, slot: SkillSlotPaths) -> None:
@@ -5747,6 +5931,7 @@ class SkillManager:
             "python_paths": list(python_paths),
             "skill_env": str(slot.skill_env_path),
             "skill_memory": str(slot.skill_memory_path),
+            "skill_state": str(slot.state_dir),
             "internal_data": str(slot.internal_data_dir),
         }
 
