@@ -249,6 +249,16 @@ class ApplicationAutoUpdateService:
                     item["status"] = receipt.status
                     item["operation_revision"] = receipt.revision
                     item["result"] = dict(receipt.result)
+                    if receipt.status == "succeeded":
+                        try:
+                            release = self.application_service.store.get_release(
+                                app_id, target_digest
+                            )
+                            item["addresses_report_ids"] = list(
+                                release.addresses_report_ids
+                            )
+                        except (AttributeError, FileNotFoundError, KeyError):
+                            item["addresses_report_ids"] = []
             except Exception as exc:
                 item["status"] = "failed"
                 item["error"] = {

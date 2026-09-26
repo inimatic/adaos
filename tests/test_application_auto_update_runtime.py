@@ -86,3 +86,45 @@ def test_runtime_registry_event_coalesces_while_sync_is_running(monkeypatch) -> 
         "applications.registry.updated",
         "applications.registry.updated",
     ]
+
+
+def test_addressed_update_thanks_the_local_reporter(monkeypatch) -> None:
+    bus = _Bus()
+    ctx = SimpleNamespace(bus=bus)
+    notifications = []
+    reports = SimpleNamespace(
+        receive=lambda **_kwargs: [],
+        get_report=lambda report_id: {"report_id": report_id}
+        if report_id == "report.local"
+        else None,
+    )
+    monkeypatch.setattr(runtime, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(
+        "adaos.services.applications.get_development_report_service",
+        lambda: reports,
+    )
+    monkeypatch.setattr(
+        "adaos.services.platform_notifications.append_platform_notification",
+        lambda **kwargs: notifications.append(kwargs) or {"ok": True},
+    )
+
+    runtime._publish_contribution_notification(
+        {
+            "run_id": "run.one",
+            "webspace_id": "desktop",
+            "updated_at": "2026-09-26T00:00:00+00:00",
+            "outcomes": [
+                {
+                    "application_id": "marketplace",
+                    "status": "succeeded",
+                    "addresses_report_ids": ["report.local", "report.other"],
+                }
+            ],
+        }
+    )
+
+    assert len(notifications) == 1
+    notice = notifications[0]["item"]
+    assert notice["details"]["addressed_report_ids"] == ["report.local"]
+    assert notice["details"]["contribution_count"] == 1
+    assert "Благодарим за вклад" in notice["message"]

@@ -6,6 +6,7 @@ from adaos.services.platform_notifications import (
     PLATFORM_NOTIFICATIONS_CHANGED_EVENT,
     PLATFORM_NOTIFICATIONS_PROJECTION_KEY,
     clear_platform_notifications,
+    append_platform_notification,
     platform_notifications_projection_record,
     platform_notifications_snapshot,
     replace_platform_notifications,
@@ -99,3 +100,22 @@ def test_notification_event_refreshes_demanded_projection(monkeypatch) -> None:
 
 def test_notification_change_event_name_is_stable() -> None:
     assert PLATFORM_NOTIFICATIONS_CHANGED_EVENT == "adaos.platform.notifications.changed"
+
+
+def test_append_notification_preserves_history_and_replaces_same_identity() -> None:
+    replace_platform_notifications(
+        webspace_id="desktop",
+        items=[{"id": "existing", "message": "Existing", "ts": "1"}],
+    )
+    append_platform_notification(
+        webspace_id="desktop",
+        item={"id": "update", "message": "Updated", "ts": "2"},
+    )
+    append_platform_notification(
+        webspace_id="desktop",
+        item={"id": "update", "message": "Updated once", "ts": "3"},
+    )
+
+    items = platform_notifications_snapshot(webspace_id="desktop")["items"]
+    assert [item["id"] for item in items] == ["existing", "update"]
+    assert items[-1]["message"] == "Updated once"

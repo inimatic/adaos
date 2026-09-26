@@ -106,6 +106,49 @@ def replace_platform_notifications(
     }
 
 
+def append_platform_notification(
+    *,
+    webspace_id: str,
+    item: Mapping[str, Any],
+    max_items: int = 40,
+    bus: Any | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Append one idempotent platform notice without replacing operation history."""
+
+    token = str(webspace_id or "").strip()
+    normalized = _normalize_item(item)
+    if not token or normalized is None:
+        raise ValueError("webspace_id and notification message are required")
+    with _LOCK:
+        current = [dict(value) for value in _ITEMS.get(token, [])]
+    by_id = {
+        str(value.get("id") or ""): value
+        for value in current
+        if str(value.get("id") or "")
+    }
+    by_id[normalized["id"]] = normalized
+    ordered = [
+        by_id[key]
+        for key in [
+            *[
+                str(value.get("id") or "")
+                for value in current
+                if str(value.get("id") or "") != normalized["id"]
+            ],
+            normalized["id"],
+        ]
+        if key in by_id
+    ]
+    return replace_platform_notifications(
+        webspace_id=token,
+        items=ordered,
+        max_items=max_items,
+        bus=bus,
+        now=now,
+    )
+
+
 def platform_notifications_snapshot(*, webspace_id: str) -> dict[str, Any]:
     token = str(webspace_id or "").strip()
     with _LOCK:
@@ -174,6 +217,7 @@ def clear_platform_notifications() -> None:
 __all__ = [
     "PLATFORM_NOTIFICATIONS_CHANGED_EVENT",
     "PLATFORM_NOTIFICATIONS_PROJECTION_KEY",
+    "append_platform_notification",
     "clear_platform_notifications",
     "ensure_platform_notifications_projection_handler",
     "platform_notifications_projection_record",
