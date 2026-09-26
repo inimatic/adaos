@@ -54,6 +54,29 @@ def automatic_update_blockers(plan: Mapping[str, Any]) -> list[str]:
     return list(dict.fromkeys(blockers))
 
 
+def _retryable_terminal_operation(operation: Any) -> bool:
+    """Return whether a prior exact update can safely converge in a new operation."""
+
+    status = _text(getattr(operation, "status", "planned"))
+    if status == "failed":
+        return True
+    if status != "unknown":
+        return False
+    result = getattr(operation, "result", None)
+    if not isinstance(result, Mapping):
+        return False
+    deployment = result.get("deployment_operation")
+    if not isinstance(deployment, Mapping):
+        return False
+    error = deployment.get("error")
+    return (
+        _text(deployment.get("state")) == "partial"
+        and not bool(deployment.get("uncertain"))
+        and isinstance(error, Mapping)
+        and error.get("manual_reconciliation") is False
+    )
+
+
 class ApplicationAutoUpdateService:
     """Apply exact safe updates for ``auto_compatible`` subscriptions."""
 
@@ -167,6 +190,7 @@ class ApplicationAutoUpdateService:
             }
             try:
                 retry_chain: list[str] = []
+                failed_retry_chain: list[str] = []
                 for _attempt in range(16):
                     operation = self.application_service.plan_operation(
                         app_id,
@@ -178,9 +202,19 @@ class ApplicationAutoUpdateService:
                         capability="applications.plan",
                         idempotency_key=idempotency_key,
                     )
-                    if _text(getattr(operation, "status", "planned")) != "failed":
+                    operation_status = _text(
+                        getattr(operation, "status", "planned")
+                    )
+                    if operation_status == "planned":
                         break
+                    if not _retryable_terminal_operation(operation):
+                        raise RuntimeError(
+                            "automatic update blocked by unresolved operation "
+                            f"status: {operation_status or 'unknown'}"
+                        )
                     retry_chain.append(_text(operation.operation_id))
+                    if operation_status == "failed":
+                        failed_retry_chain.append(_text(operation.operation_id))
                     retry_identity = hashlib.sha256(
                         (
                             f"{idempotency_key}\0{operation.operation_id}\0"
@@ -194,7 +228,9 @@ class ApplicationAutoUpdateService:
                     raise RuntimeError("automatic update retry chain exhausted")
                 item["idempotency_key"] = idempotency_key
                 if retry_chain:
-                    item["retried_failed_operation_ids"] = retry_chain
+                    item["retried_terminal_operation_ids"] = retry_chain
+                if failed_retry_chain:
+                    item["retried_failed_operation_ids"] = failed_retry_chain
                 item["operation_id"] = operation.operation_id
                 item["plan_digest"] = operation.plan_digest
                 blockers = automatic_update_blockers(operation.plan)
@@ -226,10 +262,15 @@ class ApplicationAutoUpdateService:
             1 for item in outcomes if item.get("status") == "review_required"
         )
         failed = sum(1 for item in outcomes if item.get("status") == "failed")
+        uncertain = sum(
+            1
+            for item in outcomes
+            if item.get("status") in {"unknown", "applying", "reconciling"}
+        )
         payload = {
             "schema": AUTO_UPDATE_RUN_SCHEMA,
             "run_id": run_id,
-            "status": "failed" if failed else "completed",
+            "status": "failed" if failed else "uncertain" if uncertain else "completed",
             "trigger": trigger_token,
             "subnet_ref": subnet,
             "webspace_id": _text(webspace_id) or "desktop",
@@ -238,6 +279,7 @@ class ApplicationAutoUpdateService:
             "applied_count": applied,
             "review_required_count": review_required,
             "failed_count": failed,
+            "uncertain_count": uncertain,
             "skipped_count": len(skipped),
             "outcomes": outcomes,
             "skipped": skipped,

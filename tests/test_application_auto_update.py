@@ -154,3 +154,75 @@ def test_automatic_update_retries_after_a_failed_idempotent_operation(tmp_path) 
         application_service.plan_keys[0] + ":retry:"
     )
     assert [call[0] for call in application_service.applied] == ["appop.retry"]
+
+
+def test_automatic_update_converges_after_known_partial_operation(tmp_path) -> None:
+    class PartialApplicationService(_ApplicationService):
+        def __init__(self) -> None:
+            super().__init__(_plan())
+            self.plan_keys: list[str] = []
+
+        def plan_operation(self, application_id, kind, **kwargs):
+            self.plan_keys.append(kwargs["idempotency_key"])
+            if len(self.plan_keys) == 1:
+                return SimpleNamespace(
+                    operation_id="appop.partial",
+                    plan_digest="sha256:" + "d" * 64,
+                    plan=self.plan,
+                    status="unknown",
+                    revision=3,
+                    result={
+                        "deployment_operation": {
+                            "state": "partial",
+                            "uncertain": False,
+                            "error": {"manual_reconciliation": False},
+                        }
+                    },
+                )
+            return SimpleNamespace(
+                operation_id="appop.converge",
+                plan_digest="sha256:" + "e" * 64,
+                plan=self.plan,
+                status="planned",
+                revision=1,
+            )
+
+    application_service = PartialApplicationService()
+    result = ApplicationAutoUpdateService(
+        tmp_path,
+        application_service,  # type: ignore[arg-type]
+    ).run(
+        subnet_ref="subnet:test",
+        trigger="applications.registry.updated",
+    )
+
+    outcome = result["outcomes"][0]
+    assert result["status"] == "completed"
+    assert outcome["status"] == "succeeded"
+    assert outcome["operation_id"] == "appop.converge"
+    assert outcome["retried_terminal_operation_ids"] == ["appop.partial"]
+    assert "retried_failed_operation_ids" not in outcome
+    assert len(set(application_service.plan_keys)) == 2
+
+
+def test_automatic_update_reports_unknown_receipt_as_uncertain(tmp_path) -> None:
+    class UnknownReceiptService(_ApplicationService):
+        def apply_operation(self, operation_id, **kwargs):
+            self.applied.append((operation_id, kwargs))
+            return SimpleNamespace(
+                status="unknown",
+                revision=3,
+                result={"ok": False, "status": "unknown"},
+            )
+
+    result = ApplicationAutoUpdateService(
+        tmp_path,
+        UnknownReceiptService(_plan()),  # type: ignore[arg-type]
+    ).run(
+        subnet_ref="subnet:test",
+        trigger="applications.registry.updated",
+    )
+
+    assert result["status"] == "uncertain"
+    assert result["uncertain_count"] == 1
+    assert result["applied_count"] == 0

@@ -1327,6 +1327,55 @@ def test_production_workspace_sync_aligns_configured_registry_branch_before_read
     assert git.alignments == [(str(workspace), "origin", "stable", None)]
 
 
+def test_workspace_sync_releases_materialization_lock_before_auto_update(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lock_state = {"active": False}
+    semantic_registry = {"application_catalog": {"status": "imported"}}
+
+    @contextmanager
+    def _mutation_lock(_path, *, timeout_s):
+        assert timeout_s == 1800.0
+        lock_state["active"] = True
+        try:
+            yield
+        finally:
+            lock_state["active"] = False
+
+    def _automatic_update(_ctx, observed):
+        assert lock_state["active"] is False
+        assert observed is semantic_registry
+        return {"status": "completed", "applied_count": 1}
+
+    monkeypatch.setattr(workspace_sync_module, "mutation_lock", _mutation_lock)
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "_sync_workspace_sparse_to_registry_unlocked",
+        lambda _ctx: {"ok": True, "semantic_registry": semantic_registry},
+    )
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "_automatic_application_update_result",
+        _automatic_update,
+    )
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "_reconcile_after_application_auto_update",
+        lambda _ctx, _result: {"ok": True},
+    )
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(state_dir=lambda: tmp_path / "state"),
+        settings=SimpleNamespace(base_dir=tmp_path),
+    )
+
+    result = sync_workspace_sparse_to_registry(ctx)
+
+    assert result["ok"] is True
+    assert result["application_auto_update"]["applied_count"] == 1
+    assert result["post_application_reconcile"] == {"ok": True}
+
+
 def test_selected_runtime_skill_names_requires_valid_selection(tmp_path: Path):
     skills_root = tmp_path / "workspace" / "skills"
     runtime_root = skills_root / ".runtime"

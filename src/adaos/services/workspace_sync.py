@@ -633,18 +633,6 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             semantic_registry = _import_semantic_registry(ctx, workspace_root)
         except Exception as exc:
             errors.append(f"semantic registry: {exc}")
-        application_auto_update = _automatic_application_update_result(
-            ctx,
-            semantic_registry,
-        )
-        post_application_reconcile: dict[str, Any] | None = None
-        try:
-            post_application_reconcile = _reconcile_after_application_auto_update(
-                ctx,
-                application_auto_update,
-            )
-        except Exception as exc:
-            errors.append(f"post-Application-update reconcile: {exc}")
         return {
             "ok": len(errors) == 0,
             "mode": "archive",
@@ -661,8 +649,6 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             "errors": errors,
             "reconcile": reconcile_result,
             "semantic_registry": semantic_registry,
-            "application_auto_update": application_auto_update,
-            "post_application_reconcile": post_application_reconcile,
             "patterns": desired,
             "source_alignment": source_alignment,
         }
@@ -783,36 +769,6 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             "patterns": desired,
         }
 
-    application_auto_update = _automatic_application_update_result(
-        ctx,
-        semantic_registry,
-    )
-    try:
-        post_application_reconcile = _reconcile_after_application_auto_update(
-            ctx,
-            application_auto_update,
-        )
-    except Exception as exc:
-        return {
-            "ok": False,
-            "skills": skills,
-            "scenarios": scenarios,
-            "registry_skills": registry_skills,
-            "registry_scenarios": registry_scenarios,
-            "selected_runtime_skills": selected_runtime_skills,
-            "runtime_scenario_refs": runtime_scenario_refs,
-            "scenario_required_skills": scenario_required_skills,
-            "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
-            "fallback_used": fallback_used,
-            "project_materialization": project_materialization,
-            "reconcile": reconcile_result,
-            "semantic_registry": semantic_registry,
-            "application_auto_update": application_auto_update,
-            "error": f"workspace reconcile failed after Application update: {exc}",
-            "patterns": desired,
-            "source_alignment": source_alignment,
-        }
-
     return {
         "ok": True,
         "skills": skills,
@@ -827,8 +783,6 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
         "project_materialization": project_materialization,
         "reconcile": reconcile_result,
         "semantic_registry": semantic_registry,
-        "application_auto_update": application_auto_update,
-        "post_application_reconcile": post_application_reconcile,
         "patterns": desired,
         "source_alignment": source_alignment,
     }
@@ -863,10 +817,11 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
     """Synchronize registry source without racing project materialization.
 
     Sparse Git alignment mutates the same canonical component paths that a
-    project deployment replaces atomically.  Use the deployment mutation lock
-    across the complete synchronization (including automatic Application
-    updates, which are re-entrant in the owning thread) so a registry event
-    cannot restore tracked source files into an uncommitted package activation.
+    project deployment replaces atomically.  Keep source alignment, project
+    materialization restore, and registry import under the deployment mutation
+    lock.  Application updates run after that lock is released because the
+    deployment runtime executes component phases on its worker thread and owns
+    the same lock there.
     """
 
     lock_path = _project_deployment_mutation_lock_path(ctx)
@@ -874,7 +829,32 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         lock_path,
         timeout_s=_workspace_sync_mutation_timeout_s(),
     ):
-        return _sync_workspace_sparse_to_registry_unlocked(ctx)
+        result = _sync_workspace_sparse_to_registry_unlocked(ctx)
+
+    if not bool(result.get("ok")):
+        return result
+
+    application_auto_update = _automatic_application_update_result(
+        ctx,
+        result.get("semantic_registry"),
+    )
+    result["application_auto_update"] = application_auto_update
+    try:
+        result["post_application_reconcile"] = (
+            _reconcile_after_application_auto_update(
+                ctx,
+                application_auto_update,
+            )
+        )
+    except Exception as exc:
+        result["ok"] = False
+        result["error"] = (
+            f"workspace reconcile failed after Application update: {exc}"
+        )
+        errors = result.get("errors")
+        if isinstance(errors, list):
+            errors.append(f"post-Application-update reconcile: {exc}")
+    return result
 
 
 __all__ = [
