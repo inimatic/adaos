@@ -4,6 +4,9 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
+import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -24,6 +27,10 @@ from adaos.services.id_gen import new_id
 
 
 router = APIRouter(tags=["development-tickets"], dependencies=[Depends(require_token)])
+_LOG = logging.getLogger("adaos.development_tickets")
+_REPORT_SYNC_LOCK = threading.Lock()
+_REPORT_SYNC_NEXT_AT = 0.0
+_REPORT_SYNC_INTERVAL_SECONDS = 5.0
 
 
 def _get_service() -> DevelopmentTicketService:
@@ -38,6 +45,165 @@ def _get_automation_service() -> Any:
     from adaos.services.builder.automation import BuilderAutomationService
 
     return BuilderAutomationService.from_context()
+
+
+def _development_ticket_application_tokens(ticket: Mapping[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    fields = {
+        "application_id",
+        "application_ref",
+        "project_id",
+        "project_ref",
+        "scenario_id",
+        "scenario_ref",
+    }
+
+    def collect(value: Any, *, depth: int = 0) -> None:
+        if depth > 4 or not isinstance(value, Mapping):
+            return
+        kind = str(value.get("type") or value.get("kind") or "").strip().lower()
+        if kind in {"application", "project", "scenario", "modal"}:
+            token = str(value.get("id") or value.get("name") or "").strip().lower()
+            if token:
+                tokens.add(token.split(":")[-1])
+        for key, item in value.items():
+            if key in fields:
+                token = str(item or "").strip().lower()
+                if token:
+                    tokens.add(token.split(":")[-1])
+            elif isinstance(item, Mapping):
+                collect(item, depth=depth + 1)
+
+    for scope in (
+        ticket.get("target_scope"),
+        ticket.get("origin_scope"),
+        ticket.get("metadata"),
+    ):
+        collect(scope)
+    return tokens
+
+
+def _forward_ticket_to_application_publisher(
+    service: DevelopmentTicketService,
+    ticket_id: str,
+    *,
+    reports: Any | None = None,
+) -> None:
+    """Best-effort local-to-publisher bridge; the report outbox remains durable."""
+
+    ticket = service.get_ticket(ticket_id)
+    if not ticket or str(ticket.get("source") or "") not in {
+        "client_feedback",
+        "ui_feedback",
+    }:
+        return
+    tokens = _development_ticket_application_tokens(ticket)
+    if not tokens:
+        return
+    try:
+        from adaos.services.applications import get_development_report_service
+
+        reports = reports or get_development_report_service()
+        applications = reports.application_store.list_applications()
+        matches = []
+        for application in applications:
+            identities = {
+                application.application_id.lower(),
+                application.legacy_project_id.lower(),
+                application.slug.lower(),
+            }
+            for entrypoint in application.entrypoints:
+                presentation = str(entrypoint.get("presentation_ref") or "").strip().lower()
+                if presentation:
+                    identities.add(presentation.split(":")[-1])
+            if identities & tokens:
+                matches.append(application)
+        if len(matches) != 1 or matches[0].publisher_ref == reports.subnet_ref:
+            return
+        application = matches[0]
+        created = reports.create_report(
+            application_id=application.application_id,
+            summary=str(ticket.get("summary") or "")[:500],
+            details=json.dumps(
+                {
+                    "ticket_id": ticket_id,
+                    "target_scope": ticket.get("target_scope") or {},
+                    "origin_scope": ticket.get("origin_scope") or {},
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )[:8_000],
+            idempotency_key=f"dev-ticket:{ticket_id}",
+        )
+        service.link_development_report(
+            ticket_id,
+            report=created["report"],
+            relay=created.get("relay") if isinstance(created, Mapping) else None,
+        )
+    except Exception as exc:
+        _LOG.warning(
+            "Development Report forwarding deferred ticket_id=%s error=%s",
+            ticket_id,
+            type(exc).__name__,
+            exc_info=True,
+        )
+
+
+def _sync_ticket_development_reports(service: DevelopmentTicketService) -> None:
+    global _REPORT_SYNC_NEXT_AT
+
+    if not _REPORT_SYNC_LOCK.acquire(blocking=False):
+        return
+    try:
+        now = time.monotonic()
+        if now < _REPORT_SYNC_NEXT_AT:
+            return
+        _REPORT_SYNC_NEXT_AT = now + _REPORT_SYNC_INTERVAL_SECONDS
+
+        from adaos.services.applications import get_development_report_service
+
+        reports = get_development_report_service()
+        tickets = service.list_tickets(limit=1000)
+        for ticket in tickets:
+            linked = (
+                ticket.get("metadata", {}).get("development_report", {})
+                if isinstance(ticket.get("metadata"), Mapping)
+                else {}
+            )
+            if not str(linked.get("report_id") or "").strip():
+                _forward_ticket_to_application_publisher(
+                    service,
+                    str(ticket.get("ticket_id") or ""),
+                    reports=reports,
+                )
+        reports.flush_outbox(limit=50)
+        reports.receive(limit=50)
+        for ticket in service.list_tickets(limit=1000):
+            linked = (
+                ticket.get("metadata", {}).get("development_report", {})
+                if isinstance(ticket.get("metadata"), Mapping)
+                else {}
+            )
+            report_id = str(linked.get("report_id") or "").strip()
+            if not report_id:
+                continue
+            event = reports.public_status(report_id)
+            if not event:
+                continue
+            service.link_development_report(
+                str(ticket.get("ticket_id") or ""),
+                report={**dict(linked), **event},
+                relay={"local_status": "synced"},
+            )
+    except Exception as exc:
+        _LOG.debug(
+            "Development Report status synchronization deferred error=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+    finally:
+        _REPORT_SYNC_LOCK.release()
 
 
 def _source_recovery_required(exc: BuilderSourceRecoveryRequired) -> HTTPException:
@@ -1193,6 +1359,7 @@ def _artifact_manifest_path(service: DevelopmentTicketService, artifact_id: str)
 @router.get("")
 def list_tickets(
     request: Request,
+    background_tasks: BackgroundTasks,
     status_filter: str | None = Query(default=None, alias="status"),
     status_group: str | None = None,
     target_id: str | None = None,
@@ -1218,6 +1385,7 @@ def list_tickets(
     limit: int | None = Query(default=None, ge=0, le=1000),
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
+    background_tasks.add_task(_sync_ticket_development_reports, service)
     target_tokens = _query_filter_tokens(request, "target_id", "target_ids")
     ref_tokens = _query_filter_tokens(
         request,
@@ -1270,6 +1438,7 @@ def list_tickets(
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_ticket(
     body: DevTicketCreateRequest,
+    background_tasks: BackgroundTasks,
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
@@ -1326,6 +1495,12 @@ def create_ticket(
             signal_id=str(signal_result["signal"].get("signal_id") or ""),
             ticket_id=str(ticket.get("ticket_id") or ""),
         )
+        if not ticket_result.get("duplicate"):
+            background_tasks.add_task(
+                _forward_ticket_to_application_publisher,
+                service,
+                str(ticket.get("ticket_id") or ""),
+            )
         return {
             "ok": True,
             "signal": signal_result["signal"],

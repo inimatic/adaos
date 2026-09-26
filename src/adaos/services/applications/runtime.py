@@ -173,11 +173,18 @@ def create_local_development_report_service(
     subnet_ref: str,
     zone_id: str,
     display_name: str | None = None,
+    root_client: Any | None = None,
+    directory_client: Any | None = None,
+    root_client_for_zone: Callable[[str], Any] | None = None,
 ) -> Any:
     from .development_reports import DevelopmentReportService
     from .report_directory import SubnetKeyDirectoryAuthority, SubnetKeyDirectoryClient
     from .report_keys import SubnetPurposeKeyStore
-    from .report_relay import DurableDevelopmentReportRelay, HttpDevelopmentReportRelayPeer
+    from .report_relay import (
+        DurableDevelopmentReportRelay,
+        HttpDevelopmentReportRelayPeer,
+        RootMailboxDevelopmentReportRelay,
+    )
     from .report_classifier import OciDevelopmentReportClassifier
     from adaos.services.root.client import RootHttpClient
 
@@ -185,18 +192,33 @@ def create_local_development_report_service(
     keys = SubnetPurposeKeyStore(root)
     keys.ensure_key(subnet_ref, "message_signing")
     keys.ensure_key(subnet_ref, "message_encryption")
-    authority = SubnetKeyDirectoryAuthority(root, zone_id=zone_id)
-    projection = authority.publish_subnet(
-        subnet_ref,
-        home_zone=zone_id,
-        keys=keys.list_public(subnet_ref),
-        display_name=display_name,
-    )
     directory = SubnetKeyDirectoryClient()
     directory_path = str(
         os.getenv("ADAOS_DEVELOPMENT_REPORT_DIRECTORY_PROJECTION") or ""
     ).strip()
-    if directory_path:
+    use_root_mailbox = root_client is not None and str(
+        os.getenv("ADAOS_DEVELOPMENT_REPORT_ROOT_MAILBOX") or "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    if use_root_mailbox:
+        shared_client = directory_client or root_client
+        response = shared_client.publish_development_report_directory_entry(
+            subnet_ref=subnet_ref,
+            home_zone=zone_id,
+            keys=[item.to_dict() for item in keys.list_public(subnet_ref)],
+            display_name=display_name,
+        )
+        shared_projection = response.get("directory") if isinstance(response, Mapping) else None
+        if not isinstance(shared_projection, Mapping):
+            raise RuntimeError("Root returned no signed Development Report directory")
+        directory.update(shared_projection)
+
+        def refresh_directory() -> Mapping[str, Any]:
+            refreshed = shared_client.get_shared_development_report_directory()
+            projection = refreshed.get("directory") if isinstance(refreshed, Mapping) else None
+            if not isinstance(projection, Mapping):
+                raise RuntimeError("Root returned no signed Development Report directory")
+            return projection
+    elif directory_path:
         try:
             shared_projection = json.loads(
                 Path(directory_path).expanduser().resolve().read_text(encoding="utf-8")
@@ -208,13 +230,28 @@ def create_local_development_report_service(
             active = keys.active_key(subnet_ref, purpose)
             directory.key(subnet_ref, active.key_id, purpose, allow_retiring=False)
     else:
+        authority = SubnetKeyDirectoryAuthority(root, zone_id=zone_id)
+        projection = authority.publish_subnet(
+            subnet_ref,
+            home_zone=zone_id,
+            keys=keys.list_public(subnet_ref),
+            display_name=display_name,
+        )
         directory.update(projection)
-    relay = DurableDevelopmentReportRelay(root, zone_id=zone_id, directory=directory)
+    relay = (
+        RootMailboxDevelopmentReportRelay(
+            zone_id=zone_id,
+            directory=directory,
+            client_for_zone=root_client_for_zone or (lambda _zone: root_client),
+        )
+        if use_root_mailbox
+        else DurableDevelopmentReportRelay(root, zone_id=zone_id, directory=directory)
+    )
     peer_config_raw = str(
         os.getenv("ADAOS_DEVELOPMENT_REPORT_ROOT_PEERS_JSON") or ""
     ).strip()
     relay_peers: dict[str, HttpDevelopmentReportRelayPeer] = {}
-    if peer_config_raw:
+    if peer_config_raw and not use_root_mailbox:
         try:
             peer_config = json.loads(peer_config_raw)
         except json.JSONDecodeError as exc:
@@ -266,6 +303,7 @@ def create_local_development_report_service(
         relay=relay,
         classifier=classifier,
         relay_peers=relay_peers,
+        directory_refresher=refresh_directory if use_root_mailbox else None,
     )
 
 

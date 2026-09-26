@@ -20,7 +20,9 @@ from adaos.services.applications.report_keys import SubnetPurposeKeyStore
 from adaos.services.applications.report_relay import (
     DurableDevelopmentReportRelay,
     HttpDevelopmentReportRelayPeer,
+    RootMailboxDevelopmentReportRelay,
 )
+from adaos.domain.development_report import DevelopmentReportAck
 from adaos.services.root.client import RootHttpClient
 
 
@@ -175,6 +177,48 @@ def test_root_http_client_uses_bounded_report_relay_routes() -> None:
     assert client.calls[2][2]["json"]["source_identity"] == {"zone_id": "zone_a"}
 
 
+def test_root_http_client_uses_authenticated_mailbox_routes() -> None:
+    class Client(RootHttpClient):
+        def __init__(self) -> None:
+            super().__init__(base_url="https://zone.example", verify=True)
+            self.calls: list[tuple[str, str, dict[str, Any]]] = []
+
+        def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+            self.calls.append((method, path, kwargs))
+            if method == "GET" and path.endswith("/directory"):
+                return {"ok": True, "directory": {}}
+            if method == "GET":
+                return {"ok": True, "deliveries": []}
+            if path.endswith("/ack"):
+                return {"ok": True, "receipt": {}}
+            return {"ok": True, "accepted": True}
+
+    client = Client()
+    client.publish_development_report_directory_entry(
+        subnet_ref="subnet:one",
+        home_zone="zone_a",
+        display_name="One",
+        keys=[],
+    )
+    client.get_shared_development_report_directory()
+    client.enqueue_development_report_message(envelope={"message_id": "msg.one"})
+    client.poll_development_report_messages(limit=7)
+    client.acknowledge_development_report_message(
+        message_id="msg.one",
+        delivery_id="delivery.one",
+        disposition="accepted",
+    )
+
+    assert [(method, path) for method, path, _ in client.calls] == [
+        ("PUT", "/v1/hub/development-reports/directory"),
+        ("GET", "/v1/hub/development-reports/directory"),
+        ("POST", "/v1/hub/development-reports/messages"),
+        ("GET", "/v1/hub/development-reports/messages"),
+        ("POST", "/v1/hub/development-reports/messages/msg.one/ack"),
+    ]
+    assert client.calls[3][2]["params"] == {"limit": 7}
+
+
 def test_http_forward_retry_reuses_durable_offer_after_lost_response(tmp_path) -> None:
     _directory, source, destination, envelope = _relays(tmp_path)
 
@@ -236,3 +280,71 @@ def test_runtime_loads_pinned_http_peers_without_network_bootstrap(
 
     assert set(service.relay_peers) == {"zone_b"}
     assert service.relay_peers["zone_b"].public_identity() == destination.public_identity()
+
+
+def test_root_mailbox_transport_keeps_ciphertext_until_recipient_ack(tmp_path) -> None:
+    directory, _source, _destination, envelope = _relays(tmp_path)
+
+    class MailboxClient:
+        def __init__(self) -> None:
+            self.messages: dict[str, dict[str, Any]] = {}
+
+        def enqueue_development_report_message(self, *, envelope):
+            message_id = envelope["message_id"]
+            duplicate = message_id in self.messages
+            self.messages.setdefault(message_id, dict(envelope))
+            return {"accepted": True, "duplicate": duplicate, "message_id": message_id}
+
+        def poll_development_report_messages(self, *, limit):
+            return {
+                "deliveries": [
+                    {
+                        "delivery_id": f"delivery.{message_id}",
+                        "attempt": 1,
+                        "envelope": value,
+                    }
+                    for message_id, value in list(self.messages.items())[:limit]
+                ]
+            }
+
+        def acknowledge_development_report_message(
+            self, *, message_id, delivery_id, disposition
+        ):
+            self.messages.pop(message_id)
+            return {
+                "receipt": {
+                    "message_id": message_id,
+                    "delivery_id": delivery_id,
+                    "disposition": disposition,
+                }
+            }
+
+    mailbox = MailboxClient()
+
+    def resolver(_zone):
+        return mailbox
+
+    sender = RootMailboxDevelopmentReportRelay(
+        zone_id="zone_a", directory=directory, client_for_zone=resolver
+    )
+    recipient = RootMailboxDevelopmentReportRelay(
+        zone_id="zone_b", directory=directory, client_for_zone=resolver
+    )
+
+    assert sender.enqueue(envelope)["duplicate"] is False
+    assert sender.enqueue(envelope)["duplicate"] is True
+    delivery = recipient.poll("subnet:publisher", limit=1)[0]
+    assert delivery["envelope"]["ciphertext_b64"] == envelope.ciphertext_b64
+    assert envelope.message_id in mailbox.messages
+
+    receipt = recipient.acknowledge(
+        DevelopmentReportAck(
+            message_id=envelope.message_id,
+            recipient_subnet_ref="subnet:publisher",
+            disposition="accepted",
+            delivery_id=delivery["delivery_id"],
+            accepted_at="2026-09-05T00:00:00+00:00",
+        )
+    )
+    assert receipt["disposition"] == "accepted"
+    assert mailbox.messages == {}

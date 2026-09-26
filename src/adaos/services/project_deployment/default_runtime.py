@@ -888,7 +888,9 @@ def configure_default_distributed_runtimes(
             register_stable_source_publisher,
         )
         from adaos.services.applications.deployment_executor import ApplicationDeploymentExecutor
+        from adaos.services.root.client import RootHttpClient
         from adaos.services.root.service import RootDeveloperService
+        from adaos.services.zone_hosts import zone_public_base_url
 
         register_application_executor(
             ApplicationDeploymentExecutor(runtime=deployment, state_dir=state_dir)
@@ -899,12 +901,64 @@ def configure_default_distributed_runtimes(
         subnet_id = str(conf.subnet_id)
         subnet_ref = subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
         zone_id = str(getattr(conf, "zone_id", None) or "local")
+        report_root_url = str(
+            getattr(getattr(conf, "root_settings", None), "base_url", None)
+            or getattr(current.settings, "api_base", None)
+            or ""
+        ).rstrip("/")
+        report_cert_path = conf.hub_cert_path()
+        report_key_path = conf.hub_key_path()
+        report_ca_path = conf.ca_cert_path()
+        report_verify: str | bool = (
+            str(report_ca_path) if report_ca_path.exists() else True
+        )
+        report_cert = (
+            (str(report_cert_path), str(report_key_path))
+            if report_cert_path.exists() and report_key_path.exists()
+            else None
+        )
+        report_root_client = (
+            RootHttpClient(
+                base_url=report_root_url,
+                verify=report_verify,
+                cert=report_cert,
+            )
+            if report_root_url and report_cert is not None
+            else None
+        )
+        directory_root_url = str(
+            os.getenv("ADAOS_DEVELOPMENT_REPORT_DIRECTORY_ROOT_URL") or report_root_url
+        ).strip().rstrip("/")
+        directory_root_client = (
+            RootHttpClient(
+                base_url=directory_root_url,
+                verify=report_verify,
+                cert=report_cert,
+            )
+            if directory_root_url and report_cert is not None
+            else None
+        )
+
+        def report_client_for_zone(target_zone: str) -> RootHttpClient:
+            if report_root_client is None or report_cert is None:
+                raise RuntimeError("Root Development Report mailbox is not configured")
+            if str(target_zone or "").strip().lower() == zone_id.lower():
+                return report_root_client
+            return RootHttpClient(
+                base_url=zone_public_base_url(target_zone),
+                verify=report_verify,
+                cert=report_cert,
+            )
+
         register_development_report_service_factory(
             lambda: create_local_development_report_service(
                 state_dir,
                 subnet_ref=subnet_ref,
                 zone_id=zone_id,
                 display_name=str(getattr(conf, "subnet_alias", None) or subnet_id),
+                root_client=report_root_client,
+                directory_client=directory_root_client,
+                root_client_for_zone=report_client_for_zone,
             )
         )
         stable_repository = str(

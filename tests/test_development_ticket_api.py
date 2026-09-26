@@ -2011,3 +2011,72 @@ def test_existing_external_issue_can_be_linked_without_becoming_authoritative(tm
     assert ref["issue_id"] == "42"
     assert ref["sync_mode"] == "link_only"
     assert linked.json()["ticket"]["status"] == created["status"]
+
+
+def test_report_sync_retries_unlinked_feedback_and_coalesces_polling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="Publisher should receive this ticket",
+        owner_scope={"type": "workspace", "id": "local"},
+        origin_scope={"type": "ui", "surface": "application"},
+        target_scope={"type": "application", "id": "mail_focus_reader"},
+        source="client_feedback",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="development_request",
+        source="client_feedback",
+    )["ticket"]
+
+    class _Reports:
+        def __init__(self) -> None:
+            self.flushes = 0
+            self.receives = 0
+
+        def flush_outbox(self, *, limit: int) -> None:
+            self.flushes += limit
+
+        def receive(self, *, limit: int) -> None:
+            self.receives += limit
+
+        def public_status(self, report_id: str):
+            return None
+
+    reports = _Reports()
+    forwarded: list[str] = []
+    monkeypatch.setattr(tickets_api, "_REPORT_SYNC_NEXT_AT", 0.0)
+    monkeypatch.setattr(
+        "adaos.services.applications.get_development_report_service",
+        lambda: reports,
+    )
+    monkeypatch.setattr(
+        tickets_api,
+        "_forward_ticket_to_application_publisher",
+        lambda _service, ticket_id, **_kwargs: forwarded.append(ticket_id),
+    )
+
+    tickets_api._sync_ticket_development_reports(service)
+    tickets_api._sync_ticket_development_reports(service)
+
+    assert forwarded == [ticket["ticket_id"]]
+    assert reports.flushes == 50
+    assert reports.receives == 50
+
+
+def test_application_tokens_include_nested_scenario_identity() -> None:
+    tokens = tickets_api._development_ticket_application_tokens(
+        {
+            "target_scope": {
+                "type": "modal",
+                "id": "message-editor",
+                "scenario_ref": "scenario:mail_focus_reader",
+            },
+            "origin_scope": {"application_id": "adaos_drive"},
+        }
+    )
+
+    assert tokens == {"message-editor", "mail_focus_reader", "adaos_drive"}

@@ -5530,6 +5530,61 @@ class DevelopmentTicketService:
             self._write(state)
             return _normalized_ticket(ticket)
 
+    def link_development_report(
+        self,
+        ticket_id: str,
+        *,
+        report: Mapping[str, Any],
+        relay: Mapping[str, Any] | None = None,
+        actor: str = "system:development_report",
+    ) -> dict[str, Any]:
+        """Attach the public publisher feedback identity to a local ticket."""
+
+        report_id = _text(report.get("report_id"))
+        if not report_id:
+            raise ValueError("Development Report identity is required")
+        with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
+            state = self._read()
+            ticket = state["tickets"].get(_text(ticket_id))
+            if not ticket:
+                raise KeyError(ticket_id)
+            metadata = _mapping(ticket.get("metadata"))
+            existing = _mapping(metadata.get("development_report"))
+            linked = {
+                "schema": "adaos.dev_ticket.development_report_link.v1",
+                "report_id": report_id,
+                "application_id": _text(report.get("application_id")) or None,
+                "publisher_ref": _text(report.get("publisher_ref")) or None,
+                "status": _text(report.get("status")) or "queued",
+                "revision": int(report.get("revision") or 1),
+                "relay_status": _text(_mapping(relay).get("local_status")) or None,
+                "updated_at": _now(),
+            }
+            if existing.get("report_id") not in {None, "", report_id}:
+                raise ValueError("Dev Ticket already links another Development Report")
+            if {
+                key: value for key, value in existing.items() if key != "updated_at"
+            } == {
+                key: value for key, value in linked.items() if key != "updated_at"
+            }:
+                return _normalized_ticket(ticket)
+            metadata["development_report"] = linked
+            ticket["metadata"] = metadata
+            ticket["updated_at"] = linked["updated_at"]
+            self._append_history(
+                ticket,
+                {
+                    "kind": "development_report_linked",
+                    "actor": _text(actor) or "system:development_report",
+                    "report_id": report_id,
+                    "status": linked["status"],
+                    "recorded_at": linked["updated_at"],
+                },
+            )
+            self._validate_ticket(ticket)
+            self._write(state)
+            return _normalized_ticket(ticket)
+
     def assist_ticket_comment(
         self,
         ticket_id: str,

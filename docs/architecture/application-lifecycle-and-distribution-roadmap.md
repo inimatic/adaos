@@ -944,6 +944,21 @@ prerelease, and stable publication then append idempotent exact-digest report
 status announcements. This closes the release/report coupling at contract and
 hermetic-service level; the clean guest/publisher proof remains `APP6`.
 
+Implementation correction, 2026-09-26: the earlier implementation note
+overstated the production status of `APP5-03`. The durable relay had been
+exercised with two services sharing one test mailbox, while normal runtime
+composition created one mailbox per Hub state directory. That topology could
+not deliver between real subnets. Production composition now publishes each
+Hub's purpose-scoped public message keys to an mTLS-authenticated Root
+directory and uses a PostgreSQL-backed zonal Root mailbox for opaque encrypted
+envelopes, delivery attempts, idempotent replay, and ACK-driven ciphertext
+deletion. UI feedback for an installed remotely published Application is
+bridged idempotently from its local Dev Ticket to a `DevelopmentReport`; public
+status is linked back without copying internal comments or Builder state.
+`APP5-03` is therefore implemented on the production rail, but its clean
+two-machine proof remains part of `APP6-02`. The old per-Hub mailbox remains an
+explicit offline/test compatibility transport, not evidence of federation.
+
 ## APP6. Full End-to-End Release Proof
 
 **Outcome:** the main single-publisher track is proven before security and

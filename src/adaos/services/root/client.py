@@ -1081,6 +1081,80 @@ class RootHttpClient:
             )
         )
 
+    def publish_development_report_directory_entry(
+        self,
+        *,
+        subnet_ref: str,
+        home_zone: str,
+        keys: list[Mapping[str, Any]],
+        display_name: str | None = None,
+    ) -> dict:
+        return dict(
+            self.request(
+                "PUT",
+                "/v1/hub/development-reports/directory",
+                json={
+                    "subnet_ref": subnet_ref,
+                    "home_zone": home_zone,
+                    "display_name": display_name,
+                    "keys": [dict(item) for item in keys],
+                },
+                timeout=30.0,
+            )
+        )
+
+    def get_shared_development_report_directory(self) -> dict:
+        return dict(
+            self.request(
+                "GET",
+                "/v1/hub/development-reports/directory",
+                timeout=30.0,
+            )
+        )
+
+    def enqueue_development_report_message(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+    ) -> dict:
+        return dict(
+            self.request(
+                "POST",
+                "/v1/hub/development-reports/messages",
+                json={"envelope": dict(envelope)},
+                timeout=30.0,
+            )
+        )
+
+    def poll_development_report_messages(self, *, limit: int = 20) -> dict:
+        return dict(
+            self.request(
+                "GET",
+                "/v1/hub/development-reports/messages",
+                params={"limit": max(1, min(int(limit), 100))},
+                timeout=30.0,
+            )
+        )
+
+    def acknowledge_development_report_message(
+        self,
+        *,
+        message_id: str,
+        delivery_id: str,
+        disposition: str,
+    ) -> dict:
+        return dict(
+            self.request(
+                "POST",
+                f"/v1/hub/development-reports/messages/{quote(message_id, safe='')}/ack",
+                json={
+                    "delivery_id": delivery_id,
+                    "disposition": disposition,
+                },
+                timeout=30.0,
+            )
+        )
+
     def put_artifact_package_bytes(
         self,
         *,

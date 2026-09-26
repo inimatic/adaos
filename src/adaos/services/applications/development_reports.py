@@ -26,9 +26,7 @@ from adaos.services.applications.report_directory import SubnetKeyDirectoryClien
 from adaos.services.applications.report_keys import SubnetPurposeKeyStore
 from adaos.services.applications.report_relay import (
     DevelopmentReportRelayPeer,
-    DevelopmentReportRelayBackpressure,
     DevelopmentReportRelayError,
-    DurableDevelopmentReportRelay,
 )
 from adaos.services.applications.store import ApplicationStore
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
@@ -122,10 +120,11 @@ class DevelopmentReportService:
         application_store: ApplicationStore,
         key_store: SubnetPurposeKeyStore,
         directory: SubnetKeyDirectoryClient,
-        relay: DurableDevelopmentReportRelay,
+        relay: Any,
         ticket_service: DevelopmentTicketService | None = None,
         classifier: DevelopmentReportClassifier | None = None,
         relay_peers: Mapping[str, DevelopmentReportRelayPeer] | None = None,
+        directory_refresher: Callable[[], Mapping[str, Any]] | None = None,
         now: Callable[[], datetime] = _now,
     ) -> None:
         self.state_dir = Path(state_dir).expanduser().resolve()
@@ -135,6 +134,7 @@ class DevelopmentReportService:
         self.application_store = application_store
         self.key_store = key_store
         self.directory = directory
+        self.directory_refresher = directory_refresher
         self.relay = relay
         self.relay_peers = {
             str(zone).strip().lower(): peer
@@ -145,6 +145,11 @@ class DevelopmentReportService:
         self.crypto = DevelopmentReportEnvelopeCrypto(key_store=key_store, directory=directory, now=now)
         self.store = DevelopmentReportStore(self.state_dir, subnet_ref=self.subnet_ref)
         self.now = now
+
+    def _seal(self, *args: Any, **kwargs: Any):
+        if self.directory_refresher is not None:
+            self.directory.update(self.directory_refresher())
+        return self.crypto.seal(*args, **kwargs)
 
     def ensure_message_keys(self) -> tuple[dict[str, Any], dict[str, Any]]:
         signing = self.key_store.ensure_key(self.subnet_ref, "message_signing")
@@ -295,7 +300,7 @@ class DevelopmentReportService:
             verify_local_installation=True,
         )
         message_id = _id("msg", report.report_id, "report", report.revision)
-        envelope = self.crypto.seal(
+        envelope = self._seal(
             report.to_dict(), message_kind="report", sender_subnet_ref=self.subnet_ref,
             recipient_subnet_ref=application.publisher_ref, message_id=message_id,
         )
@@ -352,7 +357,7 @@ class DevelopmentReportService:
             return {"accepted": True, "duplicate": True, "message_id": message_id, "local_status": "sent"}
         try:
             result = self.relay.enqueue(item["envelope"])
-        except DevelopmentReportRelayBackpressure as exc:
+        except DevelopmentReportRelayError as exc:
             return {"accepted": False, "duplicate": False, "message_id": message_id, "local_status": "queued", "reason": str(exc)}
         destination_zone = str(item["envelope"].get("destination_zone") or "").lower()
         if destination_zone and destination_zone != self.relay.zone_id:
@@ -464,7 +469,7 @@ class DevelopmentReportService:
 
     def _send_status(self, report: DevelopmentReport, event: DevelopmentReportStatusEvent) -> dict[str, Any]:
         message_id = _id("msg", report.report_id, "status", event.revision)
-        envelope = self.crypto.seal(
+        envelope = self._seal(
             event.to_dict(), message_kind="status", sender_subnet_ref=self.subnet_ref,
             recipient_subnet_ref=report.reporter_subnet_ref, message_id=message_id,
         )
@@ -758,7 +763,7 @@ class DevelopmentReportService:
             "release_digest": release_digest, "outcome": outcome, "created_at": _iso(self.now()),
         }
         message_id = _id("msg", report_id, "verification", release_digest, outcome)
-        envelope = self.crypto.seal(payload, message_kind="verification", sender_subnet_ref=self.subnet_ref, recipient_subnet_ref=report.publisher_ref, message_id=message_id)
+        envelope = self._seal(payload, message_kind="verification", sender_subnet_ref=self.subnet_ref, recipient_subnet_ref=report.publisher_ref, message_id=message_id)
         self.store.mutate(lambda state: state["outbox"].setdefault(message_id, {"kind": "verification", "envelope": envelope.to_dict(), "status": "queued", "created_at": _iso(self.now())}))
         result = self._dispatch_outbox(message_id)
         return {"verification": payload, "message_id": message_id, "relay": result}
@@ -788,7 +793,7 @@ class DevelopmentReportService:
             created_at=_iso(self.now()),
         )
         message_id = _id("msg", report_id, "resync", after_revision, limit)
-        envelope = self.crypto.seal(request.to_dict(), message_kind="resync", sender_subnet_ref=self.subnet_ref, recipient_subnet_ref=report.publisher_ref, message_id=message_id)
+        envelope = self._seal(request.to_dict(), message_kind="resync", sender_subnet_ref=self.subnet_ref, recipient_subnet_ref=report.publisher_ref, message_id=message_id)
         self.store.mutate(lambda state: state["outbox"].setdefault(message_id, {"kind": "resync", "envelope": envelope.to_dict(), "status": "queued", "created_at": _iso(self.now())}))
         return {"request": request.to_dict(), "message_id": message_id, "relay": self._dispatch_outbox(message_id)}
 
@@ -807,7 +812,7 @@ class DevelopmentReportService:
             "generated_at": _iso(self.now()),
         }
         message_id = _id("msg", report.report_id, "resync_snapshot", request.request_id)
-        sealed = self.crypto.seal(snapshot, message_kind="resync_snapshot", sender_subnet_ref=self.subnet_ref, recipient_subnet_ref=report.reporter_subnet_ref, message_id=message_id)
+        sealed = self._seal(snapshot, message_kind="resync_snapshot", sender_subnet_ref=self.subnet_ref, recipient_subnet_ref=report.reporter_subnet_ref, message_id=message_id)
         self.store.mutate(lambda state: state["outbox"].setdefault(message_id, {"kind": "resync_snapshot", "envelope": sealed.to_dict(), "status": "queued", "created_at": _iso(self.now())}))
         return {"ok": True, "report_id": report.report_id, "message_id": message_id, "relay": self._dispatch_outbox(message_id)}
 
@@ -893,7 +898,7 @@ class DevelopmentReportService:
             updated_at=_iso(self.now()),
         )
         message_id = _id("msg", appeal.appeal_id, "appeal", appeal.revision)
-        envelope = self.crypto.seal(
+        envelope = self._seal(
             appeal.to_dict(),
             message_kind="appeal",
             sender_subnet_ref=self.subnet_ref,
@@ -1021,7 +1026,7 @@ class DevelopmentReportService:
         response_message_id = _id(
             "msg", appeal.appeal_id, "appeal_response", resolved.revision
         )
-        response_envelope = self.crypto.seal(
+        response_envelope = self._seal(
             resolved.to_dict(),
             message_kind="appeal_response",
             sender_subnet_ref=self.subnet_ref,
@@ -1034,7 +1039,7 @@ class DevelopmentReportService:
             _id("msg", report.report_id, "status", event.revision) if event is not None else None
         )
         status_envelope = (
-            self.crypto.seal(
+            self._seal(
                 event.to_dict(),
                 message_kind="status",
                 sender_subnet_ref=self.subnet_ref,

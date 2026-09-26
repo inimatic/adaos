@@ -1489,6 +1489,24 @@ consumers deduplicate by report/event identity. ACK, TTL, dead-letter,
 backpressure, ordering, replay protection, and status resynchronization are
 explicit protocol concerns.
 
+Runtime deployments use the mTLS Hub identity to publish only the Hub's
+purpose-scoped public keys and to access the zonal Root mailbox. Root persists
+the canonical encrypted envelope in PostgreSQL and deletes its ciphertext only
+after an exact recipient delivery ACK. A local per-Hub mailbox is permitted for
+offline tests, but is not a federated transport and must never be reported as
+cross-subnet delivery evidence. The signed directory may be hosted at a common
+global Root while encrypted mailboxes remain in the destination zone; a Hub
+resolves the destination zone before enqueue and does not guess hostnames from
+arbitrary zone strings.
+
+User-facing Dev Tickets remain local records. When feedback unambiguously
+targets an installed Application whose Publisher is another subnet, AdaOS
+creates one idempotent `DevelopmentReport` (`dev-ticket:<ticket-id>`) in the
+background and stores only its public identity/status on the local ticket.
+After an exact addressed release is installed, the update notification may
+thank the user and count only report IDs owned by that reporting subnet; it
+must not imply that unrelated reports in the same release were theirs.
+
 A signed subnet directory resolves `subnet_id` to home zone and active public
 keys. Root-to-Root transport is authenticated. Forwarding records hop limit,
 route generation, destination acceptance, and publisher delivery receipts to

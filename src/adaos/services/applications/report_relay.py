@@ -88,6 +88,131 @@ class HttpDevelopmentReportRelayPeer:
         return dict(receipt)
 
 
+class RootMailboxDevelopmentReportRelay:
+    """Use the authenticated zonal Root as the durable opaque mailbox.
+
+    The Hub still seals and opens every envelope. Root receives only routing
+    metadata and ciphertext, and owns delivery attempts/ACK persistence while
+    a Hub is offline.
+    """
+
+    def __init__(
+        self,
+        *,
+        zone_id: str,
+        directory: SubnetKeyDirectoryClient,
+        client_for_zone: Callable[[str], Any],
+    ) -> None:
+        self.zone_id = str(zone_id or "").strip().lower()
+        if not self.zone_id:
+            raise DevelopmentReportRelayError("zone_id is required")
+        self.directory = directory
+        self.client_for_zone = client_for_zone
+
+    def enqueue(
+        self,
+        envelope: DevelopmentReportEnvelope | Mapping[str, Any],
+    ) -> dict[str, Any]:
+        value = (
+            envelope
+            if isinstance(envelope, DevelopmentReportEnvelope)
+            else DevelopmentReportEnvelope.from_mapping(envelope)
+        )
+        if value.source_zone != self.zone_id:
+            raise DevelopmentReportRelayError(
+                "sender must enqueue through its home-zone Root"
+            )
+        if self.directory.home_zone(value.sender_subnet_ref) != value.source_zone:
+            raise DevelopmentReportRelayError(
+                "relay source conflicts with signed directory"
+            )
+        if (
+            self.directory.home_zone(value.recipient_subnet_ref)
+            != value.destination_zone
+        ):
+            raise DevelopmentReportRelayError(
+                "relay destination conflicts with signed directory"
+            )
+        try:
+            response = self.client_for_zone(
+                value.destination_zone
+            ).enqueue_development_report_message(envelope=value.to_dict())
+        except Exception as exc:
+            status = int(getattr(exc, "status_code", 0) or 0)
+            if status == 429:
+                raise DevelopmentReportRelayBackpressure(
+                    "Root relay recipient mailbox limit reached"
+                ) from exc
+            raise DevelopmentReportRelayError(
+                "Root Development Report mailbox is unavailable"
+            ) from exc
+        if not isinstance(response, Mapping) or not response.get("accepted"):
+            raise DevelopmentReportRelayError(
+                "Root Development Report mailbox rejected the envelope"
+            )
+        return {
+            "accepted": True,
+            "duplicate": bool(response.get("duplicate")),
+            "message_id": value.message_id,
+        }
+
+    def poll(
+        self, recipient_subnet_ref: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        if self.directory.home_zone(recipient_subnet_ref) != self.zone_id:
+            raise DevelopmentReportRelayError(
+                "recipient does not belong to this Root zone"
+            )
+        try:
+            response = self.client_for_zone(
+                self.zone_id
+            ).poll_development_report_messages(limit=limit)
+        except Exception as exc:
+            raise DevelopmentReportRelayError(
+                "Root Development Report mailbox is unavailable"
+            ) from exc
+        deliveries = response.get("deliveries") if isinstance(response, Mapping) else None
+        if not isinstance(deliveries, list):
+            raise DevelopmentReportRelayError(
+                "Root Development Report mailbox returned an invalid delivery batch"
+            )
+        return [dict(item) for item in deliveries if isinstance(item, Mapping)]
+
+    def acknowledge(
+        self, ack: DevelopmentReportAck | Mapping[str, Any]
+    ) -> dict[str, Any]:
+        value = (
+            ack
+            if isinstance(ack, DevelopmentReportAck)
+            else DevelopmentReportAck.from_mapping(ack)
+        )
+        try:
+            response = self.client_for_zone(
+                self.zone_id
+            ).acknowledge_development_report_message(
+                message_id=value.message_id,
+                delivery_id=value.delivery_id,
+                disposition=value.disposition,
+            )
+        except Exception as exc:
+            raise DevelopmentReportRelayError(
+                "Root Development Report mailbox ACK failed"
+            ) from exc
+        receipt = response.get("receipt") if isinstance(response, Mapping) else None
+        if not isinstance(receipt, Mapping):
+            raise DevelopmentReportRelayError(
+                "Root Development Report mailbox returned no ACK receipt"
+            )
+        return dict(receipt)
+
+    def pending_forwards(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        del limit
+        return []
+
+    def public_identity(self) -> dict[str, str]:
+        return {"zone_id": self.zone_id, "transport": "root_mailbox.v1"}
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -499,4 +624,5 @@ __all__ = [
     "DevelopmentReportRelayPeer",
     "DurableDevelopmentReportRelay",
     "HttpDevelopmentReportRelayPeer",
+    "RootMailboxDevelopmentReportRelay",
 ]
