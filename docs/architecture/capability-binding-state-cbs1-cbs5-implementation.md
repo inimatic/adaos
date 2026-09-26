@@ -211,7 +211,7 @@ active on `192.168.0.30`:
 | `cv_descriptor_lab` | `0.1.19` | `sha256:c1ce20e76249515da99dd3e24cc37e5b5fb4592496fc1b481319e09de7788396` |
 | `semantic_ui_demo` | `0.10.28` | `sha256:675f32d34f00fbc0ec6e68f61997fe0d1bb7aecacbd3e51d1ae3ac0f0627efc0` |
 | `flowboard_lab_for_safely_prototyping_a_r_17528146` | `0.1.17` | `sha256:9794e4f50c83b45d7772b4c7d5832c39b4fe89c6b0872d6b281acb03756080f4` |
-| `media_center` | `0.6.111` | `sha256:a9205da153f254dc02e0c29aaf6629233b0125605268d06990a1351816e6cf34` |
+| `media_center` | `0.6.114` | `sha256:4c47394b70f86cecf82c93c18029732b121f5a452358e6dd9d38d2430eaa9c7e` |
 | `notebook` | `0.1.2` | `sha256:5af5487a9fdddf83fb0566255d3b1e98e5daf60e72b05ae9a5339cccaf5a9275` |
 | `redevice_control` | `0.1.22` | `sha256:c15939868394b4de6e4fc1de7b1db28379eb9470123b96692fcbc5f014428fb8` |
 | `research_platform` | `0.1.21` | `sha256:758e6dac8a7bbf92b46400fd6de9680ce5f5277ae5c5a2ab3bf4eb20d08e40f7` |
@@ -248,6 +248,36 @@ results converge. The published Core merge commit is
 `e4ed1f10c9857e061fa1bbacdb29aacc6a3ea2b8`. The next run applied exactly one
 update with zero failed and zero uncertain operations, advancing Media Center
 to `0.6.111`.
+
+A subsequent runtime-degradation investigation found that terminal rendition
+and scan snapshots were replaying `media_library_agent.catalog.changed`. That
+made a read-side snapshot request look like a new catalog mutation and could
+form a refresh feedback loop. The provider now carries an internal
+`_publish_catalog_change=false` marker on snapshot replay, removes the marker
+before publishing the stream payload, and emits the catalog event only for a
+real terminal transition. The regression is covered by the provider's full
+100-test suite.
+
+The first attempted publication exposed a separate source-authority hazard.
+`media_center@0.6.113` contained the advanced `media_library_agent@0.6.52`
+manifest but not the handler change because the edit had been made in the
+managed runtime projection rather than the authoritative owner-development
+workspace. The final checkpoint was therefore rebuilt from
+`b3ff84c35be31bffd3c8d76d4fd473ab157131ca`; its immutable provider package was
+inspected before promotion and contains `media_library_agent@0.6.54`, digest
+`sha256:205f206c38665cd2ecc5f777ac1ab6b0e28e58172b707f92b332a9ce7083bb4d`.
+The accepted Application release is `media_center@0.6.114`, digest
+`sha256:4c47394b70f86cecf82c93c18029732b121f5a452358e6dd9d38d2430eaa9c7e`.
+
+On `192.168.0.30`, registry notification and auto-update deployed all four
+exact packages successfully. The inner deployment completed, but its outer
+`ApplicationOperation` remained `applying`; the governed reconciliation API
+observed the exact succeeded deployment and atomically committed installation
+revision 7. Forced rendition and scan snapshot requests after activation
+produced no `catalog.changed` event. This closes the Media feedback-loop proof,
+but automatic bridging of a completed inner deployment to an interrupted outer
+Application operation remains required under MUST Dev Ticket
+`dticket.01M3FA71K71C9ES1F5Y2S87RGV`.
 
 Four publication/CBS reuse development tickets for Builder and ReDevice are
 verified against exact release, deployment, CBS lifecycle, and independent

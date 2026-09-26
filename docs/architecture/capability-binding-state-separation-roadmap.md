@@ -114,6 +114,26 @@ materialization-status hydration. Duplicate `adaos_connect` view
 materialization and SQLite/fsync pressure remain explicit runtime performance
 debt.
 
+Runtime-degradation follow-up, 2026-09-26: live logs traced a Media Center
+feedback loop to terminal `media_library_agent` snapshot replays emitting
+`catalog.changed` as if a new job had completed. The correction now marks
+snapshot replay as non-authoritative, strips the internal marker before stream
+delivery, and emits the catalog event only for a real terminal transition.
+An intermediate `0.6.113` release proved that publication preflight must
+inspect the authoritative owner-development workspace rather than its managed
+runtime projection: its manifest advanced, but the intended handler change was
+absent. The final `media_center@0.6.114` release
+`sha256:4c47394b70f86cecf82c93c18029732b121f5a452358e6dd9d38d2430eaa9c7e`
+contains exact `media_library_agent@0.6.54` package
+`sha256:205f206c38665cd2ecc5f777ac1ab6b0e28e58172b707f92b332a9ce7083bb4d`.
+The package was inspected before promotion, all 100 provider tests passed, and
+forced rendition/scan snapshot requests on the independent subnet emitted no
+new `catalog.changed` event. Auto-update deployed all four components and the
+governed reconciliation API committed installation revision 7; automatic
+reconciliation of a completed inner deployment whose outer
+`ApplicationOperation` remains `applying` is tracked as MUST Dev Ticket
+`dticket.01M3FA71K71C9ES1F5Y2S87RGV`.
+
 ## Outcome
 
 AdaOS can preserve Application and eligible state identities while changing a
