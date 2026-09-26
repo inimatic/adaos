@@ -549,7 +549,11 @@ class ApplicationStore:
         from .runtime_channel import ApplicationRuntimeChannel
 
         channels = ApplicationRuntimeChannel.list_selections(self.state_dir)
-        application_ids = {item.application_id for item in channels}
+        # An empty channel is an authoritative removal tombstone and must mask
+        # legacy JSON projections just as a selected channel does.
+        application_ids = ApplicationRuntimeChannel.list_application_ids(
+            self.state_dir
+        )
         values = [item for item in self._list_current("runtime_selections", RuntimeSelection.from_mapping)
                   if item.application_id not in application_ids] + list(channels)
         return tuple(sorted(values, key=lambda item: (item.webspace_id, item.application_id)))

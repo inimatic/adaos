@@ -1022,6 +1022,18 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(
     assert updated.status == "succeeded"
     assert updated.result["installation"]["snapshot_ref"] == "snapshot:recipes:1"
 
+    service.select_runtime(
+        webspace_id="desktop",
+        application_id="app_recipes",
+        source="stable_installation",
+        release_digest=second.release_digest,
+        runtime_root_ref="workspace",
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
     simulation = service.simulate_removal("app_recipes", data_policy="retain")
     assert simulation["components"][0]["remove_package"] is True
     remove = service.plan_operation(
@@ -1044,6 +1056,9 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(
     )
     assert removed.status == "succeeded"
     assert removed.result["installation"]["status"] == "removed"
+    with pytest.raises(FileNotFoundError):
+        service.store.get_runtime_selection("desktop", "app_recipes")
+    assert service.store.list_runtime_selections() == ()
 
 
 def test_install_materializes_only_declared_grant_on_install_access(

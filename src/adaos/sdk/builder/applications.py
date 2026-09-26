@@ -910,12 +910,23 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
         raise ValueError("RuntimeSelection changed; reopen the Candidate changelog")
     if selection.source not in {"local_trial", "stable_installation"}:
         raise ValueError("Only the publisher's local Trial can be accepted into Workspace")
-    scenario_id = _primary_scenario(application)
-    try:
-        state = workflow.get_state("scenario", scenario_id)
-    except FileNotFoundError:
+    scenario_refs = [
+        str(item.get("presentation_ref") or "").removeprefix("scenario:")
+        for item in application.entrypoints
+        if str(item.get("presentation_ref") or "").startswith("scenario:")
+    ]
+    scenario_id = scenario_refs[0] if scenario_refs else ""
+    if scenario_id:
+        try:
+            state = workflow.get_state("scenario", scenario_id)
+        except FileNotFoundError:
+            state = {}
+    else:
+        # Skill-owned Application entrypoints have no mutable Scenario
+        # workflow projection. Their exact immutable Candidate and selected
+        # Trial evidence form the publication authority below.
         state = {}
-    workflow_matches = lifecycle._candidate_identity(state) == (
+    workflow_matches = bool(scenario_id) and lifecycle._candidate_identity(state) == (
         candidate_id,
         candidate_digest,
     )

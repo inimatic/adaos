@@ -840,8 +840,11 @@ def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publ
     assert effects == []
 
 
+@pytest.mark.parametrize(
+    "presentation_ref", ["scenario:test", "skill:test_skill"]
+)
 def test_local_trial_acceptance_resumes_exact_selected_candidate_when_workflow_is_stale(
-    monkeypatch,
+    monkeypatch, presentation_ref,
 ):
     from adaos.sdk.builder import workflow
     from adaos.sdk.developer import projects
@@ -852,7 +855,7 @@ def test_local_trial_acceptance_resumes_exact_selected_candidate_when_workflow_i
         revision=14,
     )
     release = SimpleNamespace(accepted_candidate_id="selected-candidate")
-    app = SimpleNamespace(entrypoints=({"presentation_ref": "scenario:test"},))
+    app = SimpleNamespace(entrypoints=({"presentation_ref": presentation_ref},))
     store = SimpleNamespace(
         get_application=lambda _application_id: app,
         get_runtime_selection=lambda *_args: selection,

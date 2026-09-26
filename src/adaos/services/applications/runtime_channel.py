@@ -119,6 +119,35 @@ class ApplicationRuntimeChannel:
                 raise
         return tuple(values)
 
+    @classmethod
+    def list_application_ids(cls, state_dir: Path) -> frozenset[str]:
+        """Return identities with an authoritative channel, including empty ones."""
+
+        root = (Path(state_dir) / "applications/runtime_channels").absolute()
+        values = set()
+        for path in root.glob("*.sqlite3"):
+            with closing(
+                sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.25)
+            ) as connection:
+                if not connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel'"
+                ).fetchone():
+                    continue
+                row = connection.execute(
+                    "SELECT document FROM channel WHERE id=1"
+                ).fetchone()
+                if row is None:
+                    raise RuntimeChannelConflict("Application channel record is missing")
+                identity = str(json.loads(row[0]).get("application_id") or "")
+                channel = cls(state_dir, identity)
+                if channel.path.name != path.name:
+                    raise RuntimeChannelConflict(
+                        "Application channel path identity mismatch"
+                    )
+                channel._decode(row[0])
+                values.add(identity)
+        return frozenset(values)
+
     def select(self, value: RuntimeSelection, *, expected_revision: int,
                legacy: Sequence[RuntimeSelection] = ()) -> RuntimeSelection:
         from adaos.services.applications.store import ApplicationRevisionConflict
@@ -148,6 +177,18 @@ class ApplicationRuntimeChannel:
             connection.execute("UPDATE channel SET document=? WHERE id=1", (self._encode(projected),))
             connection.commit()
             return value
+
+    def retire(self, *, legacy: Sequence[RuntimeSelection] = ()) -> None:
+        """Atomically fence execution and retire all Webspace selections."""
+
+        with self._connection() as connection:
+            self._initialize(connection, legacy)
+            connection.execute("BEGIN EXCLUSIVE")
+            self._assert_available(connection)
+            connection.execute(
+                "UPDATE channel SET document=? WHERE id=1", (self._encode(()),)
+            )
+            connection.commit()
 
     @contextmanager
     def execution(self, runtime_root_ref: str, release_digest: str, *,

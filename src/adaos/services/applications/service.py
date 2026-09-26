@@ -17,6 +17,7 @@ from adaos.domain.artifact_release import WorkspaceLock, canonical_payload_diges
 from adaos.domain.application_access import classify_access_profile_diff
 
 from .store import ApplicationStore
+from .runtime_channel import ApplicationRuntimeChannel
 
 
 class ApplicationServiceError(RuntimeError):
@@ -1350,6 +1351,14 @@ class ApplicationService:
             )
         else:
             assert current is not None
+            legacy_selections = tuple(
+                item
+                for item in self.store.list_runtime_selections()
+                if item.application_id == operation.application_id
+            )
+            ApplicationRuntimeChannel(
+                self.store.state_dir, operation.application_id
+            ).retire(legacy=legacy_selections)
             installation = replace(
                 current,
                 status="removed",
