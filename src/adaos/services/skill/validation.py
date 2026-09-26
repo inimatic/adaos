@@ -636,6 +636,13 @@ def validate_dependency_isolation_contract(
         )
 
     dependency_args = [str(item) for item in manifest.get("dependencies") or []]
+    dependency_args.extend(str(item) for item in runtime.get("dependencies") or [])
+    service = manifest.get("service") if isinstance(manifest.get("service"), dict) else {}
+    service_dependency_args = (
+        [str(item) for item in service.get("dependencies") or []]
+        if runtime_kind == "service"
+        else []
+    )
     requirements = Path(skill_dir) / "requirements.in"
     if requirements.is_file():
         try:
@@ -667,7 +674,8 @@ def validate_dependency_isolation_contract(
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported_roots.add(node.module.split(".", 1)[0])
     imported_heavy = set(heavy_import_dependency_names(imported_roots))
-    declared_heavy = set(heavy)
+    service_heavy = set(heavy_dependency_names(service_dependency_args))
+    declared_heavy = set(heavy) | service_heavy
     undeclared_heavy = sorted(imported_heavy - declared_heavy)
     if undeclared_heavy:
         issues.append(
@@ -691,7 +699,15 @@ def validate_dependency_isolation_contract(
         for config in (environment, runtime)
         for key in allow_keys
     )
-    effective_heavy = sorted(declared_heavy | imported_heavy)
+    in_process_events = _manifest_flag(runtime.get("in_process_events"))
+    effective_heavy = sorted(
+        set(heavy)
+        | (
+            imported_heavy
+            if runtime_kind != "service" or in_process_events
+            else set()
+        )
+    )
     if effective_heavy and not explicitly_allowed:
         boundary = (
             "Keep heavy dependencies behind the service runtime boundary or explicitly set "

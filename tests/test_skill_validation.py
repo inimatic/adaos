@@ -157,6 +157,41 @@ def ping():
     assert "runtime.dependencies.heavy_isolation" not in {issue.code for issue in report.issues}
 
 
+def test_strict_validation_accepts_service_owned_heavy_dependencies(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+def load_model():
+    import torch
+    return torch.__version__
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=[
+            "runtime:",
+            "  kind: service",
+            "  env:",
+            "    mode: venv",
+            "service:",
+            "  host: 127.0.0.1",
+            "  port: 18099",
+            "  command:",
+            "    - -m",
+            "    - handlers.main",
+            "  dependencies:",
+            "    - torch>=2.2.0",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+    codes = {issue.code for issue in report.issues}
+
+    assert "runtime.dependencies.heavy_undeclared" not in codes
+    assert "runtime.dependencies.heavy_isolation" not in codes
+
+
 def test_strict_validation_rejects_undeclared_heavy_runtime_import(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,
