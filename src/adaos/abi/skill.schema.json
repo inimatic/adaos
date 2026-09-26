@@ -49,6 +49,18 @@
             "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])(?=.*(?:^|/)logs/)[^/]+(?:/[^/]+)*\\.(?:log|jsonl)$"
           }
         },
+        "reconstructible_directories": {
+          "description": "Owner-relative directories containing derived data that may be omitted during Stable/Beta cutover and rebuilt from authoritative inputs.",
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])[^/]+(?:/[^/]+)*$"
+          }
+        },
         "databases": {
           "type": "array",
           "maxItems": 32,

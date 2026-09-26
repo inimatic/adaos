@@ -8,7 +8,7 @@ from adaos.domain.application import RuntimeSelection
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.applications.configuration import ApplicationConfigurationStore
 from adaos.services.applications.blob_data_transition import BlobDataTransition
-from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases, declared_coordination_files, declared_operational_evidence_files, inventory
+from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases, declared_coordination_files, declared_operational_evidence_files, declared_reconstructible_directories, inventory
 from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 
 
@@ -657,6 +657,34 @@ def test_declared_skill_log_is_operational_evidence_not_application_state(tmp_pa
         declared_databases(manifest_value),
         operational_evidence_files=declared_operational_evidence_files(manifest_value),
     )
+
+
+def test_declared_reconstructible_directory_is_admitted_but_not_implicit_state(tmp_path):
+    root = tmp_path / "data"
+    path = root / "attempts/run-1/result.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"derived":true}\n', encoding="utf-8")
+    value = manifest(1)
+    value["data_lifecycle"]["reconstructible_directories"] = ["attempts"]
+
+    inventory(
+        root,
+        declared_databases(value),
+        reconstructible_directories=declared_reconstructible_directories(value),
+    )
+
+    with pytest.raises(ValueError, match="Undeclared runtime data"):
+        inventory(root, declared_databases(value))
+
+
+@pytest.mark.parametrize(
+    "path", ["../attempts", "C:/attempts", "attempts/../objects", "attempts//objects"]
+)
+def test_reconstructible_directory_paths_are_bounded(path):
+    value = manifest(1)
+    value["data_lifecycle"]["reconstructible_directories"] = [path]
+    with pytest.raises(ValueError, match="relative owner path"):
+        declared_reconstructible_directories(value)
 
 
 @pytest.mark.parametrize(

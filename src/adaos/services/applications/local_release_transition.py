@@ -301,23 +301,23 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
         return {"ok": True, "status": "not_local_or_not_detached"}
     selections = ApplicationStore(state).list_runtime_selections()
     expected_root = f"trial:{candidate_id}"
-    if not any(
+    has_exact_selection = any(
         item.runtime_root_ref == expected_root
         and item.release_digest == release_digest
         for item in selections
-    ):
-        # Candidate decisions and runtime placement are separate durable
-        # authorities. A newer Beta may replace this Candidate before its
-        # workflow projection resumes; rejecting the stale Candidate must not
-        # roll back that newer selection.
+    )
+    root = Path(archive_value).resolve()
+    archive_root = (state / "artifact_pipeline/trial-rollbacks").resolve()
+    if not has_exact_selection and not root.is_dir():
+        # A superseded decision may be reconciled after its retained archive
+        # has already expired. With no exact active selection and no archive,
+        # there is no local effect left to compensate.
         return {
             "ok": True,
             "status": "superseded_runtime_selection",
             "candidate_id": candidate_id,
             "release_digest": release_digest,
         }
-    root = Path(archive_value).resolve()
-    archive_root = (state / "artifact_pipeline/trial-rollbacks").resolve()
     if not root.is_dir() or not root.is_relative_to(archive_root):
         raise ValueError("Rejected Trial archive is outside the retained recovery root")
     binding = root / ".adaos/data-transition.json"
@@ -366,6 +366,40 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
         elif slots:
             raise ValueError("Workspace installation appeared during Trial rejection")
         return {"ok": True, "release_digest": lifecycle.stable_digest}
+
+    from .runtime_transition import ApplicationRuntimeTransition
+
+    operation_id = f"application-beta:{release.project_id}:{candidate_id}"
+    transition = ApplicationRuntimeTransition(lifecycle.channel).get(operation_id)
+    if transition is not None and not transition["completed"]:
+        # Preparation can fail before RuntimeSelection ever points at Trial.
+        # Candidate rejection archives the immutable runtime, but the retained
+        # data journal must still be cancelled against the unchanged Stable
+        # source or it will correctly fence every later Candidate.
+        result = lifecycle.abort_beta_preparation(
+            verify_source=verify,
+            source_guard=lambda: mutation_lock(
+                metadata / ".workspace-writer.lock", timeout_s=30
+            ),
+        )
+        return {
+            "ok": True,
+            "status": "aborted_failed_preparation",
+            "operation_id": result["operation_id"],
+        }
+
+    if not has_exact_selection:
+        # Candidate decisions and runtime placement are separate durable
+        # authorities. A newer Beta may replace this Candidate before its
+        # workflow projection resumes; rejecting the stale Candidate must not
+        # roll back that newer selection. An unfinished journal is handled
+        # above even though preparation has not selected Trial yet.
+        return {
+            "ok": True,
+            "status": "superseded_runtime_selection",
+            "candidate_id": candidate_id,
+            "release_digest": release_digest,
+        }
 
     result = lifecycle.reject_beta(
         webspace_id=webspace_id,

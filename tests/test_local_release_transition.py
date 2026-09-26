@@ -2,6 +2,7 @@ from contextlib import closing
 from dataclasses import replace
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 from types import SimpleNamespace
 
@@ -19,6 +20,7 @@ from adaos.services.applications.local_release_transition import (
 from adaos.services.applications.service import ApplicationService
 from adaos.services.applications.store import ApplicationStore
 from adaos.services.applications.trial_runtime import NativeTrialRuntime, TrialRuntimeUnavailable
+from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition
 from adaos.services.artifact_pipeline.packages import build_artifact_package, ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore, trial_workspace_root
@@ -624,6 +626,49 @@ def test_sdk_recovery_verifies_stable_identity_before_unfencing(setup, monkeypat
         pass
     with pytest.raises(TrialRuntimeUnavailable, match="pending or aborted"):
         NativeTrialRuntime.resolve(owner, "candidate-sample", new.release_digest)
+
+
+def test_rejected_archived_failed_prepare_aborts_retained_journal(setup):
+    owner, service, old, new, activations, _lock = setup
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+    with pytest.raises(Exception, match="Undeclared runtime data"):
+        undeclared = lifecycle.components[0].stable_root / "derived/output.json"
+        undeclared.parent.mkdir(parents=True)
+        undeclared.write_text("{}", encoding="utf-8")
+        lifecycle.prepare_beta(
+            webspace_id="desktop", activate=lambda _: {"ok": True}
+        )
+
+    archive = (
+        owner.paths.state_dir()
+        / "artifact_pipeline/trial-rollbacks/candidate-sample/trial-sample/workspace"
+    )
+    archive.parent.mkdir(parents=True)
+    shutil.move(str(runtime.root), str(archive))
+    activation = activations.load("candidate-sample")
+    activations.update(
+        "candidate-sample",
+        status="detached",
+        rollback={"archive": str(archive)},
+    )
+
+    result = reconcile_rejected_local_trial(
+        owner, "candidate-sample", new.release_digest
+    )
+
+    assert result["status"] == "aborted_failed_preparation"
+    assert service.store.get_runtime_selection(
+        "desktop", "sample"
+    ).release_digest == old.release_digest
+    record = ApplicationRuntimeTransition(lifecycle.channel).get(
+        "application-beta:sample:candidate-sample"
+    )
+    assert record is not None and record["aborted"] is True
+    with lifecycle.channel.execution("workspace", old.release_digest):
+        pass
 
 
 def test_sdk_aborts_exact_trial_rejected_before_data_transition(setup, monkeypatch):

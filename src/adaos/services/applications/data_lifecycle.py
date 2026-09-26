@@ -132,11 +132,12 @@ def automation_data_contract() -> dict[str, Any]:
             "shape": "skill.yaml capabilities is a flat unique string array, not an object with required/optional fields. Merge required SDK tokens without removing existing declarations.",
             "example": {"capabilities": ["storage.relational", "configuration.read", "configuration.write"]},
         },
-        "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [], "coordination_files": [], "operational_evidence_files": []},
+        "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [], "coordination_files": [], "operational_evidence_files": [], "reconstructible_directories": []},
         "database_fields": {"path": "relative SQLite filename under this skill's SDK data root",
             "migrations": "full ordered list of {version: positive integer, name: string, statements: SQL string[]}"},
         "coordination_files": "Exact owner-relative *.lock mutex files; admitted by inventory but never copied as Application state.",
         "operational_evidence_files": "Exact owner-relative *.log/*.jsonl files below a logs directory; admitted as operational evidence but never copied as Application state.",
+        "reconstructible_directories": "Explicit owner-relative derived-data roots; admitted by inventory but intentionally omitted from Stable/Beta transfer because authoritative inputs can rebuild them.",
         "initialization_contract": {
             "call": "adaos.sdk.data.lifecycle.ensure_database(path) before opening the declared SQLite file; requires storage.relational.",
             "async": "Async handlers use a_ensure_database(path).",
@@ -175,7 +176,7 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
     if not isinstance(declaration, dict) or declaration.get("schema") != "adaos.skill.data_lifecycle.v1":
         raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
     if (
-        set(declaration) - {"schema", "execution", "databases", "legacy_adoption", "coordination_files", "operational_evidence_files"}
+        set(declaration) - {"schema", "execution", "databases", "legacy_adoption", "coordination_files", "operational_evidence_files", "reconstructible_directories"}
         or declaration["execution"] != "native_tools"
     ):
         raise ValueError("Data cutover currently requires declared native_tools execution")
@@ -303,6 +304,38 @@ def declared_operational_evidence_files(manifest: Mapping[str, Any]) -> frozense
     return frozenset(normalized)
 
 
+def declared_reconstructible_directories(manifest: Mapping[str, Any]) -> frozenset[str]:
+    """Return explicit derived-data roots that carry no cutover authority."""
+
+    declaration = manifest.get("data_lifecycle")
+    if not isinstance(declaration, Mapping):
+        raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
+    values = declaration.get("reconstructible_directories", [])
+    if not isinstance(values, list) or len(values) > 16:
+        raise ValueError("Data lifecycle reconstructible_directories must be a bounded list")
+    normalized: set[str] = set()
+    for value in values:
+        parts = value.split("/") if isinstance(value, str) else []
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > 240
+            or "\\" in value
+            or ":" in value
+            or PurePosixPath(value).is_absolute()
+            or any(part in {".", "..", ""} for part in parts)
+            or value in normalized
+        ):
+            raise ValueError(
+                "Reconstructible directory requires a unique relative owner path"
+            )
+        normalized.add(value)
+    for parent in normalized:
+        if any(child.startswith(parent + "/") for child in normalized if child != parent):
+            raise ValueError("Reconstructible directories cannot overlap")
+    return frozenset(normalized)
+
+
 def _declared_tool_names(manifest: Mapping[str, Any]) -> set[str]:
     tools = manifest.get("tools")
     if isinstance(tools, Mapping):
@@ -418,6 +451,7 @@ def inventory(
     skill_memory: bool = False,
     coordination_files: frozenset[str] = frozenset(),
     operational_evidence_files: frozenset[str] = frozenset(),
+    reconstructible_directories: frozenset[str] = frozenset(),
 ) -> None:
     if root is None or not root.exists():
         return
@@ -440,7 +474,11 @@ def inventory(
         if path.is_symlink() or getattr(path, "is_junction", lambda: False)() or not path.resolve().is_relative_to(root):
             raise ValueError("Linked runtime data requires an explicit storage adapter")
         relative = path.relative_to(root).as_posix()
-        if path.is_file() and relative not in permitted and not (blobs is not None and relative.startswith("files/")):
+        reconstructible = any(
+            relative.startswith(directory + "/")
+            for directory in reconstructible_directories
+        )
+        if path.is_file() and relative not in permitted and not reconstructible and not (blobs is not None and relative.startswith("files/")):
             raise ValueError(
                 "Undeclared runtime data requires a data/configuration/credential "
                 f"adapter: {relative}"
@@ -478,6 +516,7 @@ class LocalApplicationDataLifecycle:
         self.contracts = {}
         self.coordination_contracts = {}
         self.operational_evidence_contracts = {}
+        self.reconstructible_contracts = {}
         self.blob_contracts = {}
         self.stable_blob_contracts = {}
         self.skill_memory_contracts = {}
@@ -516,6 +555,14 @@ class LocalApplicationDataLifecycle:
             if set(operational_evidence) & (set(databases) | set(coordination_files)):
                 raise ValueError("Operational evidence cannot also be declared Application state")
             self.operational_evidence_contracts[component.component_ref] = operational_evidence
+            reconstructible = declared_reconstructible_directories(component.target_manifest)
+            if any(
+                database == directory or database.startswith(directory + "/")
+                for directory in reconstructible
+                for database in databases
+            ):
+                raise ValueError("Reconstructible directories cannot contain declared databases")
+            self.reconstructible_contracts[component.component_ref] = reconstructible
             stable_blobs = "storage.blob" in set(component.stable_manifest.get("capabilities") or [])
             target_blobs = "storage.blob" in set(component.target_manifest.get("capabilities") or [])
             if stable_blobs and not target_blobs:
@@ -617,10 +664,11 @@ class LocalApplicationDataLifecycle:
                 databases = self.contracts[component.component_ref]
                 coordination_files = self.coordination_contracts[component.component_ref]
                 operational_evidence = self.operational_evidence_contracts[component.component_ref]
+                reconstructible = self.reconstructible_contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
-                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
-                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
+                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
                 for name, migrations in databases.items():
                     source = component.stable_root / name if component.stable_root else None
                     base = self._root(component, "stable") / name
@@ -688,11 +736,12 @@ class LocalApplicationDataLifecycle:
                 databases = self.contracts[component.component_ref]
                 coordination_files = self.coordination_contracts[component.component_ref]
                 operational_evidence = self.operational_evidence_contracts[component.component_ref]
+                reconstructible = self.reconstructible_contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
-                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
-                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
-                inventory(component.target_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence)
+                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                inventory(component.target_root, databases, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
                 for name in databases:
                     base = self._root(component, "stable") / name
                     if component.stable_root and (component.stable_root / name).exists():
