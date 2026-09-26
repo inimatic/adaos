@@ -5,6 +5,7 @@ import logging
 import shutil
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1156,6 +1157,16 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
     sql = _Sql(tmp_path / "adaos.db")
     SqliteScenarioRegistry(sql).register("media_center", active_version="0.1.0")
 
+    lock_state = {"active": False, "path": None, "timeout_s": None}
+
+    @contextmanager
+    def _mutation_lock(path, *, timeout_s):
+        lock_state.update(active=True, path=Path(path), timeout_s=timeout_s)
+        try:
+            yield
+        finally:
+            lock_state["active"] = False
+
     class _Git:
         def __init__(self):
             self.pulls = 0
@@ -1164,6 +1175,7 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
             return []
 
         def pull(self, _root):
+            assert lock_state["active"] is True
             self.pulls += 1
 
     class _Sparse:
@@ -1190,6 +1202,7 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
         settings=SimpleNamespace(base_dir=tmp_path),
     )
     monkeypatch.setattr(workspace_sync_module, "SparseWorkspace", _Sparse)
+    monkeypatch.setattr(workspace_sync_module, "mutation_lock", _mutation_lock)
     monkeypatch.setattr(workspace_sync_module, "runtime_required_scenario_refs", lambda: ["web_desktop"])
     monkeypatch.setattr(workspace_sync_module, "selected_runtime_skill_names", lambda _ctx: ["weather_skill"])
     monkeypatch.setattr(
@@ -1227,6 +1240,15 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
         "scenarios/web_desktop",
     ]
     assert git.pulls == 1
+    assert lock_state["path"] == (
+        tmp_path
+        / ".adaos"
+        / "state"
+        / "project_deployments"
+        / "component_operations"
+        / ".mutation.lock"
+    )
+    assert lock_state["timeout_s"] == 1800.0
 
 
 def test_production_workspace_sync_aligns_configured_registry_branch_before_read(

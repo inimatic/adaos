@@ -10,6 +10,7 @@ from typing import Any
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.adapters.git.workspace import SparseWorkspace
 from adaos.services.git.workspace_guard import ensure_clean
+from adaos.services.mutation_lock import mutation_lock
 from adaos.services.project_deployment.materialization import (
     restore_project_owned_materializations,
 )
@@ -545,7 +546,7 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
     }
 
 
-def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
+def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
     """
     Skills and scenarios share the same workspace monorepo checkout; sparse
     patterns must be applied as a union, otherwise one sync overwrites the other.
@@ -831,6 +832,49 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
         "patterns": desired,
         "source_alignment": source_alignment,
     }
+
+
+def _project_deployment_mutation_lock_path(ctx) -> Path:
+    state_dir_resolver = getattr(getattr(ctx, "paths", None), "state_dir", None)
+    if callable(state_dir_resolver):
+        state_dir = Path(state_dir_resolver())
+    else:
+        state_dir = Path(getattr(ctx.settings, "base_dir")) / ".adaos" / "state"
+    return (
+        state_dir
+        / "project_deployments"
+        / "component_operations"
+        / ".mutation.lock"
+    )
+
+
+def _workspace_sync_mutation_timeout_s() -> float:
+    try:
+        value = float(
+            os.getenv("ADAOS_WORKSPACE_SYNC_MUTATION_LOCK_TIMEOUT_S", "1800")
+            or "1800"
+        )
+    except ValueError:
+        value = 1800.0
+    return max(60.0, min(value, 3600.0))
+
+
+def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
+    """Synchronize registry source without racing project materialization.
+
+    Sparse Git alignment mutates the same canonical component paths that a
+    project deployment replaces atomically.  Use the deployment mutation lock
+    across the complete synchronization (including automatic Application
+    updates, which are re-entrant in the owning thread) so a registry event
+    cannot restore tracked source files into an uncommitted package activation.
+    """
+
+    lock_path = _project_deployment_mutation_lock_path(ctx)
+    with mutation_lock(
+        lock_path,
+        timeout_s=_workspace_sync_mutation_timeout_s(),
+    ):
+        return _sync_workspace_sparse_to_registry_unlocked(ctx)
 
 
 __all__ = [
