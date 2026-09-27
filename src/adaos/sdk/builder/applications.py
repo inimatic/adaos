@@ -13,6 +13,7 @@ from adaos.domain.application import Application, utc_now
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.developer import compositions, projects
 from adaos.services.applications import (
+    ApplicationAccessError,
     ApplicationAccessManagementService,
     ApplicationDevelopmentCoordinator,
     ApplicationServiceError,
@@ -2266,6 +2267,93 @@ def _completed_project_promotion_is_current(
     return bool(_completed_project_promotion_lock_digest(candidate_id, candidate))
 
 
+def _carry_forward_unchanged_access_verification(
+    management: ApplicationAccessManagementService,
+    distribution,
+    *,
+    application_id: str,
+    candidate,
+    candidate_release,
+    actor_ref: str,
+) -> dict[str, Any]:
+    """Rebind passed access evidence when the permission contract is unchanged."""
+
+    previous_release = distribution.applications.store.get_release(
+        application_id, candidate.base_release_digest
+    )
+    if (
+        previous_release.permission_profile.digest
+        != candidate_release.permission_profile.digest
+    ):
+        raise ApplicationAccessError(
+            "Project-only recovery cannot carry access verification across permission drift"
+        )
+    previous_reports = [
+        item
+        for item in management.list_verification_reports(application_id)
+        if item.get("release_digest") == candidate.base_release_digest
+        and item.get("overall") == "passed"
+        and item.get("permission_profile_digest")
+        == candidate_release.permission_profile.digest
+    ]
+    if not previous_reports:
+        raise ApplicationAccessError(
+            "Project-only recovery requires passed verification for the exact base permission contract"
+        )
+    selected = sorted(
+        previous_reports,
+        key=lambda item: (
+            item.get("release_scope") == "publication",
+            str(item.get("created_at") or ""),
+        ),
+        reverse=True,
+    )[0]
+    validation_refs = tuple(
+        sorted(
+            {
+                str(ref).strip()
+                for evidence in candidate.validation_evidence
+                if evidence.get("status") == "passed"
+                for ref in evidence.get("refs") or ()
+                if str(ref).strip()
+            }
+        )
+    )
+    if not validation_refs:
+        raise ApplicationAccessError(
+            "Project-only recovery requires passed exact Candidate validation evidence"
+        )
+    prior_ref = f"verification:{selected['report_digest']}"
+    verification = management.final_verification(
+        application_id,
+        release_digest=candidate.release_digest,
+        source_commit=candidate.source_ref.revision,
+        observed_capabilities=candidate_release.permission_profile.flat_permissions,
+        inferred_capabilities=(),
+        regression_evidence=validation_refs,
+        access_matrix_evidence=(prior_ref + "#access-matrix",),
+        pending_action_evidence=(prior_ref + "#pending-action-fallback",),
+        audit_evidence=(prior_ref + "#auditability",),
+        disclosure_evidence=(prior_ref + "#external-effects-disclosure",),
+        redaction_evidence=(prior_ref + "#secret-redaction",),
+        release_scope="trial",
+        actor_ref=actor_ref,
+        candidate_release=candidate_release,
+    )
+    if verification.get("publication_allowed") is not True:
+        raise ApplicationAccessError(
+            "Carried-forward Application Final Verification did not pass"
+        )
+    return {
+        "status": "carried_forward",
+        "base_release_digest": candidate.base_release_digest,
+        "base_report_digest": selected["report_digest"],
+        "candidate_report_digest": verification["report"]["report_digest"],
+        "permission_profile_digest": candidate_release.permission_profile.digest,
+        "validation_refs": list(validation_refs),
+    }
+
+
 def promote_stable(
     application_id: str,
     candidate_id: str,
@@ -2305,6 +2393,7 @@ def promote_stable(
             and item.source in {"local_trial", "stable_installation"}
         ]
         runtime_reconciliation = None
+        access_verification_recovery = None
         recovery_publication_verification = None
         recovery_trial_publication = None
         if len(selections) != 1:
@@ -2346,6 +2435,24 @@ def promote_stable(
                 candidate_id,
                 publisher_ref=subnet_ref,
             )
+            candidate_reports = [
+                item
+                for item in management.list_verification_reports(application_id)
+                if item.get("release_digest") == candidate.release_digest
+                and item.get("overall") == "passed"
+                and item.get("release_scope") in {"trial", "publication"}
+            ]
+            if not candidate_reports:
+                access_verification_recovery = (
+                    _carry_forward_unchanged_access_verification(
+                        management,
+                        distribution,
+                        application_id=application_id,
+                        candidate=candidate,
+                        candidate_release=candidate_release,
+                        actor_ref=actor_ref,
+                    )
+                )
             recovery_publication_verification = (
                 _promote_local_trial_final_verification(
                     management,
@@ -2482,6 +2589,7 @@ def promote_stable(
             "trial_publication": dict(trial_publication),
             "visibility_transition": visibility_transition,
             "runtime_reconciliation": runtime_reconciliation,
+            "access_verification_recovery": access_verification_recovery,
         }
 
     return _execute_development(

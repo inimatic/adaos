@@ -613,6 +613,68 @@ def test_completed_project_promotion_is_exact_restart_evidence(
     )
 
 
+def test_access_verification_carry_forward_requires_unchanged_profile() -> None:
+    profile = SimpleNamespace(
+        digest="sha256:" + "1" * 64,
+        flat_permissions=("applications.read", "applications.apply"),
+    )
+    captured = {}
+
+    class _Management:
+        @staticmethod
+        def list_verification_reports(_application_id):
+            return [
+                {
+                    "release_digest": "sha256:" + "a" * 64,
+                    "overall": "passed",
+                    "permission_profile_digest": profile.digest,
+                    "release_scope": "publication",
+                    "created_at": "2026-09-26T00:00:00+00:00",
+                    "report_digest": "sha256:" + "b" * 64,
+                }
+            ]
+
+        @staticmethod
+        def final_verification(application_id, **kwargs):
+            captured.update({"application_id": application_id, **kwargs})
+            return {
+                "publication_allowed": True,
+                "report": {"report_digest": "sha256:" + "c" * 64},
+            }
+
+    distribution = SimpleNamespace(
+        applications=SimpleNamespace(
+            store=SimpleNamespace(
+                get_release=lambda _application_id, _release_digest: SimpleNamespace(
+                    permission_profile=profile
+                )
+            )
+        )
+    )
+    candidate = SimpleNamespace(
+        base_release_digest="sha256:" + "a" * 64,
+        release_digest="sha256:" + "d" * 64,
+        source_ref=SimpleNamespace(revision="sha256:" + "e" * 64),
+        validation_evidence=(
+            {"status": "passed", "refs": ["pytest:applications:65-pass"]},
+        ),
+    )
+
+    result = applications._carry_forward_unchanged_access_verification(
+        _Management(),
+        distribution,
+        application_id="applications",
+        candidate=candidate,
+        candidate_release=SimpleNamespace(permission_profile=profile),
+        actor_ref="user:owner",
+    )
+
+    assert result["status"] == "carried_forward"
+    assert captured["release_scope"] == "trial"
+    assert captured["observed_capabilities"] == profile.flat_permissions
+    assert captured["regression_evidence"] == ("pytest:applications:65-pass",)
+
+
 def test_promote_existing_private_stable_opens_public_prerelease_channel(
     monkeypatch,
 ) -> None:
