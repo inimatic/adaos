@@ -3803,16 +3803,22 @@ def _scenario_loader_space(source_mode: str) -> str:
     return "dev" if str(source_mode or "").strip().lower() == "dev" else "workspace"
 
 
-def _materialization_path_stamp(path: Path) -> dict[str, Any] | None:
+def _materialization_content_stamp(path: Path) -> dict[str, Any] | None:
+    """Describe materialization input by content, never by physical slot.
+
+    Runtime skill releases are extracted below alternating A/B slot paths.
+    Those paths and their mtimes are delivery details, not semantic inputs.
+    A content digest preserves exact invalidation while allowing an unchanged
+    skill closure to reuse the materialization cache after a core update.
+    """
+
     try:
-        if not path.exists():
+        if not path.is_file():
             return None
-        stat = path.stat()
         return {
-            "path": str(path.resolve()),
-            "kind": "dir" if path.is_dir() else "file",
-            "mtime_ns": int(stat.st_mtime_ns),
-            "size": int(stat.st_size) if path.is_file() else 0,
+            "name": path.name,
+            "digest": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "size": int(path.stat().st_size),
         }
     except Exception:
         return None
@@ -3885,8 +3891,8 @@ def _skill_sources_fingerprint_for_materialization(source_mode: str) -> str:
                 skill_dir = _skill_source_dir_for_materialization(paths, skill_name, space=space)
             except Exception:
                 continue
-            for candidate in (skill_dir, skill_dir / "skill.yaml", skill_dir / "webui.json"):
-                stamp = _materialization_path_stamp(Path(candidate))
+            for candidate in (skill_dir / "skill.yaml", skill_dir / "webui.json"):
+                stamp = _materialization_content_stamp(Path(candidate))
                 if stamp is not None:
                     stamp["skill"] = skill_name
                     stamp["space"] = space

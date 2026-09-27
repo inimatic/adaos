@@ -146,3 +146,37 @@ def test_yaml_manifest_fingerprint_tracks_adjacent_webui(monkeypatch, tmp_path) 
     assert first
     assert second
     assert first != second
+
+
+def test_scenario_fingerprint_is_stable_across_package_relocation(
+    monkeypatch, tmp_path
+) -> None:
+    first_root = tmp_path / "slot-a" / "scenario"
+    second_root = tmp_path / "slot-b" / "scenario"
+    for root in (first_root, second_root):
+        root.mkdir(parents=True)
+        (root / "scenario.yaml").write_text(
+            "id: workflow_lab\nversion: 0.1.0\nui:\n  manifest: webui.json\n",
+            encoding="utf-8",
+        )
+        (root / "webui.json").write_text(
+            json.dumps({"ui": {"application": {"desktop": {"id": "stable"}}}}),
+            encoding="utf-8",
+        )
+
+    active_root = [first_root]
+    monkeypatch.setattr(
+        scenarios_loader,
+        "_candidate_roots",
+        lambda *_args, **_kwargs: tuple(active_root),
+    )
+    first = scenarios_loader.scenario_source_fingerprint(
+        "workflow_lab", space="workspace"
+    )
+    active_root[0] = second_root
+    second = scenarios_loader.scenario_source_fingerprint(
+        "workflow_lab", space="workspace"
+    )
+
+    assert first
+    assert first == second

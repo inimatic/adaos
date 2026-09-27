@@ -31,6 +31,25 @@ def _safe_file_stamp(path: Path) -> Tuple[str, int, int] | None:
         return None
 
 
+def _safe_file_content_fingerprint(path: Path) -> Tuple[str, int] | None:
+    """Return a location-independent fingerprint for a scenario source file.
+
+    Scenario packages are extracted into alternating runtime slots.  Absolute
+    paths and extraction mtimes therefore are not part of the semantic source
+    identity: using them makes an unchanged release miss the materialization
+    cache after every core update.  The byte digest still invalidates the
+    cache for every source change, including same-size rewrites.
+    """
+
+    try:
+        if not path.is_file():
+            return None
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return (digest, int(path.stat().st_size))
+    except Exception:
+        return None
+
+
 def _read_cached_mapping_file(
     *,
     cache: Dict[Tuple[str, str], Tuple[Tuple[str, int, int], Dict[str, Any]]],
@@ -226,24 +245,25 @@ def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any
 
 def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -> str:
     """
-    Return a cheap filesystem fingerprint for the scenario source.
+    Return a content-addressed fingerprint for the scenario source.
 
     Runtime materialization cache keys need to change when the source scenario
-    changes, but computing that key must not parse every skill or rebuild the
-    scenario. Track the files that can feed read_content/read_manifest,
-    including Builder UI manifests referenced from scenario.json.
+    changes, but package relocation or extraction into another runtime slot
+    must not invalidate an otherwise reusable materialization. Track the
+    content of files that can feed read_content/read_manifest, including
+    Builder UI manifests referenced from scenario.json.
     """
     token = str(scenario_id or "").strip()
     if not token:
         return ""
     normalized_space = "dev" if str(space or "").strip() == "dev" else "workspace"
-    files: list[tuple[str, int, int]] = []
+    files: list[tuple[str, str, int]] = []
     for root in _candidate_roots(token, normalized_space):
         root = Path(root)
         for name in ("scenario.yaml", "scenario.json"):
-            stamp = _safe_file_stamp(root / name)
-            if stamp is not None:
-                files.append(stamp)
+            fingerprint = _safe_file_content_fingerprint(root / name)
+            if fingerprint is not None:
+                files.append((name, fingerprint[0], fingerprint[1]))
         manifest_name = ""
         yaml_path = root / "scenario.yaml"
         if yaml_path.is_file():
@@ -278,9 +298,9 @@ def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -
                 manifest_path = (root / manifest_name).resolve()
                 root_resolved = root.resolve()
                 if manifest_path.parent == root_resolved:
-                    stamp = _safe_file_stamp(manifest_path)
-                    if stamp is not None:
-                        files.append(stamp)
+                    fingerprint = _safe_file_content_fingerprint(manifest_path)
+                    if fingerprint is not None:
+                        files.append((manifest_name, fingerprint[0], fingerprint[1]))
             except Exception:
                 pass
         if files:

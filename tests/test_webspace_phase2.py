@@ -4798,6 +4798,68 @@ def test_materialization_source_prewarm_returns_mode_summary(monkeypatch) -> Non
     assert fingerprint_modes == ["workspace", "dev"]
 
 
+def test_skill_materialization_fingerprint_is_stable_across_runtime_slots(
+    monkeypatch, tmp_path
+) -> None:
+    first_root = tmp_path / "slots" / "A" / "skills"
+    second_root = tmp_path / "slots" / "B" / "skills"
+    skill_yaml = "id: reusable_skill\nversion: 1.0.0\nactivation: lazy\n"
+    webui = json.dumps({"ui": {"widgets": [{"id": "stable"}]}})
+    for root in (first_root, second_root):
+        skill_root = root / "reusable_skill"
+        skill_root.mkdir(parents=True)
+        (skill_root / "skill.yaml").write_text(skill_yaml, encoding="utf-8")
+        (skill_root / "webui.json").write_text(webui, encoding="utf-8")
+
+    active_root = [first_root]
+    paths = SimpleNamespace(
+        skills_dir=lambda: active_root[0],
+        dev_skills_dir=lambda: active_root[0],
+        repo_root=lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "get_ctx",
+        lambda: SimpleNamespace(paths=paths),
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "get_local_capacity",
+        lambda: {
+            "skills": [
+                {
+                    "name": "reusable_skill",
+                    "version": "1.0.0",
+                    "active": True,
+                }
+            ]
+        },
+    )
+
+    webspace_runtime_module._RUNTIME.cache.clear_skill_source_fingerprints()  # noqa: SLF001
+    first = webspace_runtime_module._skill_sources_fingerprint_for_materialization(  # noqa: SLF001
+        "workspace"
+    )
+    active_root[0] = second_root
+    webspace_runtime_module._RUNTIME.cache.clear_skill_source_fingerprints()  # noqa: SLF001
+    second = webspace_runtime_module._skill_sources_fingerprint_for_materialization(  # noqa: SLF001
+        "workspace"
+    )
+
+    assert first
+    assert first == second
+
+    (second_root / "reusable_skill" / "webui.json").write_text(
+        json.dumps({"ui": {"widgets": [{"id": "changed"}]}}),
+        encoding="utf-8",
+    )
+    webspace_runtime_module._RUNTIME.cache.clear_skill_source_fingerprints()  # noqa: SLF001
+    changed = webspace_runtime_module._skill_sources_fingerprint_for_materialization(  # noqa: SLF001
+        "workspace"
+    )
+    assert changed != second
+
+
 def test_startup_materialization_hydrates_every_registered_webspace(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
     monkeypatch.setenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_CONCURRENCY", "1")
