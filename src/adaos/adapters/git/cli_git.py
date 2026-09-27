@@ -855,6 +855,15 @@ class CliGitClient(GitClient):
     def current_commit(self, dir: StrOrPath) -> str:
         return _run_git(["rev-parse", "HEAD"], cwd=dir)
 
+    def remote_url(self, dir: StrOrPath, remote: str = "origin") -> str:
+        remote_name = str(remote or "").strip()
+        if not _REMOTE_NAME_RE.fullmatch(remote_name):
+            raise GitError(f"invalid git remote name: {remote_name or '-'}")
+        value = _safe_git(dir, ["config", "--get", f"remote.{remote_name}.url"])
+        if not value.strip():
+            raise GitError(f"git remote is not configured: {remote_name}")
+        return value.strip()
+
     def show(self, dir: StrOrPath, spec: str) -> str:
         return _run_git(["show", spec], cwd=dir)
 

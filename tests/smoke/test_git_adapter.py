@@ -51,3 +51,18 @@ def test_latest_commit_for_path_returns_full_message(tmp_path):
     assert len(info["commit"]) == 40
     assert info["message"].startswith("Add demo")
     assert "AdaOS-Change-Id: builder_change_test" in info["message"]
+
+
+def test_remote_url_resolves_remote_alias(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    expected = "https://github.com/inimatic/adaos-registry.git"
+    subprocess.run(
+        ["git", "remote", "add", "registry", expected],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    assert CliGitClient().remote_url(str(repo), "registry") == expected

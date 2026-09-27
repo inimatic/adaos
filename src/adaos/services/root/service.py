@@ -3264,8 +3264,28 @@ class RootDeveloperService:
                     receipts["source_registry_published"]
                 )
         if existing_source_receipt is not None:
+            existing_remote = str(
+                existing_source_receipt.get("repository") or ""
+            ).strip()
+            same_remote = existing_remote == remote_name
+            if not same_remote:
+                resolve_remote_url = getattr(self.ctx.git, "remote_url", None)
+                if callable(resolve_remote_url):
+                    try:
+                        same_remote = (
+                            str(
+                                resolve_remote_url(
+                                    str(workspace), existing_remote
+                                )
+                            ).strip()
+                            == str(
+                                resolve_remote_url(str(workspace), remote_name)
+                            ).strip()
+                        )
+                    except Exception:
+                        same_remote = False
             if (
-                existing_source_receipt.get("repository") != remote_name
+                not same_remote
                 or existing_source_receipt.get("branch") != branch_name
             ):
                 raise RootServiceError(
