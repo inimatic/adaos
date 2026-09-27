@@ -1,5 +1,7 @@
 # src/adaos/apps/bootstrap.py
 from __future__ import annotations
+import os
+import sys
 from typing import Optional
 from threading import RLock
 
@@ -19,7 +21,10 @@ from adaos.services.policy.fs import SimpleFSPolicy
 from adaos.adapters.secrets.keyring_vault import KeyringVault
 from adaos.adapters.secrets.file_vault import FileVault
 from adaos.services.crypto.secrets_service import SecretsService
-from adaos.services.crypto.vault import load_or_create_master  # noqa: F401 (если пока не используешь)
+from adaos.services.crypto.vault import (
+    load_or_create_local_master,
+    local_master_key_path,
+)
 from adaos.services.sandbox.runner import ProcSandbox
 from adaos.services.sandbox.service import SandboxService
 from adaos.services.storage import build_default_relational_storage_broker
@@ -27,6 +32,50 @@ from adaos.services.provider_status import build_provider_status_registry
 
 from adaos.services.agent_context import set_ctx
 from adaos.services.node_config import load_config
+
+
+def _credential_vault_mode() -> str:
+    mode = str(os.getenv("ADAOS_CREDENTIAL_VAULT_BACKEND") or "auto").strip().lower()
+    if mode not in {"auto", "keyring", "file"}:
+        raise ValueError("ADAOS_CREDENTIAL_VAULT_BACKEND must be auto, keyring, or file")
+    return mode
+
+
+def _usable_os_keyring(*, mode: str) -> bool:
+    if mode == "file":
+        return False
+    # Importing/probing backend plugins takes several seconds on a headless
+    # Linux host and resolves to keyring.backends.fail.Keyring. In auto mode
+    # avoid that critical-path work unless a desktop Secret Service session is
+    # actually present. Operators may still request an explicit probe.
+    if (
+        mode == "auto"
+        and sys.platform.startswith("linux")
+        and not os.getenv("DBUS_SESSION_BUS_ADDRESS")
+    ):
+        return False
+    try:
+        import keyring
+
+        backend = keyring.get_keyring()
+        return float(getattr(backend, "priority", 0) or 0) > 0
+    except Exception:
+        return False
+
+
+def _build_credential_vault(*, paths: PathProvider, profile: str, kv: SQLiteKV):
+    mode = _credential_vault_mode()
+    if _usable_os_keyring(mode=mode):
+        return KeyringVault(profile=profile, kv=kv)
+    if mode == "keyring":
+        raise RuntimeError("requested OS credential keyring is unavailable")
+    master = load_or_create_local_master(local_master_key_path(paths.base_dir(), profile))
+    return FileVault(
+        base_dir=paths.base,
+        fs=None,
+        key_get=lambda: master,
+        key_set=lambda _value: None,
+    )
 
 
 class _CtxHolder:
@@ -125,29 +174,13 @@ class _CtxHolder:
         sql = SQLite(paths)
         kv = SQLiteKV(sql, namespace="adaos")
 
-        # Secrets: keyring primary; file vault fallback (ключ в keyring)
-        try:
-            secrets_backend = KeyringVault(profile=settings.profile, kv=kv)
-        except Exception:
-            # file vault (ключ через keyring, но если keyring недоступен — ищем в ENV)
-            def key_get():
-                try:
-                    import keyring
-
-                    v = keyring.get_password(f"adaos:master:{settings.profile}", "vault.key")
-                    return v.encode("utf-8") if v else None
-                except Exception:
-                    return None
-
-            def key_set(b: bytes):
-                try:
-                    import keyring
-
-                    keyring.set_password(f"adaos:master:{settings.profile}", "vault.key", b.decode("utf-8"))
-                except Exception:
-                    pass
-
-            secrets_backend = FileVault(base_dir=paths.base, fs=None, key_get=key_get, key_set=key_set)
+        # Desktop OS keyring where one is actually available; encrypted local
+        # FileVault with a persistent node-private master key on headless nodes.
+        secrets_backend = _build_credential_vault(
+            paths=paths,
+            profile=settings.profile,
+            kv=kv,
+        )
 
         secrets = SecretsService(secrets_backend, caps)
 

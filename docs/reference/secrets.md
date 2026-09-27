@@ -54,4 +54,19 @@ adaos secret export [--show]          # JSON (значения по умолча
 adaos secret import file.json
 ```
 
+## Headless node vault selection
+
+`ADAOS_CREDENTIAL_VAULT_BACKEND` accepts `auto` (default), `keyring`, or
+`file`. `auto` uses the OS keyring only when a real backend is available. A
+headless Linux node without a Secret Service session does not probe the Python
+fail backend on the boot critical path; it uses `FileVault`.
+
+For `FileVault`, the Fernet master key is provisioned atomically at
+`{BASE_DIR}/private/credentials/vault-master-<profile-digest>.key` with
+owner-only permissions. `ADAOS_VAULT_MASTER_KEY`, when provided for initial
+provisioning, seeds that durable local key. An invalid configured key fails
+closed. The private key and encrypted `state/vault.json` are node authority
+state: neither is published with an Application/skill package or copied to
+another subnet by CBS resolution.
+
 > CLI никогда не логирует значения секретов.

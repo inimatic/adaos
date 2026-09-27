@@ -85,6 +85,11 @@ provider/user/account vault key does not change, so no credential is copied.
 Builder-generated UI must present this as an explicit user choice; discovery
 alone must not attach the account.
 
+Reuse is node-local. Installing the same CapabilityContract or Gmail binding on
+another subnet does not transport the OAuth client secret, refresh token, or
+connected-account authorization. That node must configure its provider vault
+or receive credentials through a separately governed secret-provisioning flow.
+
 ## Node configuration
 
 Configure a Google OAuth client through either environment variables:

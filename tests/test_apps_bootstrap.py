@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 from adaos.apps import bootstrap
 from adaos.services.agent_context import get_ctx, set_ctx
 from adaos.services.settings import Settings
+
+
+def test_headless_linux_auto_vault_does_not_probe_keyring(monkeypatch) -> None:
+    probed = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "keyring",
+        SimpleNamespace(get_keyring=lambda: probed.append(True)),
+    )
+
+    assert bootstrap._usable_os_keyring(mode="auto") is False
+    assert probed == []
+
+
+def test_explicit_unavailable_keyring_is_rejected(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "keyring",
+        SimpleNamespace(
+            get_keyring=lambda: SimpleNamespace(priority=0),
+        ),
+    )
+
+    assert bootstrap._usable_os_keyring(mode="keyring") is False
 
 
 def test_build_publishes_complete_context_before_loading_node_config(
