@@ -2783,7 +2783,7 @@ def list_home_targets(application_id: str) -> dict[str, Any]:
         if bool(getattr(row, "is_dev", False)):
             continue
         webspace_id = str(row.workspace_id or "").strip()
-        if not webspace_id:
+        if not workspace_index._is_concrete_workspace_id(webspace_id):
             continue
         installed_overlay = (
             getattr(row, "installed_overlay", {}) or {}

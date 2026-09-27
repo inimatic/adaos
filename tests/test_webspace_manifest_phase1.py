@@ -10,6 +10,8 @@ import time
 import types
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.services.agent_context import get_ctx
 if "y_py" not in sys.modules and importlib.util.find_spec("y_py") is None:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
@@ -743,6 +745,44 @@ def test_list_workspaces_dedupes_stringified_workspace_id_rows() -> None:
 
     assert [row.workspace_id for row in rows].count("desktop") == 1
     assert all(not str(row.workspace_id).startswith("{") for row in rows)
+
+
+def test_workspace_index_rejects_new_unresolved_runtime_identity() -> None:
+    with pytest.raises(ValueError, match="must be resolved"):
+        ensure_workspace("$runtime.webspace_id")
+
+
+def test_list_workspaces_hides_legacy_unresolved_runtime_identity() -> None:
+    ctx = get_ctx()
+    ensure_workspace("desktop")
+    with ctx.sql.connect() as con:
+        workspace_index_module._ensure_schema(con)
+        con.execute(
+            """
+            INSERT OR REPLACE INTO y_workspaces(
+                workspace_id, path, created_at, display_name,
+                kind, home_scenario, source_mode, owner_scope, profile_scope, device_binding, ui_overlay_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "$runtime.webspace_id",
+                "state/ystores/unresolved-runtime.sqlite3",
+                1,
+                "$runtime.webspace_id",
+                "workspace",
+                "web_desktop",
+                "workspace",
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        con.commit()
+
+    rows = workspace_index_module.list_workspaces()
+
+    assert "$runtime.webspace_id" not in {row.workspace_id for row in rows}
 
 
 def test_list_workspaces_dedupes_legacy_default_workspace_row(monkeypatch) -> None:

@@ -72,6 +72,34 @@ def _normalize_workspace_id(value: Any) -> str:
     return coerce_webspace_id(value, fallback=default_webspace_id())
 
 
+def _is_concrete_workspace_id(value: Any) -> bool:
+    """Return whether *value* is a materialized workspace identity.
+
+    Runtime expressions are valid in declarative UI artifacts, but must be
+    resolved before they reach the durable workspace catalog.  Older runtimes
+    could persist values such as ``$runtime.webspace_id`` when that resolution
+    was skipped; keep those legacy rows recoverable in storage while excluding
+    them from runtime projections.
+    """
+
+    token = str(value or "").strip()
+    if not token:
+        return False
+    return not (
+        token.startswith("$")
+        or "${" in token
+        or "{{" in token
+        or "}}" in token
+    )
+
+
+def _require_concrete_workspace_id(value: Any) -> str:
+    workspace_id = _normalize_workspace_id(value)
+    if not _is_concrete_workspace_id(workspace_id):
+        raise ValueError("workspace_id must be resolved before persistence")
+    return workspace_id
+
+
 def _canonical_manifest(manifest: "WebspaceManifest") -> "WebspaceManifest":
     workspace_id = _normalize_workspace_id(manifest.workspace_id)
     if workspace_id == manifest.workspace_id:
@@ -90,6 +118,12 @@ def _dedupe_manifest_rows(rows: Iterable["WebspaceManifest"]) -> List["WebspaceM
     out: List[WebspaceManifest] = []
     for row in manifests:
         raw_id = str(row.workspace_id or "").strip()
+        if not _is_concrete_workspace_id(raw_id):
+            _log.warning(
+                "ignoring unresolved workspace catalog row workspace_id=%r",
+                raw_id,
+            )
+            continue
         normalized_id = _normalize_workspace_id(raw_id)
         if raw_id != normalized_id and normalized_id in raw_ids:
             continue
@@ -995,7 +1029,7 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
     Ensure a workspace row exists and return it. The associated Yjs store
     path is derived from the current ctx paths.
     """
-    workspace_id = _normalize_workspace_id(workspace_id)
+    workspace_id = _require_concrete_workspace_id(workspace_id)
     sql = get_ctx().sql
     with sql.connect() as con:
         _ensure_schema(con)
@@ -1080,7 +1114,7 @@ def set_workspace_manifest(
     device_binding: Any = _UNSET,
     ui_overlay_json: Any = _UNSET,
 ) -> WebspaceManifest:
-    workspace_id = _normalize_workspace_id(workspace_id)
+    workspace_id = _require_concrete_workspace_id(workspace_id)
     if kind is not _UNSET and _normalize_kind(kind) == KIND_DEV:
         from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
 

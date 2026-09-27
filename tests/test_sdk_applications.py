@@ -780,6 +780,14 @@ def test_home_targets_exclude_development_desktops_and_report_current_pins(
             has_installed_overlay=False,
             has_pinned_applications_overlay=False,
         ),
+        SimpleNamespace(
+            workspace_id="$runtime.webspace_id",
+            title="$runtime.webspace_id",
+            effective_kind="workspace",
+            is_dev=False,
+            has_installed_overlay=False,
+            has_pinned_applications_overlay=False,
+        ),
     ]
 
     class Desktop:
