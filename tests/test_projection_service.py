@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 import types
 from types import SimpleNamespace
 
@@ -301,6 +302,35 @@ def test_projection_service_uses_local_bridge_before_detached_fallback(monkeypat
     asyncio.run(service.apply("current_user", "root_mgmnt.snapshot", {"ok": True}, webspace_id="desktop-dev"))
 
     assert bridge_calls == [("desktop-dev", "data/root_mgmnt", {"ok": True})]
+
+
+def test_local_projection_bridge_discovers_control_endpoint_off_event_loop(monkeypatch) -> None:
+    owner_thread = threading.get_ident()
+    discovery_threads: list[int] = []
+
+    def _discover():
+        discovery_threads.append(threading.get_ident())
+        return None
+
+    monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_LOCAL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(
+        projection_service_module,
+        "_projection_local_bridge_base_and_token",
+        _discover,
+    )
+
+    result = asyncio.run(
+        projection_service_module._try_local_projection_bridge(
+            "desktop",
+            "data/demo",
+            {"ok": True},
+            owner="test",
+            channel="test",
+        )
+    )
+
+    assert result == {"applied": False, "reason": "local_projection_bridge_unavailable"}
+    assert discovery_threads and discovery_threads[0] != owner_thread
 
 
 def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None:

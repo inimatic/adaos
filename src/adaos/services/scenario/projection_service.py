@@ -1562,7 +1562,10 @@ async def _try_local_projection_bridge(
 ) -> Mapping[str, Any]:
     if not _YJS_PROJECTION_LOCAL_BRIDGE_ENABLED:
         return {"applied": False, "reason": "local_projection_bridge_disabled"}
-    resolved = _projection_local_bridge_base_and_token()
+    # Active-control discovery may probe loopback HTTP endpoints. Keep that
+    # synchronous compatibility lookup off the event-loop owner just like the
+    # projection request itself.
+    resolved = await asyncio.to_thread(_projection_local_bridge_base_and_token)
     if resolved is None:
         return {"applied": False, "reason": "local_projection_bridge_unavailable"}
     base, token = resolved
