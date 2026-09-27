@@ -396,7 +396,13 @@ def _try_update_transition_guard(*, operation: str):
         if not locked:
             yield False
             return
-        _LOG.debug("acquired update transition guard operation=%s path=%s", operation, path)
+        # Reconciliation probes this guard once per supervisor tick.  Logging
+        # every uncontended acquisition turns a healthy production node into a
+        # sustained journal write workload and can amplify storage pressure.
+        # Keep the diagnostic for actual transition operations; reconciliation
+        # outcomes are already reported by their state changes.
+        if operation != "update.reconcile":
+            _LOG.debug("acquired update transition guard operation=%s path=%s", operation, path)
         yield True
     finally:
         if handle is not None:

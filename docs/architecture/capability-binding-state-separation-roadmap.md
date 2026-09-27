@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
-Last reviewed: 2026-09-26.
+Last reviewed: 2026-09-27.
 
 Implementation checkpoint: every non-deferred item through `CBS5` and every
 `must`/`should` item in `CBS6` through `CBS9` has validated-local evidence as
@@ -96,8 +96,12 @@ and the derived read-only CBS stages `compiled -> admitted -> ready -> active
 [CBS1-CBS5 Implementation](capability-binding-state-cbs1-cbs5-implementation.md).
 Runtime receipts cover Applications scenario selection, Drive navigation,
 Media Center's provider-owned library agent, and a byte-identical Notebook
-binary attachment upload/download. The subnet runs one `api serve` listener on
-`127.0.0.1:8777` and no production supervisor.
+binary attachment upload/download. That qualification run used a temporary
+single `api serve` listener. The subnet is now restored to its production
+topology: a systemd-managed update supervisor on `127.0.0.1:8776` owns the
+active/candidate runtime slots on `127.0.0.1:8777` and `127.0.0.1:8778`.
+Operational updates on this subnet must go through that supervisor; direct
+`api serve` is reserved for development machines.
 
 The batch also exercised a real Application auto-update failure chain. A
 topology-incomplete Media Center update first failed closed, then a retry
