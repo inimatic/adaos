@@ -2113,7 +2113,10 @@ def _reconcile_promoted_project_runtime(
     from adaos.domain.artifact_release import WorkspaceLock
     from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
 
-    if not distribution.project_release_is_current(candidate_id):
+    if not (
+        distribution.project_release_is_current(candidate_id)
+        or _completed_project_promotion_is_current(candidate_id, candidate)
+    ):
         return None
     try:
         release = distribution.applications.store.get_release(
@@ -2203,6 +2206,52 @@ def _reconcile_promoted_project_runtime(
     }
 
 
+def _completed_project_promotion_is_current(
+    candidate_id: str, candidate
+) -> bool:
+    """Observe the exact durable Project promotion after a Root restart.
+
+    The shared channel is normally the preferred observation.  A completed
+    Project promotion can, however, already have committed Workspace and then
+    become temporarily invisible through a restarting Root repository.  Its
+    journal remains admissible only when the candidate, channel receipt,
+    activation receipt, and attestation binding all name the same digest.
+    WorkspaceLock equality is checked again by the reconciliation step.
+    """
+
+    path = (
+        _state_dir()
+        / "artifact_pipeline/promotions"
+        / f"{candidate_id}.json"
+    )
+    if not path.is_file():
+        return False
+    try:
+        operation = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    receipts = dict(operation.get("receipts") or {})
+    channel = dict((receipts.get("channel_moved") or {}).get("pointer") or {})
+    activation = dict(receipts.get("workspace_activated") or {})
+    binding = dict(operation.get("attestation_binding") or {})
+    attestation_set = dict(binding.get("attestation_set") or {})
+    return bool(
+        operation.get("schema") == "adaos.artifact.promotion_operation.v1"
+        and operation.get("status") == "completed"
+        and operation.get("phase") == "completed"
+        and operation.get("candidate_id") == candidate_id
+        and operation.get("project_id") == candidate.project_id
+        and operation.get("release_digest") == candidate.release_digest
+        and channel.get("project_id") == candidate.project_id
+        and channel.get("channel") == "stable"
+        and channel.get("release_digest") == candidate.release_digest
+        and activation.get("lock_digest")
+        and binding.get("status") == "completed"
+        and attestation_set.get("project_id") == candidate.project_id
+        and attestation_set.get("release_digest") == candidate.release_digest
+    )
+
+
 def promote_stable(
     application_id: str,
     candidate_id: str,
@@ -2229,8 +2278,10 @@ def promote_stable(
             )
             or {}
         )
-        project_release_is_current = distribution.project_release_is_current(
-            candidate_id
+        project_release_is_current = distribution.project_release_is_current(candidate_id)
+        project_promotion_is_current = (
+            project_release_is_current
+            or _completed_project_promotion_is_current(candidate_id, candidate)
         )
         selections = [
             item
@@ -2257,7 +2308,7 @@ def promote_stable(
                 and item.release_digest == candidate.release_digest
                 and item.source in {"local_trial", "stable_installation"}
             ]
-        if len(selections) != 1 and project_release_is_current:
+        if len(selections) != 1 and project_promotion_is_current:
             if application.visibility != "public":
                 raise ValueError(
                     "Project-only Application recovery requires a public Application"

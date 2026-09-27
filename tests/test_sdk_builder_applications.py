@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -547,6 +548,67 @@ def test_promote_reconciles_exact_completed_project_activation(
     }
     assert calls[1][1]["expected_revision"] == 4
     assert calls[1][1]["release_digest"] == digest
+
+
+def test_completed_project_promotion_is_exact_restart_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    candidate_id = "mail-reader-0-2-0-candidate"
+    digest = "sha256:" + "c" * 64
+    root = tmp_path / "state"
+    path = root / "artifact_pipeline/promotions" / f"{candidate_id}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.artifact.promotion_operation.v1",
+                "candidate_id": candidate_id,
+                "project_id": "mail_reader",
+                "release_digest": digest,
+                "status": "completed",
+                "phase": "completed",
+                "receipts": {
+                    "channel_moved": {
+                        "pointer": {
+                            "project_id": "mail_reader",
+                            "channel": "stable",
+                            "release_digest": digest,
+                        }
+                    },
+                    "workspace_activated": {
+                        "lock_digest": "sha256:" + "e" * 64
+                    },
+                },
+                "attestation_binding": {
+                    "status": "completed",
+                    "attestation_set": {
+                        "project_id": "mail_reader",
+                        "release_digest": digest,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        applications,
+        "_ctx",
+        lambda: SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: root)),
+    )
+    candidate = SimpleNamespace(project_id="mail_reader", release_digest=digest)
+
+    assert applications._completed_project_promotion_is_current(
+        candidate_id, candidate
+    )
+
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["receipts"]["channel_moved"]["pointer"]["release_digest"] = (
+        "sha256:" + "f" * 64
+    )
+    path.write_text(json.dumps(value), encoding="utf-8")
+    assert not applications._completed_project_promotion_is_current(
+        candidate_id, candidate
+    )
 
 
 def test_promote_existing_private_stable_opens_public_prerelease_channel(
