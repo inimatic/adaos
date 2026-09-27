@@ -775,6 +775,47 @@ async def _wait_for_first_paint_before_post_ready_prewarm(
     return "headless_grace_expired"
 
 
+async def _prewarm_interactive_home_read_models() -> dict[str, Any]:
+    """Warm the compact Home read path after first paint, off the event loop."""
+
+    def _warm() -> dict[str, Any]:
+        phases_ms: dict[str, float] = {}
+
+        phase_started = time.perf_counter()
+        from adaos.services.system_model.catalog import local_capacity_object
+        from adaos.services.system_model.service import current_node_object
+
+        subject = current_node_object()
+        subject_id = str(getattr(subject, "id", "") or "").strip()
+        node_ref = subject_id.split(":", 1)[1] if ":" in subject_id else subject_id
+        local_capacity_object(node_id=node_ref or None)
+        phases_ms["system_summary"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
+
+        phase_started = time.perf_counter()
+        from adaos.services.application_registry_projection import (
+            ApplicationRegistryProjection,
+        )
+        from adaos.services.runtime_paths import current_state_dir
+
+        projects = ApplicationRegistryProjection(
+            current_state_dir()
+        ).list_development_projects(limit=500)
+        phases_ms["development_projects"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
+        return {
+            "ok": True,
+            "project_total": len(projects),
+            "phases_ms": phases_ms,
+        }
+
+    return await _to_thread_without_yjs_cyclic_gc(_warm)
+
+
 async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> None:
     """Warm optional catalogs after the API can serve persisted state."""
     started = time.perf_counter()
@@ -808,10 +849,10 @@ async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> N
         status["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
         raise
 
-    # On-demand reads already build the same caches.  Running optional disk and
-    # registry scans while an attached browser is fetching its first scenario
-    # data only steals executor/SQLite capacity from the interactive path.
-    # Headless runtimes still prewarm after their bounded grace period.
+    # Keep the broad catalog/materialization scan away from the interactive
+    # path.  A compact Home read-model warmup is still valuable after first
+    # paint: without it, the first system/development widgets serialize cold
+    # imports and registry initialization behind the Python import lock.
     if barrier == "first_paint_observed":
         try:
             from adaos.services.yjs.gateway_ws import active_yws_connection_total
@@ -819,9 +860,29 @@ async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> N
             active_connections = active_yws_connection_total()
         except Exception:
             active_connections = 0
+        phase_started = time.perf_counter()
+        try:
+            home_read_models = await _prewarm_interactive_home_read_models()
+            app.state.interactive_home_read_model_prewarm = home_read_models
+            status["state"] = "interactive_complete"
+        except asyncio.CancelledError:
+            status["state"] = "cancelled"
+            raise
+        except Exception as exc:
+            status["state"] = "degraded"
+            status["errors"].append(
+                {"phase": "interactive_home_read_models", "error_type": type(exc).__name__}
+            )
+            logging.getLogger("adaos.api.server").warning(
+                "failed to prewarm interactive Home read models",
+                exc_info=True,
+            )
+        status["phases_ms"]["interactive_home_read_models"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
         status.update(
             {
-                "state": "skipped",
                 "skip_reason": "interactive_first_paint_observed",
                 "active_yws_connections": active_connections,
                 "completed_at": time.time(),
@@ -832,9 +893,11 @@ async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> N
             }
         )
         logging.getLogger("adaos.startup").info(
-            "post-ready catalog/materialization prewarm skipped "
-            "reason=interactive_first_paint_observed connections=%s",
+            "post-ready broad prewarm skipped after compact Home warmup "
+            "state=%s connections=%s duration_ms=%s",
+            status["state"],
             active_connections,
+            status["phases_ms"]["interactive_home_read_models"],
         )
         return
     status["state"] = "running"

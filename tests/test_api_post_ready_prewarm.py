@@ -121,7 +121,7 @@ def test_catalog_and_materialization_prewarm_runs_after_readiness(monkeypatch) -
     }
 
 
-def test_catalog_and_materialization_prewarm_skips_for_interactive_browser(
+def test_catalog_and_materialization_prewarm_uses_compact_home_warmup_for_interactive_browser(
     monkeypatch,
 ) -> None:
     from adaos.services.yjs import gateway_ws
@@ -145,13 +145,25 @@ def test_catalog_and_materialization_prewarm_skips_for_interactive_browser(
         lambda: calls.append("catalog"),
     )
 
+    async def _home_read_models():
+        calls.append("home_read_models")
+        return {"ok": True, "project_total": 3, "phases_ms": {}}
+
+    monkeypatch.setattr(
+        server,
+        "_prewarm_interactive_home_read_models",
+        _home_read_models,
+    )
+
     asyncio.run(server._run_post_ready_catalog_and_materialization_prewarm(app))
 
-    assert calls == []
+    assert calls == ["home_read_models"]
     status = app.state.post_ready_catalog_materialization_prewarm
-    assert status["state"] == "skipped"
+    assert status["state"] == "interactive_complete"
     assert status["skip_reason"] == "interactive_first_paint_observed"
     assert status["active_yws_connections"] == 2
+    assert status["phases_ms"]["interactive_home_read_models"] >= 0.0
+    assert app.state.interactive_home_read_model_prewarm["project_total"] == 3
 
 
 def test_yjs_gc_is_collected_on_owner_after_catalog_worker(monkeypatch) -> None:
