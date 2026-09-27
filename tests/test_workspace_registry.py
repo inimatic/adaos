@@ -22,6 +22,7 @@ from adaos.services import workspace_registry as workspace_registry_module
 from adaos.services import workspace_sync as workspace_sync_module
 from adaos.services.workspace_sync import (
     active_workspace_lock_components,
+    active_workspace_lock_projects,
     audit_workspace_materialization,
     reconcile_workspace_db_to_materialized,
     resolve_scenario_requirements,
@@ -1450,6 +1451,28 @@ def test_active_workspace_lock_components_extend_sparse_authority(
         "scenarios/gmail_cbs_cleanroom",
         "skills/gmail_cbs_cleanroom_skill",
     ]
+
+
+def test_active_workspace_lock_projects_preserve_public_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    active = SimpleNamespace(
+        slots={
+            "applications": SimpleNamespace(project_id="applications"),
+            "drive": SimpleNamespace(project_id="adaos_drive"),
+        }
+    )
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "_artifact_activation_manager",
+        lambda _ctx, _root: SimpleNamespace(load_lock=lambda: active),
+    )
+
+    projects, patterns = active_workspace_lock_projects(SimpleNamespace(), tmp_path)
+
+    assert projects == ["adaos_drive", "applications"]
+    assert patterns == ["projects/adaos_drive", "projects/applications"]
 
 
 def test_workspace_materialization_audit_is_read_only(tmp_path: Path, monkeypatch):

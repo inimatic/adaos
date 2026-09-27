@@ -450,6 +450,33 @@ def active_workspace_lock_components(
     return sorted(skills), sorted(scenarios), sorted(paths)
 
 
+def active_workspace_lock_projects(
+    ctx,
+    workspace_root: Path,
+) -> tuple[list[str], list[str]]:
+    """Return Project identities pinned by the active WorkspaceLock slots.
+
+    Project manifests and public documents are retained development/publication
+    source rather than executable package members.  They still must stay in
+    the sparse checkout: removing ``projects/<id>`` after promotion can erase
+    README and other publishable source while the corresponding release remains
+    active.
+    """
+
+    manager = _artifact_activation_manager(ctx, workspace_root)
+    active = manager.load_lock()
+    if active is None:
+        return [], []
+    projects = sorted(
+        {
+            str(getattr(slot, "project_id", "") or "").strip()
+            for slot in (getattr(active, "slots", {}) or {}).values()
+            if str(getattr(slot, "project_id", "") or "").strip()
+        }
+    )
+    return projects, [f"projects/{project_id}" for project_id in projects]
+
+
 def restore_workspace_lock_materializations(ctx, workspace_root: Path) -> dict[str, Any]:
     """Reassert the active immutable WorkspaceLock after source synchronization."""
 
@@ -642,6 +669,11 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
         ctx,
         workspace_root,
     )
+    locked_projects, locked_project_patterns = active_workspace_lock_projects(
+        ctx,
+        workspace_root,
+    )
+    locked_patterns = sorted(set(locked_patterns) | set(locked_project_patterns))
     skills = sorted(set(skills) | set(selected_runtime_skills) | set(locked_skills))
     scenarios = sorted(set(scenarios) | set(locked_scenarios))
     runtime_scenario_refs = runtime_required_scenario_refs()
@@ -666,7 +698,13 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
     )
     scenarios = sorted(set(scenarios) | set(resolved_scenarios))
     skills = sorted(set(skills) | set(scenario_required_skills))
-    desired = registry_pattern_set([*(f"skills/{n}" for n in skills), *(f"scenarios/{n}" for n in scenarios)])
+    desired = registry_pattern_set(
+        [
+            *(f"projects/{n}" for n in locked_projects),
+            *(f"skills/{n}" for n in skills),
+            *(f"scenarios/{n}" for n in scenarios),
+        ]
+    )
     fallback_used: dict[str, list[str]] = {}
     if skills_fallback:
         fallback_used["skills"] = skills
@@ -714,6 +752,7 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             "selected_runtime_skills": selected_runtime_skills,
             "locked_skills": locked_skills,
             "locked_scenarios": locked_scenarios,
+            "locked_projects": locked_projects,
             "runtime_scenario_refs": runtime_scenario_refs,
             "scenario_required_skills": scenario_required_skills,
             "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
@@ -770,7 +809,11 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
         scenarios = sorted(set(scenarios) | set(resolved_scenarios))
         skills = sorted(set(skills) | set(scenario_required_skills))
         desired = registry_pattern_set(
-            [*(f"skills/{n}" for n in skills), *(f"scenarios/{n}" for n in scenarios)]
+            [
+                *(f"projects/{n}" for n in locked_projects),
+                *(f"skills/{n}" for n in skills),
+                *(f"scenarios/{n}" for n in scenarios),
+            ]
         )
         current = sparse.read_patterns()
         ensure_clean(ctx.git, str(workspace_root), desired)
@@ -826,6 +869,7 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             "selected_runtime_skills": selected_runtime_skills,
             "locked_skills": locked_skills,
             "locked_scenarios": locked_scenarios,
+            "locked_projects": locked_projects,
             "runtime_scenario_refs": runtime_scenario_refs,
             "scenario_required_skills": scenario_required_skills,
             "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
@@ -881,6 +925,7 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
         "selected_runtime_skills": selected_runtime_skills,
         "locked_skills": locked_skills,
         "locked_scenarios": locked_scenarios,
+        "locked_projects": locked_projects,
         "runtime_scenario_refs": runtime_scenario_refs,
         "scenario_required_skills": scenario_required_skills,
         "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
@@ -972,6 +1017,7 @@ __all__ = [
     "runtime_required_scenario_refs",
     "selected_runtime_skill_names",
     "active_workspace_lock_components",
+    "active_workspace_lock_projects",
     "restore_workspace_lock_materializations",
     "sync_workspace_sparse_to_registry",
     "workspace_kind_names",

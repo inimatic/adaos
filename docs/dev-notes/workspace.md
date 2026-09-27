@@ -22,6 +22,12 @@ patterns are narrowed, synchronize them with every component in the active
 from the local content-addressed store before reconciling the workspace
 database.
 
+The sparse set also retains `projects/<project_id>` for every active lock slot.
+These paths contain the Project manifest and bounded public documents used by
+the publish-after-promotion flow. They are not executable package authority,
+but removing them would destroy publisher source while leaving the release
+active.
+
 Do not infer activation state from which paths happen to remain in the sparse
 checkout. A missing active path is materialization drift: repair it without
 changing the lock digest, or fail closed. Otherwise Home can silently fall back
