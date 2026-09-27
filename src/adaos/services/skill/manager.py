@@ -5955,6 +5955,17 @@ class SkillManager:
         return {
             "name": manifest.get("name", slot.skill_name),
             "version": manifest.get("version"),
+            # These declarations participate in runtime authorization and UI
+            # composition.  Keep them in the immutable resolved manifest so
+            # admission never has to trust mutable workspace source.
+            "webui_owner": str(manifest.get("webui_owner") or "").strip().lower(),
+            "capabilities": sorted(
+                {
+                    str(item).strip().lower()
+                    for item in (manifest.get("capabilities") or [])
+                    if str(item).strip()
+                }
+            ),
             "runtime_bucket": slot.root.parent.parent.name,
             "slot": slot.slot,
             "source": str(skill_dir.resolve()),

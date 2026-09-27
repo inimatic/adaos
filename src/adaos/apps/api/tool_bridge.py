@@ -33,6 +33,7 @@ from adaos.services.runtime_action_grants import (
 )
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.tool_contract import (
+    declared_skill_webui_owner as _declared_skill_webui_owner,
     declared_tool_application_access as _declared_tool_application_access,
     declared_tool_contract as _declared_tool_contract,
     declared_tool_permissions as _declared_tool_permissions,
@@ -1332,11 +1333,18 @@ def _request_tool_call_timeout_s(body: "ToolCall", request: Request) -> float | 
 
 
 def _debug_autosync_enabled() -> bool:
+    """Return whether legacy workspace source autosync was explicitly enabled.
+
+    Debug logging is an observability setting, not a runtime mutation policy.
+    Historically ``ADAOS_LOG_LEVEL=DEBUG`` also enabled this path, causing
+    every mutating tool call to contend for the per-skill workspace lock and
+    potentially rebuild its runtime.  Production-like development nodes often
+    use DEBUG logging, so the implicit coupling could turn ordinary navigation
+    into a minute-long lock queue.  Keep the compatibility rail available, but
+    require an explicit opt-in.
+    """
     raw = str(os.getenv("ADAOS_TOOL_BRIDGE_WORKSPACE_AUTOSYNC") or "").strip().lower()
-    if raw:
-        return raw in {"1", "true", "yes", "on"}
-    level = (os.getenv("ADAOS_LOG_LEVEL") or "").strip().upper()
-    return level == "DEBUG"
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _should_autosync_workspace_runtime(
@@ -2254,6 +2262,60 @@ async def _authorize_application_tool_call(
         admission_timings["application_runtime_resolution_ms"] = (
             time.perf_counter() - stage_started
         ) * 1000.0
+    if (
+        runtime is None
+        and requested_application_id
+        and _declared_skill_webui_owner(
+            manager,
+            skill_name=skill_name,
+            dev=False,
+        )
+        == "shared"
+    ):
+        # A shared skill can render inside another Application's scenario.  In
+        # that case the page Application identity is a routing hint for the
+        # surface, not the authority that delivers the skill.  Resolve the
+        # unique installed owner and still apply its exact release, permission
+        # profile and user grant below.  Ambiguous ownership remains fail
+        # closed.
+        fallback_started = time.perf_counter()
+        try:
+            runtime = await asyncio.to_thread(
+                management.resolve_runtime_context,
+                skill_name=skill_name,
+                webspace_id=_resolve_tool_webspace_id(
+                    body.arguments or {}, context=body.context
+                ),
+            )
+        except ApplicationAccessError as exc:
+            ambiguous = "ambiguous" in str(exc).lower()
+            raise HTTPException(
+                status_code=409 if ambiguous else 403,
+                detail={
+                    "error": (
+                        "application_context_ambiguous"
+                        if ambiguous
+                        else "application_context_invalid"
+                    ),
+                    "retryable": False,
+                    "technical_detail": {
+                        "tool": body.tool,
+                        "requested_application_id": requested_application_id,
+                        "shared_component_fallback": True,
+                    },
+                },
+            ) from exc
+        finally:
+            admission_timings["shared_application_runtime_resolution_ms"] = (
+                time.perf_counter() - fallback_started
+            ) * 1000.0
+        if runtime is not None:
+            _log.info(
+                "resolved shared skill against owning Application skill=%s requested_application=%s resolved_application=%s",
+                skill_name,
+                requested_application_id,
+                runtime.get("application_id"),
+            )
     if runtime is None:
         if requested_application_id:
             raise HTTPException(

@@ -339,6 +339,19 @@ def test_workspace_autosync_skips_project_owned_skill(monkeypatch) -> None:
     assert updates == []
 
 
+def test_workspace_autosync_requires_explicit_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_TOOL_BRIDGE_WORKSPACE_AUTOSYNC", raising=False)
+    monkeypatch.setenv("ADAOS_LOG_LEVEL", "DEBUG")
+
+    assert tool_bridge_module._debug_autosync_enabled() is False
+
+    monkeypatch.setenv("ADAOS_TOOL_BRIDGE_WORKSPACE_AUTOSYNC", "true")
+    assert tool_bridge_module._debug_autosync_enabled() is True
+
+    monkeypatch.setenv("ADAOS_TOOL_BRIDGE_WORKSPACE_AUTOSYNC", "false")
+    assert tool_bridge_module._debug_autosync_enabled() is False
+
+
 def test_workspace_autosync_skips_slideshow_runtime_tools(monkeypatch) -> None:
     monkeypatch.setattr(tool_bridge_module, "_debug_autosync_enabled", lambda: True)
 

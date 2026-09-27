@@ -34,6 +34,25 @@ def _resolved_tool_spec(
         return {}
 
 
+def declared_skill_webui_owner(
+    manager: Any,
+    *,
+    skill_name: str,
+    dev: bool,
+) -> str:
+    """Return the trusted UI ownership mode from the active runtime manifest."""
+
+    try:
+        status = manager.dev_runtime_status(skill_name) if dev else manager.runtime_status(skill_name)
+        manifest_path = Path(str(status.get("resolved_manifest") or ""))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            return ""
+        return str(manifest.get("webui_owner") or "").strip().lower()
+    except Exception:
+        return ""
+
+
 def _application_access(spec: dict[str, Any]) -> dict[str, str]:
     value = spec.get("application_access")
     if not isinstance(value, dict):
@@ -188,6 +207,7 @@ __all__ = [
     "declared_tool_approval_scope",
     "declared_tool_permissions",
     "declared_tool_side_effects",
+    "declared_skill_webui_owner",
     "normalize_side_effects",
     "side_effects_are_read_only",
 ]

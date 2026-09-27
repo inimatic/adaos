@@ -81,6 +81,48 @@ def application_execution(ctx: AgentContext, skill_name: str):
     from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 
     state_dir = Path(getattr(ctx, "authority_state_dir", None) or ctx.paths.state_dir())
+    # Tool ingress has already resolved and authorized one exact Application
+    # release before SkillManager enters this fence.  Reuse that trusted
+    # identity instead of scanning every RuntimeSelection and deserializing
+    # every ApplicationRelease for every tool invocation.  The exact channel
+    # transaction remains authoritative and still fails closed during a
+    # pending cutover.  Calls without a verified ingress context (lifecycle
+    # hooks, transitions, tests and internal execution) keep the exhaustive
+    # discovery path below so newly introduced components are fenced before
+    # selection commits.
+    try:
+        from adaos.services.policy.application import current_application
+
+        verified = current_application() or {}
+    except Exception:
+        verified = {}
+    verified_component = str(verified.get("component_ref") or "").strip()
+    verified_application_id = str(verified.get("application_id") or "").strip()
+    verified_release_digest = str(verified.get("release_digest") or "").strip()
+    verified_runtime_root = str(verified.get("runtime_root_ref") or "").strip()
+    if (
+        verified_component == f"skill:{skill_name}"
+        and verified_application_id
+        and verified_release_digest
+        and verified_runtime_root
+    ):
+        channel = ApplicationRuntimeChannel(state_dir, verified_application_id)
+        # Do not create a new empty channel from request context.  Nodes still
+        # carrying a legacy JSON-only RuntimeSelection must take the migration
+        # compatible discovery path once.
+        if channel.read() is not None:
+            actual_root = str(getattr(ctx.paths, "runtime_channel_ref", "workspace"))
+            if actual_root != verified_runtime_root:
+                raise RuntimeChannelConflict(
+                    "This Application runtime is inactive; reopen the selected channel"
+                )
+            with channel.execution(
+                verified_runtime_root,
+                verified_release_digest,
+            ):
+                yield
+            return
+
     store = ApplicationStore(state_dir)
     selected = {}
     selections = store.list_runtime_selections()

@@ -167,6 +167,37 @@ def test_native_execution_uses_node_authority_and_rejects_stale_beta(tmp_path, m
         pass
 
 
+def test_verified_application_execution_fences_exact_channel_without_global_scan(tmp_path, monkeypatch):
+    from adaos.services.applications import runtime_selection
+    from adaos.services.policy.application import bind_application, clear_application
+
+    channel = ApplicationRuntimeChannel(tmp_path, "sample")
+    selected = selection()
+    channel.select(selected, expected_revision=0)
+
+    class UnexpectedStore:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("verified ingress must not scan ApplicationStore")
+
+    monkeypatch.setattr(runtime_selection, "ApplicationStore", UnexpectedStore)
+    ctx = SimpleNamespace(paths=SimpleNamespace(
+        state_dir=lambda: tmp_path,
+        runtime_channel_ref="workspace",
+    ))
+    bind_application({
+        "application_id": "sample",
+        "release_digest": selected.release_digest,
+        "runtime_root_ref": selected.runtime_root_ref,
+        "component_ref": "skill:worker",
+    })
+    try:
+        with runtime_selection.application_execution(ctx, "worker"):
+            with pytest.raises(RuntimeChannelConflict, match="executing"):
+                channel.select(selection(beta=True, revision=2), expected_revision=1)
+    finally:
+        clear_application()
+
+
 def test_trial_resolution_is_node_wide_but_never_overrides_dev(tmp_path, monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.applications import runtime_selection
