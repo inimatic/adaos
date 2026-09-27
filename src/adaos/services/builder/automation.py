@@ -1370,6 +1370,7 @@ class BuilderAutomationService:
     @classmethod
     def from_context(cls, *, background: bool = True) -> "BuilderAutomationService":
         from adaos.services.economic_policy import report_codex_usage_to_root
+        from adaos.services.agent_context import get_ctx
 
         workspace = BuilderWorkspaceService.from_context()
         repo_root = Path(workspace.repo_root or current_repo_root() or Path.cwd())
@@ -1379,6 +1380,31 @@ class BuilderAutomationService:
         dev_scenarios = workspace.dev_scenarios_root or (
             repo_root / ".adaos" / "workspace" / "scenarios"
         )
+        env_type = str(get_ctx().settings.env_type or "prod").strip().lower()
+
+        def configured_worker() -> LocalSkillFactoryWorker:
+            executor = None
+            if env_type != "dev":
+                try:
+                    from adaos_automation.builder import RemoteCodexExecutor
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "Production Builder requires the adaos-automation remote executor package"
+                    ) from exc
+                try:
+                    executor = RemoteCodexExecutor.from_env()
+                except (KeyError, OSError, ValueError) as exc:
+                    raise RuntimeError(
+                        "Production Builder remote automation identity is not configured"
+                    ) from exc
+            return LocalSkillFactoryWorker(
+                state_dir=Path(workspace.state_dir or current_state_dir()),
+                repo_root=repo_root,
+                dev_skills_root=Path(dev_skills),
+                dev_scenarios_root=Path(dev_scenarios),
+                executor=executor,
+            )
+
         return cls(
             state_dir=Path(workspace.state_dir or current_state_dir()),
             repo_root=repo_root,
@@ -1386,6 +1412,7 @@ class BuilderAutomationService:
             dev_scenarios_root=Path(dev_scenarios),
             event_sink=_publish_automation_changed,
             workspace_service=workspace,
+            worker_factory=configured_worker,
             codex_usage_reporter=report_codex_usage_to_root,
             background=background,
         )
