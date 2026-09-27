@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 READ_ONLY_SIDE_EFFECTS = frozenset({"safe", "none", "read", "read_only", "readonly"})
 
@@ -48,7 +50,29 @@ def declared_skill_webui_owner(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             return ""
-        return str(manifest.get("webui_owner") or "").strip().lower()
+        owner = str(manifest.get("webui_owner") or "").strip().lower()
+        if owner:
+            return owner
+
+        # Resolved manifests created before ``webui_owner`` became part of the
+        # runtime contract remain valid exact package slots after a core
+        # update.  Recover only from the immutable source copied into that
+        # same slot; never consult the mutable workspace source.  The
+        # containment and skill-identity checks keep this compatibility read
+        # inside the already selected runtime authority.
+        slot_root = manifest_path.parent.resolve()
+        source = Path(str(manifest.get("source") or "")).resolve()
+        if not source.is_relative_to(slot_root):
+            return ""
+        source_manifest_path = source / "skill.yaml"
+        source_manifest = yaml.safe_load(
+            source_manifest_path.read_text(encoding="utf-8")
+        )
+        if not isinstance(source_manifest, dict):
+            return ""
+        if str(source_manifest.get("name") or "").strip() != skill_name:
+            return ""
+        return str(source_manifest.get("webui_owner") or "").strip().lower()
     except Exception:
         return ""
 

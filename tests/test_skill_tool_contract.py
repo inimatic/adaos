@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from adaos.services.skill.tool_contract import declared_tool_contract
+from adaos.services.skill.tool_contract import (
+    declared_skill_webui_owner,
+    declared_tool_contract,
+)
 
 
 def test_declared_tool_contract_reads_one_runtime_snapshot(tmp_path: Path) -> None:
@@ -55,3 +58,60 @@ def test_declared_tool_contract_reads_one_runtime_snapshot(tmp_path: Path) -> No
             "permission": "providers.google.gmail",
         },
     }
+
+
+def test_shared_owner_recovers_from_immutable_legacy_slot_source(
+    tmp_path: Path,
+) -> None:
+    slot = tmp_path / "runtime" / "mail_provider" / "v1" / "slots" / "A"
+    source = slot / "src" / "skills" / "mail_provider"
+    source.mkdir(parents=True)
+    (source / "skill.yaml").write_text(
+        "name: mail_provider\nwebui_owner: shared\n",
+        encoding="utf-8",
+    )
+    manifest_path = slot / "resolved.manifest.json"
+    manifest_path.write_text(
+        json.dumps({"name": "mail_provider", "source": str(source)}),
+        encoding="utf-8",
+    )
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            return {"resolved_manifest": str(manifest_path)}
+
+    assert (
+        declared_skill_webui_owner(
+            _Manager(), skill_name="mail_provider", dev=False
+        )
+        == "shared"
+    )
+
+
+def test_shared_owner_does_not_fall_back_outside_selected_runtime_slot(
+    tmp_path: Path,
+) -> None:
+    slot = tmp_path / "runtime" / "mail_provider" / "v1" / "slots" / "A"
+    slot.mkdir(parents=True)
+    mutable_source = tmp_path / "workspace" / "skills" / "mail_provider"
+    mutable_source.mkdir(parents=True)
+    (mutable_source / "skill.yaml").write_text(
+        "name: mail_provider\nwebui_owner: shared\n",
+        encoding="utf-8",
+    )
+    manifest_path = slot / "resolved.manifest.json"
+    manifest_path.write_text(
+        json.dumps({"name": "mail_provider", "source": str(mutable_source)}),
+        encoding="utf-8",
+    )
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            return {"resolved_manifest": str(manifest_path)}
+
+    assert (
+        declared_skill_webui_owner(
+            _Manager(), skill_name="mail_provider", dev=False
+        )
+        == ""
+    )
