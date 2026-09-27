@@ -397,7 +397,12 @@ class AdaOSComponentLifecycleHooks:
         from adaos.services.skill.service_supervisor import get_service_supervisor
 
         supervisor = get_service_supervisor()
-        supervisor.ensure_discovered(force=True)
+        # Discovery was forced before a deployment-owned restart. Readiness and
+        # health polling must stay a cheap cached read: on storage-constrained
+        # nodes a full workspace scan can outlive the health freshness window
+        # and turn a healthy service into a false negative merely because
+        # observing it took too long.
+        supervisor.ensure_discovered(force=False)
         status = supervisor.status(component_id, check_health=True)
         if status is None:
             return {

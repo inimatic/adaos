@@ -520,7 +520,7 @@ def test_missing_declared_service_is_not_accepted_as_non_service(
 
     class Supervisor:
         def ensure_discovered(self, *, force: bool) -> None:
-            assert force is True
+            assert force is False
 
         def status(self, component_id: str, *, check_health: bool):
             assert component_id == "media_library_agent"
