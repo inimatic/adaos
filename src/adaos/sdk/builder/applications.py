@@ -1277,6 +1277,7 @@ def _promote_local_trial_final_verification(
     release_digest: str,
     actor_ref: str,
     allow_completed: bool = False,
+    candidate_release=None,
 ) -> dict[str, Any]:
     """Qualify the exact healthy Trial review for publication admission."""
 
@@ -1317,6 +1318,7 @@ def _promote_local_trial_final_verification(
         release_digest=release_digest,
         publication_evidence=evidence_ref,
         actor_ref=actor_ref,
+        candidate_release=candidate_release,
     )
 
 
@@ -2220,6 +2222,16 @@ def promote_stable(
             raise ValueError("only the local Application publisher may promote stable")
         distribution = _distribution_service()
         candidate = distribution.candidates.load(candidate_id)
+        management = ApplicationAccessManagementService(distribution.applications)
+        channels = (
+            distribution.applications.store.get_channels(application_id).get(
+                "channels"
+            )
+            or {}
+        )
+        project_release_is_current = distribution.project_release_is_current(
+            candidate_id
+        )
         selections = [
             item
             for item in distribution.applications.store.list_runtime_selections()
@@ -2228,7 +2240,69 @@ def promote_stable(
             and item.source in {"local_trial", "stable_installation"}
         ]
         runtime_reconciliation = None
+        recovery_publication_verification = None
+        recovery_trial_publication = None
         if len(selections) != 1:
+            runtime_reconciliation = _reconcile_promoted_project_runtime(
+                distribution,
+                application_id=application_id,
+                candidate_id=candidate_id,
+                candidate=candidate,
+                actor_ref=actor_ref,
+            )
+            selections = [
+                item
+                for item in distribution.applications.store.list_runtime_selections()
+                if item.application_id == application_id
+                and item.release_digest == candidate.release_digest
+                and item.source in {"local_trial", "stable_installation"}
+            ]
+        if len(selections) != 1 and project_release_is_current:
+            if application.visibility != "public":
+                raise ValueError(
+                    "Project-only Application recovery requires a public Application"
+                )
+            from adaos.services.artifact_pipeline.trial_activation import (
+                TrialActivationStore,
+            )
+
+            activation = TrialActivationStore(
+                _state_dir() / "artifact_pipeline/trial-activations"
+            ).load(candidate_id)
+            recovery_webspace_id = str(
+                (activation.get("target") or {}).get("webspace_id") or ""
+            ).strip()
+            if not recovery_webspace_id:
+                raise ValueError(
+                    "Completed Trial target is unavailable for Application recovery"
+                )
+            candidate_release = distribution.candidate_release_projection(
+                application_id,
+                candidate_id,
+                publisher_ref=subnet_ref,
+            )
+            recovery_publication_verification = (
+                _promote_local_trial_final_verification(
+                    management,
+                    application_id=application_id,
+                    webspace_id=recovery_webspace_id,
+                    candidate_id=candidate_id,
+                    candidate_digest=candidate.package_digest,
+                    release_digest=candidate.release_digest,
+                    actor_ref=actor_ref,
+                    allow_completed=True,
+                    candidate_release=candidate_release,
+                )
+            )
+            recovery_trial_publication = distribution.publish_trial(
+                application_id,
+                candidate_id,
+                publisher_ref=subnet_ref,
+                mode="prerelease" if channels.get("stable") else "link_only",
+                expected_prerelease_digest=(
+                    str(channels.get("prerelease") or "").strip() or None
+                ),
+            )
             runtime_reconciliation = _reconcile_promoted_project_runtime(
                 distribution,
                 application_id=application_id,
@@ -2248,28 +2322,25 @@ def promote_stable(
                 "Application stable promotion requires one unambiguous exact Trial "
                 "RuntimeSelection"
             )
-        publication_verification = _promote_local_trial_final_verification(
-            ApplicationAccessManagementService(distribution.applications),
-            application_id=application_id,
-            webspace_id=selections[0].webspace_id,
-            candidate_id=candidate_id,
-            candidate_digest=candidate.package_digest,
-            release_digest=candidate.release_digest,
-            actor_ref=actor_ref,
-            allow_completed=True,
-        )
-        channels = (
-            distribution.applications.store.get_channels(application_id).get(
-                "channels"
+        publication_verification = (
+            recovery_publication_verification
+            or _promote_local_trial_final_verification(
+                management,
+                application_id=application_id,
+                webspace_id=selections[0].webspace_id,
+                candidate_id=candidate_id,
+                candidate_digest=candidate.package_digest,
+                release_digest=candidate.release_digest,
+                actor_ref=actor_ref,
+                allow_completed=True,
             )
-            or {}
         )
         # A Builder Candidate initially exists only in the publisher's local
         # release cache.  Project publication is what uploads its immutable
         # closure, attestations and exact attestation-set binding.  Application
         # distribution intentionally verifies those remote facts, so Finalize
         # must establish them before it creates the link/prerelease projection.
-        if distribution.project_release_is_current(candidate_id):
+        if project_release_is_current:
             project_publication = {
                 "ok": True,
                 "status": "already_promoted",
@@ -2321,14 +2392,17 @@ def promote_stable(
                 "reason": "qualified_existing_stable_promotion",
             }
         mode = "prerelease" if channels.get("stable") else "link_only"
-        trial_publication = distribution.publish_trial(
-            application_id,
-            candidate_id,
-            publisher_ref=subnet_ref,
-            mode=mode,
-            expected_prerelease_digest=(
-                str(channels.get("prerelease") or "").strip() or None
-            ),
+        trial_publication = (
+            recovery_trial_publication
+            or distribution.publish_trial(
+                application_id,
+                candidate_id,
+                publisher_ref=subnet_ref,
+                mode=mode,
+                expected_prerelease_digest=(
+                    str(channels.get("prerelease") or "").strip() or None
+                ),
+            )
         )
         promoted = distribution.promote_stable(
             application_id,

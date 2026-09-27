@@ -1914,6 +1914,7 @@ class ApplicationAccessManagementService:
         release_digest: str,
         publication_evidence: str,
         actor_ref: str,
+        candidate_release: ApplicationRelease | None = None,
     ) -> dict[str, Any]:
         """Bind an exact, reviewed Trial runtime to publication verification.
 
@@ -1937,7 +1938,7 @@ class ApplicationAccessManagementService:
         release = self._verification_release(
             application_id,
             release_digest,
-            candidate_release=None,
+            candidate_release=candidate_release,
         )
         profile = release.project_release.composition_lock
         if profile is None or profile.permission_profile is None:
