@@ -1475,6 +1475,28 @@ def test_active_workspace_lock_projects_preserve_public_source(
     assert patterns == ["projects/adaos_drive", "projects/applications"]
 
 
+def test_active_workspace_lock_projects_accept_canonical_tuple_slots(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    active = SimpleNamespace(
+        slots=(
+            SimpleNamespace(project_id="applications"),
+            SimpleNamespace(project_id="adaos_drive"),
+        )
+    )
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "_artifact_activation_manager",
+        lambda _ctx, _root: SimpleNamespace(load_lock=lambda: active),
+    )
+
+    projects, patterns = active_workspace_lock_projects(SimpleNamespace(), tmp_path)
+
+    assert projects == ["adaos_drive", "applications"]
+    assert patterns == ["projects/adaos_drive", "projects/applications"]
+
+
 def test_workspace_materialization_audit_is_read_only(tmp_path: Path, monkeypatch):
     workspace = tmp_path / "workspace"
     scenario_dir = workspace / "scenarios" / "media_center"

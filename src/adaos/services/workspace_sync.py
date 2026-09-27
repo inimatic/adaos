@@ -467,10 +467,12 @@ def active_workspace_lock_projects(
     active = manager.load_lock()
     if active is None:
         return [], []
+    raw_slots = getattr(active, "slots", ()) or ()
+    slots = raw_slots.values() if isinstance(raw_slots, Mapping) else raw_slots
     projects = sorted(
         {
             str(getattr(slot, "project_id", "") or "").strip()
-            for slot in (getattr(active, "slots", {}) or {}).values()
+            for slot in slots
             if str(getattr(slot, "project_id", "") or "").strip()
         }
     )
