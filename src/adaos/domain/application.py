@@ -746,6 +746,7 @@ class ApplicationInstallation:
     data_policy: str
     status: str
     revision: int
+    shared_project_bindings: tuple[Mapping[str, Any], ...] = ()
     legacy_deployment_id: str | None = None
     snapshot_ref: str | None = None
     active_runtime_leases: tuple[str, ...] = ()
@@ -803,6 +804,40 @@ class ApplicationInstallation:
             "component_refs",
             tuple(sorted(normalized, key=lambda item: item["component_ref"])),
         )
+        bindings = _mapping_tuple(
+            self.shared_project_bindings, "shared_project_bindings"
+        )
+        normalized_bindings: list[dict[str, Any]] = []
+        seen_projects: set[str] = set()
+        for raw in bindings:
+            project_ref = _text(raw.get("provider_project_ref"), "provider_project_ref")
+            if not project_ref.startswith("project:"):
+                raise ApplicationContractError(
+                    "provider_project_ref must use project:<id>"
+                )
+            if project_ref in seen_projects:
+                raise ApplicationContractError("shared_project_bindings must be unique")
+            seen_projects.add(project_ref)
+            normalized_bindings.append(
+                {
+                    "provider_project_ref": project_ref,
+                    "project_release_digest": _digest(
+                        raw.get("project_release_digest"),
+                        "project_release_digest",
+                    ),
+                    "version_spec": str(raw.get("version_spec") or "").strip(),
+                }
+            )
+        object.__setattr__(
+            self,
+            "shared_project_bindings",
+            tuple(
+                sorted(
+                    normalized_bindings,
+                    key=lambda item: item["provider_project_ref"],
+                )
+            ),
+        )
         if self.data_policy not in {"retain", "delete", "snapshot_then_delete"}:
             raise ApplicationContractError("installation data_policy is invalid")
         if self.status not in {
@@ -854,6 +889,9 @@ class ApplicationInstallation:
             "application_id": self.application_id,
             "installed_release_digest": self.installed_release_digest,
             "component_refs": [dict(item) for item in self.component_refs],
+            "shared_project_bindings": [
+                dict(item) for item in self.shared_project_bindings
+            ],
             "data_policy": self.data_policy,
             "status": self.status,
             "revision": self.revision,
@@ -888,13 +926,17 @@ class ApplicationInstallation:
         payload = _schema_mapping(
             value,
             schema=APPLICATION_INSTALLATION_SCHEMA,
-            allowed=required,
+            allowed={*required, "shared_project_bindings"},
             required=required,
             field_name="ApplicationInstallation",
         )
         payload.pop("schema")
         payload["component_refs"] = _mapping_tuple(
             payload["component_refs"], "component_refs"
+        )
+        payload["shared_project_bindings"] = _mapping_tuple(
+            payload.get("shared_project_bindings") or (),
+            "shared_project_bindings",
         )
         for key in (
             "active_runtime_leases",

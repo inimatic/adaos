@@ -565,6 +565,46 @@ class ApplicationStore:
         self.get_application(value.application_id)
         return self._save_revisioned("installations", value.application_id, value, expected_revision=expected_revision, loader=ApplicationInstallation.from_mapping)
 
+    def save_installations_batch(
+        self,
+        values: tuple[ApplicationInstallation, ...],
+        *,
+        expected_revisions: Mapping[str, int],
+    ) -> tuple[ApplicationInstallation, ...]:
+        """Commit a reviewed provider/consumer rebinding set under one CAS lock."""
+
+        ordered = tuple(sorted(values, key=lambda item: item.application_id))
+        identities = [item.application_id for item in ordered]
+        if not ordered or len(identities) != len(set(identities)):
+            raise ApplicationStoreError(
+                "installation batch must contain unique Application identities"
+            )
+        if set(expected_revisions) != set(identities):
+            raise ApplicationStoreError(
+                "installation batch expected revisions do not match its identities"
+            )
+        for value in ordered:
+            self.get_application(value.application_id)
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            paths = {
+                value.application_id: self._current_path("installations", value.application_id)
+                for value in ordered
+            }
+            for value in ordered:
+                path = paths[value.application_id]
+                current = ApplicationInstallation.from_mapping(_read(path)) if path.is_file() else None
+                observed = current.revision if current is not None else 0
+                expected = int(expected_revisions[value.application_id])
+                if expected != observed:
+                    raise ApplicationRevisionConflict(expected=expected, observed=observed)
+                if value.revision != observed + 1:
+                    raise ApplicationStoreError(
+                        "installation batch revisions must advance by exactly one"
+                    )
+            for value in ordered:
+                atomic_write_json(paths[value.application_id], value.to_dict())
+        return ordered
+
     def get_subscription(self, application_id: str) -> ApplicationSubscription:
         path = self._current_path("subscriptions", application_id)
         if not path.is_file():

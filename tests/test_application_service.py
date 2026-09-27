@@ -18,6 +18,9 @@ from adaos.domain.application_access import (
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
+    ProjectCompositionLock,
+    ProjectDependencyLock,
+    ProjectMemberLock,
     ProjectRelease,
     ResolvedDependency,
 )
@@ -38,6 +41,7 @@ from adaos.services.applications import (
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
 DIGEST_C = "sha256:" + "c" * 64
+DIGEST_D = "sha256:" + "d" * 64
 
 
 def _application(
@@ -223,7 +227,9 @@ def test_store_refuses_to_delete_application_with_release(tmp_path: Path) -> Non
         store.delete_unpublished_application("app_recipes", expected_revision=1)
 
 
-def test_catalog_summary_omits_full_release_closure(service: ApplicationService) -> None:
+def test_catalog_summary_omits_full_release_closure(
+    service: ApplicationService,
+) -> None:
     release = service.register_release(_release())
     service.move_channel(
         "app_recipes",
@@ -239,11 +245,11 @@ def test_catalog_summary_omits_full_release_closure(service: ApplicationService)
     assert summary["schema"] == "adaos.application.catalog_summary.v1"
     assert summary["marketplace_release"]["version"] == "1.0.0"
     assert "components" not in summary["marketplace_release"]["project_release"]
-    assert set(summary["marketplace_release"]["project_release"]["catalog"]) <= {
-        "icon"
-    }
+    assert set(summary["marketplace_release"]["project_release"]["catalog"]) <= {"icon"}
     assert "release" not in summary["effective_release"]
-    assert full["effective_release"]["release"]["release_digest"] == release.release_digest
+    assert (
+        full["effective_release"]["release"]["release_digest"] == release.release_digest
+    )
 
 
 def test_operation_plan_projects_structured_permission_review(
@@ -1155,19 +1161,20 @@ def test_install_materializes_only_declared_grant_on_install_access(
     )
     assert replay["status"] == "ready"
     assert replay["created"] is False
-    assert len(
-        service.store.list_application_access_grants(
-            "app_recipes", subject_ref="user:sn_home"
+    assert (
+        len(
+            service.store.list_application_access_grants(
+                "app_recipes", subject_ref="user:sn_home"
+            )
         )
-    ) == 1
+        == 1
+    )
 
 
 def test_install_plans_exact_shared_dependencies_and_reuses_active_reference(
     service: ApplicationService,
 ) -> None:
-    publisher_release = service.register_release(
-        _release(with_shared_dependency=True)
-    )
+    publisher_release = service.register_release(_release(with_shared_dependency=True))
     publisher_plan = service.plan_operation(
         "app_recipes",
         "install",
@@ -1225,6 +1232,318 @@ def test_install_plans_exact_shared_dependencies_and_reuses_active_reference(
     assert consumer_dependency["lifecycle"] == "shared"
     assert consumer_dependency["materialization"] == "reuse"
     assert consumer_dependency["reused_from_application_ids"] == ["app_recipes"]
+
+
+def test_provider_update_rebinds_compatible_shared_project_consumers(
+    tmp_path: Path,
+) -> None:
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+    )
+    service.register(_application("provider_app", "provider"))
+    service.register(_application("consumer_app", "consumer"))
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/shared-provider",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("projects/shared-provider/",),
+    )
+
+    def provider_release(version: str, dependency_digest: str) -> ApplicationRelease:
+        scenario = ArtifactPackageRef(
+            kind="scenario",
+            artifact_id="provider",
+            version=version,
+            digest=DIGEST_A,
+            manifest_digest=DIGEST_C,
+            source_ref=source,
+        )
+        dependency = ArtifactPackageRef(
+            kind="skill",
+            artifact_id="shared-mail-provider",
+            version=version,
+            digest=dependency_digest,
+            manifest_digest=DIGEST_C,
+            source_ref=source,
+        )
+        project = ProjectRelease(
+            project_id="provider",
+            version=version,
+            source_ref=source,
+            components=(scenario, dependency),
+            validation_evidence=({"status": "passed"},),
+            composition_lock=ProjectCompositionLock(
+                project_definition_digest=DIGEST_C,
+                profiles=("default",),
+                members=(
+                    ProjectMemberLock(
+                        ref=scenario.key,
+                        package_digest=scenario.digest,
+                        role="primary",
+                        exposure="application",
+                        lifecycle="bound",
+                        relations=("presents",),
+                    ),
+                    ProjectMemberLock(
+                        ref=dependency.key,
+                        package_digest=dependency.digest,
+                        role="implementation",
+                        exposure="project_only",
+                        lifecycle="bound",
+                        relations=("realizes",),
+                    ),
+                ),
+                project_dependencies=(),
+                entrypoints=(),
+                compatibility={},
+                lifecycle={},
+            ),
+        ).seal()
+        return ApplicationRelease(
+            application_id="provider_app",
+            publisher_ref="subnet:sn_home",
+            project_release=project,
+            accepted_candidate_id=f"candidate.provider.{version}",
+            acceptance_evidence=(
+                {"decision": "accepted", "release_digest": project.release_digest},
+            ),
+            provenance_refs=(DIGEST_C,),
+            lifecycle="stable",
+        )
+
+    provider_v1 = service.register_release(provider_release("1.0.0", DIGEST_C))
+    provider_install = service.plan_operation(
+        "provider_app",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-provider-v1",
+        expected_revision=0,
+        release_digest=provider_v1.release_digest,
+    )
+    service.apply_operation(
+        provider_install.operation_id,
+        plan_digest=provider_install.plan_digest,
+        idempotency_key=provider_install.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    consumer_scenario = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="consumer",
+        version="1.0.0",
+        digest=DIGEST_A,
+        manifest_digest=DIGEST_C,
+        source_ref=source,
+    )
+    consumer_project = ProjectRelease(
+        project_id="consumer",
+        version="1.0.0",
+        source_ref=source,
+        components=(consumer_scenario,),
+        resolved_dependencies=(
+            ResolvedDependency(
+                kind="skill",
+                artifact_id="shared-mail-provider",
+                version="1.0.0",
+                package_digest=DIGEST_C,
+            ),
+        ),
+        validation_evidence=({"status": "passed"},),
+        composition_lock=ProjectCompositionLock(
+            project_definition_digest=DIGEST_C,
+            profiles=("default",),
+            members=(
+                ProjectMemberLock(
+                    ref=consumer_scenario.key,
+                    package_digest=consumer_scenario.digest,
+                    role="primary",
+                    exposure="application",
+                    lifecycle="bound",
+                    relations=("presents",),
+                ),
+            ),
+            project_dependencies=(
+                ProjectDependencyLock(
+                    project_ref="project:provider",
+                    version_spec="^1.0",
+                    release_digest=str(provider_v1.project_release.release_digest),
+                ),
+            ),
+            entrypoints=(),
+            compatibility={},
+            lifecycle={},
+        ),
+    ).seal()
+    consumer_release = service.register_release(
+        ApplicationRelease(
+            application_id="consumer_app",
+            publisher_ref="subnet:sn_home",
+            project_release=consumer_project,
+            accepted_candidate_id="candidate.consumer.1.0.0",
+            acceptance_evidence=(
+                {
+                    "decision": "accepted",
+                    "release_digest": consumer_project.release_digest,
+                },
+            ),
+            provenance_refs=(DIGEST_C,),
+            lifecycle="stable",
+        )
+    )
+    consumer_install = service.plan_operation(
+        "consumer_app",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-consumer",
+        expected_revision=0,
+        release_digest=consumer_release.release_digest,
+    )
+    service.apply_operation(
+        consumer_install.operation_id,
+        plan_digest=consumer_install.plan_digest,
+        idempotency_key=consumer_install.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    provider_v11 = service.register_release(provider_release("1.1.0", DIGEST_B))
+    update = service.plan_operation(
+        "provider_app",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-provider-v11",
+        expected_revision=1,
+        release_digest=provider_v11.release_digest,
+    )
+
+    assert update.plan["conflicts"] == []
+    assert update.plan["shared_dependency_rebindings"] == [
+        {
+            "consumer_application_id": "consumer_app",
+            "consumer_installation_id": "installation:consumer_app",
+            "expected_consumer_revision": 1,
+            "component_ref": "skill:shared-mail-provider",
+            "from_package_digest": DIGEST_C,
+            "to_package_digest": DIGEST_B,
+            "provider_project_ref": "project:provider",
+            "from_project_release_digest": provider_v1.project_release.release_digest,
+            "to_project_release_digest": provider_v11.project_release.release_digest,
+            "admitted_by_version_spec": "^1.0",
+        }
+    ]
+    service.executor = lambda _plan: {
+        "ok": True,
+        "status": "succeeded",
+        "snapshot_receipt": {
+            "snapshot_ref": "snapshot:provider:1",
+            "source_release_digest": provider_v1.release_digest,
+            "consistency_boundary": "artifact_activation_transaction",
+        },
+    }
+    applied = service.apply_operation(
+        update.operation_id,
+        plan_digest=update.plan_digest,
+        idempotency_key=update.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    rebound = service.store.get_installation("consumer_app")
+    shared = next(
+        item
+        for item in rebound.component_refs
+        if item["component_ref"] == "skill:shared-mail-provider"
+    )
+    assert shared["package_digest"] == DIGEST_B
+    assert rebound.revision == 2
+    assert applied.result["shared_dependency_rebindings"][0]["application_id"] == (
+        "consumer_app"
+    )
+
+    provider_v12 = service.register_release(provider_release("1.2.0", DIGEST_D))
+    second_update = service.plan_operation(
+        "provider_app",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-provider-v12",
+        expected_revision=2,
+        release_digest=provider_v12.release_digest,
+    )
+    assert second_update.plan["conflicts"] == []
+    assert (
+        second_update.plan["shared_dependency_rebindings"][0]["from_package_digest"]
+        == DIGEST_B
+    )
+    service.executor = lambda _plan: {
+        "ok": True,
+        "status": "succeeded",
+        "snapshot_receipt": {
+            "snapshot_ref": "snapshot:provider:2",
+            "source_release_digest": provider_v11.release_digest,
+            "consistency_boundary": "artifact_activation_transaction",
+        },
+    }
+    second_applied = service.apply_operation(
+        second_update.operation_id,
+        plan_digest=second_update.plan_digest,
+        idempotency_key=second_update.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+    assert second_applied.status == "succeeded"
+    rebound_again = service.store.get_installation("consumer_app")
+    assert rebound_again.revision == 3
+    assert (
+        next(
+            item
+            for item in rebound_again.component_refs
+            if item["component_ref"] == "skill:shared-mail-provider"
+        )["package_digest"]
+        == DIGEST_D
+    )
+    assert rebound_again.shared_project_bindings == (
+        {
+            "provider_project_ref": "project:provider",
+            "project_release_digest": provider_v12.project_release.release_digest,
+            "version_spec": "^1.0",
+        },
+    )
+
+    provider_v2 = service.register_release(provider_release("2.0.0", DIGEST_C))
+    incompatible = service.plan_operation(
+        "provider_app",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-provider-v2",
+        expected_revision=3,
+        release_digest=provider_v2.release_digest,
+    )
+    assert incompatible.plan["shared_dependency_rebindings"] == []
+    assert incompatible.plan["conflicts"] == [
+        {
+            "component_ref": "skill:shared-mail-provider",
+            "requested_digest": DIGEST_C,
+            "active_digest": DIGEST_D,
+            "active_application_id": "consumer_app",
+            "reason": "side_by_side_component_versions_not_supported",
+        }
+    ]
 
 
 def test_workspace_adoption_requires_resolved_dependency_closure(
@@ -1600,7 +1919,9 @@ def test_read_models_separate_catalog_and_installed_state(
 def test_managed_project_lifecycle_requires_and_preserves_owner(
     service: ApplicationService,
 ) -> None:
-    child_payload = _application("research_project_tlp", "research_project_tlp").to_dict()
+    child_payload = _application(
+        "research_project_tlp", "research_project_tlp"
+    ).to_dict()
     child_payload.update(
         {
             "visibility": "private",
@@ -1695,12 +2016,12 @@ def test_managed_project_lifecycle_requires_and_preserves_owner(
 
     model = service.get_model("app_recipes")
     assert [
-        item["application"]["application_id"]
-        for item in model["managed_projects"]
+        item["application"]["application_id"] for item in model["managed_projects"]
     ] == ["research_project_tlp"]
-    assert service.get_model(child.application_id)["owner_application"][
-        "application_id"
-    ] == "app_recipes"
+    assert (
+        service.get_model(child.application_id)["owner_application"]["application_id"]
+        == "app_recipes"
+    )
 
 
 def test_store_rejects_unknown_or_mutated_managed_project_owner(
@@ -1716,10 +2037,14 @@ def test_store_rejects_unknown_or_mutated_managed_project_owner(
     )
     project = Application.from_mapping(payload)
 
-    with pytest.raises(ApplicationStoreError, match="owner Application is not registered"):
+    with pytest.raises(
+        ApplicationStoreError, match="owner Application is not registered"
+    ):
         store.save_application(project, expected_revision=0)
 
-    store.save_application(_application("research_workbench", "research_workbench"), expected_revision=0)
+    store.save_application(
+        _application("research_workbench", "research_workbench"), expected_revision=0
+    )
     saved = store.save_application(project, expected_revision=0)
     assert store.list_managed_applications("research_workbench") == (saved,)
 
@@ -1765,9 +2090,7 @@ def test_store_rejects_unknown_or_mutated_managed_project_owner(
             expected_revision=1,
         )
     with pytest.raises(ApplicationStoreError, match="with managed Projects"):
-        store.delete_unpublished_application(
-            "research_workbench", expected_revision=1
-        )
+        store.delete_unpublished_application("research_workbench", expected_revision=1)
 
 
 def test_managed_project_install_rechecks_owner_at_apply(tmp_path: Path) -> None:

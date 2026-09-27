@@ -4,6 +4,9 @@ import hashlib
 from dataclasses import replace
 from typing import Any, Callable, Mapping
 
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
 from adaos.domain.application import (
     Application,
     ApplicationInstallation,
@@ -15,6 +18,7 @@ from adaos.domain.application import (
 )
 from adaos.domain.artifact_release import WorkspaceLock, canonical_payload_digest
 from adaos.domain.application_access import classify_access_profile_diff
+from adaos.services.artifact_pipeline.releases import normalize_version_spec
 
 from .store import ApplicationStore
 from .runtime_channel import ApplicationRuntimeChannel
@@ -276,6 +280,7 @@ class ApplicationService:
                 "Workspace Application dependency closure differs from the release"
             )
         refs = tuple(self._release_components(release))
+        shared_project_bindings = self._release_shared_project_bindings(release)
         try:
             current = self.store.get_installation(application_id)
         except FileNotFoundError:
@@ -285,6 +290,7 @@ class ApplicationService:
             and current.status == "active"
             and current.installed_release_digest == release_digest
             and current.component_refs == refs
+            and current.shared_project_bindings == shared_project_bindings
         ):
             return current
         if current and current.status not in {"active", "removed"}:
@@ -296,6 +302,7 @@ class ApplicationService:
                 current,
                 installed_release_digest=release_digest,
                 component_refs=refs,
+                shared_project_bindings=shared_project_bindings,
                 status="active",
                 revision=current.revision + 1,
                 updated_at=utc_now(),
@@ -306,6 +313,7 @@ class ApplicationService:
                 application_id=application_id,
                 installed_release_digest=release_digest,
                 component_refs=refs,
+                shared_project_bindings=shared_project_bindings,
                 data_policy="retain",
                 status="active",
                 revision=1,
@@ -626,6 +634,22 @@ class ApplicationService:
                 by_ref[dependency.key] = candidate
         return sorted(components, key=lambda item: item["component_ref"])
 
+    @staticmethod
+    def _release_shared_project_bindings(
+        release: ApplicationRelease,
+    ) -> tuple[dict[str, Any], ...]:
+        composition = release.project_release.composition_lock
+        if composition is None:
+            return ()
+        return tuple(
+            {
+                "provider_project_ref": item.project_ref,
+                "project_release_digest": item.release_digest,
+                "version_spec": item.version_spec,
+            }
+            for item in composition.project_dependencies
+        )
+
     def _shared_component_materialization(
         self,
         application_id: str,
@@ -661,8 +685,19 @@ class ApplicationService:
         self,
         application_id: str,
         components: list[dict[str, Any]],
+        *,
+        admitted_rebindings: tuple[Mapping[str, Any], ...] = (),
     ) -> list[dict[str, Any]]:
         target = {item["component_ref"]: item["package_digest"] for item in components}
+        admitted = {
+            (
+                str(item.get("consumer_application_id") or ""),
+                str(item.get("component_ref") or ""),
+                str(item.get("from_package_digest") or ""),
+                str(item.get("to_package_digest") or ""),
+            )
+            for item in admitted_rebindings
+        }
         conflicts: list[dict[str, Any]] = []
         for installation in self.store.list_installations():
             if (
@@ -673,6 +708,14 @@ class ApplicationService:
             for current in installation.component_refs:
                 requested = target.get(current["component_ref"])
                 if requested and requested != current["package_digest"]:
+                    transition = (
+                        installation.application_id,
+                        current["component_ref"],
+                        current["package_digest"],
+                        requested,
+                    )
+                    if transition in admitted:
+                        continue
                     conflicts.append(
                         {
                             "component_ref": current["component_ref"],
@@ -686,6 +729,238 @@ class ApplicationService:
             conflicts,
             key=lambda item: (item["component_ref"], item["active_application_id"]),
         )
+
+    def _shared_dependency_rebindings(
+        self,
+        application_id: str,
+        release: ApplicationRelease,
+        components: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], ...]:
+        """Find consumers that can follow a compatible provider release.
+
+        This is deliberately narrower than matching a component name.  The
+        consumer must hold the component as an exact resolved ``shared``
+        dependency and its immutable release must name the currently active
+        provider ProjectRelease.  Only a target provider version admitted by
+        the declared Project dependency range may advance that local lock.
+        """
+
+        try:
+            provider_installation = self.store.get_installation(application_id)
+        except FileNotFoundError:
+            return ()
+        if provider_installation.status == "removed":
+            return ()
+        try:
+            provider_release = self.store.get_release(
+                application_id, provider_installation.installed_release_digest
+            )
+        except FileNotFoundError:
+            return ()
+        current_project_digest = str(
+            provider_release.project_release.release_digest or ""
+        )
+        target_project = release.project_release
+        target_project_digest = str(target_project.release_digest or "")
+        if not current_project_digest or not target_project_digest:
+            return ()
+        target_by_ref = {
+            item["component_ref"]: item["package_digest"] for item in components
+        }
+        provider_ref = f"project:{target_project.project_id}"
+        result: list[dict[str, Any]] = []
+        for installation in self.store.list_installations():
+            if (
+                installation.application_id == application_id
+                or installation.status == "removed"
+            ):
+                continue
+            try:
+                consumer_release = self.store.get_release(
+                    installation.application_id,
+                    installation.installed_release_digest,
+                )
+            except FileNotFoundError:
+                continue
+            composition = consumer_release.project_release.composition_lock
+            if composition is None:
+                continue
+            immutable_lock = next(
+                (
+                    item
+                    for item in composition.project_dependencies
+                    if item.project_ref == provider_ref
+                ),
+                None,
+            )
+            local_lock = next(
+                (
+                    item
+                    for item in installation.shared_project_bindings
+                    if item["provider_project_ref"] == provider_ref
+                ),
+                None,
+            )
+            observed_project_digest = str(
+                (local_lock or {}).get("project_release_digest")
+                or (immutable_lock.release_digest if immutable_lock else "")
+            )
+            version_spec = str(
+                (local_lock or {}).get("version_spec")
+                or (immutable_lock.version_spec if immutable_lock else "")
+            )
+            if (
+                immutable_lock is None
+                or observed_project_digest != current_project_digest
+            ):
+                continue
+            try:
+                normalized = normalize_version_spec(version_spec)
+                compatible = not normalized or Version(
+                    target_project.version
+                ) in SpecifierSet(normalized)
+            except Exception:
+                compatible = False
+            if not compatible:
+                continue
+            resolved = {
+                item.key: item
+                for item in consumer_release.project_release.resolved_dependencies
+            }
+            for current in installation.component_refs:
+                component_ref = str(current["component_ref"])
+                requested = target_by_ref.get(component_ref)
+                dependency = resolved.get(component_ref)
+                if (
+                    not requested
+                    or requested == current["package_digest"]
+                    or current["lifecycle"] != "shared"
+                    or (
+                        local_lock is None
+                        and (
+                            dependency is None
+                            or dependency.package_digest != current["package_digest"]
+                        )
+                    )
+                ):
+                    continue
+                result.append(
+                    {
+                        "consumer_application_id": installation.application_id,
+                        "consumer_installation_id": installation.installation_id,
+                        "expected_consumer_revision": installation.revision,
+                        "component_ref": component_ref,
+                        "from_package_digest": current["package_digest"],
+                        "to_package_digest": requested,
+                        "provider_project_ref": provider_ref,
+                        "from_project_release_digest": current_project_digest,
+                        "to_project_release_digest": target_project_digest,
+                        "admitted_by_version_spec": version_spec,
+                    }
+                )
+        return tuple(
+            sorted(
+                result,
+                key=lambda item: (
+                    item["consumer_application_id"],
+                    item["component_ref"],
+                ),
+            )
+        )
+
+    def _prepare_shared_dependency_rebindings(
+        self, raw_rebindings: Any
+    ) -> tuple[tuple[ApplicationInstallation, ...], dict[str, int]]:
+        rows = tuple(raw_rebindings or ())
+        by_application: dict[str, list[Mapping[str, Any]]] = {}
+        for raw in rows:
+            if not isinstance(raw, Mapping):
+                raise ApplicationServiceError(
+                    "shared dependency rebinding plan is invalid"
+                )
+            application_id = str(raw.get("consumer_application_id") or "")
+            by_application.setdefault(application_id, []).append(raw)
+        updates: list[ApplicationInstallation] = []
+        expected_revisions: dict[str, int] = {}
+        for application_id, changes in sorted(by_application.items()):
+            if not application_id:
+                raise ApplicationServiceError(
+                    "shared dependency rebinding consumer is required"
+                )
+            current = self.store.get_installation(application_id)
+            expected = int(changes[0].get("expected_consumer_revision") or 0)
+            if current.revision != expected or any(
+                int(item.get("expected_consumer_revision") or 0) != expected
+                for item in changes
+            ):
+                raise ApplicationServiceError(
+                    "shared dependency consumer revision changed after review"
+                )
+            transitions = {
+                str(item.get("component_ref") or ""): (
+                    str(item.get("from_package_digest") or ""),
+                    str(item.get("to_package_digest") or ""),
+                )
+                for item in changes
+            }
+            observed_refs: set[str] = set()
+            component_refs: list[dict[str, Any]] = []
+            for component in current.component_refs:
+                component_ref = str(component["component_ref"])
+                transition = transitions.get(component_ref)
+                if transition is None:
+                    component_refs.append(dict(component))
+                    continue
+                before, after = transition
+                if (
+                    component["lifecycle"] != "shared"
+                    or component["package_digest"] != before
+                    or not after
+                ):
+                    raise ApplicationServiceError(
+                        "shared dependency binding changed after review"
+                    )
+                observed_refs.add(component_ref)
+                component_refs.append(
+                    {
+                        **dict(component),
+                        "package_digest": after,
+                    }
+                )
+            if observed_refs != set(transitions):
+                raise ApplicationServiceError(
+                    "shared dependency binding is absent after review"
+                )
+            updates.append(
+                replace(
+                    current,
+                    component_refs=tuple(component_refs),
+                    shared_project_bindings=tuple(
+                        {
+                            **dict(binding),
+                            "project_release_digest": (
+                                str(changes[0]["to_project_release_digest"])
+                                if binding["provider_project_ref"]
+                                == changes[0]["provider_project_ref"]
+                                else binding["project_release_digest"]
+                            ),
+                        }
+                        for binding in (
+                            current.shared_project_bindings
+                            or self._release_shared_project_bindings(
+                                self.store.get_release(
+                                    current.application_id,
+                                    current.installed_release_digest,
+                                )
+                            )
+                        )
+                    ),
+                    revision=current.revision + 1,
+                    updated_at=utc_now(),
+                )
+            )
+            expected_revisions[application_id] = current.revision
+        return tuple(updates), expected_revisions
 
     @staticmethod
     def _compatibility_summary(release: ApplicationRelease) -> dict[str, Any]:
@@ -949,6 +1224,7 @@ class ApplicationService:
         release: ApplicationRelease | None = None
         components: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
+        shared_dependency_rebindings: tuple[dict[str, Any], ...] = ()
         compatibility: dict[str, Any] = {}
         previous_release: ApplicationRelease | None = None
         if operation_kind in {"install", "update"}:
@@ -992,7 +1268,15 @@ class ApplicationService:
                 self._release_components(release),
                 allow_reuse=operation_kind == "install",
             )
-            conflicts = self._component_conflicts(application_id, components)
+            if operation_kind == "update":
+                shared_dependency_rebindings = self._shared_dependency_rebindings(
+                    application_id, release, components
+                )
+            conflicts = self._component_conflicts(
+                application_id,
+                components,
+                admitted_rebindings=shared_dependency_rebindings,
+            )
             compatibility = self._compatibility_summary(release)
             if operation_kind == "update" and current is not None:
                 previous_release = self.store.get_release(
@@ -1072,6 +1356,9 @@ class ApplicationService:
             ),
             "components": components,
             "conflicts": conflicts,
+            "shared_dependency_rebindings": [
+                dict(item) for item in shared_dependency_rebindings
+            ],
             "compatibility": compatibility,
             "snapshot": snapshot,
             "removal": removal,
@@ -1405,6 +1692,12 @@ class ApplicationService:
                 application_id=operation.application_id,
                 installed_release_digest=str(operation.plan["release_digest"]),
                 component_refs=tuple(operation.plan.get("components") or ()),
+                shared_project_bindings=self._release_shared_project_bindings(
+                    self.store.get_release(
+                        operation.application_id,
+                        str(operation.plan["release_digest"]),
+                    )
+                ),
                 data_policy=str(operation.plan.get("data_policy") or "retain"),
                 status="active",
                 revision=observed_revision + 1,
@@ -1432,7 +1725,39 @@ class ApplicationService:
                 revision=current.revision + 1,
                 updated_at=utc_now(),
             )
-        self.store.save_installation(installation, expected_revision=observed_revision)
+        shared_rebindings: tuple[ApplicationInstallation, ...] = ()
+        shared_expected_revisions: dict[str, int] = {}
+        if operation.kind == "update":
+            try:
+                (
+                    shared_rebindings,
+                    shared_expected_revisions,
+                ) = self._prepare_shared_dependency_rebindings(
+                    operation.plan.get("shared_dependency_rebindings")
+                )
+            except Exception as exc:
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=result,
+                    recovery_reason=(
+                        "shared_dependency_rebinding_changed_after_execution:"
+                        f"{type(exc).__name__}:{exc}"
+                    ),
+                )
+        if shared_rebindings:
+            expected_revisions = {
+                operation.application_id: observed_revision,
+                **shared_expected_revisions,
+            }
+            self.store.save_installations_batch(
+                (installation, *shared_rebindings),
+                expected_revisions=expected_revisions,
+            )
+        else:
+            self.store.save_installation(
+                installation, expected_revision=observed_revision
+            )
         subscription_result = None
         raw_subscription_default = operation.plan.get("subscription_default")
         if operation.kind == "install" and isinstance(
@@ -1464,6 +1789,10 @@ class ApplicationService:
                     expected_revision=0,
                 )
         operation_result = {**result, "installation": installation.to_dict()}
+        if shared_rebindings:
+            operation_result["shared_dependency_rebindings"] = [
+                item.to_dict() for item in shared_rebindings
+            ]
         if install_access is not None:
             operation_result["install_access"] = install_access
         if subscription_result is not None:
@@ -1647,13 +1976,19 @@ class ApplicationService:
     ) -> dict[str, Any]:
         """Build one bounded catalog row without expanding release closures."""
 
-        channels = dict(self.store.get_channels(application.application_id).get("channels") or {})
+        channels = dict(
+            self.store.get_channels(application.application_id).get("channels") or {}
+        )
         local_beta = any(item.source == "local_trial" for item in runtime_selections)
         local_beta_digests = {
-            item.release_digest for item in runtime_selections if item.source == "local_trial"
+            item.release_digest
+            for item in runtime_selections
+            if item.source == "local_trial"
         }
         effective_installed = installation is not None or local_beta
-        prerelease_following = bool(subscription and subscription.update_track == "prerelease")
+        prerelease_following = bool(
+            subscription and subscription.update_track == "prerelease"
+        )
         effective = self.effective_release(
             application.application_id,
             subscriber_subnet_ref=subscriber_subnet_ref,
@@ -1672,26 +2007,39 @@ class ApplicationService:
                 return None
             if token not in release_cache:
                 try:
-                    release_cache[token] = self.store.get_release_summary(application.application_id, token)
+                    release_cache[token] = self.store.get_release_summary(
+                        application.application_id, token
+                    )
                 except FileNotFoundError:
                     release_cache[token] = None
             return release_cache[token]
 
-        installed_release = release_for(installation.installed_release_digest if installation else None)
+        installed_release = release_for(
+            installation.installed_release_digest if installation else None
+        )
         local_beta_releases = [
             release
             for digest in sorted(local_beta_digests)
             if (release := release_for(digest)) is not None
         ]
-        local_beta_release = local_beta_releases[0] if len(local_beta_releases) == 1 else None
+        local_beta_release = (
+            local_beta_releases[0] if len(local_beta_releases) == 1 else None
+        )
         installation_summary = None
         if installation is not None:
             value = installation.to_dict()
             installation_summary = {
                 key: value[key]
                 for key in (
-                    "schema", "installation_id", "application_id", "installed_release_digest",
-                    "data_policy", "status", "revision", "created_at", "updated_at",
+                    "schema",
+                    "installation_id",
+                    "application_id",
+                    "installed_release_digest",
+                    "data_policy",
+                    "status",
+                    "revision",
+                    "created_at",
+                    "updated_at",
                 )
                 if key in value
             }
@@ -1701,8 +2049,15 @@ class ApplicationService:
             operation_summary = {
                 key: value[key]
                 for key in (
-                    "schema", "operation_id", "application_id", "kind", "status", "revision",
-                    "recovery_reason", "created_at", "updated_at",
+                    "schema",
+                    "operation_id",
+                    "application_id",
+                    "kind",
+                    "status",
+                    "revision",
+                    "recovery_reason",
+                    "created_at",
+                    "updated_at",
                 )
                 if key in value
             }
@@ -1711,7 +2066,8 @@ class ApplicationService:
             "application": application.to_dict(),
             "installed": effective_installed,
             "installation": installation_summary,
-            "available": bool(channels.get("stable")) or application.visibility != "public",
+            "available": bool(channels.get("stable"))
+            or application.visibility != "public",
             "update_available": update_available,
             "pinned": bool(subscription and subscription.update_policy == "pinned"),
             "prerelease_following": prerelease_following,

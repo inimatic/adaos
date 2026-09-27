@@ -8,6 +8,7 @@
     "schema": {"const": "adaos.application.installation.v1"}, "installation_id": {"type": "string", "minLength": 1, "maxLength": 180},
     "application_id": {"$ref": "#/$defs/id"}, "installed_release_digest": {"$ref": "#/$defs/digest"},
     "component_refs": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["component_ref", "package_digest", "lifecycle"], "properties": {"component_ref": {"type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"}, "package_digest": {"$ref": "#/$defs/digest"}, "lifecycle": {"enum": ["bound", "shared"]}}}},
+    "shared_project_bindings": {"type": "array", "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["provider_project_ref", "project_release_digest", "version_spec"], "properties": {"provider_project_ref": {"type": "string", "pattern": "^project:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"}, "project_release_digest": {"$ref": "#/$defs/digest"}, "version_spec": {"type": "string", "maxLength": 120}}}},
     "data_policy": {"enum": ["retain", "delete", "snapshot_then_delete"]},
     "status": {"enum": ["planned", "installing", "active", "updating", "degraded", "removing", "removed", "failed", "unknown"]},
     "revision": {"type": "integer", "minimum": 1}, "legacy_deployment_id": {"type": ["string", "null"], "maxLength": 180}, "snapshot_ref": {"type": ["string", "null"], "maxLength": 300},
