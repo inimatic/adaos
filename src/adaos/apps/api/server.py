@@ -663,6 +663,23 @@ def _yjs_owner_gc_interval_sec() -> float:
     return max(5.0, min(value, 300.0))
 
 
+def _yjs_owner_gc_generation(collection_number: int) -> int:
+    """Choose a bounded collection generation for the owner-thread worker.
+
+    A full collection can block the API event loop for more than a second on
+    long-lived nodes.  Newly unreachable Yjs wrapper cycles begin in the young
+    generation, so collect that generation on every pass while still giving
+    older generations deterministic, substantially less frequent service.
+    """
+
+    number = max(1, int(collection_number))
+    if number % 20 == 0:
+        return 2
+    if number % 4 == 0:
+        return 1
+    return 0
+
+
 def _y_py_loaded() -> bool:
     return any(name == "y_py" or name.startswith("y_py.") for name in sys.modules)
 
@@ -681,12 +698,18 @@ async def _yjs_owner_gc_worker(app: FastAPI) -> None:
     }
     while True:
         await asyncio.sleep(interval_sec)
+        collection_number = int(app.state.yjs_owner_gc.get("collections") or 0) + 1
+        generation = _yjs_owner_gc_generation(collection_number)
         started = time.perf_counter()
-        collected = int(gc.collect() or 0)
+        collected = int(gc.collect(generation) or 0)
         duration_ms = round((time.perf_counter() - started) * 1000.0, 3)
         state = app.state.yjs_owner_gc
-        state["collections"] = int(state.get("collections") or 0) + 1
+        state["collections"] = collection_number
         state["collected"] = int(state.get("collected") or 0) + collected
+        state[f"generation_{generation}_collections"] = (
+            int(state.get(f"generation_{generation}_collections") or 0) + 1
+        )
+        state["last_generation"] = generation
         state["last_collected"] = collected
         state["last_duration_ms"] = duration_ms
         state["last_completed_at"] = time.time()
@@ -694,7 +717,8 @@ async def _yjs_owner_gc_worker(app: FastAPI) -> None:
             raise RuntimeError("Yjs cyclic collection left its owner thread")
         if duration_ms >= 250.0:
             logging.getLogger("adaos.yjs.owner_gc").warning(
-                "Yjs owner-thread cyclic collection slow duration_ms=%.1f collected=%d",
+                "Yjs owner-thread cyclic collection slow generation=%d duration_ms=%.1f collected=%d",
+                generation,
                 duration_ms,
                 collected,
             )

@@ -208,7 +208,7 @@ def test_api_runtime_routes_cyclic_gc_to_yjs_owner_thread(monkeypatch) -> None:
     monkeypatch.setattr(
         server.gc,
         "collect",
-        lambda: calls.append(("collect", threading.current_thread().name)) or 1,
+        lambda *_args: calls.append(("collect", threading.current_thread().name)) or 1,
     )
     monkeypatch.setattr(
         server.gc,
@@ -229,3 +229,28 @@ def test_api_runtime_routes_cyclic_gc_to_yjs_owner_thread(monkeypatch) -> None:
     assert any(name == "collect" for name, _thread in calls)
     assert all(thread == owner_thread for _name, thread in calls)
     assert app.state.yjs_owner_gc["active"] is False
+
+
+def test_yjs_owner_gc_uses_bounded_generational_schedule() -> None:
+    assert [server._yjs_owner_gc_generation(index) for index in range(1, 21)] == [
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        2,
+    ]
