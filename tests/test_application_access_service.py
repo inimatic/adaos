@@ -189,6 +189,34 @@ def test_application_access_grant_decision_audit_and_revoke(tmp_path: Path) -> N
     assert denied.reason_code == "grant_revoked"
 
 
+def test_application_access_audit_recovers_from_stale_derived_sequence(
+    tmp_path: Path,
+) -> None:
+    service, _access, _release_digest = _service(tmp_path)
+    first = service.store.append_application_access_audit(
+        {
+            "application_id": "family_tasks",
+            "subject_ref": "user:masha",
+            "action": "permission_decision",
+        }
+    )
+    sequence_path = (
+        service.store.root / "application_access_audit" / "sequence.json"
+    )
+    sequence_path.write_text("not-json", encoding="utf-8")
+
+    second = service.store.append_application_access_audit(
+        {
+            "application_id": "family_tasks",
+            "subject_ref": "user:masha",
+            "action": "permission_decision",
+        }
+    )
+
+    assert first["sequence"] == 1
+    assert second["sequence"] == 2
+
+
 def test_application_access_pauses_when_release_profile_digest_changes(tmp_path: Path) -> None:
     service, access, release_digest = _service(tmp_path)
     grant = access.grant_access(

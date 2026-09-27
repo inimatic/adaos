@@ -62,6 +62,34 @@ def _read(path: Path) -> dict[str, Any]:
     return dict(payload)
 
 
+def _write_derived_sequence_cache(path: Path, sequence: int) -> None:
+    """Best-effort cursor for an immutable event directory.
+
+    The numbered audit event is the durable source of truth. Requiring a
+    second fsync plus directory sync for this rebuildable cursor doubled the
+    latency of every runtime access decision on slow storage. A torn or stale
+    cursor is safe: append scans forward under the mutation lock.
+    """
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "adaos.application.access_audit_sequence.v1",
+                    "sequence": int(sequence),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        # This cursor is derived from the immutable numbered events.
+        return
+
+
 def _encode_event_cursor(sequence: int) -> str:
     raw = json.dumps({"after": int(sequence)}, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -830,7 +858,14 @@ class ApplicationStore:
         with mutation_lock(self.lock_path, timeout_s=30.0):
             parent = self.root / "application_access_audit"
             sequence_path = parent / "sequence.json"
-            sequence = int(_read(sequence_path).get("sequence") or 0) + 1 if sequence_path.is_file() else 1
+            try:
+                sequence = (
+                    int(_read(sequence_path).get("sequence") or 0) + 1
+                    if sequence_path.is_file()
+                    else 1
+                )
+            except ApplicationStoreError:
+                sequence = 1
             while (parent / f"{sequence:020d}.json").exists():
                 sequence += 1
             event = {
@@ -840,7 +875,7 @@ class ApplicationStore:
                 **dict(payload),
             }
             atomic_write_json(parent / f"{sequence:020d}.json", event)
-            atomic_write_json(sequence_path, {"schema": "adaos.application.access_audit_sequence.v1", "sequence": sequence})
+            _write_derived_sequence_cache(sequence_path, sequence)
             return event
 
     def list_application_access_audit(
