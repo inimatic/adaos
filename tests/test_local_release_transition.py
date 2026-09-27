@@ -13,6 +13,7 @@ from adaos.domain.application import Application, ApplicationInstallation, Appli
 from adaos.domain.artifact_release import ArtifactSourceRef, ProjectRelease, ProjectCompositionLock, ProjectMemberLock, WorkspaceLock, WorkspaceSlot
 from adaos.services.applications.data_lifecycle import declared_databases
 from adaos.services.applications.local_release_transition import (
+    _retained_retired_components,
     bind_local_data_lifecycle,
     promote_with_local_data,
     reconcile_rejected_local_trial,
@@ -29,6 +30,29 @@ from adaos.services.artifact_pipeline.trial_activation import TrialActivationSto
 def rows(path):
     with closing(sqlite3.connect(path)) as connection:
         return connection.execute("SELECT id, label FROM entries ORDER BY id").fetchall()
+
+
+def test_project_upgrade_can_explicitly_retain_retired_owned_skill_data() -> None:
+    release = SimpleNamespace(
+        composition_lock=SimpleNamespace(
+            lifecycle={
+                "upgrade": {
+                    "retired_components": [
+                        {
+                            "ref": "skill:legacy_prompt",
+                            "data": "retain",
+                            "reason": "Retain legacy project history after UI retirement.",
+                        }
+                    ]
+                }
+            }
+        )
+    )
+
+    assert _retained_retired_components(release) == {"skill:legacy_prompt"}
+    assert _retained_retired_components(
+        SimpleNamespace(composition_lock=SimpleNamespace(lifecycle={}))
+    ) == set()
 
 
 def test_unmanaged_project_source_is_not_an_installed_migration_base(

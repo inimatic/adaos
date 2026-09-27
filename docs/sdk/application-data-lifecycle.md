@@ -67,6 +67,23 @@ target bucket is a conflict, not permission to overwrite it. An interrupted
 transition keeps a persistent execution fence and resumes its original intent;
 retrying a completed Candidate does not reseed its data or publish again.
 
+Removing an owned skill from an Application release is also a data transition.
+Core fails closed unless the new `project.yaml` explicitly retains the retired
+component's data:
+
+```yaml
+lifecycle:
+  upgrade:
+    retired_components:
+      - ref: skill:legacy_skill
+        data: retain
+        reason: Retain historical project data after retiring the old surface.
+```
+
+`retain` preserves the old versioned runtime data root but gives the new release
+no implicit access to it. Destructive cleanup and migration into a different
+owner still require separately implemented and reviewed adapters.
+
 An unfinished Stable-to-Beta preparation can be explicitly cancelled through
 `adaos.sdk.builder.applications.abort_local_trial_preparation`, with the exact
 Candidate/release and `applications.recover` admission. Core verifies the retained

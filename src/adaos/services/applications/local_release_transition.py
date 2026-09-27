@@ -21,6 +21,24 @@ from .runtime_channel import ApplicationRuntimeChannel
 from .store import ApplicationStore
 
 
+def _retained_retired_components(release) -> set[str]:
+    """Return exact owned skill refs whose retired data must be retained."""
+
+    composition = getattr(release, "composition_lock", None)
+    lifecycle = getattr(composition, "lifecycle", {}) if composition else {}
+    lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
+    upgrade = lifecycle.get("upgrade")
+    upgrade = upgrade if isinstance(upgrade, dict) else {}
+    retirements = upgrade.get("retired_components") or ()
+    return {
+        str(item.get("ref") or "").strip()
+        for item in retirements
+        if isinstance(item, dict)
+        and item.get("data") == "retain"
+        and str(item.get("ref") or "").strip()
+    }
+
+
 def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> dict:
     """Invoke one exact immutable Trial lifecycle hook without exposing state."""
 
@@ -180,9 +198,12 @@ def bind_local_data_lifecycle(owner, runtime, release):
             )
         }
         target_shared = shared_components(release)
+        retained_retirements = _retained_retired_components(release)
         relinquished = previous.keys() - target.keys()
         unsafe_relinquished = []
         for ref in sorted(relinquished):
+            if ref in retained_retirements:
+                continue
             previous_package = previous[ref][0]
             target_digest = target_shared.get(ref)
             if target_digest == previous_package.digest:
@@ -203,6 +224,9 @@ def bind_local_data_lifecycle(owner, runtime, release):
                 unsafe_relinquished.append(ref)
         if unsafe_relinquished:
             raise ValueError("Removing owned skill data requires an explicit retention/migration adapter")
+        binding["retained_retired_components"] = sorted(
+            retained_retirements.intersection(relinquished)
+        )
         shared_adoptions = {}
         for installation in store.list_installations():
             if installation.application_id == application_id or installation.status == "removed":
