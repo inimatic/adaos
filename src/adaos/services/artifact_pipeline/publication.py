@@ -14,6 +14,7 @@ from packaging.version import InvalidVersion, Version
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactSourceRef,
+    ProjectRelease,
     StableSubscription,
     WorkspaceLock,
     canonical_payload_digest,
@@ -121,6 +122,29 @@ _DEVELOPMENT_SOURCE_TEXT_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+
+
+def _active_project_release(
+    active_lock: WorkspaceLock | None,
+    project_id: str,
+    release_cache: Any,
+) -> ProjectRelease | None:
+    """Load the exact ProjectRelease pinned by the project's active slot."""
+
+    if active_lock is None:
+        return None
+    for slot in active_lock.slots:
+        if slot.project_id != project_id:
+            continue
+        try:
+            return release_cache.get_release(
+                slot.project_id,
+                slot.release_digest,
+            ).release
+        except Exception:
+            # Missing local release evidence must fail closed.
+            return None
+    return None
 
 
 def _canonical_development_source_bytes(path: Path) -> bytes:
@@ -2161,7 +2185,14 @@ class ArtifactPublicationService:
             )
             conflicts, shared_rebinding_evidence = (
                 unresolved_shared_skill_conflicts(
-                    plan, active_lock, self.package_store
+                    plan,
+                    active_lock,
+                    self.package_store,
+                    replaced_release=_active_project_release(
+                        active_lock,
+                        plan.release.project_id,
+                        self.release_cache,
+                    ),
                 )
             )
         except TrialActivationError as exc:
@@ -2356,7 +2387,14 @@ class ArtifactPublicationService:
                 source="stable",
             )
         conflicts, shared_rebinding_evidence = unresolved_shared_skill_conflicts(
-            plan, active_lock, self.package_store
+            plan,
+            active_lock,
+            self.package_store,
+            replaced_release=_active_project_release(
+                active_lock,
+                plan.release.project_id,
+                self.release_cache,
+            ),
         )
         if conflicts:
             summary = "; ".join(
@@ -2712,7 +2750,14 @@ class ArtifactPublicationService:
             )
             conflicts, shared_rebinding_evidence = (
                 unresolved_shared_skill_conflicts(
-                    plan, active_lock, self.package_store
+                    plan,
+                    active_lock,
+                    self.package_store,
+                    replaced_release=_active_project_release(
+                        active_lock,
+                        plan.release.project_id,
+                        self.release_cache,
+                    ),
                 )
             )
         except TrialActivationError as exc:

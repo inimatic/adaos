@@ -15,6 +15,7 @@ import yaml
 
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
+    ProjectRelease,
     WorkspaceLock,
     canonical_payload_digest,
 )
@@ -538,18 +539,50 @@ def load_workspace_lock(path: Path) -> WorkspaceLock | None:
 def shared_skill_conflicts(
     plan: ReleasePlan,
     active_lock: WorkspaceLock | None,
+    *,
+    replaced_release: ProjectRelease | None = None,
 ) -> list[dict[str, Any]]:
     """Return unsafe candidate skill substitutions in the single-version runtime.
 
     A changed skill is admitted only when every active reverse consumer is also
-    part of this candidate release. That bounded closure is the only resolver
-    proof available in the MVP; otherwise the Trial must fail closed.
+    part of this candidate release or is an owned component retired by the
+    exact active ProjectRelease being replaced. The latter exception is valid
+    only when WorkspaceLock pins that same project and release digest; a
+    consumer owned by any other active slot remains external and fail-closed.
     """
 
     if active_lock is None:
         return []
     candidate_by_key = {item.key: item for item in plan.packages}
     active_by_key = {item.key: item for item in active_lock.components}
+    retired_consumers: set[str] = set()
+    if replaced_release is not None:
+        candidate_release = getattr(plan, "release", None)
+        candidate_project_id = str(
+            getattr(candidate_release, "project_id", "") or ""
+        ).strip()
+        replaced_project_id = str(
+            getattr(replaced_release, "project_id", "") or ""
+        ).strip()
+        replaced_digest = str(
+            getattr(replaced_release, "release_digest", "") or ""
+        ).strip()
+        exact_slot = any(
+            slot.project_id == replaced_project_id
+            and slot.release_digest == replaced_digest
+            for slot in active_lock.slots
+        )
+        if (
+            candidate_project_id
+            and candidate_project_id == replaced_project_id
+            and replaced_digest
+            and exact_slot
+        ):
+            retired_consumers = {
+                item.key
+                for item in replaced_release.components
+                if item.key not in candidate_by_key
+            }
     conflicts: list[dict[str, Any]] = []
     for key, candidate_package in candidate_by_key.items():
         if candidate_package.kind != "skill":
@@ -561,7 +594,9 @@ def shared_skill_conflicts(
             {
                 binding.consumer
                 for binding in active_lock.bindings
-                if binding.dependency == key and binding.consumer not in candidate_by_key
+                if binding.dependency == key
+                and binding.consumer not in candidate_by_key
+                and binding.consumer not in retired_consumers
             }
         )
         if external_consumers:
@@ -581,6 +616,8 @@ def contract_preserving_shared_skill_rebindings(
     plan: ReleasePlan,
     active_lock: WorkspaceLock | None,
     package_store: Any,
+    *,
+    replaced_release: ProjectRelease | None = None,
 ) -> list[dict[str, Any]]:
     """Prove safe rebinding of active consumers to a new package delivery.
 
@@ -596,7 +633,9 @@ def contract_preserving_shared_skill_rebindings(
     active_by_key = {item.key: item for item in active_lock.components}
     candidate_by_key = {item.key: item for item in plan.packages}
     evidence: list[dict[str, Any]] = []
-    for conflict in shared_skill_conflicts(plan, active_lock):
+    for conflict in shared_skill_conflicts(
+        plan, active_lock, replaced_release=replaced_release
+    ):
         skill_ref = str(conflict.get("skill") or "")
         active_package = active_by_key.get(skill_ref)
         candidate_package = candidate_by_key.get(skill_ref)
@@ -632,6 +671,8 @@ def legacy_cbs_shared_skill_rebindings(
     plan: ReleasePlan,
     active_lock: WorkspaceLock | None,
     package_store: Any,
+    *,
+    replaced_release: ProjectRelease | None = None,
 ) -> list[dict[str, Any]]:
     """Bridge an explicitly enumerated legacy package into native CBS ownership.
 
@@ -647,7 +688,9 @@ def legacy_cbs_shared_skill_rebindings(
     active_by_key = {item.key: item for item in active_lock.components}
     candidate_by_key = {item.key: item for item in plan.packages}
     evidence: list[dict[str, Any]] = []
-    for conflict in shared_skill_conflicts(plan, active_lock):
+    for conflict in shared_skill_conflicts(
+        plan, active_lock, replaced_release=replaced_release
+    ):
         skill_ref = str(conflict.get("skill") or "")
         active_package = active_by_key.get(skill_ref)
         candidate_package = candidate_by_key.get(skill_ref)
@@ -716,15 +759,25 @@ def unresolved_shared_skill_conflicts(
     plan: ReleasePlan,
     active_lock: WorkspaceLock | None,
     package_store: Any,
+    *,
+    replaced_release: ProjectRelease | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return conflicts without exact rebinding proof and the admitted proofs."""
 
-    conflicts = shared_skill_conflicts(plan, active_lock)
+    conflicts = shared_skill_conflicts(
+        plan, active_lock, replaced_release=replaced_release
+    )
     admitted = contract_preserving_shared_skill_rebindings(
-        plan, active_lock, package_store
+        plan,
+        active_lock,
+        package_store,
+        replaced_release=replaced_release,
     )
     legacy_admitted = legacy_cbs_shared_skill_rebindings(
-        plan, active_lock, package_store
+        plan,
+        active_lock,
+        package_store,
+        replaced_release=replaced_release,
     )
     admitted = [
         *admitted,

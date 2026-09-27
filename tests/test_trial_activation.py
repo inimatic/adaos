@@ -14,6 +14,7 @@ from adaos.domain.artifact_release import (
     ArtifactSourceRef,
     DependencyBinding,
     WorkspaceLock,
+    WorkspaceSlot,
 )
 from adaos.services.artifact_pipeline.trial_activation import (
     TRIAL_WORKSPACE_LAYOUT_SCHEMA,
@@ -105,6 +106,66 @@ def test_runtime_trial_allows_same_skill_digest_or_closed_candidate_consumer() -
         SimpleNamespace(packages=(changed, scenario)),
         same_digest_lock,
     )
+
+
+def test_project_upgrade_allows_owned_consumer_retired_by_exact_active_release() -> None:
+    active = _skill("a")
+    candidate = _skill("b")
+    retired_scenario = ArtifactPackageRef(
+        kind="scenario",
+        artifact_id="legacy_prompt",
+        version="1.0.0",
+        digest="sha256:" + "e" * 64,
+        manifest_digest="sha256:" + "f" * 64,
+        source_ref=active.source_ref,
+    )
+    active_release_digest = "sha256:" + "9" * 64
+    lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-08-06T00:00:00+00:00",
+        slots=(
+            WorkspaceSlot(
+                slot_id="builder",
+                project_id="builder",
+                release="builder@1.0.0",
+                release_digest=active_release_digest,
+            ),
+        ),
+        components=(active, retired_scenario),
+        bindings=(
+            DependencyBinding(
+                consumer=retired_scenario.key,
+                dependency=active.key,
+                package_digest=active.digest,
+            ),
+        ),
+    )
+    plan = SimpleNamespace(
+        packages=(candidate,),
+        release=SimpleNamespace(project_id="builder"),
+    )
+    replaced_release = SimpleNamespace(
+        project_id="builder",
+        release_digest=active_release_digest,
+        components=(active, retired_scenario),
+    )
+
+    assert not shared_skill_conflicts(
+        plan,
+        lock,
+        replaced_release=replaced_release,
+    )
+
+    wrong_release = SimpleNamespace(
+        project_id="builder",
+        release_digest="sha256:" + "8" * 64,
+        components=(active, retired_scenario),
+    )
+    assert shared_skill_conflicts(
+        plan,
+        lock,
+        replaced_release=wrong_release,
+    )[0]["active_consumers"] == [retired_scenario.key]
 
 
 def test_contract_preserving_delivery_rebinds_external_consumers() -> None:

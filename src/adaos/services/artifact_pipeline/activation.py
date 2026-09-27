@@ -830,8 +830,14 @@ class WorkspaceActivationManager:
                 )
             verified.append(observed.ref)
         current = self.load_lock()
+        replaced_release = self._active_release(current, slot_id=slot_id)
         unresolved_conflicts, shared_rebinding_evidence = (
-            unresolved_shared_skill_conflicts(plan, current, self.package_store)
+            unresolved_shared_skill_conflicts(
+                plan,
+                current,
+                self.package_store,
+                replaced_release=replaced_release,
+            )
         )
         if unresolved_conflicts:
             summary = "; ".join(
@@ -1555,7 +1561,12 @@ class WorkspaceActivationManager:
 
             unresolved_conflicts, shared_rebinding_evidence = (
                 unresolved_shared_skill_conflicts(
-                    plan, current, self.package_store
+                    plan,
+                    current,
+                    self.package_store,
+                    replaced_release=self._active_release(
+                        current, slot_id=slot_id
+                    ),
                 )
             )
             if unresolved_conflicts:
