@@ -4074,6 +4074,7 @@ def _refresh_live_room_after_rebuild_enabled() -> bool:
 def _rebuild_action_refreshes_live_room(action: str) -> bool:
     action_token = str(action or "").strip().lower()
     if action_token in {
+        "startup_materialization_hydration",
         "scenario_switch_rebuild",
         "builder_revision_apply",
         "builder_aprobation_apply",
@@ -4089,6 +4090,7 @@ def _rebuild_action_refreshes_live_room(action: str) -> bool:
 def _rebuild_action_applies_live_payload(action: str) -> bool:
     action_token = str(action or "").strip().lower()
     if action_token in {
+        "startup_materialization_hydration",
         "scenario_switch_rebuild",
         "builder_revision_apply",
         "builder_aprobation_apply",

@@ -5060,9 +5060,10 @@ def test_startup_materialization_passes_prewarmed_skill_declarations(monkeypatch
     assert calls[0]["skill_decls_fingerprint"] == "fp-dev"
 
 
-def test_startup_materialization_uses_isolated_payload_without_live_mutation(monkeypatch) -> None:
+def test_startup_materialization_uses_isolated_payload_and_commits_authoritative_state(monkeypatch) -> None:
     materialize_calls: list[dict[str, object]] = []
     direct_rebuild_calls: list[str] = []
+    live_refresh_calls: list[dict[str, object]] = []
 
     async def _fake_refresh(
         ctx,  # noqa: ARG001
@@ -5099,6 +5100,20 @@ def test_startup_materialization_uses_isolated_payload_without_live_mutation(mon
         direct_rebuild_calls.append(webspace_id)
         raise AssertionError("startup hydration must not mutate the operational YDoc")
 
+    async def _fake_live_refresh(webspace_id: str, materialized_payload: dict, **kwargs):
+        live_refresh_calls.append(
+            {
+                "webspace_id": webspace_id,
+                "materialized_payload": materialized_payload,
+                **kwargs,
+            }
+        )
+        return {
+            "ok": True,
+            "materialized_payload_applied": True,
+            "materialized_payload": {"ready": True},
+        }
+
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
@@ -5109,6 +5124,10 @@ def test_startup_materialization_uses_isolated_payload_without_live_mutation(mon
         webspace_runtime_module.WebspaceScenarioRuntime,
         "rebuild_webspace_async",
         _unexpected_direct_rebuild,
+    )
+    monkeypatch.setattr(
+        "adaos.services.yjs.gateway.apply_materialized_payload_to_live_room",
+        _fake_live_refresh,
     )
 
     result = asyncio.run(
@@ -5125,10 +5144,14 @@ def test_startup_materialization_uses_isolated_payload_without_live_mutation(mon
     assert result["accepted"] is True
     assert result["payload_only_rebuild"] is True
     assert result["live_room_update_requested"] is False
-    assert result["live_room_refresh"] is None
+    assert result["live_room_refresh"]["materialized_payload_applied"] is True
     assert direct_rebuild_calls == []
     assert len(materialize_calls) == 1
     assert materialize_calls[0]["isolate_process"] is True
+    assert len(live_refresh_calls) == 1
+    assert live_refresh_calls[0]["webspace_id"] == "startup-desktop"
+    assert live_refresh_calls[0]["persist_repair"] is True
+    assert live_refresh_calls[0]["materialized_payload"]["scenario_id"] == "web_desktop"
 
 
 def test_scenarios_synced_routes_through_semantic_rebuild_helper(monkeypatch) -> None:
