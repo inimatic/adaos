@@ -37,7 +37,11 @@ from adaos.services.project_deployment import (
     SnapshotNodeInventoryProvider,
     UncertainDeploymentPhaseError,
 )
-from adaos.services.project_deployment.execution import _safe_error, _safe_payload
+from adaos.services.project_deployment.execution import (
+    _safe_error,
+    _safe_payload,
+    next_component_activation_generation,
+)
 
 
 _NOW = "2026-08-19T18:00:00+00:00"
@@ -88,6 +92,46 @@ def test_deployment_error_receipts_retain_bounded_operator_detail() -> None:
 
 def _digest(character: str) -> str:
     return "sha256:" + character * 64
+
+
+def test_component_activation_generation_is_global_to_node_component(
+    tmp_path: Path,
+) -> None:
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.put_activation(
+        ComponentActivation(
+            activation_id="activation.previous-deployment",
+            deployment_id="application-deployment:previous",
+            component_ref="skill:media_library_agent",
+            node_id="node-a",
+            release_digest=_digest("a"),
+            package_digest=_digest("b"),
+            generation=92,
+            status="inactive",
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+    store.put_activation(
+        ComponentActivation(
+            activation_id="activation.other-node",
+            deployment_id="application-deployment:other",
+            component_ref="skill:media_library_agent",
+            node_id="node-b",
+            release_digest=_digest("c"),
+            package_digest=_digest("d"),
+            generation=500,
+            status="active",
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+
+    assert next_component_activation_generation(
+        store,
+        node_id="node-a",
+        component_ref="skill:media_library_agent",
+    ) == 93
 
 
 def _release(

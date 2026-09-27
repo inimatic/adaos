@@ -64,6 +64,38 @@ def component_activation_id(
     return f"activation.{activation_seed}"
 
 
+def next_component_activation_generation(
+    store: ProjectDeploymentStore,
+    *,
+    node_id: str,
+    component_ref: str,
+) -> int:
+    """Allocate the next node/component epoch across deployment identities.
+
+    A deployment revision is only monotonic inside one deployment. Components
+    can move between Application deployments or be rolled back to an older
+    package, while distributed service membership uses the activation
+    generation as a fencing epoch. Deriving that epoch from ``desired.revision``
+    therefore regresses it and leaves the membership supervisor retrying
+    forever. The activation store is the authority for this node/component
+    epoch, so allocate after the greatest observation regardless of deployment.
+    """
+
+    greatest = 0
+    cursor: str | None = None
+    while True:
+        values, cursor = store.list_activations(cursor=cursor, limit=200)
+        for activation in values:
+            if (
+                activation.node_id == node_id
+                and activation.component_ref == component_ref
+            ):
+                greatest = max(greatest, int(activation.generation))
+        if cursor is None:
+            break
+    return greatest + 1
+
+
 class ComponentDeploymentAdapter(Protocol):
     def execute_phase(
         self,
@@ -659,6 +691,11 @@ class ProjectDeploymentExecutor:
                 break
         receipts = {item.phase: dict(item.receipt) for item in phases if item.receipt}
         health = dict(receipts.get("health") or {})
+        generation = next_component_activation_generation(
+            self.store,
+            node_id=change.node_id,
+            component_ref=change.component_ref,
+        )
         activation = ComponentActivation(
             activation_id=component_activation_id(desired, change, package),
             deployment_id=desired.deployment_id,
@@ -666,7 +703,7 @@ class ProjectDeploymentExecutor:
             node_id=change.node_id,
             release_digest=desired.release_digest,
             package_digest=package.digest,
-            generation=desired.revision,
+            generation=generation,
             status="active",
             health=health,
             evidence={

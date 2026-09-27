@@ -29,6 +29,7 @@ from .execution import (
     RetryableDeploymentPhaseError,
     UncertainDeploymentPhaseError,
     component_activation_id,
+    next_component_activation_generation,
 )
 from .store import ProjectDeploymentStore
 
@@ -410,6 +411,11 @@ def _persist_remote_activation(
     if existing is not None:
         active = replace(existing, status="active", updated_at=now)
     else:
+        generation = next_component_activation_generation(
+            store,
+            node_id=change.node_id,
+            component_ref=change.component_ref,
+        )
         active = ComponentActivation(
             activation_id=activation_id,
             deployment_id=desired.deployment_id,
@@ -417,7 +423,7 @@ def _persist_remote_activation(
             node_id=change.node_id,
             release_digest=desired.release_digest,
             package_digest=package.digest,
-            generation=desired.revision,
+            generation=generation,
             status="active",
             health={"ready": True, "source": "remote_commit"},
             evidence={
