@@ -945,6 +945,7 @@ def _read_pidfile(path: Path) -> dict | None:
 
 
 def _write_pidfile(path: Path, *, host: str, port: int, advertised_base: str, owner: str | None = None) -> None:
+    _prune_stale_api_pidfiles(path.parent)
     payload = {
         "pid": os.getpid(),
         "host": host,
@@ -955,6 +956,47 @@ def _write_pidfile(path: Path, *, host: str, port: int, advertised_base: str, ow
         "started_at": time.time(),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _pidfile_has_live_adaos_owner(data: dict | None) -> bool:
+    try:
+        pid = int((data or {}).get("pid") or 0)
+    except Exception:
+        return False
+    if pid <= 0:
+        return False
+    try:
+        proc = psutil.Process(pid)
+        if not proc.is_running() or proc.status() == psutil.STATUS_ZOMBIE:
+            return False
+    except psutil.Error:
+        return False
+    return _process_kind(proc) in {"api_serve", "autostart_runner", "supervisor"}
+
+
+def _prune_stale_api_pidfiles(api_dir: Path) -> list[Path]:
+    """Remove discovery records whose AdaOS runtime owner no longer exists.
+
+    ``api serve`` may take over an API on a different port.  Keeping the old
+    record makes Root and local control discovery probe a dead endpoint and can
+    leave the public hub route pointing at it until another successful start.
+    """
+
+    removed: list[Path] = []
+    try:
+        candidates = list(api_dir.glob("serve-*.json"))
+    except Exception:
+        return removed
+    for candidate in candidates:
+        data = _read_pidfile(candidate)
+        if _pidfile_has_live_adaos_owner(data):
+            continue
+        try:
+            candidate.unlink(missing_ok=True)
+            removed.append(candidate)
+        except Exception:
+            continue
+    return removed
 
 
 def _host_matches_listener(bind_host: str, listener_host: str | None) -> bool:
@@ -1449,11 +1491,7 @@ def _stop_previous_server(host: str, port: int) -> None:
         if not owner_pid or owner_pid == os.getpid():
             break
         time.sleep(0.1)
-    try:
-        if not candidate_pids and pidfile.exists():
-            pidfile.unlink()
-    except Exception:
-        pass
+    _prune_stale_api_pidfiles(pidfile.parent)
 
 
 def _cleanup_pidfile(path: Path) -> None:

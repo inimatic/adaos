@@ -80,6 +80,34 @@ def test_looks_like_control_api_response_rejects_candidate_runtime_payload() -> 
         )
         is False
     )
+
+
+def test_pidfile_control_urls_ignore_dead_runtime_owner(monkeypatch, tmp_path) -> None:
+    api_dir = tmp_path / "api"
+    api_dir.mkdir()
+    (api_dir / "serve-127.0.0.1-8778.json").write_text(
+        json.dumps(
+            {
+                "pid": 123,
+                "advertised_base": "http://127.0.0.1:8778",
+                "started_at": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Paths:
+        @staticmethod
+        def state_dir():
+            return tmp_path
+
+    class _Ctx:
+        paths = _Paths()
+
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: _Ctx())
+    monkeypatch.setattr(active_control.psutil, "Process", lambda _pid: (_ for _ in ()).throw(active_control.psutil.NoSuchProcess(_pid)))
+
+    assert active_control._pidfile_control_urls() == []
     assert (
         active_control._looks_like_control_api_response(
             200,

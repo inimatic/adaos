@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import psutil
 import requests
 from adaos.services.settings import _parse_env_file
 from adaos.services.runtime_topology import (
@@ -198,6 +199,21 @@ def _pidfile_control_urls() -> list[str]:
             except Exception:
                 continue
             if not isinstance(data, dict):
+                continue
+            try:
+                pid = int(data.get("pid") or 0)
+                proc = psutil.Process(pid)
+                cmdline = " ".join(str(part) for part in proc.cmdline()).lower()
+                live_owner = (
+                    pid > 0
+                    and proc.is_running()
+                    and proc.status() != psutil.STATUS_ZOMBIE
+                    and "adaos" in cmdline
+                    and any(token in cmdline for token in (" serve", "autostart_runner", "apps.supervisor"))
+                )
+            except (ValueError, TypeError, psutil.Error):
+                live_owner = False
+            if not live_owner:
                 continue
             raw = _normalize_url(data.get("advertised_base"))
             if not raw or not _is_local_url(raw):

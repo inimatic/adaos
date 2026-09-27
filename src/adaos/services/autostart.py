@@ -948,6 +948,21 @@ def _pidfile_control_candidates() -> list[tuple[float, str, int]]:
                 continue
             if not isinstance(data, dict):
                 continue
+            try:
+                pid = int(data.get("pid") or 0)
+                proc = psutil.Process(pid)
+                cmdline = " ".join(str(part) for part in proc.cmdline()).lower()
+                live_owner = (
+                    pid > 0
+                    and proc.is_running()
+                    and proc.status() != psutil.STATUS_ZOMBIE
+                    and "adaos" in cmdline
+                    and any(token in cmdline for token in (" serve", "autostart_runner", "apps.supervisor"))
+                )
+            except (ValueError, TypeError, psutil.Error):
+                live_owner = False
+            if not live_owner:
+                continue
             advertised = _local_url_to_host_port(data.get("advertised_base"))
             if advertised is None:
                 continue

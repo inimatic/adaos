@@ -18,6 +18,7 @@ from adaos.apps.cli.commands.api import (
     _parse_windows_tcp_excluded_ranges,
     _probe_api_bind_availability,
     _process_matches_bind,
+    _prune_stale_api_pidfiles,
     _run_api_pre_stop_preflight,
     _runtime_import_preflight_timeout_sec,
     _resolve_stop_bind,
@@ -47,6 +48,24 @@ def test_write_pidfile_records_server_owner(tmp_path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["owner"] == "autostart"
     assert data["port"] == 8778
+
+
+def test_prune_stale_api_pidfiles_removes_dead_owner_and_keeps_live_runtime(monkeypatch, tmp_path):
+    dead = tmp_path / "serve-127.0.0.1-8778.json"
+    live = tmp_path / "serve-127.0.0.1-8777.json"
+    dead.write_text(json.dumps({"pid": 100}), encoding="utf-8")
+    live.write_text(json.dumps({"pid": 200}), encoding="utf-8")
+    monkeypatch.setattr(
+        api_cmd,
+        "_pidfile_has_live_adaos_owner",
+        lambda data: int((data or {}).get("pid") or 0) == 200,
+    )
+
+    removed = _prune_stale_api_pidfiles(tmp_path)
+
+    assert removed == [dead]
+    assert not dead.exists()
+    assert live.exists()
 
 
 def test_resolve_bind_prefers_saved_local_hub_port():
