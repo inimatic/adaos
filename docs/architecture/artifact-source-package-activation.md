@@ -186,6 +186,15 @@ Required invariants:
 - A DEV context may be deleted after its source commits, package references,
   and evidence are durable.
 
+Sparse checkout is a source-transport optimization, never activation
+authority. Every component pinned by the active `WorkspaceLock` must remain in
+the effective sparse set. After source synchronization, AdaOS verifies each
+locked component against its exact CAS package and rematerializes missing or
+drifted files before runtime/database reconciliation. This repair does not
+change the lock revision or digest. If an exact package cannot be restored, or
+if the lock changes during repair, synchronization fails closed and must not
+project a partial application set into Home or runtime discovery.
+
 ### 3. Immutable Package Store
 
 Every executable component is packaged before installation or trial.

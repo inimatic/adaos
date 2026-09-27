@@ -14,6 +14,8 @@ from adaos.services.mutation_lock import mutation_lock
 from adaos.services.project_deployment.materialization import (
     restore_project_owned_materializations,
 )
+from adaos.services.artifact_pipeline.activation import WorkspaceActivationManager
+from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from adaos.services.workspace_registry import (
     load_workspace_registry,
@@ -399,6 +401,64 @@ def selected_runtime_skill_names(ctx) -> list[str]:
     return sorted(names)
 
 
+def _artifact_activation_manager(ctx, workspace_root: Path) -> WorkspaceActivationManager:
+    state_dir_resolver = getattr(getattr(ctx, "paths", None), "state_dir", None)
+    state_dir = (
+        Path(state_dir_resolver()).resolve()
+        if callable(state_dir_resolver)
+        else (Path(getattr(ctx.settings, "base_dir")) / ".adaos" / "state").resolve()
+    )
+    return WorkspaceActivationManager(
+        workspace_root=workspace_root,
+        package_store=ContentAddressedPackageStore(
+            state_dir / "artifact_pipeline" / "packages"
+        ),
+        state_root=state_dir / "artifact_pipeline" / "activation",
+    )
+
+
+def active_workspace_lock_components(
+    ctx,
+    workspace_root: Path,
+) -> tuple[list[str], list[str], list[str]]:
+    """Return lock-pinned component ids and their canonical sparse paths."""
+
+    manager = _artifact_activation_manager(ctx, workspace_root)
+    active = manager.load_lock()
+    if active is None:
+        return [], [], []
+    skills: set[str] = set()
+    scenarios: set[str] = set()
+    paths: set[str] = set()
+    for package in active.components:
+        relative = str(
+            package.materialization_path
+            or (
+                f"skills/{package.artifact_id}"
+                if package.kind == "skill"
+                else f"scenarios/{package.artifact_id}"
+            )
+        ).strip().replace("\\", "/").strip("/")
+        expected = f"{package.kind}s/{package.artifact_id}"
+        if relative != expected:
+            raise RuntimeError(
+                "WorkspaceLock component has a non-canonical materialization path: "
+                f"{package.key} -> {relative or '<empty>'}"
+            )
+        paths.add(relative)
+        (skills if package.kind == "skill" else scenarios).add(package.artifact_id)
+    return sorted(skills), sorted(scenarios), sorted(paths)
+
+
+def restore_workspace_lock_materializations(ctx, workspace_root: Path) -> dict[str, Any]:
+    """Reassert the active immutable WorkspaceLock after source synchronization."""
+
+    return _artifact_activation_manager(
+        ctx,
+        workspace_root,
+    ).restore_active_materializations()
+
+
 def workspace_kind_names(ctx, workspace_root: Path, kind: str) -> list[str]:
     names: set[str] = set()
     prefix = f"{kind}/"
@@ -578,7 +638,12 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
     selected_runtime_skills = selected_runtime_skill_names(ctx)
     skills, skills_fallback = effective_registry_names(ctx, registry_skills, workspace_root, "skills")
     scenarios, scenarios_fallback = effective_registry_names(ctx, registry_scenarios, workspace_root, "scenarios")
-    skills = sorted(set(skills) | set(selected_runtime_skills))
+    locked_skills, locked_scenarios, locked_patterns = active_workspace_lock_components(
+        ctx,
+        workspace_root,
+    )
+    skills = sorted(set(skills) | set(selected_runtime_skills) | set(locked_skills))
+    scenarios = sorted(set(scenarios) | set(locked_scenarios))
     runtime_scenario_refs = runtime_required_scenario_refs()
 
     try:
@@ -623,6 +688,12 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
         project_materialization = restore_project_owned_materializations(ctx)
         if project_materialization.get("ok") is not True:
             errors.append("project materialization restore failed")
+        workspace_lock_materialization = restore_workspace_lock_materializations(
+            ctx,
+            workspace_root,
+        )
+        if workspace_lock_materialization.get("ok") is not True:
+            errors.append("WorkspaceLock materialization restore failed")
         reconcile_result: dict[str, Any] | None = None
         try:
             reconcile_result = reconcile_workspace_db_to_materialized(ctx)
@@ -641,11 +712,14 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             "registry_skills": registry_skills,
             "registry_scenarios": registry_scenarios,
             "selected_runtime_skills": selected_runtime_skills,
+            "locked_skills": locked_skills,
+            "locked_scenarios": locked_scenarios,
             "runtime_scenario_refs": runtime_scenario_refs,
             "scenario_required_skills": scenario_required_skills,
             "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
             "fallback_used": fallback_used,
             "project_materialization": project_materialization,
+            "workspace_lock_materialization": workspace_lock_materialization,
             "errors": errors,
             "reconcile": reconcile_result,
             "semantic_registry": semantic_registry,
@@ -657,6 +731,11 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
     current = sparse.read_patterns()
     to_remove = [pattern for pattern in current if pattern not in desired]
 
+    # Expand the checkout before cleanliness admission.  Missing lock-pinned
+    # paths otherwise remain marked skip-worktree and disappear even though
+    # their immutable packages are still active.  Removal still happens only
+    # after the normal dirty-tree guard succeeds.
+    sparse.update(add=locked_patterns, remove=())
     ensure_clean(ctx.git, str(workspace_root), desired)
     sparse.update(add=desired, remove=to_remove)
     try:
@@ -733,6 +812,30 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             "patterns": desired,
         }
 
+    workspace_lock_materialization = restore_workspace_lock_materializations(
+        ctx,
+        workspace_root,
+    )
+    if workspace_lock_materialization.get("ok") is not True:
+        return {
+            "ok": False,
+            "skills": skills,
+            "scenarios": scenarios,
+            "registry_skills": registry_skills,
+            "registry_scenarios": registry_scenarios,
+            "selected_runtime_skills": selected_runtime_skills,
+            "locked_skills": locked_skills,
+            "locked_scenarios": locked_scenarios,
+            "runtime_scenario_refs": runtime_scenario_refs,
+            "scenario_required_skills": scenario_required_skills,
+            "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
+            "fallback_used": fallback_used,
+            "project_materialization": project_materialization,
+            "workspace_lock_materialization": workspace_lock_materialization,
+            "error": "WorkspaceLock materialization restore failed",
+            "patterns": desired,
+        }
+
     try:
         reconcile_result = reconcile_workspace_db_to_materialized(ctx)
     except Exception as exc:
@@ -776,11 +879,14 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
         "registry_skills": registry_skills,
         "registry_scenarios": registry_scenarios,
         "selected_runtime_skills": selected_runtime_skills,
+        "locked_skills": locked_skills,
+        "locked_scenarios": locked_scenarios,
         "runtime_scenario_refs": runtime_scenario_refs,
         "scenario_required_skills": scenario_required_skills,
         "unresolved_runtime_scenarios": unresolved_runtime_scenarios,
         "fallback_used": fallback_used,
         "project_materialization": project_materialization,
+        "workspace_lock_materialization": workspace_lock_materialization,
         "reconcile": reconcile_result,
         "semantic_registry": semantic_registry,
         "patterns": desired,
@@ -865,6 +971,8 @@ __all__ = [
     "resolve_scenario_requirements",
     "runtime_required_scenario_refs",
     "selected_runtime_skill_names",
+    "active_workspace_lock_components",
+    "restore_workspace_lock_materializations",
     "sync_workspace_sparse_to_registry",
     "workspace_kind_names",
 ]

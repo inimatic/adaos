@@ -743,6 +743,43 @@ def test_missing_retained_dependency_is_repaired_from_locked_package(tmp_path: P
     }
 
 
+def test_active_workspace_lock_materialization_can_be_reconciled_without_release_change(
+    tmp_path: Path,
+) -> None:
+    scenario = _built_scenario(tmp_path, version="1.0.0", marker="locked")
+    skill = _built_skill(tmp_path, version="1.0.0", marker="locked")
+    store, manager = _manager(tmp_path)
+    for built in (scenario, skill):
+        store.put(built.archive_bytes)
+    activated = _activate(
+        manager,
+        _plan_with_skill(scenario, skill),
+        idempotency_key="active-materialization-base",
+    )
+    expected_lock = activated.workspace_lock.to_dict()["lock_digest"]
+    shutil.rmtree(tmp_path / "workspace" / "scenarios" / "recipes")
+    (tmp_path / "workspace" / "skills" / "shopping" / "handler.py").write_text(
+        "DRIFTED = True\n",
+        encoding="utf-8",
+    )
+
+    receipt = manager.restore_active_materializations()
+
+    assert receipt["ok"] is True
+    assert receipt["lock_digest"] == expected_lock
+    assert receipt["checked"] == ["scenario:recipes", "skill:shopping"]
+    assert receipt["repaired"] == ["scenario:recipes", "skill:shopping"]
+    assert json.loads(
+        (tmp_path / "workspace" / "scenarios" / "recipes" / "webui.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {"marker": "locked"}
+    assert (
+        tmp_path / "workspace" / "skills" / "shopping" / "handler.py"
+    ).read_text(encoding="utf-8") == "MARKER = 'locked'\n"
+    assert manager.load_lock() == activated.workspace_lock
+
+
 def test_project_release_consolidates_replaced_standalone_component_slot(
     tmp_path: Path,
 ) -> None:

@@ -21,6 +21,7 @@ from adaos.domain.artifact_release import (
 from adaos.services import workspace_registry as workspace_registry_module
 from adaos.services import workspace_sync as workspace_sync_module
 from adaos.services.workspace_sync import (
+    active_workspace_lock_components,
     audit_workspace_materialization,
     reconcile_workspace_db_to_materialized,
     resolve_scenario_requirements,
@@ -1413,6 +1414,42 @@ def test_selected_runtime_skill_names_preserves_legacy_selection(tmp_path: Path)
     ctx = SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: skills_root))
 
     assert selected_runtime_skill_names(ctx) == ["legacy_skill"]
+
+
+def test_active_workspace_lock_components_extend_sparse_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _Package:
+        def __init__(self, kind: str, artifact_id: str) -> None:
+            self.kind = kind
+            self.artifact_id = artifact_id
+            self.materialization_path = f"{kind}s/{artifact_id}"
+            self.key = f"{kind}:{artifact_id}"
+
+    active = SimpleNamespace(
+        components=(
+            _Package("scenario", "gmail_cbs_cleanroom"),
+            _Package("skill", "gmail_cbs_cleanroom_skill"),
+        )
+    )
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "_artifact_activation_manager",
+        lambda _ctx, _root: SimpleNamespace(load_lock=lambda: active),
+    )
+
+    skills, scenarios, patterns = active_workspace_lock_components(
+        SimpleNamespace(),
+        tmp_path,
+    )
+
+    assert skills == ["gmail_cbs_cleanroom_skill"]
+    assert scenarios == ["gmail_cbs_cleanroom"]
+    assert patterns == [
+        "scenarios/gmail_cbs_cleanroom",
+        "skills/gmail_cbs_cleanroom_skill",
+    ]
 
 
 def test_workspace_materialization_audit_is_read_only(tmp_path: Path, monkeypatch):

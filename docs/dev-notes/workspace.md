@@ -13,3 +13,17 @@ The lifecycle is intentionally symmetrical:
 
 This flow guarantees that a follow-up `install → uninstall → install` round-trip does not leave untracked
 files or stale sparse patterns, which was the root cause of `FileNotFoundError: ... not present after sync`.
+
+## Active package materializations
+
+The registry checkout is only a transport for mutable source. Before sparse
+patterns are narrowed, synchronize them with every component in the active
+`WorkspaceLock`. After the Git update, restore and verify those exact packages
+from the local content-addressed store before reconciling the workspace
+database.
+
+Do not infer activation state from which paths happen to remain in the sparse
+checkout. A missing active path is materialization drift: repair it without
+changing the lock digest, or fail closed. Otherwise Home can silently fall back
+to its built-in seed while the lock and database still claim that applications
+are active.

@@ -360,6 +360,78 @@ class WorkspaceActivationManager:
             "skipped_host_metadata_files": skipped_host_metadata,
         }
 
+    def restore_active_materializations(self) -> dict[str, Any]:
+        """Restore every exact package pinned by the active WorkspaceLock.
+
+        Registry sparse-checkout is a source transport and must not be allowed
+        to erase or replace the immutable materialization selected by the
+        WorkspaceLock.  This reconciliation is intentionally lock-bound and
+        digest-verifying: missing or drifted component directories are rebuilt
+        from the local CAS, while an authority change aborts the receipt.
+        """
+
+        with mutation_lock(self.writer_lock_path, timeout_s=60.0):
+            active = self.load_lock()
+            if active is None:
+                return {
+                    "schema": "adaos.artifact.workspace_materialization_reconciliation.v1",
+                    "ok": True,
+                    "configured": False,
+                    "checked": [],
+                    "repaired": [],
+                    "reason": "workspace_lock_unavailable",
+                }
+            expected_digest = str(active.to_dict()["lock_digest"])
+            checked: list[str] = []
+            repaired: list[str] = []
+            errors: list[dict[str, str]] = []
+            for package in sorted(active.components, key=lambda item: item.key):
+                checked.append(package.key)
+                try:
+                    self._verify_materialized_component(package)
+                    continue
+                except (ActivationError, PackageVerificationError, FileNotFoundError):
+                    pass
+                try:
+                    verified = self.package_store.materialize(
+                        package.digest,
+                        self._target_for(package),
+                    )
+                    if verified.ref != package:
+                        raise ActivationError(
+                            "restored package differs from WorkspaceLock: "
+                            f"{package.key}"
+                        )
+                    self._verify_materialized_component(package)
+                    repaired.append(package.key)
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "package": package.key,
+                            "package_digest": package.digest,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc)[:500],
+                        }
+                    )
+
+            observed = self.load_lock()
+            observed_digest = self._lock_digest(observed)
+            if observed_digest != expected_digest:
+                raise ActivationConflictError(
+                    "WorkspaceLock changed during materialization reconciliation: "
+                    f"expected {expected_digest}, observed {observed_digest or '<absent>'}"
+                )
+            return {
+                "schema": "adaos.artifact.workspace_materialization_reconciliation.v1",
+                "ok": not errors,
+                "configured": True,
+                "lock_digest": expected_digest,
+                "lock_revision": active.lock_revision,
+                "checked": checked,
+                "repaired": repaired,
+                "errors": errors,
+            }
+
     def run_delayed_verification(
         self,
         operation_id: str,
