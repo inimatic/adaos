@@ -129,6 +129,34 @@ def test_windows_wrapper_keeps_managed_supervisor_restartable(tmp_path: Path) ->
     assert "Start-Sleep -Seconds 2" in text
 
 
+def test_windows_task_reliability_disables_battery_shutdown_and_restarts(monkeypatch) -> None:
+    import adaos.services.autostart as autostart
+
+    captured: dict[str, list[str]] = {}
+
+    def _run(argv: list[str]):
+        captured["argv"] = argv
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(autostart, "_run", _run)
+
+    result = autostart._configure_windows_task_reliability("AdaOS")
+
+    argv = captured["argv"]
+    assert argv[:4] == ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"]
+    assert len(argv) == 5
+    assert "-AllowStartIfOnBatteries" in argv[4]
+    assert "-DontStopIfGoingOnBatteries" in argv[4]
+    assert "-DontStopOnIdleEnd" in argv[4]
+    assert "-ExecutionTimeLimit ([TimeSpan]::Zero)" in argv[4]
+    assert "-RestartCount 999" in argv[4]
+    assert "Set-ScheduledTask -TaskName 'AdaOS'" in argv[4]
+    assert "Enable-ScheduledTask -TaskName 'AdaOS'" in argv[4]
+    assert result["execution_time_limit"] == "PT0S"
+    assert result["restart_count"] == 999
+    assert result["enabled"] is True
+
+
 def test_windows_status_distinguishes_running_task_from_enabled_state(monkeypatch, tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 

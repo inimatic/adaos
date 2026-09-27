@@ -634,6 +634,48 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, **_text_subprocess_kwargs())
 
 
+def _configure_windows_task_reliability(task_name: str) -> dict[str, object]:
+    """Keep the managed runtime alive across battery and process failures."""
+    task_name_literal = "'" + str(task_name).replace("'", "''") + "'"
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        "$settings = New-ScheduledTaskSettingsSet "
+        "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd "
+        "-StartWhenAvailable "
+        "-ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 "
+        "-RestartInterval (New-TimeSpan -Minutes 1); "
+        f"Set-ScheduledTask -TaskName {task_name_literal} -Settings $settings | Out-Null; "
+        f"Enable-ScheduledTask -TaskName {task_name_literal} | Out-Null"
+    )
+    proc = _run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ]
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            (
+                proc.stderr
+                or proc.stdout
+                or "failed to configure scheduled task reliability settings"
+            ).strip()
+        )
+    return {
+        "allow_start_on_batteries": True,
+        "stop_on_batteries": False,
+        "stop_on_idle_end": False,
+        "start_when_available": True,
+        "execution_time_limit": "PT0S",
+        "restart_count": 999,
+        "restart_interval": "PT1M",
+        "enabled": True,
+    }
+
+
 def _safe_proc_cmdline(proc: psutil.Process) -> list[str]:
     try:
         return [str(part) for part in proc.cmdline()]
@@ -1845,7 +1887,14 @@ def enable(
         proc = _run(args)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout or "failed to create scheduled task").strip())
-        return {"ok": True, "platform": "windows", "wrapper": str(wrapper), "task": name}
+        reliability = _configure_windows_task_reliability(name)
+        return {
+            "ok": True,
+            "platform": "windows",
+            "wrapper": str(wrapper),
+            "task": name,
+            "reliability": reliability,
+        }
 
     if _is_linux():
         run_as_user = str(run_as or "").strip() or None
