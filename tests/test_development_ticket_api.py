@@ -1519,6 +1519,111 @@ def test_development_ticket_list_summary_projection_omits_heavy_fields(tmp_path:
     assert len(response.content) < 2_000
 
 
+def test_development_ticket_list_excludes_platform_debt_before_limit(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    user_ticket = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Keep the user request visible",
+            "kind": "feedback",
+            "target_scope": {"type": "scenario", "id": "applications"},
+        },
+    ).json()["ticket"]
+    client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Generated compatibility finding",
+            "kind": "runtime_compatibility_debt",
+            "target_scope": {"type": "skill", "id": "legacy_skill"},
+        },
+    )
+
+    response = client.get(
+        "/api/development-tickets"
+        "?projection=summary"
+        "&exclude_kind=runtime_compatibility_debt"
+        "&limit=1",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["ticket_id"] for item in response.json()["items"]] == [
+        user_ticket["ticket_id"]
+    ]
+
+
+def test_development_ticket_list_applies_target_before_limit(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    matching = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Applications feedback",
+            "target_scope": {"type": "scenario", "id": "applications"},
+        },
+    ).json()["ticket"]
+    client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Newer unrelated feedback",
+            "target_scope": {"type": "scenario", "id": "builder"},
+        },
+    )
+
+    response = client.get(
+        "/api/development-tickets"
+        "?projection=summary"
+        "&target_id=applications"
+        "&limit=1",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["ticket_id"] for item in response.json()["items"]] == [
+        matching["ticket_id"]
+    ]
+
+
+def test_development_ticket_create_schedules_publisher_forward_without_waiting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduled: list[tuple[DevelopmentTicketService, str]] = []
+
+    def schedule(
+        service: DevelopmentTicketService,
+        *,
+        ticket_id: str | None = None,
+    ) -> None:
+        scheduled.append((service, str(ticket_id or "")))
+
+    monkeypatch.setattr(
+        tickets_api,
+        "_schedule_ticket_development_report_sync",
+        schedule,
+    )
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+
+    response = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "summary": "Forward this feedback",
+            "source": "client_feedback",
+            "target_scope": {"type": "scenario", "id": "applications"},
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert scheduled == [(service, response.json()["ticket"]["ticket_id"])]
+
+
 def test_builder_prototype_projection_recovers_model_call_fact_from_job_id() -> None:
     projected = tickets_api._builder_prototype_context(
         {

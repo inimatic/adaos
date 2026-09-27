@@ -2,7 +2,7 @@
 
 Status: proposed cross-domain roadmap.
 
-Last reviewed: 2026-09-05.
+Last reviewed: 2026-09-27.
 
 This roadmap sequences the work needed to make evolution feedback a governed,
 natural AdaOS interface for both people and Codex. It is subordinate to
@@ -175,6 +175,22 @@ Builder: scenario invocation now selects that scenario by default, component
 choices are searchable, external images are bounded to four files of at most
 6 MiB each, and an erroneous ticket can be closed immediately. Browser capture
 and external attachment remain distinct evidence origins.
+
+The 2026-09-27 queue checkpoint separates human-authored work from generated
+`runtime_compatibility_debt`. The default **User work** view excludes that
+platform-debt kind; **Platform debt** and **All tickets** remain explicit,
+reversible views. The API applies target, scope, kind, and exclusion filters
+before its bounded summary projection and limit, so a large generated backlog
+cannot hide a matching user ticket. List reads use the compact projection and
+the client requests at most 1000 records for the selected workstream.
+
+Publisher forwarding is no longer attached to the HTTP response as a
+Starlette background task. Local ticket persistence is the synchronous
+success boundary; a single coalescing daemon worker performs the durable
+publisher outbox/status round trip afterward. This closes the observed case
+where routed creation returned `502` after roughly ten seconds although the
+ticket had already been stored. The publisher-centred star topology and
+reverse public status projection remain unchanged.
 
 ## DS2. Conversational Failure Triage
 

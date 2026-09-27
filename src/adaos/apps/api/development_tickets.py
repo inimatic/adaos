@@ -31,6 +31,7 @@ _LOG = logging.getLogger("adaos.development_tickets")
 _REPORT_SYNC_LOCK = threading.Lock()
 _REPORT_SYNC_SCHEDULE_LOCK = threading.Lock()
 _REPORT_SYNC_THREAD: threading.Thread | None = None
+_REPORT_FORWARD_PENDING: dict[str, DevelopmentTicketService] = {}
 _REPORT_SYNC_NEXT_AT = 0.0
 _REPORT_SYNC_INTERVAL_SECONDS = 5.0
 
@@ -208,7 +209,11 @@ def _sync_ticket_development_reports(service: DevelopmentTicketService) -> None:
         _REPORT_SYNC_LOCK.release()
 
 
-def _schedule_ticket_development_report_sync(service: DevelopmentTicketService) -> None:
+def _schedule_ticket_development_report_sync(
+    service: DevelopmentTicketService,
+    *,
+    ticket_id: str | None = None,
+) -> None:
     """Start publisher-report reconciliation without extending a read response.
 
     Starlette waits for ``BackgroundTasks`` before it completes the proxied
@@ -222,16 +227,33 @@ def _schedule_ticket_development_report_sync(service: DevelopmentTicketService) 
     global _REPORT_SYNC_THREAD
 
     with _REPORT_SYNC_SCHEDULE_LOCK:
+        normalized_ticket_id = str(ticket_id or "").strip()
+        if normalized_ticket_id:
+            _REPORT_FORWARD_PENDING[normalized_ticket_id] = service
         if _REPORT_SYNC_THREAD is not None and _REPORT_SYNC_THREAD.is_alive():
             return
 
         def run() -> None:
+            global _REPORT_SYNC_THREAD
             try:
-                _sync_ticket_development_reports(service)
+                while True:
+                    with _REPORT_SYNC_SCHEDULE_LOCK:
+                        pending = list(_REPORT_FORWARD_PENDING.items())
+                        _REPORT_FORWARD_PENDING.clear()
+                    for pending_ticket_id, pending_service in pending:
+                        _forward_ticket_to_application_publisher(
+                            pending_service,
+                            pending_ticket_id,
+                        )
+                    _sync_ticket_development_reports(service)
+                    with _REPORT_SYNC_SCHEDULE_LOCK:
+                        if not _REPORT_FORWARD_PENDING:
+                            _REPORT_SYNC_THREAD = None
+                            return
             finally:
-                global _REPORT_SYNC_THREAD
                 with _REPORT_SYNC_SCHEDULE_LOCK:
-                    _REPORT_SYNC_THREAD = None
+                    if _REPORT_SYNC_THREAD is threading.current_thread():
+                        _REPORT_SYNC_THREAD = None
 
         _REPORT_SYNC_THREAD = threading.Thread(
             target=run,
@@ -1293,26 +1315,6 @@ def _query_filter_tokens(request: Request, *names: str, expand_ref_tail: bool = 
     return tokens
 
 
-def _ticket_target_tokens(ticket: Mapping[str, Any]) -> set[str]:
-    tokens: set[str] = set()
-    _append_filter_tokens(tokens, ticket.get("owner_area"))
-    _append_filter_tokens(tokens, ticket.get("component_ref"))
-    _append_filter_tokens(tokens, ticket.get("web_component"))
-    target = ticket.get("target_scope")
-    if isinstance(target, Mapping):
-        _append_filter_tokens(tokens, target)
-        for key in (
-            "component_refs",
-            "components",
-            "target_refs",
-            "affected_refs",
-            "scope_refs",
-            "related_refs",
-        ):
-            _append_filter_tokens(tokens, target.get(key))
-    return tokens
-
-
 def _bool_query(value: str | None) -> bool | None:
     token = _text(value).lower()
     if not token:
@@ -1399,6 +1401,7 @@ def list_tickets(
     target_id: str | None = None,
     target_ref: str | None = None,
     kind: str | None = None,
+    exclude_kind: str | None = None,
     scenario_id: str | None = None,
     skill_id: str | None = None,
     modal_id: str | None = None,
@@ -1433,6 +1436,12 @@ def list_tickets(
     _append_filter_tokens(ref_tokens, target_ref, expand_ref_tail=False)
     kind_tokens = _query_filter_tokens(request, "kind", "kinds")
     _append_filter_tokens(kind_tokens, kind)
+    excluded_kind_tokens = _query_filter_tokens(
+        request,
+        "exclude_kind",
+        "exclude_kinds",
+    )
+    _append_filter_tokens(excluded_kind_tokens, exclude_kind)
     scoped_tokens = set()
     for name in ("project_id", "project_ids", "scenario_id", "scenario_ids", "skill_id", "skill_ids", "modal_id", "modal_ids", "component", "components"):
         scoped_tokens.update(_query_filter_tokens(request, name))
@@ -1441,6 +1450,13 @@ def list_tickets(
     tickets = service.list_tickets(
         status=status_filter,
         status_group=status_group,
+        target_tokens=tuple(target_tokens | ref_tokens | scoped_tokens),
+        kind=",".join(sorted(kind_tokens)) if kind_tokens else None,
+        exclude_kind=(
+            ",".join(sorted(excluded_kind_tokens))
+            if excluded_kind_tokens
+            else None
+        ),
         severity=severity,
         priority=None if priority == "all" else priority,
         blocking=_bool_query(blocking),
@@ -1453,13 +1469,6 @@ def list_tickets(
         limit=limit,
         projection=projection,
     )
-    if target_tokens or ref_tokens:
-        wanted = target_tokens | ref_tokens
-        tickets = [ticket for ticket in tickets if _ticket_target_tokens(ticket) & wanted]
-    if scoped_tokens:
-        tickets = [ticket for ticket in tickets if _ticket_target_tokens(ticket) & scoped_tokens]
-    if kind_tokens:
-        tickets = [ticket for ticket in tickets if _text(ticket.get("kind")) in kind_tokens]
     items = tickets
     return {
         "ok": True,
@@ -1473,7 +1482,6 @@ def list_tickets(
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_ticket(
     body: DevTicketCreateRequest,
-    background_tasks: BackgroundTasks,
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
     try:
@@ -1531,10 +1539,9 @@ def create_ticket(
             ticket_id=str(ticket.get("ticket_id") or ""),
         )
         if not ticket_result.get("duplicate"):
-            background_tasks.add_task(
-                _forward_ticket_to_application_publisher,
+            _schedule_ticket_development_report_sync(
                 service,
-                str(ticket.get("ticket_id") or ""),
+                ticket_id=str(ticket.get("ticket_id") or ""),
             )
         return {
             "ok": True,

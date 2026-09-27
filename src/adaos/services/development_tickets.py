@@ -6257,6 +6257,7 @@ class DevelopmentTicketService:
         target_id: str | None = None,
         target_tokens: Sequence[str] = (),
         kind: str | None = None,
+        exclude_kind: str | None = None,
         scenario_id: str | None = None,
         skill_id: str | None = None,
         modal_id: str | None = None,
@@ -6305,6 +6306,18 @@ class DevelopmentTicketService:
         if kind_token:
             allowed = {_text(part) for part in kind_token.split(",") if _text(part)}
             tickets = [item for item in tickets if _text(item.get("kind")) in allowed]
+        excluded_kind_token = _text(exclude_kind)
+        if excluded_kind_token:
+            excluded = {
+                _text(part)
+                for part in excluded_kind_token.split(",")
+                if _text(part)
+            }
+            tickets = [
+                item
+                for item in tickets
+                if _text(item.get("kind")) not in excluded
+            ]
         severity_token = _text(severity)
         if severity_token:
             allowed = {_text(part) for part in severity_token.split(",") if _text(part)}
