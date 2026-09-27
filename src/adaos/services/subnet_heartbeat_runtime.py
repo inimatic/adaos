@@ -38,7 +38,7 @@ class HeartbeatPersistenceRuntime:
         self,
         *,
         idle_exit_s: float = 1.0,
-        min_repeat_interval_s: float = 30.0,
+        min_repeat_interval_s: float = 120.0,
     ) -> None:
         self._idle_exit_s = max(0.05, float(idle_exit_s))
         self._min_repeat_interval_s = max(0.0, float(min_repeat_interval_s))

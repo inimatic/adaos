@@ -17,6 +17,22 @@ def _sqlite_locked(exc: BaseException) -> bool:
     return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
 
 
+_DURABLE_HEARTBEAT_INTERVAL_S = 120.0
+
+
+def _configure_reconstructible_projection_write(con: Any) -> None:
+    """Avoid a FULL-sync fsync for state rebuilt from live node reports.
+
+    Subnet liveness, capacity, and runtime snapshots are materialized
+    projections. WAL/NORMAL keeps the database corruption-safe while allowing
+    the most recent projection transaction to be replayed by the next report
+    after an OS-level power loss. Authority-bearing stores retain SQLite's
+    default FULL durability.
+    """
+
+    con.execute("PRAGMA synchronous=NORMAL")
+
+
 def _normalize_runtime_projection_payload(payload: Any) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else data
@@ -308,6 +324,7 @@ class SubnetRepo:
             )
             if not changed:
                 return False
+            _configure_reconstructible_projection_write(con)
             self._replace_capacity_tables(
                 con,
                 node_id,
@@ -537,6 +554,7 @@ class SubnetRepo:
                 node_id=node_id,
                 roles=role_items,
             )
+            _configure_reconstructible_projection_write(con)
             con.execute(
                 """
                 INSERT INTO subnet_nodes(node_id, subnet_id, roles_json, hostname, base_url, node_state, last_seen, display_index, accent_index, created_at, updated_at)
@@ -589,10 +607,39 @@ class SubnetRepo:
                             capacity,
                             partial=True,
                         )
+                    persisted = con.execute(
+                        "SELECT last_seen, node_state, base_url FROM subnet_nodes WHERE node_id=?",
+                        (node_id,),
+                    ).fetchone()
+                    previous_last_seen = (
+                        float(persisted[0] or 0.0) if persisted is not None else 0.0
+                    )
+                    state_changed = bool(
+                        persisted is not None
+                        and node_state is not None
+                        and str(persisted[1] or "ready") != str(node_state or "ready")
+                    )
+                    normalized_base_url = str(base_url or "").strip() or None
+                    base_url_changed = bool(
+                        persisted is not None
+                        and base_url is not None
+                        and (str(persisted[2] or "").strip() or None)
+                        != normalized_base_url
+                    )
+                    heartbeat_age = float(last_seen) - previous_last_seen
+                    if (
+                        persisted is not None
+                        and not changed
+                        and not state_changed
+                        and not base_url_changed
+                        and heartbeat_age < _DURABLE_HEARTBEAT_INTERVAL_S
+                    ):
+                        return
+                    _configure_reconstructible_projection_write(con)
                     if node_state is not None and base_url is not None:
                         con.execute(
                             "UPDATE subnet_nodes SET last_seen=?, node_state=?, base_url=?, updated_at=? WHERE node_id=?",
-                            (float(last_seen), str(node_state or "ready"), str(base_url or "").strip() or None, _now(), node_id),
+                            (float(last_seen), str(node_state or "ready"), normalized_base_url, _now(), node_id),
                         )
                     elif node_state is not None:
                         con.execute(
@@ -683,6 +730,7 @@ class SubnetRepo:
         ready = projection.get("ready")
         connected_to_subnet = projection.get("connected_to_subnet")
         with self.sql.connect() as con:
+            _configure_reconstructible_projection_write(con)
             con.execute(
                 """
                 INSERT INTO subnet_runtime_projection(
@@ -759,6 +807,7 @@ class SubnetRepo:
         params.append(_now())
         params.append(node_id)
         with self.sql.connect() as con:
+            _configure_reconstructible_projection_write(con)
             con.execute(
                 f"UPDATE subnet_runtime_projection SET {', '.join(fields)} WHERE node_id=?",
                 tuple(params),
@@ -791,6 +840,31 @@ class SubnetRepo:
         projection_params.append(_now())
         projection_params.append(node_id)
         with self.sql.connect() as con:
+            persisted = con.execute(
+                "SELECT last_seen, node_state FROM subnet_nodes WHERE node_id=?",
+                (node_id,),
+            ).fetchone()
+            projection_exists = con.execute(
+                "SELECT 1 FROM subnet_runtime_projection WHERE node_id=?",
+                (node_id,),
+            ).fetchone()
+            previous_last_seen = (
+                float(persisted[0] or 0.0) if persisted is not None else 0.0
+            )
+            state_changed = bool(
+                persisted is not None
+                and node_state is not None
+                and str(persisted[1] or "ready") != str(node_state or "ready")
+            )
+            if (
+                persisted is not None
+                and projection_exists is not None
+                and not state_changed
+                and float(last_seen) - previous_last_seen
+                < _DURABLE_HEARTBEAT_INTERVAL_S
+            ):
+                return
+            _configure_reconstructible_projection_write(con)
             if node_state is not None:
                 con.execute(
                     "UPDATE subnet_nodes SET last_seen=?, node_state=?, updated_at=? WHERE node_id=?",

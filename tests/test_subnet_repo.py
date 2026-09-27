@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from adaos.adapters.db.sqlite_store import (
@@ -175,6 +176,48 @@ def test_touch_heartbeat_updates_base_url_when_runtime_port_changes(tmp_path: Pa
     node = repo.get_node("member-1")
     assert node is not None
     assert node["base_url"] == "http://127.0.0.1:8778"
+
+
+def test_touch_heartbeat_skips_recent_unchanged_durable_projection(
+    tmp_path: Path,
+) -> None:
+    sql = SQLite(_FakePaths(tmp_path))
+    repo = SubnetRepo(sql)
+    observed_at = time.time()
+    repo.upsert_node(
+        {
+            "node_id": "member-1",
+            "subnet_id": "alpha",
+            "roles": ["member"],
+            "hostname": "member-1",
+            "base_url": "http://member-1.local",
+            "node_state": "ready",
+            "last_seen": observed_at,
+        }
+    )
+
+    repo.touch_heartbeat(
+        "member-1",
+        observed_at + 1.0,
+        None,
+        node_state="ready",
+        base_url="http://member-1.local",
+    )
+    unchanged = repo.get_node("member-1")
+    assert unchanged is not None
+    assert unchanged["last_seen"] == observed_at
+
+    repo.touch_heartbeat(
+        "member-1",
+        observed_at + 2.0,
+        None,
+        node_state="limited",
+        base_url="http://member-1.local",
+    )
+    changed = repo.get_node("member-1")
+    assert changed is not None
+    assert changed["last_seen"] == observed_at + 2.0
+    assert changed["node_state"] == "limited"
 
 
 def test_runtime_projection_accepts_connected_to_subnet_alias_and_returns_legacy_field(tmp_path: Path) -> None:
