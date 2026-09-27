@@ -1690,6 +1690,19 @@ def contracts() -> list[RootMcpToolContract]:
             },
         ),
         RootMcpToolContract(
+            id="applications.list_home_targets",
+            title="List Application Home targets",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="List non-development desktops and the current Home pin state for one installed Application.",
+            input_schema=schema_object(
+                properties={"application_id": {"type": "string"}},
+                required=["application_id"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_list_home_targets"},
+        ),
+        RootMcpToolContract(
             id="applications.set_home_pin",
             title="Set Application Home pin",
             surface=RootMcpSurface.OPERATIONS,
@@ -1706,6 +1719,28 @@ def contracts() -> list[RootMcpToolContract]:
             required_capability="applications.apply",
             side_effects="write",
             metadata={**published, "handler": "applications_set_home_pin"},
+        ),
+        RootMcpToolContract(
+            id="applications.set_home_pins",
+            title="Set Application Home desktops",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Replace the bounded set of desktops where an installed Application is pinned to Home.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "webspace_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1, "maxLength": 160},
+                        "uniqueItems": True,
+                        "maxItems": 100,
+                    },
+                },
+                required=["application_id", "webspace_ids"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_set_home_pins"},
         ),
         RootMcpToolContract(
             id="applications.reorder_home",
@@ -3200,6 +3235,30 @@ def _handle_set_home_pin(arguments: dict[str, Any], *, dry_run: bool) -> dict[st
     }
 
 
+def _handle_list_home_targets(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    del dry_run
+    return {"home_targets": _sdk().list_home_targets(_application_id(arguments))}
+
+
+def _handle_set_home_pins(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    webspace_ids = [str(item) for item in (arguments.get("webspace_ids") or [])]
+    if dry_run:
+        return {
+            "would_set_home_pins": True,
+            "application_id": _application_id(arguments),
+            "webspace_ids": webspace_ids,
+        }
+    return {
+        "home_targets": _sdk().set_home_pinned_many(
+            _application_id(arguments), webspace_ids=webspace_ids
+        )
+    }
+
+
 def _handle_reorder_home(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {
@@ -4267,7 +4326,9 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.setup.configure": _handle_setup_configure,
         "applications.setup.credential": _handle_setup_credential,
         "applications.setup.provider": _handle_setup_provider,
+        "applications.list_home_targets": _handle_list_home_targets,
         "applications.set_home_pin": _handle_set_home_pin,
+        "applications.set_home_pins": _handle_set_home_pins,
         "applications.reorder_home": _handle_reorder_home,
         "applications.update_settings": _handle_update_settings,
         "applications.access.show": _handle_access_show,

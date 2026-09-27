@@ -55,6 +55,7 @@ from adaos.services.project_deployment import (
     ProjectDeploymentStoreError,
 )
 from adaos.services.providers.configuration import ProviderConfigurationService
+from adaos.services.workspaces import index as workspace_index
 
 
 def _state_dir() -> Path:
@@ -2753,6 +2754,109 @@ def set_home_pinned(
     }
 
 
+def list_home_targets(application_id: str) -> dict[str, Any]:
+    """Return bounded desktop pinning choices for one installed Application."""
+
+    token = str(application_id or "").strip()
+    if not token:
+        raise ValueError("application_id is required")
+    service = WebDesktopService()
+    targets: list[dict[str, Any]] = []
+    pinned_webspace_ids: list[str] = []
+    for row in workspace_index.list_workspaces():
+        if bool(getattr(row, "is_dev", False)):
+            continue
+        webspace_id = str(row.workspace_id or "").strip()
+        if not webspace_id:
+            continue
+        snapshot = service.get_snapshot(webspace_id)
+        try:
+            model = get_application(token, webspace_id=webspace_id)
+        except FileNotFoundError:
+            aliases = (token,)
+            installed = token in set(snapshot.installed.apps)
+        else:
+            aliases = _application_home_aliases(model)
+            installed = bool(model.get("installed"))
+        alias_set = set(aliases)
+        pinned = bool(alias_set.intersection(snapshot.pinned_applications))
+        if pinned:
+            pinned_webspace_ids.append(webspace_id)
+        targets.append(
+            {
+                "id": webspace_id,
+                "webspace_id": webspace_id,
+                "title": str(row.title or webspace_id),
+                "kind": str(row.effective_kind or "desktop"),
+                "installed": installed,
+                "pinned": pinned,
+            }
+        )
+    return {
+        "schema": "adaos.application.home_targets.v1",
+        "application_id": token,
+        "targets": targets,
+        "pinned_webspace_ids": pinned_webspace_ids,
+    }
+
+
+def set_home_pinned_many(
+    application_id: str,
+    *,
+    webspace_ids: Sequence[str],
+) -> dict[str, Any]:
+    """Replace an Application's Home desktop selection as one bounded operation."""
+
+    requested = list(dict.fromkeys(str(item or "").strip() for item in webspace_ids))
+    requested = [item for item in requested if item]
+    if len(requested) > 100:
+        raise ValueError("webspace_ids exceeds the maximum of 100")
+    available = list_home_targets(application_id)
+    targets = list(available["targets"])
+    known = {str(item["webspace_id"]): item for item in targets}
+    unknown = [item for item in requested if item not in known]
+    if unknown:
+        raise ValueError("Unknown desktop targets: " + ", ".join(unknown))
+    unavailable = [item for item in requested if not bool(known[item].get("installed"))]
+    if unavailable:
+        raise ValueError("Application is not installed for desktops: " + ", ".join(unavailable))
+
+    service = WebDesktopService()
+    before = {
+        str(item["webspace_id"]): service.get_snapshot(str(item["webspace_id"]))
+        for item in targets
+    }
+    changed: list[dict[str, Any]] = []
+    try:
+        for item in targets:
+            webspace_id = str(item["webspace_id"])
+            desired = webspace_id in requested
+            if bool(item.get("pinned")) == desired:
+                continue
+            changed.append(
+                set_home_pinned(
+                    application_id,
+                    pinned=desired,
+                    webspace_id=webspace_id,
+                )
+            )
+    except Exception:
+        for webspace_id, snapshot in before.items():
+            service.set_installed_with_live_room(snapshot.installed, webspace_id)
+            service.set_pinned_applications_with_live_room(
+                list(snapshot.pinned_applications), webspace_id
+            )
+        raise
+    return {
+        "schema": "adaos.application.home_targets.v1",
+        "application_id": str(application_id or "").strip(),
+        "pinned_webspace_ids": requested,
+        "changed": changed,
+        "targets": list_home_targets(application_id)["targets"],
+        "status": "ready",
+    }
+
+
 def reorder_home_application(
     application_id: str,
     *,
@@ -4474,6 +4578,7 @@ __all__ = [
     "list_development_report_appeals",
     "list_development_report_intakes",
     "list_development_reports",
+    "list_home_targets",
     "list_operations",
     "list_publisher_development_report_appeals",
     "list_releases",
@@ -4499,6 +4604,7 @@ __all__ = [
     "revoke_trial_access",
     "select_runtime",
     "set_home_pinned",
+    "set_home_pinned_many",
     "set_development_report_status",
     "set_prerelease_rollout",
     "simulate_application_access",

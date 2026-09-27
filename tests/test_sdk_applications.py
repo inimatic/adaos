@@ -758,6 +758,112 @@ def test_home_pin_materializes_missing_desktop_projection_for_subnet_install(
     assert pinned_writes == []
 
 
+def test_home_targets_exclude_development_desktops_and_report_current_pins(
+    monkeypatch,
+) -> None:
+    rows = [
+        SimpleNamespace(
+            workspace_id="desktop",
+            title="Personal",
+            effective_kind="workspace",
+            is_dev=False,
+        ),
+        SimpleNamespace(
+            workspace_id="builder-dev",
+            title="Builder",
+            effective_kind="workspace",
+            is_dev=True,
+        ),
+    ]
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            assert webspace_id == "desktop"
+            return SimpleNamespace(
+                installed=SimpleNamespace(apps=["scenario:reading_list"]),
+                pinned_applications=["scenario:reading_list"],
+            )
+
+    monkeypatch.setattr(applications.workspace_index, "list_workspaces", lambda: rows)
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda application_id, **_kwargs: {
+            "application": {
+                "application_id": application_id,
+                "entrypoints": [
+                    {
+                        "entrypoint_id": "main",
+                        "presentation_ref": "scenario:reading_list",
+                    }
+                ],
+            },
+            "installed": True,
+        },
+    )
+
+    result = applications.list_home_targets("reading_list")
+
+    assert result["pinned_webspace_ids"] == ["desktop"]
+    assert result["targets"] == [
+        {
+            "id": "desktop",
+            "webspace_id": "desktop",
+            "title": "Personal",
+            "kind": "workspace",
+            "installed": True,
+            "pinned": True,
+        }
+    ]
+
+
+def test_home_pin_batch_replaces_complete_desktop_selection(monkeypatch) -> None:
+    targets = {
+        "schema": "adaos.application.home_targets.v1",
+        "application_id": "reading_list",
+        "pinned_webspace_ids": ["desktop"],
+        "targets": [
+            {"webspace_id": "desktop", "pinned": True, "installed": True},
+            {"webspace_id": "family", "pinned": False, "installed": True},
+        ],
+    }
+    snapshots = {
+        key: SimpleNamespace(
+            installed=SimpleNamespace(apps=["scenario:reading_list"]),
+            pinned_applications=["scenario:reading_list"] if key == "desktop" else [],
+        )
+        for key in ("desktop", "family")
+    }
+    writes = []
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            return snapshots[webspace_id]
+
+    monkeypatch.setattr(applications, "list_home_targets", lambda _application_id: targets)
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+    monkeypatch.setattr(
+        applications,
+        "set_home_pinned",
+        lambda application_id, *, pinned, webspace_id: writes.append(
+            (application_id, pinned, webspace_id)
+        )
+        or {"webspace_id": webspace_id, "pinned": pinned},
+    )
+
+    result = applications.set_home_pinned_many(
+        "reading_list", webspace_ids=["family"]
+    )
+
+    assert writes == [
+        ("reading_list", False, "desktop"),
+        ("reading_list", True, "family"),
+    ]
+    assert result["pinned_webspace_ids"] == ["family"]
+    assert result["status"] == "ready"
+
+
 def test_home_reorder_preserves_complete_authoritative_projection(monkeypatch) -> None:
     snapshot = SimpleNamespace(
         pinned_applications=[

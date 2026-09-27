@@ -167,6 +167,22 @@ class _StubSdk:
             "pinned": kwargs["pinned"],
         }
 
+    def list_home_targets(self, *args, **kwargs):
+        self.calls.append(("list_home_targets", args, kwargs))
+        return {
+            "application_id": args[0],
+            "pinned_webspace_ids": ["family"],
+            "targets": [{"id": "family", "title": "Family", "pinned": True}],
+        }
+
+    def set_home_pinned_many(self, *args, **kwargs):
+        self.calls.append(("set_home_pinned_many", args, kwargs))
+        return {
+            "application_id": args[0],
+            "pinned_webspace_ids": kwargs["webspace_ids"],
+            "status": "ready",
+        }
+
     def reorder_home_application(self, *args, **kwargs):
         self.calls.append(("reorder_home_application", args, kwargs))
         return {
@@ -296,7 +312,9 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.setup.configure",
         "applications.setup.credential",
         "applications.setup.provider",
+        "applications.list_home_targets",
         "applications.set_home_pin",
+        "applications.set_home_pins",
         "applications.reorder_home",
         "applications.update_settings",
         "applications.access.show",
@@ -797,6 +815,35 @@ def test_applications_plane_exposes_explicit_home_pin_mutation(monkeypatch) -> N
             ("app_recipes",),
             {"pinned": False, "webspace_id": "family"},
         )
+    ]
+
+
+def test_applications_plane_lists_and_replaces_home_desktop_targets(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    listed = applications_plane.handlers()["applications.list_home_targets"](
+        {"application_id": "app_recipes", "_mcp_context": _context()},
+        dry_run=False,
+    )
+    changed = applications_plane.handlers()["applications.set_home_pins"](
+        {
+            "application_id": "app_recipes",
+            "webspace_ids": ["family", "work"],
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert listed["home_targets"]["pinned_webspace_ids"] == ["family"]
+    assert changed["home_targets"]["pinned_webspace_ids"] == ["family", "work"]
+    assert stub.calls == [
+        ("list_home_targets", ("app_recipes",), {}),
+        (
+            "set_home_pinned_many",
+            ("app_recipes",),
+            {"webspace_ids": ["family", "work"]},
+        ),
     ]
 
 
