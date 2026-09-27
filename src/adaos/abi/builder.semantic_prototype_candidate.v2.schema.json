@@ -158,6 +158,8 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "label": { "$ref": "#/$defs/localizedText" },
+        "help_text": { "anyOf": [{ "$ref": "#/$defs/localizedText" }, { "type": "null" }] },
+        "placeholder": { "anyOf": [{ "$ref": "#/$defs/localizedText" }, { "type": "null" }] },
         "value_type": { "type": "string", "enum": ["short_text", "long_text", "markdown", "number", "date", "boolean", "choice", "multi_choice", "attachment", "attachments"] },
         "required": { "type": "boolean" },
         "editable": { "type": "boolean" },

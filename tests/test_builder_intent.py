@@ -76,6 +76,51 @@ def test_source_revision_instructions_are_process_constraints(statement):
     assert process_constraint_kind(statement) == "source_preservation"
 
 
+def test_layout_negations_and_semantic_authoring_rules_do_not_invent_states_or_crud() -> None:
+    from adaos.services.builder.prototype_context import (
+        prototype_process_constraints,
+        prototype_requirement_inventory,
+    )
+
+    statement = (
+        "Mobile — обычный stack без master/detail и без скрытия операций в detail sheet. "
+        "Используй только поддерживаемые semantic commands create/update/delete на "
+        "collection/editor views. Сохрани schema semantic_v2 и устрани любые ошибки "
+        "semantic validation."
+    )
+
+    brief = compile_prototype_brief(statement)
+
+    assert brief["operations"] == []
+    assert brief["principal_jobs"] == []
+    assert brief["representative_states"]["state"] == "unknown"
+    assert [item["statement"] for item in prototype_requirement_inventory(brief)] == [
+        "Mobile — обычный stack без master/detail и без скрытия операций в detail sheet"
+    ]
+    assert {
+        item["verification_owner"] for item in prototype_process_constraints(brief)
+    } == {"source_preservation"}
+
+
+def test_localization_value_mapping_is_not_a_representative_state() -> None:
+    statement = (
+        "Не меняй layout, resources, views, команды, поля и операции. "
+        "Русский остаётся primary fallback. В ru-локали переведи все статусы, "
+        "option labels и empty states. Обязательно используй: "
+        "Cold = «Холодный», Warm = «Прогрет», Pending = «Ожидает»."
+    )
+
+    brief = compile_prototype_brief(statement)
+
+    assert brief["representative_states"]["state"] == "unknown"
+    assert brief["operations"] == []
+    assert not brief.get("state_requirements")
+    assert any(
+        "Cold = «Холодный»" in item["statement"]
+        for item in brief["residual_requirements"]
+    )
+
+
 def test_intent_capture_is_exact_content_addressed_evidence() -> None:
     statement = "Покажи заявки и позволь назначить ответственного."
 
@@ -318,6 +363,23 @@ def test_end_user_record_crud_still_requires_prototype_resources() -> None:
     qualified = qualify_ui_request(
         "Allow a coordinator to create, edit, and archive inspection records."
     )
+
+    assert qualified["requirements"]["prototype_resource"] is True
+    assert qualified["requirements"]["resource_mutations"] is True
+    assert qualified["requirements"]["resource_scope_needs_interpretation"] is False
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "Create and update work items in a list.",
+        "Show items and assign their owner.",
+    ],
+)
+def test_domain_object_in_full_clause_qualifies_split_mutation(statement: str) -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    qualified = qualify_ui_request(statement)
 
     assert qualified["requirements"]["prototype_resource"] is True
     assert qualified["requirements"]["resource_mutations"] is True

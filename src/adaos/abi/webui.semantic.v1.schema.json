@@ -186,6 +186,8 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "label": { "$ref": "#/$defs/localizedText" },
+        "help_text": { "$ref": "#/$defs/localizedText" },
+        "placeholder": { "$ref": "#/$defs/localizedText" },
         "value_type": {
           "enum": ["short_text", "long_text", "number", "date", "boolean", "choice", "multi_choice", "attachment"]
         },

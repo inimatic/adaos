@@ -3192,6 +3192,25 @@ def test_single_locale_candidate_keeps_keys_without_fabricating_translations(loc
     assert set(provider["$defs"]["localizedText"]["properties"]) == {locale}
 
 
+def test_brief_locale_selects_bilingual_runtime_fallback_without_dropping_dictionaries() -> None:
+    brief, semantic = _multi_resource_fixture()
+    brief.setdefault("constraints", {})["locale"] = "ru"
+    candidate = _multi_resource_candidate(semantic)
+
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    assert list(compiled["locale_dictionaries"]) == ["ru", "en"]
+    assert page["title"] == candidate["title"]["ru"]
+    collection = next(widget for widget in page["widgets"] if widget["id"] == "work-list")
+    assert collection["title"] == next(
+        view["title"]["ru"] for view in candidate["views"] if view["id"] == "work-list"
+    )
+    assert set(compiled["locale_dictionaries"]["ru"]) == set(
+        compiled["locale_dictionaries"]["en"]
+    )
+
+
 def test_media_binding_renders_actual_media_and_resolves_only_explicit_samples() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)
@@ -3399,14 +3418,91 @@ def test_semantic_v2_editor_surface_preserves_commands_and_source_map(surface, p
     widgets = application["desktop"]["pageSchema"]["widgets"]
     opener = next(widget for widget in widgets if widget["id"] == f"open-{editor['id']}")
     assert [button["id"] for button in opener["inputs"]["buttons"]] == ["new"]
+    assert opener["inputs"]["buttons"][0]["label"] == editor["title"]["en"]
     details = next(widget for widget in widgets if widget["type"] == "item.details")
     assert any(action["type"] == "openModal" for action in details["actions"])
-    assert result["locale_dictionaries"]["ru"]["prototype.editor.new"] == "Добавить"
+    assert "prototype.editor.new" not in result["locale_dictionaries"]["ru"]
     from jsonschema import ValidationError
     import adaos.services.builder.semantic_prototype as compiler
     modal["pageSchema"] = modal.pop("schema")
     with pytest.raises(ValidationError):
         compiler._validator("webui.v1.schema.json").validate(result["webui"])
+
+
+def test_delete_editor_requires_explicit_toolbar_action_instead_of_row_activation() -> None:
+    _, semantic = _multi_resource_fixture()
+    editor = next(item for item in semantic["views"] if item["role"] == "editor")
+    semantic["views"] = [
+        item
+        for item in semantic["views"]
+        if item["role"] not in {"details", "editor"}
+    ] + [editor]
+    editor["surface"] = "modal"
+    delete_command = next(
+        item for item in semantic["commands"] if item["view_ref"] == editor["id"]
+    )
+    delete_command.update(
+        kind="delete",
+        input_field_refs=[],
+        fixed_values={},
+        confirmation=_text(
+            "work.delete.confirm",
+            "Delete selected item?",
+            "Удалить выбранный пункт?",
+        ),
+    )
+    delete_command.pop("guard", None)
+    semantic["commands"] = [delete_command]
+    semantic["requirement_bindings"] = []
+
+    result = compile_semantic_prototype(semantic)
+
+    widgets = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    opener = next(item for item in widgets if item["id"] == f"open-{editor['id']}")
+    assert [button["id"] for button in opener["inputs"]["buttons"]] == ["edit"]
+    assert opener["inputs"]["buttons"][0]["label"] == editor["title"]["en"]
+    collection = next(item for item in widgets if item["id"] == "work-list")
+    assert not any(action.get("type") == "openModal" for action in collection["actions"])
+
+
+def test_semantic_field_guidance_compiles_to_localized_form_examples() -> None:
+    brief, semantic = _multi_resource_fixture()
+    brief.setdefault("constraints", {})["locale"] = "ru"
+    candidate = _multi_resource_candidate(semantic)
+    editor = next(item for item in candidate["views"] if item["role"] == "editor")
+    editor["surface"] = "modal"
+    resource = next(
+        item
+        for item in candidate["resources"]
+        if item["id"] == editor["resource_ref"]
+    )
+    field_id = editor["field_refs"][0]
+    field = next(item for item in resource["fields"] if item["id"] == field_id)
+    field["help_text"] = {
+        "en": "Example: host-eu-01",
+        "ru": "Например: host-eu-01",
+    }
+    field["placeholder"] = {
+        "en": "host-eu-01",
+        "ru": "host-eu-01",
+    }
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    modal = result["webui"]["ui"]["application"]["modals"][
+        f"editor-{editor['id']}"
+    ]
+    form_field = next(
+        item
+        for item in modal["schema"]["widgets"][0]["inputs"]["fields"]
+        if item["id"] == field_id
+    )
+    assert form_field["helpText"] == "Например: host-eu-01"
+    assert form_field["placeholder"] == "host-eu-01"
+    help_key = form_field["helpText_i18n"]["key"]
+    assert form_field["helpText_i18n"]["fallback"] == "Например: host-eu-01"
+    assert result["locale_dictionaries"]["ru"][help_key] == "Например: host-eu-01"
+    assert result["locale_dictionaries"]["en"][help_key] == "Example: host-eu-01"
 
 
 def test_semantic_v2_relationship_identity_compiles_editor_selector() -> None:

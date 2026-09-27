@@ -394,8 +394,6 @@ def _prototype_resource_signal(operation: Mapping[str, Any]) -> bool | None:
         flags=re.IGNORECASE,
     ):
         return False
-    if statement in {"update", "change", "edit", "add", "create"}:
-        return False
     authoring_text = f"{statement} {source_clause}".strip()
     if re.search(
         r"\b(?:prototype|revision|webui|layout|region|widget|viewport|"
@@ -437,11 +435,20 @@ def _prototype_resource_signal(operation: Mapping[str, Any]) -> bool | None:
     if re.search(
         r"\b(?:create|add|edit|update|assign|move|close|complete|archive|delete)\w*"
         r"(?:\s+[a-z][\w-]*){0,8}\s+"
-        r"(?:records?|entries|tasks?|appointments?|inspections?|tickets?)\b",
+        r"(?:(?:work\s+)?items?|records?|entries|tasks?|appointments?|inspections?|tickets?)\b",
         authoring_text,
         flags=re.IGNORECASE,
     ):
         return True
+    if re.search(
+        r"\bassign\w*(?:\s+(?:their|the|an?|this))?\s+"
+        r"(?:owner|assignee|responsible\s+(?:person|member)|host|pod)\b",
+        authoring_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if statement in {"update", "change", "edit", "add", "create"}:
+        return False
     return None
 
 

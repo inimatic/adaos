@@ -65,6 +65,12 @@ def process_constraint_kind(statement: str) -> str | None:
             r"the (?:wide|compact|desktop|mobile|browser) review (?:showed|found|observed|revealed) .{1,320}",
             r"this is the single allowed chat correction",
             r"fix (?:both|the) observed failures without expanding the product",
+            r"(?:do\s+not|don't)\s+change\s+.{1,320}\b(?:layout|resources?|relationships?|records?|views?|commands?|fields?|operations?|behavio(?:u)?r)\b.*",
+            r"\u043d\u0435\s+\u043c\u0435\u043d\u044f\u0439\s+.{1,320}\b(?:layout|resources?|relationships?|seed\s+records?|views?|\u043a\u043e\u043c\u0430\u043d\u0434\w*|\u043f\u043e\u043b\w*|\u043e\u043f\u0435\u0440\u0430\u0446\w*|\u043f\u043e\u0432\u0435\u0434\u0435\u043d\w*)\b.*",
+            r".*\b(?:translat\w*|\u043f\u0435\u0440\u0435\u0432(?:\u0435\u0434|\u043e\u0434)\w*)\b.{0,240}\b(?:empty\s+states?|option\s+labels?|statuses?)\b.*",
+            r".*\b(?:cold|warm|warn|connected|degraded|disconnected|pending|linked|not\s+issued)\s*=\s*[«\"'].*",
+            r"(?:use only supported semantic commands create/update/delete on collection/editor(?: views)?|используй только поддерживаемые semantic commands create/update/delete на collection/editor(?: views)?)",
+            r"(?:сохрани|сохраняй|preserve|keep) schema semantic_v2 (?:и|and) (?:устрани|исправь|eliminate|fix) (?:любые |any )?(?:ошибки|errors) semantic validation",
             r"(?:it )?must never (?:create|copy|fork|edit)(?:,? (?:or|and)? ?(?:create|copy|fork|edit))* (?:a |the )?provider implementation",
             r"(?:сохрани|используй) (?:существующие|текущие) языки(?: интерфейса)?",
             r"не переименовывай (?:существующие )?идентификаторы полей",
@@ -240,6 +246,12 @@ _REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
 )
 _NON_STATE_CONTINUITY_PATTERN = re.compile(
     r"\bwithout\s+(?:losing|leaving|closing|hiding|resetting)\b|"
+    r"\bwithout\s+(?:a\s+)?master(?:/|[- ]+)detail\b|"
+    r"\bбез\s+(?:master(?:/|[- ]+)detail|скрытия\s+операц\w*\s+в\s+detail\s+sheet)\b|"
+    r"\b(?:translat\w*|\u043f\u0435\u0440\u0435\u0432(?:\u0435\u0434|\u043e\u0434)\w*)\b.{0,240}"
+    r"\b(?:empty\s+states?|option\s+labels?|statuses?)\b|"
+    r"\b(?:cold|warm|warn|connected|degraded|disconnected|pending|linked|not\s+issued)"
+    r"\s*=\s*[«\"']|"
     r"\b(?:keep|preserve|retain)\w*\s+(?:the\s+)?(?:queue|list|context|selection)\b|"
     r"\b(?:\u043d\u0435\s+\u0442\u0435\u0440\u044f|\u0431\u0435\u0437\s+\u043f\u043e\u0442\u0435\u0440\u0438|\u0441\u043e\u0445\u0440\u0430\u043d)\w*.{0,24}"
     r"(?:\u043e\u0447\u0435\u0440\u0435\u0434|\u0441\u043f\u0438\u0441\u043e\u043a|\u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442|\u0432\u044b\u0431\u043e\u0440)\w*\b",
@@ -680,7 +692,11 @@ def _extract_residual_requirements(statement: str) -> list[dict[str, Any]]:
             continue
         if _REPEATED_COLLECTION_PATTERN.search(value):
             continue
-        if not process_kind and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
+        if (
+            not process_kind
+            and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value)
+            and not _NON_STATE_CONTINUITY_PATTERN.search(value)
+        ):
             continue
         start = clause_start + value_start
         end = start + len(value)
@@ -746,12 +762,16 @@ def _extract_representative_states(
         value = _without_spans(clause, _authoring_spans(clause))
         if not value or not _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
             continue
-        if process_constraint_kind(value) or re.search(
+        if (
+            process_constraint_kind(value)
+            or _NON_STATE_CONTINUITY_PATTERN.search(value)
+            or re.search(
             r"\b(?:no\s+(?:horizontal|vertical)\s+overflow|"
             r"no\s+folders?/|without\s+expanding\s+the\s+product|"
             r"do\s+not\s+render\s+a\s+repeated)\b",
             value,
             flags=re.IGNORECASE,
+            )
         ):
             continue
         if any(state_job in value for state_job in state_jobs):
