@@ -439,6 +439,116 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
     assert result["publication_verification"]["publication_allowed"] is True
 
 
+def test_promote_reconciles_exact_completed_project_activation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.services.artifact_pipeline import trial_activation
+
+    digest = "sha256:" + "c" * 64
+    package_digest = "sha256:" + "d" * 64
+    lock_digest = "sha256:" + "e" * 64
+    candidate_id = "mail-reader-0-2-0-candidate"
+    workspace = tmp_path / "workspace"
+    metadata = workspace / ".adaos"
+    metadata.mkdir(parents=True)
+    (metadata / "workspace.lock.json").write_text("{}\n", encoding="utf-8")
+    lock = SimpleNamespace(to_dict=lambda: {"lock_digest": lock_digest})
+    monkeypatch.setattr(
+        WorkspaceLock, "from_mapping", staticmethod(lambda _value: lock)
+    )
+    monkeypatch.setattr(
+        applications,
+        "_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(
+                state_dir=lambda: tmp_path / "state",
+                workspace_dir=lambda: workspace,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        trial_activation,
+        "TrialActivationStore",
+        lambda _root: SimpleNamespace(
+            load=lambda _candidate_id: {
+                "status": "completed",
+                "candidate_ref": {
+                    "candidate_id": candidate_id,
+                    "release_digest": digest,
+                    "package_digest": package_digest,
+                },
+                "target": {"webspace_id": "desktop"},
+                "health_evidence": {"status": "passed"},
+                "runtime_binding": {
+                    "authority": "immutable_candidate",
+                    "workspace_lock_digest": lock_digest,
+                },
+            }
+        ),
+    )
+    selected = SimpleNamespace(
+        revision=4,
+        release_digest="sha256:" + "a" * 64,
+        source="stable_installation",
+        runtime_root_ref="workspace",
+    )
+    saved = SimpleNamespace(
+        revision=5,
+        release_digest=digest,
+        source="stable_installation",
+        runtime_root_ref="workspace",
+    )
+    calls = []
+
+    class _Applications:
+        store = SimpleNamespace(
+            get_release=lambda _application_id, _release_digest: SimpleNamespace(
+                accepted_candidate_id=candidate_id,
+                publisher_ref="subnet:home",
+            ),
+            get_runtime_selection=lambda _webspace_id, _application_id: selected,
+        )
+
+        @staticmethod
+        def reconcile_workspace_installation(application_id, release_digest, observed):
+            calls.append(("installation", application_id, release_digest, observed))
+            return SimpleNamespace(revision=8)
+
+        @staticmethod
+        def select_runtime(**kwargs):
+            calls.append(("selection", kwargs))
+            return saved
+
+    distribution = SimpleNamespace(
+        applications=_Applications(),
+        project_release_is_current=lambda _candidate_id: True,
+    )
+    candidate = SimpleNamespace(
+        release_digest=digest,
+        package_digest=package_digest,
+    )
+
+    result = applications._reconcile_promoted_project_runtime(
+        distribution,
+        application_id="mail_reader",
+        candidate_id=candidate_id,
+        candidate=candidate,
+        actor_ref="user:owner",
+    )
+
+    assert result == {
+        "status": "reconciled",
+        "candidate_id": candidate_id,
+        "release_digest": digest,
+        "workspace_lock_digest": lock_digest,
+        "installation_revision": 8,
+        "runtime_selection_revision": 5,
+        "webspace_id": "desktop",
+    }
+    assert calls[1][1]["expected_revision"] == 4
+    assert calls[1][1]["release_digest"] == digest
+
+
 def test_promote_existing_private_stable_opens_public_prerelease_channel(
     monkeypatch,
 ) -> None:

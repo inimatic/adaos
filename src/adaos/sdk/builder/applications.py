@@ -2090,6 +2090,117 @@ def publish_prerelease(
     )
 
 
+def _reconcile_promoted_project_runtime(
+    distribution,
+    *,
+    application_id: str,
+    candidate_id: str,
+    candidate,
+    actor_ref: str,
+) -> dict[str, Any] | None:
+    """Adopt an exact Project promotion into the lagging Application plane.
+
+    Project publication and Application distribution are deliberately separate
+    authorities.  A crash or an older publication path can therefore leave the
+    accepted Project release active in Workspace while the Application still
+    selects its previous stable release.  Recovery is safe only when all three
+    immutable observations agree: the accepted ApplicationRelease, the
+    completed TrialActivation, and the active WorkspaceLock.
+    """
+
+    from adaos.domain.artifact_release import WorkspaceLock
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+
+    if not distribution.project_release_is_current(candidate_id):
+        return None
+    try:
+        release = distribution.applications.store.get_release(
+            application_id, candidate.release_digest
+        )
+    except FileNotFoundError:
+        return None
+    if release.accepted_candidate_id != candidate_id:
+        raise ValueError(
+            "Active Project release is not bound to the accepted Application Candidate"
+        )
+
+    activation = TrialActivationStore(
+        _state_dir() / "artifact_pipeline/trial-activations"
+    ).load(candidate_id)
+    identity = dict(activation.get("candidate_ref") or {})
+    target = dict(activation.get("target") or {})
+    health = dict(activation.get("health_evidence") or {})
+    binding = dict(activation.get("runtime_binding") or {})
+    webspace_id = str(target.get("webspace_id") or "").strip()
+    if (
+        activation.get("status") not in {"active", "completed"}
+        or identity.get("candidate_id") != candidate_id
+        or identity.get("release_digest") != candidate.release_digest
+        or identity.get("package_digest") != candidate.package_digest
+        or health.get("status") != "passed"
+        or binding.get("authority") != "immutable_candidate"
+        or not webspace_id
+    ):
+        raise ValueError(
+            "Completed exact Trial evidence is required for Application recovery"
+        )
+
+    lock_path = Path(_ctx().paths.workspace_dir()) / ".adaos/workspace.lock.json"
+    if not lock_path.is_file():
+        raise ValueError("Active WorkspaceLock is unavailable for Application recovery")
+    lock = WorkspaceLock.from_mapping(json.loads(lock_path.read_text(encoding="utf-8")))
+    expected_lock_digest = str(binding.get("workspace_lock_digest") or "").strip()
+    observed_lock_digest = str(lock.to_dict().get("lock_digest") or "").strip()
+    if not expected_lock_digest or observed_lock_digest != expected_lock_digest:
+        raise ValueError(
+            "Active WorkspaceLock differs from the accepted Trial activation"
+        )
+
+    installation = distribution.applications.reconcile_workspace_installation(
+        application_id, candidate.release_digest, lock
+    )
+    try:
+        selection = distribution.applications.store.get_runtime_selection(
+            webspace_id, application_id
+        )
+    except FileNotFoundError:
+        selection = None
+    if selection is not None and selection.release_digest != candidate.release_digest:
+        if (
+            selection.source != "stable_installation"
+            or selection.runtime_root_ref != "workspace"
+        ):
+            raise ValueError(
+                "Application recovery cannot replace a non-stable RuntimeSelection"
+            )
+    if (
+        selection is None
+        or selection.release_digest != candidate.release_digest
+        or selection.source != "stable_installation"
+        or selection.runtime_root_ref != "workspace"
+    ):
+        selection = distribution.applications.select_runtime(
+            webspace_id=webspace_id,
+            application_id=application_id,
+            source="stable_installation",
+            release_digest=candidate.release_digest,
+            runtime_root_ref="workspace",
+            expected_revision=selection.revision if selection is not None else 0,
+            actor_ref=actor_ref,
+            subnet_ref=release.publisher_ref,
+            capability="applications.apply",
+        )
+    return {
+        "status": "reconciled",
+        "candidate_id": candidate_id,
+        "release_digest": candidate.release_digest,
+        "workspace_lock_digest": observed_lock_digest,
+        "installation_revision": installation.revision,
+        "runtime_selection_revision": selection.revision,
+        "webspace_id": webspace_id,
+    }
+
+
 def promote_stable(
     application_id: str,
     candidate_id: str,
@@ -2116,6 +2227,22 @@ def promote_stable(
             and item.release_digest == candidate.release_digest
             and item.source in {"local_trial", "stable_installation"}
         ]
+        runtime_reconciliation = None
+        if len(selections) != 1:
+            runtime_reconciliation = _reconcile_promoted_project_runtime(
+                distribution,
+                application_id=application_id,
+                candidate_id=candidate_id,
+                candidate=candidate,
+                actor_ref=actor_ref,
+            )
+            selections = [
+                item
+                for item in distribution.applications.store.list_runtime_selections()
+                if item.application_id == application_id
+                and item.release_digest == candidate.release_digest
+                and item.source in {"local_trial", "stable_installation"}
+            ]
         if len(selections) != 1:
             raise ValueError(
                 "Application stable promotion requires one unambiguous exact Trial "
@@ -2215,6 +2342,7 @@ def promote_stable(
             "project_publication": dict(project_publication),
             "trial_publication": dict(trial_publication),
             "visibility_transition": visibility_transition,
+            "runtime_reconciliation": runtime_reconciliation,
         }
 
     return _execute_development(
