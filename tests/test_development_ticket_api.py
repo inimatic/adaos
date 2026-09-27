@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -2185,3 +2186,58 @@ def test_application_tokens_include_nested_scenario_identity() -> None:
     )
 
     assert tokens == {"message-editor", "mail_focus_reader", "adaos_drive"}
+
+
+def test_ticket_application_resolution_prefers_primary_modal_over_ambient_scenario() -> None:
+    applications = [
+        SimpleNamespace(
+            application_id="adaos_drive",
+            legacy_project_id="adaos_drive",
+            slug="adaos-drive",
+            entrypoints=(),
+        ),
+        SimpleNamespace(
+            application_id="web_desktop",
+            legacy_project_id="web_desktop",
+            slug="management",
+            entrypoints=(),
+        ),
+    ]
+
+    resolved = tickets_api._resolve_ticket_application(
+        {
+            "target_scope": {
+                "type": "modal",
+                "id": "adaos_drive",
+                "scenario_id": "web_desktop",
+            }
+        },
+        applications,
+    )
+
+    assert resolved is applications[0]
+
+
+def test_ticket_application_resolution_remains_fail_closed_on_equal_evidence() -> None:
+    applications = [
+        SimpleNamespace(
+            application_id="app_one",
+            legacy_project_id="shared",
+            slug="one",
+            entrypoints=(),
+        ),
+        SimpleNamespace(
+            application_id="app_two",
+            legacy_project_id="shared",
+            slug="two",
+            entrypoints=(),
+        ),
+    ]
+
+    assert (
+        tickets_api._resolve_ticket_application(
+            {"target_scope": {"type": "project", "id": "shared"}},
+            applications,
+        )
+        is None
+    )

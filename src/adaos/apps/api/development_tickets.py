@@ -86,6 +86,99 @@ def _development_ticket_application_tokens(ticket: Mapping[str, Any]) -> set[str
     return tokens
 
 
+def _development_ticket_application_identity_weights(
+    ticket: Mapping[str, Any],
+) -> dict[str, int]:
+    """Rank Application identity evidence without treating UI context equally.
+
+    A feedback target can contain both the owning Application and an ambient
+    scenario (for example ``modal:adaos_drive`` inside ``web_desktop``).  The
+    old set intersection made that case ambiguous and silently suppressed its
+    Development Report.  Preserve fail-closed behaviour for genuine ties, but
+    prefer explicit/primary target identities over surrounding UI context.
+    """
+
+    weights: dict[str, int] = {}
+    identity_fields = {
+        "application_id": 70,
+        "application_ref": 70,
+        "project_id": 65,
+        "project_ref": 65,
+        "scenario_id": 30,
+        "scenario_ref": 30,
+    }
+    kind_weights = {
+        "application": 70,
+        "project": 65,
+        "modal": 45,
+        "scenario": 30,
+    }
+
+    def add(raw: Any, score: int) -> None:
+        token = str(raw or "").strip().lower()
+        if not token:
+            return
+        token = token.split(":")[-1]
+        weights[token] = max(weights.get(token, 0), score)
+
+    def collect(value: Any, *, scope_weight: int, depth: int = 0) -> None:
+        if depth > 4 or not isinstance(value, Mapping):
+            return
+        depth_penalty = min(depth * 5, 20)
+        kind = str(value.get("type") or value.get("kind") or "").strip().lower()
+        if kind in kind_weights:
+            add(
+                value.get("id") or value.get("name"),
+                scope_weight + kind_weights[kind] - depth_penalty,
+            )
+        for key, item in value.items():
+            if key in identity_fields:
+                add(item, scope_weight + identity_fields[key] - depth_penalty)
+            elif isinstance(item, Mapping):
+                collect(item, scope_weight=scope_weight, depth=depth + 1)
+
+    collect(ticket.get("target_scope"), scope_weight=100)
+    collect(ticket.get("origin_scope"), scope_weight=50)
+    collect(ticket.get("metadata"), scope_weight=10)
+    return weights
+
+
+def _resolve_ticket_application(
+    ticket: Mapping[str, Any],
+    applications: Any,
+) -> Any | None:
+    weights = _development_ticket_application_identity_weights(ticket)
+    if not weights:
+        return None
+    ranked: list[tuple[int, str, Any]] = []
+    for application in applications:
+        identity_strengths: dict[str, int] = {
+            str(application.application_id).lower(): 30,
+            str(application.legacy_project_id).lower(): 20,
+            str(application.slug).lower(): 20,
+        }
+        for entrypoint in application.entrypoints:
+            presentation = str(entrypoint.get("presentation_ref") or "").strip().lower()
+            if presentation:
+                identity_strengths[presentation.split(":")[-1]] = 10
+        score = max(
+            (
+                evidence_weight + identity_strengths[token]
+                for token, evidence_weight in weights.items()
+                if token in identity_strengths
+            ),
+            default=0,
+        )
+        if score:
+            ranked.append((score, str(application.application_id), application))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
+        return None
+    return ranked[0][2]
+
+
 def _forward_ticket_to_application_publisher(
     service: DevelopmentTicketService,
     ticket_id: str,
@@ -100,30 +193,16 @@ def _forward_ticket_to_application_publisher(
         "ui_feedback",
     }:
         return
-    tokens = _development_ticket_application_tokens(ticket)
-    if not tokens:
+    if not _development_ticket_application_identity_weights(ticket):
         return
     try:
         from adaos.services.applications import get_development_report_service
 
         reports = reports or get_development_report_service()
         applications = reports.application_store.list_applications()
-        matches = []
-        for application in applications:
-            identities = {
-                application.application_id.lower(),
-                application.legacy_project_id.lower(),
-                application.slug.lower(),
-            }
-            for entrypoint in application.entrypoints:
-                presentation = str(entrypoint.get("presentation_ref") or "").strip().lower()
-                if presentation:
-                    identities.add(presentation.split(":")[-1])
-            if identities & tokens:
-                matches.append(application)
-        if len(matches) != 1 or matches[0].publisher_ref == reports.subnet_ref:
+        application = _resolve_ticket_application(ticket, applications)
+        if application is None or application.publisher_ref == reports.subnet_ref:
             return
-        application = matches[0]
         created = reports.create_report(
             application_id=application.application_id,
             summary=str(ticket.get("summary") or "")[:500],
