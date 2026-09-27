@@ -2124,6 +2124,38 @@ def test_failed_update_requires_verified_snapshot_restore_receipt(
     )
 
 
+def test_repeated_restore_receipt_keeps_first_observation_time(tmp_path: Path) -> None:
+    store = ApplicationStore(tmp_path)
+    snapshot_ref = "snapshot:recipes:retry"
+    first = store.put_snapshot_receipt(
+        f"restore:{snapshot_ref}",
+        {
+            "schema": "adaos.application.data_restore.v1",
+            "snapshot_ref": snapshot_ref,
+            "application_id": "app_recipes",
+            "snapshot_digest": DIGEST_A,
+            "restored_release_digest": DIGEST_B,
+            "status": "restored",
+            "restored_at": "2026-09-27T22:18:17+00:00",
+        },
+    )
+
+    replay = store.put_snapshot_receipt(
+        f"restore:{snapshot_ref}",
+        {
+            **first,
+            "restored_at": "2026-09-27T22:35:12+00:00",
+        },
+    )
+
+    assert replay == first
+    with pytest.raises(ApplicationStoreError, match="immutable snapshot receipt conflict"):
+        store.put_snapshot_receipt(
+            f"restore:{snapshot_ref}",
+            {**first, "restored_release_digest": DIGEST_C},
+        )
+
+
 def test_read_models_separate_catalog_and_installed_state(
     service: ApplicationService,
 ) -> None:

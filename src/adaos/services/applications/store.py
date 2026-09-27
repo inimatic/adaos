@@ -90,6 +90,31 @@ def _write_derived_sequence_cache(path: Path, sequence: int) -> None:
         return
 
 
+def _same_restore_outcome(
+    existing: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> bool:
+    """Treat a repeated verified restore as the same immutable outcome.
+
+    Application updates can fail before activation and retry against the same
+    content-addressed snapshot.  Restoring it again is safe, but the executor
+    observes a new wall-clock ``restored_at`` value.  The receipt identity is
+    deliberately the snapshot reference, so time is evidence metadata rather
+    than part of that identity.  All other fields remain fail-closed.
+    """
+
+    if (
+        existing.get("schema") != "adaos.application.data_restore.v1"
+        or candidate.get("schema") != "adaos.application.data_restore.v1"
+        or existing.get("status") != "restored"
+        or candidate.get("status") != "restored"
+    ):
+        return False
+    ignored = {"restored_at"}
+    return {
+        key: value for key, value in existing.items() if key not in ignored
+    } == {key: value for key, value in candidate.items() if key not in ignored}
+
+
 def _encode_event_cursor(sequence: int) -> str:
     raw = json.dumps({"after": int(sequence)}, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -955,7 +980,10 @@ class ApplicationStore:
             "receipt_ref": snapshot_ref,
         }
         with mutation_lock(self.lock_path, timeout_s=30.0):
-            if path.is_file() and _read(path) != record:
+            if path.is_file():
+                existing = _read(path)
+                if existing == record or _same_restore_outcome(existing, record):
+                    return existing
                 raise ApplicationStoreError("immutable snapshot receipt conflict")
             if not path.is_file():
                 atomic_write_json(path, record)
