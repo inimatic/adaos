@@ -230,6 +230,57 @@ def test_post_boot_migration_does_not_mark_rejected_worker_as_started(monkeypatc
     assert api_server.app.state.skill_runtime_migration_starting is False
 
 
+def test_post_boot_migration_retries_until_core_update_is_terminal(monkeypatch, tmp_path) -> None:
+    import adaos.services.core_slots as core_slots
+    import adaos.services.skill.runtime_migration_worker as migration_worker
+
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_TESTING", "1")
+    monkeypatch.setattr(api_server.app.state, "runtime_boot_task", None, raising=False)
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "ready", "ready": True, "started_at": 1.0, "completed_at": 2.0},
+        raising=False,
+    )
+    monkeypatch.setattr(api_server.app.state, "skill_runtime_migration_started", False, raising=False)
+    monkeypatch.setattr(api_server.app.state, "skill_runtime_migration_starting", False, raising=False)
+    monkeypatch.setattr(
+        core_slots,
+        "active_slot_manifest",
+        lambda: {"skill_runtime_migration": {"deferred": True, "background_required": True}},
+    )
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(paths=types.SimpleNamespace(workspace_dir=lambda: tmp_path)),
+    )
+    calls = 0
+
+    async def _eventually_accepted(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"ok": True, "accepted": False, "retryable": True, "reason": "core_update_active"}
+        return {"ok": True, "accepted": True, "status": {"state": "scheduled"}}
+
+    async def _no_delay(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(migration_worker, "start_background_migration", _eventually_accepted)
+    monkeypatch.setattr(api_server.asyncio, "sleep", _no_delay)
+
+    payload = asyncio.run(
+        api_server._start_post_boot_skill_runtime_migration(
+            api_server.app,
+            reason="core_update_post_boot",
+        )
+    )
+
+    assert payload["started"] is True
+    assert calls == 2
+
+
 @pytest.mark.parametrize(
     ("workspace_lock_present", "expected_sync_workspace"),
     [(False, True), (True, False)],

@@ -8016,6 +8016,13 @@ def test_supervisor_maybe_resume_auto_completes_root_promotion_pending(monkeypat
     supervisor._write_update_attempt({"state": "active", "action": "update", "updated_at": 1.0})
 
     captured: dict[str, object] = {}
+    released: list[str] = []
+
+    monkeypatch.setattr(
+        manager,
+        "_release_skill_runtime_migration_gate",
+        lambda *, reason: released.append(reason),
+    )
 
     async def _complete_update(*, reason: str, auto: bool = False) -> dict[str, object]:
         captured["reason"] = reason
@@ -8027,6 +8034,26 @@ def test_supervisor_maybe_resume_auto_completes_root_promotion_pending(monkeypat
     asyncio.run(manager._maybe_resume_or_continue_transition())
 
     assert captured == {"reason": "supervisor.auto_update_complete", "auto": True}
+    assert released == []
+
+
+def test_supervisor_maybe_resume_releases_migration_gate_after_terminal_validation(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    write_status({"state": "succeeded", "phase": "validate", "action": "update"})
+    supervisor._write_update_attempt({"state": "completed", "action": "update", "updated_at": 1.0})
+    released: list[str] = []
+    monkeypatch.setattr(
+        manager,
+        "_release_skill_runtime_migration_gate",
+        lambda *, reason: released.append(reason),
+    )
+
+    asyncio.run(manager._maybe_resume_or_continue_transition())
+
+    assert released == ["update_status:succeeded"]
 
 
 def test_public_update_status_payload_is_browser_safe() -> None:

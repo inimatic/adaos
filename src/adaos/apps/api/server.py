@@ -563,7 +563,12 @@ async def _start_post_boot_skill_runtime_migration(
                     "readiness": readiness,
                 }
 
-        deadline = time.monotonic() + (60.0 if allow_promoted_candidate else 0.0)
+        # A promoted candidate can remain alive while the supervisor stages the
+        # bootstrap root and crosses its own restart boundary.  The regular
+        # post-boot path can observe the same short window after that restart.
+        # Wait for the core transition instead of dropping migration forever or
+        # starting it concurrently with root promotion.
+        deadline = time.monotonic() + 60.0
         while True:
             result = await start_background_migration(
                 get_ctx(),
@@ -586,11 +591,14 @@ async def _start_post_boot_skill_runtime_migration(
                     "stabilize_sec": stabilize_sec,
                     "worker": result.get("status"),
                 }
-            if str(result.get("reason") or "") != "global_migration_running" or time.monotonic() >= deadline:
+            rejected_reason = str(result.get("reason") or "")
+            retryable_transition = rejected_reason == "core_update_active"
+            retryable_lease = allow_promoted_candidate and rejected_reason == "global_migration_running"
+            if not (retryable_transition or retryable_lease) or time.monotonic() >= deadline:
                 return {
                     "ok": True,
                     "started": False,
-                    "reason": str(result.get("reason") or "migration_not_started"),
+                    "reason": rejected_reason or "migration_not_started",
                     "retryable": bool(result.get("retryable")),
                     "stabilize_sec": stabilize_sec,
                     "worker": result.get("status"),

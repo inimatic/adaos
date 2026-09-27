@@ -61,6 +61,30 @@ def test_global_migration_lease_serializes_runtime_processes(tmp_path) -> None:
     worker._release_global_lease(third)
 
 
+def test_core_update_blocks_migration_through_root_restart(monkeypatch) -> None:
+    import adaos.services.core_update as core_update
+
+    for status in (
+        {"state": "preparing", "phase": "prewarm", "target_version": "next"},
+        {"state": "validated", "phase": "root_promotion_pending", "target_version": "next"},
+        {"state": "succeeded", "phase": "root_promoted", "target_version": "next"},
+    ):
+        monkeypatch.setattr(core_update, "read_status", lambda status=status: dict(status))
+        blocker = worker._core_update_migration_blocker(reason="core_update_post_promotion")
+        assert blocker == {
+            "state": status["state"],
+            "phase": status["phase"],
+            "target_version": "next",
+        }
+
+    monkeypatch.setattr(
+        core_update,
+        "read_status",
+        lambda: {"state": "succeeded", "phase": "validate", "target_version": "next"},
+    )
+    assert worker._core_update_migration_blocker(reason="core_update_post_boot") is None
+
+
 def test_runtime_mutation_lease_waits_for_migration_owner(tmp_path) -> None:
     ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: tmp_path))
     first = worker._try_acquire_global_lease(ctx, operation_id="migration")

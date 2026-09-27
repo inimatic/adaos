@@ -8750,7 +8750,18 @@ class SupervisorManager:
         status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
         attempt = payload.get("attempt") if isinstance(payload.get("attempt"), dict) else _read_update_attempt() or {}
         status_state = str(status.get("state") or "").strip().lower()
-        if status_state in {"validated", "succeeded", "failed", "cancelled", "canceled"}:
+        # A validated slot is not terminal when its bootstrap/root promotion is
+        # still pending, and ``succeeded/root_promoted`` still has to cross the
+        # supervisor restart boundary.  Releasing the shared migration lease at
+        # either point lets post-promotion skill synchronization compete with
+        # root staging on the same workspace and disk.  Keep the lease until the
+        # state machine is genuinely terminal; explicit failure/cancellation is
+        # always safe to release.
+        release_migration_gate = status_state in {"failed", "cancelled", "canceled"} or (
+            status_state in {"validated", "succeeded"}
+            and not _is_transition_in_progress(status, attempt)
+        )
+        if release_migration_gate:
             self._release_skill_runtime_migration_gate(reason=f"update_status:{status_state}")
         if self._candidate_proc is not None and not _is_transition_in_progress(status, attempt):
             await self._cleanup_candidate_runtime(reason="supervisor.candidate.idle_cleanup")

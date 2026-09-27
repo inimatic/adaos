@@ -393,20 +393,31 @@ def _worker_process_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _core_update_migration_blocker(*, reason: str) -> dict[str, Any] | None:
-    if str(reason or "").strip() == "core_update_post_promotion":
-        return None
     try:
-        from adaos.services.core_update import read_core_update_status
+        from adaos.services.core_update import read_status as read_core_update_status
 
         status = read_core_update_status()
     except Exception:
         return None
     state = str(status.get("state") or "").strip().lower()
-    if state not in {"planned", "countdown", "preparing", "restarting"}:
+    phase = str(status.get("phase") or "").strip().lower()
+    transition_active = state in {
+        "planned",
+        "countdown",
+        "preparing",
+        "draining",
+        "stopping",
+        "restarting",
+        "applying",
+    } or (state, phase) in {
+        ("validated", "root_promotion_pending"),
+        ("succeeded", "root_promoted"),
+    }
+    if not transition_active:
         return None
     return {
         "state": state,
-        "phase": str(status.get("phase") or "").strip() or None,
+        "phase": phase or None,
         "target_version": str(status.get("target_version") or "").strip() or None,
     }
 
