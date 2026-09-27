@@ -1155,10 +1155,17 @@ class ApplicationService:
             raise ApplicationServiceError(
                 "operation authority does not match reviewed plan"
             )
-        if (
-            operation.plan_digest != plan_digest
-            or operation.idempotency_key != idempotency_key
-        ):
+        # Older Applications releases projected ``operation_id`` as the
+        # reviewed idempotency identity.  The operation id is derived from the
+        # exact plan digest and original idempotency key, and authority was
+        # checked above, so accepting that stable operation identity is just
+        # as fail-closed as accepting the original key.  New consumers should
+        # send ``operation.idempotency_key`` directly.
+        idempotency_identity_matches = idempotency_key in {
+            operation.idempotency_key,
+            operation.operation_id,
+        }
+        if operation.plan_digest != plan_digest or not idempotency_identity_matches:
             raise ApplicationServiceError(
                 "reviewed plan or idempotency identity does not match"
             )

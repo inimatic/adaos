@@ -1398,6 +1398,70 @@ def test_shared_component_conflict_is_reported_before_apply(tmp_path: Path) -> N
         )
 
 
+def test_apply_accepts_reviewed_operation_identity_from_existing_clients(
+    tmp_path: Path,
+) -> None:
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+    )
+    service.register(_application())
+    release = service.register_release(_release())
+    plan = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="browser-generated-review-key",
+        expected_revision=0,
+        release_digest=release.release_digest,
+    )
+
+    applied = service.apply_operation(
+        plan.operation_id,
+        plan_digest=plan.plan_digest,
+        idempotency_key=plan.operation_id,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    assert applied.status == "succeeded"
+
+
+def test_apply_rejects_unrelated_review_identity(tmp_path: Path) -> None:
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+    )
+    service.register(_application())
+    release = service.register_release(_release())
+    plan = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="browser-generated-review-key",
+        expected_revision=0,
+        release_digest=release.release_digest,
+    )
+
+    with pytest.raises(
+        ApplicationServiceError,
+        match="reviewed plan or idempotency identity does not match",
+    ):
+        service.apply_operation(
+            plan.operation_id,
+            plan_digest=plan.plan_digest,
+            idempotency_key="different-review-key",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.apply",
+        )
+
+
 def test_unknown_executor_outcome_is_not_replayed_blindly(tmp_path: Path) -> None:
     def _unknown(_plan):
         raise TimeoutError("response lost")
