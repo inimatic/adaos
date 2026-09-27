@@ -173,14 +173,16 @@ class ApplicationAutoUpdateService:
         )
         run_id = f"appautorun.{identity.split(':', 1)[1][:32]}"
         actor_ref = "service:application-auto-update"
+        registry_snapshot = _text(registry_index_digest) or "registry-index:unavailable"
         outcomes: list[dict[str, Any]] = []
         for candidate in candidates:
             app_id = candidate["application_id"]
             target_digest = candidate["target_release_digest"]
             child_identity = hashlib.sha256(
-                f"{subnet}\0{app_id}\0{target_digest}\0{candidate['installation_revision']}".encode(
-                    "utf-8"
-                )
+                (
+                    f"{subnet}\0{app_id}\0{target_digest}\0"
+                    f"{candidate['installation_revision']}\0{registry_snapshot}"
+                ).encode("utf-8")
             ).hexdigest()
             idempotency_key = f"application-auto-update:{child_identity}"
             item: dict[str, Any] = {

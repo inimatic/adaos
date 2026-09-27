@@ -104,6 +104,37 @@ def test_automatic_update_requires_review_for_authority_or_migration_change(tmp_
         assert application_service.applied == []
 
 
+def test_automatic_update_scopes_plan_identity_to_registry_snapshot(tmp_path) -> None:
+    class RecordingApplicationService(_ApplicationService):
+        def __init__(self) -> None:
+            super().__init__(_plan())
+            self.plan_keys: list[str] = []
+
+        def plan_operation(self, application_id, kind, **kwargs):
+            self.plan_keys.append(kwargs["idempotency_key"])
+            return super().plan_operation(application_id, kind, **kwargs)
+
+    application_service = RecordingApplicationService()
+    service = ApplicationAutoUpdateService(
+        tmp_path,
+        application_service,  # type: ignore[arg-type]
+    )
+
+    first = service.run(
+        subnet_ref="subnet:test",
+        trigger="applications.registry.updated",
+        registry_index_digest="sha256:" + "1" * 64,
+    )
+    second = service.run(
+        subnet_ref="subnet:test",
+        trigger="applications.registry.updated",
+        registry_index_digest="sha256:" + "2" * 64,
+    )
+
+    assert first["outcomes"][0]["idempotency_key"] != second["outcomes"][0]["idempotency_key"]
+    assert len(set(application_service.plan_keys)) == 2
+
+
 def test_automatic_update_blockers_fail_closed_for_incomplete_plan() -> None:
     assert automatic_update_blockers({}) == [
         "permission_review_unavailable",
