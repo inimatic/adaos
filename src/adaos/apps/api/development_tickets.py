@@ -29,6 +29,8 @@ from adaos.services.id_gen import new_id
 router = APIRouter(tags=["development-tickets"], dependencies=[Depends(require_token)])
 _LOG = logging.getLogger("adaos.development_tickets")
 _REPORT_SYNC_LOCK = threading.Lock()
+_REPORT_SYNC_SCHEDULE_LOCK = threading.Lock()
+_REPORT_SYNC_THREAD: threading.Thread | None = None
 _REPORT_SYNC_NEXT_AT = 0.0
 _REPORT_SYNC_INTERVAL_SECONDS = 5.0
 
@@ -204,6 +206,39 @@ def _sync_ticket_development_reports(service: DevelopmentTicketService) -> None:
         )
     finally:
         _REPORT_SYNC_LOCK.release()
+
+
+def _schedule_ticket_development_report_sync(service: DevelopmentTicketService) -> None:
+    """Start publisher-report reconciliation without extending a read response.
+
+    Starlette waits for ``BackgroundTasks`` before it completes the proxied
+    response lifecycle.  The report round trip performs durable mailbox and
+    network IO, so attaching it to every ticket-list GET made a public Root
+    request appear to take ten seconds even though the list was already ready.
+    Keep a single daemon worker and let the existing lock/interval coalesce
+    duplicate read-triggered requests.
+    """
+
+    global _REPORT_SYNC_THREAD
+
+    with _REPORT_SYNC_SCHEDULE_LOCK:
+        if _REPORT_SYNC_THREAD is not None and _REPORT_SYNC_THREAD.is_alive():
+            return
+
+        def run() -> None:
+            try:
+                _sync_ticket_development_reports(service)
+            finally:
+                global _REPORT_SYNC_THREAD
+                with _REPORT_SYNC_SCHEDULE_LOCK:
+                    _REPORT_SYNC_THREAD = None
+
+        _REPORT_SYNC_THREAD = threading.Thread(
+            target=run,
+            name="adaos-development-report-sync",
+            daemon=True,
+        )
+        _REPORT_SYNC_THREAD.start()
 
 
 def _source_recovery_required(exc: BuilderSourceRecoveryRequired) -> HTTPException:
@@ -1359,7 +1394,6 @@ def _artifact_manifest_path(service: DevelopmentTicketService, artifact_id: str)
 @router.get("")
 def list_tickets(
     request: Request,
-    background_tasks: BackgroundTasks,
     status_filter: str | None = Query(default=None, alias="status"),
     status_group: str | None = None,
     target_id: str | None = None,
@@ -1385,7 +1419,7 @@ def list_tickets(
     limit: int | None = Query(default=None, ge=0, le=1000),
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
-    background_tasks.add_task(_sync_ticket_development_reports, service)
+    _schedule_ticket_development_report_sync(service)
     target_tokens = _query_filter_tokens(request, "target_id", "target_ids")
     ref_tokens = _query_filter_tokens(
         request,

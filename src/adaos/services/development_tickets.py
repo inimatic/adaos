@@ -107,6 +107,7 @@ RECEIVER_COMPATIBILITY_REASONS = {
     "stream_receiver_not_declared",
 }
 _LOCK = threading.RLock()
+_STATE_READ_CACHE: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
 _log = logging.getLogger("adaos.development_tickets")
 
 
@@ -8064,6 +8065,13 @@ class DevelopmentTicketService:
     def _read(self) -> dict[str, Any]:
         if not self.state_path.is_file():
             return {"schema": STATE_SCHEMA, "signals": {}, "tickets": {}, "command_receipts": {}}
+        cache_key = str(self.state_path.resolve())
+        stat = self.state_path.stat()
+        fingerprint = (int(stat.st_mtime_ns), int(stat.st_size))
+        with _LOCK:
+            cached = _STATE_READ_CACHE.get(cache_key)
+            if cached is not None and cached[0] == fingerprint:
+                return _clone(cached[1])
         value = json.loads(self.state_path.read_text(encoding="utf-8"))
         if not isinstance(value, Mapping):
             raise ValueError("development ticket state is corrupt")
@@ -8083,7 +8091,7 @@ class DevelopmentTicketService:
                 except (TypeError, ValueError):
                     ticket["revision"] = 1
             normalized_tickets[str(ticket_id)] = ticket
-        return {
+        normalized = {
             "schema": STATE_SCHEMA,
             "signals": {
                 str(signal_id): _portable_structured_paths(signal)
@@ -8099,6 +8107,9 @@ class DevelopmentTicketService:
                 if isinstance(receipt, Mapping)
             },
         }
+        with _LOCK:
+            _STATE_READ_CACHE[cache_key] = (fingerprint, normalized)
+        return _clone(normalized)
 
     def _write(self, state: Mapping[str, Any]) -> None:
         previous_tickets: Mapping[str, Any] = {}
@@ -8123,6 +8134,8 @@ class DevelopmentTicketService:
                 previous_content = {key: value for key, value in previous_ticket.items() if key != "revision"}
                 raw_ticket["revision"] = previous_revision + (1 if current_content != previous_content else 0)
         atomic_write_json(self.state_path, dict(state))
+        with _LOCK:
+            _STATE_READ_CACHE.pop(str(self.state_path.resolve()), None)
 
     @staticmethod
     def _validate_signal(signal: Mapping[str, Any]) -> None:

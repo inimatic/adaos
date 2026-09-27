@@ -19,6 +19,43 @@ from adaos.services.development_tickets import (
 from adaos.services.skill.activation import stream_receiver_event_admission
 
 
+def test_state_read_cache_is_copy_safe_and_invalidated_on_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    service._write(
+        {
+            "schema": development_tickets_module.STATE_SCHEMA,
+            "signals": {},
+            "tickets": {},
+            "command_receipts": {},
+        }
+    )
+    original_read_text = Path.read_text
+    state_reads = 0
+
+    def counted_read_text(path: Path, *args, **kwargs):
+        nonlocal state_reads
+        if path == service.state_path:
+            state_reads += 1
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+    first = service._read()
+    first["tickets"]["caller-mutation"] = {"status": "open"}
+    second = service._read()
+
+    assert state_reads == 1
+    assert "caller-mutation" not in second["tickets"]
+
+    service._write(second)
+    service._read()
+    # The write performs one explicit optimistic-revision read; the following
+    # read must perform another because the cache was invalidated.
+    assert state_reads == 3
+
+
 def test_default_builder_prototype_submitter_uses_shared_conversation_packet(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
