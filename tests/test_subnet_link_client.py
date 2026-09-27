@@ -37,6 +37,113 @@ if "ypy_websocket" not in sys.modules:
 mod = importlib.import_module("adaos.services.subnet.link_client")
 
 
+def test_mirrored_yjs_control_tracks_member_projection_demand(monkeypatch) -> None:
+    from adaos.sdk.data.projections import clear_projection_demand, has_projection_demand
+
+    published = []
+
+    class _Bus:
+        def publish(self, event) -> None:
+            published.append(event)
+
+    clear_projection_demand()
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(node_id="member-01"),
+            bus=_Bus(),
+        ),
+    )
+    client = mod.MemberLinkClient()
+    client._hub_node_id = "hub-01"
+    payload = {
+        "topic": "webio.yjs.desktop.nodes.member-01.infrastate.summary",
+        "webspace_id": "desktop",
+        "slot": "infrastate.summary",
+        "projection": "infrastate.summary",
+        "node_id": "member-01",
+        "transport": "ws",
+        "connection_id": "browser-01",
+        "subscription_id": (
+            "ws:browser-01:webio.yjs.desktop.nodes.member-01.infrastate.summary"
+        ),
+    }
+
+    asyncio.run(
+        client._on_hub_event(
+            {
+                "event": {
+                    "type": "webio.yjs.snapshot.requested",
+                    "payload": payload,
+                    "source": "events_ws",
+                }
+            }
+        )
+    )
+
+    assert has_projection_demand("infrastate.summary", webspace_id="desktop") is True
+    assert len(published) == 1
+    assert published[0].payload["_meta"]["subnet_hub_mirrored"] is True
+
+    asyncio.run(
+        client._on_hub_event(
+            {
+                "event": {
+                    "type": "webio.yjs.subscription.changed",
+                    "payload": {**payload, "action": "unsubscribed"},
+                    "source": "events_ws",
+                }
+            }
+        )
+    )
+
+    assert has_projection_demand("infrastate.summary", webspace_id="desktop") is False
+    clear_projection_demand()
+
+
+def test_mirrored_yjs_control_rejects_other_node_id(monkeypatch) -> None:
+    from adaos.sdk.data.projections import clear_projection_demand, has_projection_demand
+
+    published = []
+
+    class _Bus:
+        def publish(self, event) -> None:
+            published.append(event)
+
+    clear_projection_demand()
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(node_id="member-01"),
+            bus=_Bus(),
+        ),
+    )
+    client = mod.MemberLinkClient()
+
+    asyncio.run(
+        client._on_hub_event(
+            {
+                "event": {
+                    "type": "webio.yjs.subscription.changed",
+                    "payload": {
+                        "webspace_id": "desktop",
+                        "slot": "infrastate.summary",
+                        "node_id": "member-02",
+                        "action": "subscribed",
+                        "subscription_id": "ws:browser-01:other",
+                    },
+                }
+            }
+        )
+    )
+
+    assert has_projection_demand("infrastate.summary", webspace_id="desktop") is False
+    assert published == []
+    clear_projection_demand()
+
+
 def test_member_link_ws_compression_disabled_by_default(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_SUBNET_LINK_WS_COMPRESSION", raising=False)
 

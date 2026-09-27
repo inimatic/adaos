@@ -655,10 +655,17 @@ def _parse_webio_yjs_projection_topic(topic: str) -> dict[str, Any] | None:
     }
     if node_id:
         payload["node_id"] = node_id
+        payload["target_node_id"] = node_id
+        payload["_meta"] = {"webspace_id": webspace_id, "target_node_id": node_id}
     return payload
 
 
-def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str) -> None:
+def _request_webio_yjs_projection_snapshots(
+    topics: set[str],
+    *,
+    transport: str,
+    connection_id: str | None = None,
+) -> None:
     for topic in topics:
         parsed = _parse_webio_yjs_projection_topic(topic)
         if not parsed:
@@ -666,6 +673,9 @@ def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str)
         try:
             payload = dict(parsed)
             payload["transport"] = str(transport or "webrtc_data:events")
+            if connection_id:
+                payload["connection_id"] = str(connection_id)
+                payload["subscription_id"] = f"{transport}:{connection_id}:{payload['topic']}"
             request_snapshot_event(
                 "webio.yjs.snapshot.requested",
                 payload,
@@ -1135,7 +1145,11 @@ class HubPeer:
 
                     asyncio.ensure_future(_send_initial())
                     _request_webio_stream_snapshots(added, transport="webrtc_data:events")
-                    _request_webio_yjs_projection_snapshots(added, transport="webrtc_data:events")
+                    _request_webio_yjs_projection_snapshots(
+                        added,
+                        transport="webrtc_data:events",
+                        connection_id=str(id(self)),
+                    )
                 return
             if msg.get("type") == "unsubscribe":
                 _unregister_event_channel_subscription_topics(self, msg.get("topics"))

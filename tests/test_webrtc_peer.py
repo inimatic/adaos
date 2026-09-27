@@ -861,6 +861,7 @@ def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot(mon
     peer_mod._request_webio_yjs_projection_snapshots(
         {"webio.yjs.default.nodes.member-01.infrastate.summary"},
         transport="webrtc_data:events",
+        connection_id="peer-1",
     )
 
     assert published == [
@@ -872,7 +873,14 @@ def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot(mon
                 "slot": "infrastate.summary",
                 "projection": "infrastate.summary",
                 "node_id": "member-01",
+                "target_node_id": "member-01",
+                "_meta": {"webspace_id": "desktop", "target_node_id": "member-01"},
                 "transport": "webrtc_data:events",
+                "connection_id": "peer-1",
+                "subscription_id": (
+                    "webrtc_data:events:peer-1:"
+                    "webio.yjs.default.nodes.member-01.infrastate.summary"
+                ),
             },
             "webrtc.peer",
         )

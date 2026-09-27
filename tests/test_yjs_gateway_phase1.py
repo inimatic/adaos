@@ -1665,6 +1665,7 @@ def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot() -
     gateway_module._request_webio_yjs_projection_snapshots(
         {"webio.yjs.default.nodes.member-01.infrastate.summary"},
         transport="ws",
+        connection_id="client-1",
     )
 
     assert len(published) == 1
@@ -1674,6 +1675,11 @@ def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot() -
     assert getattr(event, "payload", {}).get("slot") == "infrastate.summary"
     assert getattr(event, "payload", {}).get("node_id") == "member-01"
     assert getattr(event, "payload", {}).get("_meta", {}).get("target_node_id") == "member-01"
+    assert getattr(event, "payload", {}).get("connection_id") == "client-1"
+    assert (
+        getattr(event, "payload", {}).get("subscription_id")
+        == "ws:client-1:webio.yjs.default.nodes.member-01.infrastate.summary"
+    )
 
 
 def test_request_webio_yjs_projection_snapshots_dedupes_repeated_control_events() -> None:

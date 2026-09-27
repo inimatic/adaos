@@ -2249,8 +2249,20 @@ class MemberLinkClient:
             meta.setdefault("subnet_hub_node_id", self._hub_node_id)
         target_node_id = str(
             mirrored_payload.get("target_node_id")
+            or mirrored_payload.get("node_target_id")
             or meta.get("target_node_id")
             or meta.get("node_target_id")
+            or (
+                mirrored_payload.get("node_id")
+                if event_type
+                in {
+                    "webio.stream.snapshot.requested",
+                    "webio.stream.subscription.changed",
+                    "webio.yjs.snapshot.requested",
+                    "webio.yjs.subscription.changed",
+                }
+                else ""
+            )
             or ""
         ).strip()
         local_node_id = str(getattr(get_ctx().config, "node_id", "") or "").strip()
@@ -2259,6 +2271,23 @@ class MemberLinkClient:
         mirrored_payload["_meta"] = meta
         self._last_hub_event_type = event_type
         self._last_hub_event_at = time.time()
+        if event_type == "webio.yjs.subscription.changed" or (
+            event_type == "webio.yjs.snapshot.requested"
+            and bool(
+                str(mirrored_payload.get("subscription_id") or "").strip()
+                or str(mirrored_payload.get("connection_id") or "").strip()
+            )
+        ):
+            try:
+                from adaos.sdk.data.projections import record_projection_subscription_change
+
+                record_projection_subscription_change(mirrored_payload)
+            except Exception:
+                _log.debug(
+                    "failed to record mirrored projection demand type=%s",
+                    event_type,
+                    exc_info=True,
+                )
         try:
             get_ctx().bus.publish(
                 DomainEvent(

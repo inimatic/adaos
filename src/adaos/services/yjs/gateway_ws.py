@@ -3877,7 +3877,12 @@ def _parse_webio_yjs_projection_topic(topic: str) -> dict[str, Any] | None:
     return payload
 
 
-def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str) -> None:
+def _request_webio_yjs_projection_snapshots(
+    topics: set[str],
+    *,
+    transport: str,
+    connection_id: str | None = None,
+) -> None:
     for topic in topics:
         parsed = _parse_webio_yjs_projection_topic(topic)
         if not parsed:
@@ -3885,6 +3890,9 @@ def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str)
         try:
             payload = dict(parsed)
             payload["transport"] = str(transport or "ws")
+            if connection_id:
+                payload["connection_id"] = str(connection_id)
+                payload["subscription_id"] = f"{transport}:{connection_id}:{payload['topic']}"
             request_snapshot_event(
                 "webio.yjs.snapshot.requested",
                 payload,
@@ -10597,7 +10605,11 @@ async def events_ws(websocket: WebSocket):
                 if added:
                     await _send_initial_ws_event_messages(websocket, added)
                     _request_webio_stream_snapshots(added, transport="ws")
-                    _request_webio_yjs_projection_snapshots(added, transport="ws")
+                    _request_webio_yjs_projection_snapshots(
+                        added,
+                        transport="ws",
+                        connection_id=str(id(websocket)),
+                    )
                 continue
 
             if msg.get("type") == "unsubscribe":
