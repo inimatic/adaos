@@ -8,6 +8,16 @@ import yaml
 
 
 READ_ONLY_SIDE_EFFECTS = frozenset({"safe", "none", "read", "read_only", "readonly"})
+_LEGACY_SIDE_EFFECT_PERMISSIONS = {
+    "safe": "workspace.read",
+    "none": "workspace.read",
+    "read": "workspace.read",
+    "read_only": "workspace.read",
+    "readonly": "workspace.read",
+    "ui_navigation": "workspace.read",
+    "local_write": "workspace.write",
+    "runtime_write": "workspace.write",
+}
 
 
 def normalize_side_effects(value: Any) -> str:
@@ -31,9 +41,54 @@ def _resolved_tool_spec(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         tools = manifest.get("tools") if isinstance(manifest, dict) else {}
         spec = tools.get(public_tool) if isinstance(tools, dict) else {}
-        return dict(spec) if isinstance(spec, dict) else {}
+        if not isinstance(spec, dict):
+            return {}
+        result = dict(spec)
+        permissions = result.get("permissions")
+        has_permissions = bool(
+            permissions
+            and (
+                not isinstance(permissions, dict)
+                or permissions.get("required")
+                or permissions.get("optional")
+            )
+        )
+        if has_permissions:
+            result["_permissions_source"] = "resolved_manifest"
+            return result
+        if isinstance(manifest, dict) and "capabilities" not in manifest:
+            # Before capability declarations became part of the compiled
+            # runtime contract, standardized workspace effects were the only
+            # package-level authority available to the executor. Preserve that
+            # narrow meaning for already installed exact slots. A manifest
+            # produced by the current compiler always has ``capabilities``;
+            # an explicit empty declaration therefore remains fail-closed.
+            permission = _LEGACY_SIDE_EFFECT_PERMISSIONS.get(
+                normalize_side_effects(
+                    _governance_side_effects(result)
+                )
+            )
+            if permission:
+                result["permissions"] = [permission]
+                result["_permissions_source"] = "legacy_side_effects"
+        return result
     except Exception:
         return {}
+
+
+def _governance_side_effects(spec: dict[str, Any]) -> Any:
+    governance = (
+        spec.get("yjs_governance")
+        if isinstance(spec.get("yjs_governance"), dict)
+        else {}
+    )
+    return (
+        governance.get("side_effects")
+        or spec.get("side_effects")
+        or spec.get("sideEffects")
+        or spec.get("effects")
+        or ""
+    )
 
 
 def declared_skill_webui_owner(
@@ -111,7 +166,6 @@ def declared_tool_contract(
         public_tool=public_tool,
         dev=dev,
     )
-    governance = spec.get("yjs_governance") if isinstance(spec.get("yjs_governance"), dict) else {}
     raw_permissions = spec.get("permissions")
     permission_values: list[Any] = []
     if isinstance(raw_permissions, dict):
@@ -124,11 +178,7 @@ def declared_tool_contract(
     approval_scope = spec.get("approval_scope")
     return {
         "side_effects": str(
-            governance.get("side_effects")
-            or spec.get("side_effects")
-            or spec.get("sideEffects")
-            or spec.get("effects")
-            or ""
+            _governance_side_effects(spec)
         ).strip(),
         "approval_scope": dict(approval_scope) if isinstance(approval_scope, dict) else {},
         "permissions": tuple(
@@ -141,6 +191,9 @@ def declared_tool_contract(
             )
         ),
         "application_access": _application_access(spec),
+        "permissions_source": str(
+            spec.get("_permissions_source") or "undeclared"
+        ),
     }
 
 

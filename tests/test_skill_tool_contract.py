@@ -57,7 +57,75 @@ def test_declared_tool_contract_reads_one_runtime_snapshot(tmp_path: Path) -> No
             "capability": "mail.manage",
             "permission": "providers.google.gmail",
         },
+        "permissions_source": "resolved_manifest",
     }
+
+
+def test_legacy_runtime_effect_recovers_only_standard_workspace_capability(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "resolved.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "refresh": {
+                        "side_effects": "local_write",
+                        "permissions": None,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            return {"resolved_manifest": str(manifest_path)}
+
+    contract = declared_tool_contract(
+        _Manager(),
+        skill_name="subscription_status_skill",
+        public_tool="refresh",
+        dev=False,
+    )
+
+    assert contract["permissions"] == ("workspace.write",)
+    assert contract["permissions_source"] == "legacy_side_effects"
+
+
+def test_current_runtime_empty_capabilities_remain_fail_closed(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "resolved.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "capabilities": [],
+                "tools": {
+                    "refresh": {
+                        "side_effects": "local_write",
+                        "permissions": None,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            return {"resolved_manifest": str(manifest_path)}
+
+    contract = declared_tool_contract(
+        _Manager(),
+        skill_name="subscription_status_skill",
+        public_tool="refresh",
+        dev=False,
+    )
+
+    assert contract["permissions"] == ()
+    assert contract["permissions_source"] == "undeclared"
 
 
 def test_shared_owner_recovers_from_immutable_legacy_slot_source(

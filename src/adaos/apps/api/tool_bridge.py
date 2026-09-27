@@ -3098,6 +3098,12 @@ async def _call_tool_impl(
             if isinstance(declared_contract.get("application_access"), Mapping)
             else {}
         )
+        if declared_contract.get("permissions_source") == "legacy_side_effects":
+            _log.warning(
+                "legacy component capability recovered from declared side effects tool=%s permission=%s",
+                body.tool,
+                ",".join(declared_component_permissions),
+            )
         phase_timings["contract_resolution_ms"] = (
             time.perf_counter() - phase_started
         ) * 1000.0
