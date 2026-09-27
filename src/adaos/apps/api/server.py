@@ -231,7 +231,11 @@ from adaos.services.core_update_policy import core_update_reactions_disabled_rea
 from adaos.services.core_slots import active_slot, active_slot_manifest, slot_status as core_slot_status
 from adaos.services.node_config import save_config
 from adaos.services.runtime_topology import supervisor_base_candidates_from_env
-from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_transition_role
+from adaos.services.runtime_identity import (
+    runtime_identity_snapshot,
+    runtime_shared_state_write_authorized,
+    runtime_transition_role,
+)
 from adaos.services.runtime_lifecycle import (
     is_draining,
     request_drain,
@@ -1150,12 +1154,16 @@ def _runtime_identity_public_payload() -> dict[str, Any]:
     except Exception:
         runtime_port = None
     transition_role = str(identity.get("transition_role") or runtime_transition_role() or "active").strip().lower() or "active"
+    shared_state_write_authorized = bool(
+        identity.get("shared_state_write_authorized", runtime_shared_state_write_authorized())
+    )
     return {
         "runtime_instance_id": str(identity.get("runtime_instance_id") or "").strip() or None,
         "transition_role": transition_role,
+        "shared_state_write_authorized": shared_state_write_authorized,
         "slot": slot_name or None,
         "runtime_port": runtime_port,
-        "admin_mutation_allowed": transition_role != "candidate",
+        "admin_mutation_allowed": shared_state_write_authorized,
     }
 
 
@@ -1189,7 +1197,7 @@ def _supervisor_manages_sidecar() -> bool:
 
 def _ensure_runtime_admin_mutation_allowed(action: str) -> None:
     info = _runtime_identity_public_payload()
-    if str(info.get("transition_role") or "active").strip().lower() != "candidate":
+    if info.get("admin_mutation_allowed") is True:
         return
     raise HTTPException(
         status_code=409,
@@ -2042,7 +2050,7 @@ async def _runtime_context(app: FastAPI):
             exc_info=True,
         )
 
-    _schedule_startup_tail(
+    app.state.webspace_materialization_hydration_task = _schedule_startup_tail(
         _run_post_ready_catalog_and_materialization_prewarm(app),
         name="post-ready-catalog-materialization-prewarm",
     )
@@ -2071,6 +2079,12 @@ async def _runtime_context(app: FastAPI):
                 await _cancel_background_task(task)
         finally:
             app.state.runtime_startup_tail_tasks = []
+        try:
+            await _cancel_background_task(
+                getattr(app.state, "promoted_materialization_commit_task", None)
+            )
+        finally:
+            app.state.promoted_materialization_commit_task = None
         try:
             await _cancel_background_task(getattr(app.state, "runtime_boot_task", None))
         finally:
@@ -2487,6 +2501,11 @@ async def _wait_for_promoted_service_start_admission(reason: str) -> dict[str, A
 
 
 async def _start_service_skills_after_promotion(reason: str) -> None:
+    materialization_task = asyncio.create_task(
+        _commit_startup_materializations_after_promotion(reason),
+        name="runtime-promote-materialization-commit",
+    )
+    app.state.promoted_materialization_commit_task = materialization_task
     router_service = getattr(app.state, "router_service", None)
     activate_router = getattr(router_service, "activate_after_promotion", None)
     if callable(activate_router):
@@ -2528,6 +2547,16 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
             "updated_at": time.time(),
         }
     try:
+        await asyncio.shield(materialization_task)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logging.getLogger("adaos.runtime").warning(
+            "promoted startup materialization commit task failed reason=%s",
+            reason,
+            exc_info=True,
+        )
+    try:
         delay_s = max(
             0.0,
             float(os.getenv("ADAOS_RUNTIME_PROMOTION_READY_EVENT_DELAY_S", "2") or "2"),
@@ -2553,6 +2582,69 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
             reason,
             exc_info=True,
         )
+
+
+async def _commit_startup_materializations_after_promotion(reason: str) -> dict[str, Any]:
+    status: dict[str, Any] = {
+        "state": "waiting",
+        "reason": str(reason or "supervisor.fast_cutover"),
+        "started_at": time.time(),
+        "updated_at": time.time(),
+    }
+    app.state.promoted_materialization_commit_status = status
+    hydration_task = getattr(app.state, "webspace_materialization_hydration_task", None)
+    try:
+        if isinstance(hydration_task, asyncio.Task) and hydration_task is not asyncio.current_task():
+            await asyncio.shield(hydration_task)
+        if not runtime_shared_state_write_authorized():
+            result = {
+                "ok": True,
+                "accepted": False,
+                "reason": "shared_state_write_not_authorized",
+            }
+        else:
+            from adaos.services.scenario.webspace_runtime import (
+                commit_cached_startup_materializations_after_promotion,
+            )
+
+            result = await commit_cached_startup_materializations_after_promotion()
+        status.update(
+            {
+                "state": "complete" if bool(result.get("ok")) else "degraded",
+                "result": result,
+                "completed_at": time.time(),
+                "updated_at": time.time(),
+            }
+        )
+        logging.getLogger("adaos.runtime").info(
+            "promoted startup materialization commit finished reason=%s result=%s",
+            reason,
+            json.dumps(result, ensure_ascii=True, sort_keys=True),
+        )
+        return result
+    except asyncio.CancelledError:
+        status.update({"state": "cancelled", "updated_at": time.time()})
+        raise
+    except Exception as exc:
+        status.update(
+            {
+                "state": "failed",
+                "error_type": type(exc).__name__,
+                "completed_at": time.time(),
+                "updated_at": time.time(),
+            }
+        )
+        logging.getLogger("adaos.runtime").warning(
+            "failed to commit startup materializations after candidate promotion reason=%s",
+            reason,
+            exc_info=True,
+        )
+        return {
+            "ok": False,
+            "accepted": False,
+            "reason": "commit_failed",
+            "error_type": type(exc).__name__,
+        }
 
 
 def _schedule_promoted_runtime_service_start(reason: str) -> dict[str, Any]:
@@ -3222,6 +3314,8 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
             },
         )
     previous_transition_role = str(os.getenv("ADAOS_RUNTIME_TRANSITION_ROLE") or "candidate").strip() or "candidate"
+    previous_shared_state_authority = os.environ.get("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED")
+    os.environ["ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED"] = "0"
     os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = "active"
     reconnect_result: dict[str, Any] | None = None
     if bool(body.reconnect_hub_root):
@@ -3262,6 +3356,10 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
             hub_root_authority_required and authority.get("ready") is not True
         ):
             os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = previous_transition_role
+            if previous_shared_state_authority is None:
+                os.environ.pop("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", None)
+            else:
+                os.environ["ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED"] = previous_shared_state_authority
             raise HTTPException(
                 status_code=503,
                 detail={
@@ -3274,6 +3372,10 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         _promote_project_deployment_authority()
     except Exception as exc:
         os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = previous_transition_role
+        if previous_shared_state_authority is None:
+            os.environ.pop("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", None)
+        else:
+            os.environ["ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED"] = previous_shared_state_authority
         raise HTTPException(
             status_code=503,
             detail={
@@ -3282,6 +3384,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
                 "error_type": type(exc).__name__,
             },
         ) from exc
+    os.environ["ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED"] = "1"
     service_start = _schedule_promoted_runtime_service_start(body.reason)
     migration_start = asyncio.create_task(
         _start_post_boot_skill_runtime_migration(

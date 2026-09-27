@@ -38,6 +38,7 @@ from adaos.services.yjs.doc import (
 )
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.runtime_environment import runtime_environment_payload
+from adaos.services.runtime_identity import runtime_shared_state_write_authorized
 from adaos.services.browser_assets import (
     BrowserAssetPublishError,
     publish_scenario_resource_descriptor,
@@ -4073,6 +4074,11 @@ def _refresh_live_room_after_rebuild_enabled() -> bool:
 
 def _rebuild_action_refreshes_live_room(action: str) -> bool:
     action_token = str(action or "").strip().lower()
+    if (
+        action_token == "startup_materialization_hydration"
+        and not runtime_shared_state_write_authorized()
+    ):
+        return False
     if action_token in {
         "startup_materialization_hydration",
         "scenario_switch_rebuild",
@@ -5158,6 +5164,116 @@ def get_webspace_rebuild_materialized_payload(webspace_id: str) -> dict[str, Any
         return json.loads(json.dumps(dict(payload)))
     except Exception:
         return dict(payload)
+
+
+async def commit_cached_startup_materializations_after_promotion() -> dict[str, Any]:
+    """Publish candidate-computed startup payloads after authority commits."""
+
+    if not runtime_shared_state_write_authorized():
+        return {
+            "ok": True,
+            "accepted": False,
+            "reason": "shared_state_write_not_authorized",
+            "committed_total": 0,
+            "already_committed_total": 0,
+            "failed_total": 0,
+            "webspaces": [],
+        }
+
+    from adaos.services.yjs.gateway import apply_materialized_payload_to_live_room
+
+    items: list[dict[str, Any]] = []
+    for webspace_id, raw_record in _RUNTIME.tasks.record_items(
+        _RUNTIME.tasks.WEBSPACE_REBUILD_STATUS
+    ):
+        record = dict(raw_record) if isinstance(raw_record, Mapping) else {}
+        if str(record.get("action") or "").strip() != "startup_materialization_hydration":
+            continue
+        if str(record.get("status") or "").strip() != "ready" or bool(record.get("pending")):
+            continue
+        payload = record.get("materialized_payload")
+        if not isinstance(payload, Mapping) or not payload:
+            continue
+        refresh = record.get("live_room_refresh")
+        if isinstance(refresh, Mapping) and bool(refresh.get("materialized_payload_applied")):
+            items.append(
+                {
+                    "webspace_id": webspace_id,
+                    "ok": True,
+                    "committed": False,
+                    "reason": "already_committed",
+                }
+            )
+            continue
+        request_id = str(record.get("request_id") or "").strip() or None
+        try:
+            _raise_if_rebuild_request_superseded(webspace_id, request_id)
+            result = await apply_materialized_payload_to_live_room(
+                webspace_id,
+                materialized_payload=dict(payload),
+                reason="candidate_promotion:startup_materialization_hydration",
+                persist_repair=True,
+            )
+            refresh_result = (
+                dict(result)
+                if isinstance(result, Mapping)
+                else {
+                    "ok": result is not None,
+                    "materialized_payload_applied": False,
+                    "warning": "live_room_refresh_returned_non_mapping",
+                }
+            )
+            committed = bool(refresh_result.get("materialized_payload_applied"))
+            _set_webspace_rebuild_status_if_current(
+                webspace_id,
+                request_id,
+                live_room_refresh=refresh_result,
+                promotion_materialization_committed_at=time.time() if committed else None,
+            )
+            items.append(
+                {
+                    "webspace_id": webspace_id,
+                    "ok": bool(refresh_result.get("ok", committed)),
+                    "committed": committed,
+                    "reason": "committed" if committed else "apply_not_confirmed",
+                }
+            )
+        except BaseException as exc:
+            if _is_control_flow_base_exception(exc):
+                raise
+            failure = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            _set_webspace_rebuild_status_if_current(
+                webspace_id,
+                request_id,
+                live_room_refresh=failure,
+            )
+            items.append(
+                {
+                    "webspace_id": webspace_id,
+                    "ok": False,
+                    "committed": False,
+                    "reason": "apply_failed",
+                    "error_type": type(exc).__name__,
+                }
+            )
+            _log.warning(
+                "failed to commit cached startup materialization after promotion webspace=%s",
+                webspace_id,
+                exc_info=True,
+            )
+
+    committed_total = sum(1 for item in items if item.get("committed"))
+    already_committed_total = sum(1 for item in items if item.get("reason") == "already_committed")
+    failed_total = sum(1 for item in items if not item.get("ok"))
+    return {
+        "ok": failed_total == 0,
+        "accepted": bool(items),
+        "reason": "completed" if items else "no_cached_startup_materializations",
+        "committed_total": committed_total,
+        "already_committed_total": already_committed_total,
+        "failed_total": failed_total,
+        "webspaces": items,
+    }
 
 
 class WebspaceScenarioRuntime:
@@ -8881,6 +8997,7 @@ __all__ = [
     "describe_webspace_overlay_state",
     "describe_webspace_projection_state",
     "describe_webspace_rebuild_state",
+    "commit_cached_startup_materializations_after_promotion",
     "get_webspace_rebuild_materialized_payload",
     "invalidate_webspace_materialization_cache",
     "hydrate_webspace_materialization_statuses",

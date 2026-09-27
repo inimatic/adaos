@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 import time
@@ -1417,6 +1418,7 @@ def test_supervisor_manages_sidecar_helper(monkeypatch) -> None:
 
 def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
@@ -1443,6 +1445,8 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
         wait_for_authority: bool = False,
     ):
         call_order.append("reconnect")
+        assert api_server.runtime_transition_role() == "active"
+        assert api_server.runtime_shared_state_write_authorized() is False
         reconnect_calls.append((transport, url_override, wait_for_authority))
         return {"ok": True, "accepted": True, "authority": {"required": True, "ready": True}}
 
@@ -1469,6 +1473,7 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     assert payload["ok"] is True
     assert payload["accepted"] is True
     assert payload["runtime"]["transition_role"] == "active"
+    assert payload["runtime"]["shared_state_write_authorized"] is True
     assert payload["runtime"]["runtime_instance_id"] == "rt-b-c-abcdef12"
     assert payload["runtime"]["admin_mutation_allowed"] is True
     assert payload["reconnect"]["ok"] is True
@@ -1491,9 +1496,14 @@ def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeyp
     async def _emit(event_type, payload, **kwargs) -> None:
         call_order.append((event_type, payload, kwargs))
 
+    async def _commit(_reason: str) -> dict[str, object]:
+        call_order.append("materialization")
+        return {"ok": True, "accepted": False}
+
     monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
     monkeypatch.setattr(api_server, "_read_core_update_status_async", lambda: asyncio.sleep(0, result={"state": "idle"}))
     monkeypatch.setattr(api_server.sdk_data_bus, "emit", _emit)
+    monkeypatch.setattr(api_server, "_commit_startup_materializations_after_promotion", _commit)
     monkeypatch.setattr(
         api_server,
         "get_ctx",
@@ -1502,12 +1512,46 @@ def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeyp
 
     asyncio.run(api_server._start_service_skills_after_promotion("test.cutover"))
 
-    assert call_order[0] == "services"
-    event_type, payload, kwargs = call_order[1]
+    assert set(call_order[:2]) == {"services", "materialization"}
+    event_type, payload, kwargs = call_order[-1]
     assert event_type == "sys.ready"
     assert payload["promoted"] is True
     assert payload["reason"] == "test.cutover"
     assert kwargs == {"source": "lifecycle.promotion", "actor": "system"}
+
+
+def test_candidate_promotion_waits_for_hydration_before_cached_commit(monkeypatch) -> None:
+    order: list[str] = []
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
+
+    async def _exercise() -> dict[str, object]:
+        async def _hydrate() -> None:
+            await asyncio.sleep(0)
+            order.append("hydrated")
+
+        async def _commit() -> dict[str, object]:
+            order.append("committed")
+            return {"ok": True, "accepted": True, "committed_total": 1}
+
+        task = asyncio.create_task(_hydrate())
+        monkeypatch.setattr(
+            api_server.app.state,
+            "webspace_materialization_hydration_task",
+            task,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "adaos.services.scenario.webspace_runtime.commit_cached_startup_materializations_after_promotion",
+            _commit,
+        )
+        return await api_server._commit_startup_materializations_after_promotion("test.cutover")
+
+    result = asyncio.run(_exercise())
+
+    assert result["committed_total"] == 1
+    assert order == ["hydrated", "committed"]
+    assert api_server.app.state.promoted_materialization_commit_status["state"] == "complete"
 
 
 def test_candidate_promotion_defers_service_start_until_core_update_finishes(monkeypatch) -> None:
@@ -1612,6 +1656,7 @@ def test_promote_active_is_idempotent_for_active_runtime(monkeypatch) -> None:
 
 def test_candidate_runtime_promotion_rejects_missing_hub_root_authority(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
@@ -1650,10 +1695,13 @@ def test_candidate_runtime_promotion_rejects_missing_hub_root_authority(monkeypa
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail["error"] == "hub_root_authority_not_ready"
     assert api_server.runtime_transition_role() == "candidate"
+    assert api_server.runtime_shared_state_write_authorized() is False
+    assert os.environ["ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED"] == "0"
 
 
 def test_candidate_runtime_promotion_rejects_incomplete_boot(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
     monkeypatch.setattr(
         api_server.app.state,
         "runtime_boot_readiness",
@@ -1675,6 +1723,7 @@ def test_candidate_runtime_promotion_rejects_incomplete_boot(monkeypatch) -> Non
 
 def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")

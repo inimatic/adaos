@@ -5154,6 +5154,120 @@ def test_startup_materialization_uses_isolated_payload_and_commits_authoritative
     assert live_refresh_calls[0]["materialized_payload"]["scenario_id"] == "web_desktop"
 
 
+def test_candidate_startup_materialization_caches_without_shared_state_write(monkeypatch) -> None:
+    live_refresh_calls: list[dict[str, object]] = []
+
+    async def _fake_refresh(ctx, webspace_id: str, **kwargs):  # noqa: ARG001
+        return {"attempted": True}
+
+    async def _fake_materialize(self, webspace_id: str, **kwargs):  # noqa: ARG001
+        self._last_rebuild_timings_ms = {"payload_worker": 1.0, "total": 1.0}
+        self._last_rebuild_ydoc_timings_ms = {"worker_process": 1.0, "total": 1.0}
+        self._last_worker_diagnostics = {"mode": "payload_only"}
+        self._last_apply_summary = {"payload_only": True}
+        self._last_materialized_payload = {
+            "scenario_id": "web_desktop",
+            "application": {"desktop": {"pageSchema": {"id": "desktop"}}},
+            "catalog": {"apps": [], "widgets": []},
+            "registry": {},
+            "installed": {"apps": [], "widgets": []},
+            "desktop": {},
+            "webio": {},
+            "routing": {},
+        }
+        return SimpleNamespace(scenario_id="web_desktop", apps=[], widgets=[])
+
+    async def _unexpected_live_refresh(*args, **kwargs):
+        live_refresh_calls.append({"args": args, "kwargs": kwargs})
+        raise AssertionError("candidate hydration must not write shared Yjs state")
+
+    monkeypatch.setattr(webspace_runtime_module, "runtime_shared_state_write_authorized", lambda: False)
+    monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _fake_materialize,
+    )
+    monkeypatch.setattr(
+        "adaos.services.yjs.gateway.apply_materialized_payload_to_live_room",
+        _unexpected_live_refresh,
+    )
+
+    try:
+        result = asyncio.run(
+            webspace_runtime_module.rebuild_webspace_from_sources(
+                "candidate-desktop",
+                action="startup_materialization_hydration",
+                scenario_id="web_desktop",
+                scenario_resolution="manifest_home",
+                source_of_truth="startup_runtime",
+                request_id="startup-materialization:candidate",
+            )
+        )
+        assert result["accepted"] is True
+        assert result["payload_only_rebuild"] is True
+        assert result["live_room_refresh"] is None
+        assert live_refresh_calls == []
+        assert webspace_runtime_module.get_webspace_rebuild_materialized_payload(
+            "candidate-desktop"
+        )["scenario_id"] == "web_desktop"
+    finally:
+        webspace_runtime_module._RUNTIME.tasks.pop_record(  # noqa: SLF001
+            webspace_runtime_module._RUNTIME.tasks.WEBSPACE_REBUILD_STATUS,  # noqa: SLF001
+            "candidate-desktop",
+        )
+
+
+def test_promotion_commits_cached_candidate_materialization_once(monkeypatch) -> None:
+    webspace_id = "promoted-desktop"
+    request_id = "startup-materialization:promoted"
+    apply_calls: list[dict[str, object]] = []
+    webspace_runtime_module._set_webspace_rebuild_status(  # noqa: SLF001
+        webspace_id,
+        status="ready",
+        pending=False,
+        action="startup_materialization_hydration",
+        request_id=request_id,
+        materialized_payload={"scenario_id": "web_desktop", "installed": {"apps": []}},
+        live_room_refresh=None,
+    )
+
+    async def _fake_apply(target: str, materialized_payload: dict, **kwargs):
+        apply_calls.append(
+            {"webspace_id": target, "materialized_payload": materialized_payload, **kwargs}
+        )
+        return {"ok": True, "materialized_payload_applied": True}
+
+    monkeypatch.setattr(webspace_runtime_module, "runtime_shared_state_write_authorized", lambda: True)
+    monkeypatch.setattr(
+        "adaos.services.yjs.gateway.apply_materialized_payload_to_live_room",
+        _fake_apply,
+    )
+    try:
+        first = asyncio.run(
+            webspace_runtime_module.commit_cached_startup_materializations_after_promotion()
+        )
+        second = asyncio.run(
+            webspace_runtime_module.commit_cached_startup_materializations_after_promotion()
+        )
+    finally:
+        webspace_runtime_module._RUNTIME.tasks.pop_record(  # noqa: SLF001
+            webspace_runtime_module._RUNTIME.tasks.WEBSPACE_REBUILD_STATUS,  # noqa: SLF001
+            webspace_id,
+        )
+
+    assert first["committed_total"] == 1
+    assert second["committed_total"] == 0
+    assert second["already_committed_total"] >= 1
+    assert any(
+        item["webspace_id"] == webspace_id and item["reason"] == "already_committed"
+        for item in second["webspaces"]
+    )
+    assert len(apply_calls) == 1
+    assert apply_calls[0]["persist_repair"] is True
+    assert apply_calls[0]["reason"] == "candidate_promotion:startup_materialization_hydration"
+
+
 def test_scenarios_synced_routes_through_semantic_rebuild_helper(monkeypatch) -> None:
     captured: list[tuple[str, str | None, str, str]] = []
 

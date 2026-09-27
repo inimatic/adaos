@@ -21,6 +21,24 @@ def runtime_transition_role() -> str:
     return _normalize_transition_role(os.getenv("ADAOS_RUNTIME_TRANSITION_ROLE"))
 
 
+def runtime_shared_state_write_authorized() -> bool:
+    """Return whether this process may mutate shared runtime state.
+
+    A candidate briefly adopts the ``active`` transition role while proving
+    its upstream authority. Shared-state writers must remain fenced during
+    that interval: the role alone is not proof that promotion committed.
+    Ordinary active boots do not need an explicit marker and remain backward
+    compatible.
+    """
+
+    if runtime_transition_role() != "active":
+        return False
+    marker = os.getenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED")
+    if marker is None:
+        return True
+    return str(marker).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def runtime_instance_id() -> str:
     global _RUNTIME_INSTANCE_ID
     env_value = str(os.getenv("ADAOS_RUNTIME_INSTANCE_ID") or "").strip()
@@ -50,6 +68,7 @@ def runtime_identity_snapshot() -> dict[str, Any]:
     return {
         "runtime_instance_id": runtime_instance_id(),
         "transition_role": runtime_transition_role(),
+        "shared_state_write_authorized": runtime_shared_state_write_authorized(),
         "hostname": socket.gethostname(),
         "started_at": _RUNTIME_STARTED_AT,
     }
@@ -60,5 +79,6 @@ __all__ = [
     "runtime_identity_snapshot",
     "runtime_instance_id",
     "runtime_instance_short_id",
+    "runtime_shared_state_write_authorized",
     "runtime_transition_role",
 ]

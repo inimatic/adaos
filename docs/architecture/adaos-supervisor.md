@@ -234,6 +234,18 @@ The same rule must apply to local control discovery:
 
 - `candidate` runtime surfaces must self-identify through lightweight probes such as `/api/ping` and `/api/admin/update/status`
 - local fallback control resolvers must ignore a runtime that reports `transition_role=candidate` or `admin_mutation_allowed=false`
+
+The fence covers browser-visible shared state as well as root traffic. Startup
+materialization may calculate and cache an authoritative webspace payload in a
+candidate process, but it must not publish that payload to a live YRoom or the
+shared YStore. Promotion has a distinct
+`shared_state_write_authorized` boundary: it remains false while the process
+temporarily assumes the `active` transition role to prove root authority. Only
+after root reconnect and project-deployment authority both succeed is the
+boundary committed. The promoted runtime then applies any cached startup
+payload exactly once and only afterwards emits its deferred `sys.ready` event.
+An unsuccessful promotion restores the previous fence and leaves shared state
+unchanged.
 - a candidate runtime must reject mutating local update operations (`update.start`, `update.cancel`, `update.rollback`) with an explicit conflict instead of behaving like a second control plane
 - candidate bootstrap must not reconcile or finalize the shared core-update status, persist shared hub configuration, or report slot validation; those writes belong to the active runtime after cutover
 
@@ -913,9 +925,10 @@ That prewarm now feeds a real fast-cutover path:
 Candidate readiness is deliberately narrower than full active-runtime
 initialization. A passive candidate imports handlers and proves its listener,
 runtime and sidecar readiness, but defers `sys.ready` subscribers until it has
-been promoted. Service-skill startup and the deferred readiness event then run
-in a background promotion task. Slow skill projections therefore do not hold
-the candidate-readiness barrier or the promotion HTTP request.
+been promoted. Service-skill startup and cached materialization commit then run
+in a background promotion task; the deferred readiness event follows both.
+Slow skill projections therefore do not hold the candidate-readiness barrier
+or the promotion HTTP request.
 
 The hub/member watchdog treats `/api/node/reliability/runtime` as an advisory
 rich snapshot, not as the process-health probe. Its HTTP read is dispatched off
