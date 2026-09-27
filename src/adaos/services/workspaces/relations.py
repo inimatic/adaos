@@ -112,10 +112,26 @@ class WebspaceRelationshipRegistry:
             "CREATE INDEX IF NOT EXISTS idx_webspace_relations_purpose ON webspace_relations(purpose)"
         )
 
+    @classmethod
+    def _ensure_schema_for_read(cls, con: sqlite3.Connection) -> None:
+        """Bootstrap old databases without running DDL on every registry read.
+
+        The managed SQLite adapter classifies DDL as a write and therefore takes
+        the process-wide write gate.  ``CREATE ... IF NOT EXISTS`` is still DDL,
+        so using ``_ensure_schema`` in these hot read paths serialized Builder
+        topology lookups with unrelated state writers.
+        """
+
+        exists = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='webspace_relations'"
+        ).fetchone()
+        if exists is None:
+            cls._ensure_schema(con)
+
     def get_outgoing(self, source_webspace_id: Any) -> WebspaceRelation | None:
         source = _workspace_id(source_webspace_id)
         with self.sql.connect() as con:
-            self._ensure_schema(con)
+            self._ensure_schema_for_read(con)
             row = con.execute(
                 "SELECT relation_id, source_webspace_id, target_webspace_id, purpose, generation, "
                 "created_at, updated_at, metadata_json FROM webspace_relations WHERE source_webspace_id=?",
@@ -126,7 +142,7 @@ class WebspaceRelationshipRegistry:
     def get_incoming(self, target_webspace_id: Any) -> WebspaceRelation | None:
         target = _workspace_id(target_webspace_id)
         with self.sql.connect() as con:
-            self._ensure_schema(con)
+            self._ensure_schema_for_read(con)
             row = con.execute(
                 "SELECT relation_id, source_webspace_id, target_webspace_id, purpose, generation, "
                 "created_at, updated_at, metadata_json FROM webspace_relations WHERE target_webspace_id=?",
@@ -136,7 +152,7 @@ class WebspaceRelationshipRegistry:
 
     def list(self, *, purpose: str | None = None) -> list[WebspaceRelation]:
         with self.sql.connect() as con:
-            self._ensure_schema(con)
+            self._ensure_schema_for_read(con)
             if purpose:
                 rows = con.execute(
                     "SELECT relation_id, source_webspace_id, target_webspace_id, purpose, generation, "

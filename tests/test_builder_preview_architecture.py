@@ -69,6 +69,20 @@ def test_preview_reads_do_not_allocate_and_creation_reuses_one_target(tmp_path):
     assert len(registry.list()) == 1
 
 
+def test_established_preview_registry_reads_do_not_run_schema_ddl(tmp_path, monkeypatch):
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    with registry.sql.connect() as con:
+        registry._ensure_schema(con)
+
+    def reject_ddl(_con):
+        raise AssertionError("established registry reads must not run schema DDL")
+
+    monkeypatch.setattr(registry, "_ensure_schema", reject_ddl)
+    assert registry.get_outgoing("desktop") is None
+    assert registry.get_incoming("desktop-dev") is None
+    assert registry.list() == []
+
+
 def test_self_host_checks_actual_scenario_and_production_ancestor(tmp_path):
     registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
     registry.sql.workspace("desktop")
