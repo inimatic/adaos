@@ -77,6 +77,26 @@ def _retryable_terminal_operation(operation: Any) -> bool:
     )
 
 
+def _model_runtime_selections(model: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    values = model.get("runtime_selections")
+    if not isinstance(values, list):
+        return []
+    return [item for item in values if isinstance(item, Mapping)]
+
+
+def _runtime_selection_requires_reconciliation(
+    model: Mapping[str, Any],
+    *,
+    installed_release_digest: str,
+) -> bool:
+    return any(
+        _text(item.get("source")) == "stable_installation"
+        and _text(item.get("runtime_root_ref")) == "workspace"
+        and _text(item.get("release_digest")) != installed_release_digest
+        for item in _model_runtime_selections(model)
+    )
+
+
 class ApplicationAutoUpdateService:
     """Apply exact safe updates for ``auto_compatible`` subscriptions."""
 
@@ -101,6 +121,70 @@ class ApplicationAutoUpdateService:
             atomic_write_json(self.root / run_id / "run.json", value)
             atomic_write_json(self.root / "current.json", value)
         return value
+
+    def _reconcile_stable_runtime(
+        self,
+        *,
+        application_id: str,
+        release_digest: str,
+        webspace_id: str,
+        actor_ref: str,
+        subnet_ref: str,
+    ) -> dict[str, Any]:
+        """Advance an existing Stable channel after its installation updates.
+
+        Applications without a RuntimeSelection remain on the compatibility
+        lifecycle.  Existing Stable selections, however, must move with the
+        installation or ingress observes two different release identities.
+        This follow-up is idempotent and a later auto-update run can repair it
+        even when package installation already converged.
+        """
+
+        store = getattr(self.application_service, "store", None)
+        if store is None or not callable(getattr(store, "list_runtime_selections", None)):
+            return {"status": "not_observed", "reason": "runtime_store_unavailable"}
+        selections = [
+            item
+            for item in store.list_runtime_selections()
+            if item.application_id == application_id
+        ]
+        if any(
+            item.source != "stable_installation"
+            or item.runtime_root_ref != "workspace"
+            for item in selections
+        ):
+            raise RuntimeError(
+                "automatic update cannot replace an active non-Stable runtime selection"
+            )
+        if not selections:
+            return {"status": "compatibility_runtime", "changed": False}
+        if all(item.release_digest == release_digest for item in selections):
+            return {
+                "status": "current",
+                "changed": False,
+                "selection_count": len(selections),
+            }
+        selected = next(
+            (item for item in selections if item.webspace_id == webspace_id),
+            selections[0],
+        )
+        updated = self.application_service.select_runtime(
+            webspace_id=selected.webspace_id,
+            application_id=application_id,
+            source="stable_installation",
+            release_digest=release_digest,
+            runtime_root_ref="workspace",
+            expected_revision=selected.revision,
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.apply",
+        )
+        return {
+            "status": "reconciled",
+            "changed": True,
+            "selection_count": len(selections),
+            "selection": updated.to_dict(),
+        }
 
     def run(
         self,
@@ -138,14 +222,37 @@ class ApplicationAutoUpdateService:
             if not bool(model.get("auto_update_enabled")):
                 skipped.append({"application_id": app_id, "reason": "auto_update_disabled"})
                 continue
-            if not bool(model.get("update_available")):
-                skipped.append({"application_id": app_id, "reason": "already_current"})
-                continue
             if not isinstance(installation, Mapping):
                 skipped.append({"application_id": app_id, "reason": "stable_installation_required"})
                 continue
             if list(installation.get("uncertain_operation_refs") or ()):
                 skipped.append({"application_id": app_id, "reason": "uncertain_operation_present"})
+                continue
+            if bool(model.get("local_beta_active")) or any(
+                _text(item.get("source")) != "stable_installation"
+                or _text(item.get("runtime_root_ref")) != "workspace"
+                for item in _model_runtime_selections(model)
+            ):
+                skipped.append({"application_id": app_id, "reason": "active_non_stable_runtime"})
+                continue
+            installed_digest = _text(installation.get("installed_release_digest"))
+            if not bool(model.get("update_available")):
+                if installed_digest and _runtime_selection_requires_reconciliation(
+                    model,
+                    installed_release_digest=installed_digest,
+                ):
+                    candidates.append(
+                        {
+                            "application_id": app_id,
+                            "target_release_digest": installed_digest,
+                            "installation_revision": int(
+                                installation.get("revision") or 0
+                            ),
+                            "reconcile_only": True,
+                        }
+                    )
+                else:
+                    skipped.append({"application_id": app_id, "reason": "already_current"})
                 continue
             target_digest = _text(
                 effective.get("release_digest")
@@ -191,6 +298,17 @@ class ApplicationAutoUpdateService:
                 "idempotency_key": idempotency_key,
             }
             try:
+                if bool(candidate.get("reconcile_only")):
+                    item["runtime_selection"] = self._reconcile_stable_runtime(
+                        application_id=app_id,
+                        release_digest=target_digest,
+                        webspace_id=webspace_id,
+                        actor_ref=actor_ref,
+                        subnet_ref=subnet,
+                    )
+                    item["status"] = "succeeded"
+                    outcomes.append(item)
+                    continue
                 retry_chain: list[str] = []
                 failed_retry_chain: list[str] = []
                 for _attempt in range(16):
@@ -252,6 +370,13 @@ class ApplicationAutoUpdateService:
                     item["operation_revision"] = receipt.revision
                     item["result"] = dict(receipt.result)
                     if receipt.status == "succeeded":
+                        item["runtime_selection"] = self._reconcile_stable_runtime(
+                            application_id=app_id,
+                            release_digest=target_digest,
+                            webspace_id=webspace_id,
+                            actor_ref=actor_ref,
+                            subnet_ref=subnet,
+                        )
                         try:
                             release = self.application_service.store.get_release(
                                 app_id, target_digest

@@ -510,18 +510,53 @@ class ApplicationStore:
     def _channel_path(self, application_id: str) -> Path:
         return self.root / "channels" / f"{_key(application_id)}.json"
 
+    @staticmethod
+    def _validate_channel_set(
+        payload: Mapping[str, Any], *, application_id: str | None = None
+    ) -> dict[str, Any]:
+        observed_application_id = str(payload.get("application_id") or "")
+        if (
+            payload.get("schema") != "adaos.application.channel_set.v1"
+            or not observed_application_id
+            or (
+                application_id is not None
+                and observed_application_id != application_id
+            )
+        ):
+            raise ApplicationStoreError("unsupported Application channel set")
+        channels = payload.get("channels")
+        if not isinstance(channels, Mapping) or set(channels) - {
+            "stable",
+            "prerelease",
+        }:
+            raise ApplicationStoreError("Application channel set is invalid")
+        return dict(payload)
+
+    def list_channel_sets(self) -> dict[str, dict[str, Any]]:
+        """Load channel projections once for bounded catalog construction."""
+
+        parent = self.root / "channels"
+        if not parent.is_dir():
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        for path in parent.glob("*.json"):
+            payload = self._validate_channel_set(_read(path))
+            application_id = str(payload["application_id"])
+            if application_id in result:
+                raise ApplicationStoreError(
+                    "duplicate Application channel set identity"
+                )
+            result[application_id] = payload
+        return result
+
     def get_channels(self, application_id: str) -> dict[str, Any]:
         self.get_application(application_id)
         path = self._channel_path(application_id)
         if not path.is_file():
             return {"schema": "adaos.application.channel_set.v1", "application_id": application_id, "revision": 0, "channels": {}}
-        payload = _read(path)
-        if payload.get("schema") != "adaos.application.channel_set.v1" or payload.get("application_id") != application_id:
-            raise ApplicationStoreError("unsupported Application channel set")
-        channels = payload.get("channels")
-        if not isinstance(channels, Mapping) or set(channels) - {"stable", "prerelease"}:
-            raise ApplicationStoreError("Application channel set is invalid")
-        return payload
+        return self._validate_channel_set(
+            _read(path), application_id=application_id
+        )
 
     def set_channel(
         self,

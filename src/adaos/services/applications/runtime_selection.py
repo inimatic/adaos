@@ -110,7 +110,15 @@ def application_execution(ctx: AgentContext, skill_name: str):
         # Do not create a new empty channel from request context.  Nodes still
         # carrying a legacy JSON-only RuntimeSelection must take the migration
         # compatible discovery path once.
-        if channel.read() is not None:
+        # An empty channel is an authoritative tombstone for obsolete
+        # RuntimeSelection projections, but it is not an active execution
+        # selection.  Stable Applications can still be installed through the
+        # compatibility lifecycle without a per-Webspace selection.  Treating
+        # the empty tombstone as an exact channel fenced those installations
+        # forever after a rejected first Beta, even after a later Stable
+        # release was installed.
+        channel_values = channel.read()
+        if channel_values:
             actual_root = str(getattr(ctx.paths, "runtime_channel_ref", "workspace"))
             if actual_root != verified_runtime_root:
                 raise RuntimeChannelConflict(

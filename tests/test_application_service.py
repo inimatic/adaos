@@ -252,6 +252,45 @@ def test_catalog_summary_omits_full_release_closure(
     )
 
 
+def test_catalog_summary_reuses_bulk_channels_and_subscriptions(
+    service: ApplicationService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = service.register_release(_release())
+    service.move_channel(
+        "app_recipes",
+        "stable",
+        release.release_digest,
+        publisher_ref="subnet:sn_home",
+        expected_release_digest=None,
+    )
+    service.set_subscription(
+        "app_recipes",
+        update_track="stable",
+        update_policy="auto_compatible",
+        paused=False,
+        expected_revision=0,
+    )
+
+    monkeypatch.setattr(
+        service.store,
+        "get_channels",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("catalog summary must not reread channels per Application")
+        ),
+    )
+    monkeypatch.setattr(
+        service.store,
+        "get_subscription",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("catalog summary must not reread subscriptions per Application")
+        ),
+    )
+
+    summary = service.list_models(summary=True)[0]
+    assert summary["channels"]["stable"] == release.release_digest
+    assert summary["effective_release"]["release_digest"] == release.release_digest
+
+
 def test_operation_plan_projects_structured_permission_review(
     service: ApplicationService,
 ) -> None:

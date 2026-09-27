@@ -88,6 +88,55 @@ def test_runtime_registry_event_coalesces_while_sync_is_running(monkeypatch) -> 
     ]
 
 
+def test_runtime_skips_dirty_development_workspace_without_registry_mutation(
+    monkeypatch,
+) -> None:
+    bus = _Bus()
+    ctx = SimpleNamespace(
+        bus=bus,
+        paths=SimpleNamespace(workspace_dir=lambda: "C:/workspace"),
+        git=SimpleNamespace(changed_files=lambda _root: ["skills/mail/skill.yaml"]),
+    )
+    calls = []
+    monkeypatch.setenv("ENV_TYPE", "dev")
+    monkeypatch.setattr(runtime, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(runtime, "_startup_delay_s", lambda: 0.0)
+    monkeypatch.setattr(
+        runtime,
+        "sync_workspace_sparse_to_registry",
+        lambda observed: calls.append(observed),
+    )
+    runtime._TASK = None
+    runtime._PENDING_TRIGGER = None
+
+    async def exercise() -> None:
+        await runtime.on_runtime_ready(None)
+        assert runtime._TASK is not None
+        await runtime._TASK
+
+    asyncio.run(exercise())
+
+    assert calls == []
+    assert len(bus.events) == 1
+    assert bus.events[0].payload["workspace_sync_ok"] is True
+    assert bus.events[0].payload["result"] == {
+        "schema": "adaos.application.auto_update_run.v1",
+        "status": "skipped",
+        "reason": "dirty_development_workspace",
+        "changed_count": 1,
+    }
+
+
+def test_dirty_workspace_preflight_does_not_change_production(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(workspace_dir=lambda: "C:/workspace"),
+        git=SimpleNamespace(changed_files=lambda _root: ["skills/mail/skill.yaml"]),
+    )
+
+    assert runtime._development_workspace_preflight(ctx) is None
+
+
 def test_addressed_update_thanks_the_local_reporter(monkeypatch) -> None:
     bus = _Bus()
     ctx = SimpleNamespace(bus=bus)

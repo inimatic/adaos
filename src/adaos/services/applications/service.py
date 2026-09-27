@@ -426,6 +426,27 @@ class ApplicationService:
         try:
             subscription = self.store.get_subscription(application_id)
         except FileNotFoundError:
+            subscription = None
+        return self._effective_release_from_state(
+            application_id,
+            channels=channels,
+            subscription=subscription,
+            subscriber_subnet_ref=subscriber_subnet_ref,
+            include_release=include_release,
+        )
+
+    def _effective_release_from_state(
+        self,
+        application_id: str,
+        *,
+        channels: Mapping[str, Any],
+        subscription: ApplicationSubscription | None,
+        subscriber_subnet_ref: str | None,
+        include_release: bool,
+    ) -> dict[str, Any]:
+        """Resolve a release from one already-consistent aggregate snapshot."""
+
+        if subscription is None:
             subscription = ApplicationSubscription(
                 application_id=application_id,
                 update_track="stable",
@@ -1973,12 +1994,11 @@ class ApplicationService:
         runtime_selections: list[RuntimeSelection],
         operation: ApplicationOperation | None,
         subscriber_subnet_ref: str | None,
+        channels: Mapping[str, Any],
     ) -> dict[str, Any]:
         """Build one bounded catalog row without expanding release closures."""
 
-        channels = dict(
-            self.store.get_channels(application.application_id).get("channels") or {}
-        )
+        channels = dict(channels)
         local_beta = any(item.source == "local_trial" for item in runtime_selections)
         local_beta_digests = {
             item.release_digest
@@ -1989,8 +2009,10 @@ class ApplicationService:
         prerelease_following = bool(
             subscription and subscription.update_track == "prerelease"
         )
-        effective = self.effective_release(
+        effective = self._effective_release_from_state(
             application.application_id,
+            channels=channels,
+            subscription=subscription,
             subscriber_subnet_ref=subscriber_subnet_ref,
             include_release=False,
         )
@@ -2166,6 +2188,7 @@ class ApplicationService:
         operations: dict[str, ApplicationOperation] = {}
         for operation in self.store.list_operations():
             operations.setdefault(operation.application_id, operation)
+        channel_sets = self.store.list_channel_sets() if summary else {}
         models: list[dict[str, Any]] = []
         for application in self.store.list_applications():
             installation = installations.get(application.application_id)
@@ -2177,14 +2200,22 @@ class ApplicationService:
                 and not any(item.source == "local_trial" for item in runtime_selections)
             ):
                 continue
+            reader = self._read_summary_model if summary else self._read_model
+            reader_kwargs: dict[str, Any] = {}
+            if summary:
+                reader_kwargs["channels"] = dict(
+                    channel_sets.get(application.application_id, {}).get("channels")
+                    or {}
+                )
             models.append(
-                (self._read_summary_model if summary else self._read_model)(
+                reader(
                     application,
                     installation=installation,
                     subscription=subscription,
                     runtime_selections=runtime_selections,
                     operation=operations.get(application.application_id),
                     subscriber_subnet_ref=subscriber_subnet_ref,
+                    **reader_kwargs,
                 )
             )
         return models

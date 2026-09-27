@@ -198,6 +198,37 @@ def test_verified_application_execution_fences_exact_channel_without_global_scan
         clear_application()
 
 
+def test_verified_compatibility_execution_ignores_empty_channel_tombstone(
+    tmp_path,
+) -> None:
+    from adaos.services.applications import runtime_selection
+    from adaos.services.policy.application import bind_application, clear_application
+
+    channel = ApplicationRuntimeChannel(tmp_path, "sample")
+    channel.retire()
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            state_dir=lambda: tmp_path,
+            runtime_channel_ref="workspace",
+        )
+    )
+    bind_application(
+        {
+            "application_id": "sample",
+            "release_digest": DIGEST,
+            "runtime_root_ref": "workspace",
+            "component_ref": "skill:worker",
+        }
+    )
+    try:
+        with runtime_selection.application_execution(ctx, "worker"):
+            pass
+    finally:
+        clear_application()
+
+    assert channel.read() == ()
+
+
 def test_trial_resolution_is_node_wide_but_never_overrides_dev(tmp_path, monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.applications import runtime_selection

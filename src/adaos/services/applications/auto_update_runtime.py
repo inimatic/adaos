@@ -96,6 +96,43 @@ def _startup_delay_s() -> float:
     return max(0.0, min(value, 300.0))
 
 
+def _development_workspace_preflight(ctx: Any) -> dict[str, Any] | None:
+    """Keep automatic registry pulls away from active dev authoring trees."""
+
+    environment = str(
+        os.getenv("ENV_TYPE") or os.getenv("ADAOS_ENV_TYPE") or "prod"
+    ).strip().lower()
+    if environment != "dev":
+        return None
+    try:
+        workspace_root = str(ctx.paths.workspace_dir())
+        changed = sorted(
+            {
+                str(path).replace("\\", "/")
+                for path in ctx.git.changed_files(workspace_root)
+                if str(path).strip()
+            }
+        )
+    except Exception:
+        _LOG.debug("failed to inspect development workspace", exc_info=True)
+        return None
+    if not changed:
+        return None
+    return {
+        "ok": True,
+        "skipped": True,
+        "reason": "dirty_development_workspace",
+        "workspace_root": workspace_root,
+        "changed_count": len(changed),
+        "application_auto_update": {
+            "schema": "adaos.application.auto_update_run.v1",
+            "status": "skipped",
+            "reason": "dirty_development_workspace",
+            "changed_count": len(changed),
+        },
+    }
+
+
 async def _run_updates(initial_trigger: str) -> None:
     global _PENDING_TRIGGER, _TASK
     trigger = initial_trigger
@@ -104,7 +141,10 @@ async def _run_updates(initial_trigger: str) -> None:
     try:
         while True:
             _PENDING_TRIGGER = None
-            result = await asyncio.to_thread(sync_workspace_sparse_to_registry, get_ctx())
+            ctx = get_ctx()
+            result = await asyncio.to_thread(_development_workspace_preflight, ctx)
+            if result is None:
+                result = await asyncio.to_thread(sync_workspace_sparse_to_registry, ctx)
             auto_update = (
                 result.get("application_auto_update")
                 if isinstance(result, dict)
