@@ -58,3 +58,18 @@ def test_skill_run_rejects_inline_and_file_payload_together(tmp_path) -> None:
 
     assert result.exit_code == 1
     assert "use either --json or --json-file" in result.output
+
+
+def test_skill_run_configures_oneshot_execution_mode(monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.delenv("ADAOS_DEV_TOOL_EXECUTION_MODE", raising=False)
+    monkeypatch.setattr(
+        "adaos.services.project_deployment.default_runtime.configure_default_distributed_runtimes",
+        lambda ctx, *, authoritative: calls.append((ctx, authoritative)),
+    )
+    monkeypatch.setattr(skill_cmd, "get_ctx", lambda: "ctx")
+
+    skill_cmd._configure_skill_run_sdk_runtimes()
+
+    assert calls == [("ctx", False)]
+    assert skill_cmd.os.environ["ADAOS_DEV_TOOL_EXECUTION_MODE"] == "oneshot"

@@ -72,7 +72,13 @@ def _read_manifest(skill_dir: Path) -> SkillMeta:
             ver = str(data.get("version") or "0.0.0")
             return SkillMeta(id=SkillId(sid), name=name, version=ver, path=str(skill_dir.resolve()))
     # дефолты, если манифеста нет
-    _log.error("skill rejected: required declaration is missing path=%s required=skill.yaml", str(skill_dir))
+    # Stale bytecode or a partial sparse checkout can leave an otherwise empty
+    # directory behind. Explicit get/install callers still receive the error;
+    # broad discovery quietly ignores a directory that is not a declared Skill.
+    _log.debug(
+        "skill directory ignored: required declaration is missing path=%s required=skill.yaml",
+        str(skill_dir),
+    )
     raise FileNotFoundError(f"skill '{skill_dir.name}' has no skill.yaml declaration")
 
 

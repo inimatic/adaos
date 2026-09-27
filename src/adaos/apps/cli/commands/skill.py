@@ -612,6 +612,13 @@ def _mgr() -> SkillManager:
 
 
 def _configure_skill_run_sdk_runtimes() -> None:
+    # ``adaos skill run`` executes the tool in a short-lived worker.  Skills
+    # must not schedule background work on that worker's event loop or local
+    # event bus because both disappear as soon as the command returns.
+    # Builder uses this marker to wait for LLM jobs and to deliver dev
+    # materialization through the long-lived control API owner.
+    os.environ["ADAOS_DEV_TOOL_EXECUTION_MODE"] = "oneshot"
+
     from adaos.services.project_deployment.default_runtime import (
         configure_default_distributed_runtimes,
     )
