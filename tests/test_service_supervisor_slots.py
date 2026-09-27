@@ -38,6 +38,47 @@ def _write_service_skill(root: Path, *, port: int) -> None:
     (root / "handlers" / "main.py").write_text("def handle(payload=None):\n    return {'ok': True}\n", encoding="utf-8")
 
 
+def test_service_operation_lock_serializes_independent_event_loops():
+    from adaos.services.skill.service_supervisor import ServiceSkillSupervisor
+
+    supervisor = ServiceSkillSupervisor()
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    errors: list[BaseException] = []
+
+    async def _first() -> None:
+        async with supervisor._operation_lock("slot_service"):
+            first_entered.set()
+            await asyncio.to_thread(release_first.wait, 5)
+
+    async def _second() -> None:
+        async with supervisor._operation_lock("slot_service"):
+            second_entered.set()
+
+    def _run(coro) -> None:
+        try:
+            asyncio.run(coro())
+        except BaseException as exc:  # pragma: no cover - assertion aid
+            errors.append(exc)
+
+    first_thread = threading.Thread(target=_run, args=(_first,))
+    second_thread = threading.Thread(target=_run, args=(_second,))
+    first_thread.start()
+    assert first_entered.wait(2)
+    second_thread.start()
+
+    assert second_entered.wait(0.1) is False
+    release_first.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert errors == []
+    assert first_thread.is_alive() is False
+    assert second_thread.is_alive() is False
+    assert second_entered.is_set() is True
+
+
 def test_service_startup_readiness_timeout_is_explicit(monkeypatch, tmp_path):
     from adaos.services.skill import service_supervisor as mod
 

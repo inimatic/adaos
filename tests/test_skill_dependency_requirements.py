@@ -164,6 +164,85 @@ def test_satisfied_runtime_vendor_is_reused_without_disk_guard_or_install(monkey
     assert paths == [str(slot.vendor_dir)]
 
 
+def test_plain_requirements_vendor_is_adopted_and_digest_marker_reused(
+    monkeypatch, tmp_path: Path
+) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(
+        git=ctx.git,
+        paths=ctx.paths,
+        caps=SimpleNamespace(require=lambda *_args, **_kwargs: None),
+    )
+    env = SkillRuntimeEnvironment(
+        skills_root=tmp_path / "skills", skill_name="tracker_skill"
+    )
+    env.prepare_version("1.0.0")
+    slot = env.build_slot_paths("1.0.0", "A")
+    skill_dir = tmp_path / "tracker_skill"
+    skill_dir.mkdir()
+    (skill_dir / "requirements.in").write_text(
+        "mlflow==3.15.1\nboto3>=1.35,<2\n", encoding="utf-8"
+    )
+    slot.vendor_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mgr, "_constraints_file", lambda: None)
+    monkeypatch.setattr(mgr, "_repo_root_for_dependency_resolution", lambda: tmp_path)
+    monkeypatch.setattr(
+        skill_manager_module,
+        "_vendor_satisfies_requirements",
+        lambda vendor, specs: vendor == slot.vendor_dir
+        and list(specs) == ["mlflow==3.15.1", "boto3>=1.35,<2"],
+    )
+    monkeypatch.setattr(
+        skill_manager_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("pip must not run for an adopted vendor")
+        ),
+    )
+    monkeypatch.setattr(
+        skill_manager_module,
+        "ensure_dependency_disk_budget",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("disk guard must not run for an adopted vendor")
+        ),
+    )
+
+    first = mgr._install_python_dependencies(
+        manifest={
+            "runtime": {
+                "kind": "service",
+                "env": {"mode": "venv", "allow_heavy_dependencies": True},
+            }
+        },
+        slot=slot,
+        skill_dir=skill_dir,
+    )
+    marker = slot.vendor_dir / ".adaos-runtime-vendor-deps.json"
+    assert first == [str(slot.vendor_dir)]
+    assert marker.is_file()
+
+    monkeypatch.setattr(
+        skill_manager_module,
+        "_vendor_satisfies_requirements",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact marker must be checked first")
+        ),
+    )
+    second = mgr._install_python_dependencies(
+        manifest={
+            "runtime": {
+                "kind": "service",
+                "env": {"mode": "venv", "allow_heavy_dependencies": True},
+            }
+        },
+        slot=slot,
+        skill_dir=skill_dir,
+    )
+
+    assert second == [str(slot.vendor_dir)]
+
+
 def test_runtime_vendor_reuse_rejects_missing_transitive_dependency(tmp_path: Path) -> None:
     vendor_dir = tmp_path / "vendor"
     dist_info = vendor_dir / "requests-2.34.2.dist-info"

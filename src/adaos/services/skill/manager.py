@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 from importlib import metadata as importlib_metadata
 import asyncio
+import hashlib
 from inspect import isawaitable
 import json
 import logging
@@ -297,6 +298,34 @@ def _vendor_satisfies_requirements(vendor_dir: Path, args: Iterable[str]) -> boo
     except Exception:
         return False
     return _distributions_satisfy_requirements(distributions, args)
+
+
+def _plain_requirements_file_specs(path: Path) -> list[str] | None:
+    """Return a bounded list of plain PEP 508 requirements when possible.
+
+    Requirements files with includes or installer options intentionally fall
+    back to pip.  The common generated lock used by service skills contains
+    only exact/bounded requirements and can therefore be verified against an
+    existing digest bucket without downloading the full closure again.
+    """
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    specs: list[str] = []
+    for raw in lines:
+        token = raw.strip()
+        if not token or token.startswith("#"):
+            continue
+        if token.startswith("-") or token.endswith("\\"):
+            return None
+        try:
+            Requirement(token)
+        except InvalidRequirement:
+            return None
+        specs.append(token)
+    return specs or None
 
 
 def _environment_satisfies_requirements(args: Iterable[str]) -> bool:
@@ -4175,13 +4204,14 @@ class SkillManager:
         skill_dir: Path,
     ) -> list[str]:
         requirements_file = skill_dir / "requirements.in"
+        has_requirements_file = requirements_file.exists()
         dependencies = resolve_skill_dependency_args(
             self._collect_dependencies(manifest),
             skill_dir=skill_dir,
             repo_root=self._repo_root_for_dependency_resolution(),
         )
         python_args: list[str] = []
-        if requirements_file.exists():
+        if has_requirements_file:
             python_args.extend(["-r", str(requirements_file)])
         if dependencies:
             python_args.extend(dependencies)
@@ -4224,8 +4254,61 @@ class SkillManager:
 
         vendor_dir = slot.vendor_dir
 
+        marker_path = vendor_dir / ".adaos-runtime-vendor-deps.json"
+        requirements_sha256: str | None = None
+        if has_requirements_file:
+            try:
+                requirements_sha256 = hashlib.sha256(
+                    requirements_file.read_bytes()
+                ).hexdigest()
+            except OSError:
+                requirements_sha256 = "unreadable"
+        constraints_sha256: str | None = None
+        if constraints:
+            try:
+                constraints_sha256 = hashlib.sha256(constraints.read_bytes()).hexdigest()
+            except OSError:
+                constraints_sha256 = "unreadable"
+        vendor_marker = {
+            "schema": "adaos.skill_runtime.vendor_dependencies.v1",
+            "install_mode": mode,
+            "requirements_sha256": requirements_sha256,
+            "dependency_args": list(dependencies),
+            "constraints_sha256": constraints_sha256,
+            "python_implementation": str(sys.implementation.name),
+            "python_cache_tag": str(getattr(sys.implementation, "cache_tag", "") or ""),
+        }
+        current_vendor_marker = self._read_json_object(marker_path)
+        if (
+            mode != "shared"
+            and vendor_dir.is_dir()
+            and current_vendor_marker == vendor_marker
+        ):
+            _log.info(
+                "reusing digest-matched runtime vendor dependencies skill=%s vendor=%s",
+                slot.skill_name,
+                vendor_dir,
+            )
+            return [str(vendor_dir)]
+
+        # Releases created before the marker existed can still be adopted
+        # without one final full reinstall when their plain requirements graph
+        # is already complete.  Complex requirements files remain fail-safe
+        # and go through the installer.
+        if mode != "shared" and has_requirements_file and not dependencies:
+            requirement_specs = _plain_requirements_file_specs(requirements_file)
+            if requirement_specs and _vendor_satisfies_requirements(
+                vendor_dir, requirement_specs
+            ):
+                self._write_json_object(marker_path, vendor_marker)
+                _log.info(
+                    "adopted satisfied runtime vendor dependencies skill=%s vendor=%s",
+                    slot.skill_name,
+                    vendor_dir,
+                )
+                return [str(vendor_dir)]
+
         run_cwd = skill_dir if skill_dir.exists() else slot.src_dir
-        has_requirements_file = requirements_file.exists()
 
         def _run(cmd: list[str]) -> tuple[bool, str]:
             try:
@@ -4303,12 +4386,14 @@ class SkillManager:
             _run([str(sys.executable), "-m", "ensurepip", "--upgrade"])  # best-effort
             ok2, out2 = _run(vendor_cmd)
         if ok2:
+            self._write_json_object(marker_path, vendor_marker)
             return [str(vendor_dir)]
 
         # Last resort: try `uv pip install --target` (if available)
         uv_vendor = [*uv_base, "--target", str(vendor_dir), *python_args]
         ok4, out4 = _run(uv_vendor)
         if ok4:
+            self._write_json_object(marker_path, vendor_marker)
             return [str(vendor_dir)]
 
         # Failed all strategies

@@ -880,7 +880,13 @@ class ServiceSkillSupervisor:
         self._external_ready_specs: dict[str, tuple[Any, ...]] = {}
         self._external_ready_at: dict[str, float] = {}
         self._ensure_failure_counts: dict[str, int] = {}
-        self._operation_locks: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+        # Service convergence can be entered both from the API event loop and
+        # from a deployment worker running its own event loop.  An
+        # ``asyncio.Lock`` is loop-local, so keeping one lock per loop allowed
+        # both owners to restart the same service concurrently.  Use one
+        # process-wide lock per skill and acquire it cooperatively from any
+        # loop instead.
+        self._operation_locks: dict[str, threading.Lock] = {}
         self._discover_lock = threading.Lock()
         self._discover_async_lock: asyncio.Lock | None = None
         self._discover_async_lock_loop: asyncio.AbstractEventLoop | None = None
@@ -1829,14 +1835,19 @@ class ServiceSkillSupervisor:
                 "source": source,
             }
 
-    def _operation_lock(self, name: str) -> asyncio.Lock:
-        loop = asyncio.get_running_loop()
-        current = self._operation_locks.get(name)
-        if current is None or current[0] is not loop:
-            lock = asyncio.Lock()
-            self._operation_locks[name] = (loop, lock)
-            return lock
-        return current[1]
+    @contextlib.asynccontextmanager
+    async def _operation_lock(self, name: str):
+        lock = self._operation_locks.setdefault(name, threading.Lock())
+        # Do not delegate a blocking ``acquire`` to a worker thread: if the
+        # coroutine is cancelled, that worker could acquire the lock later and
+        # leave it held forever.  Bounded cooperative polling is cancellation
+        # safe and keeps the owning event loop responsive.
+        while not lock.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+        try:
+            yield
+        finally:
+            lock.release()
 
     def _ensure_background_tasks(self) -> None:
         if self._shutdown_requested:
