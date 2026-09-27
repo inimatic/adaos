@@ -8586,6 +8586,11 @@ async def _ensure_room_effective_materialized(
             webspace_id,
             scenario_id=expected_scenario,
             isolate_process=True,
+            # The cold room has already replayed its YStore into this owner-
+            # thread document.  Borrow it for semantic resolution instead of
+            # opening a detached read session and replaying the same multi-MB
+            # store a second time before first paint.
+            operational_ydoc=ydoc,
         )
         payload = getattr(runtime, "_last_materialized_payload", None)
         if not isinstance(payload, Mapping) or not payload:

@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import time
+from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict
+
+
+@asynccontextmanager
+async def _borrowed_operational_doc(ydoc: Any):
+    """Expose an owner-thread bootstrap document without closing it."""
+
+    yield ydoc
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +59,7 @@ class WebspaceMaterializationService:
         skill_decls_fingerprint: str | None = None,
         scenario_content_override: Mapping[str, Any] | None = None,
         skill_source_mode: str | None = None,
+        operational_ydoc: Any | None = None,
     ) -> Any:
         """Resolve a materialized payload without mutating an intermediate YDoc."""
         materialize_started = time.perf_counter()
@@ -175,7 +184,12 @@ class WebspaceMaterializationService:
 
         operational_doc_started = time.perf_counter()
         operational_doc_close_started = operational_doc_started
-        async with operations.open_readonly_operational_ydoc(webspace_id) as ydoc:
+        doc_context = (
+            _borrowed_operational_doc(operational_ydoc)
+            if operational_ydoc is not None
+            else operations.open_readonly_operational_ydoc(webspace_id)
+        )
+        async with doc_context as ydoc:
             operations.record_timing(timings, "open_operational_doc", operational_doc_started)
             operations.raise_if_rebuild_request_superseded(webspace_id, request_id)
             prepared_scenario_id = str(scenario_id or "").strip()

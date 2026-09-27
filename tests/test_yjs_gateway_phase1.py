@@ -3372,7 +3372,15 @@ def test_room_bootstrap_seed_override_beats_stale_authoritative_lease(monkeypatc
 
     seen_current: list[str] = []
 
-    async def _fake_resolve(self, _webspace_id, *, scenario_id=None, **_kwargs) -> None:
+    async def _fake_resolve(
+        self,
+        _webspace_id,
+        *,
+        scenario_id=None,
+        operational_ydoc=None,
+        **_kwargs,
+    ) -> None:
+        assert operational_ydoc is ydoc
         current = str(scenario_id or "")
         seen_current.append(current)
         self._last_materialized_payload = {

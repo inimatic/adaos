@@ -5991,6 +5991,7 @@ class WebspaceScenarioRuntime:
         skill_decls_fingerprint: str | None = None,
         scenario_content_override: Mapping[str, Any] | None = None,
         skill_source_mode: str | None = None,
+        operational_ydoc: Any | None = None,
     ) -> WebUIRegistryEntry:
         if materialization_identity is None and scenario_content_override is None:
             selected = await _run_materialization_cpu(
@@ -6014,6 +6015,7 @@ class WebspaceScenarioRuntime:
             skill_decls_fingerprint=skill_decls_fingerprint,
             scenario_content_override=scenario_content_override,
             skill_source_mode=skill_source_mode,
+            operational_ydoc=operational_ydoc,
         )
 
     # --- public API ------------------------------------------------------
