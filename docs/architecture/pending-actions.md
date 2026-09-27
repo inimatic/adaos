@@ -50,6 +50,10 @@ Current implemented slice:
 - [x] Browser FAB/global overlay UI shows active actions from
   `data.pending_actions`, previews the first three entries, expands to the full
   active list, and sends `pending_actions.respond.request`.
+- [x] The browser overlay exposes separate Active and History views. Terminal
+  acknowledgements move directly to History without closing the panel, while
+  the durable action, response, and bounded transition history remain under
+  `data.pending_actions` (up to the configured registry retention limit).
 - [x] NLU Teacher candidate confirmations publish Pending Actions and accept
   responses from the Pending Actions registry, browser UI, and voice yes/no.
 - [x] NLU Teacher workbench has a direct candidate Test action for operator
@@ -70,8 +74,8 @@ Current implemented slice:
 - [x] Keep immediate same-turn workflow confirmation distinct from Pending
   Actions. A guarded local action only creates a Pending Action when the choice
   must survive the turn, cross a channel, or await another authority.
-- [ ] Full Pending Actions workbench/modal with filtering, history, and direct
-  links to source evidence.
+- [ ] Full Pending Actions workbench/modal with filtering and direct links to
+  source evidence. The compact global overlay already exposes terminal history.
 - [ ] Application permission Pending Actions use product-facing Application,
   user, role, data, and provider language by default, with raw tool ids only in
   technical detail.
@@ -378,15 +382,25 @@ Implemented initial behavior:
 - preview up to three latest/highest-priority actions in a compact overlay
 - expand the overlay to the full active queue and send responses through the
   event command plane
+- expose terminal records in a History tab and keep a terminal command
+  acknowledgement visible there immediately, without waiting for a later Yjs
+  projection refresh
 - resolve `title_i18n`, `summary_i18n`, and `label_i18n` through the client i18n
   service with fallback text
 
 Open UI work:
 
-- open a dedicated modal/workbench for filtering, history, source evidence, and
-  long queues
+- open a dedicated modal/workbench for filtering, source evidence, and long
+  queues; terminal history already exists in the compact global overlay
 - keep notifications separate but allow notification entries to deep-link to a
   pending action
+
+Pending Actions and Notifications have different authority. Pending Actions
+are the durable action/response journal; Notifications are an attention and
+delivery surface and are not evidence that an action was or was not retained.
+After a response, operators should use **Pending Actions -> History** for the
+authoritative record. A notification may eventually deep-link to that record,
+but must not become its source of truth.
 
 ## Verification
 
