@@ -904,6 +904,10 @@ publisher-controlled resolution without receiving source authority.
   provenance and require publisher acceptance.
 - [x] `[should]` `APP5-10` Implement signed subnet home-zone/key directory and
   Root-to-Root store-and-forward before an inter-zone pilot.
+- [x] `[must]` `APP5-14` Preserve the publisher-centred star topology: each
+  issuer durably owns its report, only the publisher owns the private Dev
+  Ticket, zonal/global Roots carry encrypted delivery and reverse public-status
+  events, and status resync remains independent of Application update timing.
 - [x] `[could]` `APP5-11` Add publisher-side explainable duplicate clustering,
   an encrypted transparent appeal, and scoped factual reporter history without
   a global reputation score or automatic intake decisions.

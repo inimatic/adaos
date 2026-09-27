@@ -873,13 +873,22 @@ Application and exact release. It is delivered to the publisher through the
 Application relay defined by
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
 
+This is a star-shaped exchange around the Application publisher. Issuer
+subnets retain their own durable reports; the publisher retains the only
+authoritative development backlog; Root relays retain encrypted delivery and
+ACK state only. Dev Tickets are therefore neither browser-local records nor a
+globally replicated queue.
+
 ```text
 guest DevelopmentReport
   -> signed encrypted envelope
-  -> Root durable relay
+  -> issuer zonal Root
+  -> global/cross-zone Root relay when required
   -> publisher report inbox
   -> deterministic admission and publisher acceptance
   -> publisher-local Development Signal/Dev Ticket
+  -> signed public status through the reverse relay route
+  -> issuer DevelopmentReport projection
 ```
 
 Only the publisher may accept the report into its local development backlog.

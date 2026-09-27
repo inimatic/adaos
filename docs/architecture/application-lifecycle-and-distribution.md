@@ -18,6 +18,14 @@ migration, one legacy Project definition maps to one Application definition;
 Project entry points become Application launch targets rather than separate
 Application identities.
 
+User-facing surfaces use **Desktop** for a place where Applications are
+arranged and **Management** for the built-in home Application. The persisted
+and protocol identifiers `Webspace`, `workspace`, and `web_desktop` remain
+compatibility vocabulary until a separately governed storage/API migration.
+Documentation may introduce the product term as `Desktop (Webspace)` where the
+technical distinction matters; UI copy must not require a user to understand
+the compatibility name.
+
 The compatibility mapping is structural and one-to-one:
 
 | Canonical contract | Compatibility source | Identity rule |
@@ -1390,17 +1398,32 @@ upstream channels.
 A guest subnet does not create a Dev Ticket in the publisher subnet directly.
 It owns a local `DevelopmentReport` and sends an encrypted signed envelope.
 
+The topology is a publisher-centred star, not a replicated backlog. Every
+issuer retains its own durable report and public status projection, while the
+Application publisher is the only centre that may create and process the
+corresponding private Dev Ticket. Zonal and global Roots are durable routing
+planes; they do not become ticket authorities.
+
 ```text
-guest DevelopmentReport
-  -> deterministic local admission
-  -> encrypted Root relay envelope
-  -> publisher inbox/quarantine
-  -> publisher accepts
-  -> publisher-local Dev Ticket
-  -> Builder work and release
-  -> signed public status events
-  -> guest installs release and verifies outcome
+issuer A DevelopmentReport --\
+issuer B DevelopmentReport ----> zonal Root -> global/cross-zone relay
+issuer C DevelopmentReport --/                         |
+                                                        v
+                                                publisher inbox
+                                                        |
+                                             publisher-local Dev Ticket
+                                                        |
+                                           signed public status events
+                                                        |
+                 issuer projections <--- Root relay <---+
 ```
+
+The return path is durable and independent of Application installation: an
+issuer can observe `received`, triage, decline, planning, and release status
+before installing anything. An exact Application update may carry addressed
+report IDs and trigger immediate reconciliation plus a contribution thank-you,
+but update delivery never substitutes for status resynchronization. Offline
+issuers and publishers converge through idempotent ACK/resync after reconnect.
 
 The public report lifecycle is deliberately distinct from the publisher's
 internal Dev Ticket workflow:

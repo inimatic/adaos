@@ -866,6 +866,10 @@ installation.
 - [x] `[must]` `DS10-06` Bind `addresses_report_ids` to an exact prerelease or
   stable digest and close only after guest-side `verified`; allow
   `still_reproduces` to reopen the public lifecycle.
+- [x] `[must]` `DS10-12` Keep cross-subnet feedback publisher-centred and
+  star-shaped: issuer reports and public projections remain durable locally,
+  publisher Dev Tickets remain private and authoritative, and reverse status
+  synchronization works without waiting for an Application update.
 - [x] `[should]` `DS10-07` Add publisher-side duplicate clustering,
   accept/decline/duplicate reasons, quotas, and abuse diagnostics without
   allowing model output to assign priority or ownership.
