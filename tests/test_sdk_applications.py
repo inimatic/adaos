@@ -767,22 +767,24 @@ def test_home_targets_exclude_development_desktops_and_report_current_pins(
             title="Personal",
             effective_kind="workspace",
             is_dev=False,
+            has_installed_overlay=True,
+            installed_overlay={"apps": ["scenario:reading_list"]},
+            has_pinned_applications_overlay=True,
+            pinned_applications_overlay=["scenario:reading_list"],
         ),
         SimpleNamespace(
             workspace_id="builder-dev",
             title="Builder",
             effective_kind="workspace",
             is_dev=True,
+            has_installed_overlay=False,
+            has_pinned_applications_overlay=False,
         ),
     ]
 
     class Desktop:
         def get_snapshot(self, webspace_id):
-            assert webspace_id == "desktop"
-            return SimpleNamespace(
-                installed=SimpleNamespace(apps=["scenario:reading_list"]),
-                pinned_applications=["scenario:reading_list"],
-            )
+            raise AssertionError("Home target reads must not materialize desktop YDocs")
 
     monkeypatch.setattr(applications.workspace_index, "list_workspaces", lambda: rows)
     monkeypatch.setattr(applications, "WebDesktopService", Desktop)

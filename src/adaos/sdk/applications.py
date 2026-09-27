@@ -479,6 +479,13 @@ def _durable_home_snapshot(webspace_id: str) -> WebDesktopSnapshot:
     """
 
     desktop = WebDesktopService()
+    # Lightweight test doubles and third-party adapters predating durable
+    # overlays may expose only the legacy aggregate read. Core production
+    # services always take the overlay-only branch below.
+    if not hasattr(desktop, "get_installed") or not hasattr(
+        desktop, "get_pinned_applications"
+    ):
+        return desktop.get_snapshot(webspace_id)
     return WebDesktopSnapshot(
         installed=desktop.get_installed(webspace_id),
         pinned_widgets=[],
@@ -2699,7 +2706,7 @@ def set_home_pinned(
     if not webspace:
         raise ValueError("webspace_id is required")
     service = WebDesktopService()
-    snapshot = service.get_snapshot(webspace)
+    snapshot = _durable_home_snapshot(webspace)
     token = str(application_id or "").strip()
     try:
         model = get_application(token, webspace_id=webspace)
@@ -2760,7 +2767,16 @@ def list_home_targets(application_id: str) -> dict[str, Any]:
     token = str(application_id or "").strip()
     if not token:
         raise ValueError("application_id is required")
-    service = WebDesktopService()
+    try:
+        model = get_application(token)
+    except FileNotFoundError:
+        model = None
+        aliases = (token,)
+        installed_model = None
+    else:
+        aliases = _application_home_aliases(model)
+        installed_model = bool(model.get("installed"))
+    alias_set = set(aliases)
     targets: list[dict[str, Any]] = []
     pinned_webspace_ids: list[str] = []
     for row in workspace_index.list_workspaces():
@@ -2769,17 +2785,32 @@ def list_home_targets(application_id: str) -> dict[str, Any]:
         webspace_id = str(row.workspace_id or "").strip()
         if not webspace_id:
             continue
-        snapshot = service.get_snapshot(webspace_id)
-        try:
-            model = get_application(token, webspace_id=webspace_id)
-        except FileNotFoundError:
-            aliases = (token,)
-            installed = token in set(snapshot.installed.apps)
+        installed_overlay = (
+            getattr(row, "installed_overlay", {}) or {}
+            if bool(getattr(row, "has_installed_overlay", False))
+            else {}
+        )
+        installed_refs = {
+            str(item or "").strip()
+            for item in installed_overlay.get("apps") or ()
+            if str(item or "").strip()
+        }
+        if bool(getattr(row, "has_pinned_applications_overlay", False)):
+            pinned_refs = {
+                str(item or "").strip()
+                for item in (
+                    getattr(row, "pinned_applications_overlay", []) or ()
+                )
+                if str(item or "").strip()
+            }
         else:
-            aliases = _application_home_aliases(model)
-            installed = bool(model.get("installed"))
-        alias_set = set(aliases)
-        pinned = bool(alias_set.intersection(snapshot.pinned_applications))
+            pinned_refs = set(installed_refs)
+        installed = (
+            bool(installed_model)
+            if installed_model is not None
+            else token in installed_refs
+        )
+        pinned = bool(alias_set.intersection(pinned_refs))
         if pinned:
             pinned_webspace_ids.append(webspace_id)
         targets.append(
@@ -2823,7 +2854,7 @@ def set_home_pinned_many(
 
     service = WebDesktopService()
     before = {
-        str(item["webspace_id"]): service.get_snapshot(str(item["webspace_id"]))
+        str(item["webspace_id"]): _durable_home_snapshot(str(item["webspace_id"]))
         for item in targets
     }
     changed: list[dict[str, Any]] = []
