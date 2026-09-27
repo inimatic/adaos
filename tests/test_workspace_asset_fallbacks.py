@@ -477,6 +477,28 @@ def test_webspace_runtime_load_webui_reads_shared_ui_owner_from_skill_manifest(t
     assert payload["ydoc_defaults"]["data/demo_metrics/table"] == {"items": [{"id": "cpu"}]}
 
 
+def test_manifest_projection_metadata_ignores_nested_fields_and_reads_quoted_scalars(tmp_path: Path) -> None:
+    from adaos.services.scenario.webspace_components.skill_catalog import (
+        WebspaceSkillCatalogService,
+    )
+
+    manifest = tmp_path / "skill.yaml"
+    manifest.write_text(
+        "name: example\n"
+        "version: '1.2.3'\n"
+        "tools:\n"
+        "- name: read\n"
+        "  ui_owner: node\n"
+        "webui_owner: shared # catalog authority\n",
+        encoding="utf-8",
+    )
+
+    assert WebspaceSkillCatalogService._manifest_projection_metadata(manifest) == (
+        "1.2.3",
+        "shared",
+    )
+
+
 def test_collect_skill_decls_treats_missing_skill_webui_as_optional(
     tmp_path: Path,
     monkeypatch,

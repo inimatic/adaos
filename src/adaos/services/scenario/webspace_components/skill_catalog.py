@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
-import yaml
-
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
@@ -44,6 +42,44 @@ class WebspaceSkillCatalogOperations:
 
 
 class WebspaceSkillCatalogService:
+    @staticmethod
+    def _manifest_projection_metadata(path: Path) -> tuple[str, str]:
+        """Read the two UI projection fields without parsing a whole manifest.
+
+        Skill manifests can contain hundreds of tool schemas.  Full PyYAML
+        parsing for every active skill used to consume most of the first
+        materialization budget even though catalog projection only needs two
+        top-level scalar fields.  Tool/runtime validation still parses the
+        canonical manifest on its governed path; this bounded reader is only
+        for desktop catalog metadata.
+        """
+
+        version = ""
+        ui_owner = ""
+        try:
+            with path.open("r", encoding="utf-8-sig") as handle:
+                for raw_line in handle:
+                    if not raw_line or raw_line[0].isspace() or ":" not in raw_line:
+                        continue
+                    key, raw_value = raw_line.split(":", 1)
+                    token = key.strip()
+                    if token not in {"version", "webui_owner", "ui_owner"}:
+                        continue
+                    value = raw_value.strip()
+                    if value[:1] in {"'", '"'} and value[-1:] == value[:1]:
+                        value = value[1:-1]
+                    else:
+                        value = value.split(" #", 1)[0].strip()
+                    if token == "version":
+                        version = value
+                    elif value.lower() in {"shared", "node"}:
+                        ui_owner = value.lower()
+                    if version and ui_owner:
+                        break
+        except OSError:
+            return "", ""
+        return version, ui_owner
+
     @staticmethod
     def _active_runtime_source(paths: Any, skill_name: str) -> dict[str, Any] | None:
         """Resolve declarations from the same immutable slot that runs the skill."""
@@ -207,16 +243,10 @@ class WebspaceSkillCatalogService:
         webio_receivers_raw = webio_raw.get("receivers") if isinstance(webio_raw, dict) else {}
         ui_owner = "shared" if skill_name == "web_desktop_skill" else "node"
         manifest_version = ""
-        try:
-            if manifest_path.exists():
-                manifest_raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-                if isinstance(manifest_raw, dict):
-                    manifest_version = str(manifest_raw.get("version") or "").strip()
-                    owner_token = str(manifest_raw.get("webui_owner") or manifest_raw.get("ui_owner") or "").strip().lower()
-                    if owner_token in {"shared", "node"}:
-                        ui_owner = owner_token
-        except Exception:
-            operations.logger.debug("failed to read skill manifest ownership for %s", skill_name, exc_info=True)
+        if manifest_path.exists():
+            manifest_version, owner_token = self._manifest_projection_metadata(manifest_path)
+            if owner_token:
+                ui_owner = owner_token
 
         payload = {
             "skill": skill_name,

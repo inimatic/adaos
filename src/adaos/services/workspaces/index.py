@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Iterable, List, Any
+import copy
 import json
 import logging
 import os
@@ -184,7 +185,7 @@ def _normalize_overlay_widget_list(values: Any) -> list[dict[str, Any]]:
             continue
         seen.add(item_id)
         try:
-            payload = json.loads(json.dumps(value, ensure_ascii=True))
+            payload = copy.deepcopy(value)
         except Exception:
             payload = {str(k): v for k, v in value.items()}
         payload["id"] = item_id
@@ -199,7 +200,7 @@ def _clone_overlay_json_dict(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     try:
-        payload = json.loads(json.dumps(value, ensure_ascii=True))
+        payload = copy.deepcopy(value)
     except Exception:
         payload = {str(k): v for k, v in value.items()}
     return payload if isinstance(payload, dict) else {}
@@ -209,7 +210,7 @@ def _clone_overlay_json_list(value: Any) -> list[Any]:
     if not isinstance(value, list):
         return []
     try:
-        payload = json.loads(json.dumps(value, ensure_ascii=True))
+        payload = copy.deepcopy(value)
     except Exception:
         payload = list(value)
     return payload if isinstance(payload, list) else []
@@ -656,9 +657,14 @@ def _manifest_needs_persisted_defaults(manifest: WebspaceManifest) -> bool:
     )
 
 
-def _persist_manifest_defaults(con, manifest: WebspaceManifest) -> WebspaceManifest:
-    normalized = manifest.with_defaults()
-    if not _manifest_needs_persisted_defaults(manifest):
+def _persist_manifest_defaults(
+    con,
+    manifest: WebspaceManifest,
+    *,
+    normalized: WebspaceManifest | None = None,
+) -> WebspaceManifest:
+    normalized = normalized or manifest.with_defaults()
+    if not _manifest_differs_from_normalized(manifest, normalized):
         return normalized
     con.execute(
         """
@@ -681,6 +687,24 @@ def _persist_manifest_defaults(con, manifest: WebspaceManifest) -> WebspaceManif
         ),
     )
     return normalized
+
+
+def _manifest_differs_from_normalized(
+    manifest: WebspaceManifest,
+    normalized: WebspaceManifest,
+) -> bool:
+    return any(
+        (
+            manifest.path != normalized.path,
+            manifest.display_name != normalized.display_name,
+            manifest.kind != normalized.kind,
+            manifest.source_mode != normalized.source_mode,
+            manifest.owner_scope != normalized.owner_scope,
+            manifest.profile_scope != normalized.profile_scope,
+            manifest.device_binding != normalized.device_binding,
+            manifest.ui_overlay_json != normalized.ui_overlay_json,
+        )
+    )
 
 
 def _workspace_schema_identity(con: sqlite3.Connection) -> str:
@@ -901,8 +925,13 @@ def get_workspace(workspace_id: str) -> Optional[WebspaceManifest]:
         manifest = None
         if row:
             raw_manifest = _row_from_db(row, apply_defaults=False)
-            dirty = _manifest_needs_persisted_defaults(raw_manifest)
-            manifest = _persist_manifest_defaults(con, raw_manifest)
+            normalized = raw_manifest.with_defaults()
+            dirty = _manifest_differs_from_normalized(raw_manifest, normalized)
+            manifest = _persist_manifest_defaults(
+                con,
+                raw_manifest,
+                normalized=normalized,
+            )
             if dirty:
                 _bump_workspace_catalog_version(con)
                 con.commit()
@@ -922,9 +951,12 @@ def list_workspaces() -> List[WebspaceManifest]:
         dirty = False
         for db_row in cur.fetchall():
             manifest = _row_from_db(db_row, apply_defaults=False)
-            if _manifest_needs_persisted_defaults(manifest):
+            normalized = manifest.with_defaults()
+            if _manifest_differs_from_normalized(manifest, normalized):
                 dirty = True
-            rows.append(_persist_manifest_defaults(con, manifest))
+            rows.append(
+                _persist_manifest_defaults(con, manifest, normalized=normalized)
+            )
         if dirty:
             _bump_workspace_catalog_version(con)
             con.commit()
@@ -947,9 +979,10 @@ def normalize_workspaces() -> int:
         cur = con.execute(f"SELECT {_ROW_SELECT} FROM y_workspaces ORDER BY created_at")
         for db_row in cur.fetchall():
             manifest = _row_from_db(db_row, apply_defaults=False)
-            if not _manifest_needs_persisted_defaults(manifest):
+            normalized = manifest.with_defaults()
+            if not _manifest_differs_from_normalized(manifest, normalized):
                 continue
-            _persist_manifest_defaults(con, manifest)
+            _persist_manifest_defaults(con, manifest, normalized=normalized)
             updated += 1
         if updated:
             _bump_workspace_catalog_version(con)
@@ -973,8 +1006,13 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
         row = cur.fetchone()
         if row:
             raw_manifest = _row_from_db(row, apply_defaults=False)
-            dirty = _manifest_needs_persisted_defaults(raw_manifest)
-            manifest = _persist_manifest_defaults(con, raw_manifest)
+            normalized = raw_manifest.with_defaults()
+            dirty = _manifest_differs_from_normalized(raw_manifest, normalized)
+            manifest = _persist_manifest_defaults(
+                con,
+                raw_manifest,
+                normalized=normalized,
+            )
             if dirty:
                 _bump_workspace_catalog_version(con)
                 con.commit()
