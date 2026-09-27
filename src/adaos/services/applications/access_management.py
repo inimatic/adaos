@@ -1035,6 +1035,7 @@ class ApplicationAccessManagementService:
                 application_id=application_id
             )
             if item.get("action") == "runtime_observation"
+            or item.get("runtime_observation") is True
         ]
         observed_permissions = sorted(
             {

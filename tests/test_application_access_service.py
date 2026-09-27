@@ -159,12 +159,19 @@ def test_application_access_grant_decision_audit_and_revoke(tmp_path: Path) -> N
         app_capability="app.write",
         component_capabilities=("workspace.write",),
         actor_chain={"user": "user:masha", "component": "scenario:family_tasks"},
+        observation={
+            "network_destination": "tasks.example",
+            "data_categories": ("task",),
+        },
     )
 
     assert decision.decision == "allow"
     assert decision.grant_id == grant.grant_id
     audit = service.store.list_application_access_audit("family_tasks", subject_ref="user:masha")
     assert [item["action"] for item in audit] == ["permission_decision", "grant_create"]
+    assert audit[0]["runtime_observation"] is True
+    assert audit[0]["network_destination"] == "tasks.example"
+    assert audit[0]["data_categories"] == ["task"]
 
     revoked = access.revoke_access(grant.grant_id, issuer_ref="user:owner", expected_revision=grant.revision)
     denied = access.decide(

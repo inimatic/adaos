@@ -2437,6 +2437,12 @@ async def _authorize_application_tool_call(
         app_capability=app_capability,
         actor_chain=actor_chain,
         component_capabilities=component_capabilities,
+        observation={
+            "network_destination": str(
+                actor_chain.get("external_provider_ref") or ""
+            ),
+            "data_categories": (),
+        },
     )
     admission_timings["application_access_decision_ms"] = (
         time.perf_counter() - stage_started
@@ -2490,20 +2496,10 @@ async def _authorize_application_tool_call(
 
     bind_application(verified)
     updated_context = {**request_context, "_verified_application_access": verified}
-    stage_started = time.perf_counter()
-    await asyncio.to_thread(
-        management.record_runtime_observation,
-        application_id=runtime["application_id"],
-        subject_ref=subject_ref,
-        permission_id=permission_id,
-        actor_chain=actor_chain,
-        outcome=decision.decision,
-        grant_id=str(decision.grant_id or ""),
-        network_destination=str(actor_chain.get("external_provider_ref") or ""),
-    )
-    admission_timings["application_observation_ms"] = (
-        time.perf_counter() - stage_started
-    ) * 1000.0
+    # Runtime admission is folded into the permission-decision audit above.
+    # Both records described the same pre-dispatch event and serializing them
+    # separately doubled durable filesystem I/O on every Application tool call.
+    admission_timings["application_observation_ms"] = 0.0
     return body.model_copy(update={"context": updated_context}), {
         "decision": decision.to_dict(),
         "context": verified,

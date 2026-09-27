@@ -584,6 +584,7 @@ class ApplicationAccessService:
         actor_chain: Mapping[str, Any],
         component_capabilities: tuple[str, ...] = (),
         approval_id: str | None = None,
+        observation: Mapping[str, Any] | None = None,
     ) -> ApplicationAccessDecision:
         release = self.store.get_release(application_id, release_digest)
         subject_grants = tuple(
@@ -615,21 +616,36 @@ class ApplicationAccessService:
             component_capabilities=component_capabilities,
             approval_id=approval_id,
         )
-        self._audit(
-            {
-                "action": "permission_decision",
-                "application_id": application_id,
-                "subject_ref": subject_ref,
-                "grant_id": decision.grant_id,
-                "decision": decision.decision,
-                "reason_code": decision.reason_code,
-                "permission_id": decision.permission_id,
-                "app_capability": decision.app_capability,
-                "approval_id": decision.approval_id,
-                "reviewed_permission_profile_digest": release.permission_profile.digest,
-                "actor_chain": dict(decision.actor_chain),
-            }
-        )
+        audit_payload = {
+            "action": "permission_decision",
+            "application_id": application_id,
+            "subject_ref": subject_ref,
+            "grant_id": decision.grant_id,
+            "decision": decision.decision,
+            "reason_code": decision.reason_code,
+            "permission_id": decision.permission_id,
+            "app_capability": decision.app_capability,
+            "approval_id": decision.approval_id,
+            "reviewed_permission_profile_digest": release.permission_profile.digest,
+            "actor_chain": dict(decision.actor_chain),
+        }
+        if observation is not None:
+            audit_payload.update(
+                {
+                    "runtime_observation": True,
+                    "network_destination": str(
+                        observation.get("network_destination") or ""
+                    ).strip(),
+                    "data_categories": sorted(
+                        {
+                            str(item).strip()
+                            for item in observation.get("data_categories") or ()
+                            if str(item).strip()
+                        }
+                    ),
+                }
+            )
+        self._audit(audit_payload)
         return decision
 
 
