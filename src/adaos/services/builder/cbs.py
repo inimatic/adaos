@@ -20,7 +20,7 @@ from .workflow import BuilderWorkflowError
 
 
 BUILDER_CBS_COMPILATION_SCHEMA = "adaos.builder.cbs_compilation.v1"
-BUILDER_CBS_COMPILER_VERSION = "1.2.0"
+BUILDER_CBS_COMPILER_VERSION = "1.3.0"
 BUILDER_CBS_COMPILER_VIEW_SCHEMA = "adaos.builder.cbs_compiler_view.v1"
 
 
@@ -102,6 +102,7 @@ def cbs_compiler_view(compilation: Mapping[str, Any]) -> dict[str, Any]:
         "schema": BUILDER_CBS_COMPILER_VIEW_SCHEMA,
         "registry_ref": cbs_compilation_registry_ref(value["compilation_digest"]),
         "application_ref": value["application_ref"],
+        "presentation_ref": value.get("presentation_ref"),
         "compiler_version": value["compiler_version"],
         "compilation_digest": value["compilation_digest"],
         "semantic_revision_digest": value["semantic_revision_digest"],
@@ -386,11 +387,19 @@ def compile_project_cbs(
         (item for item in entrypoints if item.get("default") is True),
         entrypoints[0] if entrypoints else None,
     )
-    application_ref = str((selected or {}).get("presentation") or "").strip()
-    if not re.fullmatch(r"(?:scenario|skill):[A-Za-z0-9_.-]+", application_ref):
+    presentation_ref = str((selected or {}).get("presentation") or "").strip()
+    if not re.fullmatch(
+        r"(?:(?:scenario|skill):[A-Za-z0-9_.-]+|[a-z0-9][a-z0-9_.-]{0,127})",
+        presentation_ref,
+    ):
         raise BuilderWorkflowError(
-            "Project CBS compilation requires one scenario or skill entrypoint"
+            "Project CBS compilation requires one physical or logical presentation entrypoint"
         )
+    # The semantic requirement set belongs to the Application, never to the
+    # Scenario, Skill, or desktop contribution that happens to present this
+    # release.  Keeping the physical presentation only in the source digest
+    # lets a later package/component move preserve Application identity.
+    application_ref = f"application:{project_id}"
     profile_ref = str(environment_profile_ref or "").strip()
     if not profile_ref.startswith("profile:"):
         raise BuilderWorkflowError("CBS environment profile must be a profile: reference")
@@ -401,7 +410,7 @@ def compile_project_cbs(
     application_token = _token(application_ref.replace(":", "."), fallback=project_id)
     requirements: list[dict[str, Any]] = []
     generated = 0
-    if application_ref.startswith("scenario:"):
+    if presentation_ref.startswith("scenario:") or ":" not in presentation_ref:
         requirements.append(
             _requirement(
                 requirement_ref=f"requirement:{application_token}.ui",
@@ -450,6 +459,7 @@ def compile_project_cbs(
             "project_id": project_id,
             "version": version,
             "entrypoint": selected,
+            "presentation_ref": presentation_ref,
             "required_contracts": list(
                 dict(source.get("compatibility") or {}).get("required_contracts")
                 or []
@@ -468,6 +478,7 @@ def compile_project_cbs(
         "schema": BUILDER_CBS_COMPILATION_SCHEMA,
         "compiler_version": BUILDER_CBS_COMPILER_VERSION,
         "application_ref": application_ref,
+        "presentation_ref": presentation_ref,
         "source_acceptance_digest": source_digest,
         "semantic_revision_digest": semantic_revision_digest,
         "environment_target": environment_target,

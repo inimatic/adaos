@@ -942,6 +942,11 @@ SDK, Root MCP, provider-contract, and package metadata as discovery input, but
 the persisted semantic Application refers only to admitted semantic contracts.
 Raw tool IDs, skill IDs, provider IDs, package members, endpoints, and local
 paths are implementation candidates or evidence, never semantic dependencies.
+Likewise, a logical presentation id is a launch identity rather than a package
+locator. Project CBS compilations use `application:<id>` as their semantic
+identity and carry the logical presentation separately so exact-release
+admission can prove which package delivers it. Legacy `scenario:/skill:`
+presentations remain readable during migration.
 
 Prototype acceptance freezes observable behavior and the semantic Application
 revision. It does not freeze the simulation package topology. Automation may

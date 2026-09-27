@@ -123,6 +123,26 @@ def _ui_provider(package: Any) -> tuple[CapabilityContract, BindingDefinition, B
     return capability, binding, delivery
 
 
+def _declares_logical_presentation(
+    webui: Mapping[str, Any], presentation_ref: str
+) -> bool:
+    """Prove that one verified WebUI owns the logical desktop presentation."""
+
+    application_ids = {
+        str(item.get("id") or "").strip()
+        for item in webui.get("apps") or ()
+        if isinstance(item, Mapping)
+    }
+    contribution_ids = {
+        str(item.get("id") or "").strip()
+        for item in webui.get("contributions") or ()
+        if isinstance(item, Mapping)
+        and str(item.get("extensionPoint") or "").strip() == "desktop.apps"
+        and str(item.get("type") or "").strip() == "app"
+    }
+    return presentation_ref in application_ids and presentation_ref in contribution_ids
+
+
 @dataclass(slots=True)
 class NativeApplicationCBSAdmissionService:
     state_dir: Path
@@ -222,6 +242,8 @@ class NativeApplicationCBSAdmissionService:
         bindings: list[BindingDefinition] = []
         deliveries: list[BindingDelivery] = []
         scenario_packages = []
+        logical_ui_packages = []
+        presentation_ref = str(compilation.get("presentation_ref") or "").strip()
         for package in release_plan.packages:
             archive_bytes, verified = package_store.read_verified(package.digest)
             if verified.ref != package:
@@ -230,6 +252,10 @@ class NativeApplicationCBSAdmissionService:
                 )
             if package.kind == "scenario" and "webui.json" in verified.file_names:
                 scenario_packages.append(package)
+            if presentation_ref and ":" not in presentation_ref and "webui.json" in verified.file_names:
+                webui = _read_json_member(archive_bytes, "webui.json")
+                if _declares_logical_presentation(webui, presentation_ref):
+                    logical_ui_packages.append(package)
             if not verified.binding_deliveries:
                 continue
             capability = CapabilityContract.from_mapping(
@@ -249,7 +275,7 @@ class NativeApplicationCBSAdmissionService:
             and item.get("capability_ref") == "capability:application.ui.render"
         ]
         if ui_requirements:
-            ui_packages = scenario_packages
+            ui_packages = logical_ui_packages if presentation_ref and ":" not in presentation_ref else scenario_packages
             application_kind, separator, application_id = application_ref.partition(":")
             if separator and application_kind == "scenario":
                 matching_packages = [
@@ -259,8 +285,8 @@ class NativeApplicationCBSAdmissionService:
                     ui_packages = matching_packages
             if len(ui_packages) != 1:
                 raise NativeApplicationCBSAdmissionError(
-                    "application.ui.render requires one exact entrypoint scenario "
-                    "package with webui.json"
+                    "application.ui.render requires one exact package whose verified "
+                    "webui.json owns the declared presentation"
                 )
             capability, binding, delivery = _ui_provider(ui_packages[0])
             contracts.append(capability)

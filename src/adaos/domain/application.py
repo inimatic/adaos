@@ -39,6 +39,10 @@ RuntimeSelectionSource = Literal[
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REF_RE = re.compile(r"^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_PRESENTATION_RE = re.compile(
+    r"^(?:(?:skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}|"
+    r"[a-z0-9][a-z0-9_.-]{0,127})$"
+)
 
 
 class ApplicationContractError(ValueError):
@@ -248,9 +252,9 @@ class Application:
         for raw in entrypoints:
             entrypoint_id = _identifier(raw.get("entrypoint_id"), "entrypoint_id")
             presentation_ref = _text(raw.get("presentation_ref"), "presentation_ref")
-            if not _REF_RE.fullmatch(presentation_ref):
+            if not _PRESENTATION_RE.fullmatch(presentation_ref):
                 raise ApplicationContractError(
-                    "presentation_ref must reference a skill or scenario"
+                    "presentation_ref must be a logical presentation id or reference a skill or scenario"
                 )
             if entrypoint_id in seen:
                 raise ApplicationContractError("entrypoint ids must be unique")

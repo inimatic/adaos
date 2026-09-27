@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import jsonschema
@@ -82,6 +83,42 @@ def _application() -> Application:
             "trust_relation": "local",
         },
     )
+
+
+def test_application_accepts_package_independent_presentation_identity() -> None:
+    application = _application()
+
+    logical = replace(
+        application,
+        entrypoints=(
+            {
+                "entrypoint_id": "main",
+                "presentation_ref": "recipes_desktop_app",
+            },
+        ),
+    )
+
+    assert logical.entrypoints == (
+        {
+            "entrypoint_id": "main",
+            "presentation_ref": "recipes_desktop_app",
+        },
+    )
+
+
+def test_application_rejects_ambiguous_presentation_identity() -> None:
+    application = _application()
+
+    with pytest.raises(ApplicationContractError, match="logical presentation id"):
+        replace(
+            application,
+            entrypoints=(
+                {
+                    "entrypoint_id": "main",
+                    "presentation_ref": "modal:recipes",
+                },
+            ),
+        )
 
 
 def _contracts() -> list[tuple[str, object]]:

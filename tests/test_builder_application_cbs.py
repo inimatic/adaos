@@ -231,7 +231,7 @@ def test_project_compiler_uses_portable_contract_refs_for_skill_application() ->
 
     compilation = compile_project_cbs(project)
 
-    assert compilation["application_ref"] == "skill:subscription_status_skill"
+    assert compilation["application_ref"] == "application:subscriptions"
     assert [item["capability_ref"] for item in compilation["requirements"]] == [
         "capability:subscriptions.status.inspect"
     ]
@@ -265,6 +265,30 @@ def test_project_compiler_generates_scenario_ui_requirement() -> None:
         "capability:application.ui.render"
     ]
     assert compilation["authoring_telemetry"]["compiler_generated_requirements"] == 1
+
+
+def test_project_compiler_keeps_logical_presentation_out_of_application_identity() -> None:
+    compilation = compile_project_cbs(
+        {
+            "id": "notebook",
+            "version": "1.0.0",
+            "entrypoints": [
+                {
+                    "id": "main",
+                    "presentation": "notebook_skill_app",
+                    "default": True,
+                    "bindings": {},
+                }
+            ],
+            "compatibility": {},
+        }
+    )
+
+    assert compilation["application_ref"] == "application:notebook"
+    assert compilation["presentation_ref"] == "notebook_skill_app"
+    assert [item["capability_ref"] for item in compilation["requirements"]] == [
+        "capability:application.ui.render"
+    ]
 
 
 def test_compiler_rejects_tampered_acceptance() -> None:

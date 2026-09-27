@@ -170,7 +170,7 @@ def test_project_trial_admits_the_exact_cbs_release_before_handoff(
             assert state_dir == tmp_path / "state"
 
         def inspect(self, application_ref: str):
-            assert application_ref == "scenario:mail_reader"
+            assert application_ref == "application:mail_reader"
             return compilation
 
     class _Admissions:
@@ -227,7 +227,7 @@ def test_project_trial_admits_the_exact_cbs_release_before_handoff(
         "requirements_resolved": 1,
         "plan_digests": ["sha256:" + "4" * 64],
     }
-    assert captured["application_ref"] == "scenario:mail_reader"
+    assert captured["application_ref"] == "application:mail_reader"
     assert captured["compilation"] is compilation
     assert captured["release_plan"] is prepared.plan
     assert captured["package_store"] is package_store

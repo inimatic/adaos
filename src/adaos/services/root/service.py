@@ -2615,22 +2615,18 @@ class RootDeveloperService:
 
         state_dir = Path(self.ctx.paths.state_dir())
         cbs = ApplicationCBSService(state_dir)
-        entrypoints = [
-            dict(item)
-            for item in (project_manifest or {}).get("entrypoints") or []
-            if isinstance(item, Mapping)
-        ]
-        selected = next(
-            (item for item in entrypoints if item.get("default") is True),
-            entrypoints[0] if entrypoints else None,
-        )
-        presentation_ref = str((selected or {}).get("presentation") or "").strip()
-        application_ref = (
-            presentation_ref
-            if presentation_ref.startswith(("scenario:", "skill:"))
-            else f"{source_kind}:{source_name}"
-        )
+        application_ref = f"application:{project_id}"
         compilation = cbs.inspect(application_ref)
+        # Candidate preparation without a Project manifest is retained for
+        # legacy Builder/component callers. Their earlier compilations were
+        # keyed by the physical presentation and remain admissible until the
+        # Project is next compiled under the semantic Application identity.
+        if compilation is None and not project_manifest:
+            legacy_application_ref = f"{source_kind}:{source_name}"
+            legacy_compilation = cbs.inspect(legacy_application_ref)
+            if legacy_compilation is not None:
+                application_ref = legacy_application_ref
+                compilation = legacy_compilation
         declarations = [
             str(item or "").strip()
             for item in dict((project_manifest or {}).get("compatibility") or {}).get(

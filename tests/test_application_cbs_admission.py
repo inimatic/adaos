@@ -62,7 +62,7 @@ def _scenario(root: Path):
     return _scenario_named(root, "mail_client")
 
 
-def _provider(root: Path):
+def _provider(root: Path, *, presentation_ref: str | None = None):
     source = root / "mail_provider"
     (source / "contracts").mkdir(parents=True)
     (source / "handlers").mkdir()
@@ -115,6 +115,24 @@ binding:
 """,
         encoding="utf-8",
     )
+    if presentation_ref:
+        (source / "webui.json").write_text(
+            json.dumps(
+                {
+                    "schema": "adaos.webui.v1",
+                    "apps": [{"id": presentation_ref, "title": "Mail"}],
+                    "contributions": [
+                        {
+                            "extensionPoint": "desktop.apps",
+                            "type": "app",
+                            "id": presentation_ref,
+                            "autoInstall": True,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
     return build_artifact_package(
         source, kind="skill", source_ref=_source("skills/mail_provider/")
     )
@@ -233,6 +251,84 @@ def test_ui_admission_selects_application_entrypoint_from_multiple_scenarios(
 
     assert admitted["status"] == "admitted"
     assert admitted["requirements_total"] == admitted["requirements_resolved"] == 2
+
+
+def test_ui_admission_proves_logical_presentation_from_exact_skill_package(
+    tmp_path: Path,
+) -> None:
+    package = _provider(
+        tmp_path / "source", presentation_ref="notebook_skill_app"
+    )
+    store = ContentAddressedPackageStore(tmp_path / "packages")
+    store.put(package.archive_bytes, expected_digest=package.ref.digest)
+    plan = build_project_release(
+        project_id="notebook",
+        version="1.0.0",
+        source_ref=_source("projects/notebook/"),
+        components=(package.ref,),
+        catalog=PackageCatalog(),
+        permissions=("providers.google.gmail",),
+        validation_evidence=({"validator": "pytest", "status": "passed"},),
+    )
+    target = {
+        "profile_ref": "profile:local/default",
+        "allowed_modes": ["production"],
+    }
+    requirement = ApplicationRequirement.create(
+        requirement_ref="requirement:application.notebook.ui",
+        capability_ref="capability:application.ui.render",
+        contract_range="^1.0.0",
+        environment_target=target,
+        policy_constraints={
+            "locality": "local",
+            "privacy": "application-declared",
+            "required_authorities": [],
+        },
+        evidence_threshold={
+            "required_claim_kinds": ["capability_conformance"],
+            "allow_stale": False,
+        },
+    ).to_dict()
+    compilation = {
+        "schema": "adaos.builder.cbs_compilation.v1",
+        "compiler_version": "1.3.0",
+        "application_ref": "application:notebook",
+        "presentation_ref": "notebook_skill_app",
+        "source_acceptance_digest": canonical_payload_digest(
+            {"project": "notebook"}
+        ),
+        "semantic_revision_digest": canonical_payload_digest(requirement),
+        "environment_target": target,
+        "requirements": [requirement],
+        "simulation_attachments": [],
+        "automation_obligations": [],
+        "authoring_telemetry": {
+            "human_authored_requirements": 0,
+            "builder_inferred_requirements": 0,
+            "compiler_generated_requirements": 1,
+        },
+        "viability": {
+            "semantic": "compiled",
+            "simulation": "pending",
+            "production": "unresolved",
+            "unresolved_requirement_refs": [requirement["requirement_ref"]],
+        },
+    }
+    compilation["compilation_digest"] = canonical_payload_digest(compilation)
+
+    admitted = NativeApplicationCBSAdmissionService(
+        tmp_path / "state", now=lambda: FIXED_NOW
+    ).admit(
+        application_ref="application:notebook",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:candidate-notebook",
+    )
+
+    assert admitted["status"] == "admitted"
+    assert admitted["requirements_total"] == admitted["requirements_resolved"] == 1
+    assert admitted["resolutions"][0]["package_closure"][0]["kind"] == "skill"
 
 
 def test_exact_application_release_admits_every_requirement_and_plan(tmp_path: Path) -> None:

@@ -1041,6 +1041,55 @@ def test_adoption_accepts_skill_owned_application_entrypoint(monkeypatch, tmp_pa
     )
 
 
+def test_adoption_accepts_package_independent_application_presentation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        applications,
+        "publisher_context",
+        lambda: {
+            "publisher_ref": "subnet:home",
+            "display_name": "Home Lab",
+            "subnet_short_ref": "home",
+            "home_zone": "local",
+            "release_key_ref": "artifact-signing:home:key",
+            "release_key_fingerprint": "sha256:" + "f" * 64,
+            "release_key_algorithm": "ed25519",
+            "release_key_issuer": "home",
+            "trust_relation": "local",
+        },
+    )
+    project = {
+        "id": "notebook",
+        "version": "1.0.0",
+        "catalog": {"title": "Notebook", "description": "Notes"},
+        "entrypoints": [{"id": "notes", "presentation": "notebook_skill_app"}],
+        "components": {
+            "owned": [
+                {
+                    "ref": "skill:notebook_skill",
+                    "role": "primary",
+                    "exposure": "application",
+                }
+            ]
+        },
+    }
+    monkeypatch.setattr(compositions, "get", lambda _project_id: project)
+
+    created = applications._ensure_application_for_project(
+        "notebook", actor_ref="builder.user"
+    )
+
+    assert created.entrypoints == (
+        {"entrypoint_id": "notes", "presentation_ref": "notebook_skill_app"},
+    )
+
+
 def test_builder_application_sdk_has_no_raw_authority_parameters() -> None:
     forbidden = {
         "path", "filesystem_path", "command", "process", "git_credentials",

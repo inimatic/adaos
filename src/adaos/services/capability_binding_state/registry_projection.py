@@ -533,6 +533,11 @@ class SemanticRegistryProjection:
             "project_id": release.project_id,
             "version": release.version,
             "application_ref": application_ref,
+            **(
+                {"presentation_ref": str(compilation["presentation_ref"])}
+                if str(compilation.get("presentation_ref") or "").strip()
+                else {}
+            ),
             "project_release_digest": release_digest,
             "source_ref": release.source_ref.to_dict(),
             "compilation_digest": compilation_digest,

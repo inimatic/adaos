@@ -19,10 +19,14 @@
   ],
   "properties": {
     "schema": { "const": "adaos.builder.cbs_compilation.v1" },
-    "compiler_version": { "enum": ["1.0.0", "1.1.0", "1.2.0"] },
+    "compiler_version": { "enum": ["1.0.0", "1.1.0", "1.2.0", "1.3.0"] },
     "application_ref": {
       "type": "string",
-      "pattern": "^(project|scenario|skill):[A-Za-z0-9_.-]+$"
+      "pattern": "^(application|project|scenario|skill):[A-Za-z0-9_.-]+$"
+    },
+    "presentation_ref": {
+      "type": "string",
+      "pattern": "^(?:(?:skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}|[a-z0-9][a-z0-9_.-]{0,127})$"
     },
     "source_acceptance_digest": { "$ref": "#/$defs/digest" },
     "semantic_revision_digest": { "$ref": "#/$defs/digest" },

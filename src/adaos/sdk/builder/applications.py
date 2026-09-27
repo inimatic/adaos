@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping, Sequence
 
 import yaml
@@ -42,6 +43,15 @@ _ACTION_CAPABILITIES = {
     "publish_stable_source": "applications.publish",
     "recover": "applications.recover",
 }
+
+_PRESENTATION_RE = re.compile(
+    r"^(?:(?:skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}|"
+    r"[a-z0-9][a-z0-9_.-]{0,127})$"
+)
+
+
+def _is_application_presentation(value: str) -> bool:
+    return bool(_PRESENTATION_RE.fullmatch(str(value or "").strip()))
 
 
 def _ctx():
@@ -645,7 +655,7 @@ def _project_application_entrypoints(project: Mapping[str, Any]) -> tuple[dict[s
             continue
         entrypoint_id = str(raw.get("id") or "").strip()
         presentation_ref = str(raw.get("presentation") or "").strip()
-        if not entrypoint_id or not presentation_ref.startswith(("scenario:", "skill:")):
+        if not entrypoint_id or not _is_application_presentation(presentation_ref):
             continue
         result.append(
             {
@@ -689,7 +699,7 @@ def _release_application_entrypoints(release: Any) -> tuple[dict[str, str], ...]
             raise ValueError("exact Application release entrypoints must be objects")
         entrypoint_id = str(raw.get("id") or "").strip()
         presentation_ref = str(raw.get("presentation") or "").strip()
-        if not entrypoint_id or not presentation_ref.startswith(("scenario:", "skill:")):
+        if not entrypoint_id or not _is_application_presentation(presentation_ref):
             raise ValueError(
                 "exact Application release contains an invalid public entrypoint"
             )

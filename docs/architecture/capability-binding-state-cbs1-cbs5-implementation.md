@@ -357,7 +357,7 @@ storage locators, endpoints, or credentials into the semantic Application.
 Builder now has a bounded authoring envelope for explicit semantic capability
 requirements. `adaos.builder.cbs_intent.v1` is stored under
 `pageSchema.meta.builder.cbs_intent`, pinned into Prototype acceptance, and
-expanded by compiler `1.1.0` into canonical `ApplicationRequirement` records.
+expanded by compiler `1.3.0` into canonical `ApplicationRequirement` records.
 The compact record contains only a stable requirement id, `capability:` ref,
 contract range, authoring origin, and optional semantic policy/evidence
 constraints. It cannot name a package, skill, entry point, endpoint, account,
@@ -366,7 +366,20 @@ or credential.
 The compiler records separate counts for human-authored, Builder-inferred, and
 compiler-generated requirements. This prevents generated boilerplate from
 being reported as human authoring cost in later CBS9 measurements. Existing
-compiler `1.0.0` records remain readable; new output is `1.1.0`.
+compiler `1.0.0` through `1.2.0` records remain readable; new Project output
+is `1.3.0`.
+
+Project compilation keys the semantic requirement set by
+`application:<application-id>`, not by the Scenario or Skill which currently
+delivers its presentation. A Project entrypoint may therefore name either a
+legacy physical `scenario:/skill:` ref or a package-independent logical
+desktop presentation id. The latter is retained as `presentation_ref` for
+release admission, while it never becomes the Application identity. Native
+admission remains fail-closed: the exact package closure must contain exactly
+one verified `webui.json` which declares both the matching desktop app and its
+`desktop.apps` contribution. Moving that presentation to another conforming
+package changes delivery/package identity without rewriting the semantic
+Application or capability requirements.
 
 Provider packages have a separate compact, package-local authoring seam:
 `contracts/provider.cbs.yaml` with schema

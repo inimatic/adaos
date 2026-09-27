@@ -127,6 +127,11 @@ class ApplicationCBSService:
             "schema": "adaos.application.semantic_requirement_set.v1",
             "application_id": application_token,
             "application_ref": application_ref,
+            **(
+                {"presentation_ref": str(value["presentation_ref"])}
+                if str(value.get("presentation_ref") or "").strip()
+                else {}
+            ),
             "project_id": project_id,
             "project_release_digest": release_digest,
             "compilation_digest": compilation_digest,
