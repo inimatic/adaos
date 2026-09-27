@@ -178,18 +178,22 @@ Tests disable the process boundary by default under `ADAOS_TESTING`; tests for
 the boundary may explicitly enable it.
 
 Scenario-switch materialization uses an explicit identity derived from
-`webspace_id`, `scenario_id`, source mode, scenario file stamps, active skill UI
-declaration stamps, user/roles, and policy. Resolver caching is split into a
+`webspace_id`, `scenario_id`, source mode, content digests of the scenario and
+active skill UI declarations, user/roles, and policy. Absolute package paths,
+runtime A/B slot names, and extraction mtimes are delivery details and MUST NOT
+participate in that identity. Consequently an unchanged immutable artifact can
+reuse a materialization after package relocation or a core slot switch, while
+any source-byte change still invalidates it. Resolver caching is split into a
 scenario-invariant core and a per-webspace overlay. The core may be reused by
 two preview webspaces only when scenario, source, skill, user/roles, and policy
-fingerprints match; installed state, pinned widgets, ordering/visibility, and the
-output webspace id are cloned and applied separately. Scenario-owned topbar and
-page schema always come from the new core; stale structural values collected
+fingerprints match; installed state, pinned widgets, ordering/visibility, and
+the output webspace id are cloned and applied separately. Scenario-owned topbar
+and page schema always come from the new core; stale structural values collected
 from the previous webspace state are not overlaid. Full fresh-doc snapshots
 remain in a separate cache namespace, so a fast switch cannot reuse a payload
-where a Yjs snapshot is required. Runtime mutations without a specific
-scenario id invalidate all materialized entries for the webspace;
-scenario-specific mutations may drop only that scenario.
+where a Yjs snapshot is required. Runtime mutations without a specific scenario
+id invalidate all materialized entries for the webspace; scenario-specific
+mutations may drop only that scenario.
 
 An ordinary switch preserves the existing YStore base and persists the
 live-room branch diff. It no longer clears YStore and then blocks the switch on
