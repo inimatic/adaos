@@ -56,6 +56,39 @@ def test_state_read_cache_is_copy_safe_and_invalidated_on_write(
     assert state_reads == 3
 
 
+def test_public_ticket_reads_detach_records_from_cached_snapshot(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    state = {
+        "schema": development_tickets_module.STATE_SCHEMA,
+        "signals": {},
+        "tickets": {
+            "dticket.cached": {
+                "schema": development_tickets_module.DEV_TICKET_SCHEMA,
+                "ticket_id": "dticket.cached",
+                "revision": 1,
+                "kind": "development_request",
+                "status": "proposed",
+                "summary": "Cached ticket",
+                "target_scope": {"type": "scenario", "id": "applications"},
+                "metadata": {"nested": {"value": "original"}},
+            }
+        },
+        "command_receipts": {},
+    }
+    service._write(state)
+
+    listed = service.list_tickets()
+    listed[0]["metadata"]["nested"]["value"] = "mutated"
+    summarized = service.list_tickets(projection="summary")
+    summarized[0]["target_scope"]["id"] = "mutated"
+    fetched = service.get_ticket("dticket.cached")
+
+    assert fetched is not None
+    assert fetched["metadata"]["nested"]["value"] == "original"
+    assert fetched["target_scope"]["id"] == "applications"
+    assert "metadata" not in summarized[0]
+
+
 def test_default_builder_prototype_submitter_uses_shared_conversation_packet(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

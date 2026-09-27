@@ -1451,6 +1451,7 @@ def list_tickets(
         updated_since=updated_since,
         search=search,
         limit=limit,
+        projection=projection,
     )
     if target_tokens or ref_tokens:
         wanted = target_tokens | ref_tokens
@@ -1459,7 +1460,7 @@ def list_tickets(
         tickets = [ticket for ticket in tickets if _ticket_target_tokens(ticket) & scoped_tokens]
     if kind_tokens:
         tickets = [ticket for ticket in tickets if _text(ticket.get("kind")) in kind_tokens]
-    items = [_ticket_list_item(ticket) for ticket in tickets] if projection == "summary" else tickets
+    items = tickets
     return {
         "ok": True,
         "tickets": items,

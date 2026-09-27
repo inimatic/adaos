@@ -306,7 +306,9 @@ def _normalize_relation_refs(*groups: Sequence[Mapping[str, Any]]) -> list[dict[
     return _merge_refs([], refs)
 
 
-def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
+def _normalized_ticket_view(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    """Build a shallow normalized view suitable for filtering and sorting."""
+
     out = dict(ticket)
     try:
         out["revision"] = max(1, int(out.get("revision") or 1))
@@ -336,7 +338,11 @@ def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
         _sequence_of_mappings(out.get("relation_refs") or []),
         _sequence_of_mappings(out.get("related_refs") or []),
     )
-    return _clone(out)
+    return out
+
+
+def _normalized_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    return _clone(_normalized_ticket_view(ticket))
 
 
 def _ref_tail(value: Any, prefix: str) -> str:
@@ -6236,11 +6242,11 @@ class DevelopmentTicketService:
             return _normalized_ticket(ticket)
 
     def get_signal(self, signal_id: str) -> dict[str, Any] | None:
-        signal = self._read()["signals"].get(_text(signal_id))
+        signal = self._read_snapshot()["signals"].get(_text(signal_id))
         return _clone(signal) if signal else None
 
     def get_ticket(self, ticket_id: str) -> dict[str, Any] | None:
-        ticket = self._read()["tickets"].get(_text(ticket_id))
+        ticket = self._read_snapshot()["tickets"].get(_text(ticket_id))
         return _normalized_ticket(ticket) if ticket else None
 
     def list_tickets(
@@ -6265,8 +6271,15 @@ class DevelopmentTicketService:
         updated_since: str | None = None,
         search: str | None = None,
         limit: int | None = None,
+        projection: str = "full",
     ) -> list[dict[str, Any]]:
-        tickets = [_normalized_ticket(item) for item in self._read()["tickets"].values()]
+        projection_token = _text(projection).lower() or "full"
+        if projection_token not in {"full", "summary"}:
+            raise ValueError(f"unsupported Dev Ticket projection: {projection_token}")
+        tickets = [
+            _normalized_ticket_view(item)
+            for item in self._read_snapshot()["tickets"].values()
+        ]
         if status:
             allowed = {_text(part) for part in _text(status).split(",") if _text(part)}
             tickets = [item for item in tickets if _text(item.get("status")) in allowed]
@@ -6344,6 +6357,11 @@ class DevelopmentTicketService:
         sorted_tickets = sorted(tickets, key=lambda item: item.get("updated_at") or item.get("created_at") or "")
         if limit is not None and int(limit) >= 0:
             sorted_tickets = sorted_tickets[-int(limit):]
+        if projection_token == "summary":
+            return [
+                _clone(project_development_ticket_summary(item))
+                for item in sorted_tickets
+            ]
         return [_clone(item) for item in sorted_tickets]
 
     def list_core_backlog(
@@ -6359,7 +6377,7 @@ class DevelopmentTicketService:
         search: str | None = None,
         limit: int = 200,
     ) -> dict[str, Any]:
-        state = self._read()
+        state = self._read_snapshot()
         tickets = {
             _text(ticket_id): _normalized_ticket(ticket)
             for ticket_id, ticket in state["tickets"].items()
@@ -6809,7 +6827,7 @@ class DevelopmentTicketService:
         owner_area: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        state = self._read()
+        state = self._read_snapshot()
         events: list[dict[str, Any]] = []
         for ticket in state["tickets"].values():
             if _text(ticket_id) and _text(ticket.get("ticket_id")) != _text(ticket_id):
@@ -8063,6 +8081,17 @@ class DevelopmentTicketService:
             raise ValueError(f"Dev Ticket revision conflict: expected {expected}, current {current}")
 
     def _read(self) -> dict[str, Any]:
+        """Return a detached state for callers that may mutate it."""
+
+        return _clone(self._read_snapshot())
+
+    def _read_snapshot(self) -> Mapping[str, Any]:
+        """Return the process-local read-only snapshot without a full clone.
+
+        Public read operations detach the records they return. Mutation paths
+        continue to use ``_read`` so a caller can never modify the shared cache.
+        """
+
         if not self.state_path.is_file():
             return {"schema": STATE_SCHEMA, "signals": {}, "tickets": {}, "command_receipts": {}}
         cache_key = str(self.state_path.resolve())
@@ -8071,7 +8100,7 @@ class DevelopmentTicketService:
         with _LOCK:
             cached = _STATE_READ_CACHE.get(cache_key)
             if cached is not None and cached[0] == fingerprint:
-                return _clone(cached[1])
+                return cached[1]
         value = json.loads(self.state_path.read_text(encoding="utf-8"))
         if not isinstance(value, Mapping):
             raise ValueError("development ticket state is corrupt")
@@ -8109,7 +8138,7 @@ class DevelopmentTicketService:
         }
         with _LOCK:
             _STATE_READ_CACHE[cache_key] = (fingerprint, normalized)
-        return _clone(normalized)
+        return normalized
 
     def _write(self, state: Mapping[str, Any]) -> None:
         previous_tickets: Mapping[str, Any] = {}
