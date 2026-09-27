@@ -204,6 +204,41 @@ async def test_heartbeat_persistence_coalesces_pending_state_and_reports_failure
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_persistence_defers_identical_durable_rewrites() -> None:
+    directory = _FakeDirectory(known=True, online=True)
+    runtime = HeartbeatPersistenceRuntime(
+        idle_exit_s=0.05,
+        min_repeat_interval_s=0.05,
+    )
+    payload = {"skills": [{"name": "weather", "version": "1.0.0"}]}
+
+    runtime.submit(
+        directory,
+        node_id="member-1",
+        capacity=payload,
+        node_state="ready",
+        base_url=None,
+    )
+    await runtime.wait_idle()
+    runtime.submit(
+        directory,
+        node_id="member-1",
+        capacity=payload,
+        node_state="ready",
+        base_url=None,
+    )
+    await asyncio.sleep(0.01)
+
+    assert directory.persisted == [("member-1", payload)]
+    assert runtime.snapshot()["pending_heartbeat_total"] == 1
+
+    await runtime.wait_idle(timeout_s=0.5)
+    assert directory.persisted == [("member-1", payload), ("member-1", payload)]
+    assert runtime.snapshot()["repeat_deferred_total"] >= 1
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_registration_persistence_retries_failure_and_recovers() -> None:
     directory = _FakeDirectory()
     directory.registration_error = RuntimeError("database locked")

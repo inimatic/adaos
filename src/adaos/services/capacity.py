@@ -164,9 +164,7 @@ def _save_local_capacity_to_registry(payload: Dict[str, Any]) -> None:
         raise RuntimeError("node_id is not configured; cannot persist local capacity")
     repo = get_directory().repo
     snapshot = _normalize_capacity_snapshot(payload)
-    repo.replace_io_capacity(node_id, snapshot.get("io") or [])
-    repo.replace_skill_capacity(node_id, snapshot.get("skills") or [])
-    repo.replace_scenario_capacity(node_id, snapshot.get("scenarios") or [])
+    repo.replace_capacity_snapshot(node_id, snapshot)
 
 
 def _clear_legacy_capacity_from_node_yaml(*, base_dir: Path | None = None) -> None:

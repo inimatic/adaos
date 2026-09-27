@@ -99,6 +99,24 @@ def test_touch_heartbeat_rewrites_capacity_when_materially_changed(tmp_path: Pat
     assert after[0]["version"] == "1.1.0"
 
 
+def test_replace_capacity_snapshot_is_atomic_and_skips_identical_projection(
+    tmp_path: Path,
+) -> None:
+    sql = SQLite(_FakePaths(tmp_path))
+    repo = SubnetRepo(sql)
+    capacity = {
+        "io": [{"io_type": "stdout", "capabilities": ["text"]}],
+        "skills": [{"name": "weather", "version": "1.0.0", "active": True}],
+        "scenarios": [{"name": "desktop", "version": "1.0.0", "active": True}],
+    }
+
+    assert repo.replace_capacity_snapshot("member-1", capacity) is True
+    assert repo.replace_capacity_snapshot("member-1", capacity) is False
+    assert repo.io_for_node("member-1")[0]["io_type"] == "stdout"
+    assert repo.skills_for_node("member-1")[0]["name"] == "weather"
+    assert repo.scenarios_for_node("member-1")[0]["name"] == "desktop"
+
+
 def test_capacity_cache_can_be_invalidated_after_external_write(tmp_path: Path) -> None:
     sql = SQLite(_FakePaths(tmp_path))
     api_repo = SubnetRepo(sql)

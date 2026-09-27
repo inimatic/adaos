@@ -153,6 +153,177 @@ class SubnetRepo:
         self._skill_capacity_cache.clear()
         self._scenario_capacity_cache.clear()
 
+    @staticmethod
+    def _capacity_snapshot_from_connection(con: Any, node_id: str) -> dict[str, Any]:
+        io_rows = con.execute(
+            "SELECT io_type, capabilities_json, priority, id_hint "
+            "FROM subnet_capacity_io WHERE node_id=?",
+            (node_id,),
+        ).fetchall()
+        skill_rows = con.execute(
+            "SELECT name, version, active, dev "
+            "FROM subnet_capacity_skills WHERE node_id=?",
+            (node_id,),
+        ).fetchall()
+        scenario_rows = con.execute(
+            "SELECT name, version, active, dev "
+            "FROM subnet_capacity_scenarios WHERE node_id=?",
+            (node_id,),
+        ).fetchall()
+        return _normalize_capacity_snapshot(
+            {
+                "io": [
+                    {
+                        "io_type": row[0],
+                        "capabilities": json.loads(row[1] or "[]"),
+                        "priority": row[2],
+                        "id_hint": row[3],
+                    }
+                    for row in io_rows
+                ],
+                "skills": [
+                    {
+                        "name": row[0],
+                        "version": row[1],
+                        "active": bool(row[2]),
+                        "dev": bool(row[3]),
+                    }
+                    for row in skill_rows
+                ],
+                "scenarios": [
+                    {
+                        "name": row[0],
+                        "version": row[1],
+                        "active": bool(row[2]),
+                        "dev": bool(row[3]),
+                    }
+                    for row in scenario_rows
+                ],
+            }
+        )
+
+    @staticmethod
+    def _replace_capacity_tables(
+        con: Any,
+        node_id: str,
+        snapshot: dict[str, Any],
+        *,
+        collections: set[str],
+        updated_at: float,
+    ) -> None:
+        if "io" in collections:
+            con.execute("DELETE FROM subnet_capacity_io WHERE node_id=?", (node_id,))
+            for item in snapshot["io"]:
+                con.execute(
+                    """
+                    INSERT INTO subnet_capacity_io(
+                      node_id, io_type, capabilities_json, priority, id_hint, updated_at
+                    ) VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        node_id,
+                        item["io_type"],
+                        json.dumps(item["capabilities"], ensure_ascii=False),
+                        item["priority"],
+                        item["id_hint"],
+                        updated_at,
+                    ),
+                )
+        if "skills" in collections:
+            con.execute("DELETE FROM subnet_capacity_skills WHERE node_id=?", (node_id,))
+            for item in snapshot["skills"]:
+                con.execute(
+                    """
+                    INSERT INTO subnet_capacity_skills(
+                      node_id, name, version, active, updated_at, dev
+                    ) VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        node_id,
+                        item["name"],
+                        item["version"],
+                        1 if item["active"] else 0,
+                        updated_at,
+                        1 if item["dev"] else 0,
+                    ),
+                )
+        if "scenarios" in collections:
+            con.execute("DELETE FROM subnet_capacity_scenarios WHERE node_id=?", (node_id,))
+            for item in snapshot["scenarios"]:
+                con.execute(
+                    """
+                    INSERT INTO subnet_capacity_scenarios(
+                      node_id, name, version, active, updated_at, dev
+                    ) VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        node_id,
+                        item["name"],
+                        item["version"],
+                        1 if item["active"] else 0,
+                        updated_at,
+                        1 if item["dev"] else 0,
+                    ),
+                )
+
+    @staticmethod
+    def _merged_capacity_snapshot(
+        current: dict[str, Any],
+        capacity: Dict[str, Any],
+        *,
+        partial: bool,
+    ) -> tuple[dict[str, Any], set[str]]:
+        incoming = _normalize_capacity_snapshot(capacity)
+        requested = (
+            {key for key in ("io", "skills", "scenarios") if key in capacity}
+            if partial
+            else {"io", "skills", "scenarios"}
+        )
+        target = {key: list(current[key]) for key in ("io", "skills", "scenarios")}
+        for key in requested:
+            target[key] = list(incoming[key])
+        changed = {key for key in requested if target[key] != current[key]}
+        return target, changed
+
+    def replace_capacity_snapshot(
+        self,
+        node_id: str,
+        capacity: Dict[str, Any],
+        *,
+        partial: bool = False,
+    ) -> bool:
+        """Persist a capacity projection with at most one durable transaction.
+
+        Heartbeats and startup discovery commonly carry all three collections.
+        Keeping them in one commit avoids three FULL-sync fsync cycles while
+        retaining an atomic, fail-closed projection.
+        """
+
+        with self.sql.connect() as con:
+            current = self._capacity_snapshot_from_connection(con, node_id)
+            target, changed = self._merged_capacity_snapshot(
+                current,
+                capacity,
+                partial=partial,
+            )
+            if not changed:
+                return False
+            self._replace_capacity_tables(
+                con,
+                node_id,
+                target,
+                collections=changed,
+                updated_at=_now(),
+            )
+            con.commit()
+        if "io" in changed:
+            self._io_capacity_cache.pop(node_id, None)
+        if "skills" in changed:
+            self._skill_capacity_cache.pop(node_id, None)
+        if "scenarios" in changed:
+            self._scenario_capacity_cache.pop(node_id, None)
+        return True
+
     # -------------------- schema --------------------
     _SCHEMA_COLUMNS = {
         "subnet_nodes": {
@@ -409,6 +580,15 @@ class SubnetRepo:
         for attempt in range(4):
             try:
                 with self.sql.connect() as con:
+                    changed: set[str] = set()
+                    target: dict[str, Any] | None = None
+                    if capacity:
+                        current = self._capacity_snapshot_from_connection(con, node_id)
+                        target, changed = self._merged_capacity_snapshot(
+                            current,
+                            capacity,
+                            partial=True,
+                        )
                     if node_state is not None and base_url is not None:
                         con.execute(
                             "UPDATE subnet_nodes SET last_seen=?, node_state=?, base_url=?, updated_at=? WHERE node_id=?",
@@ -429,28 +609,26 @@ class SubnetRepo:
                             "UPDATE subnet_nodes SET last_seen=?, updated_at=? WHERE node_id=?",
                             (float(last_seen), _now(), node_id),
                         )
+                    if target is not None and changed:
+                        self._replace_capacity_tables(
+                            con,
+                            node_id,
+                            target,
+                            collections=changed,
+                            updated_at=_now(),
+                        )
                     con.commit()
                 break
             except sqlite3.OperationalError as exc:
                 if not _sqlite_locked(exc) or attempt >= 3:
                     raise
                 time.sleep(0.05 * (attempt + 1))
-        if capacity:
-            incoming = _normalize_capacity_snapshot(capacity)
-            current = _normalize_capacity_snapshot(
-                {
-                    "io": self.io_for_node(node_id),
-                    "skills": self.skills_for_node(node_id),
-                    "scenarios": self.scenarios_for_node(node_id),
-                }
-            )
-            if incoming != current:
-                if "io" in capacity:
-                    self.replace_io_capacity(node_id, capacity.get("io") or [])
-                if "skills" in capacity:
-                    self.replace_skill_capacity(node_id, capacity.get("skills") or [])
-                if "scenarios" in capacity:
-                    self.replace_scenario_capacity(node_id, capacity.get("scenarios") or [])
+        if "io" in changed:
+            self._io_capacity_cache.pop(node_id, None)
+        if "skills" in changed:
+            self._skill_capacity_cache.pop(node_id, None)
+        if "scenarios" in changed:
+            self._scenario_capacity_cache.pop(node_id, None)
 
     def list_nodes(self) -> List[Dict[str, Any]]:
         with self.sql.connect() as con:
@@ -588,6 +766,48 @@ class SubnetRepo:
             con.commit()
         self._runtime_projection_cache.pop(node_id, None)
 
+    def touch_heartbeat_and_runtime_projection(
+        self,
+        node_id: str,
+        last_seen: float,
+        *,
+        captured_at: float | None = None,
+        node_state: str | None = None,
+    ) -> None:
+        """Refresh member liveness and its runtime projection in one commit."""
+
+        projection_fields: list[str] = []
+        projection_params: list[Any] = []
+        if captured_at is not None:
+            try:
+                projection_params.append(float(captured_at))
+            except Exception:
+                projection_params.append(None)
+            projection_fields.append("captured_at=?")
+        if node_state is not None:
+            projection_fields.append("node_state=?")
+            projection_params.append(str(node_state or "ready"))
+        projection_fields.append("updated_at=?")
+        projection_params.append(_now())
+        projection_params.append(node_id)
+        with self.sql.connect() as con:
+            if node_state is not None:
+                con.execute(
+                    "UPDATE subnet_nodes SET last_seen=?, node_state=?, updated_at=? WHERE node_id=?",
+                    (float(last_seen), str(node_state or "ready"), _now(), node_id),
+                )
+            else:
+                con.execute(
+                    "UPDATE subnet_nodes SET last_seen=?, updated_at=? WHERE node_id=?",
+                    (float(last_seen), _now(), node_id),
+                )
+            con.execute(
+                f"UPDATE subnet_runtime_projection SET {', '.join(projection_fields)} WHERE node_id=?",
+                tuple(projection_params),
+            )
+            con.commit()
+        self._runtime_projection_cache.pop(node_id, None)
+
     def runtime_projection_for_node(self, node_id: str) -> Dict[str, Any]:
         with self.sql.connect() as con:
             cur = con.execute(
@@ -642,44 +862,10 @@ class SubnetRepo:
 
     # -------------------- capacity --------------------
     def replace_io_capacity(self, node_id: str, io_list: List[Dict[str, Any]]) -> None:
-        now = _now()
-        with self.sql.connect() as con:
-            con.execute("DELETE FROM subnet_capacity_io WHERE node_id=?", (node_id,))
-            for item in io_list or []:
-                io_type = str(item.get("io_type") or item.get("type") or "stdout")
-                caps = json.dumps(list(item.get("capabilities") or []), ensure_ascii=False)
-                prio = int(item.get("priority") or 50)
-                id_hint = item.get("id_hint") or ""
-                con.execute(
-                    """
-                    INSERT INTO subnet_capacity_io(node_id, io_type, capabilities_json, priority, id_hint, updated_at)
-                    VALUES(?,?,?,?,?,?)
-                    """,
-                    (node_id, io_type, caps, prio, id_hint, now),
-                )
-            con.commit()
-        self._io_capacity_cache.pop(node_id, None)
+        self.replace_capacity_snapshot(node_id, {"io": io_list or []}, partial=True)
 
     def replace_skill_capacity(self, node_id: str, skills: List[Dict[str, Any]]) -> None:
-        now = _now()
-        with self.sql.connect() as con:
-            con.execute("DELETE FROM subnet_capacity_skills WHERE node_id=?", (node_id,))
-            for s in skills or []:
-                name = str(s.get("name") or s.get("id") or "").strip()
-                if not name:
-                    continue
-                version = str(s.get("version") or "").strip() or "unknown"
-                active = 1 if bool(s.get("active", True)) else 0
-                dev = 1 if bool(s.get("dev", False)) else 0
-                con.execute(
-                    """
-                    INSERT INTO subnet_capacity_skills(node_id, name, version, active, updated_at, dev)
-                    VALUES(?,?,?,?,?,?)
-                    """,
-                    (node_id, name, version, active, now, dev),
-                )
-            con.commit()
-        self._skill_capacity_cache.pop(node_id, None)
+        self.replace_capacity_snapshot(node_id, {"skills": skills or []}, partial=True)
 
     def nodes_with_skill(self, name: str) -> List[Dict[str, Any]]:
         q = (
@@ -771,25 +957,11 @@ class SubnetRepo:
             return out
 
     def replace_scenario_capacity(self, node_id: str, scenarios: List[Dict[str, Any]]) -> None:
-        now = _now()
-        with self.sql.connect() as con:
-            con.execute("DELETE FROM subnet_capacity_scenarios WHERE node_id=?", (node_id,))
-            for s in scenarios or []:
-                name = str(s.get("name") or s.get("id") or "").strip()
-                if not name:
-                    continue
-                version = str(s.get("version") or "").strip() or "unknown"
-                active = 1 if bool(s.get("active", True)) else 0
-                dev = 1 if bool(s.get("dev", False)) else 0
-                con.execute(
-                    """
-                    INSERT INTO subnet_capacity_scenarios(node_id, name, version, active, updated_at, dev)
-                    VALUES(?,?,?,?,?,?)
-                    """,
-                    (node_id, name, version, active, now, dev),
-                )
-            con.commit()
-        self._scenario_capacity_cache.pop(node_id, None)
+        self.replace_capacity_snapshot(
+            node_id,
+            {"scenarios": scenarios or []},
+            partial=True,
+        )
 
     def scenarios_for_node(self, node_id: str) -> List[Dict[str, Any]]:
         cached = self._scenario_capacity_cache.get(node_id)

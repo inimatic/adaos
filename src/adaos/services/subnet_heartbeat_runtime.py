@@ -34,8 +34,14 @@ class _PendingRegistration:
 class HeartbeatPersistenceRuntime:
     """Serialize and coalesce durable heartbeat writes outside route handling."""
 
-    def __init__(self, *, idle_exit_s: float = 1.0) -> None:
+    def __init__(
+        self,
+        *,
+        idle_exit_s: float = 1.0,
+        min_repeat_interval_s: float = 30.0,
+    ) -> None:
         self._idle_exit_s = max(0.05, float(idle_exit_s))
+        self._min_repeat_interval_s = max(0.0, float(min_repeat_interval_s))
         self._loop: asyncio.AbstractEventLoop | None = None
         self._event: asyncio.Event | None = None
         self._task: asyncio.Task[None] | None = None
@@ -44,6 +50,8 @@ class HeartbeatPersistenceRuntime:
         self._in_flight: str | None = None
         self._in_flight_kind: str | None = None
         self._executor: ThreadPoolExecutor | None = None
+        self._last_persisted_signature: dict[str, str] = {}
+        self._last_persisted_monotonic: dict[str, float] = {}
         self._stats_lock = threading.RLock()
         self._stats: dict[str, Any] = {
             "accepted_total": 0,
@@ -61,7 +69,24 @@ class HeartbeatPersistenceRuntime:
             "registration_failed_total": 0,
             "durable_write_total": 0,
             "durable_failed_total": 0,
+            "repeat_deferred_total": 0,
         }
+
+    @staticmethod
+    def _heartbeat_signature(pending: _PendingHeartbeat) -> str:
+        import json
+
+        return json.dumps(
+            {
+                "capacity": pending.capacity,
+                "node_state": pending.node_state,
+                "base_url": pending.base_url,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
 
     def _durable_executor(self) -> ThreadPoolExecutor:
         if self._executor is None:
@@ -84,6 +109,8 @@ class HeartbeatPersistenceRuntime:
             self._pending_registrations.clear()
             self._in_flight = None
             self._in_flight_kind = None
+            self._last_persisted_signature.clear()
+            self._last_persisted_monotonic.clear()
         return loop
 
     def _wake_worker(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -169,14 +196,55 @@ class HeartbeatPersistenceRuntime:
                 node_id = next(iter(self._pending_registrations))
                 pending: _PendingRegistration | _PendingHeartbeat = self._pending_registrations.pop(node_id)
                 kind = "registration"
+                heartbeat_signature = ""
                 callback = functools.partial(
                     pending.directory.persist_registration,
                     pending.node_info,
                 )
             else:
-                node_id = next(iter(self._pending))
+                node_id = ""
+                deferred_wait_s: float | None = None
+                monotonic_now = time.monotonic()
+                for candidate_node_id, candidate in self._pending.items():
+                    candidate_signature = self._heartbeat_signature(candidate)
+                    repeated = (
+                        self._last_persisted_signature.get(candidate_node_id)
+                        == candidate_signature
+                    )
+                    elapsed = monotonic_now - self._last_persisted_monotonic.get(
+                        candidate_node_id,
+                        0.0,
+                    )
+                    remaining = (
+                        max(0.0, self._min_repeat_interval_s - elapsed)
+                        if repeated
+                        else 0.0
+                    )
+                    if remaining <= 0.0:
+                        node_id = candidate_node_id
+                        break
+                    deferred_wait_s = (
+                        remaining
+                        if deferred_wait_s is None
+                        else min(deferred_wait_s, remaining)
+                    )
+                if not node_id:
+                    event.clear()
+                    with self._stats_lock:
+                        self._stats["repeat_deferred_total"] = (
+                            int(self._stats.get("repeat_deferred_total") or 0) + 1
+                        )
+                    try:
+                        await asyncio.wait_for(
+                            event.wait(),
+                            timeout=max(0.01, float(deferred_wait_s or 0.01)),
+                        )
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
                 pending = self._pending.pop(node_id)
                 kind = "heartbeat"
+                heartbeat_signature = self._heartbeat_signature(pending)
                 callback = functools.partial(
                     pending.directory.persist_heartbeat,
                     pending.node_id,
@@ -218,6 +286,8 @@ class HeartbeatPersistenceRuntime:
                         )
                     else:
                         self._stats["persisted_total"] = int(self._stats.get("persisted_total") or 0) + 1
+                        self._last_persisted_signature[node_id] = heartbeat_signature
+                        self._last_persisted_monotonic[node_id] = time.monotonic()
                     self._stats["durable_write_total"] = int(self._stats.get("durable_write_total") or 0) + 1
                     self._stats["last_persisted_at"] = time.time()
                     self._stats["last_error"] = None
@@ -292,6 +362,7 @@ class HeartbeatPersistenceRuntime:
             ),
             "worker_alive": bool(self._task is not None and not self._task.done()),
             "executor": "dedicated_single_worker",
+            "min_repeat_interval_s": self._min_repeat_interval_s,
         }
 
 

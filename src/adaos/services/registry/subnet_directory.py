@@ -55,9 +55,12 @@ class SubnetDirectory:
         node = self._registration_node(node_info, last_seen=time.time())
         self.repo.upsert_node(node)
         capacity = node_info.get("capacity") or {}
-        self.repo.replace_io_capacity(node["node_id"], capacity.get("io") or [])
-        self.repo.replace_skill_capacity(node["node_id"], capacity.get("skills") or [])
-        self.repo.replace_scenario_capacity(node["node_id"], capacity.get("scenarios") or [])
+        if hasattr(self.repo, "replace_capacity_snapshot"):
+            self.repo.replace_capacity_snapshot(node["node_id"], capacity)
+        else:
+            self.repo.replace_io_capacity(node["node_id"], capacity.get("io") or [])
+            self.repo.replace_skill_capacity(node["node_id"], capacity.get("skills") or [])
+            self.repo.replace_scenario_capacity(node["node_id"], capacity.get("scenarios") or [])
 
     def on_register(self, node_info: Dict[str, Any]) -> None:
         self.accept_registration(node_info)
@@ -152,9 +155,12 @@ class SubnetDirectory:
             )
         capacity = snap.get("capacity") if isinstance(snap.get("capacity"), dict) else {}
         if capacity:
-            self.repo.replace_io_capacity(node_id, capacity.get("io") or [])
-            self.repo.replace_skill_capacity(node_id, capacity.get("skills") or [])
-            self.repo.replace_scenario_capacity(node_id, capacity.get("scenarios") or [])
+            if hasattr(self.repo, "replace_capacity_snapshot"):
+                self.repo.replace_capacity_snapshot(node_id, capacity)
+            else:
+                self.repo.replace_io_capacity(node_id, capacity.get("io") or [])
+                self.repo.replace_skill_capacity(node_id, capacity.get("skills") or [])
+                self.repo.replace_scenario_capacity(node_id, capacity.get("scenarios") or [])
         self.repo.upsert_runtime_projection(node_id, snap)
         st = self.live.get(node_id) or {}
         st["online"] = True
@@ -169,8 +175,20 @@ class SubnetDirectory:
         node_state: str | None = None,
     ) -> None:
         ts = time.time()
-        self.repo.touch_heartbeat(node_id, ts, None, node_state=node_state)
-        self.repo.touch_runtime_projection(node_id, captured_at=captured_at, node_state=node_state)
+        if hasattr(self.repo, "touch_heartbeat_and_runtime_projection"):
+            self.repo.touch_heartbeat_and_runtime_projection(
+                node_id,
+                ts,
+                captured_at=captured_at,
+                node_state=node_state,
+            )
+        else:
+            self.repo.touch_heartbeat(node_id, ts, None, node_state=node_state)
+            self.repo.touch_runtime_projection(
+                node_id,
+                captured_at=captured_at,
+                node_state=node_state,
+            )
         st = self.live.get(node_id) or {}
         st["online"] = True
         st["last_seen"] = ts
