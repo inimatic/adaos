@@ -2136,7 +2136,8 @@ def _reconcile_promoted_project_runtime(
     target = dict(activation.get("target") or {})
     health = dict(activation.get("health_evidence") or {})
     binding = dict(activation.get("runtime_binding") or {})
-    webspace_id = str(target.get("webspace_id") or "").strip()
+    trial_webspace_id = str(target.get("webspace_id") or "").strip()
+    webspace_id = production_webspace_id(trial_webspace_id)
     if (
         activation.get("status") not in {"active", "completed"}
         or identity.get("candidate_id") != candidate_id
@@ -2144,7 +2145,7 @@ def _reconcile_promoted_project_runtime(
         or identity.get("package_digest") != candidate.package_digest
         or health.get("status") != "passed"
         or binding.get("authority") != "immutable_candidate"
-        or not webspace_id
+        or not trial_webspace_id
     ):
         raise ValueError(
             "Completed exact Trial evidence is required for Application recovery"
@@ -2154,11 +2155,17 @@ def _reconcile_promoted_project_runtime(
     if not lock_path.is_file():
         raise ValueError("Active WorkspaceLock is unavailable for Application recovery")
     lock = WorkspaceLock.from_mapping(json.loads(lock_path.read_text(encoding="utf-8")))
-    expected_lock_digest = str(binding.get("workspace_lock_digest") or "").strip()
+    trial_lock_digest = str(binding.get("workspace_lock_digest") or "").strip()
+    promotion_lock_digest = _completed_project_promotion_lock_digest(
+        candidate_id, candidate
+    )
     observed_lock_digest = str(lock.to_dict().get("lock_digest") or "").strip()
-    if not expected_lock_digest or observed_lock_digest != expected_lock_digest:
+    expected_lock_digests = {
+        value for value in (trial_lock_digest, promotion_lock_digest) if value
+    }
+    if not expected_lock_digests or observed_lock_digest not in expected_lock_digests:
         raise ValueError(
-            "Active WorkspaceLock differs from the accepted Trial activation"
+            "Active WorkspaceLock differs from the accepted Trial and Project promotion"
         )
 
     installation = distribution.applications.reconcile_workspace_installation(
@@ -2206,9 +2213,9 @@ def _reconcile_promoted_project_runtime(
     }
 
 
-def _completed_project_promotion_is_current(
+def _completed_project_promotion_lock_digest(
     candidate_id: str, candidate
-) -> bool:
+) -> str | None:
     """Observe the exact durable Project promotion after a Root restart.
 
     The shared channel is normally the preferred observation.  A completed
@@ -2225,17 +2232,17 @@ def _completed_project_promotion_is_current(
         / f"{candidate_id}.json"
     )
     if not path.is_file():
-        return False
+        return None
     try:
         operation = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
-        return False
+        return None
     receipts = dict(operation.get("receipts") or {})
     channel = dict((receipts.get("channel_moved") or {}).get("pointer") or {})
     activation = dict(receipts.get("workspace_activated") or {})
     binding = dict(operation.get("attestation_binding") or {})
     attestation_set = dict(binding.get("attestation_set") or {})
-    return bool(
+    exact = bool(
         operation.get("schema") == "adaos.artifact.promotion_operation.v1"
         and operation.get("status") == "completed"
         and operation.get("phase") == "completed"
@@ -2250,6 +2257,13 @@ def _completed_project_promotion_is_current(
         and attestation_set.get("project_id") == candidate.project_id
         and attestation_set.get("release_digest") == candidate.release_digest
     )
+    return str(activation.get("lock_digest") or "").strip() if exact else None
+
+
+def _completed_project_promotion_is_current(
+    candidate_id: str, candidate
+) -> bool:
+    return bool(_completed_project_promotion_lock_digest(candidate_id, candidate))
 
 
 def promote_stable(

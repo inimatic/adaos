@@ -43,7 +43,6 @@ def test_legacy_workspace_adoption_honors_removed_installation_tombstone(
             AssertionError("removed installation must not inspect WorkspaceLock")
         ),
     )
-
     assert applications._adopt_legacy_workspace_installation(application) is application
 
 
@@ -466,6 +465,9 @@ def test_promote_reconciles_exact_completed_project_activation(
                 workspace_dir=lambda: workspace,
             )
         ),
+    )
+    monkeypatch.setattr(
+        applications, "production_webspace_id", lambda value: value
     )
     monkeypatch.setattr(
         trial_activation,
