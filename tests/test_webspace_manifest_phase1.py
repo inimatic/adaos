@@ -752,7 +752,7 @@ def test_workspace_index_rejects_new_unresolved_runtime_identity() -> None:
         ensure_workspace("$runtime.webspace_id")
 
 
-def test_list_workspaces_hides_legacy_unresolved_runtime_identity(caplog) -> None:
+def test_list_workspaces_hides_legacy_unresolved_runtime_identity(monkeypatch) -> None:
     ctx = get_ctx()
     ensure_workspace("desktop")
     with ctx.sql.connect() as con:
@@ -783,14 +783,22 @@ def test_list_workspaces_hides_legacy_unresolved_runtime_identity(caplog) -> Non
     workspace_index_module._WARNED_UNRESOLVED_WORKSPACE_IDS.discard(
         "$runtime.webspace_id"
     )
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        workspace_index_module._log,
+        "warning",
+        lambda message, workspace_id: warnings.append((message, workspace_id)),
+    )
     rows = workspace_index_module.list_workspaces()
     workspace_index_module.list_workspaces()
 
     assert "$runtime.webspace_id" not in {row.workspace_id for row in rows}
-    assert sum(
-        "workspace_id='$runtime.webspace_id'" in record.getMessage()
-        for record in caplog.records
-    ) == 1
+    assert warnings == [
+        (
+            "ignoring unresolved workspace catalog row workspace_id=%r",
+            "$runtime.webspace_id",
+        )
+    ]
 
 
 def test_list_workspaces_dedupes_legacy_default_workspace_row(monkeypatch) -> None:
