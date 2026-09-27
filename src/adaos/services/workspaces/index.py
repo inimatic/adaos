@@ -33,6 +33,7 @@ _log = logging.getLogger("adaos.workspaces.index")
 _WORKSPACE_SCHEMA_REVISION = "2026-08-16.1"
 _WORKSPACE_SCHEMA_LOCK = threading.RLock()
 _ENSURED_WORKSPACE_SCHEMA_REVISIONS: set[tuple[str, str]] = set()
+_WARNED_UNRESOLVED_WORKSPACE_IDS: set[str] = set()
 _PENDING_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str]] = {}
 _INFLIGHT_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str]] = {}
 _CURRENT_SCENARIO_OVERLAY_WORKER: threading.Thread | None = None
@@ -119,10 +120,14 @@ def _dedupe_manifest_rows(rows: Iterable["WebspaceManifest"]) -> List["WebspaceM
     for row in manifests:
         raw_id = str(row.workspace_id or "").strip()
         if not _is_concrete_workspace_id(raw_id):
-            _log.warning(
-                "ignoring unresolved workspace catalog row workspace_id=%r",
-                raw_id,
-            )
+            with _WORKSPACE_SCHEMA_LOCK:
+                first_observation = raw_id not in _WARNED_UNRESOLVED_WORKSPACE_IDS
+                _WARNED_UNRESOLVED_WORKSPACE_IDS.add(raw_id)
+            if first_observation:
+                _log.warning(
+                    "ignoring unresolved workspace catalog row workspace_id=%r",
+                    raw_id,
+                )
             continue
         normalized_id = _normalize_workspace_id(raw_id)
         if raw_id != normalized_id and normalized_id in raw_ids:
