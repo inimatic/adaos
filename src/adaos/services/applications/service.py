@@ -759,11 +759,11 @@ class ApplicationService:
     ) -> tuple[dict[str, Any], ...]:
         """Find consumers that can follow a compatible provider release.
 
-        This is deliberately narrower than matching a component name.  The
-        consumer must hold the component as an exact resolved ``shared``
-        dependency and its immutable release must name the currently active
-        provider ProjectRelease.  Only a target provider version admitted by
-        the declared Project dependency range may advance that local lock.
+        This is deliberately narrower than matching a component name.  A
+        consumer may follow either a shared Project dependency or a directly
+        resolved shared component dependency.  In both cases its immutable
+        version range must admit the provider's target version and its current
+        local binding must still point at the provider's active package.
         """
 
         try:
@@ -788,6 +788,10 @@ class ApplicationService:
         target_by_ref = {
             item["component_ref"]: item["package_digest"] for item in components
         }
+        current_packages = {
+            item.key: item for item in provider_release.project_release.components
+        }
+        target_packages = {item.key: item for item in target_project.components}
         provider_ref = f"project:{target_project.project_id}"
         result: list[dict[str, Any]] = []
         for installation in self.store.list_installations():
@@ -804,12 +808,12 @@ class ApplicationService:
             except FileNotFoundError:
                 continue
             composition = consumer_release.project_release.composition_lock
-            if composition is None:
-                continue
             immutable_lock = next(
                 (
                     item
-                    for item in composition.project_dependencies
+                    for item in (
+                        composition.project_dependencies if composition is not None else ()
+                    )
                     if item.project_ref == provider_ref
                 ),
                 None,
@@ -830,20 +834,6 @@ class ApplicationService:
                 (local_lock or {}).get("version_spec")
                 or (immutable_lock.version_spec if immutable_lock else "")
             )
-            if (
-                immutable_lock is None
-                or observed_project_digest != current_project_digest
-            ):
-                continue
-            try:
-                normalized = normalize_version_spec(version_spec)
-                compatible = not normalized or Version(
-                    target_project.version
-                ) in SpecifierSet(normalized)
-            except Exception:
-                compatible = False
-            if not compatible:
-                continue
             resolved = {
                 item.key: item
                 for item in consumer_release.project_release.resolved_dependencies
@@ -852,18 +842,71 @@ class ApplicationService:
                 component_ref = str(current["component_ref"])
                 requested = target_by_ref.get(component_ref)
                 dependency = resolved.get(component_ref)
+                current_package = current_packages.get(component_ref)
+                target_package = target_packages.get(component_ref)
                 if (
                     not requested
                     or requested == current["package_digest"]
                     or current["lifecycle"] != "shared"
+                ):
+                    continue
+                project_compatible = False
+                if (
+                    immutable_lock is not None
+                    and observed_project_digest == current_project_digest
+                ):
+                    try:
+                        normalized = normalize_version_spec(version_spec)
+                        project_compatible = not normalized or Version(
+                            target_project.version
+                        ) in SpecifierSet(normalized)
+                    except Exception:
+                        project_compatible = False
+                if project_compatible and (
+                    local_lock is not None
                     or (
-                        local_lock is None
-                        and (
-                            dependency is None
-                            or dependency.package_digest != current["package_digest"]
-                        )
+                        dependency is not None
+                        and dependency.package_digest == current["package_digest"]
                     )
                 ):
+                    result.append(
+                        {
+                            "consumer_application_id": installation.application_id,
+                            "consumer_installation_id": installation.installation_id,
+                            "expected_consumer_revision": installation.revision,
+                            "component_ref": component_ref,
+                            "from_package_digest": current["package_digest"],
+                            "to_package_digest": requested,
+                            "provider_project_ref": provider_ref,
+                            "from_project_release_digest": current_project_digest,
+                            "to_project_release_digest": target_project_digest,
+                            "admitted_by_version_spec": version_spec,
+                        }
+                    )
+                    continue
+
+                # A component can be consumed directly without a Project-level
+                # dependency (for example the desktop's shared voice runtime).
+                # The provider relationship is proven by the active provider
+                # package digest; the consumer's immutable dependency range is
+                # the authority for advancing its local materialization.
+                if (
+                    immutable_lock is not None
+                    or dependency is None
+                    or current_package is None
+                    or target_package is None
+                    or current_package.digest != current["package_digest"]
+                    or target_package.digest != requested
+                ):
+                    continue
+                try:
+                    direct_spec = normalize_version_spec(dependency.version_spec)
+                    direct_compatible = not direct_spec or Version(
+                        target_package.version
+                    ) in SpecifierSet(direct_spec)
+                except Exception:
+                    direct_compatible = False
+                if not direct_compatible:
                     continue
                 result.append(
                     {
@@ -873,10 +916,10 @@ class ApplicationService:
                         "component_ref": component_ref,
                         "from_package_digest": current["package_digest"],
                         "to_package_digest": requested,
-                        "provider_project_ref": provider_ref,
-                        "from_project_release_digest": current_project_digest,
-                        "to_project_release_digest": target_project_digest,
-                        "admitted_by_version_spec": version_spec,
+                        "binding_kind": "direct_component",
+                        "from_component_version": current_package.version,
+                        "to_component_version": target_package.version,
+                        "admitted_by_version_spec": dependency.version_spec,
                     }
                 )
         return tuple(
@@ -952,30 +995,42 @@ class ApplicationService:
                 raise ApplicationServiceError(
                     "shared dependency binding is absent after review"
                 )
+            project_change = next(
+                (
+                    item
+                    for item in changes
+                    if str(item.get("provider_project_ref") or "")
+                    and str(item.get("to_project_release_digest") or "")
+                ),
+                None,
+            )
+            project_bindings = current.shared_project_bindings
+            if project_change is not None:
+                project_bindings = tuple(
+                    {
+                        **dict(binding),
+                        "project_release_digest": (
+                            str(project_change["to_project_release_digest"])
+                            if binding["provider_project_ref"]
+                            == project_change["provider_project_ref"]
+                            else binding["project_release_digest"]
+                        ),
+                    }
+                    for binding in (
+                        current.shared_project_bindings
+                        or self._release_shared_project_bindings(
+                            self.store.get_release(
+                                current.application_id,
+                                current.installed_release_digest,
+                            )
+                        )
+                    )
+                )
             updates.append(
                 replace(
                     current,
                     component_refs=tuple(component_refs),
-                    shared_project_bindings=tuple(
-                        {
-                            **dict(binding),
-                            "project_release_digest": (
-                                str(changes[0]["to_project_release_digest"])
-                                if binding["provider_project_ref"]
-                                == changes[0]["provider_project_ref"]
-                                else binding["project_release_digest"]
-                            ),
-                        }
-                        for binding in (
-                            current.shared_project_bindings
-                            or self._release_shared_project_bindings(
-                                self.store.get_release(
-                                    current.application_id,
-                                    current.installed_release_digest,
-                                )
-                            )
-                        )
-                    ),
+                    shared_project_bindings=project_bindings,
                     revision=current.revision + 1,
                     updated_at=utc_now(),
                 )

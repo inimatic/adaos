@@ -1585,6 +1585,199 @@ def test_provider_update_rebinds_compatible_shared_project_consumers(
     ]
 
 
+def test_provider_update_rebinds_compatible_direct_component_consumers(
+    tmp_path: Path,
+) -> None:
+    service = ApplicationService(
+        ApplicationStore(tmp_path),
+        executor=lambda _plan: {"ok": True, "status": "succeeded"},
+    )
+    service.register(_application("provider_app", "provider"))
+    service.register(_application("consumer_app", "consumer"))
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/direct-shared-provider",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("projects/direct-shared-provider/",),
+    )
+
+    def provider_release(version: str, digest: str) -> ApplicationRelease:
+        package = ArtifactPackageRef(
+            kind="skill",
+            artifact_id="shared-mail-provider",
+            version=version,
+            digest=digest,
+            manifest_digest=DIGEST_C,
+            source_ref=source,
+        )
+        project = ProjectRelease(
+            project_id="provider",
+            version=version,
+            source_ref=source,
+            components=(package,),
+            validation_evidence=({"status": "passed"},),
+        ).seal()
+        return ApplicationRelease(
+            application_id="provider_app",
+            publisher_ref="subnet:sn_home",
+            project_release=project,
+            accepted_candidate_id=f"candidate.provider.{version}",
+            acceptance_evidence=(
+                {"decision": "accepted", "release_digest": project.release_digest},
+            ),
+            provenance_refs=(DIGEST_C,),
+            lifecycle="stable",
+        )
+
+    provider_v1 = service.register_release(provider_release("1.0.0", DIGEST_C))
+    install_provider = service.plan_operation(
+        "provider_app",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-direct-provider-v1",
+        expected_revision=0,
+        release_digest=provider_v1.release_digest,
+    )
+    service.apply_operation(
+        install_provider.operation_id,
+        plan_digest=install_provider.plan_digest,
+        idempotency_key=install_provider.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    consumer_project = ProjectRelease(
+        project_id="consumer",
+        version="1.0.0",
+        source_ref=source,
+        components=(
+            ArtifactPackageRef(
+                kind="scenario",
+                artifact_id="consumer",
+                version="1.0.0",
+                digest=DIGEST_A,
+                manifest_digest=DIGEST_C,
+                source_ref=source,
+            ),
+        ),
+        resolved_dependencies=(
+            ResolvedDependency(
+                kind="skill",
+                artifact_id="shared-mail-provider",
+                version="1.0.0",
+                package_digest=DIGEST_C,
+                version_spec="^1.0",
+            ),
+        ),
+        validation_evidence=({"status": "passed"},),
+    ).seal()
+    consumer_release = service.register_release(
+        ApplicationRelease(
+            application_id="consumer_app",
+            publisher_ref="subnet:sn_home",
+            project_release=consumer_project,
+            accepted_candidate_id="candidate.consumer.direct.1.0.0",
+            acceptance_evidence=(
+                {
+                    "decision": "accepted",
+                    "release_digest": consumer_project.release_digest,
+                },
+            ),
+            provenance_refs=(DIGEST_C,),
+            lifecycle="stable",
+        )
+    )
+    install_consumer = service.plan_operation(
+        "consumer_app",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-direct-consumer",
+        expected_revision=0,
+        release_digest=consumer_release.release_digest,
+    )
+    service.apply_operation(
+        install_consumer.operation_id,
+        plan_digest=install_consumer.plan_digest,
+        idempotency_key=install_consumer.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    provider_v11 = service.register_release(provider_release("1.1.0", DIGEST_B))
+    update = service.plan_operation(
+        "provider_app",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-direct-provider-v11",
+        expected_revision=1,
+        release_digest=provider_v11.release_digest,
+    )
+    assert update.plan["conflicts"] == []
+    assert update.plan["shared_dependency_rebindings"] == [
+        {
+            "consumer_application_id": "consumer_app",
+            "consumer_installation_id": "installation:consumer_app",
+            "expected_consumer_revision": 1,
+            "component_ref": "skill:shared-mail-provider",
+            "from_package_digest": DIGEST_C,
+            "to_package_digest": DIGEST_B,
+            "binding_kind": "direct_component",
+            "from_component_version": "1.0.0",
+            "to_component_version": "1.1.0",
+            "admitted_by_version_spec": "^1.0",
+        }
+    ]
+    service.executor = lambda _plan: {
+        "ok": True,
+        "status": "succeeded",
+        "snapshot_receipt": {
+            "snapshot_ref": "snapshot:direct-provider:1",
+            "source_release_digest": provider_v1.release_digest,
+            "consistency_boundary": "artifact_activation_transaction",
+        },
+    }
+    applied = service.apply_operation(
+        update.operation_id,
+        plan_digest=update.plan_digest,
+        idempotency_key=update.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+    assert applied.status == "succeeded"
+    rebound = service.store.get_installation("consumer_app")
+    assert rebound.shared_project_bindings == ()
+    assert next(
+        item
+        for item in rebound.component_refs
+        if item["component_ref"] == "skill:shared-mail-provider"
+    )["package_digest"] == DIGEST_B
+
+    provider_v2 = service.register_release(provider_release("2.0.0", DIGEST_D))
+    incompatible = service.plan_operation(
+        "provider_app",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-direct-provider-v2",
+        expected_revision=2,
+        release_digest=provider_v2.release_digest,
+    )
+    assert incompatible.plan["shared_dependency_rebindings"] == []
+    assert incompatible.plan["conflicts"][0]["active_application_id"] == (
+        "consumer_app"
+    )
+
+
 def test_workspace_adoption_requires_resolved_dependency_closure(
     service: ApplicationService,
 ) -> None:
