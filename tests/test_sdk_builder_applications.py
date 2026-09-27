@@ -790,6 +790,10 @@ def test_publish_to_registry_makes_stable_application_public_and_records_receipt
                     "entrypoint_id": "main",
                     "presentation_ref": "scenario:mail_reader",
                 },
+                {
+                    "entrypoint_id": "prompt-ide",
+                    "presentation_ref": "scenario:prompt_ide",
+                },
             ),
             publisher={
                 "publisher_ref": "subnet:home",
@@ -804,6 +808,17 @@ def test_publish_to_registry_makes_stable_application_public_and_records_receipt
     )
     coordinator = ApplicationDevelopmentCoordinator(tmp_path)
     projected: list[dict[str, object]] = []
+    release = SimpleNamespace(
+        project_release=SimpleNamespace(
+            project_id="mail_reader",
+            composition_lock=SimpleNamespace(
+                entrypoints=(
+                    {"id": "main", "presentation": "scenario:mail_reader"},
+                )
+            ),
+        )
+    )
+    monkeypatch.setattr(service.store, "get_release", lambda *_args: release)
 
     class _Projection:
         def __init__(self, observed_service, *, publisher) -> None:
@@ -840,6 +855,12 @@ def test_publish_to_registry_makes_stable_application_public_and_records_receipt
     assert operation["status"] == "succeeded"
     assert operation["result"]["application"]["visibility"] == "public"
     assert service.store.get_application("mail_reader").revision == 2
+    assert service.store.get_application("mail_reader").entrypoints == (
+        {
+            "entrypoint_id": "main",
+            "presentation_ref": "scenario:mail_reader",
+        },
+    )
     assert projected == [
         {
             "application_id": "mail_reader",
@@ -849,6 +870,58 @@ def test_publish_to_registry_makes_stable_application_public_and_records_receipt
                 "require_application_catalog": True,
         }
     ]
+
+
+def test_publish_to_registry_fails_closed_without_exact_release_entrypoint(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    service.register(
+        Application(
+            application_id="mail_reader",
+            legacy_project_id="mail_reader",
+            publisher_ref="subnet:home",
+            slug="mail_reader",
+            display={"title": "Mail Reader", "summary": "Read mail"},
+            visibility="private",
+            entrypoints=(
+                {
+                    "entrypoint_id": "main",
+                    "presentation_ref": "scenario:mail_reader",
+                },
+            ),
+            publisher={
+                "publisher_ref": "subnet:home",
+                "display_name": "Home",
+                "subnet_short_ref": "home",
+                "release_key_ref": "artifact-signing:home:key",
+                "release_key_fingerprint": "sha256:" + "f" * 64,
+                "home_zone": "local",
+                "trust_relation": "local",
+            },
+        )
+    )
+    release = SimpleNamespace(
+        project_release=SimpleNamespace(
+            project_id="mail_reader",
+            composition_lock=SimpleNamespace(entrypoints=()),
+        )
+    )
+    monkeypatch.setattr(service.store, "get_release", lambda *_args: release)
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+
+    with pytest.raises(ValueError, match="no public entrypoints"):
+        applications._publish_to_registry_effect(
+            "mail_reader",
+            "sha256:" + "a" * 64,
+            release_notes="Invalid release",
+            subnet_ref="subnet:home",
+            expected_revision=1,
+        )
+
+    application = service.store.get_application("mail_reader")
+    assert application.visibility == "private"
+    assert application.revision == 1
 
 
 def test_candidate_verification_adopts_project_before_release_gate(monkeypatch) -> None:

@@ -197,24 +197,23 @@ view did not participate in either authority decision.
 
 ### Maintained Application batch qualification
 
-The 2026-09-26 independent-subnet run qualified Desktop and the requested
-maintained Application set against Core commit
-`e4ed1f10c9857e061fa1bbacdb29aacc6a3ea2b8`. The following exact releases are
+The 2026-09-27 independent-subnet run qualified Desktop and the requested
+maintained Application set against Core `0.1.1096+g452bc10`. The following exact releases are
 active on `192.168.0.30`:
 
 | Application id | Version | Application release digest |
 | --- | --- | --- |
-| `web_desktop` | `0.3.54` | `sha256:641531165944c32c224c12fcecde6fceb53967fab816ce02f22bb8d48c06f88d` |
-| `adaos_drive` | `0.1.18` | `sha256:9983881b57191e9a45700f929a5df5ef9b35593df5418377d824b56cd650ea8f` |
-| `adaos_builder` | `0.3.15` | `sha256:88cf68a2859338d97fd38e0784062bbecbe736efde096cb6d82cca4cc75a77aa` |
-| `applications` | `0.1.39` | `sha256:c662fbb8ca92dde442ddaf88d1128e7c36599d3656e5e20595a51d430731588d` |
-| `cv_descriptor_lab` | `0.1.19` | `sha256:c1ce20e76249515da99dd3e24cc37e5b5fb4592496fc1b481319e09de7788396` |
+| `web_desktop` | `0.3.57` | `sha256:331fe338fba113b2d2b8da4fef13235b6fb62e565cb21b242bfc86510d23c067` |
+| `adaos_drive` | `0.1.21` | `sha256:613e6ec9ef6d78330b953dd9517efa65e0c4711e32b3c77c911bf58b22e085ec` |
+| `adaos_builder` | `0.3.18` | `sha256:7155818c48dcb528dc6bcccfb4037cced38d73ca3c8a63bf3bc97c4f7c0b0f5d` |
+| `applications` | `0.1.44` | `sha256:8b07964fa31009c554629a4eb79cc29bdd8b846431832f6d1911c6e5bc739710` |
+| `cv_descriptor_lab` | `0.1.21` | `sha256:5cf8ed9bc5dbaec6ecae830c54921a71397b5df65b9ae0113370fc0959250a93` |
 | `semantic_ui_demo` | `0.10.28` | `sha256:675f32d34f00fbc0ec6e68f61997fe0d1bb7aecacbd3e51d1ae3ac0f0627efc0` |
 | `flowboard_lab_for_safely_prototyping_a_r_17528146` | `0.1.17` | `sha256:9794e4f50c83b45d7772b4c7d5832c39b4fe89c6b0872d6b281acb03756080f4` |
 | `media_center` | `0.6.114` | `sha256:4c47394b70f86cecf82c93c18029732b121f5a452358e6dd9d38d2430eaa9c7e` |
 | `notebook` | `0.1.2` | `sha256:5af5487a9fdddf83fb0566255d3b1e98e5daf60e72b05ae9a5339cccaf5a9275` |
 | `redevice_control` | `0.1.22` | `sha256:c15939868394b4de6e4fc1de7b1db28379eb9470123b96692fcbc5f014428fb8` |
-| `research_platform` | `0.1.21` | `sha256:758e6dac8a7bbf92b46400fd6de9680ce5f5277ae5c5a2ab3bf4eb20d08e40f7` |
+| `research_platform` | `0.1.25` | `sha256:0496c61257a67e794bdd0196b52b04c7162d333a7e43721286ebc2646887db00` |
 | `slideshow` | `0.1.5` | `sha256:f0ff99f653c0ea864fee7401afef43b9b6aacfe9548b8d89b29f3451632ef410` |
 | `subscription_status` | `0.1.17` | `sha256:fa91fb66a431e7336be9369d50c0d2a1850b6d14d4f407346e677ae7b32844b8` |
 | `research_tlp` | `0.3.18` | `sha256:ad8c1d22fb71bb4d1a15809765f2dc8194a4f10fb9571de8afda2d50eb477e39` |
@@ -235,7 +234,17 @@ non-authoritative `derived_read_only` lifecycle projection with requirement
   permission closure;
 - Notebook's governed `workspace.read`/`workspace.write` grant permits a
   binary attachment upload and byte-identical download;
-- one `api serve` process owns port `8777`; no supervisor is running.
+- the production systemd service owns one AdaOS supervisor on `8776`, which
+  manages the active runtime slot on `8778`; no direct `api serve` competes for
+  MySQL, NATS, or other shared services.
+
+Builder `0.3.18` also removed the obsolete `prompt-ide` presentation from its
+exact composition. Publication now derives the public Application entrypoints
+from that exact immutable release and updates visibility plus entrypoints in
+one optimistic revision. Empty, malformed, duplicate, mismatched, or ambiguous
+release entrypoints fail closed. Republishing an older digest cannot rewrite an
+already immutable registry projection; therefore the corrected catalog was
+delivered as a new release and auto-updated on the independent subnet.
 
 The Media Center update was a deliberate recovery proof rather than a clean
 happy path. Topology admission first rejected an incomplete provider closure.

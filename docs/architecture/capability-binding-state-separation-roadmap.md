@@ -118,6 +118,17 @@ materialization-status hydration. Duplicate `adaos_connect` view
 materialization and SQLite/fsync pressure remain explicit runtime performance
 debt.
 
+Application-identity follow-up, 2026-09-27: Builder `0.3.18` removed its
+obsolete `prompt-ide` entrypoint from the exact immutable composition.
+Registry publication now reconciles public Application entrypoints from that
+exact release in the same optimistic revision as the visibility transition
+and fails closed on missing, malformed, duplicate, or identity-mismatched
+release data. The independent production subnet received the registry event,
+auto-updated to release
+`sha256:7155818c48dcb528dc6bcccfb4037cced38d73ca3c8a63bf3bc97c4f7c0b0f5d`,
+and retained all five green CBS stages without a manual Application update or
+runtime restart.
+
 Runtime-degradation follow-up, 2026-09-26: live logs traced a Media Center
 feedback loop to terminal `media_library_agent` snapshot replays emitting
 `catalog.changed` as if a new job had completed. The correction now marks

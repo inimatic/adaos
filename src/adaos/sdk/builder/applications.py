@@ -668,6 +668,45 @@ def _project_application_entrypoints(project: Mapping[str, Any]) -> tuple[dict[s
     return tuple(result)
 
 
+def _release_application_entrypoints(release: Any) -> tuple[dict[str, str], ...]:
+    """Project exact release entrypoints into the public Application identity.
+
+    Publication is the authority boundary at which a stale mutable Application
+    aggregate must stop advertising presentations that the immutable release
+    no longer delivers. Unlike legacy Project adoption, this projection is
+    deliberately strict: malformed, empty, or duplicate release entrypoints
+    fail closed instead of being guessed from owned components.
+    """
+
+    composition = release.project_release.composition_lock
+    raw_entrypoints = tuple(composition.entrypoints)
+    if not raw_entrypoints:
+        raise ValueError("exact Application release has no public entrypoints")
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in raw_entrypoints:
+        if not isinstance(raw, Mapping):
+            raise ValueError("exact Application release entrypoints must be objects")
+        entrypoint_id = str(raw.get("id") or "").strip()
+        presentation_ref = str(raw.get("presentation") or "").strip()
+        if not entrypoint_id or not presentation_ref.startswith(("scenario:", "skill:")):
+            raise ValueError(
+                "exact Application release contains an invalid public entrypoint"
+            )
+        if entrypoint_id in seen:
+            raise ValueError(
+                "exact Application release contains duplicate public entrypoints"
+            )
+        seen.add(entrypoint_id)
+        result.append(
+            {
+                "entrypoint_id": entrypoint_id,
+                "presentation_ref": presentation_ref,
+            }
+        )
+    return tuple(result)
+
+
 def publisher_context() -> dict[str, Any]:
     ctx = _ctx()
     config = ctx.config
@@ -1056,7 +1095,9 @@ def retire_failed_local_publication_preflight(
             raise ValueError("Workspace installation appeared after Beta preparation")
         return {"ok": True, "release_digest": lifecycle.stable_digest}
 
-    guard = lambda: mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30)
+    def guard():
+        return mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30)
+
     retired = lifecycle.abort_stable_adoption_before_effects(
         verify_source=verify,
         source_guard=guard,
@@ -2652,11 +2693,30 @@ def _publish_to_registry_effect(
     application = service.store.get_application(application_id)
     if application.publisher_ref != subnet_ref:
         raise ValueError("only the local Application publisher may publish to registry")
+    release = service.store.get_release(application_id, release_digest)
+    if release.project_release.project_id != application.legacy_project_id:
+        raise ValueError("exact Application release does not match Application identity")
+    desired_entrypoints = _release_application_entrypoints(release)
     if application.visibility == "public":
         if application.revision not in {expected_revision, expected_revision + 1}:
             raise ValueError(
                 f"Application revision conflict: expected {expected_revision} or "
                 f"{expected_revision + 1}, observed {application.revision}"
+            )
+        if application.revision == expected_revision + 1:
+            if application.entrypoints != desired_entrypoints:
+                raise ValueError(
+                    "resumed public Application revision does not match exact release entrypoints"
+                )
+        elif application.entrypoints != desired_entrypoints:
+            application = service.register(
+                replace(
+                    application,
+                    entrypoints=desired_entrypoints,
+                    revision=application.revision + 1,
+                    updated_at=utc_now(),
+                ),
+                expected_revision=expected_revision,
             )
     else:
         if application.revision != expected_revision:
@@ -2668,6 +2728,7 @@ def _publish_to_registry_effect(
             replace(
                 application,
                 visibility="public",
+                entrypoints=desired_entrypoints,
                 revision=application.revision + 1,
                 updated_at=utc_now(),
             ),
