@@ -3949,6 +3949,7 @@ class WebspaceUpdateRequest(BaseModel):
 class WebspaceToggleInstallRequest(BaseModel):
     type: str = Field(..., pattern="^(app|widget)$")
     id: str = Field(..., min_length=1)
+    installed: bool | None = None
 
 
 class WebspacePinnedWidgetsRequest(BaseModel):
@@ -6597,7 +6598,17 @@ async def node_yjs_toggle_install(webspace_id: str, payload: WebspaceToggleInsta
             "error": "hub_role_required",
         }
     svc = WebDesktopService()
-    await svc.toggle_install_async(str(payload.type), str(payload.id), target_webspace_id)
+    if payload.installed is None:
+        # Compatibility for older clients.  Current clients send the desired
+        # state so retries and stale responses cannot reverse the operation.
+        await svc.toggle_install_async(str(payload.type), str(payload.id), target_webspace_id)
+    else:
+        await svc.set_install_state_async(
+            str(payload.type),
+            str(payload.id),
+            installed=bool(payload.installed),
+            webspace_id=target_webspace_id,
+        )
     installed = await svc.get_installed_async(target_webspace_id)
     desktop = await svc.get_snapshot_async(target_webspace_id)
     return {

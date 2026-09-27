@@ -736,7 +736,7 @@ def test_node_yjs_set_home_current_publishes_correct_action(monkeypatch) -> None
 
 
 def test_node_yjs_toggle_install_endpoint_uses_desktop_service(monkeypatch) -> None:
-    captured: list[tuple[str, str, str]] = []
+    captured: list[tuple[str, str, bool, str]] = []
 
     class _Installed:
         def to_dict(self) -> dict[str, list[str]]:
@@ -744,7 +744,17 @@ def test_node_yjs_toggle_install_endpoint_uses_desktop_service(monkeypatch) -> N
 
     class _DesktopService:
         async def toggle_install_async(self, item_type: str, item_id: str, webspace_id: str | None = None) -> None:
-            captured.append((item_type, item_id, str(webspace_id or "")))
+            captured.append((item_type, item_id, False, str(webspace_id or "")))
+
+        async def set_install_state_async(
+            self,
+            item_type: str,
+            item_id: str,
+            *,
+            installed: bool,
+            webspace_id: str | None = None,
+        ) -> None:
+            captured.append((item_type, item_id, installed, str(webspace_id or "")))
 
         async def get_installed_async(self, webspace_id: str | None = None) -> _Installed:
             assert webspace_id == "desktop"
@@ -766,11 +776,13 @@ def test_node_yjs_toggle_install_endpoint_uses_desktop_service(monkeypatch) -> N
     result = asyncio.run(
         node_api_module.node_yjs_toggle_install(
             "default",
-            node_api_module.WebspaceToggleInstallRequest(type="widget", id="weather"),
+            node_api_module.WebspaceToggleInstallRequest(
+                type="widget", id="weather", installed=True
+            ),
         )
     )
 
-    assert captured == [("widget", "weather", "desktop")]
+    assert captured == [("widget", "weather", True, "desktop")]
     assert result["ok"] is True
     assert result["installed"]["widgets"] == ["weather"]
     assert result["runtime"]["webspace_id"] == "desktop"

@@ -18,6 +18,22 @@ from adaos.services.workspaces import index as workspace_index
 _log = logging.getLogger("adaos.io_web.desktop")
 
 
+# Browser install actions are read-modify-write operations over a shared
+# desktop document.  Serialize them per webspace so concurrent requests cannot
+# both read the same snapshot and let the last full-list write erase the first
+# action.  The API also supplies the desired state (rather than relying on a
+# non-idempotent toggle), which makes retries safe.
+_desktop_install_locks: dict[str, asyncio.Lock] = {}
+
+
+def _desktop_install_lock(webspace_id: str) -> asyncio.Lock:
+    lock = _desktop_install_locks.get(webspace_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _desktop_install_locks[webspace_id] = lock
+    return lock
+
+
 def _desktop_async_write_meta():
     return ystore_write_metadata(
         root_names=["data", "ui"],
@@ -1149,17 +1165,77 @@ class WebDesktopService:
         awaited from async runtimes.
         """
         webspace = self._resolve_webspace(webspace_id)
-        snapshot = await self.get_snapshot_async(webspace)
+        async with _desktop_install_lock(webspace):
+            snapshot = await self.get_snapshot_async(webspace)
+            installed = (
+                str(target_id or "").strip() not in set(snapshot.installed.apps)
+                if item_type == "app"
+                else str(target_id or "").strip() not in set(snapshot.installed.widgets)
+            )
+            await self._set_install_state_async_unlocked(
+                item_type,
+                target_id,
+                installed=installed,
+                webspace=webspace,
+                snapshot=snapshot,
+            )
+
+    async def set_install_state_async(
+        self,
+        item_type: str,
+        target_id: str,
+        *,
+        installed: bool,
+        webspace_id: Optional[str] = None,
+    ) -> None:
+        """Idempotently install or remove one desktop item.
+
+        This is the preferred browser/API mutation.  Unlike a toggle, replaying
+        the same request after a timeout cannot reverse the accepted action.
+        """
+        webspace = self._resolve_webspace(webspace_id)
+        async with _desktop_install_lock(webspace):
+            snapshot = await self.get_snapshot_async(webspace)
+            await self._set_install_state_async_unlocked(
+                item_type,
+                target_id,
+                installed=bool(installed),
+                webspace=webspace,
+                snapshot=snapshot,
+            )
+
+    async def _set_install_state_async_unlocked(
+        self,
+        item_type: str,
+        target_id: str,
+        *,
+        installed: bool,
+        webspace: str,
+        snapshot: WebDesktopSnapshot,
+    ) -> None:
         current = snapshot.installed
-        next_installed = self._next_installed_state(current, item_type, target_id)
         target = str(target_id or "").strip()
-        removing_app = item_type == "app" and target in set(current.apps)
-        removing_widget = item_type != "app" and str(target_id or "").strip() in set(current.widgets)
+        if not target:
+            raise ValueError("target_id is required")
+        current_items = set(current.apps if item_type == "app" else current.widgets)
+        was_installed = target in current_items
+        if was_installed == bool(installed):
+            _log.info(
+                "desktop install state unchanged webspace=%s type=%s target=%s installed=%s",
+                webspace,
+                item_type,
+                target,
+                bool(installed),
+            )
+            return
+        next_installed = self._next_installed_state(current, item_type, target)
+        removing_app = item_type == "app" and not installed
+        removing_widget = item_type != "app" and not installed
         if item_type == "app":
             next_pinned_applications = [
                 item for item in snapshot.pinned_applications if item != target
             ]
-            if not removing_app and target:
+            if installed:
                 next_pinned_applications.append(target)
             await self.set_pinned_applications_async(next_pinned_applications, webspace)
             if removing_app:
@@ -1176,6 +1252,14 @@ class WebDesktopService:
                 [item for item in snapshot.widget_order if str(item or "").strip() != target_id],
             )
         await self.set_installed_async(next_installed, webspace)
+        _log.info(
+            "desktop install state changed webspace=%s type=%s target=%s installed=%s previous=%s",
+            webspace,
+            item_type,
+            target,
+            bool(installed),
+            was_installed,
+        )
 
     def toggle_install_with_live_room(
         self,
