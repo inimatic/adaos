@@ -27,7 +27,13 @@ async def _emit_service_issue() -> None:
                 "type": "endpoint_unhealthy",
                 "severity": "warning",
                 "message": "healthcheck failed",
-                "details": {"token": "must-not-be-logged"},
+                "details": {
+                    "error_type": "RuntimeError",
+                    "error": "not enough free disk space",
+                    "failures": 3,
+                    "cooloff_s": 60.0,
+                    "token": "must-not-be-logged",
+                },
             },
         },
         source="skill.service",
@@ -72,4 +78,8 @@ def test_bus_emit_and_on(monkeypatch) -> None:
     assert issue_extra["issue_type"] == "endpoint_unhealthy"
     assert issue_extra["issue_severity"] == "warning"
     assert issue_extra["issue_message"] == "healthcheck failed"
+    assert issue_extra["issue_error_type"] == "RuntimeError"
+    assert issue_extra["issue_error"] == "not enough free disk space"
+    assert issue_extra["issue_failures"] == 3
+    assert issue_extra["issue_cooloff_s"] == 60.0
     assert "must-not-be-logged" not in str(issue_extra)

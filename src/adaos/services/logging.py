@@ -988,12 +988,33 @@ def attach_event_logger(bus: EventBus, logger: Optional[logging.Logger] = None) 
             return {}
         issue = payload.get("issue") if isinstance(payload.get("issue"), dict) else {}
         message = str(issue.get("message") or "").strip()
+        details = issue.get("details") if isinstance(issue.get("details"), dict) else {}
+
+        def safe_detail(key: str, *, limit: int = 512) -> Any:
+            value = details.get(key)
+            if isinstance(value, bool) or isinstance(value, (int, float)):
+                return value
+            if isinstance(value, str):
+                return value[:limit] or None
+            return None
+
         return {
             "skill": str(payload.get("skill") or "").strip() or None,
             "issue_id": str(issue.get("id") or "").strip() or None,
             "issue_type": str(issue.get("type") or "").strip() or None,
             "issue_severity": str(issue.get("severity") or "").strip() or None,
             "issue_message": message[:512] or None,
+            # Service issues are durable, but normal event logging deliberately
+            # omits their payload.  Project a small non-secret diagnostic set so
+            # operators can still understand failures such as disk pressure
+            # without enabling unrestricted event payload logging.
+            "issue_error_type": safe_detail("error_type", limit=128),
+            "issue_error": safe_detail("error"),
+            "issue_reason": safe_detail("reason"),
+            "issue_failures": safe_detail("failures"),
+            "issue_cooloff_s": safe_detail("cooloff_s"),
+            "issue_host": safe_detail("host", limit=256),
+            "issue_port": safe_detail("port"),
         }
 
     def _handler(ev: Event) -> None:
