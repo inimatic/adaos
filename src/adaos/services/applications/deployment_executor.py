@@ -219,9 +219,20 @@ class ApplicationDataSnapshotStore:
 
 
 class ApplicationDeploymentExecutor:
-    def __init__(self, *, runtime: ProjectDeploymentRuntime, state_dir: Path) -> None:
+    def __init__(
+        self,
+        *,
+        runtime: ProjectDeploymentRuntime,
+        state_dir: Path,
+        workspace_root: Path | None = None,
+    ) -> None:
         self.runtime = runtime
         self.state_dir = Path(state_dir).expanduser().resolve()
+        self.workspace_root = (
+            Path(workspace_root).expanduser().resolve()
+            if workspace_root is not None
+            else None
+        )
         self.snapshots = ApplicationDataSnapshotStore(self.state_dir)
         self.package_store = ContentAddressedPackageStore(
             self.state_dir / "artifact_pipeline" / "packages"
@@ -553,14 +564,102 @@ class ApplicationDeploymentExecutor:
         )
         return desired, expected_revision, previous
 
-    def _restore_desired(self, previous: ProjectDeployment, *, actor_ref: str) -> None:
+    def _restore_desired(
+        self, previous: ProjectDeployment, *, actor_ref: str
+    ) -> ProjectDeployment:
         current = self.runtime.store.get_deployment(previous.deployment_id)
+        restored = replace(
+            previous, revision=current.revision + 1, updated_at=utc_now()
+        )
         self.runtime.define(
-            replace(previous, revision=current.revision + 1, updated_at=utc_now()),
+            restored,
             expected_revision=current.revision,
             principal=self._principal(actor_ref),
             reason="application_operation_rollback",
         )
+        return restored
+
+    def _rollback_applied_deployment(
+        self,
+        *,
+        desired: ProjectDeployment,
+        previous: ProjectDeployment | None,
+        actor_ref: str,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        """Compensate a successful deployment whose final authority commit failed."""
+
+        principal = self._principal(actor_ref)
+        if previous is not None:
+            rollback_desired = self._restore_desired(previous, actor_ref=actor_ref)
+        else:
+            current = self.runtime.store.get_deployment(desired.deployment_id)
+            rollback_desired = replace(
+                current,
+                revision=current.revision + 1,
+                status="removed",
+                updated_at=utc_now(),
+            )
+            self.runtime.define(
+                rollback_desired,
+                expected_revision=current.revision,
+                principal=principal,
+                reason="application_native_cbs_activation_rollback",
+            )
+        rollback_plan = self.runtime.plan(
+            rollback_desired.deployment_id, principal=principal
+        )
+        if rollback_plan.status == "blocked":
+            raise ApplicationDeploymentExecutorError(
+                "native CBS deployment compensation is blocked"
+            )
+        rollback = self.runtime.apply(
+            str(rollback_plan.plan_digest),
+            principal=principal,
+            idempotency_key=f"application:{idempotency_key}:cbs-rollback",
+        )
+        if rollback.state != "succeeded":
+            raise ApplicationDeploymentExecutorError(
+                "native CBS deployment compensation did not complete"
+            )
+        return rollback.to_dict()
+
+    def _activate_native_cbs_workspace(
+        self,
+        *,
+        plan: Mapping[str, Any],
+        admission: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        application_id = str(plan.get("application_id") or "").strip()
+        if str(admission.get("application_ref") or "") != (
+            f"application:{application_id}"
+        ):
+            return None
+        if self.workspace_root is None:
+            raise ApplicationDeploymentExecutorError(
+                "native CBS WorkspaceLock activation is not configured"
+            )
+        from adaos.services.applications.cbs_activation import (
+            NativeApplicationCBSActivationService,
+        )
+
+        project_id = str(plan.get("legacy_project_id") or "").strip()
+        release_digest = str(plan.get("release_digest") or "").strip()
+        release_plan = self.runtime.releases.get_release(
+            project_id, release_digest
+        )
+        activation = NativeApplicationCBSActivationService(
+            state_dir=self.state_dir,
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+        ).activate(
+            admission=admission,
+            release_plan=release_plan,
+            application_id=application_id,
+            idempotency_key=str(plan["idempotency_key"]),
+            actor_ref=str(plan.get("actor_ref") or "system:applications"),
+        )
+        return activation.to_dict()
 
     def __call__(self, plan: Mapping[str, Any]) -> Mapping[str, Any]:
         kind = str(plan.get("kind") or "")
@@ -634,6 +733,52 @@ class ApplicationDeploymentExecutor:
             idempotency_key=f"application:{plan['idempotency_key']}",
         )
         if operation.state == "succeeded":
+            cbs_workspace_activation = None
+            if cbs_admission is not None:
+                try:
+                    cbs_workspace_activation = self._activate_native_cbs_workspace(
+                        plan=plan,
+                        admission=cbs_admission,
+                    )
+                except Exception as exc:
+                    restore = (
+                        self.snapshots.restore(snapshot_receipt["snapshot_ref"])
+                        if snapshot_receipt is not None
+                        else None
+                    )
+                    try:
+                        compensation = self._rollback_applied_deployment(
+                            desired=desired,
+                            previous=previous,
+                            actor_ref=actor_ref,
+                            idempotency_key=str(plan["idempotency_key"]),
+                        )
+                    except Exception as rollback_exc:
+                        return {
+                            "ok": False,
+                            "status": "unknown",
+                            "reason": "native_cbs_workspace_activation_compensation_uncertain",
+                            "error_type": type(exc).__name__,
+                            "message": str(exc),
+                            "compensation_error_type": type(rollback_exc).__name__,
+                            "compensation_message": str(rollback_exc),
+                            "deployment_operation": operation.to_dict(),
+                            "snapshot_receipt": snapshot_receipt,
+                            "restore_receipt": restore,
+                            "cbs_admission": dict(cbs_admission),
+                        }
+                    return {
+                        "ok": False,
+                        "status": "failed",
+                        "reason": "native_cbs_workspace_activation_failed",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                        "deployment_operation": operation.to_dict(),
+                        "deployment_compensation": compensation,
+                        "snapshot_receipt": snapshot_receipt,
+                        "restore_receipt": restore,
+                        "cbs_admission": dict(cbs_admission),
+                    }
             return {
                 "ok": True,
                 "status": "active",
@@ -644,6 +789,7 @@ class ApplicationDeploymentExecutor:
                 "cbs_admission": (
                     dict(cbs_admission) if cbs_admission is not None else None
                 ),
+                "cbs_workspace_activation": cbs_workspace_activation,
             }
         if operation.uncertain or operation.state in {"uncertain", "partial"}:
             return {

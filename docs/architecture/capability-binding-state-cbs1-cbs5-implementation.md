@@ -270,16 +270,24 @@ the same registry run. Other deployment failures remain fail-closed. Targeted
 Application planning, deployment, auto-update, runtime-selection, and Trial
 suites pass together.
 
-This proof closes native Application admission, shared provider rebinding, and
-stable exact runtime selection for the Gmail slice. It does not yet make the
-Application channel the sole workspace authority: the production root
-`.adaos/workspace.lock.json` has no Gmail project slot. Active truth is still
-split between ProjectDeployment activation, the Application runtime channel,
-and the CBS workspace transaction. The remaining MUST is an atomic bridge from
-the admitted Application resolution/plan to the existing v2 `WorkspaceLock`
-commit, followed by local connected-account attachment on the clean subnet.
-Legacy activation cannot be removed before that bridge is exercised with
-rollback and recovery evidence.
+This proof first closed native Application admission, shared provider
+rebinding, and stable exact runtime selection for the Gmail slice. The next
+implementation closes the code-level authority gap without overloading a
+single requirement resolution: per-requirement resolutions and freshly
+rebased plans are stored in immutable application-level sets. Their exact
+binding, state, and evidence union is committed by one existing v2
+`WorkspaceLock` transaction after ProjectDeployment health succeeds. Admission
+now carries every full immutable `BindingInstance` revision selected by its
+resolutions, and activation appends those revisions to the local identity
+store before they can become active. If the final lock transaction fails, the
+already completed deployment is compensated; failed compensation is an
+explicit unknown outcome rather than a false rollback claim.
+
+The multi-requirement lock commit and compensation boundary pass locally. The
+remaining production gate is to deploy this bridge on the clean subnet,
+observe the exact Gmail slot and resolution-set digests in its active lock,
+exercise recovery there, and attach a local Gmail account. Legacy activation
+cannot be removed before that evidence is captured.
 
 The same audit repaired and verified Infra State projection semantics. The
 hub now accepts node-scoped WebIO snapshot/subscription events even when their

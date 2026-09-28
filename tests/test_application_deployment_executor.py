@@ -314,6 +314,39 @@ def test_executor_refuses_unadmitted_cbs_before_deployment(
         runtime.store.get_deployment("application-deployment:app_test")
 
 
+def test_executor_compensates_deployment_when_native_cbs_lock_is_unconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = _release("1.0.0", "a")
+    runtime = ProjectDeploymentRuntime(
+        store=ProjectDeploymentStore(state_dir=tmp_path),
+        releases=Releases(release),
+        inventory=Inventory(),
+        adapter=Adapter(),
+        local_node_id="node-local",
+    )
+    executor = ApplicationDeploymentExecutor(runtime=runtime, state_dir=tmp_path)
+    monkeypatch.setattr(
+        executor,
+        "_native_cbs_admission",
+        lambda _plan: {
+            "schema": "adaos.application.cbs_admission.v1",
+            "status": "admitted",
+            "application_ref": "application:app_test",
+        },
+    )
+
+    result = executor(_plan("install", release))
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "native_cbs_workspace_activation_failed"
+    assert result["deployment_compensation"]["state"] == "succeeded"
+    assert (
+        runtime.store.get_deployment("application-deployment:app_test").status
+        == "removed"
+    )
+
+
 def test_executor_prefetches_and_verifies_package_for_planning_evidence(
     tmp_path: Path,
 ) -> None:

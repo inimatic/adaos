@@ -898,7 +898,11 @@ def configure_default_distributed_runtimes(
         from adaos.services.zone_hosts import zone_public_base_url
 
         register_application_executor(
-            ApplicationDeploymentExecutor(runtime=deployment, state_dir=state_dir)
+            ApplicationDeploymentExecutor(
+                runtime=deployment,
+                state_dir=state_dir,
+                workspace_root=Path(current.paths.workspace_dir()),
+            )
         )
         register_application_operation_publisher(
             _publisher(ctx=current, topic="application.operation.changed")

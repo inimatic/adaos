@@ -251,6 +251,7 @@ class NativeApplicationCBSAdmissionService:
             and current.get("compilation_digest") == compilation.get("compilation_digest")
             and current.get("project_release_digest") == release_digest
             and current.get("workspace_ref") == workspace_ref
+            and isinstance(current.get("binding_instance_records"), list)
         ):
             return current
 
@@ -527,6 +528,12 @@ class NativeApplicationCBSAdmissionService:
             resolutions.append(resolution.to_dict())
             plans.append(plan.to_dict())
 
+        selected_instance_identities = {
+            (str(item.get("ref") or ""), str(item.get("revision_digest") or ""))
+            for resolution in resolutions
+            for item in resolution.get("binding_instances") or ()
+            if isinstance(item, Mapping)
+        }
         record: dict[str, Any] = {
             "schema": CBS_ADMISSION_SCHEMA,
             "application_ref": application_ref,
@@ -540,6 +547,11 @@ class NativeApplicationCBSAdmissionService:
             "status": "admitted" if len(resolutions) == len(requirements) else "unresolved",
             "resolutions": resolutions,
             "plans": plans,
+            "binding_instance_records": [
+                item.to_dict()
+                for item in sorted(instances, key=lambda value: value.stable_ref)
+                if (item.stable_ref, item.digest) in selected_instance_identities
+            ],
             "unresolved": unresolved,
             "evidence": [item.to_dict() for item in claims],
             "evidence_assessments": [item.to_dict() for item in assessments],
@@ -600,6 +612,27 @@ class NativeApplicationCBSAdmissionService:
             raise NativeApplicationCBSAdmissionError("invalid CBS requirement counters")
         if (record.get("status") == "admitted") != (resolved == total):
             raise NativeApplicationCBSAdmissionError("CBS admission status is inconsistent")
+        raw_instances = record.get("binding_instance_records")
+        if raw_instances is not None:
+            if not isinstance(raw_instances, list) or any(
+                not isinstance(item, Mapping) for item in raw_instances
+            ):
+                raise NativeApplicationCBSAdmissionError(
+                    "CBS admission BindingInstance records are malformed"
+                )
+            instances = [BindingInstance.from_mapping(item) for item in raw_instances]
+            identities = {(item.stable_ref, item.digest) for item in instances}
+            selected = {
+                (str(item.get("ref") or ""), str(item.get("revision_digest") or ""))
+                for resolution in record.get("resolutions") or ()
+                if isinstance(resolution, Mapping)
+                for item in resolution.get("binding_instances") or ()
+                if isinstance(item, Mapping)
+            }
+            if selected != identities:
+                raise NativeApplicationCBSAdmissionError(
+                    "CBS admission BindingInstance records differ from resolutions"
+                )
         return record
 
 

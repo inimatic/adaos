@@ -195,16 +195,23 @@ runtime now also retries this specifically classified pre-authority lock
 contention once the rollback receipt is durable, while all other deployment
 failures remain fail-closed.
 
-This is the first production proof of native Application admission plus shared
-provider rebinding and exact Stable selection. It deliberately does **not**
-close the Workspace authority gate: the production root
-`.adaos/workspace.lock.json` still has no Gmail project slot, so exact
-component authority is currently split between ProjectDeployment activation
-and the Application runtime channel. `CBS10-07` therefore remains partial and
-legacy activation cannot be removed. Completion requires one atomic bridge
-from the admitted Application resolutions/plans to the existing CBS
-`WorkspaceLock` transaction, followed by local Gmail account attachment on
-the clean subnet. Public RU OAuth remains in migration mode until
+This was the first production proof of native Application admission plus shared
+provider rebinding and exact Stable selection. The follow-up implementation
+adds the missing application-level authority bridge: every per-requirement
+`ApplicationResolution` is composed into one immutable workspace resolution
+set, every plan is rebound to the currently observed lock, and the exact union
+of BindingInstances, StateSpace attachments, evidence, and package closure is
+committed by one existing `WorkspaceActivationManager` CAS. Full local identity
+revisions are now persisted with admission instead of being reconstructed at
+activation time. A failed final authority commit compensates the completed
+ProjectDeployment and remains fail-closed; an uncertain compensation is
+reported as `unknown` for recovery. Multi-requirement activation and the
+pre-authority compensation path are covered by executable tests.
+
+`CBS10-07` remains partial until this bridge is deployed and observed on the
+clean subnet, the exact Gmail slot appears in its production `WorkspaceLock`,
+and a local Gmail account is attached. Legacy activation cannot be removed
+before that production/recovery proof. Public RU OAuth remains in migration mode until
 `ru.integrations.inimatic.com` has valid TLS and the node materializes
 `environment-profile:public-connected@1`; the retained loopback URI must stay
 registered on the same Google Web OAuth client meanwhile.
@@ -958,11 +965,12 @@ its own local account attachment and credential authority.
   either Application or the registry. Shared publication, clean-subnet import,
   exact provider delivery, consumer install, native 2-of-2 admission, exact
   contract-fingerprint rebinding, Stable `RuntimeSelection`, and subsequent
-  auto-update are proven. The clean subnet still needs its own Gmail OAuth
-  credential and local connected-account attachment, and the admitted release
-  must be committed through the CBS `WorkspaceLock` transaction before this
-  item is complete; credentials are intentionally neither copied from the
-  publisher nor published in Git.
+  auto-update are proven. The application-level multi-resolution
+  `WorkspaceLock` bridge is implemented and tested locally. The clean subnet
+  still needs the deployed lock-commit/recovery proof, its own Gmail OAuth
+  credential, and local connected-account attachment before this item is
+  complete; credentials are intentionally neither copied from the publisher
+  nor published in Git.
 - [ ] `[should]` `CBS10-08` Resolve a thin distribution online by semantic
   requirement and exact environment/policy/evidence constraints.
 - [ ] `[should]` `CBS10-09` Export and admit a resolved portable distribution

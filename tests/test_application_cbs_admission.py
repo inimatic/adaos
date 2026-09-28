@@ -15,12 +15,17 @@ from adaos.services.applications.cbs import ApplicationCBSService
 from adaos.services.applications.cbs_admission import (
     NativeApplicationCBSAdmissionService,
 )
+from adaos.services.applications.cbs_activation import (
+    NativeApplicationCBSActivationService,
+)
 from adaos.services.applications.deployment_executor import (
     ApplicationDeploymentExecutor,
 )
 from adaos.services.capability_binding_state import (
+    LocalIdentityStore,
     PortableContractCatalog,
 )
+from adaos.domain.capability_binding_state import BindingInstance
 from adaos.services.capability_binding_state.registry_projection import (
     SemanticRegistryProjection,
 )
@@ -253,6 +258,79 @@ def test_ui_admission_selects_application_entrypoint_from_multiple_scenarios(
 
     assert admitted["status"] == "admitted"
     assert admitted["requirements_total"] == admitted["requirements_resolved"] == 2
+
+
+def test_native_application_commits_all_requirement_resolutions_in_one_workspace_lock(
+    tmp_path: Path,
+) -> None:
+    plan, package_store = _release(tmp_path)
+    compilation = _compilation()
+    compilation["application_ref"] = "application:mail_client"
+    compilation["compilation_digest"] = canonical_payload_digest(
+        {
+            key: value
+            for key, value in compilation.items()
+            if key != "compilation_digest"
+        }
+    )
+    state_dir = tmp_path / "state"
+    workspace_root = tmp_path / "workspace"
+    admitted = NativeApplicationCBSAdmissionService(
+        state_dir, now=lambda: FIXED_NOW
+    ).admit(
+        application_ref="application:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=package_store,
+        workspace_ref="workspace:home",
+        evidence_context={"application_id": "mail_client"},
+    )
+
+    activated = NativeApplicationCBSActivationService(
+        state_dir=state_dir,
+        workspace_root=workspace_root,
+        package_store=package_store,
+        now=lambda: FIXED_NOW,
+    ).activate(
+        admission=admitted,
+        release_plan=plan,
+        application_id="mail_client",
+        idempotency_key="mail-client-install",
+        actor_ref="user:owner",
+    )
+
+    lock = activated.activation.workspace_lock
+    assert lock.to_dict()["slots"]["mail_client"]["release_digest"] == (
+        plan.release.release_digest
+    )
+    assert lock.cbs is not None
+    assert len(lock.cbs["binding_instances"]) == 2
+    assert lock.cbs["application_resolution_ref"].startswith(
+        "application-resolution:workspace-set/"
+    )
+    assert lock.cbs["application_resolution_digest"] == (
+        activated.resolution_set_digest
+    )
+    assert lock.cbs["resolution_plan_digest"] == activated.plan_set_digest
+    plan_record = (
+        state_dir
+        / "applications"
+        / "cbs-activation-sets"
+        / "plans"
+        / f"{activated.plan_set_digest.removeprefix('sha256:')}.json"
+    )
+    assert json.loads(plan_record.read_text(encoding="utf-8"))["plans"]
+    assert (workspace_root / "scenarios" / "mail_client").is_dir()
+    assert (workspace_root / "skills" / "mail_provider").is_dir()
+
+    identities = LocalIdentityStore(
+        state_dir / "capability-binding-state" / "local"
+    )
+    for item in lock.cbs["binding_instances"]:
+        observed = identities.by_digest(
+            str(item["ref"]), str(item["revision_digest"]), BindingInstance
+        )
+        assert observed.authority_epoch == item["authority_epoch"]
 
 
 def test_ui_admission_proves_logical_presentation_from_exact_skill_package(
