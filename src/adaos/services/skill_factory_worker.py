@@ -330,6 +330,7 @@ def _write_compact_json(path: Path, payload: Any) -> None:
 _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.access.caller",
     "adaos.sdk.access.require",
+    "adaos.sdk.automation.inventory",
     "adaos.sdk.data.lifecycle.ensure_database",
     "adaos.sdk.data.skill_env.skill_data_root",
     "adaos.sdk.llm.content.generate",
@@ -355,8 +356,9 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
     exported = sdk_export(
         level="std",
         query=(
-            "llm content images resources access caller require skill data root "
-            "lifecycle ensure database generate operate query"
+            "llm content images resources access caller require automation inventory "
+            "external provider fleet skill data root lifecycle ensure database "
+            "generate operate query"
         ),
         limit=64,
     )
@@ -398,7 +400,10 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "authorization": (
                 "Call access.require('workspace.read') before reads and "
                 "access.require('workspace.write') before mutation or generation; "
-                "never accept caller identity from tool arguments."
+                "automation.inventory() performs its own "
+                "access.require('external_provider.use') check; never accept caller "
+                "identity, transport URLs, bearer tokens, certificate paths or other "
+                "provider credentials from tool arguments."
             ),
             "persistence": (
                 "After authorization, keep mutable application records under "
@@ -495,9 +500,96 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "persistence": "store the complete response.media object",
                 },
             },
+            "automation_inventory": {
+                "methods": ["adaos.sdk.automation.inventory"],
+                "authorization": "external_provider.use",
+                "signature": "inventory(*, task_limit: int = 100) -> dict[str, Any]",
+                "bounds": {
+                    "task_limit": {"minimum": 1, "maximum": 100},
+                    "response_bytes_maximum": 2097152,
+                },
+                "result": {
+                    "schema": "adaos.automation.builder_inventory.v1",
+                    "required": ["schema", "observed_at", "nodes", "tasks"],
+                    "nodes_item": {
+                        "required": [
+                            "node_id",
+                            "status",
+                            "capabilities",
+                            "readiness",
+                            "placement",
+                            "architecture",
+                            "core_autoupdate",
+                            "assigned_task_id",
+                            "heartbeat_at",
+                            "account_slot",
+                            "drain_requested",
+                        ],
+                        "status_values": [
+                            "registered",
+                            "idle",
+                            "leased",
+                            "draining",
+                            "quarantined",
+                        ],
+                        "placement_fields": [
+                            "host_id",
+                            "endpoint",
+                            "zone",
+                            "image",
+                            "cpu",
+                            "memory",
+                            "workspace_policy",
+                            "host_capacity",
+                        ],
+                        "readiness": (
+                            "A boolean map reported by the node. Current keys include "
+                            "codex_credentials, codex_cli and codex_sandbox. Capability "
+                            "warm_worker is declared in capabilities, not inferred."
+                        ),
+                        "nullable": ["assigned_task_id"],
+                    },
+                    "tasks_item": {
+                        "required": [
+                            "task_id",
+                            "status",
+                            "outcome",
+                            "assigned_node_id",
+                            "error_code",
+                            "created_at",
+                            "updated_at",
+                            "completed_at",
+                        ],
+                        "omitted_secret_or_workspace_fields": [
+                            "payload",
+                            "result",
+                            "lease_id",
+                            "origin",
+                        ],
+                    },
+                },
+                "failure": {
+                    "exception": "adaos.sdk.automation.AutomationInventoryUnavailable",
+                    "stable_attribute": "code",
+                    "codes": [
+                        "automation_identity_not_configured",
+                        "automation_credential_unavailable",
+                        "automation_route_invalid",
+                        "automation_inventory_unavailable",
+                        "automation_inventory_too_large",
+                        "automation_inventory_invalid",
+                    ],
+                    "rule": (
+                        "Expose only exception.code as a stable blocker; never return "
+                        "the exception cause or transport/credential details."
+                    ),
+                },
+            },
         },
         "imports": [
             "from adaos.sdk import access",
+            "from adaos.sdk import automation",
+            "from adaos.sdk.automation import AutomationInventoryUnavailable",
             "from adaos.sdk.data.skill_env import skill_data_root",
             "from adaos.sdk.llm import content, images",
             "from adaos.sdk import resources",

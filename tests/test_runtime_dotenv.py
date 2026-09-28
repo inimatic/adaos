@@ -10,6 +10,11 @@ def test_runtime_dotenv_allows_realtime_sidecar_keys() -> None:
     assert runtime_dotenv._is_runtime_key("ADAOS_REALTIME_ALLOW_API_FALLBACK")
 
 
+def test_runtime_dotenv_allows_core_owned_automation_transport_keys() -> None:
+    assert runtime_dotenv._is_runtime_key("ADAOS_AUTOMATION_ROOT_URL")
+    assert runtime_dotenv._is_runtime_key("ADAOS_AUTOMATION_BUILDER_TOKEN_FILE")
+
+
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 @pytest.mark.parametrize("final_newline", [True, False])
 def test_cli_dotenv_writer_separates_appended_settings(tmp_path, newline, final_newline) -> None:

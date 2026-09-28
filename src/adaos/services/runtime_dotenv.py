@@ -12,6 +12,7 @@ except Exception:  # pragma: no cover
 
 
 _RUNTIME_ENV_PREFIXES = (
+    "ADAOS_AUTOMATION_",
     "HUB_NATS_",
     "ADAOS_REALTIME_",
     "WS_NATS_PROXY_",

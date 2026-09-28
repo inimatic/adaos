@@ -86,6 +86,22 @@ def test_strict_json_validation_rejects_duplicate_manifest_keys() -> None:
         _loads_strict_json('{"area":"top","area":"bottom"}')
 
 
+def test_implementation_sdk_contract_includes_automation_inventory_closure() -> None:
+    bundle = worker_module._implementation_sdk_contract_bundle()
+    names = {item["name"] for item in bundle["contracts"]}
+    contract = bundle["response_contracts"]["automation_inventory"]
+
+    assert "adaos.sdk.automation.inventory" in names
+    assert contract["authorization"] == "external_provider.use"
+    assert contract["bounds"]["task_limit"] == {"minimum": 1, "maximum": 100}
+    assert contract["result"]["schema"] == "adaos.automation.builder_inventory.v1"
+    assert "placement" in contract["result"]["nodes_item"]["required"]
+    assert contract["failure"]["exception"].endswith(
+        ".AutomationInventoryUnavailable"
+    )
+    assert contract["failure"]["stable_attribute"] == "code"
+
+
 def test_preservable_feedback_unwraps_latest_structured_outcome(tmp_path: Path) -> None:
     run_root = tmp_path / "run"
     (run_root / "output").mkdir(parents=True)
@@ -10899,6 +10915,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     sdk_names = {item["name"] for item in sdk_contracts["contracts"]}
     assert {
         "adaos.sdk.access.require",
+        "adaos.sdk.automation.inventory",
         "adaos.sdk.data.lifecycle.ensure_database",
         "adaos.sdk.data.skill_env.skill_data_root",
         "adaos.sdk.llm.content.generate",
@@ -10911,6 +10928,16 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert sdk_contracts["response_contracts"]["image_draft"][
         "admitted_model_id"
     ] == "gpt-image-1"
+    automation_contract = sdk_contracts["response_contracts"][
+        "automation_inventory"
+    ]
+    assert automation_contract["authorization"] == "external_provider.use"
+    assert automation_contract["bounds"]["task_limit"]["maximum"] == 100
+    assert "placement" in automation_contract["result"]["nodes_item"]["required"]
+    assert automation_contract["failure"]["stable_attribute"] == "code"
+    assert "automation_inventory_unavailable" in automation_contract["failure"][
+        "codes"
+    ]
     lifecycle_contract = sdk_contracts["manifest_contracts"][
         "owned_skill_data_lifecycle"
     ]

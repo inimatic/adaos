@@ -6,6 +6,7 @@ from importlib import import_module
 
 __all__ = [
     "applications",
+    "automation",
     "builder",
     "chat",
     "control_plane",
@@ -32,6 +33,7 @@ __all__ = [
 def __getattr__(name: str):
     if name in (
         "applications",
+        "automation",
         "builder",
         "chat",
         "control_plane",

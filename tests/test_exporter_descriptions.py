@@ -93,6 +93,16 @@ def test_sdk_resource_and_persistent_data_contracts_are_discoverable():
         assert contract["description"] and "signature_detail" in contract
 
 
+def test_automation_inventory_contract_is_discoverable() -> None:
+    expected = "adaos.sdk.automation.inventory"
+    result = search_descriptors(expected, descriptor_ids=["sdk_metadata"], limit=6)
+
+    assert result["items"][0]["item_id"] == expected
+    contract = get_descriptor_item("sdk_metadata", expected)["item"]
+    assert contract["name"] == expected
+    assert "bounded fleet snapshot" in contract["description"]
+
+
 def test_sdk_catalog_is_navigation_not_an_empty_method_contract():
     result = search_descriptors("public SDK skill_data_root", limit=6)
     assert result["items"][0]["item_id"] == "adaos.sdk.data.skill_env.skill_data_root"

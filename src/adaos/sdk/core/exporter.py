@@ -20,6 +20,7 @@ _DISCOVERY_PACKAGES: Tuple[str, ...] = ("adaos.sdk.manage", "adaos.sdk.data")
 _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.access",
     "adaos.sdk.applications",
+    "adaos.sdk.automation",
     "adaos.sdk.builder.applications",
     "adaos.sdk.control_plane",
     "adaos.sdk.conversation",
@@ -46,6 +47,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
 _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.access": "Read verified caller identity and require caller capabilities in the current skill scope.",
     "adaos.sdk.applications": "Inspect Applications and execute reviewed install, update, removal, and track operations.",
+    "adaos.sdk.automation": "Read the secret-free remote automation fleet inventory through the Core-owned Builder identity and the selected AdaOS Root route. Applications never receive bearer tokens, certificate material, SSH keys, MCP tickets, or arbitrary transport URLs. Requires external_provider.use.",
     "adaos.sdk.builder.applications": "Create, preview, publish, and promote Applications through the governed Builder lifecycle.",
     "adaos.sdk.control_plane": "Read canonical node, subnet, reliability, quota, and inventory projections.",
     "adaos.sdk.conversation": "Read and update governed conversational threads and Builder topics.",
