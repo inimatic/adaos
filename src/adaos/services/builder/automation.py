@@ -4836,6 +4836,27 @@ class BuilderAutomationService:
                     "error": "automation_session_not_found",
                 }
             session = self.refresh_session(session)
+            previous_failure = (
+                dict(session.get("last_failure") or {})
+                if isinstance(session.get("last_failure"), Mapping)
+                else {}
+            )
+            feedback_retry_brief = ""
+            if (
+                str(session.get("status") or "").strip() == "failed"
+                and str(previous_failure.get("stage") or "").strip()
+                == "development_feedback"
+            ):
+                # A development-feedback turn that produced no admitted
+                # candidate is a continuation of the same implementation
+                # decision, not a replacement brief.  Preserve the exact
+                # failed execution brief while applying the new chat text as
+                # a delta; otherwise a short "resume after context repair"
+                # instruction silently drops the requirements that caused the
+                # feedback in the first place.
+                feedback_retry_brief = str(
+                    session.get("last_execution_brief") or ""
+                ).strip()
             clarification_source = None
             clarification_input = None
             needs_input = (session.get("last_failure") or {}).get(
@@ -5247,7 +5268,7 @@ class BuilderAutomationService:
                 execution_brief_override=(
                     str(session.get("last_execution_brief") or "").strip() or None
                     if instruction == _UNCHANGED_RETRY_INSTRUCTION
-                    else None
+                    else feedback_retry_brief or None
                 ),
             )
             if continuation_checkpoint:
@@ -10042,7 +10063,19 @@ class BuilderAutomationService:
             else {}
         )
         acceptance_checks = (
-            _iteration_acceptance_checks(iteration_instruction)
+            list(
+                dict.fromkeys(
+                    [
+                        *(
+                            _iteration_acceptance_checks(execution_brief)
+                            if str(execution_brief_override or "").strip()
+                            and execution_brief != iteration_instruction
+                            else []
+                        ),
+                        *_iteration_acceptance_checks(iteration_instruction),
+                    ]
+                )
+            )
             if has_iteration_instruction and not canonical_change_authority
             else [
                 str(criterion).strip()

@@ -4457,6 +4457,61 @@ def test_followup_acceptance_uses_current_explicit_requirements(tmp_path: Path) 
     assert all("old" not in item.lower() for item in checks)
 
 
+def test_development_feedback_retry_preserves_failed_brief_and_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    failed_brief = (
+        "Implement the admitted fleet inventory provider.\n\n"
+        "Acceptance requirements:\n"
+        "1. Inventory is read through the public SDK.\n"
+        "2. The Project declares external_provider.use.\n\n"
+        "Do not publish stable."
+    )
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=failed_brief,
+    )
+    session = service.get_session("scenario", "recipes")
+    session["status"] = "failed"
+    session["last_execution_brief"] = failed_brief
+    session["last_failure"] = {
+        "stage": "development_feedback",
+        "failure_class": "capability_blocked",
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda _self, value: dict(value),
+    )
+
+    followed = service.submit_turn(
+        text="Resume now that the missing SDK context is admitted.",
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
+    request = task["realize_request"]
+    assert request["artifacts"]["implementation_brief"] == failed_brief
+    assert request["artifacts"]["iteration_instruction"] == (
+        "Resume now that the missing SDK context is admitted."
+    )
+    assert "Inventory is read through the public SDK." in request["acceptance"][
+        "checks"
+    ]
+    assert "The Project declares external_provider.use." in request[
+        "acceptance"
+    ]["checks"]
+
+
 def test_session_read_waits_for_the_same_mutation_lock_as_the_writer(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
