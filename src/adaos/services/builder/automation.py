@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import psutil
 import yaml
@@ -3542,12 +3542,25 @@ class BuilderAutomationService:
         project_id: str,
         links: Mapping[str, Any],
         prototype_acceptance: Mapping[str, Any] | None,
+        known_companion_skill_ids: Iterable[str] = (),
     ) -> list[dict[str, Any]]:
         """Materialize authority needed by an accepted writable resource UI."""
 
         if kind != "scenario" or not self._prototype_requires_resource_provider(
             prototype_acceptance
         ):
+            return []
+        # Follow-up repair turns retain their already-qualified mutable provider
+        # identity in the durable session.  Prefer that identity before parsing
+        # the current Project: the reason for the turn may be to repair a Project
+        # manifest that strict composition validation cannot read yet.
+        known = [
+            token
+            for value in known_companion_skill_ids
+            if (token := _safe_token(value, fallback=""))
+            and self._is_mutable_companion_skill(token)
+        ]
+        if known:
             return []
         existing = self._resolve_companion_skill_ids(
             kind,
@@ -5090,6 +5103,7 @@ class BuilderAutomationService:
                 project_id=str(session["object_id"]),
                 links=dict(session.get("links") or {}),
                 prototype_acceptance=session.get("prototype_acceptance"),
+                known_companion_skill_ids=self._session_companion_skill_ids(session),
             )
             session.setdefault("created_artifacts", []).extend(
                 [*portable_cbs_artifacts, *provider_artifacts]

@@ -6151,6 +6151,59 @@ def test_locale_evidence_alone_does_not_require_a_resource_provider():
     )
 
 
+def test_resource_provider_repair_uses_durable_companion_before_invalid_project(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from adaos.sdk.developer import compositions
+
+    service = _service(tmp_path)
+    provider = service.dev_skills_root / "recipes_skill"
+    provider.mkdir(parents=True)
+    (provider / "skill.yaml").write_text(
+        "name: recipes_skill\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    project = service.dev_scenarios_root.parent / "projects" / "recipes"
+    project.mkdir(parents=True, exist_ok=True)
+    (project / "project.yaml").write_text(
+        """schema: adaos.project.v1
+kind: project
+id: recipes
+application_permissions: invalid
+""",
+        encoding="utf-8",
+    )
+
+    def unexpected_ownership_write(*_args, **_kwargs):
+        raise AssertionError("repair continuation must not rewrite invalid Project pre-model")
+
+    monkeypatch.setattr(
+        compositions,
+        "ensure_owned_component",
+        unexpected_ownership_write,
+    )
+
+    created = service._ensure_resource_provider_companion(
+        kind="scenario",
+        project_id="recipes",
+        links={"project_ref": "project:recipes"},
+        prototype_acceptance={
+            "deterministic_evaluation": {
+                "qualification": {
+                    "requirements": {
+                        "resource_query": True,
+                        "operation_kinds": ["create"],
+                    }
+                }
+            }
+        },
+        known_companion_skill_ids=["recipes_skill"],
+    )
+
+    assert created == []
+
+
 def test_persisted_automation_state_drops_singular_companion_alias(
     tmp_path: Path,
 ) -> None:
