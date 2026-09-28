@@ -15,7 +15,7 @@ import tarfile
 import tempfile
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -6543,7 +6543,19 @@ class LocalSkillFactoryWorker:
                 cancel_check=lambda: self._task_status(task_id)
                 in {"cancelled", "expired"},
             )
-        return self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
+        result = self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
+        if getattr(self.executor, "returns_structured_outcome", False):
+            try:
+                normalized = outcome_message(result.final_message)
+            except (TypeError, ValueError) as exc:
+                detail = f"Invalid Automation outcome: {exc}"
+                return replace(
+                    result,
+                    returncode=int(result.returncode or 1),
+                    stderr=result.stderr.rstrip() + "\n" + detail + "\n",
+                )
+            return replace(result, final_message=normalized)
+        return result
 
     @staticmethod
     def _record_codex_attempt(

@@ -7741,6 +7741,22 @@ def test_completed_session_publishes_one_terminal_chat_message(
     assert second["completion_notified_task_id"] == "task.1"
 
 
+@pytest.mark.parametrize(
+    ("env_type", "expected"),
+    [("dev", "локального"), ("prod", "удалённого"), ("", "удалённого")],
+)
+def test_automation_notification_names_the_selected_codex_route(
+    tmp_path: Path, monkeypatch, env_type: str, expected: str
+) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        "adaos.services.core_update_policy.current_env_type",
+        lambda: env_type or "prod",
+    )
+
+    assert service._codex_execution_label() == expected
+
+
 def test_started_session_broadcasts_once_without_conversation(
     tmp_path: Path, monkeypatch
 ) -> None:

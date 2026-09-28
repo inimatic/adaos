@@ -13595,6 +13595,18 @@ class BuilderAutomationService:
             )
         return delivered
 
+    @staticmethod
+    def _codex_execution_label() -> str:
+        try:
+            from adaos.services.core_update_policy import current_env_type
+
+            return "локального" if current_env_type() == "dev" else "удалённого"
+        except Exception:
+            env_type = str(
+                os.getenv("ENV_TYPE") or os.getenv("ADAOS_ENV_TYPE") or "prod"
+            ).strip().lower()
+            return "локального" if env_type == "dev" else "удалённого"
+
     def _notify_started_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         """Publish one conversational and subnet-wide start message per task."""
         current = dict(session)
@@ -13608,7 +13620,8 @@ class BuilderAutomationService:
         iteration = int(current.get("iteration") or 0)
         iteration_suffix = f" Итерация {iteration}." if iteration else ""
         message = (
-            f"Builder начал доработку {object_id} с помощью локального Codex."
+            f"Builder начал доработку {object_id} с помощью "
+            f"{self._codex_execution_label()} Codex."
             f"{iteration_suffix}"
         )
         try:
@@ -13644,7 +13657,8 @@ class BuilderAutomationService:
             object_id = str(current.get("object_id") or "").strip()
             summary = str(result.get("summary") or "").strip()
             message = (
-                f"Builder завершил доработку {object_id} с помощью локального Codex. "
+                f"Builder завершил доработку {object_id} с помощью "
+                f"{self._codex_execution_label()} Codex. "
                 "Проверки пройдены, результат готов к пользовательской апробации."
             )
             if summary:

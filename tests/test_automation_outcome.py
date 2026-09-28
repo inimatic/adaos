@@ -7,7 +7,11 @@ from jsonschema import Draft202012Validator
 
 from adaos.domain.automation_outcome import OUTCOME_SCHEMA, outcome_message
 from adaos.domain.development_feedback import parse_development_feedback, required_user_questions
-from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, SubprocessCodexExecutor
+from adaos.services.skill_factory_worker import (
+    CodexRunResult,
+    LocalSkillFactoryWorker,
+    SubprocessCodexExecutor,
+)
 
 
 def clarification():
@@ -167,3 +171,50 @@ def test_final_schema_does_not_instruct_the_model_to_abandon_tool_work():
     assert "Use the available tools normally" in OUTCOME_INSTRUCTION
     assert "Attempt the relevant admitted tool" in OUTCOME_INSTRUCTION
     assert "does not disable tools" in OUTCOME_SCHEMA["description"]
+
+
+def test_remote_executor_structured_outcome_is_adapted_before_feedback_parsing(tmp_path):
+    envelope = {
+        "schema": "adaos.development_feedback_output.v1",
+        "items": [{
+            "category": "missing_capability",
+            "summary": "Sandbox unavailable",
+            "blocking": True,
+            "impact": ["blocker"],
+        }],
+    }
+    raw = json.dumps({
+        "status": "blocked",
+        "report": "Blocked.\n```adaos-development-feedback\n"
+        + json.dumps(envelope)
+        + "\n```",
+        "questions": [],
+    })
+
+    class RemoteExecutor:
+        returns_structured_outcome = True
+
+        def __call__(self, **_):
+            return CodexRunResult(returncode=0, final_message=raw)
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
+        runs_root=tmp_path / "runs",
+        executor=RemoteExecutor(),
+    )
+    workspace = tmp_path / "workspace"
+    output = tmp_path / "output"
+    workspace.mkdir()
+    output.mkdir()
+    result = worker._execute_codex(
+        task_id="task.remote",
+        workspace=workspace,
+        prompt="bounded task",
+        output_dir=output,
+    )
+
+    assert result.returncode == 0
+    assert parse_development_feedback(result.final_message)[0]["blocking"] is True
