@@ -1466,11 +1466,15 @@ class WebDesktopService:
             owner="core:desktop",
             channel="core.desktop.live_room",
         )
-        if not live_applied:
-            _log.debug(
-                "mutate_live_room skipped for set_pinned_applications webspace=%s",
-                webspace,
-            )
+        if live_applied:
+            # The room-owner callback persists and broadcasts the mutation.
+            # Scheduling the detached writer as well lets rapid unpin/pin
+            # operations complete out of order and restore the older value.
+            return
+        _log.debug(
+            "mutate_live_room skipped for set_pinned_applications webspace=%s",
+            webspace,
+        )
 
         try:
             loop = asyncio.get_running_loop()
@@ -1568,8 +1572,9 @@ class WebDesktopService:
             owner="core:desktop",
             channel="core.desktop.live_room",
         )
-        if not live_applied:
-            _log.debug("mutate_live_room skipped for set_icon_order webspace=%s", webspace)
+        if live_applied:
+            return
+        _log.debug("mutate_live_room skipped for set_icon_order webspace=%s", webspace)
 
         try:
             loop = asyncio.get_running_loop()

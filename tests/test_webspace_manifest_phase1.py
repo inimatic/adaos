@@ -1022,6 +1022,51 @@ def test_web_desktop_service_set_pinned_widgets_updates_overlay_and_live_doc(mon
     ]
 
 
+def test_web_desktop_live_home_mutation_does_not_schedule_duplicate_detached_write(
+    monkeypatch,
+) -> None:
+    webspace_id = "phase5-live-home-single-writer"
+    ensure_workspace(webspace_id)
+    mutations: list[list[str]] = []
+
+    def apply_live(_webspace_id, mutator, **_kwargs):
+        state = {"data": _FakeMap({"desktop": {}}), "ui": _FakeMap({})}
+        doc = _FakeDoc(state)
+        with doc.begin_transaction() as txn:
+            mutator(doc, txn)
+        mutations.append(list(state["data"]["desktop"].get("pinnedApplications", [])))
+        mutations.append(list(state["data"]["desktop"].get("iconOrder", [])))
+        return True
+
+    monkeypatch.setattr(desktop_module, "mutate_live_room", apply_live)
+    monkeypatch.setattr(
+        desktop_module.asyncio,
+        "get_running_loop",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("detached fallback must not run after live-room acceptance")
+        ),
+    )
+
+    service = desktop_module.WebDesktopService()
+    service.set_pinned_applications_with_live_room(
+        ["subscription_status_app"], webspace_id
+    )
+    service.set_icon_order_with_live_room(["subscription_status_app"], webspace_id)
+
+    assert get_workspace_pinned_applications_overlay(webspace_id) == [
+        "subscription_status_app"
+    ]
+    assert get_workspace_icon_order_overlay(webspace_id) == [
+        "subscription_status_app"
+    ]
+    assert mutations == [
+        ["subscription_status_app"],
+        [],
+        [],
+        ["subscription_status_app"],
+    ]
+
+
 def test_web_desktop_service_set_hidden_sections_updates_overlay_and_live_doc(monkeypatch) -> None:
     webspace_id = "phase5-hidden-sections"
     ensure_workspace(webspace_id)
