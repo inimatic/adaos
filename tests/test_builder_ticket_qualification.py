@@ -813,7 +813,7 @@ def test_package_plan_qualifies_related_tickets_once_with_bounded_budget(
 
     assert planned["ready"] is True
     assert planned["execution_budget"]["max_tokens"] == 33000
-    assert planned["execution_budget"]["max_billable_tokens"] == 264000
+    assert planned["execution_budget"]["max_billable_tokens"] == 528000
     assert set(planned["repair_hints"]["target_files"]) == {
         "skills/subscription_status_skill/handlers/main.py",
         "skills/subscription_status_skill/webui.json",

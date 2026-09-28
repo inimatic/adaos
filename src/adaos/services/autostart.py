@@ -1887,6 +1887,20 @@ def enable(
 
     _bootstrap_core_slot(ctx, token=spec.env.get("ADAOS_TOKEN"))
     base_dir = _base_dir_from_spec(ctx, spec)
+    if _is_linux():
+        run_as_user = str(run_as or "").strip() or None
+        prefer_system_scope = _linux_should_prefer_system_scope(scope, run_as=run_as_user)
+        if (
+            prefer_system_scope
+            and shutil_which("systemctl")
+            and _linux_is_root()
+            and _linux_has_systemd_pid1()
+            and run_as_user
+            and run_as_user != "root"
+        ):
+            ok, hint = _linux_paths_safe_for_run_as(spec, run_as=run_as_user)
+            if not ok:
+                raise RuntimeError(hint)
     bin_dir = (base_dir / "bin").resolve()
     bin_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1914,18 +1928,6 @@ def enable(
     if _is_linux():
         run_as_user = str(run_as or "").strip() or None
         prefer_system_scope = _linux_should_prefer_system_scope(scope, run_as=run_as_user)
-        if (
-            prefer_system_scope
-            and shutil_which("systemctl")
-            and _linux_is_root()
-            and _linux_has_systemd_pid1()
-            and run_as_user
-            and run_as_user != "root"
-        ):
-            ok, hint = _linux_paths_safe_for_run_as(spec, run_as=run_as_user)
-            if not ok:
-                raise RuntimeError(hint)
-
         wrapper = (bin_dir / "adaos-autostart.sh").resolve()
         _write_wrapper_sh(wrapper, argv=spec.argv, env=spec.env)
         cli_shim = _install_linux_cli_shim(spec) if _linux_is_root() else None
@@ -2455,7 +2457,7 @@ def restart_service(ctx: AgentContext) -> dict[str, object]:
     scope = str(info.get("scope") or "").strip().lower()
     service_ref = str(info.get("service") or "adaos.service").strip() or "adaos.service"
     service_name = Path(service_ref).name or "adaos.service"
-    if _is_windows() and not sys.platform.startswith("linux"):
+    if _is_windows():
         task_name = str(info.get("task") or _windows_task_name()).strip() or _windows_task_name()
         wrapper = Path(
             str(info.get("wrapper") or (ctx.paths.base_dir() / "bin" / "adaos-autostart.ps1"))

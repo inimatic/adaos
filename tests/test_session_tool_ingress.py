@@ -30,7 +30,7 @@ def ingress(tmp_path, monkeypatch):
                         {"read": "read", "write": "local_write"}.get(kw["public_tool"], ""))
     monkeypatch.setattr(tool_bridge, "_webspace_uses_dev_runtime", lambda args: args.get("webspace_id") == "dev")
     calls = []
-    async def execute(*_args):
+    async def execute(*_args, **_kwargs):
         actor = await asyncio.to_thread(current_caller)
         scope = await asyncio.to_thread(current_caller_scope)
         calls.append((actor.ref(), scope.ref() if scope else None))
@@ -40,7 +40,9 @@ def ingress(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(tool_bridge.router)
     app.include_router(personalization.router)
-    app.dependency_overrides[tool_bridge.get_ctx] = lambda: SimpleNamespace()
+    app.dependency_overrides[tool_bridge.get_ctx] = lambda: SimpleNamespace(
+        paths=SimpleNamespace(state_dir=lambda: tmp_path / "state")
+    )
     @app.get("/owner-only", dependencies=[Depends(auth.require_token)])
     def owner_only():
         return {"ok": True}

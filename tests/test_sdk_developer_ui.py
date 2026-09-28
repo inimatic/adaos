@@ -11,6 +11,8 @@ def test_ui_sdk_selects_a_bounded_kanban_contract_without_runtime_context() -> N
         "recipe.kanban_board",
         "collection.board",
         "layout.board",
+        "ui.list",
+        "item.details",
     }
 
 

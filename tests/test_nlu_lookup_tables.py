@@ -3,9 +3,43 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
+
+def test_baseline_cache_is_scoped_to_agent_context_workspace(tmp_path: Path) -> None:
+    import adaos.services.nlu_lookup_tables as lookups
+
+    lookups._BASELINE_BUCKET_CACHE.clear()
+
+    def _ctx(name: str):
+        root = tmp_path / name
+        skills = root / "skills"
+        scenarios = root / "scenarios"
+        skills.mkdir(parents=True)
+        scenario = scenarios / name
+        scenario.mkdir(parents=True)
+        (scenario / "scenario.yaml").write_text(
+            f"id: {name}\nversion: 0.0.1\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(
+            paths=SimpleNamespace(
+                skills_dir=lambda: skills,
+                scenarios_dir=lambda: scenarios,
+            )
+        )
+
+    first = lookups._collect_cached_baseline_buckets(_ctx("first"))
+    second = lookups._collect_cached_baseline_buckets(_ctx("second"))
+
+    assert "first" in first["scenario_id"]
+    assert "second" not in first["scenario_id"]
+    assert "second" in second["scenario_id"]
+    assert "first" not in second["scenario_id"]
+    assert lookups.desktop_lookup_cache_diagnostics_snapshot()["workspace_count"] == 2
 
 
 def test_lookup_source_yaml_cache_is_stamp_aware_and_single_flight(tmp_path: Path, monkeypatch) -> None:

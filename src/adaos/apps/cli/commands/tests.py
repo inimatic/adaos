@@ -277,12 +277,13 @@ def _skill_test_environment(paths: list[str]) -> tuple[list[str], set[str], Path
                     _add(vendor_root)
             except (OSError, ValueError, TypeError):
                 pass
-
-        for parent in skill_root.parents:
-            vendor_root = parent / "vendor"
-            if vendor_root.is_dir():
-                _add(vendor_root)
-                break
+            # A published workspace may carry one shared vendor directory.
+            # Do not walk beyond that workspace: test roots often live under
+            # a repository that has an unrelated core ``vendor`` directory,
+            # which would silently break skill import isolation.
+            shared_vendor_root = namespace_root / "vendor"
+            if shared_vendor_root.is_dir():
+                _add(shared_vendor_root)
 
     single_root = skill_roots[0] if len(skill_roots) == 1 else None
     return python_paths, skill_names, single_root

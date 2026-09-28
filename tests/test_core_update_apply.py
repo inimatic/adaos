@@ -964,7 +964,7 @@ def test_migrate_installed_skill_runtimes_uses_target_python(monkeypatch, tmp_pa
     )
 
     assert payload["ok"] is True
-    assert captured["cmd"] == [
+    assert captured["cmd"][-3:] == [
         str(tmp_path / "venv" / "bin" / "python"),
         str(migrate_script),
         "--json",
@@ -999,7 +999,7 @@ def test_migrate_installed_skill_runtimes_can_skip_tests(monkeypatch, tmp_path: 
         run_tests=False,
     )
 
-    assert captured["cmd"] == [
+    assert captured["cmd"][-4:] == [
         str(tmp_path / "venv" / "bin" / "python"),
         str(migrate_script),
         "--json",

@@ -474,9 +474,30 @@ def _baseline_bucket_cache_stamp(ctx: AgentContext) -> tuple[Any, ...]:
     return tuple(parts)
 
 
+def _baseline_bucket_cache_key(ctx: AgentContext) -> str:
+    """Scope the fast baseline cache to the workspace that produced it.
+
+    Tests, embedded nodes, and multi-tenant processes can host more than one
+    AgentContext in a process.  A single process-global ``baseline`` key made
+    the first context's semantic registry leak into every later context for
+    the cache TTL.  Paths are enough to identify the source set without the
+    filesystem walk deliberately avoided on cache hits.
+    """
+
+    package_workspace = _package_workspace_dir(ctx)
+    roots = _unique_paths(
+        [
+            _path_from_ctx(ctx, "skills_dir"),
+            _path_from_ctx(ctx, "scenarios_dir"),
+            package_workspace,
+        ]
+    )
+    return "baseline:" + _hash_payload([str(path.resolve()) for path in roots])
+
+
 def _collect_cached_baseline_buckets(ctx: AgentContext) -> dict[str, dict[str, dict[str, Any]]]:
     ttl_s = _baseline_bucket_cache_ttl_s()
-    cache_key = "baseline"
+    cache_key = _baseline_bucket_cache_key(ctx)
     now = time.monotonic()
     if ttl_s > 0:
         with _BASELINE_BUCKET_CACHE_LOCK:
@@ -522,13 +543,17 @@ def invalidate_desktop_lookup_baseline_cache(*, reason: str = "registry_changed"
 def desktop_lookup_cache_diagnostics_snapshot() -> dict[str, Any]:
     with _BASELINE_BUCKET_CACHE_LOCK:
         snapshot = dict(_BASELINE_BUCKET_CACHE_DIAGNOSTICS)
-        cached = _BASELINE_BUCKET_CACHE.get("baseline")
-    snapshot["cached"] = cached is not None
+        cached_entries = tuple(_BASELINE_BUCKET_CACHE.values())
+    snapshot["cached"] = bool(cached_entries)
     snapshot["expires_in_s"] = (
-        round(max(0.0, float(cached[0]) - time.monotonic()), 3)
-        if cached is not None
+        round(
+            max(0.0, max(float(entry[0]) for entry in cached_entries) - time.monotonic()),
+            3,
+        )
+        if cached_entries
         else None
     )
+    snapshot["workspace_count"] = len(cached_entries)
     snapshot["yaml_loader"] = (
         "CSafeLoader" if getattr(yaml, "CSafeLoader", None) is not None else "SafeLoader"
     )

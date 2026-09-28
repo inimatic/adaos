@@ -30,8 +30,20 @@ jobs:
       PYTHONUNBUFFERED: "1"
       ADAOS_TESTING: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      NO_COLOR: "1"
+      FORCE_COLOR: "0"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out published registry fixtures
+        uses: actions/checkout@v4
+        with:
+          repository: inimatic/adaos-registry
+          path: .adaos/workspace
+
+      - name: Check out infrastructure template fixture
+        if: matrix.index == 17
+        run: git submodule update --init --depth 1 src/adaos/integrations/infra-inimatic
 
       - uses: actions/setup-python@v5
         with:

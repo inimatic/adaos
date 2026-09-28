@@ -1681,6 +1681,7 @@ def test_builder_recovers_lost_application_metadata_response(
 def test_publisher_context_exposes_only_public_signing_identity(monkeypatch, tmp_path: Path) -> None:
     key = tmp_path / "publisher.ed25519"
     key.write_bytes(b"a" * 32)
+    key.chmod(0o600)
     monkeypatch.setenv("ADAOS_ARTIFACT_ATTESTATIONS_MODE", "publish")
     monkeypatch.setenv("ADAOS_ARTIFACT_SIGNING_KEY_FILE", str(key))
     monkeypatch.setenv("ADAOS_ARTIFACT_SIGNING_ISSUER", "subnet-home")

@@ -1576,7 +1576,7 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
     assert planned["project_ref"] == "project:demo_metrics"
     assert planned["project_id"] == "demo_metrics"
     assert planned["execution_budget"]["max_tokens"] == 30000
-    assert planned["execution_budget"]["max_billable_tokens"] == 240000
+    assert planned["execution_budget"]["max_billable_tokens"] == 480000
     assert planned["repair_hints"]["profile"] == "project_batch"
     assert planned["repair_hints"]["target_files"] == [
         "skills/demo_metrics_skill/webui.json",

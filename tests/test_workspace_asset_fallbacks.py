@@ -224,6 +224,9 @@ class _PathsStub:
     def dev_skills_dir(self) -> Path:
         return self._base_dir / "dev" / "skills"
 
+    def state_dir(self) -> Path:
+        return self._base_dir / "state"
+
     def repo_root(self) -> Path:
         return self._repo_root
 
@@ -1010,10 +1013,12 @@ def test_skills_loader_imports_repo_workspace_handler_when_workspace_missing(tmp
 
     asyncio.run(loader.import_all_handlers(fake_ctx.paths.skills_dir()))
 
-    assert loaded == [repo_skill / "handlers" / "main.py"]
+    # Tool-only handlers are discovered and their declarations are loaded at
+    # bootstrap, but executable code is intentionally deferred to first use.
+    assert loaded == []
 
 
-def test_webspace_reload_emits_reloaded_event_after_rebuild(monkeypatch) -> None:
+def test_webspace_reload_emits_reloaded_event_after_rebuild(monkeypatch, tmp_path: Path) -> None:
     import asyncio
 
     emitted: list[tuple[str, dict[str, object], str]] = []
@@ -1022,7 +1027,10 @@ def test_webspace_reload_emits_reloaded_event_after_rebuild(monkeypatch) -> None
         def publish(self, _event) -> None:
             return None
 
-    fake_ctx = SimpleNamespace(bus=_Bus())
+    fake_ctx = SimpleNamespace(
+        bus=_Bus(),
+        paths=SimpleNamespace(state_dir=lambda: tmp_path / "state"),
+    )
 
     async def _fake_project(
         _webspace_id: str,

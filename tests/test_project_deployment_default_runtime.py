@@ -606,7 +606,9 @@ def test_skill_health_requires_exact_activated_package_manifest(monkeypatch) -> 
     assert health["expected_manifest_digest"] == expected
 
 
-def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkeypatch) -> None:
+def test_default_runtimes_share_durable_store_and_publish_local_inventory(
+    monkeypatch, tmp_path: Path
+) -> None:
     ctx = get_ctx()
     object.__setattr__(
         ctx,
@@ -616,6 +618,9 @@ def test_default_runtimes_share_durable_store_and_publish_local_inventory(monkey
             subnet_id="subnet-home",
             role="hub",
             token="test-token",
+            hub_cert_path=lambda: tmp_path / "hub.crt",
+            hub_key_path=lambda: tmp_path / "hub.key",
+            ca_cert_path=lambda: tmp_path / "ca.crt",
         ),
     )
     monkeypatch.setenv("ADAOS_NODE_DEPLOYMENT_URL", "http://192.0.2.10:8778")

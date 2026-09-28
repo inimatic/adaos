@@ -53,6 +53,10 @@ def semantic_project(tmp_path: Path) -> tuple[BuilderSemanticUIService, BuilderW
                                 "type": "item.details",
                                 "area": "main",
                                 "title": "Summary",
+                                "dataSource": {
+                                    "kind": "static",
+                                    "value": {"title": "Summary"},
+                                },
                             },
                         ],
                     }

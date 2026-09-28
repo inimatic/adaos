@@ -227,6 +227,12 @@ async def test_dynamic_regex_canonicalizes_lookup_slots_for_scenario_switch():
             json.dumps({"id": target_scenario_id, "version": "0.0.1"}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+    target_yaml = target_root / "scenario.yaml"
+    if not target_yaml.exists():
+        target_yaml.write_text(
+            f"id: {target_scenario_id}\nversion: 0.0.1\n",
+            encoding="utf-8",
+        )
 
     owner_root = Path(ctx.paths.scenarios_dir()) / owner_scenario_id
     owner_root.mkdir(parents=True, exist_ok=True)
@@ -257,6 +263,11 @@ async def test_dynamic_regex_canonicalizes_lookup_slots_for_scenario_switch():
         + "\n",
         encoding="utf-8",
     )
+    # The test writes semantic registry files directly, bypassing the normal
+    # activation event that invalidates the process-local baseline cache.
+    from adaos.services.nlu_lookup_tables import invalidate_desktop_lookup_baseline_cache
+
+    invalidate_desktop_lookup_baseline_cache(reason="test_scenario_registry_changed")
 
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
