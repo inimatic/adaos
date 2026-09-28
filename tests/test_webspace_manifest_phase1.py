@@ -1084,6 +1084,59 @@ def test_web_desktop_service_get_snapshot_returns_overlay_state(monkeypatch) -> 
     }
 
 
+def test_web_desktop_service_explicit_overlay_wins_over_stale_slot_snapshot(
+    monkeypatch,
+) -> None:
+    webspace_id = "phase5-slot-transition-overlay"
+    ensure_workspace(webspace_id)
+    set_workspace_installed_overlay(
+        webspace_id,
+        {
+            "apps": ["scenario:applications", "subscription_status_app"],
+            "widgets": [],
+        },
+    )
+    set_workspace_pinned_applications_overlay(
+        webspace_id,
+        ["scenario:applications", "subscription_status_app"],
+    )
+    set_workspace_icon_order_overlay(
+        webspace_id,
+        ["subscription_status_app", "scenario:applications"],
+    )
+    fake_state = {
+        "ui": _FakeMap({"application": {"desktop": {}}}),
+        "data": _FakeMap(
+            {
+                "desktop": {
+                    "pinnedApplications": ["scenario:applications"],
+                    "iconOrder": ["scenario:applications"],
+                },
+                "installed": {
+                    "apps": ["scenario:applications", "subscription_status_app"],
+                    "widgets": [],
+                },
+            }
+        ),
+    }
+    monkeypatch.setattr(
+        desktop_module,
+        "get_ydoc",
+        lambda _webspace_id: _FakeSyncDoc(fake_state),
+    )
+
+    snapshot = desktop_module.WebDesktopService().get_snapshot(webspace_id)
+
+    assert snapshot.pinned_applications == [
+        "scenario:applications",
+        "subscription_status_app",
+    ]
+    assert snapshot.icon_order == [
+        "subscription_status_app",
+        "scenario:applications",
+    ]
+
+
 def test_web_desktop_service_get_snapshot_clones_yjs_map_like_materialized_state(monkeypatch) -> None:
     webspace_id = "phase5-yjs-map-like-desktop-snapshot"
     ensure_workspace(webspace_id)
