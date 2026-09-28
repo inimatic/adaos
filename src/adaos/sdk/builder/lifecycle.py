@@ -143,6 +143,15 @@ def _admit_native_cbs_trial(
 def _candidate_preparation_failure_is_known(exc: Exception) -> bool:
     """Return whether Root conclusively rejected the request without an unknown outcome."""
 
+    # A bounded local catalog lock timeout happens before this process can
+    # mutate Candidate authority. It is retryable, but its outcome is not
+    # ambiguous: keep the Change at the exact checkpoint instead of forcing an
+    # operator-only reconciliation intended for lost remote responses.
+    from adaos.services.mutation_lock import MutationLockTimeout
+
+    if isinstance(exc, MutationLockTimeout):
+        return True
+
     try:
         status_code = int(getattr(exc, "status_code", 0) or 0)
     except (TypeError, ValueError):

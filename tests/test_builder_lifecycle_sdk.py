@@ -231,6 +231,42 @@ def test_prepare_trial_keeps_checkpoint_retryable_after_conclusive_root_rejectio
     assert transitions[1][1]["idempotency_key"] == "trial-invalid-lock:failure"
 
 
+def test_prepare_trial_keeps_checkpoint_retryable_after_local_catalog_lock_timeout(
+    monkeypatch,
+) -> None:
+    from adaos.services.mutation_lock import MutationLockTimeout
+
+    transitions: list[tuple[str, dict]] = []
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: _checkpoint_state())
+
+    def transition(_kind, _project, action, **kwargs):
+        transitions.append((action, dict(kwargs.get("metadata") or {})))
+        return {"workflow": {"governed": {"state": action}}}
+
+    monkeypatch.setattr(lifecycle.workflow, "transition", transition)
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "prepare_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MutationLockTimeout("catalog migration is still active")
+        ),
+    )
+
+    with pytest.raises(MutationLockTimeout):
+        lifecycle.prepare_trial(
+            "scenario",
+            "recipes",
+            actor="user:test",
+            idempotency_key="trial-catalog-busy",
+        )
+
+    assert [item[0] for item in transitions] == [
+        "candidate_preparation_started",
+        "candidate_preparation_failed",
+    ]
+    assert transitions[1][1]["idempotency_key"] == "trial-catalog-busy:failure"
+
+
 def test_prepare_trial_requires_reconciliation_after_unknown_transport_outcome(
     monkeypatch,
 ) -> None:

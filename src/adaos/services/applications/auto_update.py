@@ -128,14 +128,44 @@ def _runtime_selection_requires_reconciliation(
 def _workspace_authority_requires_reconciliation(
     service: ApplicationService,
     *,
+    state_dir: Path,
     application_id: str,
     installed_release_digest: str,
 ) -> bool:
     executor = getattr(service, "executor", None)
     inspect = getattr(executor, "native_cbs_workspace_status", None)
-    if not callable(inspect):
-        return False
-    status = inspect(application_id, installed_release_digest)
+    if callable(inspect):
+        status = inspect(application_id, installed_release_digest)
+    else:
+        from adaos.services.applications.cbs_admission import (
+            NativeApplicationCBSAdmissionService,
+        )
+        from adaos.services.applications.cbs_activation import (
+            NativeApplicationCBSActivationService,
+        )
+        from adaos.services.artifact_pipeline.packages import (
+            ContentAddressedPackageStore,
+        )
+
+        admission = NativeApplicationCBSAdmissionService(
+            state_dir
+        ).find_by_project_release(
+            installed_release_digest,
+            application_ref=f"application:{application_id}",
+        )
+        if admission is None:
+            return False
+        status = NativeApplicationCBSActivationService(
+            state_dir=state_dir,
+            workspace_root=state_dir.parent / "workspace",
+            package_store=ContentAddressedPackageStore(
+                state_dir / "artifact_pipeline" / "packages"
+            ),
+        ).current_status(
+            application_ref=f"application:{application_id}",
+            project_release_digest=installed_release_digest,
+            admission_digest=str(admission.get("admission_digest") or ""),
+        )
     return isinstance(status, Mapping) and status.get("current") is False
 
 
@@ -202,6 +232,85 @@ class ApplicationAutoUpdateService:
                     f"{application_id}:{release_digest}"
                 ),
             )
+        else:
+            from adaos.services.applications.cbs_admission import (
+                NativeApplicationCBSAdmissionService,
+            )
+            from adaos.services.applications.cbs_activation import (
+                NativeApplicationCBSActivationService,
+            )
+            from adaos.services.artifact_pipeline.channels import ReleaseRepository
+            from adaos.services.artifact_pipeline.packages import (
+                ContentAddressedPackageStore,
+            )
+
+            admission_service = NativeApplicationCBSAdmissionService(self.state_dir)
+            admission = admission_service.find_by_project_release(
+                release_digest,
+                application_ref=f"application:{application_id}",
+            )
+            if admission is not None:
+                release_plan = ReleaseRepository(
+                    self.state_dir / "artifact_pipeline" / "release-cache"
+                ).get_release(project_id, release_digest)
+                packages = ContentAddressedPackageStore(
+                    self.state_dir / "artifact_pipeline" / "packages"
+                )
+                if not isinstance(admission.get("binding_instance_records"), list):
+                    from adaos.services.applications.cbs import ApplicationCBSService
+
+                    compilation = ApplicationCBSService(
+                        self.state_dir
+                    ).inspect_requirement_source(
+                        f"application:{application_id}",
+                        project_release_digest=release_digest,
+                    )
+                    if compilation is None:
+                        raise RuntimeError(
+                            "native CBS workspace reconciliation has no semantic source"
+                        )
+                    admission = admission_service.admit(
+                        application_ref=f"application:{application_id}",
+                        compilation=compilation,
+                        release_plan=release_plan,
+                        package_store=packages,
+                        workspace_ref=str(
+                            admission.get("workspace_ref") or "workspace:local"
+                        ),
+                        evidence_context={
+                            "application_id": application_id,
+                            "operation": "workspace_reconcile",
+                            "source": "application_auto_update",
+                        },
+                    )
+                activation_service = NativeApplicationCBSActivationService(
+                    state_dir=self.state_dir,
+                    workspace_root=self.state_dir.parent / "workspace",
+                    package_store=packages,
+                )
+                before = activation_service.current_status(
+                    application_ref=f"application:{application_id}",
+                    project_release_digest=release_digest,
+                    admission_digest=str(admission.get("admission_digest") or ""),
+                )
+                activation = activation_service.activate(
+                    admission=admission,
+                    release_plan=release_plan,
+                    application_id=application_id,
+                    idempotency_key=(
+                        f"application-auto-update:workspace-reconcile:"
+                        f"{application_id}:{release_digest}"
+                    ),
+                    actor_ref=actor_ref,
+                )
+                workspace_authority = {
+                    "status": (
+                        "current" if before.get("current") is True else "reconciled"
+                    ),
+                    "changed": before.get("current") is not True,
+                    "before": dict(before),
+                    "activation": activation.to_dict(),
+                }
 
         store = getattr(self.application_service, "store", None)
         if store is None or not callable(
@@ -346,6 +455,7 @@ class ApplicationAutoUpdateService:
                     )
                     or _workspace_authority_requires_reconciliation(
                         self.application_service,
+                        state_dir=self.state_dir,
                         application_id=app_id,
                         installed_release_digest=installed_digest,
                     )
