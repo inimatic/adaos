@@ -177,6 +177,38 @@ the first Applications catalog call took 3.18 seconds before warming. These
 are explicit activation and performance follow-ups, not failures of the
 bounded CRUD identity proof.
 
+Native Gmail production follow-up, 2026-09-28: the public
+`gmail_cbs_cleanroom` release
+`sha256:717489abd8ae0c2c66a502b63afb6c94e58d8621a54b635d014669ae3dc7137f`
+was reconciled on the independent production subnet through the ordinary
+registry-triggered Application auto-update. Admission resolved 2 of 2 exact
+requirements. The update atomically rebound the installed
+`mail_focus_reader` consumer from Gmail provider package `403e924b…` to
+`9abe4401…` even though its legacy package range did not admit `0.1.8`; the
+planner admitted the change only after recomputing equal capability-contract,
+binding-definition, logical-entrypoint, and physical delivery fingerprints
+from verified immutable package bytes. The provider installation advanced to
+revision 2, the consumer to revision 6, and a Stable exact `RuntimeSelection`
+was committed. A prior component-lock timeout rolled back cleanly and the next
+registry run resumed under a new deterministic idempotency identity. The
+runtime now also retries this specifically classified pre-authority lock
+contention once the rollback receipt is durable, while all other deployment
+failures remain fail-closed.
+
+This is the first production proof of native Application admission plus shared
+provider rebinding and exact Stable selection. It deliberately does **not**
+close the Workspace authority gate: the production root
+`.adaos/workspace.lock.json` still has no Gmail project slot, so exact
+component authority is currently split between ProjectDeployment activation
+and the Application runtime channel. `CBS10-07` therefore remains partial and
+legacy activation cannot be removed. Completion requires one atomic bridge
+from the admitted Application resolutions/plans to the existing CBS
+`WorkspaceLock` transaction, followed by local Gmail account attachment on
+the clean subnet. Public RU OAuth remains in migration mode until
+`ru.integrations.inimatic.com` has valid TLS and the node materializes
+`environment-profile:public-connected@1`; the retained loopback URI must stay
+registered on the same Google Web OAuth client meanwhile.
+
 ## Outcome
 
 AdaOS can preserve Application and eligible state identities while changing a
@@ -924,10 +956,13 @@ its own local account attachment and credential authority.
   `gmail_cbs_cleanroom` and a distinct Gmail consumer on a clean subnet. Reuse
   the capability/provider credential attachment without copying a secret into
   either Application or the registry. Shared publication, clean-subnet import,
-  exact provider delivery, consumer install, and subsequent auto-update are
-  proven. The clean subnet still needs its own Gmail OAuth credential and local
-  connected-account attachment before this item is complete; credentials are
-  intentionally neither copied from the publisher nor published in Git.
+  exact provider delivery, consumer install, native 2-of-2 admission, exact
+  contract-fingerprint rebinding, Stable `RuntimeSelection`, and subsequent
+  auto-update are proven. The clean subnet still needs its own Gmail OAuth
+  credential and local connected-account attachment, and the admitted release
+  must be committed through the CBS `WorkspaceLock` transaction before this
+  item is complete; credentials are intentionally neither copied from the
+  publisher nor published in Git.
 - [ ] `[should]` `CBS10-08` Resolve a thin distribution online by semantic
   requirement and exact environment/policy/evidence constraints.
 - [ ] `[should]` `CBS10-09` Export and admit a resolved portable distribution

@@ -19,6 +19,10 @@ from adaos.domain.application import (
 from adaos.domain.artifact_release import WorkspaceLock, canonical_payload_digest
 from adaos.domain.application_access import classify_access_profile_diff
 from adaos.services.artifact_pipeline.releases import normalize_version_spec
+from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+from adaos.services.artifact_pipeline.trial_activation import (
+    shared_skill_contract_fingerprint,
+)
 
 from .store import ApplicationStore
 from .runtime_channel import ApplicationRuntimeChannel
@@ -36,6 +40,12 @@ class ApplicationPlanConflict(ApplicationServiceError):
 
 ApplicationExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 ApplicationOperationPublisher = Callable[[Mapping[str, Any]], Any]
+
+# Auto-update idempotency names the planning contract as well as the requested
+# release. Bump this only when the same immutable update intent can produce a
+# materially different reviewed plan (for example after adding native CBS
+# rebinding evidence). Existing operations remain immutable audit records.
+APPLICATION_OPERATION_PLANNER_REVISION = "native-cbs-rebinding.v1"
 
 
 def _require_authority(
@@ -1112,8 +1122,58 @@ class ApplicationService:
                     ) in SpecifierSet(direct_spec)
                 except Exception:
                     direct_compatible = False
-                if not direct_compatible:
+                if direct_compatible:
+                    result.append(
+                        {
+                            "consumer_application_id": installation.application_id,
+                            "consumer_installation_id": installation.installation_id,
+                            "expected_consumer_revision": installation.revision,
+                            "component_ref": component_ref,
+                            "from_package_digest": current["package_digest"],
+                            "to_package_digest": requested,
+                            "binding_kind": "direct_component",
+                            "from_component_version": current_package.version,
+                            "to_component_version": target_package.version,
+                            "admitted_by_version_spec": dependency.version_spec,
+                        }
+                    )
                     continue
+
+                # Native CBS identity is independent of package topology and
+                # package-version ranges.  When an exact direct dependency is
+                # shared by another Application, admit a provider upgrade only
+                # after recomputing exact contract + BindingDelivery equality
+                # from verified immutable package bytes on this node.  The
+                # target package may not have been materialized yet, so use the
+                # deployment runtime's authenticated package transport without
+                # changing activation authority.
+                try:
+                    ensure = getattr(self.executor, "ensure_verified_package", None)
+                    if callable(ensure):
+                        ensure(target_package)
+                    package_store = ContentAddressedPackageStore(
+                        self.store.state_dir / "artifact_pipeline" / "packages"
+                    )
+                    active_fingerprint = shared_skill_contract_fingerprint(
+                        current_package, package_store
+                    )
+                    target_fingerprint = shared_skill_contract_fingerprint(
+                        target_package, package_store
+                    )
+                except Exception:
+                    continue
+                if active_fingerprint != target_fingerprint:
+                    continue
+                evidence = {
+                    "schema": "adaos.application.shared_cbs_rebinding_evidence.v1",
+                    "component_ref": component_ref,
+                    "from_package_digest": current["package_digest"],
+                    "to_package_digest": requested,
+                    "contract_fingerprint": active_fingerprint,
+                    "admitted_by": (
+                        "exact_capability_binding_and_entrypoint_equivalence"
+                    ),
+                }
                 result.append(
                     {
                         "consumer_application_id": installation.application_id,
@@ -1122,10 +1182,12 @@ class ApplicationService:
                         "component_ref": component_ref,
                         "from_package_digest": current["package_digest"],
                         "to_package_digest": requested,
-                        "binding_kind": "direct_component",
+                        "binding_kind": "native_cbs_contract",
                         "from_component_version": current_package.version,
                         "to_component_version": target_package.version,
-                        "admitted_by_version_spec": dependency.version_spec,
+                        "admitted_by": evidence["admitted_by"],
+                        "contract_fingerprint": active_fingerprint,
+                        "evidence_digest": canonical_payload_digest(evidence),
                     }
                 )
         return tuple(

@@ -1801,7 +1801,7 @@ def test_provider_update_rebinds_compatible_shared_project_consumers(
 
 
 def test_provider_update_rebinds_compatible_direct_component_consumers(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = ApplicationService(
         ApplicationStore(tmp_path),
@@ -1979,8 +1979,39 @@ def test_provider_update_rebinds_compatible_direct_component_consumers(
         == DIGEST_B
     )
 
+    class _CBSExecutor:
+        def __init__(self) -> None:
+            self.ensured: list[str] = []
+
+        def ensure_verified_package(self, package: ArtifactPackageRef) -> None:
+            self.ensured.append(package.digest)
+
+        def __call__(self, _plan: object) -> dict[str, object]:
+            return {
+                "ok": True,
+                "status": "succeeded",
+                "snapshot_receipt": {
+                    "snapshot_ref": "snapshot:direct-provider:cbs",
+                    "source_release_digest": provider_v11.release_digest,
+                    "consistency_boundary": "artifact_activation_transaction",
+                },
+            }
+
+    executor = _CBSExecutor()
+    service.executor = executor
+    monkeypatch.setattr(
+        "adaos.services.applications.service.shared_skill_contract_fingerprint",
+        lambda package, _store: {
+            "contract_members": {"identity": "changed" if package.version == "3.0.0" else "stable"},
+            "entrypoints": [["binding-definition:mail", "entrypoint:mail"]],
+        },
+    )
+
+    # The immutable consumer still pins ^1.0, but native CBS semantics are
+    # unchanged. Exact verified contract/delivery equivalence therefore
+    # admits the topology rebind without weakening the consumer declaration.
     provider_v2 = service.register_release(provider_release("2.0.0", DIGEST_D))
-    incompatible = service.plan_operation(
+    cbs_update = service.plan_operation(
         "provider_app",
         "update",
         actor_ref="user:owner",
@@ -1989,6 +2020,47 @@ def test_provider_update_rebinds_compatible_direct_component_consumers(
         idempotency_key="update-direct-provider-v2",
         expected_revision=2,
         release_digest=provider_v2.release_digest,
+    )
+    assert cbs_update.plan["conflicts"] == []
+    assert executor.ensured == [DIGEST_D]
+    cbs_rebinding = cbs_update.plan["shared_dependency_rebindings"][0]
+    assert cbs_rebinding["binding_kind"] == "native_cbs_contract"
+    assert cbs_rebinding["admitted_by"] == (
+        "exact_capability_binding_and_entrypoint_equivalence"
+    )
+    assert cbs_rebinding["from_package_digest"] == DIGEST_B
+    assert cbs_rebinding["to_package_digest"] == DIGEST_D
+    assert cbs_rebinding["evidence_digest"].startswith("sha256:")
+
+    cbs_applied = service.apply_operation(
+        cbs_update.operation_id,
+        plan_digest=cbs_update.plan_digest,
+        idempotency_key=cbs_update.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+    assert cbs_applied.status == "succeeded"
+    rebound_cbs = service.store.get_installation("consumer_app")
+    assert rebound_cbs.revision == 3
+    assert next(
+        item
+        for item in rebound_cbs.component_refs
+        if item["component_ref"] == "skill:shared-mail-provider"
+    )["package_digest"] == DIGEST_D
+
+    # Any contract or logical/physical BindingDelivery drift stays closed.
+    digest_e = "sha256:" + "e" * 64
+    provider_v3 = service.register_release(provider_release("3.0.0", digest_e))
+    incompatible = service.plan_operation(
+        "provider_app",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-direct-provider-v3",
+        expected_revision=3,
+        release_digest=provider_v3.release_digest,
     )
     assert incompatible.plan["shared_dependency_rebindings"] == []
     assert incompatible.plan["conflicts"][0]["active_application_id"] == (

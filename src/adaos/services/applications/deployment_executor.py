@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from adaos.domain.application import utc_now
-from adaos.domain.artifact_release import canonical_payload_digest
+from adaos.domain.artifact_release import ArtifactPackageRef, canonical_payload_digest
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.domain.project_deployment import (
     ComponentPlacementPolicy,
@@ -227,6 +227,32 @@ class ApplicationDeploymentExecutor:
             self.state_dir / "artifact_pipeline" / "packages"
         )
 
+    def ensure_verified_package(self, package: ArtifactPackageRef) -> None:
+        """Materialize one immutable package for pre-activation evidence checks.
+
+        Planning native CBS shared-component rebinding needs the candidate's
+        canonical contracts before activation authority can change.  Reuse the
+        deployment runtime's authenticated release transport and the same
+        content-addressed store used by activation, and fail closed whenever
+        the exact package cannot be fetched or verified.
+        """
+
+        if self.package_store.has(package.digest):
+            verified = self.package_store.verify(package.digest)
+        else:
+            fetch = getattr(self.runtime.releases, "fetch_package", None)
+            if not callable(fetch):
+                raise FileNotFoundError(
+                    f"package is not locally available: {package.digest}"
+                )
+            verified = self.package_store.put(
+                fetch(package), expected_digest=package.digest
+            )
+        if verified.ref != package:
+            raise ApplicationDeploymentExecutorError(
+                f"verified package identity changed for {package.key}"
+            )
+
     def _native_cbs_admission(
         self, plan: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:
@@ -281,19 +307,7 @@ class ApplicationDeploymentExecutor:
                 project_id, release_digest
             )
             for package in release_plan.packages:
-                if self.package_store.has(package.digest):
-                    self.package_store.verify(package.digest)
-                    continue
-                fetch = getattr(self.runtime.releases, "fetch_package", None)
-                if not callable(fetch):
-                    raise FileNotFoundError(
-                        f"CBS package is not locally available: {package.digest}"
-                    )
-                archive = fetch(package)
-                if not self.package_store.has(package.digest):
-                    self.package_store.put(
-                        archive, expected_digest=package.digest
-                    )
+                self.ensure_verified_package(package)
             subnet = str(plan.get("subnet_ref") or "subnet:local").removeprefix(
                 "subnet:"
             )

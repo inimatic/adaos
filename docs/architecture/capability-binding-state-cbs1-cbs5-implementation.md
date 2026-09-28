@@ -225,10 +225,10 @@ reports `update_available=false` and `auto_update=true`, and exposes the
 non-authoritative `derived_read_only` compatibility lifecycle projection with
 requirement `compiled`, resolution `admitted`, plan `ready`, activation
 `active`, and lock `committed`. This projection is not evidence that the
-installed record has a native `ApplicationResolution`: the 2026-09-28
+installed record has a native `ApplicationResolution`: the initial 2026-09-28
 production audit returned `cbs_resolution=null` and no `RuntimeSelection` for
-all 18 records. Native resolution and activation must replace that fallback
-before legacy activation is removed. The runtime smoke additionally proves:
+all 18 records. That result established the compatibility baseline; it did not
+close native production activation. The runtime smoke additionally proves:
 
 - Desktop accepts the `applications` scenario instead of returning
   `scenario_not_found`;
@@ -238,9 +238,48 @@ before legacy activation is removed. The runtime smoke additionally proves:
   permission closure;
 - Notebook's governed `workspace.read`/`workspace.write` grant permits a
   binary attachment upload and byte-identical download;
-- the production systemd service owns one AdaOS supervisor on `8776`, which
-  manages the active runtime slot on `8778`; no direct `api serve` competes for
-  MySQL, NATS, or other shared services.
+- the production systemd service owns one AdaOS supervisor and the active API
+  listens on `127.0.0.1:8777`; no direct `api serve` competes for MySQL, NATS,
+  or other shared services.
+
+### Native Gmail production admission and shared rebinding
+
+The later 2026-09-28 registry reconciliation replaced that compatibility-only
+baseline for `gmail_cbs_cleanroom`. Exact release
+`sha256:717489abd8ae0c2c66a502b63afb6c94e58d8621a54b635d014669ae3dc7137f`
+resolved and admitted both native requirements, activated the stable runtime,
+and committed an exact `RuntimeSelection` for the workspace runtime root.
+
+The same Application operation updated the already installed independent
+`mail_focus_reader` consumer from Gmail provider package `403e924b…` to
+`9abe4401…`. Its direct legacy package range did not admit the new package
+version. The planner therefore fetched and verified the immutable target
+package without changing activation authority, recomputed the active and
+target capability-contract, binding-definition, logical-entrypoint, and
+delivery fingerprints, and admitted the rebind only because they were equal.
+The operation receipt records `binding_kind=native_cbs_contract` and the exact
+evidence digest. The provider installation advanced to revision 2 and the
+consumer to revision 6 without copying either the Gmail credential or the
+portable contract into the consumer.
+
+A component mutation-lock timeout in the preceding attempt produced a durable
+failed operation and complete rollback. Auto-update identities now include the
+planner revision, and a specifically classified pre-authority
+`MutationLockTimeout` is replanned under a new deterministic idempotency key in
+the same registry run. Other deployment failures remain fail-closed. Targeted
+Application planning, deployment, auto-update, runtime-selection, and Trial
+suites pass together.
+
+This proof closes native Application admission, shared provider rebinding, and
+stable exact runtime selection for the Gmail slice. It does not yet make the
+Application channel the sole workspace authority: the production root
+`.adaos/workspace.lock.json` has no Gmail project slot. Active truth is still
+split between ProjectDeployment activation, the Application runtime channel,
+and the CBS workspace transaction. The remaining MUST is an atomic bridge from
+the admitted Application resolution/plan to the existing v2 `WorkspaceLock`
+commit, followed by local connected-account attachment on the clean subnet.
+Legacy activation cannot be removed before that bridge is exercised with
+rollback and recovery evidence.
 
 The same audit repaired and verified Infra State projection semantics. The
 hub now accepts node-scoped WebIO snapshot/subscription events even when their

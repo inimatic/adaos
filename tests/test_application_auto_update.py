@@ -246,6 +246,80 @@ def test_automatic_update_converges_after_known_partial_operation(tmp_path) -> N
     assert len(set(application_service.plan_keys)) == 2
 
 
+def test_automatic_update_retries_lock_contention_in_same_run(tmp_path) -> None:
+    class LockContentionService(_ApplicationService):
+        def __init__(self) -> None:
+            super().__init__(_plan())
+            self.plan_keys: list[str] = []
+            self.apply_count = 0
+
+        def plan_operation(self, application_id, kind, **kwargs):
+            self.plan_keys.append(kwargs["idempotency_key"])
+            return SimpleNamespace(
+                operation_id=f"appop.lock-{len(self.plan_keys)}",
+                plan_digest="sha256:" + str(len(self.plan_keys)) * 64,
+                plan=self.plan,
+                status="planned",
+                revision=1,
+            )
+
+        def apply_operation(self, operation_id, **kwargs):
+            self.applied.append((operation_id, kwargs))
+            self.apply_count += 1
+            if self.apply_count == 1:
+                return SimpleNamespace(
+                    status="failed",
+                    revision=3,
+                    result={
+                        "deployment_operation": {
+                            "state": "failed",
+                            "uncertain": False,
+                            "node_results": [
+                                {
+                                    "components": [
+                                        {
+                                            "error": {
+                                                "type": "MutationLockTimeout",
+                                                "code": "adapter_phase_failed",
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            "error": {"manual_reconciliation": False},
+                        }
+                    },
+                )
+            return SimpleNamespace(
+                status="succeeded",
+                revision=3,
+                result={"ok": True, "status": "succeeded"},
+            )
+
+    application_service = LockContentionService()
+    result = ApplicationAutoUpdateService(
+        tmp_path,
+        application_service,  # type: ignore[arg-type]
+    ).run(
+        subnet_ref="subnet:test",
+        trigger="applications.registry.updated",
+    )
+
+    outcome = result["outcomes"][0]
+    assert result["status"] == "completed"
+    assert outcome["status"] == "succeeded"
+    assert outcome["operation_id"] == "appop.lock-2"
+    assert outcome["retried_failed_operation_ids"] == ["appop.lock-1"]
+    assert [call[0] for call in application_service.applied] == [
+        "appop.lock-1",
+        "appop.lock-2",
+    ]
+    assert application_service.plan_keys[1].startswith(
+        "application-auto-update:"
+    )
+    assert ":retry:" in application_service.plan_keys[1]
+
+
 def test_automatic_update_reports_unknown_receipt_as_uncertain(tmp_path) -> None:
     class UnknownReceiptService(_ApplicationService):
         def apply_operation(self, operation_id, **kwargs):

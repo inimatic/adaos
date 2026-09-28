@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
@@ -17,6 +18,7 @@ from adaos.services.applications.deployment_executor import (
     ApplicationDeploymentExecutor,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
+from adaos.services.artifact_pipeline.packages import build_artifact_package
 from adaos.services.project_deployment import (
     ProjectDeploymentExecutionError,
     ProjectDeploymentRuntime,
@@ -310,6 +312,36 @@ def test_executor_refuses_unadmitted_cbs_before_deployment(
     assert result["reason"] == "native_cbs_admission_required"
     with pytest.raises(FileNotFoundError):
         runtime.store.get_deployment("application-deployment:app_test")
+
+
+def test_executor_prefetches_and_verifies_package_for_planning_evidence(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "provider"
+    source.mkdir()
+    (source / "skill.yaml").write_text(
+        "name: shared_mail_provider\nversion: 2.0.0\n", encoding="utf-8"
+    )
+    built = build_artifact_package(source, kind="skill", source_ref=SOURCE)
+
+    class _Releases:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def fetch_package(self, package: ArtifactPackageRef) -> bytes:
+            self.calls.append(package.digest)
+            return built.archive_bytes
+
+    releases = _Releases()
+    executor = ApplicationDeploymentExecutor(
+        runtime=SimpleNamespace(releases=releases), state_dir=tmp_path
+    )
+
+    executor.ensure_verified_package(built.ref)
+    executor.ensure_verified_package(built.ref)
+
+    assert releases.calls == [built.ref.digest]
+    assert executor.package_store.verify(built.ref.digest).ref == built.ref
 
 
 def test_executor_materializes_resolved_dependency_from_exact_release_closure(

@@ -16,7 +16,10 @@ from typing import Any
 
 from adaos.domain.application import utc_now
 from adaos.domain.artifact_release import canonical_payload_digest
-from adaos.services.applications.service import ApplicationService
+from adaos.services.applications.service import (
+    APPLICATION_OPERATION_PLANNER_REVISION,
+    ApplicationService,
+)
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
 
@@ -75,6 +78,31 @@ def _retryable_terminal_operation(operation: Any) -> bool:
         and isinstance(error, Mapping)
         and error.get("manual_reconciliation") is False
     )
+
+
+def _retryable_lock_contention(operation: Any) -> bool:
+    """Recognize one known-safe transient failure for same-run convergence.
+
+    A component mutation lock timeout is observed before the failed phase can
+    commit authority, and the deployment executor has already completed its
+    rollback before returning the Application receipt.  Retry it with a new
+    idempotency identity in the same registry run.  Other deterministic
+    deployment failures stay terminal and are never blindly replayed.
+    """
+
+    if _text(getattr(operation, "status", "")) != "failed":
+        return False
+
+    def contains_lock_timeout(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            if _text(value.get("type")) == "MutationLockTimeout":
+                return True
+            return any(contains_lock_timeout(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(contains_lock_timeout(item) for item in value)
+        return False
+
+    return contains_lock_timeout(getattr(operation, "result", None))
 
 
 def _model_runtime_selections(model: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -322,7 +350,8 @@ class ApplicationAutoUpdateService:
             child_identity = hashlib.sha256(
                 (
                     f"{subnet}\0{app_id}\0{target_digest}\0"
-                    f"{candidate['installation_revision']}\0{registry_snapshot}"
+                    f"{candidate['installation_revision']}\0{registry_snapshot}\0"
+                    f"{APPLICATION_OPERATION_PLANNER_REVISION}"
                 ).encode("utf-8")
             ).hexdigest()
             idempotency_key = f"application-auto-update:{child_identity}"
@@ -357,37 +386,36 @@ class ApplicationAutoUpdateService:
                         idempotency_key=idempotency_key,
                     )
                     operation_status = _text(getattr(operation, "status", "planned"))
-                    if operation_status == "planned":
-                        break
-                    if not _retryable_terminal_operation(operation):
-                        raise RuntimeError(
-                            "automatic update blocked by unresolved operation "
-                            f"status: {operation_status or 'unknown'}"
+                    if operation_status != "planned":
+                        if not _retryable_terminal_operation(operation):
+                            raise RuntimeError(
+                                "automatic update blocked by unresolved operation "
+                                f"status: {operation_status or 'unknown'}"
+                            )
+                        retry_chain.append(_text(operation.operation_id))
+                        if operation_status == "failed":
+                            failed_retry_chain.append(_text(operation.operation_id))
+                        retry_identity = hashlib.sha256(
+                            (
+                                f"{idempotency_key}\0{operation.operation_id}\0"
+                                f"{getattr(operation, 'revision', 0)}"
+                            ).encode("utf-8")
+                        ).hexdigest()[:20]
+                        idempotency_key = (
+                            f"application-auto-update:{child_identity}:retry:"
+                            f"{retry_identity}"
                         )
-                    retry_chain.append(_text(operation.operation_id))
-                    if operation_status == "failed":
-                        failed_retry_chain.append(_text(operation.operation_id))
-                    retry_identity = hashlib.sha256(
-                        (
-                            f"{idempotency_key}\0{operation.operation_id}\0"
-                            f"{getattr(operation, 'revision', 0)}"
-                        ).encode("utf-8")
-                    ).hexdigest()[:20]
-                    idempotency_key = f"application-auto-update:{child_identity}:retry:{retry_identity}"
-                else:
-                    raise RuntimeError("automatic update retry chain exhausted")
-                item["idempotency_key"] = idempotency_key
-                if retry_chain:
-                    item["retried_terminal_operation_ids"] = retry_chain
-                if failed_retry_chain:
-                    item["retried_failed_operation_ids"] = failed_retry_chain
-                item["operation_id"] = operation.operation_id
-                item["plan_digest"] = operation.plan_digest
-                blockers = automatic_update_blockers(operation.plan)
-                if blockers:
-                    item["status"] = "review_required"
-                    item["blockers"] = blockers
-                else:
+                        continue
+
+                    item["idempotency_key"] = idempotency_key
+                    item["operation_id"] = operation.operation_id
+                    item["plan_digest"] = operation.plan_digest
+                    blockers = automatic_update_blockers(operation.plan)
+                    if blockers:
+                        item["status"] = "review_required"
+                        item["blockers"] = blockers
+                        break
+
                     receipt = self.application_service.apply_operation(
                         operation.operation_id,
                         plan_digest=operation.plan_digest,
@@ -416,6 +444,28 @@ class ApplicationAutoUpdateService:
                             )
                         except (AttributeError, FileNotFoundError, KeyError):
                             item["addresses_report_ids"] = []
+                        break
+                    if not _retryable_lock_contention(receipt):
+                        break
+                    retry_chain.append(_text(operation.operation_id))
+                    failed_retry_chain.append(_text(operation.operation_id))
+                    retry_identity = hashlib.sha256(
+                        (
+                            f"{idempotency_key}\0{operation.operation_id}\0"
+                            f"{getattr(receipt, 'revision', 0)}"
+                        ).encode("utf-8")
+                    ).hexdigest()[:20]
+                    idempotency_key = (
+                        f"application-auto-update:{child_identity}:retry:"
+                        f"{retry_identity}"
+                    )
+                else:
+                    raise RuntimeError("automatic update retry chain exhausted")
+                item["idempotency_key"] = idempotency_key
+                if retry_chain:
+                    item["retried_terminal_operation_ids"] = retry_chain
+                if failed_retry_chain:
+                    item["retried_failed_operation_ids"] = failed_retry_chain
             except Exception as exc:
                 item["status"] = "failed"
                 item["error"] = {
