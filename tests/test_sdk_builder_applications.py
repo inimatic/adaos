@@ -547,6 +547,8 @@ def test_promote_reconciles_exact_completed_project_activation(
         "installation_revision": 8,
         "runtime_selection_revision": 5,
         "webspace_id": "desktop",
+        "native_cbs_activation": None,
+        "admission_digest": None,
     }
     assert calls[1][1]["expected_revision"] == 4
     assert calls[1][1]["release_digest"] == digest

@@ -3067,3 +3067,54 @@ def test_native_cbs_activation_fails_closed_when_runtime_changed_after_review(
         service.store.get_runtime_selection("desktop", "app_recipes").source
         == "local_trial"
     )
+
+
+def test_native_cbs_reconciliation_can_commit_the_exact_promoted_trial(
+    service: ApplicationService,
+) -> None:
+    release = service.register_release(_release())
+    service.store.save_installation(
+        ApplicationInstallation(
+            installation_id="installation:app_recipes",
+            application_id="app_recipes",
+            installed_release_digest=release.release_digest,
+            component_refs=(
+                {
+                    "component_ref": "scenario:recipes",
+                    "package_digest": DIGEST_A,
+                    "lifecycle": "bound",
+                },
+            ),
+            data_policy="retain",
+            status="active",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+    service.select_runtime(
+        webspace_id="desktop",
+        application_id="app_recipes",
+        source="local_trial",
+        release_digest=release.release_digest,
+        runtime_root_ref="trial:accepted-candidate",
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    result = service.reconcile_native_runtime_selection(
+        application_id="app_recipes",
+        release_digest=release.release_digest,
+        admission=_native_admission("app_recipes", release.release_digest),
+        webspace_id="desktop",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        allow_exact_trial_transition=True,
+    )
+
+    assert result["status"] == "activated"
+    selection = service.store.get_runtime_selection("desktop", "app_recipes")
+    assert selection.source == "stable_installation"
+    assert selection.release_digest == release.release_digest
+    assert selection.revision == 2

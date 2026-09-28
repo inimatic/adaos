@@ -2223,6 +2223,26 @@ def _reconcile_promoted_project_runtime(
     installation = distribution.applications.reconcile_workspace_installation(
         application_id, candidate.release_digest, lock
     )
+    from adaos.services.applications.cbs import ApplicationCBSService
+    from adaos.services.applications.cbs_admission import (
+        NativeApplicationCBSAdmissionService,
+    )
+
+    application_ref = f"application:{application_id}"
+    semantic_source = ApplicationCBSService(_state_dir()).inspect_requirement_source(
+        application_ref,
+        project_release_digest=candidate.release_digest,
+    )
+    native_admission = NativeApplicationCBSAdmissionService(
+        _state_dir()
+    ).find_by_project_release(
+        candidate.release_digest,
+        application_ref=application_ref,
+    )
+    if semantic_source is not None and native_admission is None:
+        raise ValueError(
+            "Application runtime recovery requires exact native CBS admission"
+        )
     try:
         selection = distribution.applications.store.get_runtime_selection(
             webspace_id, application_id
@@ -2237,7 +2257,27 @@ def _reconcile_promoted_project_runtime(
             raise ValueError(
                 "Application recovery cannot replace a non-stable RuntimeSelection"
             )
-    if (
+    native_activation = None
+    if native_admission is not None:
+        native_activation = (
+            distribution.applications.reconcile_native_runtime_selection(
+                application_id=application_id,
+                release_digest=candidate.release_digest,
+                admission=native_admission,
+                webspace_id=webspace_id,
+                actor_ref=actor_ref,
+                subnet_ref=release.publisher_ref,
+                allow_exact_trial_transition=True,
+            )
+        )
+        if native_activation.get("status") not in {"activated", "current"}:
+            raise ValueError(
+                "Native CBS admission did not activate the stable runtime"
+            )
+        selection = distribution.applications.store.get_runtime_selection(
+            webspace_id, application_id
+        )
+    elif (
         selection is None
         or selection.release_digest != candidate.release_digest
         or selection.source != "stable_installation"
@@ -2255,13 +2295,19 @@ def _reconcile_promoted_project_runtime(
             capability="applications.apply",
         )
     return {
-        "status": "reconciled",
+        "status": "native_cbs_reconciled" if native_admission is not None else "reconciled",
         "candidate_id": candidate_id,
         "release_digest": candidate.release_digest,
         "workspace_lock_digest": observed_lock_digest,
         "installation_revision": installation.revision,
         "runtime_selection_revision": selection.revision,
         "webspace_id": webspace_id,
+        "native_cbs_activation": native_activation,
+        "admission_digest": (
+            native_admission.get("admission_digest")
+            if native_admission is not None
+            else None
+        ),
     }
 
 

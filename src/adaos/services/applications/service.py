@@ -724,6 +724,7 @@ class ApplicationService:
         webspace_id: str = "desktop",
         actor_ref: str,
         subnet_ref: str,
+        allow_exact_trial_transition: bool = False,
     ) -> dict[str, Any]:
         """Adopt an already installed exact native release without overriding Trial."""
 
@@ -738,11 +739,16 @@ class ApplicationService:
         except FileNotFoundError:
             current = None
         if current is not None and current.source != "stable_installation":
-            return {
-                "status": "trial_active",
-                "changed": False,
-                "selection": current.to_dict(),
-            }
+            if not (
+                allow_exact_trial_transition
+                and current.release_digest == release_digest
+                and current.runtime_root_ref.startswith("trial:")
+            ):
+                return {
+                    "status": "trial_active",
+                    "changed": False,
+                    "selection": current.to_dict(),
+                }
         return self._activate_native_runtime(
             application_id=application_id,
             release_digest=release_digest,
