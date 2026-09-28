@@ -34,6 +34,21 @@ def _root_service() -> RootDeveloperService:
     return RootDeveloperService()
 
 
+def _place_local_trial(
+    candidate_id: str,
+    *,
+    webspace_id: str,
+    actor_ref: str,
+) -> dict[str, Any]:
+    from adaos.sdk.builder.applications import place_local_trial
+
+    return place_local_trial(
+        candidate_id,
+        webspace_id=webspace_id,
+        actor_ref=actor_ref,
+    )
+
+
 def _registry_diagnostics() -> dict[str, Any]:
     from adaos.services.application_registry_projection import ApplicationRegistryProjection
 
@@ -776,6 +791,37 @@ def decide_trial(
         "beta" if normalized == "accept" else "changes_requested",
     )
     _echo_candidate(result, json_output=json_output)
+
+
+@app.command("trial-place")
+def place_trial(
+    candidate_id: str,
+    webspace_id: str = typer.Option("desktop", "--webspace"),
+    confirmed: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Confirm exact Trial placement and isolated local data preparation.",
+    ),
+    actor: str = typer.Option("user:local", "--actor"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Place an accepted exact Project Trial into an Application Webspace."""
+
+    if not confirmed:
+        raise typer.BadParameter(
+            "Trial placement requires explicit --confirm",
+            param_hint="--confirm",
+        )
+    try:
+        result = _place_local_trial(
+            candidate_id,
+            webspace_id=webspace_id,
+            actor_ref=actor,
+        )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc), param_hint="candidate_id") from exc
+    result.setdefault("lifecycle_phase", "beta")
+    _echo(result, json_output=json_output)
 
 
 @app.command("promote")

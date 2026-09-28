@@ -659,6 +659,65 @@ def test_dev_project_trial_decision_records_actor_and_evidence(monkeypatch) -> N
     )
 
 
+def test_dev_project_trial_place_requires_confirmation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        dev_project,
+        "_place_local_trial",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("placement must not run without confirmation")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        ["trial-place", "candidate.kanban"],
+    )
+
+    assert result.exit_code == 2
+    assert "requires explicit --confirm" in unstyle(result.output)
+
+
+def test_dev_project_trial_place_uses_exact_candidate_and_target(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def place(candidate_id, **kwargs):
+        calls.append({"candidate_id": candidate_id, **kwargs})
+        return {
+            "ok": True,
+            "runtime_selection": {
+                "application_id": "kanban",
+                "release_digest": "sha256:" + "a" * 64,
+                "lifecycle": "local_trial",
+            },
+        }
+
+    monkeypatch.setattr(dev_project, "_place_local_trial", place)
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        [
+            "trial-place",
+            "candidate.kanban",
+            "--webspace",
+            "desktop",
+            "--actor",
+            "codex:e2e",
+            "--confirm",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        {
+            "candidate_id": "candidate.kanban",
+            "webspace_id": "desktop",
+            "actor_ref": "codex:e2e",
+        }
+    ]
+    assert '"lifecycle_phase": "beta"' in result.output
+
+
 def test_dev_project_promote_requires_confirmation(monkeypatch) -> None:
     service = SimpleNamespace(
         promote_artifact_candidate=lambda *_args, **_kwargs: (_ for _ in ()).throw(
