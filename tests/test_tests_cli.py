@@ -173,3 +173,12 @@ def test_junit_shards_are_rewritten_and_merged(tmp_path: Path) -> None:
     assert [suite.get("name") for suite in root.findall("testsuite")] == ["first", "second"]
     assert not first.exists()
     assert not second.exists()
+
+
+def test_relative_junit_target_is_anchored_to_repository(tmp_path: Path) -> None:
+    target = tests_cli._absolute_junit_target(
+        ["-q", "--junitxml=reports/skills.xml"],
+        tmp_path,
+    )
+
+    assert target == tmp_path / "reports" / "skills.xml"

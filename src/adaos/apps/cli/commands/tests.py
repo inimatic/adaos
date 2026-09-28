@@ -314,6 +314,14 @@ def _replace_junit_target(args: list[str], target: Path) -> list[str]:
     return updated
 
 
+def _absolute_junit_target(args: list[str], repo_root: Path) -> Path | None:
+    value = _junit_target(args)
+    if not value:
+        return None
+    target = Path(value)
+    return target if target.is_absolute() else repo_root / target
+
+
 def _merge_junit_reports(shards: list[Path], target: Path) -> int:
     suites: list[ET.Element] = []
     for shard in shards:
@@ -768,14 +776,9 @@ def run_tests(
         addopts_parts += ["-m", marker]
     if extra:
         addopts_parts += extra
-    junit_value = _junit_target(addopts_parts)
-    junit_target = None
-    junit_option_target = None
+    junit_target = _absolute_junit_target(addopts_parts, repo_root)
+    merge_junit_reports = junit_target is not None and len(grouped) > 1
     junit_shards: list[Path] = []
-    if junit_value and len(grouped) > 1:
-        candidate = Path(junit_value)
-        junit_option_target = candidate
-        junit_target = candidate if candidate.is_absolute() else repo_root / candidate
 
     # 5) Прогон по группам (каждую — через venv_python)
     overall_code = 0
@@ -783,14 +786,15 @@ def run_tests(
         interp = venv_python or py_exec
         prefix = [] if venv_python else py_prefix
         group_addopts = addopts_parts
-        if junit_target is not None and junit_option_target is not None:
-            suffix = junit_option_target.suffix or ".xml"
-            option_shard = junit_option_target.with_name(
-                f"{junit_option_target.stem}-{group_index:03d}{suffix}"
+        if junit_target is not None and merge_junit_reports:
+            suffix = junit_target.suffix or ".xml"
+            option_shard = junit_target.with_name(
+                f"{junit_target.stem}-{group_index:03d}{suffix}"
             )
-            shard = option_shard if option_shard.is_absolute() else repo_root / option_shard
-            junit_shards.append(shard)
+            junit_shards.append(option_shard)
             group_addopts = _replace_junit_target(addopts_parts, option_shard)
+        elif junit_target is not None:
+            group_addopts = _replace_junit_target(addopts_parts, junit_target)
         addopts_str = subprocess.list2cmdline(group_addopts).strip()
 
         code, out, err = _run_one_group(
@@ -811,7 +815,7 @@ def run_tests(
         typer.secho(f"[pytest {group_label}] exit={code} sandbox=yes\n--- stdout ---\n{out}\n--- stderr ---\n{err}", fg=color)
         overall_code = code if overall_code == 0 else overall_code
 
-    if junit_target is not None:
+    if junit_target is not None and merge_junit_reports:
         merged_count = _merge_junit_reports(junit_shards, junit_target)
         expected_count = len(junit_shards)
         if merged_count != expected_count:
