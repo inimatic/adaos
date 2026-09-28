@@ -8610,6 +8610,173 @@ def test_worker_skips_candidate_already_absorbed_by_refreshed_snapshot(
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
 
 
+def test_worker_resumes_blocking_feedback_from_materialized_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.materialized-feedback"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "webui.json"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    contract = {"schema": "adaos.builder.continuation_contract.v1"}
+    snapshot_digest = "sha256:" + "b" * 64
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "runtime").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "skill", "id": "demo"},
+                "forge": {"source_snapshot": {"digest": snapshot_digest}},
+                "realize_request": {
+                    "artifacts": {"continuation_contract": contract}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source_run / "runtime" / "codex-final.md").write_text(
+        '```adaos-development-feedback\n'
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"insufficient_context","summary":"Use runtime scope",'
+        '"blocking":true,"target_refs":["skill:demo"]}]}\n```',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, _task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.materialized",
+                    "stage": "development_feedback",
+                    "message": "Automation blocked by reported development feedback",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"source_snapshot": {"digest": snapshot_digest}},
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": contract,
+                "continuation_checkpoint": {
+                    "mode": "resume_materialized_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": "failure.materialized",
+                    "reason": "blocking_development_feedback",
+                    "source_snapshot_digest": snapshot_digest,
+                    "source_continuation_contract": contract,
+                    "continuation_contract": contract,
+                },
+            }
+        },
+    }
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored is not None
+    assert restored["mode"] == "resume_materialized_candidate"
+    assert restored["changed_paths"] == []
+    assert "Use runtime scope" in restored["blocking_feedback_message"]
+
+
+def test_worker_rejects_stale_materialized_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.stale-materialized"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_workspace.mkdir(parents=True)
+    (previous_workspace / "README.md").write_text("candidate", encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    contract = {"schema": "adaos.builder.continuation_contract.v1"}
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "runtime").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "skill", "id": "demo"},
+                "forge": {"source_snapshot": {"digest": "sha256:old"}},
+                "realize_request": {
+                    "artifacts": {"continuation_contract": contract}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source_run / "runtime" / "codex-final.md").write_text(
+        '```adaos-development-feedback\n'
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"insufficient_context","summary":"Blocked",'
+        '"blocking":true,"target_refs":["skill:demo"]}]}\n```',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, _task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.stale",
+                    "stage": "development_feedback",
+                    "message": "Automation blocked by reported development feedback",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    workspace.mkdir(parents=True)
+    (workspace / "README.md").write_text("candidate", encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"source_snapshot": {"digest": "sha256:new"}},
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": contract,
+                "continuation_checkpoint": {
+                    "mode": "resume_materialized_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": "failure.stale",
+                    "reason": "blocking_development_feedback",
+                    "source_snapshot_digest": "sha256:old",
+                    "source_continuation_contract": contract,
+                    "continuation_contract": contract,
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="materialized continuation source snapshot is stale"):
+        worker._restore_continuation_candidate(assignment, workspace)
+
+
 def test_candidate_absorption_accepts_only_compiled_skill_activation(
     tmp_path: Path,
 ) -> None:
@@ -10705,6 +10872,11 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     worker._validate_prototype_resource_handoff(assignment, workspace, checks, errors)
     assert not errors
     assert checks[0]["kind"] == "prototype_resource_handoff.detached"
+    assignment["realize_request"]["artifacts"]["cbs_compiler_view"] = {
+        "requirements": [
+            {"capability_ref": "capability:resource.records.manage"}
+        ]
+    }
     blueprint_packet = worker._build_packet(
         assignment, workspace, tmp_path / "input-blueprint"
     )
@@ -10719,6 +10891,9 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert bindings_path.resolve().as_posix() in prompt
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
     assert "sample_skill.save_record" in bindings_path.read_text(encoding="utf-8")
+    assert bindings["contracts"]["owned_records_cbs"]["path"] == (
+        "contracts/provider.cbs.yaml"
+    )
     sdk_contracts_path = tmp_path / "input-blueprint/public-sdk-contracts.json"
     sdk_contracts = json.loads(sdk_contracts_path.read_text(encoding="utf-8"))
     sdk_names = {item["name"] for item in sdk_contracts["contracts"]}

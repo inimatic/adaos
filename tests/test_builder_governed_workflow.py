@@ -226,6 +226,81 @@ def test_terminal_change_commands_update_canonical_and_compatibility_state(
     assert workflow["change"]["gate"] == "complete"
 
 
+def test_strict_prototype_command_dispatches_revision_bound_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path)
+    _plan(service)
+    service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={
+            "revision": "001",
+            "object_type": "scenario",
+            "prototype_acceptance_required": True,
+        },
+    )
+    observed: dict[str, object] = {}
+
+    def accept_prototype(self, object_type, object_id, **kwargs):
+        observed.update(
+            {"object_type": object_type, "object_id": object_id, **kwargs}
+        )
+        return {"ok": True, "workflow": self.describe(object_type, object_id)}
+
+    monkeypatch.setattr(BuilderWorkflowService, "accept_prototype", accept_prototype)
+    behavior = [
+        {
+            "id": "render.ready",
+            "status": "passed",
+            "evidence_refs": ["test:render"],
+        }
+    ]
+    visuals = [
+        {
+            "breakpoint": "compact",
+            "viewport": {"width": 390, "height": 844},
+            "status": "passed",
+            "evidence_ref": "screenshot:compact",
+        },
+        {
+            "breakpoint": "wide",
+            "viewport": {"width": 1440, "height": 900},
+            "status": "passed",
+            "evidence_ref": "screenshot:wide",
+        },
+    ]
+
+    result = service.invoke_command(
+        "scenario",
+        "recipes",
+        "accept_prototype",
+        actor="user:owner",
+        idempotency_key="strict:accept:001",
+        input_value={
+            "confirmed": True,
+            "reviewer": {
+                "id": "user:owner",
+                "kind": "user",
+            },
+            "behavior_checks": behavior,
+            "visual_checks": visuals,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["invocation"]["command"]["command_id"] == "accept_prototype"
+    assert observed["object_type"] == "scenario"
+    assert observed["object_id"] == "recipes"
+    assert observed["reviewer"] == {"id": "user:owner", "kind": "user"}
+    assert observed["behavior_checks"] == behavior
+    assert observed["visual_checks"] == visuals
+    assert observed["expected_generation"] == service.describe(
+        "scenario", "recipes"
+    )["generation"]
+
+
 def test_dev_builder_skill_workflow_is_runtime_authority(tmp_path: Path) -> None:
     service = _service(tmp_path)
     builder_skill = service.dev_skills_root / "builder_skill"

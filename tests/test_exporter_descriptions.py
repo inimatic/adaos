@@ -104,8 +104,9 @@ def test_sdk_catalog_is_navigation_not_an_empty_method_contract():
 def test_configuration_descriptor_states_runtime_and_secret_boundaries():
     detail = get_descriptor_item("sdk_metadata", "adaos.sdk.data.configuration.read")["item"]
     assert "revision" in detail["description"]
-    assert "production" in detail["description"]
-    assert "DEV" in detail["description"]
+    assert "runtime_scope" in detail["description"]
+    assert "development" in detail["description"]
+    assert "installed" in detail["description"]
     write = get_descriptor_item("sdk_metadata", "adaos.sdk.data.configuration.write")["item"]
     assert "Credential bindings are preserved" in write["description"]
 

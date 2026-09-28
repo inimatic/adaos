@@ -2475,6 +2475,34 @@ def test_structured_edit_context_projection_keeps_authority_without_prompt_paylo
     )
 
 
+def test_model_context_projection_keeps_large_compiler_facets_lazy() -> None:
+    projection = _iteration_context_projection(
+        {
+            "schema": "adaos.builder.context_packet.v1",
+            "digest": "sha256:packet",
+            "facets": {
+                "ui_capabilities": {
+                    "status": "present",
+                    "catalog_ref": "abi:ui.capability_catalog.v1.json",
+                    "items": [{"id": "item", "contract": "x" * 5000}],
+                }
+            },
+        },
+        implementation_brief="Apply the accepted implementation.",
+        packet_ref="artifact://context/sha256/packet",
+        packet_digest="sha256:packet",
+        kind="scenario",
+        project_id="demo",
+    )
+
+    facet = projection["facets"]["ui_capabilities"]
+    assert facet["status"] == "present"
+    assert facet["content_counts"]["items"] == 1
+    assert facet["compiler_view"]["digest"].startswith("sha256:")
+    assert "items" not in facet
+    assert len(json.dumps(projection).encode("utf-8")) < 2_000
+
+
 def test_canonical_repair_path_preserves_project_owned_paths() -> None:
     assert (
         automation_module._canonical_repair_path(
@@ -3712,6 +3740,71 @@ def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
     assert checkpoint["mode"] == "resume_preserved_candidate"
     assert checkpoint["source_task_id"] == candidate_task_id
     assert checkpoint["trigger_failure_id"] == "failure.transient-model"
+
+
+def test_blocking_feedback_resumes_clean_materialized_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.materialized-feedback"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "runtime").mkdir(parents=True)
+    source_contract = {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "sdk_contract_digest": "sha256:source",
+    }
+    snapshot_digest = "sha256:" + "a" * 64
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "scenario", "id": "applications"},
+                "forge": {"source_snapshot": {"digest": snapshot_digest}},
+                "realize_request": {
+                    "artifacts": {"continuation_contract": source_contract}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_root / "runtime" / "codex-final.md").write_text(
+        '```adaos-development-feedback\n'
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"insufficient_context","summary":"Use runtime scope",'
+        '"blocking":true,"target_refs":["scenario:applications"]}]}\n```',
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.materialized",
+                    "stage": "development_feedback",
+                    "message": "Automation blocked by reported development feedback",
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: False,
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id, "task_history": [task_id]}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_materialized_candidate"
+    assert checkpoint["source_task_id"] == task_id
+    assert checkpoint["source_snapshot_digest"] == snapshot_digest
+    assert checkpoint["source_changed_paths"] == []
+    assert checkpoint["source_continuation_contract"] == source_contract
 
 
 def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_checks(

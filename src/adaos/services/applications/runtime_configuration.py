@@ -90,7 +90,15 @@ class ApplicationRuntimeConfiguration:
         with lease:
             record = store.read()
             config, _candidate = self._current(selected, schema, defaults, record)
-            return {"revision": record["revision"], "values": deepcopy(config["values"])}
+            return {
+                "revision": record["revision"],
+                "values": deepcopy(config["values"]),
+                # Core derives this from the admitted skill binding. It is not
+                # caller input and lets an Application select a deterministic
+                # DEV adapter without trusting a forgeable webspace id or an
+                # environment variable inherited by the handler process.
+                "runtime_scope": "development" if selected is None else "installed",
+            }
 
     def write(self, values, *, expected_revision: int):
         selected, schema, defaults, store, lease = self._binding("configuration.write")

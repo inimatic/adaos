@@ -719,6 +719,127 @@ def _canonical_repair_hints(
     return hints
 
 
+_CONTEXT_CONTROL_LAZY_FACETS = {
+    "application_permissions",
+    "data_policy",
+    "workflow_definition",
+    "ui_capabilities",
+}
+
+_CONTEXT_CONTROL_FACET_SUMMARY_KEYS = (
+    "status",
+    "inspection_status",
+    "source",
+    "schema",
+    "definition_ref",
+    "definition_digest",
+    "binding_digest",
+    "valid",
+    "ready",
+    "project_ref",
+    "manifest_ref",
+    "manifest_digest",
+    "declaration_status",
+    "authority_status",
+    "repair_required",
+    "profile_digest",
+    "selected_profile_id",
+    "selected_mode",
+    "execution_mode",
+    "implementation_mapping",
+    "prototype_binding",
+    "catalog_ref",
+    "catalog_version",
+    "catalog_digest",
+    "root_item_ids",
+    "dependency_closure",
+    "required_contracts",
+)
+
+
+def _context_control_prompt_projection(
+    context_packet: Mapping[str, Any], *, implementation_brief: str = ""
+) -> dict[str, Any]:
+    """Mirror the worker's lazy compiler views without embedding their payloads.
+
+    Context Control owns selection, budgeting, and receipts. The worker receives
+    the exact digest-addressed context packet separately and materializes large
+    compiler facets as files for on-demand model reads. Keeping those same large
+    facets inline here both double-counts the prompt and duplicates stable
+    project data in every task capsule.
+    """
+
+    projected = context_packet_prompt_projection(
+        context_packet,
+        implementation_brief=implementation_brief,
+    )
+    facets = (
+        dict(projected.get("facets") or {})
+        if isinstance(projected.get("facets"), Mapping)
+        else {}
+    )
+    references: list[dict[str, Any]] = []
+    for facet_name in _CONTEXT_CONTROL_LAZY_FACETS:
+        facet = facets.get(facet_name)
+        if not isinstance(facet, Mapping):
+            continue
+        canonical = json.dumps(
+            facet,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(canonical) <= 2048:
+            continue
+        digest = "sha256:" + hashlib.sha256(canonical).hexdigest()
+        summary: dict[str, Any] = {}
+        content_counts: dict[str, int] = {}
+        content_keys: dict[str, list[str]] = {}
+        for key in _CONTEXT_CONTROL_FACET_SUMMARY_KEYS:
+            value = facet.get(key)
+            if value in (None, "", [], {}):
+                continue
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            if len(encoded) <= 1024:
+                summary[key] = copy.deepcopy(value)
+            elif isinstance(value, list):
+                content_counts[key] = len(value)
+            elif isinstance(value, Mapping):
+                content_keys[key] = sorted(str(item) for item in value)[:20]
+        for key in (
+            "items",
+            "roles",
+            "role_matrix",
+            "authoring_requirements",
+            "diagnostics",
+        ):
+            value = facet.get(key)
+            if isinstance(value, list):
+                content_counts[key] = len(value)
+        summary["compiler_view"] = {
+            "schema": "adaos.builder.compiler_view_ref.v1",
+            "registry_ref": f"compiler-view:{facet_name}:{digest}",
+            "digest": digest,
+            "bytes": len(canonical),
+            "source_context_packet_digest": projected.get("digest"),
+        }
+        if content_counts:
+            summary["content_counts"] = content_counts
+        if content_keys:
+            summary["content_keys"] = content_keys
+        facets[facet_name] = summary
+        references.append({"facet": facet_name, **summary["compiler_view"]})
+    projected["facets"] = facets
+    if references:
+        projected["compiler_views"] = references
+    return projected
+
+
 def _iteration_context_projection(
     context_packet: Mapping[str, Any],
     *,
@@ -728,7 +849,7 @@ def _iteration_context_projection(
     kind: str,
     project_id: str,
 ) -> dict[str, Any]:
-    projection = context_packet_prompt_projection(
+    projection = _context_control_prompt_projection(
         context_packet,
         implementation_brief=implementation_brief,
     )
@@ -823,7 +944,8 @@ def _project_context_projection(
 ) -> dict[str, Any]:
     """Project-stable context shared by task overlays for one source generation."""
 
-    facets = dict(context_packet.get("facets") or {})
+    projected = _context_control_prompt_projection(context_packet)
+    facets = dict(projected.get("facets") or {})
     project_facets = {
         key: copy.deepcopy(facets[key])
         for key in (
@@ -841,11 +963,11 @@ def _project_context_projection(
         "source_generation": source_snapshot_digest,
         "project": copy.deepcopy(dict(context_packet.get("project") or {})),
         "base": copy.deepcopy(dict(context_packet.get("base") or {})),
-        "artifacts": copy.deepcopy(dict(context_packet.get("artifacts") or {})),
-        "dependencies": copy.deepcopy(list(context_packet.get("dependencies") or []))[
+        "artifacts": copy.deepcopy(dict(projected.get("artifacts") or {})),
+        "dependencies": copy.deepcopy(list(projected.get("dependencies") or []))[
             :200
         ],
-        "allowed_paths": copy.deepcopy(list(context_packet.get("allowed_paths") or []))[
+        "allowed_paths": copy.deepcopy(list(projected.get("allowed_paths") or []))[
             :200
         ],
         "change": {
@@ -928,7 +1050,7 @@ def _bounded_repair_project_context_projection(
 ) -> dict[str, Any]:
     """Retain bounded project authority without replaying full workflow history."""
 
-    projected = context_packet_prompt_projection(context_packet)
+    projected = _context_control_prompt_projection(context_packet)
     change = dict(projected.get("change") or {})
     dependencies = []
     for item in projected.get("dependencies") or []:
@@ -3995,7 +4117,10 @@ class BuilderAutomationService:
         if gate_checkpoint:
             return gate_checkpoint
         checkpoint = self._budget_continuation_checkpoint(session)
-        if checkpoint and checkpoint.get("mode") == "resume_preserved_candidate":
+        if checkpoint and checkpoint.get("mode") in {
+            "resume_preserved_candidate",
+            "resume_materialized_candidate",
+        }:
             return checkpoint
         if checkpoint and checkpoint.get("reason") in {
             "manifest_scope_requalified_after_guard",
@@ -5915,15 +6040,23 @@ class BuilderAutomationService:
                     else retry_reason
                 )
         run_root = Path(self.runs_root) / _safe_token(source_task_id)
-        if reason == "blocking_development_feedback" and not _preserved_candidate_has_changes(
-            run_root
-        ):
+        source_has_changes = _preserved_candidate_has_changes(run_root)
+        if reason == "blocking_development_feedback" and not source_has_changes:
+            materialized = self._materialized_feedback_checkpoint(
+                run_root=run_root,
+                source_task_id=source_task_id,
+                source_failure=source_failure,
+                trigger_failure_id=trigger_failure_id,
+            )
+            if materialized is not None:
+                return materialized
             prior_candidate = self._latest_blocking_candidate_source(
                 session,
                 exclude_task_id=task_id,
             )
             if prior_candidate is not None:
                 source_task_id, source_failure, run_root = prior_candidate
+                source_has_changes = True
                 trigger_failure_id = (
                     str(failure.get("failure_id") or "").strip() or None
                 )
@@ -5960,7 +6093,7 @@ class BuilderAutomationService:
             source_continuation_contract, Mapping
         ):
             return None
-        if not _preserved_candidate_has_changes(run_root):
+        if not source_has_changes:
             return None
         source_changed_paths = _preserved_candidate_changed_paths(run_root)
         if not source_changed_paths:
@@ -5983,6 +6116,68 @@ class BuilderAutomationService:
                 or reason == "manifest_scope_requalified_after_guard"
             ),
             "continuation_contract": continuation_contract,
+            "created_at": _now_iso(),
+        }
+
+    def _materialized_feedback_checkpoint(
+        self,
+        *,
+        run_root: Path,
+        source_task_id: str,
+        source_failure: Mapping[str, Any],
+        trigger_failure_id: str | None,
+    ) -> dict[str, Any] | None:
+        """Resume feedback against an already-materialized immutable snapshot.
+
+        A browser-gate repair can legitimately produce no diff when its source
+        snapshot already contains the candidate under review. In that case an
+        older dirty workspace is not the repair authority: restoring it would
+        discard trusted compiler/browser normalization applied during the gate.
+        Pin the next turn to the clean task's exact source snapshot instead.
+        """
+
+        assignment_path = run_root / "input" / "assignment.json"
+        try:
+            assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(assignment, Mapping):
+            return None
+        request = assignment.get("realize_request")
+        artifacts = (
+            dict(request.get("artifacts") or {})
+            if isinstance(request, Mapping)
+            and isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        source_contract = artifacts.get("continuation_contract")
+        snapshot = (
+            dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+            if isinstance(assignment.get("forge"), Mapping)
+            else {}
+        )
+        snapshot_digest = str(snapshot.get("digest") or "").strip()
+        target = assignment.get("target")
+        if (
+            not isinstance(source_contract, Mapping)
+            or not snapshot_digest
+            or not isinstance(target, Mapping)
+            or not str(target.get("id") or "").strip()
+        ):
+            return None
+        return {
+            "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+            "mode": "resume_materialized_candidate",
+            "source_task_id": source_task_id,
+            "failure_id": str(source_failure.get("failure_id") or "").strip()
+            or None,
+            "trigger_failure_id": trigger_failure_id,
+            "reason": "blocking_development_feedback",
+            "source_snapshot_digest": snapshot_digest,
+            "source_changed_paths": [],
+            "source_continuation_contract": dict(source_contract),
+            "allow_large_manifest_rewrite": False,
+            "continuation_contract": _continuation_contract(),
             "created_at": _now_iso(),
         }
 

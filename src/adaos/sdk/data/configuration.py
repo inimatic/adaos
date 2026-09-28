@@ -22,12 +22,14 @@ def _service():
 
 
 def read() -> dict[str, Any]:
-    """Return {revision, values} for declared settings of the selected production
-    Application skill, or isolated DEV defaults/overrides. Requires
-    configuration.read. Compatible new DEV defaults are projected without
-    overwriting overrides or writing on read; incompatible changes fail.
-    Unprepared Beta is rejected; no production values or credential refs are
-    copied into DEV.
+    """Return {revision, values, runtime_scope} for declared settings.
+
+    runtime_scope is the Core-derived ``development`` or ``installed`` binding,
+    never caller input. It can safely select a deterministic DEV adapter while
+    installed and trial runtimes stay fail-closed. Requires configuration.read.
+    Compatible new DEV defaults are projected without overwriting overrides or
+    writing on read; incompatible changes fail. Unprepared Beta is rejected; no
+    production values or credential refs are copied into DEV.
     """
     return _service().read()
 

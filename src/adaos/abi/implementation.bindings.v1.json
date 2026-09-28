@@ -10,18 +10,51 @@
     "dynamic_editor": "A trusted dataSource may project typed form fields inside selected records. Declare inputs.recordsPath, fieldsPath and valuesPath plus selectedStateKey. Only inert field declarations and values come from data; actions remain package-owned, and provider-supplied option sources or upload/read targets are stripped. Preserve the complete selected record as $event.record and take identity, release digest, component and expected revision from it. A missing/malformed fieldsPath blocks submission. See examples.dynamic_record_editor.",
     "read": "Use dataSource.kind=skill and name=<owned_skill>.<exported_tool>. params accepts $state references. Return a collection as {items:[...]} and one record directly or as {item:{...}}. ui.form requires records with id and an explicit inputs.selectedStateKey for skill sources. Empty selection is create mode, not the first returned record. A get tool should return an empty item for empty id.",
     "selection": "Keep accepted selection/navigation. Set the selected id before opening the editor; use it in inputs.selectedStateKey and dataSource.params.id. item.details actions sharing a named on=click:<command> run in order, stopping on false/throw. Label one step for one button. Generic on=click buttons stay independent.",
+    "modal_navigation": "Replace deprecated openModal with navigate to a public view in ui.application.interfaces.<owner>.views (scenario) or interface.views (skill). The modal lists it in implements and schema.interface.routes; see examples.modal_navigation. params.to is the view and modalId its implementation. Keep updateState before navigate. Use inputs.closeOnSuccess=true with explicit buttons.",
     "board_move": "collection.board on=move spreads displayed item fields at event top level. Include revision in reads and bind $event.revision, not $event.record.revision. See examples.board_move. Added fields: fromLaneId, toLaneId, previousIndex, currentIndex, interaction, laneKey, patch. Lane is already optimistic; fromLaneId is its prior value. Revision is unchanged. Awaited callSkill false/denied result or throw rolls back the move. The lane selector uses the same event. Never fetch a fresh revision during a move to bypass stale-view conflict detection.",
-    "creation": "For state-initialized creation, use a separate ui.form without dataSource. Before openModal, updateState with draft-specific field keys, clearing old draft values and setting the chosen parent. Fields bind via stateKey (alias state_key); without it the key is form.<widget.id>.<field.id>, not field.id. defaultValue/default/value are literal values, not $state expressions. A dataSource form does not hydrate fields from page state; an empty selected id ignores its returned record. Do not use a get tool's empty-id response to initialize a child. Use a dropdown with related_choices for a visible parent caption, or explicitly bind a known read-only caption alongside the parent id. No selection must offer a parent choice or disable creation, not show an unexplained empty read-only field.",
+    "creation": "For state-initialized creation, use a separate ui.form without dataSource. Before navigate, updateState with draft-specific field keys, clearing old draft values and setting the chosen parent. Fields bind via stateKey (alias state_key); without it the key is form.<widget.id>.<field.id>, not field.id. defaultValue/default/value are literal values, not $state expressions. A dataSource form does not hydrate fields from page state; an empty selected id ignores its returned record. Do not use a get tool's empty-id response to initialize a child. Use a dropdown with related_choices for a visible parent caption, or explicitly bind a known read-only caption alongside the parent id. No selection must offer a parent choice or disable creation, not show an unexplained empty read-only field.",
     "mutation": "callSkill.target=<owned_skill>.<exported_tool>. $event.values=draft; $event.record=loaded id/revision. Never bind revision to editable fields or invent caller identity. inputs.buttons[*].id runs actions with the SAME id in order; on=submit alone does not bind steps. Post-success updateState shares that id. False/throw/cancel stops later steps. interaction.submit.defaultAction selects Enter's button. Keep unrelated mutations on distinct buttons.",
     "result": "Client unwraps the HTTP tool envelope to the handler result. Action resultStateKey writes this result into page state; action resultPath optionally projects within it, e.g. item, not result.item. This projection does not apply to a skill dataSource: return the shape the widget consumes. Declare invalidates on mutations matching dataSource.invalidationTags to refresh affected reads only. Prefer entity/projection tags over one app-wide tag; include relationship dependencies when derived captions, choices or locks change. Test that every changed consumer is refreshed, not a prescribed tag spelling. A callSkill action used for reading or issuing an editor token must declare invalidates:[]: omission uses the legacy GLOBAL refresh default, even for a tool with side_effects=none. Avoid this read-triggered fanout; never suppress invalidation of an actual write.",
     "failure": "A thrown handler error, failed transport, or returned {ok:false,error:<code>,message:<human reason>} rejects the command. Form commands await completion even if background=true. A denied/skipped command or pending approval is not form success. inputs.closeOnSuccess with explicit buttons closes only after success; leave resetOnSuccess false to retain a failed draft. Server enforces rights, invariants and revision conflicts independently of UI enabledIf/readOnlyIf. Do not return ok:true for an unsuccessful mutation.",
     "authorization": "Call adaos.sdk.access.require('workspace.read') or require('workspace.write') inside each tool BEFORE touching data. Use adaos.sdk.access.caller() only for verified caller attribution. An absent caller is not owner. Personal DEV preview uses the same /api/tools/call ingress: the Client supplies its existing node-owner credential, Core verifies it and propagates the owner identity into the selected DEV skill handler. The app does not configure this transport, create grants, inject identity or require installation to use this owner path. Owner-issued scoped session credentials admit only their named installed skill; they are deliberately rejected in personal DEV. DEV-owner acceptance therefore cannot prove delegated reader/writer access. Application unit tests may isolate the SDK access boundary and assert denials; independent Core/HTTP tests qualify real ingress. No custom authentication or role registry belongs in the app.",
     "persistence": "Use adaos.sdk.data.skill_env.skill_data_root() for owned durable data, outside source/package files. Standard-library sqlite3 is allowed for atomic relationships, optimistic revisions and app-owned business rules. New installation starts empty; keep representative Prototype records only in tests. Add versioned compatible schema initialization/migration and persistence tests. The SDK resources facade does not register arbitrary transaction handlers.",
+    "owned_records_cbs": "When the admitted cbs_compiler_view requires capability:resource.records.manage and the Project-owned companion skill is the physical record provider, author contracts/provider.cbs.yaml using contracts.owned_records_cbs.authoring_example. Map the skill's existing read and mutation tools; do not add parallel storage or generic proxy tools. Keep the accepted package-neutral CBS requirement unchanged. The trusted package compiler emits canonical capability/binding outputs and the trusted Trial gate resolves and admits them. Candidate code must not call compilation, admission, publication or runtime-backed developer APIs. Do not author a duplicate provider when portable_contract_reuse already supplies this capability.",
     "google_gmail": "For Google Gmail use only adaos.sdk.providers.gmail. The Core adapter owns OAuth state, PKCE, access/refresh tokens, refresh and the fixed gmail.googleapis.com destination. Skills must not use requests/httpx, adaos.sdk.net.external_api, secrets slots or arbitrary URLs for Gmail. The accepted Prototype already owns and registers its package-neutral semantic intent; preserve pageSchema.meta.builder.cbs_intent and do not invent another intent-registration path. If a compatible installed contract is supplied in portable_contract_reuse, preserve its exact semantic identity and schemas. For a second consumer, expose reusable_connections and attach_reusable_connection as explicit setup tools before offering a fresh OAuth flow; discovery must not attach an account, and neither operation returns or copies credentials. Author contracts/provider.cbs.yaml only when the candidate owns a new physical provider implementation. The trusted package compiler emits canonical contracts and the trusted Builder worker owns PackageRelease closure, production resolution and admission after candidate validation. Candidate source must not call runtime-backed developer validation, publication, compilation or admission APIs.",
     "attachments": "Prototype and production attachment storage are different contracts. fileStorage=prototype uploads only to disposable Preview resource storage. For durable app-owned bytes, declare storage.blob in the skill and Project permission profile, use fileStorage=skill, and set qualified uploadTarget and readTarget from the same owned skill. The upload tool is a mutating tool with narrow permissions [storage.blob, workspace.write], application_access permission workspace.write, and it calls adaos.sdk.data.blob.put_upload(<logical-store>) exactly once; bytes never appear in arguments. It returns that blob receipt directly or under blob. The read tool is read-only with narrow permissions [storage.blob, workspace.read], application_access permission workspace.read, accepts ref plus optional field_id/webspace_id, and returns {ok:true,ref:<the exact requested sha256 ref>} after applying app rules; Core then serves the verified content-addressed object. Form fields should set maxBytes <= 10485760 and an image accept filter when appropriate. Persist the returned /api/tools/... attachment reference in owned relational data and render it through normal media/attachment fields. Without fileStorage, forms collect metadata only. Missing upload/read tools, storage.blob, exact permission declarations, byte persistence tests, denied-writer tests, or authenticated read evidence is a blocking capability gap; never present metadata as an uploaded file or weaken the accepted requirement silently.",
     "discovery": "The supplied owned skill manifest and handlers define the local tool declaration pattern. Add tools to its exports and declarations with accurate read/write side effects; never infer caller rights from those effects. Consult targeted public SDK descriptors only for contracts still missing after this capsule. Preserve the accepted workflows, not Prototype storage or sample records. Larger new UX choices need review, not extra speculative hard acceptance requirements."
   },
   "contracts": {
+    "owned_records_cbs": {
+      "path": "contracts/provider.cbs.yaml",
+      "schema": "adaos.cbs.provider_authoring.v1",
+      "capability_ref": "capability:resource.records.manage",
+      "compiler_owned_outputs": ["contracts/capability.contract.json", "contracts/binding.definition.json"],
+      "authoring_example": {
+        "schema": "adaos.cbs.provider_authoring.v1",
+        "authorship": {"origin": "builder_inferred"},
+        "capability": {
+          "ref": "capability:resource.records.manage",
+          "version": "1.0.0",
+          "title": "Manage application-owned records",
+          "operations": [
+            {"operation_id": "query_records", "tool": "query_records", "errors": ["permission_denied", "provider_unavailable"]},
+            {"operation_id": "mutate_records", "tool": "mutate_records", "errors": ["permission_denied", "invalid_input", "revision_conflict", "provider_unavailable"]}
+          ],
+          "authority_requirements": ["workspace.read", "workspace.write"]
+        },
+        "binding": {
+          "ref": "binding-definition:resource.records.application-owned",
+          "version": "1.0.0",
+          "entry_protocol": "adaos.skill.tools.v1",
+          "logical_entrypoint": "resource.records.application-owned",
+          "physical_member": "handlers/main.py",
+          "modes": ["production"],
+          "profile_classes": ["local"],
+          "authority_requirements": ["workspace.read", "workspace.write"],
+          "conformance_obligations": ["capability_conformance"]
+        }
+      }
+    },
     "google_gmail": {
       "contract": "adaos.provider.google.gmail.v1",
       "semantic_capability": "mail.messages.manage",
@@ -491,6 +524,37 @@
     }
   },
   "examples": {
+    "modal_navigation": {
+      "application_interface": {
+        "defaultView": "sample.record.create",
+        "views": {
+          "sample.record.create": {
+            "surfaces": ["modal"]
+          }
+        }
+      },
+      "modal_contract": {
+        "implements": ["sample.record.create"],
+        "schema": {
+          "interface": {
+            "defaultRoute": "record.create",
+            "routes": {
+              "record.create": {"view": "sample.record.create"}
+            }
+          }
+        }
+      },
+      "action": {
+        "on": "click:create",
+        "type": "navigate",
+        "params": {
+          "to": "sample.record.create",
+          "surface": "modal",
+          "modalId": "record-create-modal",
+          "route": "record.create"
+        }
+      }
+    },
     "board_move": {
       "on": "move", "type": "callSkill", "target": "sample_skill.move_record",
       "params": {"id": "$event.id", "revision": "$event.revision", "patch": "$event.patch"},

@@ -10,7 +10,7 @@ from adaos.sdk.web import implementation_binding_contract
 
 
 def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
-    guide = implementation_binding_contract()
+    guide = implementation_binding_contract(include_modal_navigation=True)
     root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
     schema = json.loads((root / "webui.v1.schema.json").read_text(encoding="utf-8"))
     for name, receipt in guide["sources"].items():
@@ -46,6 +46,11 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert guide["examples"]["board_move"]["params"]["revision"] == "$event.revision"
     assert "rolls" in guide["binding_rules"]["board_move"]
     assert "on=click:<command>" in guide["binding_rules"]["selection"]
+    assert "deprecated openModal" in guide["binding_rules"]["modal_navigation"]
+    assert guide["examples"]["modal_navigation"]["action"]["type"] == "navigate"
+    assert guide["examples"]["modal_navigation"]["modal_contract"]["implements"] == [
+        "sample.record.create"
+    ]
     assert "SAME id" in guide["binding_rules"]["mutation"]
     assert "on=submit alone does not bind" in guide["binding_rules"]["mutation"]
     assert "actions remain package-owned" in guide["binding_rules"]["dynamic_editor"]
@@ -58,6 +63,16 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert "false/throw" in details["manifest"]["commands"]
     guide["examples"].clear()
     assert implementation_binding_contract()["examples"]
+
+
+def test_modal_navigation_contract_is_loaded_only_when_requested():
+    compact = implementation_binding_contract()
+    extended = implementation_binding_contract(include_modal_navigation=True)
+
+    assert "modal_navigation" not in compact["examples"]
+    assert "modal_navigation" not in compact["binding_rules"]
+    assert extended["examples"]["modal_navigation"]["action"]["type"] == "navigate"
+    assert "deprecated openModal" in extended["binding_rules"]["modal_navigation"]
 
 
 def test_editor_binding_retains_loaded_revision_and_does_not_fake_upload():
@@ -166,6 +181,28 @@ def test_google_gmail_contract_is_loaded_only_for_relevant_automation_context():
         operation_validator.validate(examples[name])
     assert examples["send_uncertain"]["delivery_status"] == "unknown"
     assert "do not automatically" in examples["send_uncertain"]["rule"]
+
+
+def test_owned_records_cbs_contract_is_loaded_only_when_requested():
+    compact = implementation_binding_contract()
+    extended = implementation_binding_contract(include_owned_records_cbs=True)
+
+    assert "owned_records_cbs" not in compact["contracts"]
+    assert "owned_records_cbs" not in compact["binding_rules"]
+    contract = extended["contracts"]["owned_records_cbs"]
+    example = contract["authoring_example"]
+    schema = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "src/adaos/abi/cbs.provider_authoring.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    jsonschema.Draft202012Validator(schema).validate(example)
+    assert example["capability"]["ref"] == "capability:resource.records.manage"
+    assert {item["tool"] for item in example["capability"]["operations"]} == {
+        "query_records",
+        "mutate_records",
+    }
 
 
 def test_creation_contract_matches_state_hydration_instead_of_dynamic_defaults():

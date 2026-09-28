@@ -5359,12 +5359,57 @@ class BuilderWorkflowService:
             output.setdefault("workflow", self.describe(object_type, object_id))
             output["invocation"] = copy.deepcopy(dict(invocation))
             return output
+        current = self.describe(object_type, object_id)
+        prototype = _mapping(current.get("prototype"))
+        if command == "accept_prototype" and bool(
+            prototype.get("acceptance_required")
+        ):
+            command_input = _mapping(command_record.get("input"))
+            if command_input.get("confirmed") is not True:
+                raise BuilderWorkflowError(
+                    "explicit Prototype acceptance confirmation is required"
+                )
+            reviewer = _mapping(command_input.get("reviewer"))
+            behavior_checks = command_input.get("behavior_checks")
+            visual_checks = command_input.get("visual_checks")
+            if not reviewer:
+                raise BuilderWorkflowError(
+                    "strict Prototype acceptance requires reviewer evidence"
+                )
+            if not isinstance(behavior_checks, (list, tuple)) or not isinstance(
+                visual_checks, (list, tuple)
+            ):
+                raise BuilderWorkflowError(
+                    "strict Prototype acceptance requires behavior and visual evidence"
+                )
+            result = self.accept_prototype(
+                object_type,
+                object_id,
+                reviewer=reviewer,
+                behavior_checks=[
+                    dict(item) for item in behavior_checks if isinstance(item, Mapping)
+                ],
+                visual_checks=[
+                    dict(item) for item in visual_checks if isinstance(item, Mapping)
+                ],
+                acceptance_id=(
+                    str(command_input.get("acceptance_id") or "").strip() or None
+                ),
+                actor=actor,
+                expected_generation=int(current.get("generation") or 0),
+                domain_packs=(
+                    [str(item) for item in command_input.get("domain_packs") or []]
+                    if isinstance(command_input.get("domain_packs"), (list, tuple))
+                    else None
+                ),
+            )
+            result["invocation"] = copy.deepcopy(dict(invocation))
+            return result
         action = legacy_action_for_command(command)
         if action is None:
             raise BuilderWorkflowError(
                 f"Builder command has no compatibility activity adapter: {command}"
             )
-        current = self.describe(object_type, object_id)
         canonical = _mapping(current.get("governed"))
         instance_ref = _mapping(command_record.get("instance_ref"))
         if str(instance_ref.get("id") or "") != str(canonical.get("instance_id") or ""):

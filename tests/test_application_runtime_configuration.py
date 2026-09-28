@@ -52,7 +52,11 @@ def setup(tmp_path, monkeypatch):
 def test_settings_are_typed_revisioned_and_survive_new_context(setup):
     ctx, _channel, _stable, _, _member = setup
     service = ApplicationRuntimeConfiguration(ctx)
-    assert service.read() == {"revision": 0, "values": {"page_size": 10}}
+    assert service.read() == {
+        "revision": 0,
+        "values": {"page_size": 10},
+        "runtime_scope": "installed",
+    }
     assert service.write({"page_size": 20}, expected_revision=0)["revision"] == 1
     assert ApplicationRuntimeConfiguration(ctx).read()["values"] == {"page_size": 20}
     with pytest.raises(ConfigurationConflict):
@@ -158,9 +162,17 @@ def test_dev_uses_same_settings_sdk_without_loading_real_installation(setup, tmp
     with monkeypatch.context() as patch:
         patch.setattr(module, "ApplicationStore", lambda _: pytest.fail("DEV must not inspect real installations"))
         development = ApplicationRuntimeConfiguration(ctx)
-        assert development.read() == {"revision": 0, "values": {"page_size": 10}}
+        assert development.read() == {
+            "revision": 0,
+            "values": {"page_size": 10},
+            "runtime_scope": "development",
+        }
         development.write({"page_size": 15}, expected_revision=0)
-        assert ApplicationRuntimeConfiguration(ctx).read() == {"revision": 1, "values": {"page_size": 15}}
+        assert ApplicationRuntimeConfiguration(ctx).read() == {
+            "revision": 1,
+            "values": {"page_size": 15},
+            "runtime_scope": "development",
+        }
     ctx.skill_ctx.get().path = original
     assert production.read()["values"] == {"page_size": 40}
 
@@ -187,7 +199,11 @@ def test_dev_additive_settings_keep_overrides_without_writing_on_read(setup, tmp
         "properties": {**SCHEMA["properties"], "order": {"type": "string", "enum": ["title", "newest"]}},
         "required": ["page_size", "order"]}, "defaults": {"page_size": 10, "order": "newest"}}
     source.write_text(yaml.safe_dump(manifest), encoding="utf-8")
-    assert service.read() == {"revision": 1, "values": {"page_size": 15, "order": "newest"}}
+    assert service.read() == {
+        "revision": 1,
+        "values": {"page_size": 15, "order": "newest"},
+        "runtime_scope": "development",
+    }
     assert store.read() == original
     assert service.write({"page_size": 15, "order": "title"}, expected_revision=1)["revision"] == 2
     assert ApplicationRuntimeConfiguration(ctx).read()["values"] == {"page_size": 15, "order": "title"}

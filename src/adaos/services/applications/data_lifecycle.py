@@ -257,7 +257,7 @@ def automation_data_contract() -> dict[str, Any]:
         },
         "configuration_contract": {
             "manifest": "configuration.schema is a JSON Schema for the non-secret values object; configuration.defaults must satisfy it.",
-            "read": "adaos.sdk.data.configuration.read() -> {revision, values}; requires configuration.read.",
+            "read": "adaos.sdk.data.configuration.read() -> {revision, values, runtime_scope}; runtime_scope is Core-derived development|installed, never caller input; requires configuration.read.",
             "write": "adaos.sdk.data.configuration.write(values, expected_revision=revision) replaces the complete values object; requires configuration.write. Keep the revision from the displayed snapshot; do not reread it to bypass a conflict.",
             "async": "Async handlers use a_read() / a_write(values, expected_revision=revision).",
             "boundary": "Settings are not application database rows. Do not hard-code production values in manifests or copy credential references into forms/model input. SDK write preserves separate secret bindings.",

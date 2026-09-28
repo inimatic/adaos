@@ -5798,7 +5798,10 @@ class LocalSkillFactoryWorker:
             validation_continuation = bool(
                 continuation_mode == "validate_preserved_candidate"
             )
-            model_continuation = bool(continuation_mode == "resume_preserved_candidate")
+            model_continuation = continuation_mode in {
+                "resume_preserved_candidate",
+                "resume_materialized_candidate",
+            }
             structured_edits = self._structured_edits_from_assignment(assignment)
             validation_only = self._validation_only_from_assignment(
                 assignment, workspace
@@ -7464,6 +7467,7 @@ class LocalSkillFactoryWorker:
         if mode not in {
             "validate_preserved_candidate",
             "resume_preserved_candidate",
+            "resume_materialized_candidate",
         }:
             return None
         current_contract = (
@@ -7588,6 +7592,38 @@ class LocalSkillFactoryWorker:
         previous_digest = str(previous_snapshot.get("digest") or "").strip()
         current_digest = str(current_snapshot.get("digest") or "").strip()
         changed_paths = self._changed_from_baseline(previous_workspace)
+        if mode == "resume_materialized_candidate":
+            if changed_paths:
+                raise ValueError(
+                    "materialized continuation source must have a clean workspace"
+                )
+            expected_snapshot_digest = str(
+                checkpoint.get("source_snapshot_digest") or ""
+            ).strip()
+            if (
+                not previous_digest
+                or previous_digest != current_digest
+                or expected_snapshot_digest != current_digest
+            ):
+                raise ValueError(
+                    "materialized continuation source snapshot is stale"
+                )
+            return {
+                "schema": "adaos.skill_factory.continuation_restore.v1",
+                "mode": mode,
+                "source_task_id": source_task_id,
+                "failure_id": str(failure.get("failure_id") or "").strip()
+                or None,
+                "source_snapshot_digest": current_digest,
+                "changed_paths": [],
+                "root_mcp_evidence": None,
+                **(
+                    {"blocking_feedback_message": blocking_feedback_message}
+                    if blocking_feedback_message
+                    else {}
+                ),
+                "restored_at": _now_iso(),
+            }
         if not changed_paths:
             # There is no candidate to preserve.  This also covers a source
             # snapshot refresh that happened after a discovery-only turn.
@@ -8939,9 +8975,26 @@ class LocalSkillFactoryWorker:
                     "mail.messages.manage",
                 )
             )
+            include_owned_records_cbs = any(
+                isinstance(item, Mapping)
+                and str(item.get("capability_ref") or "").strip()
+                == "capability:resource.records.manage"
+                for item in cbs_compiler_view.get("requirements") or []
+            )
+            include_modal_navigation = any(
+                token in binding_request
+                for token in (
+                    "modalid",
+                    "openmodal",
+                    '"surface":"modal"',
+                    '"surface": "modal"',
+                )
+            )
             implementation_bindings = implementation_binding_contract(
                 include_attachments=include_attachments,
                 include_google_gmail=include_google_gmail,
+                include_owned_records_cbs=include_owned_records_cbs,
+                include_modal_navigation=include_modal_navigation,
             )
             if target_webui_value is not None:
                 portable_reuse = self._portable_contract_reuse_bundle(
