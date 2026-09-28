@@ -23,14 +23,17 @@ def test_ci_embeds_patch_bump_after_fast_tests() -> None:
     assert "python tools/bump_adaos_patch_version.py" in workflow
 
 
-def test_full_sdk_validation_is_sequential_and_not_on_push() -> None:
+def test_hosted_ci_keeps_only_the_short_mandatory_validation_path() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    assert "Full SDK tests (Ubuntu sequential)" in workflow
-    assert "github.event_name == 'schedule'" in workflow
-    assert "inputs.full_validation" in workflow
-    assert "adaos tests run --only-sdk" in workflow
-    assert "ci_sdk_shard.py" not in workflow
+    assert "Fast SDK checks (Ubuntu)" in workflow
+    assert "Skills tests (Ubuntu)" in workflow
+    assert "Full SDK tests" not in workflow
+    assert "full_validation" not in workflow
+    assert "include_windows" not in workflow
+    assert "schedule:" not in workflow
+    assert "windows_nightly:" not in workflow
+    assert "adaos tests run --only-sdk" not in workflow
 
 
 def test_standalone_version_bump_workflow_is_not_registered_separately() -> None:

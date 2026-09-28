@@ -58,10 +58,19 @@ The core base version lives in `pyproject.toml` under `[project].version`.
 On pushes to `rev2026`, the `AdaOS CI` workflow runs a bounded Linux SDK/smoke
 set and skill tests as separate parallel jobs. After both jobs succeed, the
 workflow bumps the patch version and pushes a commit named
-`chore: bump adaos version to <version>`. The complete SDK suite runs
-sequentially on the nightly schedule or when `full_validation` is requested
-manually. The Windows full-suite control run remains nightly or opt-in through
-`include_windows`; neither full run is on the normal development critical path.
+`chore: bump adaos version to <version>`. This short contour is the only
+mandatory hosted GitHub CI path; full SDK validation deliberately does not run
+in that workflow.
+
+Run the complete suite asynchronously on a developer workstation or a dedicated
+Linux validation node so it does not block normal development and releases:
+
+```bash
+adaos tests run --only-sdk -- --junitxml=reports/sdk-full-junit.xml -q
+```
+
+Preserve the JUnit report and the tested commit as validation evidence. A full
+run is a periodic/deep control, not a prerequisite for each patch version.
 
 Runtime slots record the human-readable build version in their slot manifest.
 Remote update checkouts may start shallow, but slot preparation completes the
