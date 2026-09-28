@@ -145,13 +145,20 @@ def test_model_context_keeps_residual_requirements_addressable() -> None:
     ]
 
 
-def test_context_and_compiler_share_exact_requirement_inventory() -> None:
+def test_context_compacts_job_aliases_without_losing_requirement_inventory() -> None:
     brief = prototype.merge_briefs(
         intent.compile_brief("Create a new application for a small team."),
         intent.compile_brief("Edit a request and edit its owner. Search records; show empty results."),
     )
     context = prototype.model_context(brief)
-    assert {item["id"] for item in context["required_references"]} == _brief_requirement_ids(brief)
+    required_ids = {item["id"] for item in context["required_references"]}
+    related_job_refs = {
+        ref
+        for operation in context["operations"]
+        for ref in operation["related_job_refs"]
+    }
+    assert required_ids | related_job_refs == _brief_requirement_ids(brief)
+    assert required_ids.isdisjoint(related_job_refs)
     edits = [item for item in context["operations"] if item["kind"] == "update"]
     assert len(edits) == 2
     assert edits[0]["statement"] != edits[1]["statement"]

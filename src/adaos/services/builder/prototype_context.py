@@ -291,9 +291,12 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
         item["id"] for item in prototype_model_requirement_inventory(value)
     }
     jobs = [item for item in jobs if item["id"] not in process_ids]
-    state_requirements = [item for item in state_requirements
-                          if item.get("id", item.get("job_ref")) not in process_ids
-                          and item.get("id", item.get("job_ref")) in model_requirement_ids]
+    state_requirements = [
+        item
+        for item in state_requirements
+        if item.get("id", item.get("job_ref")) not in process_ids
+        and (item.get("job_ref") or item.get("id") in model_requirement_ids)
+    ]
 
     facts = {
         name: fact

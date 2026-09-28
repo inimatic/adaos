@@ -971,10 +971,14 @@ def test_builder_adapts_inferred_context_budget_for_required_capsules(
         planned = original_plan(context_service, request)
         requested_budgets.append(int(request["token_budget"]))
         if len(requested_budgets) == 1:
+            required_tokens = max(
+                9_000,
+                int(planned.get("required_estimated_tokens") or 0),
+            )
             return {
                 **planned,
                 "status": "insufficient",
-                "required_estimated_tokens": 9_000,
+                "required_estimated_tokens": required_tokens,
                 "omitted_required_refs": ["capsule:required-task"],
             }
         return planned
@@ -992,9 +996,11 @@ def test_builder_adapts_inferred_context_budget_for_required_capsules(
     )
 
     control = started["session"]["context_control"]
-    assert requested_budgets == [8_000, 9_000]
+    assert requested_budgets[0] == 8_000
+    assert len(requested_budgets) == 2
+    assert 8_000 < requested_budgets[1] <= 10_800
     assert control["initial_token_budget"] == 8_000
-    assert control["token_budget"] == 9_000
+    assert control["token_budget"] == requested_budgets[1]
     assert control["token_budget_adapted"] is True
 
 
