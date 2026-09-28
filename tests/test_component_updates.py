@@ -448,6 +448,55 @@ def test_local_trial_api_returns_bounded_acceptance_receipt(monkeypatch):
     }
 
 
+def test_local_trial_api_reports_direct_immutable_publication_as_published(monkeypatch):
+    from adaos.services import personalization_runtime
+
+    service = SimpleNamespace(accept_local_trial=lambda *_args, **_kwargs: {
+        "ok": True,
+        "workflow": {
+            "generation": 338,
+            "delivery": {"status": "stale"},
+            "publication": {"status": "not_started"},
+        },
+        "publication": {
+            "ok": True,
+            "lifecycle_phase": "workspace",
+            "candidate_id": "selected-candidate",
+            "release_digest": "sha256:selected-release",
+            "package_digest": "sha256:selected-package",
+        },
+        "runtime_selection": {
+            "application_id": "web_desktop",
+            "source": "stable_installation",
+            "release_digest": "sha256:selected-release",
+            "revision": 15,
+        },
+    })
+    monkeypatch.setattr(personalization_runtime, "current_user_id", lambda: "owner")
+    app = FastAPI()
+    app.include_router(updates_api.router, prefix="/api/component-updates")
+    app.dependency_overrides[updates_api._get_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/component-updates/test/accept-trial",
+        json={
+            "candidate_id": "selected-candidate",
+            "candidate_digest": "sha256:selected-package",
+            "webspace_id": "desktop",
+            "confirmed": True,
+        },
+        headers={"X-AdaOS-Token": "dev-local-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["workflow"] == {
+        "generation": None,
+        "delivery_status": "accepted",
+        "publication_status": "published",
+    }
+
+
 def test_local_trial_api_reports_runtime_conflict_without_server_error(monkeypatch):
     from types import SimpleNamespace
 

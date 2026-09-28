@@ -31,8 +31,28 @@ def _acceptance_receipt(result: Any) -> dict[str, Any]:
     workflow = source.get("workflow") if isinstance(source.get("workflow"), dict) else {}
     delivery = workflow.get("delivery") if isinstance(workflow.get("delivery"), dict) else {}
     publication = workflow.get("publication") if isinstance(workflow.get("publication"), dict) else {}
-    installation = source.get("installation") if isinstance(source.get("installation"), dict) else {}
+    direct_publication = (
+        source.get("publication")
+        if isinstance(source.get("publication"), dict)
+        else {}
+    )
     selection = source.get("runtime_selection") if isinstance(source.get("runtime_selection"), dict) else {}
+    direct_published = (
+        bool(direct_publication.get("ok"))
+        and str(direct_publication.get("lifecycle_phase") or "").strip()
+        == "workspace"
+        and bool(str(direct_publication.get("candidate_id") or "").strip())
+        and bool(str(direct_publication.get("release_digest") or "").strip())
+        and str(selection.get("source") or "").strip() == "stable_installation"
+        and str(selection.get("release_digest") or "").strip()
+        == str(direct_publication.get("release_digest") or "").strip()
+        and not (
+            str(delivery.get("candidate_id") or "").strip()
+            == str(direct_publication.get("candidate_id") or "").strip()
+            and str(publication.get("status") or "").strip().lower() == "published"
+        )
+    )
+    installation = source.get("installation") if isinstance(source.get("installation"), dict) else {}
     verification = (
         source.get("application_verification")
         if isinstance(source.get("application_verification"), dict)
@@ -48,9 +68,9 @@ def _acceptance_receipt(result: Any) -> dict[str, Any]:
         "schema": "adaos.component_trial_acceptance_receipt.v1",
         "ok": bool(source.get("ok", True)),
         "workflow": {
-            "generation": workflow.get("generation"),
-            "delivery_status": delivery.get("status"),
-            "publication_status": publication.get("status"),
+            "generation": None if direct_published else workflow.get("generation"),
+            "delivery_status": "accepted" if direct_published else delivery.get("status"),
+            "publication_status": "published" if direct_published else publication.get("status"),
         },
         "installation": {
             key: installation.get(key)
