@@ -1,11 +1,50 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 
 Image = pytest.importorskip("PIL.Image", reason="SDK image variants require the optional Pillow dependency")
+
+
+def test_trial_media_store_uses_authoritative_node_runtime(monkeypatch, tmp_path):
+    from adaos.services import media_core
+
+    node_base = tmp_path / "node"
+    trial_root = node_base / "trials" / "candidate-1"
+    ctx = SimpleNamespace(
+        authority_state_dir=node_base / "state",
+        paths=SimpleNamespace(
+            runtime_channel_ref="trial:candidate-1",
+            skills_dir=lambda: trial_root / "skills",
+        ),
+    )
+    monkeypatch.setattr(media_core, "get_ctx", lambda: ctx)
+
+    env = media_core.media_store_runtime_env()
+
+    assert env.runtime_root == node_base / "workspace" / "skills" / ".runtime" / "mediaserver"
+    assert not (trial_root / "skills" / ".runtime" / "mediaserver").exists()
+
+
+def test_workspace_media_store_keeps_context_skills_root(monkeypatch, tmp_path):
+    from adaos.services import media_core
+
+    skills_root = tmp_path / "workspace" / "skills"
+    ctx = SimpleNamespace(
+        authority_state_dir=tmp_path / "state",
+        paths=SimpleNamespace(
+            runtime_channel_ref="workspace",
+            skills_dir=lambda: skills_root,
+        ),
+    )
+    monkeypatch.setattr(media_core, "get_ctx", lambda: ctx)
+
+    env = media_core.media_store_runtime_env()
+
+    assert env.runtime_root == skills_root / ".runtime" / "mediaserver"
 
 
 def test_sdk_io_media_creates_cached_variant_and_publish_descriptor(monkeypatch, tmp_path):

@@ -6,7 +6,11 @@ import json
 import pytest
 from PIL import Image
 
-from adaos.services.image_generation import ImageGenerationService, decode_generated_image
+from adaos.services.image_generation import (
+    IMAGE_JOB_POLL_TIMEOUT_SECONDS,
+    ImageGenerationService,
+    decode_generated_image,
+)
 
 
 def encoded_image(format="PNG", size=(16, 12)):
@@ -57,6 +61,12 @@ def test_image_generation_is_owned_durable_idempotent_and_context_stays_local(tm
     assert "b64_json" not in json.dumps(view) and str(tmp_path) not in json.dumps(view)
     assert recovered.get("draft-one") == view
     assert len(broker.submits) == len(broker.polls) == 1
+    assert broker.polls[0] == (
+        "job-one",
+        {
+            "timeout": IMAGE_JOB_POLL_TIMEOUT_SECONDS,
+        },
+    )
     assert all("b64_json" not in path.read_text(encoding="utf-8") for path in tmp_path.rglob("*.json"))
 
 

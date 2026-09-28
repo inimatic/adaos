@@ -113,8 +113,19 @@ class MediaResource:
 
 def media_store_runtime_env() -> SkillRuntimeEnvironment:
     ctx = get_ctx()
+    skills_root = Path(ctx.paths.skills_dir())
+    runtime_channel = str(getattr(ctx.paths, "runtime_channel_ref", "workspace") or "workspace")
+    authority_state_dir = getattr(ctx, "authority_state_dir", None)
+    if runtime_channel.startswith("trial:") and authority_state_dir:
+        # Trial application state is deliberately isolated, but media descriptors
+        # are served by the node-level media route.  Keeping published bytes in a
+        # trial-local mediaserver makes an otherwise valid descriptor resolve to
+        # 404 both during the trial and after publication.  Media filenames are
+        # content addressed, so sharing the authoritative store is safe; rejected
+        # trial artifacts can be collected later as unreferenced blobs.
+        skills_root = Path(authority_state_dir).expanduser().absolute().parent / "workspace" / "skills"
     env = SkillRuntimeEnvironment(
-        skills_root=Path(ctx.paths.skills_dir()),
+        skills_root=skills_root,
         skill_name=MEDIA_STORE_SKILL_NAME,
     )
     env.ensure_base()

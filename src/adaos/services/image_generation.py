@@ -16,6 +16,7 @@ from adaos.services.content_generation import _digest
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_IMAGE_PIXELS = 16 * 1024 * 1024
+IMAGE_JOB_POLL_TIMEOUT_SECONDS = 30.0
 _TERMINAL = {"completed", "failed", "cancelled", "invalid_output"}
 
 
@@ -115,7 +116,18 @@ class ImageGenerationService:
             record = json.loads(path.read_text(encoding="utf-8"))
             if record["status"] not in _TERMINAL and record.get("job"):
                 job = record["job"]
-                self._capture(record, self.broker.get_response_job(job["job_id"], base_url=job.get("base_url")))
+                self._capture(
+                    record,
+                    self.broker.get_response_job(
+                        job["job_id"],
+                        # Image job responses include the binary payload. Poll
+                        # through the node's normal Root route so a regional
+                        # node does not bypass its proxy for the large body.
+                        # The durable job id is globally routable and retains
+                        # ownership checks at Root.
+                        timeout=IMAGE_JOB_POLL_TIMEOUT_SECONDS,
+                    ),
+                )
                 atomic_write_json(path, record)
             return self._view(record)
 
