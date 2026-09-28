@@ -312,6 +312,69 @@ class NativeApplicationCBSActivationService:
         self._put_resolution_set(record)
         return record
 
+    def current_status(
+        self,
+        *,
+        application_ref: str,
+        project_release_digest: str,
+        admission_digest: str,
+    ) -> dict[str, Any]:
+        """Inspect whether one exact admission is already active in WorkspaceLock."""
+
+        manager = self.activation_manager
+        if manager is None:  # pragma: no cover - guarded by __post_init__
+            return {"current": False, "reason": "activation_manager_unavailable"}
+        lock = manager.load_lock()
+        if lock is None:
+            return {"current": False, "reason": "workspace_lock_absent"}
+        _, _, project_id = str(application_ref or "").partition(":")
+        slot = next((item for item in lock.slots if item.slot_id == project_id), None)
+        if slot is None:
+            return {"current": False, "reason": "application_slot_absent"}
+        if slot.release_digest != project_release_digest:
+            return {
+                "current": False,
+                "reason": "application_slot_release_drifted",
+                "observed_release_digest": slot.release_digest,
+            }
+        try:
+            members = self._load_current_members(lock)
+        except NativeApplicationCBSActivationError as exc:
+            return {
+                "current": False,
+                "reason": "resolution_set_unavailable",
+                "message": str(exc),
+            }
+        member = next(
+            (
+                item
+                for item in members
+                if str(item.get("application_ref") or "") == application_ref
+            ),
+            None,
+        )
+        if member is None:
+            return {"current": False, "reason": "application_resolution_absent"}
+        if (
+            str(member.get("project_release_digest") or "")
+            != project_release_digest
+            or str(member.get("admission_digest") or "") != admission_digest
+        ):
+            return {"current": False, "reason": "application_resolution_drifted"}
+        payload = lock.to_dict()
+        return {
+            "current": True,
+            "reason": "exact_workspace_authority",
+            "workspace_lock_revision": lock.lock_revision,
+            "workspace_lock_digest": payload["lock_digest"],
+            "application_resolution_ref": (
+                dict(lock.cbs or {}).get("application_resolution_ref")
+            ),
+            "application_resolution_digest": (
+                dict(lock.cbs or {}).get("application_resolution_digest")
+            ),
+        }
+
     @staticmethod
     def _aggregate_lock_payload(
         resolution_set: Mapping[str, Any],
@@ -443,6 +506,30 @@ class NativeApplicationCBSActivationService:
                 "Workspace activation manager is unavailable"
             )
         current = manager.load_lock()
+        status = self.current_status(
+            application_ref=application_ref,
+            project_release_digest=release_digest,
+            admission_digest=str(admission.get("admission_digest") or ""),
+        )
+        if status["current"] is True and current is not None:
+            cbs = dict(current.cbs or {})
+            activation = ActivationResult(
+                operation_id=manager.operation_id(
+                    "native-cbs-current:"
+                    f"{str(admission.get('admission_digest') or '')}"
+                ),
+                status="completed",
+                workspace_lock=current,
+                release_digest=release_digest,
+                idempotent_replay=True,
+            )
+            return NativeApplicationCBSActivationResult(
+                activation=activation,
+                resolution_set_ref=str(cbs["application_resolution_ref"]),
+                resolution_set_digest=str(cbs["application_resolution_digest"]),
+                plan_set_ref=str(cbs["resolution_plan_ref"]),
+                plan_set_digest=str(cbs["resolution_plan_digest"]),
+            )
         resolution_set = self._compose_resolution_set(
             current=current,
             admission=admission,

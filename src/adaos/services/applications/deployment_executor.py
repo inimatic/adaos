@@ -661,6 +661,94 @@ class ApplicationDeploymentExecutor:
         )
         return activation.to_dict()
 
+    def native_cbs_workspace_status(
+        self,
+        application_id: str,
+        release_digest: str,
+    ) -> Mapping[str, Any]:
+        """Return whether the exact installed Application owns workspace authority."""
+
+        application = str(application_id or "").strip()
+        release = str(release_digest or "").strip()
+        if not application or not release:
+            return {"current": False, "reason": "application_identity_incomplete"}
+        if self.workspace_root is None:
+            return {"current": False, "reason": "workspace_activation_unconfigured"}
+        from adaos.services.applications.cbs_admission import (
+            NativeApplicationCBSAdmissionService,
+        )
+        from adaos.services.applications.cbs_activation import (
+            NativeApplicationCBSActivationService,
+        )
+
+        admission = NativeApplicationCBSAdmissionService(
+            self.state_dir
+        ).find_by_project_release(
+            release,
+            application_ref=f"application:{application}",
+        )
+        if admission is None:
+            return {"current": True, "reason": "compatibility_application"}
+        return NativeApplicationCBSActivationService(
+            state_dir=self.state_dir,
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+        ).current_status(
+            application_ref=f"application:{application}",
+            project_release_digest=release,
+            admission_digest=str(admission.get("admission_digest") or ""),
+        )
+
+    def reconcile_native_cbs_workspace(
+        self,
+        *,
+        application_id: str,
+        project_id: str,
+        release_digest: str,
+        actor_ref: str,
+        subnet_ref: str,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        """Commit WorkspaceLock for an already healthy exact deployment."""
+
+        application = str(application_id or "").strip()
+        project = str(project_id or "").strip()
+        release = str(release_digest or "").strip()
+        admission = self._native_cbs_admission(
+            {
+                "kind": "update",
+                "application_id": application,
+                "legacy_project_id": project,
+                "release_digest": release,
+                "actor_ref": actor_ref,
+                "subnet_ref": subnet_ref,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if not isinstance(admission, Mapping):
+            return {"status": "compatibility_runtime", "changed": False}
+        if str(admission.get("status") or "") != "admitted":
+            raise ApplicationDeploymentExecutorError(
+                "native CBS workspace reconciliation requires admitted resolution"
+            )
+        before = self.native_cbs_workspace_status(application, release)
+        activated = self._activate_native_cbs_workspace(
+            plan={
+                "application_id": application,
+                "legacy_project_id": project,
+                "release_digest": release,
+                "actor_ref": actor_ref,
+                "idempotency_key": idempotency_key,
+            },
+            admission=admission,
+        )
+        return {
+            "status": "current" if before.get("current") is True else "reconciled",
+            "changed": before.get("current") is not True,
+            "before": dict(before),
+            "activation": dict(activated or {}),
+        }
+
     def __call__(self, plan: Mapping[str, Any]) -> Mapping[str, Any]:
         kind = str(plan.get("kind") or "")
         actor_ref = str(plan.get("actor_ref") or "application-core")

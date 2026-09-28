@@ -206,7 +206,11 @@ revisions are now persisted with admission instead of being reconstructed at
 activation time. A failed final authority commit compensates the completed
 ProjectDeployment and remains fail-closed; an uncertain compensation is
 reported as `unknown` for recovery. Multi-requirement activation and the
-pre-authority compensation path are covered by executable tests.
+pre-authority compensation path are covered by executable tests. Existing
+exact native installations are migrated through the ordinary auto-update
+reconcile-only pass: a missing or drifted Application member/slot is now a
+candidate even when its package and Stable `RuntimeSelection` are already
+current, and reconciliation commits the lock without another deployment.
 
 `CBS10-07` remains partial until this bridge is deployed and observed on the
 clean subnet, the exact Gmail slot appears in its production `WorkspaceLock`,

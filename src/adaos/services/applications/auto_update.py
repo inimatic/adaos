@@ -125,6 +125,20 @@ def _runtime_selection_requires_reconciliation(
     )
 
 
+def _workspace_authority_requires_reconciliation(
+    service: ApplicationService,
+    *,
+    application_id: str,
+    installed_release_digest: str,
+) -> bool:
+    executor = getattr(service, "executor", None)
+    inspect = getattr(executor, "native_cbs_workspace_status", None)
+    if not callable(inspect):
+        return False
+    status = inspect(application_id, installed_release_digest)
+    return isinstance(status, Mapping) and status.get("current") is False
+
+
 class ApplicationAutoUpdateService:
     """Apply exact safe updates for ``auto_compatible`` subscriptions."""
 
@@ -156,6 +170,7 @@ class ApplicationAutoUpdateService:
         self,
         *,
         application_id: str,
+        project_id: str,
         release_digest: str,
         webspace_id: str,
         actor_ref: str,
@@ -170,11 +185,33 @@ class ApplicationAutoUpdateService:
         even when package installation already converged.
         """
 
+        workspace_authority: Mapping[str, Any] | None = None
+        executor = getattr(self.application_service, "executor", None)
+        reconcile_workspace = getattr(
+            executor, "reconcile_native_cbs_workspace", None
+        )
+        if callable(reconcile_workspace):
+            workspace_authority = reconcile_workspace(
+                application_id=application_id,
+                project_id=project_id,
+                release_digest=release_digest,
+                actor_ref=actor_ref,
+                subnet_ref=subnet_ref,
+                idempotency_key=(
+                    f"application-auto-update:workspace-reconcile:"
+                    f"{application_id}:{release_digest}"
+                ),
+            )
+
         store = getattr(self.application_service, "store", None)
         if store is None or not callable(
             getattr(store, "list_runtime_selections", None)
         ):
-            return {"status": "not_observed", "reason": "runtime_store_unavailable"}
+            return {
+                "status": "not_observed",
+                "reason": "runtime_store_unavailable",
+                "workspace_authority": dict(workspace_authority or {}),
+            }
         selections = [
             item
             for item in store.list_runtime_selections()
@@ -215,6 +252,7 @@ class ApplicationAutoUpdateService:
                 "status": "current",
                 "changed": False,
                 "selection_count": len(selections),
+                "workspace_authority": dict(workspace_authority or {}),
             }
         selected = next(
             (item for item in selections if item.webspace_id == webspace_id),
@@ -236,6 +274,7 @@ class ApplicationAutoUpdateService:
             "changed": True,
             "selection_count": len(selections),
             "selection": updated.to_dict(),
+            "workspace_authority": dict(workspace_authority or {}),
         }
 
     def run(
@@ -267,6 +306,11 @@ class ApplicationAutoUpdateService:
                 if isinstance(application, Mapping)
                 else ""
             )
+            project_id = _text(
+                application.get("legacy_project_id")
+                if isinstance(application, Mapping)
+                else ""
+            )
             if requested and app_id not in requested:
                 continue
             if not bool(model.get("auto_update_enabled")):
@@ -295,13 +339,21 @@ class ApplicationAutoUpdateService:
                 continue
             installed_digest = _text(installation.get("installed_release_digest"))
             if not bool(model.get("update_available")):
-                if installed_digest and _runtime_selection_requires_reconciliation(
-                    model,
-                    installed_release_digest=installed_digest,
+                if installed_digest and (
+                    _runtime_selection_requires_reconciliation(
+                        model,
+                        installed_release_digest=installed_digest,
+                    )
+                    or _workspace_authority_requires_reconciliation(
+                        self.application_service,
+                        application_id=app_id,
+                        installed_release_digest=installed_digest,
+                    )
                 ):
                     candidates.append(
                         {
                             "application_id": app_id,
+                            "project_id": project_id,
                             "target_release_digest": installed_digest,
                             "installation_revision": int(
                                 installation.get("revision") or 0
@@ -327,6 +379,7 @@ class ApplicationAutoUpdateService:
             candidates.append(
                 {
                     "application_id": app_id,
+                    "project_id": project_id,
                     "target_release_digest": target_digest,
                     "installation_revision": int(installation.get("revision") or 0),
                 }
@@ -364,6 +417,7 @@ class ApplicationAutoUpdateService:
                 if bool(candidate.get("reconcile_only")):
                     item["runtime_selection"] = self._reconcile_stable_runtime(
                         application_id=app_id,
+                        project_id=str(candidate.get("project_id") or app_id),
                         release_digest=target_digest,
                         webspace_id=webspace_id,
                         actor_ref=actor_ref,
@@ -430,6 +484,7 @@ class ApplicationAutoUpdateService:
                     if receipt.status == "succeeded":
                         item["runtime_selection"] = self._reconcile_stable_runtime(
                             application_id=app_id,
+                            project_id=str(candidate.get("project_id") or app_id),
                             release_digest=target_digest,
                             webspace_id=webspace_id,
                             actor_ref=actor_ref,

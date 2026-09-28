@@ -283,6 +283,13 @@ store before they can become active. If the final lock transaction fails, the
 already completed deployment is compensated; failed compensation is an
 explicit unknown outcome rather than a false rollback claim.
 
+For installations that predate the bridge, registry auto-update treats an
+absent/drifted native CBS member as a reconcile-only candidate independently
+of package and `RuntimeSelection` freshness. It refreshes legacy admission
+records that do not contain full BindingInstance revisions, commits the exact
+current release to `WorkspaceLock`, and does not redeploy an already healthy
+package closure.
+
 The multi-requirement lock commit and compensation boundary pass locally. The
 remaining production gate is to deploy this bridge on the clean subnet,
 observe the exact Gmail slot and resolution-set digests in its active lock,

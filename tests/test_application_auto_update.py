@@ -452,6 +452,77 @@ def test_automatic_update_repairs_stale_selection_after_package_converged(tmp_pa
     assert application_service.selections[0]["release_digest"] == installed_digest
 
 
+def test_automatic_update_repairs_missing_native_cbs_workspace_authority(
+    tmp_path,
+) -> None:
+    installed_digest = "sha256:" + "b" * 64
+    selected = SimpleNamespace(
+        application_id="mail_focus_reader",
+        webspace_id="desktop",
+        source="stable_installation",
+        release_digest=installed_digest,
+        runtime_root_ref="workspace",
+        revision=2,
+    )
+
+    class WorkspaceExecutor:
+        def __init__(self) -> None:
+            self.reconciliations = []
+
+        def __call__(self, _plan):
+            raise AssertionError("workspace-only repair must not redeploy packages")
+
+        def native_cbs_workspace_status(self, application_id, release_digest):
+            assert application_id == "mail_focus_reader"
+            assert release_digest == installed_digest
+            return {"current": False, "reason": "application_slot_absent"}
+
+        def reconcile_native_cbs_workspace(self, **kwargs):
+            self.reconciliations.append(kwargs)
+            return {
+                "status": "reconciled",
+                "changed": True,
+                "activation": {"workspace_lock_revision": 42},
+            }
+
+    class WorkspaceRepairService(_ApplicationService):
+        def __init__(self) -> None:
+            super().__init__(_plan())
+            self.store = _RuntimeStore([selected])
+            self.executor = WorkspaceExecutor()
+
+        def list_models(self, **_kwargs):
+            model = _model()
+            model["application"]["legacy_project_id"] = "mail_focus_project"
+            model["update_available"] = False
+            model["installation"]["installed_release_digest"] = installed_digest
+            model["runtime_selections"] = [
+                {
+                    "source": "stable_installation",
+                    "release_digest": installed_digest,
+                    "runtime_root_ref": "workspace",
+                }
+            ]
+            return [model]
+
+        def plan_operation(self, *_args, **_kwargs):
+            raise AssertionError("workspace-only repair must not plan an update")
+
+    application_service = WorkspaceRepairService()
+    result = ApplicationAutoUpdateService(tmp_path, application_service).run(
+        subnet_ref="subnet:test",
+        trigger="registry_sync",
+    )
+
+    outcome = result["outcomes"][0]
+    assert outcome["reconcile_only"] is True
+    assert outcome["runtime_selection"]["status"] == "current"
+    assert outcome["runtime_selection"]["workspace_authority"]["changed"] is True
+    assert application_service.executor.reconciliations[0]["project_id"] == (
+        "mail_focus_project"
+    )
+
+
 def test_automatic_update_does_not_replace_active_beta_runtime(tmp_path) -> None:
     class BetaService(_ApplicationService):
         def list_models(self, **_kwargs):
