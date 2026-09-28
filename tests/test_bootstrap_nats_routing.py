@@ -492,6 +492,41 @@ def test_hub_route_max_chunk_raw_respects_smaller_explicit_value(monkeypatch) ->
     assert _hub_route_proxy._hub_route_max_chunk_raw_bytes(256 * 1024) == 64 * 1024
 
 
+def test_hub_route_chunks_large_http_response_without_changing_body_or_metadata() -> None:
+    body_b64 = base64.b64encode(b"large-response" * 30_000).decode("ascii")
+    payload = {
+        "t": "http_resp",
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body_b64": body_b64,
+        "truncated": False,
+    }
+
+    chunks = _hub_route_proxy._hub_route_chunk_http_response(
+        payload,
+        max_body_b64_chars=64 * 1024,
+        chunk_id="response-1",
+    )
+
+    assert len(chunks) > 1
+    assert [chunk["idx"] for chunk in chunks] == list(range(len(chunks)))
+    assert all(chunk["total"] == len(chunks) for chunk in chunks)
+    assert all(chunk["status"] == 200 for chunk in chunks)
+    assert all(chunk["schema"] == "route.http_resp.chunk.v1" for chunk in chunks)
+    assert "".join(str(chunk["body_b64"]) for chunk in chunks) == body_b64
+
+
+def test_hub_route_leaves_small_http_response_unmodified() -> None:
+    assert (
+        _hub_route_proxy._hub_route_chunk_http_response(
+            {"t": "http_resp", "status": 200, "body_b64": "YWJj"},
+            max_body_b64_chars=64 * 1024,
+            chunk_id="response-1",
+        )
+        == []
+    )
+
+
 def test_hub_route_normalize_resend_chunk_indexes_deduplicates_and_bounds() -> None:
     assert _hub_route_proxy._hub_route_normalize_resend_chunk_indexes(
         [3, "1", 3, -1, "bad", 6, 2],
@@ -630,6 +665,31 @@ def test_hub_route_force_flushes_all_sync_chunks_when_configured() -> None:
         _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "chunk", "flow": "route", "idx": 0, "total": 4},
             **{**common, "tunnel_flow": "route"},
+        )
+        is True
+    )
+
+
+def test_hub_route_force_flushes_only_final_http_response_chunk() -> None:
+    common = {
+        "route_force_flush": True,
+        "route_sync_frame_force_flush": False,
+        "tunnel_flow": "route",
+        "pending_data_size": 0,
+        "frame_flush_pending_bytes": 64 * 1024,
+    }
+
+    assert (
+        _hub_route_proxy._hub_route_should_force_flush_reply(
+            {"t": "http_resp_chunk", "idx": 0, "total": 3},
+            **common,
+        )
+        is False
+    )
+    assert (
+        _hub_route_proxy._hub_route_should_force_flush_reply(
+            {"t": "http_resp_chunk", "idx": 2, "total": 3},
+            **common,
         )
         is True
     )

@@ -98,6 +98,30 @@ Requirements:
 - isolated resource budgets
 - slow consumer in route class must not starve control class
 
+### Routed HTTP response framing
+
+Small routed HTTP responses use the existing `http_resp` envelope. A response
+whose base64 body would make one NATS publish exceed the route budget is sent
+as `http_resp_chunk` envelopes with schema `route.http_resp.chunk.v1`.
+
+Each chunk carries the same response id, status, headers, truncation flag and
+optional error plus a zero-based `idx`, `total`, and one base64 body segment.
+The Root proxy reassembles the chunks before exposing the ordinary
+`http_resp` to HTTP callers, so browser and Application APIs do not acquire a
+second response model.
+
+The receiver must:
+
+- accept out-of-order chunks and identical duplicates;
+- reject invalid indexes, conflicting metadata, and conflicting duplicate
+  content;
+- cap an assembly at 1024 chunks and 16 MiB of base64 body data;
+- bind assembly lifetime to the original routed request timeout.
+
+The sender keeps base64 split points four-byte aligned and force-flushes only
+the final response chunk. Responses below the configured route chunk budget
+remain byte-for-byte compatible with the original single-envelope protocol.
+
 ### Sync metadata class
 
 Examples:

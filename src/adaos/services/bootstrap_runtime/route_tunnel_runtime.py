@@ -336,6 +336,7 @@ class NatsRouteTunnelRuntime:
         _sub = subscribe
         route_policy = service._route_policy
         _hub_route_max_chunk_raw_bytes = route_policy.max_chunk_raw_bytes
+        _hub_route_chunk_http_response = route_policy.chunk_http_response
         _hub_route_normalize_resend_chunk_indexes = route_policy.normalize_resend_chunk_indexes
         _hub_route_semantic_flow_for_path = route_policy.semantic_flow_for_path
         _hub_route_should_shed_sync_frame = route_policy.should_shed_sync_frame
@@ -1025,6 +1026,13 @@ class NatsRouteTunnelRuntime:
                         body0 = p0.get("body_b64")
                         body_len0 = len(body0) if isinstance(body0, str) else None
                         return f"t=http_resp status={status0} truncated={truncated0} body_b64_len={body_len0} err={err0}"
+                    if t0 == "http_resp_chunk":
+                        body0 = p0.get("body_b64")
+                        body_len0 = len(body0) if isinstance(body0, str) else None
+                        return (
+                            f"t=http_resp_chunk idx={p0.get('idx')} total={p0.get('total')} "
+                            f"body_b64_len={body_len0}"
+                        )
                     if t0 == "open":
                         pth0 = str(p0.get("path") or "")
                         q0 = str(p0.get("query") or "")
@@ -1785,6 +1793,16 @@ class NatsRouteTunnelRuntime:
                     t0 = (payload or {}).get("t")
                 except Exception:
                     t0 = None
+                if t0 == "http_resp":
+                    chunk_payloads = _hub_route_chunk_http_response(
+                        payload,
+                        max_body_b64_chars=MAX_CHUNK_RAW,
+                        chunk_id=uuid.uuid4().hex,
+                    )
+                    if chunk_payloads:
+                        for chunk_payload in chunk_payloads:
+                            await _route_reply(key, chunk_payload, resend_http_resp=False)
+                        return
                 _route_lifecycle_log("reply.start", key, subject=reply_subject, payload=payload)
                 publish_elapsed_s = 0.0
                 try:
@@ -1833,7 +1851,7 @@ class NatsRouteTunnelRuntime:
                             direction="to_browser",
                             payload=payload,
                         )
-                    elif t0 in ("http_resp", "close"):
+                    elif t0 in ("http_resp", "http_resp_chunk", "close"):
                         _route_observe_flow(
                             "control",
                             f"browser_{t0}",
@@ -1853,7 +1871,9 @@ class NatsRouteTunnelRuntime:
                     t = (payload or {}).get("t")
                     if _route_trace:
                         try:
-                            if t in ("close", "http_resp") or (_route_frame_verbose and t in ("frame", "chunk")):
+                            if t in ("close", "http_resp", "http_resp_chunk") or (
+                                _route_frame_verbose and t in ("frame", "chunk")
+                            ):
                                 status = (payload or {}).get("status")
                                 kind = (payload or {}).get("kind")
                                 size = None
@@ -1971,7 +1991,7 @@ class NatsRouteTunnelRuntime:
                                 print(f"[hub-route] tx {t} key={key}")
                             except Exception:
                                 pass
-                        elif t in ("http_resp", "close", "open_ack"):
+                        elif t in ("http_resp", "http_resp_chunk", "close", "open_ack"):
                             _route_lifecycle_log(
                                 "reply.flushed",
                                 key,
@@ -2001,7 +2021,7 @@ class NatsRouteTunnelRuntime:
                             payload=payload,
                             error=str(e),
                         )
-                    elif t0 in ("http_resp", "close"):
+                    elif t0 in ("http_resp", "http_resp_chunk", "close"):
                         _route_observe_flow(
                             "control",
                             f"{t0}_publish_fail",
@@ -2016,7 +2036,7 @@ class NatsRouteTunnelRuntime:
                     except Exception:
                         pass
                     # Do not silently drop probe replies: Root will time out and surface `hub_unreachable`.
-                    if t0 in ("http_resp", "close") or _route_verbose:
+                    if t0 in ("http_resp", "http_resp_chunk", "close") or _route_verbose:
                         try:
                             _rl_log(
                                 "hub-route.publish_fail",

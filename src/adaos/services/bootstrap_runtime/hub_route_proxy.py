@@ -51,6 +51,59 @@ def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int
     return int(raw)
 
 
+def _hub_route_chunk_http_response(
+    payload: Any,
+    *,
+    max_body_b64_chars: int,
+    chunk_id: str,
+) -> list[dict[str, Any]]:
+    """Split an oversized routed HTTP response into NATS-safe messages.
+
+    ``body_b64`` is already ASCII/base64, so splitting on a multiple-of-four
+    boundary preserves a byte-identical response when Root concatenates the
+    parts. Response metadata is repeated on every chunk so the protocol does
+    not depend on receiving chunk zero first.
+    """
+
+    if not isinstance(payload, dict) or payload.get("t") != "http_resp":
+        return []
+    body_b64 = payload.get("body_b64")
+    if not isinstance(body_b64, str):
+        return []
+    try:
+        limit = int(max_body_b64_chars)
+    except Exception:
+        return []
+    limit = max(16 * 1024, limit)
+    limit -= limit % 4
+    if len(body_b64) <= limit:
+        return []
+    token = str(chunk_id or "").strip()
+    if not token:
+        return []
+    parts = [body_b64[offset : offset + limit] for offset in range(0, len(body_b64), limit)]
+    total = len(parts)
+    metadata = {
+        "schema": "route.http_resp.chunk.v1",
+        "id": token,
+        "total": total,
+        "status": payload.get("status"),
+        "headers": payload.get("headers") if isinstance(payload.get("headers"), dict) else {},
+        "truncated": bool(payload.get("truncated")),
+    }
+    if payload.get("err") is not None:
+        metadata["err"] = str(payload.get("err"))
+    return [
+        {
+            "t": "http_resp_chunk",
+            **metadata,
+            "idx": idx,
+            "body_b64": part,
+        }
+        for idx, part in enumerate(parts)
+    ]
+
+
 def _hub_route_normalize_resend_chunk_indexes(
     missing: Any,
     total: Any,
@@ -155,6 +208,13 @@ def _hub_route_should_force_flush_reply(
     t = payload.get("t")
     if t in ("open_ack", "http_resp", "close"):
         return True
+    if t == "http_resp_chunk":
+        try:
+            idx = int(payload.get("idx") or 0)
+            total = int(payload.get("total") or 0)
+        except Exception:
+            return False
+        return total > 0 and idx == total - 1
     if t not in ("frame", "chunk"):
         return False
 
@@ -970,6 +1030,7 @@ class HubRouteProxyPolicy:
         self.discovery = HubRouteDiscoveryState()
 
     max_chunk_raw_bytes = staticmethod(_hub_route_max_chunk_raw_bytes)
+    chunk_http_response = staticmethod(_hub_route_chunk_http_response)
     normalize_resend_chunk_indexes = staticmethod(_hub_route_normalize_resend_chunk_indexes)
     path_token = staticmethod(_hub_route_path_token)
     semantic_flow_for_path = staticmethod(_hub_route_semantic_flow_for_path)
