@@ -345,6 +345,9 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
 def _implementation_sdk_contract_bundle() -> dict[str, Any]:
     """Return the bounded public SDK closure needed by application realization."""
 
+    import importlib
+    import inspect
+
     from adaos.sdk.core.exporter import export as sdk_export
 
     exported = sdk_export(
@@ -355,15 +358,21 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
         ),
         limit=64,
     )
-    contracts = [
-        {
-            key: item[key]
-            for key in ("name", "module", "summary", "signature_detail")
-            if key in item
-        }
-        for item in exported.get("tools") or []
-        if item.get("name") in _IMPLEMENTATION_SDK_SYMBOLS
-    ]
+    contracts = []
+    for item in exported.get("tools") or []:
+        name = str(item.get("name") or "")
+        if name not in _IMPLEMENTATION_SDK_SYMBOLS:
+            continue
+        module_name = str(item.get("module") or "")
+        function = getattr(importlib.import_module(module_name), name.rsplit(".", 1)[-1])
+        contracts.append(
+            {
+                "name": name,
+                "module": module_name,
+                "signature": f"{name}{inspect.signature(function)}",
+                "summary": str(item.get("summary") or ""),
+            }
+        )
     present = {str(item.get("name") or "") for item in contracts}
     missing = sorted(_IMPLEMENTATION_SDK_SYMBOLS - present)
     if missing:
@@ -406,6 +415,81 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                 "Declare accurate narrow tool permissions and side effects, including "
                 "workspace.read/workspace.write and llm.generate/model use where used."
             ),
+        },
+        "response_contracts": {
+            "content_draft": {
+                "methods": [
+                    "adaos.sdk.llm.content.generate",
+                    "adaos.sdk.llm.content.get",
+                ],
+                "pending_statuses": ["submitting", "queued", "in_progress"],
+                "terminal_statuses": [
+                    "completed",
+                    "out_of_scope",
+                    "refused",
+                    "incomplete",
+                    "failed",
+                    "invalid_output",
+                    "cancelled",
+                ],
+                "fields": [
+                    "request_id",
+                    "root_request_id",
+                    "input_digest",
+                    "status",
+                    "data",
+                    "message",
+                    "model",
+                    "usage",
+                    "context",
+                ],
+                "completed_rule": (
+                    "status is completed and data exactly validates the caller-supplied "
+                    "schema; persist data, not the enclosing draft."
+                ),
+            },
+            "image_draft": {
+                "methods": [
+                    "adaos.sdk.llm.images.generate",
+                    "adaos.sdk.llm.images.get",
+                ],
+                "admitted_model_id": "gpt-image-1",
+                "pending_statuses": ["submitting", "queued", "in_progress"],
+                "terminal_statuses": [
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "invalid_output",
+                ],
+                "fields": [
+                    "request_id",
+                    "root_request_id",
+                    "input_digest",
+                    "created_at",
+                    "status",
+                    "model",
+                    "usage",
+                    "metering_status",
+                    "context",
+                    "message",
+                ],
+                "completed_media": {
+                    "location": "response.media",
+                    "fields": [
+                        "route",
+                        "path",
+                        "filename",
+                        "mime",
+                        "content_ref",
+                        "size_bytes",
+                        "sha256",
+                        "width",
+                        "height",
+                    ],
+                    "content_ref_format": "generated-image:<sha256-hex>",
+                    "persistence": "store the complete response.media object",
+                },
+            },
         },
         "imports": [
             "from adaos.sdk import access",

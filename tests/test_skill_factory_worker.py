@@ -10360,6 +10360,15 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         "adaos.sdk.llm.images.generate",
         "adaos.sdk.resources.operate",
     } <= sdk_names
+    assert sdk_contracts["response_contracts"]["content_draft"][
+        "completed_rule"
+    ].startswith("status is completed")
+    assert sdk_contracts["response_contracts"]["image_draft"][
+        "admitted_model_id"
+    ] == "gpt-image-1"
+    assert "content_ref" in sdk_contracts["response_contracts"]["image_draft"][
+        "completed_media"
+    ]["fields"]
     assert blueprint_packet["public_sdk_contracts_ref"] == (
         sdk_contracts_path.resolve().as_posix()
     )
