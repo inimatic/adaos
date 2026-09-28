@@ -2,6 +2,10 @@ name: One-time Full SDK Validation
 
 on:
   workflow_dispatch:
+  push:
+    branches: [rev2026]
+    paths:
+      - ".github/workflows/full-sdk-validation.yml"
 
 concurrency:
   group: full-sdk-validation-${{ github.ref }}
