@@ -2526,11 +2526,27 @@ def _apply_application_runtime_headers(
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
     from adaos.services.policy.caller import verified_caller
     from adaos.services.policy.application import clear_application
+    from adaos.services.integrations.ingress import (
+        PUBLIC_CONNECTED_ENVIRONMENT_REF,
+        bind_ingress_materialization,
+        ingress_environment_for_http_route,
+    )
 
     state = getattr(request, "state", None)
     actor = getattr(state, "adaos_verified_caller", None)
     scope = getattr(state, "adaos_verified_caller_scope", None)
-    with verified_caller(actor, scope):
+    environment_profile_ref = ingress_environment_for_http_route(
+        getattr(request, "headers", None)
+    )
+    zone_id = (
+        str(getattr(getattr(ctx, "config", None), "zone_id", "") or "").strip()
+        if environment_profile_ref == PUBLIC_CONNECTED_ENVIRONMENT_REF
+        else None
+    )
+    with verified_caller(actor, scope), bind_ingress_materialization(
+        environment_profile_ref,
+        zone_id=zone_id,
+    ):
         try:
             return await _call_tool_with_identity(body, request, response, ctx)
         finally:

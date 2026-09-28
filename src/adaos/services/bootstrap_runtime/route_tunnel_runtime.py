@@ -2392,10 +2392,12 @@ class NatsRouteTunnelRuntime:
             ) -> dict[str, Any]:
                 import requests  # type: ignore
 
+                route_zone_id = ""
                 try:
                     from adaos.services.node_config import load_config
 
                     cfg = getattr(service.ctx, "config", None) or load_config(ctx=service.ctx)
+                    route_zone_id = str(getattr(cfg, "zone_id", "") or "").strip()
                     bases = _build_hub_route_http_bases(
                         path_norm=(path.rstrip("/") or "/") if isinstance(path, str) else "/",
                         method=method,
@@ -2404,6 +2406,7 @@ class NatsRouteTunnelRuntime:
                     )
                     token_local = getattr(cfg, "token", None) or os.getenv("ADAOS_TOKEN", "") or None
                 except Exception:
+                    route_zone_id = str(os.getenv("ADAOS_ZONE_ID") or "").strip()
                     bases = _build_hub_route_http_bases(
                         path_norm=(path.rstrip("/") or "/") if isinstance(path, str) else "/",
                         method=method,
@@ -2415,6 +2418,13 @@ class NatsRouteTunnelRuntime:
                 h2: dict[str, str] = {}
                 if token_local:
                     h2["X-AdaOS-Token"] = str(token_local)
+                # The local API must be able to distinguish an authenticated
+                # Root-routed browser call from a direct loopback call.  This
+                # marker selects physical callback materialization only; it is
+                # not an authorization credential.
+                h2["X-AdaOS-Route"] = "root-routed"
+                if route_zone_id:
+                    h2["X-AdaOS-Zone"] = route_zone_id
                 if isinstance(headers, dict):
                     ct = headers.get("content-type") or headers.get("Content-Type")
                     if isinstance(ct, str) and ct:
@@ -4915,10 +4925,12 @@ class NatsRouteTunnelRuntime:
                                     }
                                 import requests  # type: ignore
 
+                                route_zone_id = ""
                                 try:
                                     from adaos.services.node_config import load_config
 
                                     cfg = getattr(service.ctx, "config", None) or load_config(ctx=service.ctx)
+                                    route_zone_id = str(getattr(cfg, "zone_id", "") or "").strip()
                                     # IMPORTANT: Route-proxy HTTP requests must target the local hub instance,
                                     # not the public Root proxy URL that might be stored in node.yaml as hub_url.
                                     bases = _build_hub_route_http_bases(
@@ -4929,6 +4941,7 @@ class NatsRouteTunnelRuntime:
                                     )
                                     token_local = getattr(cfg, "token", None) or os.getenv("ADAOS_TOKEN", "") or None
                                 except Exception:
+                                    route_zone_id = str(os.getenv("ADAOS_ZONE_ID") or "").strip()
                                     bases = _build_hub_route_http_bases(
                                         path_norm=path_norm,
                                         method=method,
@@ -4953,6 +4966,9 @@ class NatsRouteTunnelRuntime:
                                 h2: dict[str, str] = {}
                                 if token_local:
                                     h2["X-AdaOS-Token"] = str(token_local)
+                                h2["X-AdaOS-Route"] = "root-routed"
+                                if route_zone_id:
+                                    h2["X-AdaOS-Zone"] = route_zone_id
                                 if isinstance(headers, dict):
                                     ct = headers.get("content-type") or headers.get("Content-Type")
                                     if isinstance(ct, str) and ct:

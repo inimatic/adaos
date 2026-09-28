@@ -327,6 +327,7 @@ class GoogleGmailProvider:
         *,
         transport: HttpTransport = requests,
         clock: Callable[[], float] = time.time,
+        ingress_broker: IntegrationIngressBroker | None = None,
     ) -> "GoogleGmailProvider":
         vault = getattr(ctx, "credential_vault", None)
         if vault is None:
@@ -339,7 +340,7 @@ class GoogleGmailProvider:
         # but defer vault reads until an authorization or refresh operation.
         client_id = _text(os.getenv("ADAOS_GOOGLE_OAUTH_CLIENT_ID"))
         client_secret = _text(os.getenv("ADAOS_GOOGLE_OAUTH_CLIENT_SECRET"))
-        ingress = broker_from_context(ctx, clock=clock)
+        ingress = ingress_broker or broker_from_context(ctx, clock=clock)
         redirect_uri = ingress.endpoint.callback_uri
         return cls(
             vault=vault,

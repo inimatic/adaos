@@ -73,8 +73,10 @@ requires an Application-owned idempotency key; the Application must suppress a
 duplicate command before issuing a second provider call.
 
 `begin_connection` returns an authorization URL for a browser `openUrl` action
-with `withAuth=false`. The callback is
-`/api/providers/google/gmail/oauth/callback` on the configured local API base.
+with `withAuth=false`. Core selects the physical callback from the admitted
+transport environment: a direct loopback call uses
+`/api/providers/google/gmail/oauth/callback` on `127.0.0.1:8777`, while a
+Root-routed call uses the public callback profile in the node's authority zone.
 OAuth state is single-use and expires after ten minutes.
 
 `reusable_connections` returns only a redacted account projection for the
@@ -121,8 +123,10 @@ registered.
 
 For `environment-profile:public-connected@1`, follow the
 [public callback operator procedure](../operations/public-google-oauth-callback.md)
-and additionally register the canonical `integrations.inimatic.com` URI. Keep
-the loopback URI during the migration window.
+and register the exact authority for every activated zone:
+`integrations.inimatic.com` for central/shared zones and
+`ru.integrations.inimatic.com` for RU. Keep the loopback URI during the
+migration window.
 
 ## Google Cloud setup for the beta
 

@@ -8,6 +8,9 @@ exchange and long-lived credentials.
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -64,6 +67,62 @@ _ATTEMPT_SCHEMA = "adaos.integration.oauth_attempt_authority.v1"
 _CONSUMED_SCHEMA = "adaos.integration.oauth_attempt_consumed.v1"
 _KEY_SCHEMA = "adaos.integration.delivery_key.v1"
 _TTL_SECONDS = 10 * 60
+
+
+@dataclass(frozen=True, slots=True)
+class IngressMaterializationContext:
+    """Trusted, request-scoped choice of a physical ingress environment."""
+
+    environment_profile_ref: str
+    zone_id: str | None = None
+
+
+_INGRESS_MATERIALIZATION_CONTEXT: ContextVar[
+    IngressMaterializationContext | None
+] = ContextVar("adaos_ingress_materialization_context", default=None)
+
+
+def ingress_environment_for_http_route(headers: Mapping[str, Any] | None) -> str:
+    """Map the trusted local route marker to an ingress environment.
+
+    The Root/hub tunnel adds ``X-AdaOS-Route: root-routed`` only while
+    forwarding an authenticated public route to the loopback Core API. Direct
+    local requests do not carry the marker and retain loopback compatibility.
+    This selection changes only callback materialization; it grants no
+    provider or Application authority.
+    """
+
+    values = headers if isinstance(headers, Mapping) else {}
+    route = _text(values.get("x-adaos-route") or values.get("X-AdaOS-Route")).lower()
+    if route == "root-routed":
+        return PUBLIC_CONNECTED_ENVIRONMENT_REF
+    return LOCAL_DEVELOPMENT_ENVIRONMENT_REF
+
+
+@contextmanager
+def bind_ingress_materialization(
+    environment_profile_ref: str,
+    *,
+    zone_id: str | None = None,
+):
+    """Bind an admitted physical ingress choice for one execution context."""
+
+    profile = _text(environment_profile_ref)
+    if profile not in {
+        LOCAL_DEVELOPMENT_ENVIRONMENT_REF,
+        PUBLIC_CONNECTED_ENVIRONMENT_REF,
+    }:
+        raise IntegrationIngressError("ingress_environment_not_supported")
+    canonical_zone = canonical_zone_id(zone_id)
+    if zone_id and canonical_zone is None:
+        raise IntegrationIngressError("ingress_zone_not_supported")
+    token = _INGRESS_MATERIALIZATION_CONTEXT.set(
+        IngressMaterializationContext(profile, canonical_zone)
+    )
+    try:
+        yield
+    finally:
+        _INGRESS_MATERIALIZATION_CONTEXT.reset(token)
 
 
 class IntegrationIngressError(RuntimeError):
@@ -534,21 +593,39 @@ class IntegrationIngressBroker:
 
 
 def broker_from_context(
-    ctx: Any, *, clock: Callable[[], float] = time.time
+    ctx: Any,
+    *,
+    clock: Callable[[], float] = time.time,
+    environment_profile_ref: str | None = None,
+    zone_id: str | None = None,
 ) -> IntegrationIngressBroker:
     vault = getattr(ctx, "credential_vault", None)
     if vault is None:
         raise IntegrationIngressError("credential_vault_unavailable")
-    environment_profile_ref = _text(
-        getattr(getattr(ctx, "config", None), "environment_profile_ref", None)
+    materialization = _INGRESS_MATERIALIZATION_CONTEXT.get()
+    selected_environment_profile_ref = _text(
+        environment_profile_ref
+        or (
+            materialization.environment_profile_ref
+            if materialization is not None
+            else None
+        )
+        or getattr(getattr(ctx, "config", None), "environment_profile_ref", None)
         or getattr(getattr(ctx, "settings", None), "environment_profile_ref", None)
         or os.getenv("ADAOS_ENVIRONMENT_PROFILE_REF")
         or LOCAL_DEVELOPMENT_ENVIRONMENT_REF
     )
+    if selected_environment_profile_ref not in {
+        LOCAL_DEVELOPMENT_ENVIRONMENT_REF,
+        PUBLIC_CONNECTED_ENVIRONMENT_REF,
+    }:
+        raise IntegrationIngressError("ingress_environment_not_supported")
     settings = getattr(ctx, "settings", None)
     config = getattr(ctx, "config", None)
     zone_raw = _text(
-        os.getenv("ADAOS_ZONE_ID")
+        zone_id
+        or (materialization.zone_id if materialization is not None else None)
+        or os.getenv("ADAOS_ZONE_ID")
         or getattr(config, "zone_id", None)
         or getattr(settings, "zone_id", None)
     )
@@ -557,7 +634,7 @@ def broker_from_context(
         raise IntegrationIngressError("ingress_zone_not_supported")
     zone_id = zone_id or DEFAULT_PUBLIC_ZONE_ID
     registrar: RootIngressRegistryClient | None = None
-    if environment_profile_ref == PUBLIC_CONNECTED_ENVIRONMENT_REF:
+    if selected_environment_profile_ref == PUBLIC_CONNECTED_ENVIRONMENT_REF:
         from adaos.services.personalization_runtime import current_subnet_id
 
         root_settings = getattr(config, "root_settings", None)
@@ -582,7 +659,7 @@ def broker_from_context(
         )
     return IntegrationIngressBroker(
         vault=vault,
-        environment_profile_ref=environment_profile_ref,
+        environment_profile_ref=selected_environment_profile_ref,
         zone_id=zone_id,
         clock=clock,
         public_registrar=registrar,
@@ -597,11 +674,14 @@ __all__ = [
     "LOCAL_GOOGLE_OAUTH_CALLBACK_URI",
     "PUBLIC_CONNECTED_ENVIRONMENT_REF",
     "PUBLIC_GOOGLE_OAUTH_CALLBACK_URI",
+    "IngressMaterializationContext",
     "IntegrationIngressBroker",
     "IntegrationIngressError",
     "RootIngressRegistryClient",
+    "bind_ingress_materialization",
     "broker_from_context",
     "google_oauth_ingress_profile",
+    "ingress_environment_for_http_route",
     "materialize_google_oauth_endpoint",
     "public_google_oauth_callback_uri",
 ]

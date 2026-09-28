@@ -18,6 +18,8 @@ from adaos.services.providers.google_gmail import (
 )
 from adaos.services.integrations.ingress import (
     GOOGLE_OAUTH_INGRESS_PROFILE_REF,
+    LOCAL_DEVELOPMENT_ENVIRONMENT_REF,
+    PUBLIC_CONNECTED_ENVIRONMENT_REF,
     IntegrationIngressError,
     broker_from_context,
 )
@@ -57,14 +59,18 @@ async def google_gmail_oauth_callback(
     ctx: AgentContext = Depends(get_ctx),
 ) -> HTMLResponse:
     try:
-        provider = GoogleGmailProvider.from_context(ctx)
+        broker = broker_from_context(
+            ctx,
+            environment_profile_ref=LOCAL_DEVELOPMENT_ENVIRONMENT_REF,
+        )
+        provider = GoogleGmailProvider.from_context(ctx, ingress_broker=broker)
         result = await asyncio.to_thread(
             provider.complete_authorization,
             state=state,
             code=code,
             error=error,
         )
-    except GoogleGmailProviderError as exc:
+    except (IntegrationIngressError, GoogleGmailProviderError) as exc:
         return _page(
             "Gmail connection was not completed",
             exc.code.replace("_", " "),
@@ -82,11 +88,14 @@ async def deliver_oauth_ingress(
     """Accept one encrypted Root envelope at the selected Core authority."""
 
     try:
-        broker = broker_from_context(ctx)
+        broker = broker_from_context(
+            ctx,
+            environment_profile_ref=PUBLIC_CONNECTED_ENVIRONMENT_REF,
+        )
         payload = await asyncio.to_thread(broker.decrypt_routed_envelope, envelope)
         if str(payload.get("profile_ref") or "") != GOOGLE_OAUTH_INGRESS_PROFILE_REF:
             raise IntegrationIngressError("oauth_profile_mismatch")
-        provider = GoogleGmailProvider.from_context(ctx)
+        provider = GoogleGmailProvider.from_context(ctx, ingress_broker=broker)
         result = await asyncio.to_thread(
             provider.complete_authorization,
             state=str(payload.get("state") or ""),

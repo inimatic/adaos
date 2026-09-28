@@ -10,8 +10,11 @@ Status: operator procedure for the EIG3 migration window.
 - The isolated ingress vhost has a valid TLS certificate and exposes only
   `/v1/oauth/callback/cbp_*` plus its health probe.
 - Root and the selected Core have a healthy outbound hub route.
-- Core uses `environment-profile:public-connected@1`; this is environment
-  materialization, not a Gmail/provider flag.
+- A Root-routed tool call carries the trusted local route marker and Core
+  materializes `environment-profile:public-connected@1` in the node's admitted
+  Root zone. A direct local call has no marker and retains the loopback
+  materialization. This is transport/environment selection, not a
+  Gmail/provider or Application flag.
 
 ## Google registration
 

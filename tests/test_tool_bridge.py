@@ -121,6 +121,70 @@ def test_skill_manager_registry_initialization_runs_off_event_loop(monkeypatch) 
         tool_bridge_module._TOOL_CALL_IDEMPOTENCY_CACHE.clear()
 
 
+def test_root_routed_tool_call_binds_public_ingress_materialization(monkeypatch) -> None:
+    from adaos.services.integrations.ingress import broker_from_context
+
+    class _Vault:
+        def get(self, _key, *, default=None, scope="profile"):
+            return default
+
+        def put(self, _key, _value, *, scope="profile", meta=None):
+            return None
+
+        def delete(self, _key, *, scope="profile"):
+            return None
+
+    ctx = SimpleNamespace(
+        credential_vault=_Vault(),
+        config=SimpleNamespace(
+            zone_id="ru",
+            subnet_id="sn_test",
+            root_settings=SimpleNamespace(
+                base_url="https://ru.api.inimatic.com",
+                token="root-token",
+            ),
+        ),
+        settings=SimpleNamespace(
+            api_base="https://ru.api.inimatic.com",
+            root_token="root-token",
+            subnet_id="sn_test",
+        ),
+    )
+
+    async def _call(_body, _request, _response, _ctx):
+        return await asyncio.to_thread(
+            lambda: broker_from_context(ctx).endpoint.callback_uri
+        )
+
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_with_identity", _call)
+    request = SimpleNamespace(
+        headers={"x-adaos-route": "root-routed"},
+        state=SimpleNamespace(
+            adaos_verified_caller=None,
+            adaos_verified_caller_scope=None,
+        ),
+    )
+    routed = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(tool="gmail:test", arguments={}),
+            request,
+            Response(),
+            ctx=ctx,
+        )
+    )
+    local = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(tool="gmail:test", arguments={}),
+            SimpleNamespace(headers={}, state=request.state),
+            Response(),
+            ctx=ctx,
+        )
+    )
+
+    assert routed.startswith("https://ru.integrations.inimatic.com/")
+    assert local.startswith("http://127.0.0.1:8777/")
+
+
 def _fake_ctx() -> SimpleNamespace:
     return SimpleNamespace(
         skills_repo=None,

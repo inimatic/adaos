@@ -28,7 +28,10 @@ from adaos.services.integrations.ingress import (
     PUBLIC_GOOGLE_OAUTH_CALLBACK_URI,
     IntegrationIngressBroker,
     IntegrationIngressError,
+    bind_ingress_materialization,
+    broker_from_context,
     google_oauth_ingress_profile,
+    ingress_environment_for_http_route,
     materialize_google_oauth_endpoint,
     public_google_oauth_callback_uri,
 )
@@ -306,6 +309,45 @@ def test_public_broker_registers_the_selected_zone() -> None:
     assert captured[0]["zone_id"] == "ru"
 
 
+def test_root_routed_tool_call_selects_zonal_public_materialization() -> None:
+    ctx = SimpleNamespace(
+        credential_vault=Vault(),
+        config=SimpleNamespace(
+            zone_id="ru",
+            subnet_id="sn_test",
+            root_settings=SimpleNamespace(
+                base_url="https://ru.api.inimatic.com",
+                token="root-token",
+            ),
+        ),
+        settings=SimpleNamespace(
+            api_base="https://ru.api.inimatic.com",
+            root_token="root-token",
+            subnet_id="sn_test",
+        ),
+    )
+
+    assert (
+        ingress_environment_for_http_route({"X-AdaOS-Route": "root-routed"})
+        == PUBLIC_CONNECTED_ENVIRONMENT_REF
+    )
+    assert (
+        ingress_environment_for_http_route({})
+        == LOCAL_DEVELOPMENT_ENVIRONMENT_REF
+    )
+
+    with bind_ingress_materialization(
+        PUBLIC_CONNECTED_ENVIRONMENT_REF,
+        zone_id="ru",
+    ):
+        routed = broker_from_context(ctx)
+        assert routed.endpoint.callback_uri == public_google_oauth_callback_uri("ru")
+        assert routed.endpoint.to_dict()["zone_id"] == "ru"
+
+    local = broker_from_context(ctx)
+    assert local.endpoint.callback_uri == LOCAL_GOOGLE_OAUTH_CALLBACK_URI
+
+
 def test_public_delivery_returns_digest_addressed_exact_acknowledgement(monkeypatch) -> None:
     envelope = {
         "envelope_ref": "ingress-envelope:test",
@@ -328,11 +370,15 @@ def test_public_delivery_returns_digest_addressed_exact_acknowledgement(monkeypa
         def complete_authorization(self, **_values):
             return {"email_address": "owner@example.test"}
 
-    monkeypatch.setattr(provider_oauth, "broker_from_context", lambda _ctx: Broker())
+    monkeypatch.setattr(
+        provider_oauth,
+        "broker_from_context",
+        lambda _ctx, **_kwargs: Broker(),
+    )
     monkeypatch.setattr(
         provider_oauth.GoogleGmailProvider,
         "from_context",
-        classmethod(lambda _cls, _ctx: Provider()),
+        classmethod(lambda _cls, _ctx, **_kwargs: Provider()),
     )
 
     response = asyncio.run(
