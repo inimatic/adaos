@@ -573,6 +573,40 @@ def test_exact_release_admissions_are_selected_by_application_identity(
         service.find_by_project_release(plan.release.release_digest)
 
 
+def test_exact_release_selects_latest_admission_revision_for_one_identity(
+    tmp_path: Path,
+) -> None:
+    plan, store = _release(tmp_path)
+    compilation = _compilation()
+    service = NativeApplicationCBSAdmissionService(
+        tmp_path / "state", now=lambda: FIXED_NOW
+    )
+    first = service.admit(
+        application_ref="scenario:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:first",
+    )
+    latest = service.admit(
+        application_ref="scenario:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="workspace:current",
+    )
+
+    assert first["admission_digest"] != latest["admission_digest"]
+    assert (
+        service.find_by_project_release(
+            plan.release.release_digest,
+            application_ref="scenario:mail_client",
+        )
+        == latest
+    )
+    assert service.find_by_project_release(plan.release.release_digest) == latest
+
+
 def test_public_application_catalog_imports_installable_aggregate_without_installing(
     tmp_path: Path,
 ) -> None:

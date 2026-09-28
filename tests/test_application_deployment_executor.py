@@ -377,6 +377,55 @@ def test_executor_prefetches_and_verifies_package_for_planning_evidence(
     assert executor.package_store.verify(built.ref.digest).ref == built.ref
 
 
+def test_executor_refreshes_legacy_admission_before_workspace_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import adaos.services.applications.cbs as cbs_module
+    import adaos.services.applications.cbs_admission as admission_module
+
+    release = _release("1.0.0", "a")
+    source = {"application_ref": "application:app_test"}
+    legacy = {
+        "schema": "adaos.application.cbs_admission.v1",
+        "application_ref": "application:app_test",
+        "status": "admitted",
+    }
+    refreshed = {
+        **legacy,
+        "binding_instance_records": [{"binding_instance_ref": "binding:test"}],
+    }
+    admissions = SimpleNamespace(
+        find_by_project_release=lambda *_args, **_kwargs: legacy,
+        admit=lambda **kwargs: (admit_calls.append(kwargs) or refreshed),
+    )
+    admit_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        cbs_module,
+        "ApplicationCBSService",
+        lambda _state_dir: SimpleNamespace(
+            inspect_requirement_source=lambda *_args, **_kwargs: source
+        ),
+    )
+    monkeypatch.setattr(
+        admission_module,
+        "NativeApplicationCBSAdmissionService",
+        lambda _state_dir: admissions,
+    )
+    executor = ApplicationDeploymentExecutor(
+        runtime=SimpleNamespace(releases=Releases(release)),
+        state_dir=tmp_path,
+    )
+    monkeypatch.setattr(executor, "ensure_verified_package", lambda _package: None)
+
+    result = executor._native_cbs_admission(_plan("update", release))
+
+    assert result == refreshed
+    assert len(admit_calls) == 1
+    assert admit_calls[0]["application_ref"] == "application:app_test"
+    assert admit_calls[0]["workspace_ref"] == "workspace:home"
+
+
 def test_executor_materializes_resolved_dependency_from_exact_release_closure(
     tmp_path: Path,
 ) -> None:

@@ -197,6 +197,14 @@ class NativeApplicationCBSAdmissionService:
 
         expected = str(project_release_digest or "").strip().lower()
         expected_application = str(application_ref or "").strip()
+        if expected_application:
+            current = self.inspect(expected_application)
+            if (
+                current is not None
+                and str(current.get("project_release_digest") or "").lower()
+                == expected
+            ):
+                return current
         matches: list[dict[str, Any]] = []
         if not self.root.is_dir():
             return None
@@ -219,9 +227,29 @@ class NativeApplicationCBSAdmissionService:
             matches.append(
                 self._validate_record(value, application_ref=record_application)
             )
-        if len(matches) > 1:
+        identities = {
+            str(item.get("application_ref") or "") for item in matches
+        }
+        if len(identities) > 1:
             raise NativeApplicationCBSAdmissionError(
                 "ProjectRelease has more than one CBS admission identity"
+            )
+        if len(matches) > 1:
+            identity = next(iter(identities), "")
+            current = self.inspect(identity) if identity else None
+            if (
+                current is not None
+                and str(current.get("project_release_digest") or "").lower()
+                == expected
+            ):
+                return current
+            # Multiple immutable revisions for one identity are legitimate,
+            # but only its validated latest pointer may select among them.
+            # Reaching this branch means that pointer targets another release
+            # (or is unavailable), so historical selection remains fail-closed.
+            raise NativeApplicationCBSAdmissionError(
+                "ProjectRelease has more than one CBS admission revision "
+                "without an exact latest pointer"
             )
         return matches[0] if matches else None
 

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+import adaos.services.capability_binding_state.catalog as catalog_module
+
 from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
 from adaos.domain.capability_binding_state import (
     ApplicationRequirement,
@@ -514,6 +516,53 @@ def test_portable_catalog_is_content_addressed_and_rejects_identity_mutation(tmp
     )
     with pytest.raises(PortableContractConflict, match="different content"):
         catalog.put(CapabilityContract.from_mapping(changed))
+
+
+def test_portable_catalog_batch_commits_index_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = PortableContractCatalog(tmp_path / "catalog")
+    capability = _capability()
+    definition = _definition()
+    writes: list[Path] = []
+    original_write = catalog_module.atomic_write_json
+
+    def observed_write(path: Path, payload: object) -> None:
+        writes.append(Path(path))
+        original_write(path, payload)
+
+    monkeypatch.setattr(catalog_module, "atomic_write_json", observed_write)
+
+    paths = catalog.put_many((capability, definition))
+
+    assert set(paths) == {capability.digest, definition.digest}
+    assert all(path.is_file() for path in paths.values())
+    assert writes.count(catalog.index_path) == 1
+
+
+def test_portable_catalog_batch_validates_before_writing(tmp_path: Path) -> None:
+    catalog = PortableContractCatalog(tmp_path / "catalog")
+    capability = _capability()
+    catalog.put(capability)
+    initial_index = catalog.index_path.read_bytes()
+    definition = _definition()
+    changed = capability.to_dict()
+    changed["title"] = "Different meaning"
+    changed["contract_digest"] = canonical_payload_digest(
+        {key: value for key, value in changed.items() if key != "contract_digest"}
+    )
+
+    with pytest.raises(PortableContractConflict, match="different content"):
+        catalog.put_many(
+            (definition, CapabilityContract.from_mapping(changed))
+        )
+
+    assert catalog.index_path.read_bytes() == initial_index
+    assert not (
+        catalog.records_root
+        / definition.digest.removeprefix("sha256:")[:2]
+        / f"{definition.digest.removeprefix('sha256:')}.json"
+    ).exists()
 
 
 def test_portable_catalog_returns_verified_matching_capabilities(tmp_path: Path) -> None:

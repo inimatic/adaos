@@ -311,7 +311,9 @@ class ApplicationDeploymentExecutor:
             release_digest,
             application_ref=application_ref,
         )
-        if current is not None:
+        if current is not None and isinstance(
+            current.get("binding_instance_records"), list
+        ):
             return current
         try:
             release_plan = self.runtime.releases.get_release(

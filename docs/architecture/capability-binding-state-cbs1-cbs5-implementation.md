@@ -291,10 +291,30 @@ current release to `WorkspaceLock`, and does not redeploy an already healthy
 package closure.
 
 The multi-requirement lock commit and compensation boundary pass locally. The
-remaining production gate is to deploy this bridge on the clean subnet,
-observe the exact Gmail slot and resolution-set digests in its active lock,
-exercise recovery there, and attach a local Gmail account. Legacy activation
-cannot be removed before that evidence is captured.
+bridge is also deployed on the independent production subnet. Ordinary
+registry-triggered reconciliation committed the exact Gmail release
+`sha256:717489abd8ae0c2c66a502b63afb6c94e58d8621a54b635d014669ae3dc7137f`
+as an Application slot in resulting `WorkspaceLock` digest
+`sha256:28cdccf8cfdb426618d857ea3ed2eead6072f2dfedc683f07b3bf47c416abac8`,
+with application-resolution set
+`sha256:91bd793176a4e9cb302b5e58a37493dd1e90821bd89df11a534ff60a1d28007e`
+and plan set
+`sha256:253549ece441fc1f5a319742cd2d7385bf2c3fa0dc2c87ac3e418c065e1ccf6d`.
+The same run reconciled seven other exact Applications. A repeated event left
+all current Application members and the lock digest unchanged.
+
+One pre-bridge `recipe_generator_beta` admission exposed a separate migration
+hole: the executor returned an otherwise admitted legacy record before the
+auto-update fallback could regenerate its missing full BindingInstance
+snapshots. Exact executor lookup now accepts an existing admission only when
+that field is present; otherwise it re-admits the same release before lock
+activation. The subsequent production startup run applied that sole candidate
+with zero failures and committed lock revision 10, digest
+`sha256:1161b7c30120bef4e0b4faa5fa82429f697cfaf6da91ea0c8f60b27c6795996c`,
+while preserving the exact Gmail slot and its semantic closure. Legacy
+activation still cannot be removed until the clean subnet completes
+credential-backed Gmail operation and an injected production recovery
+exercise.
 
 The same audit repaired and verified Infra State projection semantics. The
 hub now accepts node-scoped WebIO snapshot/subscription events even when their
@@ -311,11 +331,19 @@ digest, proving delivery reuse. Their update nevertheless required a
 state-preserving remove/update/install sequence because the current conflict
 guard evaluates one Application aggregate at a time. Multi-Application
 shared-binding transitions need an atomic batch plan before this path can be
-unattended. Performance remains a separate open boundary: the measured cold
+unattended. Performance remains a separate open boundary. The measured cold
 registry reconciliation wrote about 56 MiB and waited on filesystem journal
 commit, the first Applications catalog call took 3.18 seconds, and early
-startup generated several Yjs garbage-collection pauses. Warm tool calls were
-approximately 0.38-0.88 seconds.
+startup generated several Yjs garbage-collection pauses. RCA found an
+algorithmic contributor: semantic import called
+`PortableContractCatalog.put` per immutable record, and each call rewrote the
+entire growing index. `put_many` now validates the whole batch before any
+mutation, writes only missing content-addressed records, and atomically commits
+the index once. Regression tests prove one index commit and no partial record
+write on a batch conflict. Under continuing storage pressure on the production
+node, post-fix `applications.show` calls completed in 1.1-1.8 seconds;
+remaining media-indexer I/O and cold-start work are tracked as separate runtime
+debt rather than CBS correctness failures.
 
 Builder `0.3.18` also removed the obsolete `prompt-ide` presentation from its
 exact composition. Publication now derives the public Application entrypoints

@@ -212,10 +212,34 @@ reconcile-only pass: a missing or drifted Application member/slot is now a
 candidate even when its package and Stable `RuntimeSelection` are already
 current, and reconciliation commits the lock without another deployment.
 
-`CBS10-07` remains partial until this bridge is deployed and observed on the
-clean subnet, the exact Gmail slot appears in its production `WorkspaceLock`,
-and a local Gmail account is attached. Legacy activation cannot be removed
-before that production/recovery proof. Public RU OAuth remains in migration mode until
+Production bridge qualification on 2026-09-28 closed the clean-subnet lock
+gate. Registry-triggered reconciliation committed eight missing Application
+members, including `gmail_cbs_cleanroom` and `subscription_status`, through
+successive atomic `WorkspaceLock` CAS operations. Gmail now owns exact release
+`sha256:717489abd8ae0c2c66a502b63afb6c94e58d8621a54b635d014669ae3dc7137f`
+in the production lock together with its immutable application-resolution and
+plan-set digests. A repeated registry event left that lock byte-for-byte
+unchanged for every already-current Application. The remaining legacy
+`recipe_generator_beta` admission initially failed closed because it predated
+full `BindingInstance` snapshots; executor-side refresh was corrected, and the
+next ordinary startup reconciliation completed with one candidate applied,
+zero failures, and the tenth lock revision committed.
+
+The same qualification reproduced the reported Subscriptions failure and
+fixed its cause: multiple immutable revisions of one admission identity are
+valid, so exact lookup now follows the validated latest pointer while still
+rejecting two distinct identities for one ProjectRelease. Live
+`applications.show` calls for Subscriptions, Applications, and Gmail returned
+complete models in 1.1-1.8 seconds, and `applications.set_home_pin` pinned
+Subscriptions to `desktop` successfully. The semantic registry importer also
+stopped rewriting the growing portable index once per record: a verified batch
+is now validated before mutation and commits its index once.
+
+`CBS10-07` remains partial only for the clean subnet's own Gmail OAuth
+credential and connected-account attachment, plus an injected production
+recovery exercise. The exact production `WorkspaceLock` bridge is no longer a
+pending gate. Legacy activation cannot be removed before that credential-backed
+end-to-end and recovery proof. Public RU OAuth remains in migration mode until
 `ru.integrations.inimatic.com` has valid TLS and the node materializes
 `environment-profile:public-connected@1`; the retained loopback URI must stay
 registered on the same Google Web OAuth client meanwhile.
@@ -970,11 +994,13 @@ its own local account attachment and credential authority.
   exact provider delivery, consumer install, native 2-of-2 admission, exact
   contract-fingerprint rebinding, Stable `RuntimeSelection`, and subsequent
   auto-update are proven. The application-level multi-resolution
-  `WorkspaceLock` bridge is implemented and tested locally. The clean subnet
-  still needs the deployed lock-commit/recovery proof, its own Gmail OAuth
-  credential, and local connected-account attachment before this item is
-  complete; credentials are intentionally neither copied from the publisher
-  nor published in Git.
+  `WorkspaceLock` bridge is deployed and observed on the clean subnet: Gmail's
+  exact release, resolution set, plan set, BindingInstances, evidence and
+  package closure were committed atomically, and a repeated event preserved
+  the lock. The clean subnet still needs its own Gmail OAuth credential, local
+  connected-account attachment and an injected production recovery exercise
+  before this item is complete; credentials are intentionally neither copied
+  from the publisher nor published in Git.
 - [ ] `[should]` `CBS10-08` Resolve a thin distribution online by semantic
   requirement and exact environment/policy/evidence constraints.
 - [ ] `[should]` `CBS10-09` Export and admit a resolved portable distribution

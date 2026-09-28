@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, TypeVar
+from typing import Any, Iterable, Mapping, TypeVar
 
 from packaging.version import Version
 
@@ -90,33 +90,66 @@ class PortableContractCatalog:
         return Path(self.root) / ".catalog.lock"
 
     def put(self, record: CanonicalRecord) -> Path:
-        payload = record.to_dict()
-        identity, revision = portable_record_identity(record)
-        digest = record.digest
-        path = self.records_root / digest.removeprefix("sha256:")[:2] / f"{digest.removeprefix('sha256:')}.json"
+        return self.put_many((record,))[record.digest]
+
+    def put_many(
+        self, records: Iterable[CanonicalRecord]
+    ) -> dict[str, Path]:
+        """Verify and index a portable record set with one index commit.
+
+        Registry synchronization commonly imports the complete immutable
+        semantic index. Rewriting the growing local index once per record
+        turns an otherwise idempotent import into quadratic write
+        amplification. Validate the whole batch before writing any new record,
+        then commit the index exactly once. Orphan record files remain harmless
+        if the final atomic index replacement itself fails.
+        """
+
+        batch = tuple(records)
+        if not batch:
+            return {}
+        paths: dict[str, Path] = {}
         with mutation_lock(self.writer_lock_path):
             index = self._read_index()
-            identity_key = f"{identity}@{revision}"
-            previous = index["identities"].get(identity_key)
-            if previous is not None and previous != digest:
-                raise PortableContractConflict(
-                    f"portable identity already has different content: {identity_key}"
-                )
-            if path.is_file():
-                existing = json.loads(path.read_text(encoding="utf-8"))
-                if existing != payload:
-                    raise PortableContractConflict(f"digest collision for {digest}")
-            else:
+            pending: dict[Path, dict[str, Any]] = {}
+            for record in batch:
+                payload = record.to_dict()
+                identity, revision = portable_record_identity(record)
+                digest = record.digest
+                token = digest.removeprefix("sha256:")
+                path = self.records_root / token[:2] / f"{token}.json"
+                identity_key = f"{identity}@{revision}"
+                previous = index["identities"].get(identity_key)
+                if previous is not None and previous != digest:
+                    raise PortableContractConflict(
+                        "portable identity already has different content: "
+                        f"{identity_key}"
+                    )
+                if path.is_file():
+                    existing = json.loads(path.read_text(encoding="utf-8"))
+                    if existing != payload:
+                        raise PortableContractConflict(
+                            f"digest collision for {digest}"
+                        )
+                else:
+                    previous_payload = pending.get(path)
+                    if previous_payload is not None and previous_payload != payload:
+                        raise PortableContractConflict(
+                            f"digest collision for {digest}"
+                        )
+                    pending[path] = payload
+                index["identities"][identity_key] = digest
+                index["records"][digest] = {
+                    "schema": payload["schema"],
+                    "identity": identity,
+                    "revision": revision,
+                    "path": path.relative_to(Path(self.root)).as_posix(),
+                }
+                paths[digest] = path
+            for path, payload in pending.items():
                 atomic_write_json(path, payload)
-            index["identities"][identity_key] = digest
-            index["records"][digest] = {
-                "schema": payload["schema"],
-                "identity": identity,
-                "revision": revision,
-                "path": path.relative_to(Path(self.root)).as_posix(),
-            }
             atomic_write_json(self.index_path, index)
-        return path
+        return paths
 
     def load(self, digest: str, model: type[RecordT]) -> RecordT:
         index = self._read_index()

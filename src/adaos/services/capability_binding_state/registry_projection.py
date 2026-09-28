@@ -666,6 +666,7 @@ class SemanticRegistryProjection:
             Path(self.state_dir).resolve() / "capability-binding-state" / "portable"
         )
         imported: list[str] = []
+        imported_records: list[CanonicalRecord] = []
         for token in selected:
             digest = f"sha256:{token}"
             raw_entry = index["records"].get(digest)
@@ -704,8 +705,9 @@ class SemanticRegistryProjection:
                 raise SemanticRegistryProjectionError(
                     f"semantic registry record metadata mismatch: {digest}"
                 )
-            catalog.put(record)
+            imported_records.append(record)
             imported.append(digest)
+        catalog.put_many(imported_records)
         application_catalog = self.import_public_applications(
             application_store=application_store,
             local_publisher_ref=local_publisher_ref,
