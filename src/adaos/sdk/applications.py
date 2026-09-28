@@ -470,11 +470,11 @@ _HOME_SNAPSHOT_UNSET = object()
 
 
 def _durable_home_snapshot(webspace_id: str) -> WebDesktopSnapshot:
-    """Read only the durable Home fields needed by compact catalog rows.
+    """Read only the durable Home fields needed by Application projections.
 
-    A summary row needs installed/pinned identity, not the complete live YDoc
-    materialization. Reading the full desktop snapshot here made the
-    Applications list contend with first sync and deserialize an unrelated
+    Catalog rows and detail records need installed/pinned identity, not the
+    complete live YDoc materialization. Reading the full desktop snapshot here
+    made Applications contend with first sync and deserialize an unrelated
     document solely to obtain these two lists.
     """
 
@@ -1303,11 +1303,12 @@ def _enrich_application_models(
     home_snapshot: Any = None
     if webspace:
         try:
-            home_snapshot = (
-                _durable_home_snapshot(webspace)
-                if compact
-                else WebDesktopService().get_snapshot(webspace)
-            )
+            # Application projections only need durable installed/pinned
+            # identities.  Reading the complete live YDoc here can block an
+            # otherwise local applications.show call behind materialization
+            # ownership and makes the detail pane time out while the eventual
+            # server response is still successful.
+            home_snapshot = _durable_home_snapshot(webspace)
         except (OSError, RuntimeError, ValueError):
             home_snapshot = None
     application_ids = [

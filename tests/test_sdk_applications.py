@@ -1006,7 +1006,9 @@ def test_home_pin_accepts_installed_legacy_presentation_ref(monkeypatch) -> None
     assert writes == [(["notes_app"], "desktop")]
 
 
-def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -> None:
+def test_application_list_reads_durable_home_and_placement_inventory_once(
+    monkeypatch,
+) -> None:
     models = [
         {
             "application": {
@@ -1035,9 +1037,16 @@ def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -
     placement_reads: list[tuple[str, ...]] = []
 
     class Desktop:
-        def get_snapshot(self, webspace_id):
-            home_reads.append(webspace_id)
-            return snapshot
+        def get_installed(self, webspace_id):
+            home_reads.append(f"installed:{webspace_id}")
+            return snapshot.installed
+
+        def get_pinned_applications(self, webspace_id):
+            home_reads.append(f"pinned:{webspace_id}")
+            return snapshot.pinned_applications
+
+        def get_snapshot(self, _webspace_id):
+            raise AssertionError("Application reads must not materialize the live YDoc")
 
     monkeypatch.setattr(applications, "_application_models", lambda **_kwargs: models)
     monkeypatch.setattr(applications, "_local_development_index", dict)
@@ -1050,7 +1059,7 @@ def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -
 
     listed = applications.list_applications(webspace_id="desktop")
 
-    assert home_reads == ["desktop"]
+    assert home_reads == ["installed:desktop", "pinned:desktop"]
     assert placement_reads == [("notes", "reading_list")]
     assert [item["home"]["pinned"] for item in listed] == [True, False]
     assert [item["icon"] for item in listed] == [
