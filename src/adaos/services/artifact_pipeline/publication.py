@@ -2655,34 +2655,55 @@ class ArtifactPublicationService:
         rollback_receipt: dict[str, Any]
         trial_workspace: Path | None = None
         archive: Path | None = None
-        if accepted:
-            rollback_receipt = {
-                "status": "not_required",
-                "reason": "trial accepted for promotion",
-                "recorded_at": _now(),
-            }
-        else:
-            trial_workspace = self._trial_workspace(candidate_id)
-            archive = (
-                self.state_root
-                / "trial-rollbacks"
-                / candidate_id
-                / running.trial_id
-                / "workspace"
-            )
-            if not trial_workspace.is_dir():
-                raise PublicationError("rejected trial Workspace is missing before rollback")
-            if archive.exists():
-                raise PublicationError("rejected trial rollback archive already exists")
-            archive.parent.mkdir(parents=True, exist_ok=True)
-            replace_with_retry(trial_workspace, archive)
-            rollback_receipt = {
-                "status": "rolled_back",
-                "mode": "isolated_workspace_detached",
-                "archive": str(archive),
-                "recorded_at": _now(),
-            }
+        activation = self.trial_activations.load(candidate_id)
+        activation_status_before = str((activation or {}).get("status") or "").strip()
+        activation_quiesced = False
         try:
+            if accepted:
+                rollback_receipt = {
+                    "status": "not_required",
+                    "reason": "trial accepted for promotion",
+                    "recorded_at": _now(),
+                }
+            else:
+                trial_workspace = self._trial_workspace(candidate_id)
+                archive = (
+                    self.state_root
+                    / "trial-rollbacks"
+                    / candidate_id
+                    / running.trial_id
+                    / "workspace"
+                )
+                if not trial_workspace.is_dir():
+                    raise PublicationError(
+                        "rejected trial Workspace is missing before rollback"
+                    )
+                if archive.exists():
+                    raise PublicationError(
+                        "rejected trial rollback archive already exists"
+                    )
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                if activation is not None and activation_status_before in {
+                    "active",
+                    "completed",
+                }:
+                    self.trial_activations.update(
+                        candidate_id,
+                        status="detaching",
+                        detaching_at=_now(),
+                    )
+                    activation_quiesced = True
+                # Once the activation is no longer selectable, allow in-flight
+                # Windows skill reads to release their handles before moving the
+                # immutable Trial tree.  This retries only the filesystem switch;
+                # it never repeats the candidate decision.
+                replace_with_retry(trial_workspace, archive, attempts=64)
+                rollback_receipt = {
+                    "status": "rolled_back",
+                    "mode": "isolated_workspace_detached",
+                    "archive": str(archive),
+                    "recorded_at": _now(),
+                }
             candidate = complete_trial(
                 candidate,
                 trial_id=running.trial_id,
@@ -2692,7 +2713,6 @@ class ArtifactPublicationService:
                 rollback_receipt=rollback_receipt,
             )
             self.candidate_store.save(candidate)
-            activation = self.trial_activations.load(candidate_id)
             if activation is not None:
                 now = _now()
                 self.trial_activations.update(
@@ -2711,6 +2731,12 @@ class ArtifactPublicationService:
                 and not trial_workspace.exists()
             ):
                 replace_with_retry(archive, trial_workspace)
+            if activation_quiesced:
+                self.trial_activations.update(
+                    candidate_id,
+                    status=activation_status_before,
+                    detaching_at=None,
+                )
             raise
         return candidate
 

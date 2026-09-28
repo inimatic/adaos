@@ -27,6 +27,7 @@ from adaos.services.artifact_pipeline import (
     WorkspaceActivationManager,
 )
 from adaos.services.artifact_pipeline import packages as package_module
+from adaos.services.artifact_pipeline import publication as publication_module
 from adaos.services.artifact_pipeline.project_build import (
     build_workspace_project_release,
     project_release_build_evidence,
@@ -1232,6 +1233,96 @@ def test_rejected_trial_is_detached_with_durable_rollback_evidence(tmp_path: Pat
     assert trial.duration_seconds is not None
     assert not prepared.trial_workspace.exists()
     assert Path(trial.rollback_receipt["archive"]).is_dir()
+
+
+def test_rejected_trial_quiesces_runtime_before_moving_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    state = tmp_path / "state"
+    service = ArtifactPublicationService(
+        state_root=state,
+        workspace_root=tmp_path / "workspace",
+        remote=_Remote(tmp_path / "remote"),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-quiesce",),
+        validation_evidence={"status": "passed"},
+    )
+    activations = TrialActivationStore(state / "trial-activations")
+    observed_statuses: list[str] = []
+    original_replace = publication_module.replace_with_retry
+
+    def observing_replace(source: Path, target: Path, *, attempts: int = 8) -> None:
+        if Path(source) == prepared.trial_workspace:
+            activation = activations.load(prepared.candidate.candidate_id) or {}
+            observed_statuses.append(str(activation.get("status") or ""))
+        original_replace(source, target, attempts=attempts)
+
+    monkeypatch.setattr(publication_module, "replace_with_retry", observing_replace)
+
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=False)
+
+    assert observed_statuses == ["detaching"]
+    activation = activations.load(prepared.candidate.candidate_id)
+    assert activation is not None
+    assert activation["status"] == "detached"
+
+
+def test_rejected_trial_restores_runtime_admission_when_workspace_move_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    state = tmp_path / "state"
+    service = ArtifactPublicationService(
+        state_root=state,
+        workspace_root=tmp_path / "workspace",
+        remote=_Remote(tmp_path / "remote"),
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-quiesce-failure",),
+        validation_evidence={"status": "passed"},
+    )
+    activations = TrialActivationStore(state / "trial-activations")
+
+    def failing_replace(source: Path, _target: Path, *, attempts: int = 8) -> None:
+        assert Path(source) == prepared.trial_workspace
+        assert attempts == 64
+        activation = activations.load(prepared.candidate.candidate_id) or {}
+        assert activation.get("status") == "detaching"
+        raise PermissionError("workspace is busy")
+
+    monkeypatch.setattr(publication_module, "replace_with_retry", failing_replace)
+
+    with pytest.raises(PermissionError, match="workspace is busy"):
+        service.decide_candidate(prepared.candidate.candidate_id, accepted=False)
+
+    activation = activations.load(prepared.candidate.candidate_id)
+    assert activation is not None
+    assert activation["status"] == "active"
+    assert activation["detaching_at"] is None
+    assert prepared.trial_workspace.is_dir()
+    assert service.get_candidate(prepared.candidate.candidate_id).status == "trial"
 
 
 def test_candidate_rejects_dev_changes_after_checkpoint(tmp_path: Path) -> None:

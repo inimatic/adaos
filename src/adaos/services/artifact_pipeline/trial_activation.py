@@ -29,7 +29,15 @@ from adaos.services.artifact_pipeline.storage import (
 
 TRIAL_ACTIVATION_SCHEMA = "adaos.trial.activation.v1"
 TRIAL_WORKSPACE_LAYOUT_SCHEMA = "adaos.trial.workspace_layout.v1"
-_STATUSES = {"active", "reconciling", "detached", "failed", "expired", "completed"}
+_STATUSES = {
+    "active",
+    "reconciling",
+    "detaching",
+    "detached",
+    "failed",
+    "expired",
+    "completed",
+}
 _DATA_MODES = {"empty", "mock", "snapshot", "read_only", "real"}
 _CBS_CONTRACT_MEMBERS = (
     "contracts/capability.contract.json",
