@@ -552,6 +552,7 @@ class WebDesktopService:
         topbar: List[Any],
         page_schema: Dict[str, Any],
         icon_order: List[str],
+        icon_order_explicit: bool,
         widget_order: List[str],
         hidden_sections: List[str],
     ) -> WebDesktopSnapshot:
@@ -574,16 +575,17 @@ class WebDesktopService:
             pinned_next,
             _catalog_widgets_by_id_from_data_map(data_map),
         )
-        if "pinnedApplications" in desktop_raw:
+        if pinned_applications_explicit:
+            # Workspace overlays are the durable authority.  A freshly
+            # activated core slot can initially expose an older persisted Yjs
+            # materialization; it must not roll back an acknowledged pin.
+            pinned_applications_next = _clone_text_list(pinned_applications)
+        elif "pinnedApplications" in desktop_raw:
             pinned_applications_next = _clone_text_list(
                 desktop_raw.get("pinnedApplications")
             )
         else:
-            pinned_applications_next = (
-                _clone_text_list(pinned_applications)
-                if pinned_applications_explicit
-                else _clone_text_list(installed_next.apps)
-            )
+            pinned_applications_next = _clone_text_list(installed_next.apps)
 
         application_raw = _coerce_dict(ui_map.get("application") or {})
         app_desktop = _coerce_dict(application_raw.get("desktop") or {})
@@ -599,9 +601,12 @@ class WebDesktopService:
         if not page_schema_next:
             page_schema_next = _clone_json_dict(page_schema)
 
-        icon_order_next = _clone_text_list(desktop_raw.get("iconOrder"))
-        if not icon_order_next:
+        if icon_order_explicit:
             icon_order_next = _clone_text_list(icon_order)
+        else:
+            icon_order_next = _clone_text_list(desktop_raw.get("iconOrder"))
+            if not icon_order_next:
+                icon_order_next = _clone_text_list(icon_order)
 
         widget_order_next = _clone_text_list(desktop_raw.get("widgetOrder"))
         if not widget_order_next:
@@ -796,7 +801,7 @@ class WebDesktopService:
             pinned_applications = list(installed.apps)
         topbar = self.get_topbar(webspace)
         page_schema = self.get_page_schema(webspace)
-        icon_order = self.get_icon_order(webspace)
+        icon_order, icon_order_explicit = self._read_overlay_icon_order(webspace)
         widget_order = self.get_widget_order(webspace)
         hidden_sections = self.get_hidden_sections(webspace)
         try:
@@ -810,6 +815,7 @@ class WebDesktopService:
                     topbar=topbar,
                     page_schema=page_schema,
                     icon_order=icon_order,
+                    icon_order_explicit=icon_order_explicit,
                     widget_order=widget_order,
                     hidden_sections=hidden_sections,
                 )
@@ -836,7 +842,7 @@ class WebDesktopService:
             pinned_applications = list(installed.apps)
         topbar = await self.get_topbar_async(webspace)
         page_schema = await self.get_page_schema_async(webspace)
-        icon_order = await self.get_icon_order_async(webspace)
+        icon_order, icon_order_explicit = self._read_overlay_icon_order(webspace)
         widget_order = await self.get_widget_order_async(webspace)
         hidden_sections = await self.get_hidden_sections_async(webspace)
         try:
@@ -850,6 +856,7 @@ class WebDesktopService:
                     topbar=topbar,
                     page_schema=page_schema,
                     icon_order=icon_order,
+                    icon_order_explicit=icon_order_explicit,
                     widget_order=widget_order,
                     hidden_sections=hidden_sections,
                 )
