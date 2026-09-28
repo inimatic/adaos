@@ -2837,7 +2837,7 @@ def test_manifest_scope_requalification_admits_only_the_preserved_candidate(
     )
 
 
-def test_manifest_guard_retries_the_same_resumable_candidate(
+def test_manifest_guard_retries_same_candidate_before_model_without_waiver(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
@@ -2898,6 +2898,17 @@ def test_manifest_guard_retries_the_same_resumable_candidate(
     assert checkpoint["guard_retry_reason"] == (
         "manifest_scope_requalified_after_guard"
     )
+    assert checkpoint["allow_large_manifest_rewrite"] is False
+
+    (run_root / "runtime").mkdir()
+    (run_root / "runtime" / "codex-final.md").write_text(
+        '{"status":"completed","report":"repair attempted","questions":[]}',
+        encoding="utf-8",
+    )
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+    assert checkpoint is not None
     assert checkpoint["allow_large_manifest_rewrite"] is True
 
 

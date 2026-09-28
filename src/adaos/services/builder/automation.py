@@ -5726,16 +5726,32 @@ class BuilderAutomationService:
                     and prior_checkpoint.get("continuation_contract")
                     == continuation_contract
                 ):
-                    return {
+                    model_ran = any(
+                        path.is_file()
+                        for path in (
+                            failed_run_root / "runtime" / "codex-final.md",
+                            *sorted(
+                                (failed_run_root / "runtime").glob(
+                                    "codex-final-repair-*.md"
+                                )
+                            ),
+                        )
+                    )
+                    resumed = {
                         **prior_checkpoint,
                         "trigger_failure_id": str(
                             failure.get("failure_id") or ""
                         ).strip()
                         or None,
                         "guard_retry_reason": retry_reason,
-                        "allow_large_manifest_rewrite": True,
                         "created_at": _now_iso(),
                     }
+                    # A pre-model admission failure must retry the repaired
+                    # continuation path, not silently waive the same guard.
+                    # Requalification remains available only after a model
+                    # actually had a chance to apply the bounded repair.
+                    resumed["allow_large_manifest_rewrite"] = bool(model_ran)
+                    return resumed
                 if not prior_checkpoint and (
                     failed_artifacts.get("continuation_contract")
                     == continuation_contract
