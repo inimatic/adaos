@@ -8757,6 +8757,112 @@ def test_worker_resumes_blocked_candidate_across_contract_delta(
     )
 
 
+def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.blocked-manifest"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "skill.yaml"
+    previous_file.parent.mkdir(parents=True)
+    baseline = "\n".join(f"tool_{index}: baseline" for index in range(300)) + "\n"
+    candidate = "\n".join(f"replacement_{index}: candidate" for index in range(300)) + "\n"
+    previous_file.write_text(baseline, encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text(candidate, encoding="utf-8")
+    source_contract = {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "sdk_contract_digest": "sha256:old",
+    }
+    current_contract = {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "sdk_contract_digest": "sha256:new",
+    }
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "skill", "id": "demo"},
+                "forge": {"source_snapshot": {"digest": "sha256:same"}},
+                "realize_request": {
+                    "artifacts": {"continuation_contract": source_contract}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source_run / "runtime").mkdir()
+    (source_run / "runtime" / "codex-final-repair-1.md").write_text(
+        "```adaos-development-feedback\n"
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"insufficient_context","summary":"Baseline required",'
+        '"blocking":true,"target_refs":["skill:demo"]}]}\n```',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, _task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.blocked",
+                    "stage": "development_feedback",
+                    "message": "Automation blocked by reported development feedback",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "skill.yaml"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text(baseline, encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "task_id": "task.current",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {
+                "execution_budget": {"max_model_tokens": 4096},
+                "continuation_contract": current_contract,
+                "continuation_checkpoint": {
+                    "mode": "resume_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": "failure.blocked",
+                    "reason": "blocking_development_feedback",
+                    "source_changed_paths": ["skills/demo/skill.yaml"],
+                    "source_continuation_contract": source_contract,
+                    "continuation_contract": current_contract,
+                },
+            }
+        },
+    }
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored is not None
+    assert restored["mode"] == "resume_preserved_candidate"
+    assert current_file.read_text(encoding="utf-8") == candidate
+    with pytest.raises(ValueError, match="large declarative manifest rewrite"):
+        worker._validate_changed_paths(
+            assignment,
+            ["skills/demo/skill.yaml"],
+            workspace=workspace,
+        )
+
+
 def test_worker_ignores_budget_stopped_continuation_without_source_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

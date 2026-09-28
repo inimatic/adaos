@@ -7439,9 +7439,24 @@ class LocalSkillFactoryWorker:
                 raise ValueError(
                     "continuation candidate content changed since checkpoint qualification"
                 )
+        admission_assignment: Mapping[str, Any] = assignment
+        if mode == "resume_preserved_candidate":
+            # A resumable model turn exists specifically to repair a rejected
+            # candidate.  Enforce the path/count envelope before importing it,
+            # but defer the declarative rewrite guard until after that model
+            # turn.  Final validation still receives the original assignment
+            # and therefore cannot waive the guard.
+            admission_assignment = copy.deepcopy(dict(assignment))
+            admission_request = dict(
+                admission_assignment.get("realize_request") or {}
+            )
+            admission_artifacts = dict(admission_request.get("artifacts") or {})
+            admission_artifacts["allow_large_manifest_rewrite"] = True
+            admission_request["artifacts"] = admission_artifacts
+            admission_assignment["realize_request"] = admission_request
         try:
             self._validate_changed_paths(
-                assignment,
+                admission_assignment,
                 changed_paths,
                 workspace=previous_workspace,
             )
@@ -7490,7 +7505,11 @@ class LocalSkillFactoryWorker:
                 shutil.rmtree(destination)
 
         restored_paths = self._changed_paths(workspace)
-        self._validate_changed_paths(assignment, restored_paths, workspace=workspace)
+        self._validate_changed_paths(
+            admission_assignment,
+            restored_paths,
+            workspace=workspace,
+        )
         root_mcp_evidence: dict[str, Any] | None = None
         if _root_mcp_required(assignment):
             previous_root_mcp = _root_mcp_profile_from_assignment(
