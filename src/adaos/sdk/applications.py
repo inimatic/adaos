@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from functools import lru_cache
 import json
 from pathlib import Path
 from typing import Any
@@ -466,6 +467,109 @@ def _application_home_aliases(model: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for item in aliases if item))
 
 
+@lru_cache(maxsize=128)
+def _webui_apps_at_revision(
+    path_value: str,
+    modified_ns: int,
+    size: int,
+) -> tuple[dict[str, Any], ...]:
+    """Read launcher declarations from one immutable/runtime WebUI revision."""
+
+    del modified_ns, size
+    try:
+        payload = json.loads(Path(path_value).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, TypeError):
+        return ()
+    if not isinstance(payload, Mapping):
+        return ()
+    return tuple(
+        dict(item)
+        for item in payload.get("apps") or ()
+        if isinstance(item, Mapping)
+    )
+
+
+def _application_launcher(
+    model: Mapping[str, Any], presentation_ref: str
+) -> dict[str, Any] | None:
+    """Resolve a logical Application presentation against its active skill UI."""
+
+    token = str(presentation_ref or "").strip()
+    if not token or ":" in token:
+        return None
+    effective = (
+        dict(model.get("effective_release") or {})
+        if isinstance(model.get("effective_release"), Mapping)
+        else {}
+    )
+    release = (
+        dict(effective.get("release") or {})
+        if isinstance(effective.get("release"), Mapping)
+        else _active_release_for_webspace(model, webspace_id=None)
+    )
+    project_release = (
+        dict(release.get("project_release") or {})
+        if isinstance(release.get("project_release"), Mapping)
+        else {}
+    )
+    skill_ids = [
+        str(item.get("artifact_id") or "").strip()
+        for item in project_release.get("components") or ()
+        if isinstance(item, Mapping)
+        and str(item.get("kind") or "").strip() == "skill"
+        and str(item.get("artifact_id") or "").strip()
+    ]
+    if not skill_ids:
+        return None
+    ctx = require_ctx("sdk.applications")
+    for skill_id in skill_ids:
+        candidates: list[Path] = []
+        try:
+            from adaos.services.scenario.webspace_components.skill_catalog import (
+                WebspaceSkillCatalogService,
+            )
+
+            runtime_source = WebspaceSkillCatalogService._active_runtime_source(
+                ctx.paths, skill_id
+            )
+            if runtime_source is not None:
+                candidates.append(Path(runtime_source["skill_dir"]) / "webui.json")
+        except (OSError, RuntimeError, ValueError):
+            pass
+        candidates.append(Path(ctx.paths.skills_dir()) / skill_id / "webui.json")
+        repo_root_value = getattr(ctx.paths, "repo_root", None)
+        try:
+            repo_root = (
+                repo_root_value() if callable(repo_root_value) else repo_root_value
+            )
+        except (OSError, RuntimeError, ValueError):
+            repo_root = None
+        if repo_root:
+            candidates.append(
+                Path(repo_root)
+                / ".adaos"
+                / "workspace"
+                / "skills"
+                / skill_id
+                / "webui.json"
+            )
+        seen: set[str] = set()
+        for path in candidates:
+            try:
+                resolved = path.expanduser().resolve()
+                key = str(resolved)
+                if key in seen:
+                    continue
+                seen.add(key)
+                stat = resolved.stat()
+            except OSError:
+                continue
+            for item in _webui_apps_at_revision(key, stat.st_mtime_ns, stat.st_size):
+                if str(item.get("id") or "").strip() == token:
+                    return item
+    return None
+
+
 _HOME_SNAPSHOT_UNSET = object()
 
 
@@ -669,6 +773,7 @@ def _effective_navigation(
         return unavailable("not_installed_in_webspace")
 
     scenario_entrypoints: list[tuple[str, str]] = []
+    modal_entrypoints: list[tuple[str, str, str]] = []
     for entrypoint in application.get("entrypoints") or ():
         if not isinstance(entrypoint, Mapping):
             continue
@@ -677,6 +782,34 @@ def _effective_navigation(
         kind, separator, scenario_id = presentation_ref.partition(":")
         if separator and kind == "scenario" and scenario_id:
             scenario_entrypoints.append((entrypoint_id, scenario_id))
+            continue
+        launcher = _application_launcher(model, presentation_ref)
+        launch_modal = str((launcher or {}).get("launchModal") or "").strip()
+        if launch_modal:
+            modal_entrypoints.append((entrypoint_id, presentation_ref, launch_modal))
+    if not scenario_entrypoints and modal_entrypoints:
+        _, presentation_ref, modal_id = next(
+            (
+                item
+                for item in modal_entrypoints
+                if item[0] in {"main", "default", "primary", "subscriptions"}
+            ),
+            modal_entrypoints[0],
+        )
+        return {
+            "schema": "adaos.application.effective_navigation.v1",
+            "status": "ready",
+            "reason": "installed_modal_entrypoint",
+            "target": {
+                "intent": "desktop.open_modal",
+                "modal_id": modal_id,
+                "application_ref": presentation_ref,
+                "webspace_id": webspace,
+                "application_id": application_id,
+                "release_digest": str(release.get("release_digest") or "").strip()
+                or None,
+            },
+        }
     if not scenario_entrypoints:
         return unavailable("scenario_entrypoint_unavailable")
     _, scenario_id = next(
@@ -2797,6 +2930,22 @@ def set_home_pinned(
         if pinned:
             next_pinned.append(application_ref)
         service.set_pinned_applications_with_live_room(next_pinned, webspace)
+    if hasattr(service, "set_icon_order_with_live_room"):
+        current_order = (
+            service.get_icon_order(webspace)
+            if hasattr(service, "get_icon_order")
+            else list(getattr(snapshot, "icon_order", ()) or ())
+        )
+        next_order = [
+            item
+            for item in current_order
+            if item not in alias_set
+        ]
+        if pinned:
+            # A newly pinned Application must be visible immediately even on a
+            # busy multi-node desktop whose explicit order is already long.
+            next_order.insert(0, application_ref)
+        service.set_icon_order_with_live_room(next_order, webspace)
     return {
         "schema": "adaos.application.home_projection.v1",
         "application_id": application_id,
@@ -3033,6 +3182,20 @@ def _sync_home_installation(
     if installed:
         next_pinned.append(application_ref)
     service.set_pinned_applications_with_live_room(next_pinned, webspace_id)
+    if hasattr(service, "set_icon_order_with_live_room"):
+        current_order = (
+            service.get_icon_order(webspace_id)
+            if hasattr(service, "get_icon_order")
+            else list(getattr(snapshot, "icon_order", ()) or ())
+        )
+        next_order = [
+            item
+            for item in current_order
+            if item not in alias_set
+        ]
+        if installed:
+            next_order.insert(0, application_ref)
+        service.set_icon_order_with_live_room(next_order, webspace_id)
     return {
         "schema": "adaos.application.home_projection.v1",
         "application_id": application_id,

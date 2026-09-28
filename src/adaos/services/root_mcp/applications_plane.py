@@ -513,6 +513,25 @@ def contracts() -> list[RootMcpToolContract]:
         ],
         additional_properties=False,
     )
+    installed_modal_navigation_target = schema_object(
+        properties={
+            "intent": {"const": "desktop.open_modal"},
+            "modal_id": {"type": "string", "minLength": 1},
+            "application_ref": {"type": "string", "minLength": 1},
+            "webspace_id": {"type": "string", "minLength": 1},
+            "application_id": {"type": "string", "minLength": 1},
+            "release_digest": {"type": ["string", "null"]},
+        },
+        required=[
+            "intent",
+            "modal_id",
+            "application_ref",
+            "webspace_id",
+            "application_id",
+            "release_digest",
+        ],
+        additional_properties=False,
+    )
     effective_navigation = schema_object(
         properties={
             "schema": {"const": "adaos.application.effective_navigation.v1"},
@@ -520,6 +539,7 @@ def contracts() -> list[RootMcpToolContract]:
             "reason": {
                 "enum": [
                     "installed_scenario_entrypoint",
+                    "installed_modal_entrypoint",
                     "webspace_not_selected",
                     "webspace_projection_unavailable",
                     "not_installed_in_webspace",
@@ -530,6 +550,7 @@ def contracts() -> list[RootMcpToolContract]:
                 "oneOf": [
                     {"type": "null"},
                     installed_navigation_target,
+                    installed_modal_navigation_target,
                 ]
             },
         },

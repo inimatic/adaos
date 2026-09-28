@@ -462,6 +462,15 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
         "application_id",
         "release_digest",
     ]
+    installed_modal_target = effective_navigation["properties"]["target"]["oneOf"][2]
+    assert installed_modal_target["required"] == [
+        "intent",
+        "modal_id",
+        "application_ref",
+        "webspace_id",
+        "application_id",
+        "release_digest",
+    ]
 
     shown_record = shown.output_schema["properties"]["result"]["properties"][
         "application"

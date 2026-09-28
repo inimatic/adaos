@@ -153,6 +153,49 @@ def test_effective_navigation_projects_installed_primary_scenario() -> None:
     }
 
 
+def test_effective_navigation_projects_installed_modal_application(monkeypatch) -> None:
+    release_digest = "sha256:" + "d" * 64
+    monkeypatch.setattr(
+        applications,
+        "_application_launcher",
+        lambda _model, presentation_ref: {
+            "id": presentation_ref,
+            "launchModal": "subscription_status_modal",
+        },
+    )
+
+    navigation = applications._effective_navigation(
+        {
+            "application": {
+                "application_id": "subscription_status",
+                "entrypoints": [
+                    {
+                        "entrypoint_id": "subscriptions",
+                        "presentation_ref": "subscription_status_app",
+                    }
+                ],
+            },
+            "effective_release": {"release_digest": release_digest},
+        },
+        webspace_id="desktop",
+        home={"status": "ready", "installed": True},
+    )
+
+    assert navigation == {
+        "schema": "adaos.application.effective_navigation.v1",
+        "status": "ready",
+        "reason": "installed_modal_entrypoint",
+        "target": {
+            "intent": "desktop.open_modal",
+            "modal_id": "subscription_status_modal",
+            "application_ref": "subscription_status_app",
+            "webspace_id": "desktop",
+            "application_id": "subscription_status",
+            "release_digest": release_digest,
+        },
+    }
+
+
 @pytest.mark.parametrize(
     ("webspace_id", "home", "entrypoints", "reason"),
     [
@@ -666,8 +709,10 @@ def test_home_pin_changes_only_presentation_overlay(monkeypatch) -> None:
             removed_widgets=[],
         ),
         pinned_applications=["scenario:reading_list", "scenario:notes"],
+        icon_order=["scenario:notes", "scenario:reading_list"],
     )
     writes = []
+    order_writes = []
 
     class Desktop:
         def get_snapshot(self, webspace_id):
@@ -676,6 +721,13 @@ def test_home_pin_changes_only_presentation_overlay(monkeypatch) -> None:
 
         def set_pinned_applications_with_live_room(self, values, webspace_id):
             writes.append((values, webspace_id))
+
+        def get_icon_order(self, webspace_id):
+            assert webspace_id == "family"
+            return list(snapshot.icon_order)
+
+        def set_icon_order_with_live_room(self, values, webspace_id):
+            order_writes.append((values, webspace_id))
 
     monkeypatch.setattr(
         applications,
@@ -702,6 +754,72 @@ def test_home_pin_changes_only_presentation_overlay(monkeypatch) -> None:
     assert result["pinned"] is False
     assert result["projection_reconciled"] is False
     assert writes == [(["scenario:notes"], "family")]
+    assert order_writes == [(["scenario:notes"], "family")]
+
+
+def test_home_pin_places_new_application_first_in_explicit_order(monkeypatch) -> None:
+    snapshot = SimpleNamespace(
+        installed=SimpleNamespace(apps=["subscription_status_app"]),
+        pinned_applications=["scenario:applications"],
+    )
+    writes = []
+    order_writes = []
+
+    class Desktop:
+        def get_installed(self, webspace_id):
+            assert webspace_id == "desktop"
+            return snapshot.installed
+
+        def get_pinned_applications(self, webspace_id):
+            assert webspace_id == "desktop"
+            return list(snapshot.pinned_applications)
+
+        def get_icon_order(self, webspace_id):
+            assert webspace_id == "desktop"
+            return ["scenario:applications", "scenario:web_desktop"]
+
+        def set_pinned_applications_with_live_room(self, values, webspace_id):
+            writes.append((values, webspace_id))
+
+        def set_icon_order_with_live_room(self, values, webspace_id):
+            order_writes.append((values, webspace_id))
+
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda application_id, **_kwargs: {
+            "application": {
+                "application_id": application_id,
+                "entrypoints": [
+                    {
+                        "entrypoint_id": "subscriptions",
+                        "presentation_ref": "subscription_status_app",
+                    }
+                ],
+            },
+            "installed": True,
+        },
+    )
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+
+    result = applications.set_home_pinned(
+        "subscription_status", pinned=True, webspace_id="desktop"
+    )
+
+    assert result["pinned"] is True
+    assert writes == [
+        (["scenario:applications", "subscription_status_app"], "desktop")
+    ]
+    assert order_writes == [
+        (
+            [
+                "subscription_status_app",
+                "scenario:applications",
+                "scenario:web_desktop",
+            ],
+            "desktop",
+        )
+    ]
 
 
 def test_home_pin_materializes_missing_desktop_projection_for_subnet_install(
