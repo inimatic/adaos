@@ -207,6 +207,20 @@ def _target_node_id_from_event(evt: object) -> str:
 
 
 def _skill_event_targets_this_node(evt: object) -> bool:
+    # WebIO snapshot/subscription requests are executed by the node that owns
+    # the browser session.  In those events ``target_node_id`` selects the
+    # node-scoped data/projection path; it is not an execution-routing address.
+    # Treating it as routing drops remote-member projections at the hub before
+    # the owning skill can materialize them.
+    payload = _event_payload_dict(evt)
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    event_type = str(
+        getattr(evt, "type", "")
+        or meta.get("event_type")
+        or ""
+    ).strip()
+    if event_type in _STREAM_CONTROL_SUBSCRIPTION_TOPICS:
+        return True
     target_node_id = _target_node_id_from_event(evt)
     if not target_node_id:
         return True

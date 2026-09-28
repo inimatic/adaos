@@ -133,6 +133,18 @@ def test_skill_event_target_accepts_canonical_local_node_identity(monkeypatch) -
     assert not decorators._skill_event_targets_this_node({"target_node_id": "root:node-1"})
 
 
+def test_skill_event_target_treats_webio_target_as_projection_scope(monkeypatch) -> None:
+    monkeypatch.setattr(decorators, "_local_node_id", lambda: "hub-node")
+    event = {"target_node_id": "member-node"}
+
+    for topic in decorators._STREAM_CONTROL_SUBSCRIPTION_TOPICS:
+        event["_meta"] = {"event_type": topic}
+        assert decorators._skill_event_targets_this_node(event)
+
+    event["_meta"] = {"event_type": "subnet.member.update.requested"}
+    assert not decorators._skill_event_targets_this_node(event)
+
+
 def test_register_subscriptions_replaces_skill_generation(monkeypatch) -> None:
     calls: list[str] = []
 
