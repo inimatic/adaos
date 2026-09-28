@@ -54,6 +54,8 @@ def test_run_one_group_uses_ctx_repo_root(monkeypatch, tmp_path: Path) -> None:
 
     assert result == (0, "passed", "")
     assert captured["cwd"] == checkout
+    assert captured["extra_env"]["PYTHONPATH"] == str(suite)
+    assert captured["extra_env"]["PYTHONNOUSERSITE"] == "1"
     assert "markers=asyncio: mark asyncio tests" not in captured["command"]
 
 

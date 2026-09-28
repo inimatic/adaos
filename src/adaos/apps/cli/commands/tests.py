@@ -396,6 +396,25 @@ def _run_one_group(
     except Exception:
         pass
 
+    # ``--import-mode=importlib`` deliberately keeps the SDK test directory
+    # off ``sys.path``.  A small number of long-standing SDK tests share
+    # fixtures through sibling test modules, so the full isolated suite must
+    # expose its own test root explicitly.  Skill groups retain the stricter
+    # per-skill PYTHONPATH assembled above.
+    if "PYTHONPATH" not in extra_env and ctx is not None:
+        try:
+            repo_root = Path(ctx.paths.repo_root()).resolve()
+            sdk_test_root = (repo_root / "tests").resolve()
+            if sdk_test_root.is_dir() and any(
+                Path(path).resolve() == sdk_test_root
+                or Path(path).resolve().is_relative_to(sdk_test_root)
+                for path in paths
+            ):
+                extra_env["PYTHONNOUSERSITE"] = "1"
+                extra_env["PYTHONPATH"] = str(sdk_test_root)
+        except (OSError, RuntimeError, ValueError):
+            pass
+
     if addopts:
         # preserve user's opts and ensure our importmode survives
         extra_env["PYTEST_ADDOPTS"] = addopts
