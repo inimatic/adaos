@@ -372,6 +372,46 @@ def test_application_cbs_lifecycle_projection_is_explicitly_non_authoritative(
     assert projection["lock"]["status"] == "not_observed"
 
 
+def test_application_cbs_lifecycle_observes_exact_workspace_lock(tmp_path) -> None:
+    service = ApplicationCBSService(tmp_path)
+    service.compile_and_register(
+        application_ref="scenario:applications",
+        acceptance=_acceptance(),
+    )
+
+    projection = service.lifecycle_projection(
+        "scenario:applications",
+        runtime_selection={
+            "source": "stable_installation",
+            "release_digest": DIGEST_A,
+            "revision": 5,
+        },
+        workspace_lock={
+            "schema": "adaos.workspace.lock.v1",
+            "lock_revision": 12,
+            "updated_at": "2026-09-28T12:20:13+00:00",
+            "lock_digest": DIGEST_B,
+            "slots": {
+                "applications": {
+                    "project_id": "applications",
+                    "release": "applications@1.0.0",
+                    "release_digest": DIGEST_A,
+                }
+            },
+        },
+    )
+
+    assert projection["authoritative"] is False
+    assert projection["lock"] == {
+        "status": "committed",
+        "summary": "The exact stable release is committed in WorkspaceLock",
+        "release_digest": DIGEST_A,
+        "lock_digest": DIGEST_B,
+        "lock_revision": 12,
+        "updated_at": "2026-09-28T12:20:13+00:00",
+    }
+
+
 def test_application_api_compiles_and_assesses_without_activation(tmp_path) -> None:
     app = FastAPI()
     app.include_router(application_cbs.router, prefix="/api")

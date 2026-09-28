@@ -557,6 +557,7 @@ class ApplicationCBSService:
         *,
         runtime_selection: Mapping[str, Any] | None = None,
         local_development: Mapping[str, Any] | None = None,
+        workspace_lock: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the compact read-only CBS lifecycle shown by Applications.
 
@@ -694,18 +695,58 @@ class ApplicationCBSService:
             "revision": selection.get("revision"),
         }
 
-        lock = {
-            # RuntimeSelection is the Application channel authority.  It is
-            # not evidence that the lower-level CBS WorkspaceLock transaction
-            # was committed, so this derived view must not overstate it.
-            "status": "not_observed",
-            "summary": (
-                "Stable runtime selection is active; a CBS WorkspaceLock commit "
-                "was not observed by this read model"
-                if source == "stable_installation"
-                else "No CBS WorkspaceLock commit was observed by this read model"
-            ),
-        }
+        lock_value = dict(workspace_lock or {})
+        slots = (
+            dict(lock_value.get("slots") or {})
+            if isinstance(lock_value.get("slots"), Mapping)
+            else {}
+        )
+        _, _, project_id = str(application_ref or "").partition(":")
+        slot = (
+            dict(slots.get(project_id) or {})
+            if isinstance(slots.get(project_id), Mapping)
+            else {}
+        )
+        slot_release = str(slot.get("release_digest") or "").strip()
+        selected_release = str(selection.get("release_digest") or "").strip()
+        exact_lock = bool(
+            source == "stable_installation"
+            and selected_release
+            and slot_release == selected_release
+        )
+        if exact_lock:
+            lock = {
+                "status": "committed",
+                "summary": "The exact stable release is committed in WorkspaceLock",
+                "release_digest": slot_release,
+                "lock_digest": lock_value.get("lock_digest"),
+                "lock_revision": lock_value.get("lock_revision"),
+                "updated_at": lock_value.get("updated_at"),
+            }
+        elif source == "stable_installation" and slot_release:
+            lock = {
+                "status": "drifted",
+                "summary": (
+                    "Stable RuntimeSelection and WorkspaceLock identify different releases"
+                ),
+                "release_digest": slot_release,
+                "selected_release_digest": selected_release or None,
+                "lock_digest": lock_value.get("lock_digest"),
+                "lock_revision": lock_value.get("lock_revision"),
+            }
+        else:
+            lock = {
+                # RuntimeSelection alone is not proof that the lower-level CBS
+                # WorkspaceLock transaction committed. Only an exact slot from
+                # the validated lock above may change this derived status.
+                "status": "not_observed",
+                "summary": (
+                    "Stable runtime selection is active; a CBS WorkspaceLock commit "
+                    "was not observed by this read model"
+                    if source == "stable_installation"
+                    else "No CBS WorkspaceLock commit was observed by this read model"
+                ),
+            }
         return {
             "schema": "adaos.application.cbs_lifecycle_projection.v1",
             "application_ref": application_ref,

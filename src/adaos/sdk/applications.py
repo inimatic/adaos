@@ -1760,6 +1760,9 @@ def get_application(
                         else None
                     )
                 from adaos.services.applications.cbs import ApplicationCBSService
+                from adaos.services.artifact_pipeline.trial_activation import (
+                    load_workspace_lock,
+                )
 
                 cbs = ApplicationCBSService(state_dir)
                 canonical_application_ref = f"application:{token}"
@@ -1775,10 +1778,20 @@ def get_application(
                     is not None
                     else compatibility_application_ref
                 )
+                workspace_lock = load_workspace_lock(
+                    Path(require_ctx("sdk.applications").paths.workspace_dir())
+                    / ".adaos"
+                    / "workspace.lock.json"
+                )
                 model["cbs_lifecycle"] = cbs.lifecycle_projection(
                     application_ref,
                     runtime_selection=selection_value,
                     local_development=local,
+                    workspace_lock=(
+                        workspace_lock.to_dict()
+                        if workspace_lock is not None
+                        else None
+                    ),
                 )
             except SdkRuntimeNotInitialized:
                 # Lightweight SDK contract tests may deliberately replace the
