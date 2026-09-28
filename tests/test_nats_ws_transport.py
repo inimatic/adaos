@@ -432,10 +432,14 @@ async def test_websockets_transport_processes_completed_recv_before_send_backlog
     transport._ws = ws
     transport.write(b"PUB route.to_browser.sn_1--k 2\r\nok\r\n")
 
-    data = await asyncio.wait_for(transport.readline(), timeout=1.0)
+    try:
+        data = await asyncio.wait_for(transport.readline(), timeout=1.0)
 
-    assert data == b"INFO {}\r\n"
-    assert ws.recv_calls == 2
+        assert data == b"INFO {}\r\n"
+        assert ws.recv_calls == 2
+    finally:
+        transport.close()
+        await transport.wait_closed()
 
 
 @pytest.mark.asyncio
@@ -454,9 +458,8 @@ async def test_websockets_transport_sends_between_inbound_burst_frames() -> None
         await asyncio.wait_for(_wait_until(lambda: ws.sent == [payload]), timeout=1.0)
         assert ws.recv_calls >= 2
     finally:
-        if transport._io_task is not None:
-            transport._io_task.cancel()
-            await asyncio.gather(transport._io_task, return_exceptions=True)
+        transport.close()
+        await transport.wait_closed()
 
 
 @pytest.mark.asyncio
@@ -468,20 +471,26 @@ async def test_websockets_transport_cancels_pending_recv_before_shared_io_send()
     transport._ws = ws
 
     read_task = asyncio.create_task(transport.readline())
-    await asyncio.wait_for(ws.recv_started.wait(), timeout=1.0)
+    try:
+        await asyncio.wait_for(ws.recv_started.wait(), timeout=1.0)
 
-    payload = b"SUB test 1\r\n"
-    transport.write(payload)
-    await asyncio.wait_for(transport.drain(), timeout=1.0)
+        payload = b"SUB test 1\r\n"
+        transport.write(payload)
+        await asyncio.wait_for(transport.drain(), timeout=1.0)
 
-    assert ws.recv_cancelled.is_set()
-    assert ws.sent == [payload]
+        assert ws.recv_cancelled.is_set()
+        assert ws.sent == [payload]
 
-    ws.recv_release.set()
-    data = await asyncio.wait_for(read_task, timeout=1.0)
+        ws.recv_release.set()
+        data = await asyncio.wait_for(read_task, timeout=1.0)
 
-    assert data == b"INFO {}\r\n"
-    assert ws.recv_calls >= 2
+        assert data == b"INFO {}\r\n"
+        assert ws.recv_calls >= 2
+    finally:
+        if not read_task.done():
+            read_task.cancel()
+        transport.close()
+        await transport.wait_closed()
 
 
 @pytest.mark.asyncio
