@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
-Last reviewed: 2026-09-27.
+Last reviewed: 2026-09-28.
 
 Implementation checkpoint: every non-deferred item through `CBS5` and every
 `must`/`should` item in `CBS6` through `CBS9` has validated-local evidence as
@@ -148,6 +148,34 @@ governed reconciliation API committed installation revision 7; automatic
 reconciliation of a completed inner deployment whose outer
 `ApplicationOperation` remains `applying` is tracked as MUST Dev Ticket
 `dticket.01M3FA71K71C9ES1F5Y2S87RGV`.
+
+Operational qualification follow-up, 2026-09-28: a stale Infra State widget
+on the independent production subnet exposed a routing/ownership ambiguity in
+the SDK. `target_node_id` is an execution target for ordinary skill events,
+but on `webio.*.snapshot` and `webio.*.subscription` it scopes the projected
+data. The SDK now preserves those stream-control events at the hub instead of
+dismissing a request for a remote member. A regression test covers the
+distinction, and an executable stale-to-fresh probe updated the widget from an
+intentionally stale value to `Mediapoint | N3 | slot B | 0.1.1096 | 452bc10`.
+Home, Applications discovery, Subscription status, Gmail provider status,
+Media settings, and Research Workbench were then rechecked on the production
+topology. All 18 installed Applications are active; warm tool calls completed
+in approximately 0.38-0.88 seconds.
+
+This qualification also corrected an earlier maturity overstatement. The
+maintained Applications expose a useful derived compatibility lifecycle, but
+the production subnet currently reports no native `ApplicationResolution` or
+exact `RuntimeSelection` for these installed records. Therefore this is not a
+production-accepted native CBS activation proof. Native resolution/admission
+must replace the compatibility fallback before legacy activation can be
+removed. ReDevice and Slideshow do reuse one exact slideshow delivery digest,
+but updating both owners required a state-preserving remove/update/install
+sequence because multi-Application shared-binding activation is not yet one
+atomic batch. Cold registry reconciliation also remains expensive: the
+observed run wrote about 56 MiB and waited on filesystem journal commits, while
+the first Applications catalog call took 3.18 seconds before warming. These
+are explicit activation and performance follow-ups, not failures of the
+bounded CRUD identity proof.
 
 ## Outcome
 

@@ -2,7 +2,7 @@
 
 Status: executable CRUD-first implementation and adoption guide.
 
-Last verified: 2026-09-26.
+Last verified: 2026-09-28.
 
 This document records the implemented CRUD-first scope of `CBS1` through
 `CBS5`. All non-deferred items through `CBS5` have validated-local evidence. The
@@ -207,24 +207,28 @@ active on `192.168.0.30`:
 | `adaos_drive` | `0.1.21` | `sha256:613e6ec9ef6d78330b953dd9517efa65e0c4711e32b3c77c911bf58b22e085ec` |
 | `adaos_builder` | `0.3.18` | `sha256:7155818c48dcb528dc6bcccfb4037cced38d73ca3c8a63bf3bc97c4f7c0b0f5d` |
 | `applications` | `0.1.44` | `sha256:8b07964fa31009c554629a4eb79cc29bdd8b846431832f6d1911c6e5bc739710` |
-| `cv_descriptor_lab` | `0.1.21` | `sha256:5cf8ed9bc5dbaec6ecae830c54921a71397b5df65b9ae0113370fc0959250a93` |
+| `cv_descriptor_lab` | `0.1.22` | `sha256:79c9b75dba86a5fed8e6043edbb66d272115b9a98a6c6a08ea1dcf4d6cfe4074` |
 | `semantic_ui_demo` | `0.10.28` | `sha256:675f32d34f00fbc0ec6e68f61997fe0d1bb7aecacbd3e51d1ae3ac0f0627efc0` |
 | `flowboard_lab_for_safely_prototyping_a_r_17528146` | `0.1.17` | `sha256:9794e4f50c83b45d7772b4c7d5832c39b4fe89c6b0872d6b281acb03756080f4` |
-| `media_center` | `0.6.114` | `sha256:4c47394b70f86cecf82c93c18029732b121f5a452358e6dd9d38d2430eaa9c7e` |
-| `notebook` | `0.1.2` | `sha256:5af5487a9fdddf83fb0566255d3b1e98e5daf60e72b05ae9a5339cccaf5a9275` |
-| `redevice_control` | `0.1.22` | `sha256:c15939868394b4de6e4fc1de7b1db28379eb9470123b96692fcbc5f014428fb8` |
+| `media_center` | `0.6.119` | `sha256:2f72b6d2ec0dd5777ff3c8627517b3db835b66840ed71753b5a477285518f473` |
+| `notebook` | `0.1.3` | `sha256:23fe7aa94ba1d556ce8a54edabc798ae5e12a89c673d84d17a651e06e073532b` |
+| `redevice_control` | `0.1.24` | `sha256:2e3e56a749c4fa564a342026f547b72d92b38059a52f7bed61cae31dee2afb07` |
 | `research_platform` | `0.1.25` | `sha256:0496c61257a67e794bdd0196b52b04c7162d333a7e43721286ebc2646887db00` |
-| `slideshow` | `0.1.5` | `sha256:f0ff99f653c0ea864fee7401afef43b9b6aacfe9548b8d89b29f3451632ef410` |
-| `subscription_status` | `0.1.17` | `sha256:fa91fb66a431e7336be9369d50c0d2a1850b6d14d4f407346e677ae7b32844b8` |
+| `slideshow` | `0.1.6` | `sha256:bdfd4beb2e09927b1d86b7b1b3eb14ad41b5a864ed843362e38aa150400826cd` |
+| `subscription_status` | `0.1.18` | `sha256:8510b66f85cf0837766fd7550bb534c9bff38d21962a3b5d3906fdedcda0ff30` |
 | `research_tlp` | `0.3.18` | `sha256:ad8c1d22fb71bb4d1a15809765f2dc8194a4f10fb9571de8afda2d50eb477e39` |
-| `voice` | `0.1.7` | `sha256:0b891e2da738e254317eb958eda533333ba2a5d17752ed3c75850f19e0dede55` |
+| `voice` | `0.1.9` | `sha256:e97d4959a1d4d651741c45e0f6f9c7216969945f9c8bb9ad2025af6f408cab97` |
 | `users_access` | `0.1.21` | `sha256:56b4a980eacf222cadea789e1fc506aeee7a327db83771f808ee53257bb8f256` |
 
 For every row the installed model is active, matches the registry track,
 reports `update_available=false` and `auto_update=true`, and exposes the
-non-authoritative `derived_read_only` lifecycle projection with requirement
-`compiled`, resolution `admitted`, plan `ready`, activation `active`, and lock
-`committed`. The runtime smoke additionally proves:
+non-authoritative `derived_read_only` compatibility lifecycle projection with
+requirement `compiled`, resolution `admitted`, plan `ready`, activation
+`active`, and lock `committed`. This projection is not evidence that the
+installed record has a native `ApplicationResolution`: the 2026-09-28
+production audit returned `cbs_resolution=null` and no `RuntimeSelection` for
+all 18 records. Native resolution and activation must replace that fallback
+before legacy activation is removed. The runtime smoke additionally proves:
 
 - Desktop accepts the `applications` scenario instead of returning
   `scenario_not_found`;
@@ -237,6 +241,27 @@ non-authoritative `derived_read_only` lifecycle projection with requirement
 - the production systemd service owns one AdaOS supervisor on `8776`, which
   manages the active runtime slot on `8778`; no direct `api serve` competes for
   MySQL, NATS, or other shared services.
+
+The same audit repaired and verified Infra State projection semantics. The
+hub now accepts node-scoped WebIO snapshot/subscription events even when their
+`target_node_id` names a remote member, because that field is data scope for
+stream-control events rather than an execution-routing target. After an
+intentional stale write, the live request replaced the widget summary with
+the selected member's exact slot, Core version, and commit. Home again lists
+Applications; Subscription and Media tools return successfully; Gmail reports
+the expected disconnected local-account state rather than provider failure;
+and Research Workbench has a non-empty exact scenario materialization.
+
+ReDevice `0.1.24` and Slideshow `0.1.6` reuse the same exact slideshow package
+digest, proving delivery reuse. Their update nevertheless required a
+state-preserving remove/update/install sequence because the current conflict
+guard evaluates one Application aggregate at a time. Multi-Application
+shared-binding transitions need an atomic batch plan before this path can be
+unattended. Performance remains a separate open boundary: the measured cold
+registry reconciliation wrote about 56 MiB and waited on filesystem journal
+commit, the first Applications catalog call took 3.18 seconds, and early
+startup generated several Yjs garbage-collection pauses. Warm tool calls were
+approximately 0.38-0.88 seconds.
 
 Builder `0.3.18` also removed the obsolete `prompt-ide` presentation from its
 exact composition. Publication now derives the public Application entrypoints
