@@ -30,6 +30,55 @@ def _authoring_contract() -> dict[str, Any]:
     return {
         "schema": "adaos.builder.application_permission_authoring.v1",
         "permission_profile_schema": "adaos.application.permission_profile.v1",
+        "project_manifest_contract": {
+            "context_facet_name": "application_permissions",
+            "top_level_fields": ["permission_profile", "application_roles"],
+            "forbidden_top_level_fields": ["application_permissions"],
+            "permission_profile": {
+                "required_fields": ["schema", "required", "optional"],
+                "permission_declaration_required_fields": ["id", "purpose"],
+                "permission_declaration_optional_fields": [
+                    "title",
+                    "authorization_details",
+                    "approval_policy",
+                    "sensitive",
+                ],
+                "required_and_optional_item_type": "object",
+            },
+            "application_role": {
+                "required_fields": ["id", "title", "grants"],
+                "optional_fields": [
+                    "assignable_to",
+                    "default_for",
+                    "requires_permissions",
+                    "sensitive",
+                ],
+                "grants_min_items": 1,
+            },
+            "minimal_example": {
+                "permission_profile": {
+                    "schema": "adaos.application.permission_profile.v1",
+                    "required": [
+                        {
+                            "id": "workspace.read",
+                            "purpose": "Read application-owned records.",
+                            "approval_policy": "grant_on_install",
+                        }
+                    ],
+                    "optional": [],
+                },
+                "application_roles": [
+                    {
+                        "id": "owner",
+                        "title": "Owner",
+                        "grants": ["records.read"],
+                        "assignable_to": ["owner"],
+                        "default_for": {"owner": "owner"},
+                        "requires_permissions": ["workspace.read"],
+                    }
+                ],
+            },
+        },
         "canonical_identifier": {
             "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$",
             "meaning": "stable machine identifier; never prose or localized copy",

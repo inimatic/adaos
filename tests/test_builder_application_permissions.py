@@ -35,6 +35,21 @@ permission_profile:
     )
 
     evidence = context["authoring_contract"]["trial_evidence_contract"]
+    project_contract = context["authoring_contract"]["project_manifest_contract"]
+    assert project_contract["top_level_fields"] == [
+        "permission_profile",
+        "application_roles",
+    ]
+    assert project_contract["forbidden_top_level_fields"] == [
+        "application_permissions"
+    ]
+    assert (
+        project_contract["permission_profile"]["required_and_optional_item_type"]
+        == "object"
+    )
+    assert project_contract["minimal_example"]["permission_profile"]["required"][0][
+        "id"
+    ] == "workspace.read"
     assert evidence["artifact_path"] == "tests/test_application_contract.py"
     assert evidence["access_artifact_path"] == "tests/test_application_contract.py"
     assert evidence["behavior_artifact_path"] == "tests/test_behavior_contract.py"
