@@ -11126,6 +11126,42 @@ def test_browser_feedback_timeout_is_not_sent_to_codex_repair() -> None:
     )
 
 
+def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair() -> None:
+    receipt = {
+        "ok": False,
+        "timed_out": False,
+        "exit_code": 1,
+        "report": {
+            "passed": False,
+            "samples": [
+                {
+                    "layout": "wide",
+                    "authoritative_data_settled": True,
+                    "hard_failures": [],
+                    "request_failures": [],
+                },
+                {
+                    "layout": "compact",
+                    "authoritative_data_settled": True,
+                    "hard_failures": [
+                        "Console error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+                        "HTTP 503 GET http://127.0.0.1:8777/api/node/reliability/runtime?webspace_id=desktop-dev",
+                    ],
+                    "request_failures": [
+                        {
+                            "method": "GET",
+                            "status": 503,
+                            "url": "http://127.0.0.1:8777/api/node/reliability/runtime?webspace_id=desktop-dev",
+                        }
+                    ],
+                },
+            ],
+        },
+    }
+
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
+
+
 def test_browser_feedback_repair_requires_authority_diagnosis_and_portable_evidence() -> None:
     instruction = BuilderAutomationService._browser_feedback_repair_instruction(
         {

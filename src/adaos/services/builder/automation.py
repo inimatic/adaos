@@ -11381,11 +11381,40 @@ class BuilderAutomationService:
         samples = [
             item for item in report.get("samples") or [] if isinstance(item, Mapping)
         ]
-        return any(
+        hard_failures = [
             str(value or "").strip()
             for sample in samples
             for value in sample.get("hard_failures") or []
+            if str(value or "").strip()
+        ]
+        if not hard_failures:
+            return False
+
+        # A saturated node-health probe is evidence that the browser runner could
+        # not assess the candidate, not evidence that the candidate is defective.
+        # The browser also emits a generic console error for the same failed
+        # request, so use the structured request failures for attribution.  Keep
+        # this fail-closed: only the reliability endpoint is infrastructure-owned,
+        # only transient gateway/service statuses qualify, and every authoritative
+        # application data source must already have settled successfully.
+        request_failures = [
+            failure
+            for sample in samples
+            for failure in sample.get("request_failures") or []
+            if isinstance(failure, Mapping)
+            and int(failure.get("status") or 0) >= 400
+        ]
+        authoritative_data_settled = bool(samples) and all(
+            sample.get("authoritative_data_settled") is True for sample in samples
         )
+        reliability_probe_only = bool(request_failures) and all(
+            int(failure.get("status") or 0) in {502, 503, 504}
+            and "/api/node/reliability/runtime" in str(failure.get("url") or "")
+            for failure in request_failures
+        )
+        if authoritative_data_settled and reliability_probe_only:
+            return False
+        return True
 
     @staticmethod
     def _browser_feedback_repair_instruction(receipt: Mapping[str, Any]) -> str:
