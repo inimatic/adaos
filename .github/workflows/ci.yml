@@ -74,6 +74,7 @@ jobs:
             tests/sdk \
             tests/smoke \
             tests/test_ci_core_version_bump.py \
+            tests/test_tests_cli.py \
             tests/test_realtime_sidecar.py \
             tests/test_supervisor.py \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \
