@@ -69,7 +69,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.11.3"
+RUNNER_VERSION = "adaos-local-codex-worker/0.11.4"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -4526,6 +4526,77 @@ def preservable_blocking_feedback_message(
     return message
 
 
+def origin_requalifiable_validation_feedback(
+    items: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]] | None:
+    """Admit only worker-environment validation gaps for origin revalidation.
+
+    This is deliberately narrower than ordinary blocking feedback recovery.  A
+    preserved candidate remains blocked unless every blocking item says that a
+    test dependency is unavailable in the remote worker and explicitly asks the
+    trusted origin Builder to execute the tests.  The caller must still run the
+    complete deterministic validator successfully before activating anything.
+    """
+
+    blocking = [dict(item) for item in items if item.get("blocking")]
+    if not blocking:
+        return None
+    environment_markers = (
+        "worker",
+        "container",
+        "sandbox",
+        "$adaos_python",
+        "remote python",
+    )
+    dependency_markers = (
+        "dependency",
+        "package",
+        "module",
+        "import",
+        "modulenotfounderror",
+    )
+    unavailable_markers = (
+        "lacks",
+        "missing",
+        "unavailable",
+        "not available",
+        "cannot import",
+        "could not import",
+        "no module named",
+    )
+    origin_markers = ("trusted builder", "origin builder", "origin")
+    validation_markers = ("test", "validation", "validate")
+    for item in blocking:
+        if str(item.get("category") or "").strip() != "validation_gap":
+            return None
+        if item.get("clarification_questions") or item.get("application_trace"):
+            return None
+        combined = " ".join(
+            str(item.get(field) or "")
+            for field in ("summary", "details", "recommendation")
+        ).casefold()
+        recommendation = str(item.get("recommendation") or "").casefold()
+        if not all(
+            (
+                any(marker in combined for marker in environment_markers),
+                any(marker in combined for marker in dependency_markers),
+                any(marker in combined for marker in unavailable_markers),
+                any(marker in recommendation for marker in origin_markers),
+                any(marker in recommendation for marker in validation_markers),
+            )
+        ):
+            return None
+        evidence = item.get("evidence_refs") or []
+        if not evidence or any(
+            not isinstance(ref, Mapping)
+            or str(ref.get("type") or "").strip() != "file"
+            or not str(ref.get("ref") or "").strip()
+            for ref in evidence
+        ):
+            return None
+    return blocking
+
+
 def manifest_scope_blocking_feedback_message(
     run_root: Path, failure: Mapping[str, Any]
 ) -> str | None:
@@ -5072,18 +5143,42 @@ class LocalSkillFactoryWorker:
             raise ValueError("result recovery requires a preserved failed local run")
         if not workspace.is_dir() or not (workspace / ".git").is_dir():
             raise ValueError("result recovery requires the preserved task workspace")
+        latest_failure: dict[str, Any] = {}
+        latest_failure_details: dict[str, Any] = {}
+        origin_validation_feedback: list[dict[str, Any]] | None = None
         structured_message = None
         if (input_dir / "automation-outcome.schema.json").is_file():
             structured_message = outcome_message(
                 (output_dir / "last_message.md").read_text(encoding="utf-8")
             )
-            if any(
-                item["blocking"]
-                for item in parse_development_feedback(structured_message)
-            ):
-                raise ValueError(
-                    "Cannot recover an implementation with unresolved blocking development feedback"
+            structured_feedback = parse_development_feedback(structured_message)
+            if any(item["blocking"] for item in structured_feedback):
+                try:
+                    task_state = self.factory.read_task(task_id)
+                except KeyError as exc:
+                    raise ValueError(
+                        "Cannot recover blocking feedback without its failed task record"
+                    ) from exc
+                failure_history = list(task_state.get("failure_history") or [])
+                latest_failure = (
+                    dict(failure_history[-1]) if failure_history else {}
                 )
+                latest_failure_details = (
+                    dict(latest_failure.get("details"))
+                    if isinstance(latest_failure.get("details"), Mapping)
+                    else {}
+                )
+                origin_validation_feedback = (
+                    origin_requalifiable_validation_feedback(structured_feedback)
+                )
+                if (
+                    origin_validation_feedback is None
+                    or latest_failure.get("stage") != "development_feedback"
+                    or latest_failure_details.get("clarification_questions")
+                ):
+                    raise ValueError(
+                        "Cannot recover an implementation with unresolved blocking development feedback"
+                    )
 
         test_report_path = output_dir / "test_report.json"
         test_report = _read_json(test_report_path) if test_report_path.is_file() else {}
@@ -5093,6 +5188,7 @@ class LocalSkillFactoryWorker:
         report_passed = (
             bool(test_report.get("ok"))
             and str(test_report.get("status") or "") == "passed"
+            and not origin_validation_feedback
         )
         if not report_passed:
             # A worker/host failure can happen after Codex has returned but
@@ -5115,9 +5211,34 @@ class LocalSkillFactoryWorker:
                 feedback_items,
             )
             if any(item.get("blocking") for item in feedback_items):
-                raise ValueError(
-                    "Cannot recover an implementation with unresolved blocking development feedback"
+                if not latest_failure:
+                    try:
+                        task_state = self.factory.read_task(task_id)
+                    except KeyError as exc:
+                        raise ValueError(
+                            "Cannot recover blocking feedback without its failed task record"
+                        ) from exc
+                    failure_history = list(task_state.get("failure_history") or [])
+                    latest_failure = (
+                        dict(failure_history[-1]) if failure_history else {}
+                    )
+                    latest_failure_details = (
+                        dict(latest_failure.get("details"))
+                        if isinstance(latest_failure.get("details"), Mapping)
+                        else {}
+                    )
+                origin_validation_feedback = (
+                    origin_validation_feedback
+                    or origin_requalifiable_validation_feedback(feedback_items)
                 )
+                if (
+                    origin_validation_feedback is None
+                    or latest_failure.get("stage") != "development_feedback"
+                    or latest_failure_details.get("clarification_questions")
+                ):
+                    raise ValueError(
+                        "Cannot recover an implementation with unresolved blocking development feedback"
+                    )
             recovery_packet = _read_json(input_dir / "packet.json")
             recovery_constraints = (
                 dict(recovery_packet.get("constraints"))
@@ -5171,14 +5292,37 @@ class LocalSkillFactoryWorker:
                     assignment,
                     workspace,
                 )
-            _write_json(output_dir / "test_report.json", test_report)
             if (
                 not bool(test_report.get("ok"))
                 or str(test_report.get("status") or "") != "passed"
             ):
+                _write_json(output_dir / "test_report.json", test_report)
                 raise ValueError(
                     "preserved result does not pass deterministic validation"
                 )
+            if origin_validation_feedback:
+                test_report = {
+                    **test_report,
+                    "checks": [
+                        *list(test_report.get("checks") or []),
+                        {
+                            "id": "development_feedback.origin_requalified",
+                            "status": "passed",
+                            "trust_boundary": "origin_builder",
+                            "feedback_categories": sorted(
+                                {
+                                    str(item.get("category") or "")
+                                    for item in origin_validation_feedback
+                                }
+                            ),
+                            "reason": (
+                                "remote worker dependency gap was superseded by "
+                                "the complete trusted origin validation"
+                            ),
+                        },
+                    ],
+                }
+            _write_json(output_dir / "test_report.json", test_report)
 
             evidence_paths = dict(
                 (assignment.get("evidence") or {}).get("expected_paths") or {}
@@ -5227,15 +5371,34 @@ class LocalSkillFactoryWorker:
                     else "recovered_candidate"
                 ),
                 "created_at": _now_iso(),
-                "recovery": {"mode": "pre_commit_deterministic_resume"},
+                "recovery": {
+                    "mode": (
+                        "origin_validation_requalification"
+                        if origin_validation_feedback
+                        else "pre_commit_deterministic_resume"
+                    ),
+                    "worker_report_sha256": (
+                        hashlib.sha256(final_message.encode("utf-8")).hexdigest()
+                        if origin_validation_feedback
+                        else None
+                    ),
+                },
             }
             _write_json(evidence_root / "provenance.json", provenance)
+            result_summary = final_message
+            if origin_validation_feedback:
+                result_summary = (
+                    "The retained candidate passed complete deterministic validation "
+                    "at the trusted origin Builder. The remote worker's dependency-only "
+                    "validation gap is retained by digest and development-feedback "
+                    "references; no blocking report was waived."
+                )
             result_manifest = {
                 "schema": "adaos.skill_factory.dev_result.v1",
                 "task_id": task_id,
                 "node_id": self.node_id,
                 "status": "completed",
-                "summary": final_message,
+                "summary": result_summary,
                 "development_escalations": development_escalations,
                 "development_feedback_refs": [
                     item["feedback_id"] for item in development_feedback

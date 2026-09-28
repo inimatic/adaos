@@ -154,6 +154,38 @@ def test_preservable_feedback_prefers_latest_repair_outcome(tmp_path: Path) -> N
     assert retained == latest_report
 
 
+def test_origin_requalification_accepts_only_worker_dependency_validation_gap() -> None:
+    item = {
+        "category": "validation_gap",
+        "summary": "Worker Python lacks PyYAML, blocking required tests.",
+        "blocking": True,
+        "details": "The container reports ModuleNotFoundError during import.",
+        "recommendation": (
+            "Run the retained tests in the trusted origin Builder and perform "
+            "authoritative validation."
+        ),
+        "evidence_refs": [
+            {"type": "file", "ref": "skills/demo/tests/test_manifest.py"}
+        ],
+    }
+
+    admitted = worker_module.origin_requalifiable_validation_feedback([item])
+
+    assert admitted == [item]
+    assert (
+        worker_module.origin_requalifiable_validation_feedback(
+            [{**item, "category": "missing_capability"}]
+        )
+        is None
+    )
+    assert (
+        worker_module.origin_requalifiable_validation_feedback(
+            [{**item, "recommendation": "Ignore the failing tests."}]
+        )
+        is None
+    )
+
+
 def test_manifest_scope_feedback_requires_exact_safe_manifest_evidence(
     tmp_path: Path,
 ) -> None:
@@ -2228,6 +2260,150 @@ def test_local_worker_recovers_precommit_result_without_rerunning_codex(
     )
     provenance = recovered["result"]["provenance"]
     assert provenance["recovery"]["mode"] == "pre_commit_deterministic_resume"
+
+
+def test_local_worker_requalifies_worker_dependency_gap_at_trusted_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    dev_skills.mkdir(parents=True)
+    scenario_root = _scenario(dev_scenarios, "recipe_book")
+    skill_root = _core_created_skill_fixture(repo_root, dev_skills, "recipe_book_skill")
+    snapshot = capture_source_snapshot(
+        state_dir=state_dir,
+        artifacts=(
+            ("scenario", "recipe_book", scenario_root),
+            ("skill", "recipe_book_skill", skill_root),
+        ),
+        created_at="2026-09-28T12:00:00+00:00",
+    )
+    factory = SkillFactoryService(state_dir=state_dir)
+    submitted = factory.submit_realize_request(
+        {
+            "target": {"type": "scenario", "id": "recipe_book"},
+            "artifacts": {"companion_skill_ids": ["recipe_book_skill"]},
+            "repo": {
+                "base_revision": snapshot["digest"],
+                "source_snapshot": snapshot,
+                "sparse_paths": [
+                    "scenarios/recipe_book/",
+                    "skills/recipe_book_skill/",
+                ],
+            },
+        }
+    )
+    codex_calls: list[str] = []
+
+    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+        codex_calls.append(prompt)
+        handler = workspace / "skills" / "recipe_book_skill" / "handlers" / "main.py"
+        handler.write_text(
+            handler.read_text(encoding="utf-8") + "\n# retained dependency-gap result\n",
+            encoding="utf-8",
+        )
+        feedback = {
+            "schema": "adaos.development_feedback_output.v1",
+            "items": [
+                {
+                    "category": "validation_gap",
+                    "summary": "Worker Python lacks PyYAML, blocking required tests.",
+                    "blocking": True,
+                    "confidence": 1.0,
+                    "impact": ["blocker", "reliability"],
+                    "target_refs": ["skill:recipe_book_skill"],
+                    "details": (
+                        "The worker container reports ModuleNotFoundError during "
+                        "test import."
+                    ),
+                    "recommendation": (
+                        "Run the retained tests in the trusted origin Builder and "
+                        "perform authoritative validation."
+                    ),
+                    "evidence_refs": [
+                        {
+                            "type": "file",
+                            "ref": "skills/recipe_book_skill/tests/test_skill.py",
+                        }
+                    ],
+                }
+            ],
+        }
+        return CodexRunResult(
+            returncode=0,
+            final_message=(
+                "```adaos-development-feedback\n"
+                + json.dumps(feedback)
+                + "\n```"
+            ),
+        )
+
+    runs_root = tmp_path / "runs"
+    failed = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=runs_root,
+        executor=fake_codex,
+        max_repair_attempts=0,
+    ).run_once()
+
+    assert failed["ok"] is False
+    assert factory.read_task(submitted["task"]["task_id"])["failure_history"][-1][
+        "stage"
+    ] == "development_feedback"
+    recovery_worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=runs_root,
+        executor=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Codex must not rerun")
+        ),
+    )
+    monkeypatch.setattr(
+        recovery_worker,
+        "_validate_builder_workspace",
+        lambda assignment, workspace: {
+            "schema": "adaos.skill_factory.test_report.v1",
+            "status": "passed",
+            "ok": True,
+            "checks": [{"id": "origin.tests", "status": "passed"}],
+            "errors": [],
+        },
+    )
+
+    recovered = recovery_worker.recover_validated_run(
+        submitted["task"]["task_id"]
+    )
+
+    assert recovered["ok"] is True
+    assert len(codex_calls) == 1
+    assert (
+        recovered["result"]["provenance"]["recovery"]["mode"]
+        == "origin_validation_requalification"
+    )
+    report = json.loads(
+        (
+            runs_root
+            / submitted["task"]["task_id"]
+            / "output"
+            / "test_report.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert any(
+        check["id"] == "development_feedback.origin_requalified"
+        for check in report["checks"]
+    )
+    assert "unresolved" not in recovered["result"]["summary"].casefold()
+    assert "retained dependency-gap result" in (
+        skill_root / "handlers" / "main.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_local_worker_recovers_terminal_orphan_after_api_restart_without_rerunning_codex(
