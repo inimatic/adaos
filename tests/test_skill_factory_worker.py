@@ -6063,6 +6063,49 @@ def test_large_compiler_facets_are_digest_addressed_and_compact(tmp_path: Path) 
     assert len(envelope["payload"]["roles"]) == 12
 
 
+def test_media_ui_contract_survives_prompt_projection_as_compiler_view(
+    tmp_path: Path,
+) -> None:
+    from adaos.services.ui_capabilities import selected_ui_capabilities
+
+    selection = selected_ui_capabilities(
+        "Generate an image for each recipe and show it in cards and details."
+    )
+    packet = {
+        "digest": "sha256:" + "7" * 64,
+        "facets": {"ui_capabilities": selection},
+    }
+
+    projected = _context_packet_prompt_projection(packet)
+
+    media_recipe = next(
+        item
+        for item in projected["facets"]["ui_capabilities"]["items"]
+        if item["id"] == "recipe.media_records"
+    )
+    assert media_recipe["composition"]["renderer"]["example"]["list_inputs"] == {
+        "variant": "cards",
+        "titleKey": "title",
+        "imageKey": "media",
+    }
+
+    compact, refs = _materialize_digest_addressed_compiler_views(
+        projected,
+        input_dir=tmp_path,
+        threshold_bytes=512,
+    )
+
+    assert [item["facet"] for item in refs] == ["ui_capabilities"]
+    summary = compact["facets"]["ui_capabilities"]
+    assert summary["required_contracts"] == ["media"]
+    assert "recipe.media_records" in summary["root_item_ids"]
+    envelope = json.loads(Path(refs[0]["path"]).read_text(encoding="utf-8"))
+    assert any(
+        item["id"] == "recipe.media_records"
+        for item in envelope["payload"]["items"]
+    )
+
+
 def test_generated_test_cannot_pin_raw_manifest_digest(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     tests_dir = workspace / "scenarios" / "sample" / "tests"

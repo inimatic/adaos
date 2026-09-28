@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from adaos.services.content_generation import ContentGenerationService, draft_schema
+from adaos.services.content_generation import (
+    ContentGenerationService,
+    draft_schema,
+    normalize_declared_markdown,
+)
 
 
 SCHEMA = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": False}
@@ -148,3 +152,48 @@ def test_encoded_images_count_toward_the_request_transport_budget(tmp_path):
     with pytest.raises(ValueError, match="including encoded images"):
         request(service, images=[picture])
     assert calls == []
+
+
+def test_declared_markdown_normalizes_literal_newlines_at_provider_boundary(tmp_path):
+    schema = {
+        "type": "object",
+        "properties": {
+            "ingredients": {"type": "string", "contentMediaType": "text/markdown"},
+            "path": {"type": "string"},
+        },
+        "required": ["ingredients", "path"],
+        "additionalProperties": False,
+    }
+    result = {
+        "status": "succeeded",
+        "output_text": json.dumps(
+            {
+                "status": "completed",
+                "data": {
+                    "ingredients": "- water\\n- lemon\\r\\n- mint",
+                    "path": r"C:\\new\\recipe",
+                },
+                "message": "",
+            }
+        ),
+    }
+    service, _ = setup_service(tmp_path, result)
+
+    request(service, schema=schema)
+    draft = service.get("draft-1")
+
+    assert draft["status"] == "completed"
+    assert draft["data"]["ingredients"] == "- water\n- lemon\n- mint"
+    assert draft["data"]["path"] == r"C:\\new\\recipe"
+
+
+def test_declared_markdown_normalization_follows_local_refs_and_arrays():
+    schema = {
+        "type": "array",
+        "items": {"$ref": "#/$defs/line"},
+        "$defs": {
+            "line": {"type": "string", "contentMediaType": "text/markdown"}
+        },
+    }
+
+    assert normalize_declared_markdown([r"one\ntwo"], schema) == ["one\ntwo"]

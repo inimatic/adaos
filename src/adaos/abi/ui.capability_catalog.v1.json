@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.3.12",
+  "catalog_version": "3.3.14",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -1560,6 +1560,181 @@
       },
       "postconditions": [
         "Each requested answer has one editable typed field."
+      ]
+    },
+    {
+      "id": "recipe.canonical_choice_filters",
+      "title": "Canonical choice values and executable filters",
+      "summary": "Keep agent schemas, persisted enum tokens, UI option values, filter parameters, and localized display labels aligned end to end.",
+      "aliases": {
+        "en": [
+          "filter by category",
+          "enum labels",
+          "choice values",
+          "agent structured output"
+        ],
+        "ru": [
+          "\u0444\u0438\u043b\u044c\u0442\u0440 \u043f\u043e \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438",
+          "\u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0439",
+          "\u043f\u043e\u0434\u043f\u0438\u0441\u0438 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0439"
+        ]
+      },
+      "requires": {
+        "layouts": [],
+        "components": [
+          "ui.queryToolbar",
+          "ui.list",
+          "item.details"
+        ]
+      },
+      "composition": {
+        "domain": {
+          "rule": "Declare one canonical token set and reuse it unchanged in the agent/content JSON Schema enum, persisted record, skill handler validation, query parameter, and every UI option.value. User-facing labels are presentation only.",
+          "example": {
+            "canonical_values": [
+              "up_to_30",
+              "30_to_60",
+              "over_60"
+            ],
+            "agent_schema": {
+              "type": "string",
+              "enum": [
+                "up_to_30",
+                "30_to_60",
+                "over_60"
+              ]
+            },
+            "option": {
+              "value": "over_60",
+              "label": "More than 60 minutes"
+            }
+          }
+        },
+        "query": {
+          "rule": "Use ui.queryToolbar controls to write page state immediately. Bind a skill dataSource param or ui.list filter to the same bare state key. A ui.form field merely hydrated with stateKey is not an executable live filter.",
+          "example": {
+            "control": {
+              "id": "time-filter",
+              "kind": "filter",
+              "inputType": "select",
+              "stateKey": "timeFilter",
+              "options": [
+                {
+                  "value": "any",
+                  "label": "Any"
+                },
+                {
+                  "value": "over_60",
+                  "label": "More than 60 minutes"
+                }
+              ]
+            },
+            "skill_data_source": {
+              "kind": "skill",
+              "name": "example_skill.list_records",
+              "params": {
+                "time_preference": "$state.timeFilter"
+              },
+              "invalidationTags": [
+                "example.records"
+              ]
+            }
+          }
+        },
+        "display": "For ui.list metadata and item.details fields, map canonical tokens with valueLabels or valueI18nPrefix/optionsDataSource. Never persist or filter on a translated label, and never expose a raw token such as over_60 when a label map is declared.",
+        "agent_boundary": "Validate the completed agent payload against the same closed enum before persistence. Do not repair an unknown token by guessing; return invalid_output with bounded diagnostics. Normalize presentation-only text separately from canonical identifiers.",
+        "generated_multiline_text": "For generated fields rendered as Markdown, declare contentMediaType: text/markdown on that string in the content JSON Schema. Content Generation then normalizes literal \\n and \\r\\n sequences at the provider boundary before validation and persistence. Do not decode escapes globally or apply this annotation to identifiers, paths, code, or canonical enum values."
+      },
+      "unsupported": [
+        "A buttonless ui.form is not a live query toolbar.",
+        "Translated labels are not storage or filter identities.",
+        "Agent prompts alone do not enforce enum compatibility; the structured schema and application validation must do so."
+      ],
+      "postconditions": [
+        "Changing a query control causes the bound dataSource to re-execute with the selected canonical value.",
+        "Every stored choice token belongs to the declared closed enum.",
+        "Every visible canonical token has a localized or authored label without changing its stored value.",
+        "The agent output schema, handler constants, UI option values, and filter parameters contain the same token set.",
+        "Generated Markdown fields contain real line breaks after admission, while undeclared strings remain byte-for-byte unchanged."
+      ]
+    },
+    {
+      "id": "recipe.media_records",
+      "title": "Durable media-backed records",
+      "summary": "Publish image, audio, or video bytes through the AdaOS media store, persist a browser-safe descriptor, and bind it to supported Client inputs.",
+      "aliases": {
+        "en": [
+          "generated image",
+          "media record",
+          "audio or video",
+          "photo thumbnail"
+        ],
+        "ru": [
+          "\u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435",
+          "\u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0430",
+          "\u0444\u043e\u0442\u043e",
+          "\u0430\u0443\u0434\u0438\u043e \u0438\u043b\u0438 \u0432\u0438\u0434\u0435\u043e"
+        ]
+      },
+      "requires": {
+        "layouts": [],
+        "components": [
+          "ui.list",
+          "item.details"
+        ]
+      },
+      "composition": {
+        "producer": {
+          "generated_image": "Use adaos.sdk.llm.images.generate/get with one stable request_id. A completed response already contains a published browser media descriptor in response.media; generation_pending must poll the same request instead of submitting paid work again.",
+          "application_file": "For application-owned image, audio, or video bytes use adaos.sdk.io.media.publish_media_file, then adaos.sdk.io.media.browser_media_descriptor. Use publish_media_package for bounded segmented media and register_media_file only for an intentionally retained original under an admitted stable root.",
+          "forbidden": "Never invent /media paths, persist provider URLs, embed base64 in business records, or expose node-local source/path values to WebUI."
+        },
+        "record": {
+          "rule": "Persist the complete browser-safe descriptor object atomically with the owning record only after publication succeeds. Preserve route, path, filename, mime, content_ref, and size_bytes plus verified type-specific metadata returned by the SDK.",
+          "example": {
+            "image": {
+              "route": "hub_browser_media",
+              "path": "/media/files/content/generated-image-<digest>-media.png",
+              "filename": "generated-image-<digest>-media.png",
+              "mime": "image/png",
+              "content_ref": "generated-image:<sha256>",
+              "size_bytes": 123456,
+              "sha256": "<sha256>",
+              "width": 1024,
+              "height": 1024
+            }
+          }
+        },
+        "renderer": {
+          "collection_still": "For ui.list set the top-level inputs.imageKey to the record field containing the image descriptor. Do not use imagePath or inputs.card.imagePath.",
+          "detail_still": "For item.details set the top-level inputs.imageKey to the descriptor field. Do not use imagePath or inputs.media.imagePath.",
+          "detail_mixed_media": "For item.details set inputs.mediaKey to the descriptor field. Optionally set mediaKindKey to a record field containing image, audio, or video and mediaPosterKey to an image descriptor used as the poster.",
+          "example": {
+            "list_inputs": {
+              "variant": "cards",
+              "titleKey": "title",
+              "imageKey": "media"
+            },
+            "detail_inputs": {
+              "mediaKey": "media",
+              "mediaKindKey": "media_kind",
+              "mediaPosterKey": "poster"
+            }
+          }
+        },
+        "refresh": "The read dataSource and the successful mutation action must share the same invalidation tag so the initiating Client refetches the record. Backend-originated changes require an explicit subscribed data route; direct database edits are not UI events.",
+        "trial": "Trial application data remains isolated, while SDK publication writes content-addressed bytes to the node-authoritative media store used by /media routes. Do not copy files into a trial-local mediaserver directory."
+      },
+      "unsupported": [
+        "A filename or local filesystem path is not a renderable media value.",
+        "Nested imagePath aliases are not part of the Client ABI.",
+        "Action invalidation is not a backend push subscription."
+      ],
+      "postconditions": [
+        "Every persisted media descriptor resolves through its declared browser route after restart and publication.",
+        "Collection thumbnails use inputs.imageKey and detail playback uses imageKey or mediaKey at the top level.",
+        "A successful media mutation invalidates the same tag declared by its read dataSource.",
+        "No provider credential, base64 payload, or node-local path is stored in the application record."
       ]
     },
     {

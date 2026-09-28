@@ -231,6 +231,44 @@ def test_dynamic_details_title_cannot_be_overridden_by_static_i18n() -> None:
     assert validate_webui_capabilities(webui)["ok"] is True
 
 
+def test_image_bindings_must_use_renderer_supported_top_level_image_key() -> None:
+    webui = _empty_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["widgets"] = [
+        {
+            "id": "recipes",
+            "type": "ui.list",
+            "area": "main",
+            "dataSource": {
+                "kind": "static",
+                "value": [{"id": "one", "title": "One", "image": {"browser_path": "/media/one.png"}}],
+            },
+            "inputs": {"card": {"imagePath": "image"}},
+        },
+        {
+            "id": "recipe-details",
+            "type": "item.details",
+            "area": "main",
+            "dataSource": {
+                "kind": "static",
+                "value": {"id": "one", "title": "One", "image": {"browser_path": "/media/one.png"}},
+            },
+            "inputs": {"media": {"imagePath": "image"}},
+        },
+    ]
+
+    result = validate_webui_capabilities(webui)
+
+    assert result["ok"] is False
+    assert {item["code"] for item in result["findings"]} >= {
+        "ui.list.image_binding_unsupported",
+        "ui.details.image_binding_unsupported",
+    }
+    page["widgets"][0]["inputs"] = {"imageKey": "image"}
+    page["widgets"][1]["inputs"] = {"imageKey": "image"}
+    assert validate_webui_capabilities(webui)["ok"] is True
+
+
 def test_binary_action_expression_requires_args_not_left_and_right() -> None:
     webui = _empty_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
@@ -474,6 +512,99 @@ def test_list_capability_exposes_renderer_projection_and_command_contract() -> N
     assert "headerActions" in manifest["button_shape"]
     assert "click:<buttonId>" in manifest["button_shape"]
     assert "bare page-state key" in manifest["query_binding"]
+
+
+def test_media_and_filter_request_selects_end_to_end_context_contracts() -> None:
+    selection = selected_ui_capabilities(
+        "Покажи рецепты с фильтром по времени и сгенерированным изображением в карточках и деталях."
+    )
+
+    assert {
+        "recipe.media_records",
+        "recipe.canonical_choice_filters",
+    } <= set(selection["root_item_ids"])
+    assert selection["required_contracts"] == [
+        "media",
+        "canonical_choice_filters",
+    ]
+    items = {item["id"]: item for item in selection["items"]}
+    media = items["recipe.media_records"]["composition"]
+    assert media["renderer"]["example"]["list_inputs"]["imageKey"] == "media"
+    assert "publish_media_file" in media["producer"]["application_file"]
+    choices = items["recipe.canonical_choice_filters"]["composition"]
+    assert choices["domain"]["example"]["option"] == {
+        "value": "over_60",
+        "label": "More than 60 minutes",
+    }
+    assert choices["query"]["example"]["skill_data_source"]["params"] == {
+        "time_preference": "$state.timeFilter"
+    }
+    assert "contentMediaType: text/markdown" in choices["generated_multiline_text"]
+
+
+def test_buttonless_form_cannot_serve_as_live_skill_query_filter() -> None:
+    webui = _empty_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["initialState"] = {"timeFilter": "any"}
+    page["widgets"] = [
+        {
+            "id": "filters",
+            "type": "ui.form",
+            "area": "main",
+            "inputs": {
+                "fields": [
+                    {
+                        "id": "time",
+                        "type": "dropdown",
+                        "stateKey": "timeFilter",
+                        "options": [
+                            {"value": "any", "label": "Any"},
+                            {"value": "over_60", "label": "More than 60 minutes"},
+                        ],
+                    }
+                ],
+                "buttons": [],
+            },
+        },
+        {
+            "id": "records",
+            "type": "ui.list",
+            "area": "main",
+            "dataSource": {
+                "kind": "skill",
+                "name": "example_skill.list_records",
+                "params": {"time_preference": "$state.timeFilter"},
+            },
+        },
+    ]
+
+    invalid = validate_webui_capabilities(webui)
+
+    assert any(
+        item["code"] == "ui.query.form_state_not_executable"
+        and item["state_keys"] == ["timeFilter"]
+        for item in invalid["findings"]
+    )
+    page["widgets"][0] = {
+        "id": "filters",
+        "type": "ui.queryToolbar",
+        "area": "main",
+        "inputs": {
+            "controls": [
+                {
+                    "id": "time",
+                    "kind": "filter",
+                    "inputType": "select",
+                    "stateKey": "timeFilter",
+                    "options": [
+                        {"value": "any", "label": "Any"},
+                        {"value": "over_60", "label": "More than 60 minutes"},
+                    ],
+                }
+            ]
+        },
+    }
+    assert validate_webui_capabilities(webui)["ok"] is True
 
 
 def test_query_toolbar_capability_exposes_exact_control_and_binding_contract() -> None:

@@ -1904,6 +1904,25 @@ def context_packet_prompt_projection(
             ):
                 if facet.get(key) not in (None, "", [], {}):
                     common[key] = copy.deepcopy(facet[key])
+        elif facet_name == "ui_capabilities":
+            # Selected component and recipe contracts are compiler input, not
+            # optional prose. Large selections are materialized below as an
+            # immutable compiler view; dropping them here would leave the
+            # implementation model with only a catalog name.
+            for key in (
+                "catalog_ref",
+                "catalog_version",
+                "catalog_digest",
+                "qualification",
+                "root_item_ids",
+                "dependency_closure",
+                "required_contracts",
+                "items",
+                "repair_guidance",
+                "input_attribution",
+            ):
+                if facet.get(key) not in (None, "", [], {}):
+                    common[key] = copy.deepcopy(facet[key])
         else:
             for key in ("missing", "ambiguous", "diagnostics", "metrics"):
                 if facet.get(key) not in (None, "", [], {}):
@@ -2023,6 +2042,12 @@ def _materialize_digest_addressed_compiler_views(
                 "unused_declared",
                 "implementation_mapping",
                 "prototype_binding",
+                "catalog_ref",
+                "catalog_version",
+                "catalog_digest",
+                "root_item_ids",
+                "dependency_closure",
+                "required_contracts",
             )
             if key in facet and facet[key] not in (None, "", [], {})
         }

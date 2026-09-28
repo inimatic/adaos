@@ -48,6 +48,58 @@ def draft_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
         "additionalProperties": False, "$defs": {"content": relocate(dict(schema))}}
 
 
+def _local_ref(root: Mapping[str, Any], reference: str) -> Mapping[str, Any] | None:
+    """Resolve a local JSON Pointer without ever loading another resource."""
+    if reference == "#":
+        return root
+    if not reference.startswith("#/"):
+        return None
+    current: Any = root
+    for raw_token in reference[2:].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, Mapping) or token not in current:
+            return None
+        current = current[token]
+    return current if isinstance(current, Mapping) else None
+
+
+def normalize_declared_markdown(value: Any, schema: Mapping[str, Any]) -> Any:
+    """Normalize escaped newlines only in fields explicitly declared as Markdown.
+
+    Content models occasionally return ``\\n`` as literal text inside an already
+    decoded JSON string. Decoding arbitrary strings would corrupt code, paths,
+    and regular expressions, so this transformation is deliberately driven by
+    the JSON Schema ``contentMediaType`` annotation.
+    """
+    root = schema
+
+    def visit(current: Any, node: Mapping[str, Any], seen: frozenset[str]) -> Any:
+        reference = node.get("$ref")
+        if isinstance(reference, str) and reference not in seen:
+            target = _local_ref(root, reference)
+            if target is not None:
+                return visit(current, target, seen | {reference})
+
+        media_type = str(node.get("contentMediaType") or "").split(";", 1)[0].strip().lower()
+        if isinstance(current, str) and media_type == "text/markdown":
+            return current.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+
+        if isinstance(current, dict):
+            properties = node.get("properties")
+            if isinstance(properties, Mapping):
+                return {
+                    key: visit(item, properties[key], seen)
+                    if key in properties and isinstance(properties[key], Mapping)
+                    else item
+                    for key, item in current.items()
+                }
+        elif isinstance(current, list) and isinstance(node.get("items"), Mapping):
+            return [visit(item, node["items"], seen) for item in current]
+        return current
+
+    return visit(value, schema, frozenset())
+
+
 class ContentGenerationService:
     def __init__(self, root: Path, owner: str, broker: Any):
         if not owner:
@@ -144,6 +196,10 @@ class ContentGenerationService:
         record["output_text"] = text
         try:
             draft = json.loads(text)
+            if isinstance(draft, dict) and draft.get("status") == "completed":
+                draft["data"] = normalize_declared_markdown(
+                    draft.get("data"), record["request"]["schema"]
+                )
             Draft202012Validator(draft_schema(record["request"]["schema"])).validate(draft)
             if draft["status"] == "completed":
                 Draft202012Validator(record["request"]["schema"]).validate(draft["data"])

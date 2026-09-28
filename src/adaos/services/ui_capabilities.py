@@ -81,6 +81,22 @@ _IMAGE_TERMS = {
     "изображен",
     "фото",
 }
+_MEDIA_TERMS = {
+    *_IMAGE_TERMS,
+    "audio",
+    "video",
+    "media",
+    "sound",
+    "voice",
+    "\u0438\u0437\u043e\u0431\u0440\u0430\u0436",
+    "\u043a\u0430\u0440\u0442\u0438\u043d\u043a",
+    "\u0444\u043e\u0442\u043e",
+    "\u0430\u0443\u0434\u0438\u043e",
+    "\u0432\u0438\u0434\u0435\u043e",
+    "\u043c\u0435\u0434\u0438\u0430",
+    "\u0437\u0432\u0443\u043a",
+    "\u0433\u043e\u043b\u043e\u0441",
+}
 _FILTER_TERMS = {
     "filter",
     "filters",
@@ -759,6 +775,7 @@ def qualify_ui_request(
     )
     requires_drag_drop = board and _contains_any(text, _DRAG_TERMS)
     images_requested = _contains_any(text, _IMAGE_TERMS)
+    media_requested = _contains_any(text, _MEDIA_TERMS)
     requires_query = board and _contains_any(text, _FILTER_TERMS)
     all_crud = board and _contains_any(text, _CRUD_TERMS)
     operation_kinds = []
@@ -809,6 +826,12 @@ def qualify_ui_request(
         resource_scope_needs_interpretation
     )
     requirements["prototype_resource"] = prototype_resource_required
+    requirements["media_requested"] = media_requested
+    requirements["filter_requested"] = bool(
+        _contains_any(text, _FILTER_TERMS)
+        or "filter" in brief_operation_kinds
+        or "search" in brief_operation_kinds
+    )
     gaps: list[dict[str, Any]] = []
     return {
         "schema": QUALIFICATION_SCHEMA,
@@ -898,6 +921,16 @@ def selected_ui_capabilities(
         and "recipe.data_entry" not in selected_ids
     ):
         selected_ids.append("recipe.data_entry")
+    if (
+        requirements.get("media_requested")
+        and "recipe.media_records" not in selected_ids
+    ):
+        selected_ids.append("recipe.media_records")
+    if (
+        requirements.get("filter_requested")
+        and "recipe.canonical_choice_filters" not in selected_ids
+    ):
+        selected_ids.append("recipe.canonical_choice_filters")
     explicit_layouts = (
         (
             "layout.collection-detail",
@@ -1019,6 +1052,14 @@ def selected_ui_capabilities(
         "dependency_closure": [
             item_id for item_id in expanded_ids if item_id not in root_ids
         ],
+        "required_contracts": [
+            contract
+            for contract, required in (
+                ("media", requirements.get("media_requested")),
+                ("canonical_choice_filters", requirements.get("filter_requested")),
+            )
+            if required
+        ],
         "items": items,
         "repair_guidance": {
             "general": [],
@@ -1136,6 +1177,18 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(page.get("initialState"), Mapping)
             else {}
         )
+        data_source_state_refs: set[str] = set()
+        for source_widget in widgets:
+            if not isinstance(source_widget, Mapping) or not isinstance(
+                source_widget.get("dataSource"), Mapping
+            ):
+                continue
+            serialized_source = json.dumps(
+                source_widget["dataSource"], ensure_ascii=False, sort_keys=True
+            )
+            data_source_state_refs.update(
+                re.findall(r"\$state\.([A-Za-z_][A-Za-z0-9_.-]*)", serialized_source)
+            )
         controlled_state_values: dict[str, set[str]] = {}
         static_event_state_values: dict[str, set[str]] = {}
         for candidate in widgets:
@@ -1447,6 +1500,26 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                         ),
                     }
                 )
+            if widget_type == "ui.list":
+                card = inputs.get("card") if isinstance(inputs.get("card"), Mapping) else {}
+                if "imagePath" in inputs or "imagePath" in card:
+                    invalid_path = (
+                        f"{widget_path}.inputs.imagePath"
+                        if "imagePath" in inputs
+                        else f"{widget_path}.inputs.card.imagePath"
+                    )
+                    findings.append(
+                        {
+                            "code": "ui.list.image_binding_unsupported",
+                            "severity": "error",
+                            "path": invalid_path,
+                            "message": (
+                                "ui.list renders record images only from the top-level "
+                                "inputs.imageKey binding. Replace imagePath/card.imagePath "
+                                "with inputs.imageKey."
+                            ),
+                        }
+                    )
             if widget_type == "item.details" and "title" in inputs:
                 findings.append(
                     {
@@ -1459,6 +1532,58 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                         ),
                     }
                 )
+            if widget_type == "item.details":
+                media = inputs.get("media") if isinstance(inputs.get("media"), Mapping) else {}
+                if "imagePath" in inputs or "imagePath" in media:
+                    invalid_path = (
+                        f"{widget_path}.inputs.imagePath"
+                        if "imagePath" in inputs
+                        else f"{widget_path}.inputs.media.imagePath"
+                    )
+                    findings.append(
+                        {
+                            "code": "ui.details.image_binding_unsupported",
+                            "severity": "error",
+                            "path": invalid_path,
+                            "message": (
+                                "item.details renders still images only from the top-level "
+                                "inputs.imageKey binding. Replace imagePath/media.imagePath "
+                                "with inputs.imageKey."
+                            ),
+                        }
+                    )
+            if widget_type == "ui.form" and data_source_state_refs:
+                fields = inputs.get("fields") if isinstance(inputs.get("fields"), list) else []
+                form_query_keys = {
+                    str(field.get("stateKey") or field.get("state_key") or "").strip()
+                    for field in fields
+                    if isinstance(field, Mapping)
+                    and str(field.get("stateKey") or field.get("state_key") or "").strip()
+                }.intersection(data_source_state_refs)
+                explicit_query_writes = {
+                    str(key)
+                    for action in widget.get("actions") or []
+                    if isinstance(action, Mapping)
+                    and str(action.get("type") or "") == "updateState"
+                    and str(action.get("on") or "").startswith("change:")
+                    and isinstance(action.get("params"), Mapping)
+                    for key in action["params"]
+                }
+                inert_query_keys = sorted(form_query_keys - explicit_query_writes)
+                if inert_query_keys:
+                    findings.append(
+                        {
+                            "code": "ui.query.form_state_not_executable",
+                            "severity": "error",
+                            "path": f"{widget_path}.inputs.fields",
+                            "message": (
+                                "ui.form stateKey hydrates form fields but does not make them "
+                                "live query controls. Use ui.queryToolbar controls with the same "
+                                "stateKey, or add explicit change:<fieldId> updateState actions."
+                            ),
+                            "state_keys": inert_query_keys,
+                        }
+                    )
             dynamic_title = str(widget.get("title") or "").strip()
             if (
                 widget_type == "item.details"
