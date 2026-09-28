@@ -7894,6 +7894,47 @@ async def _apply_room_materialized_payload(
         return b"", {"ok": False, "ready": False, "error": f"{type(exc).__name__}: {exc}", "phase_timings_ms": phase_timings_ms}
 
 
+def _write_detached_materialization_ready_marker(
+    ydoc: Any,
+    *,
+    webspace_id: str,
+    payload: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    reason: str,
+) -> tuple[str, bool]:
+    """Make a detached payload commit reusable by the next cold YRoom.
+
+    Candidate promotion can materialize the authoritative document before a
+    browser exists.  Persist the same readiness marker used by room bootstrap
+    so the first browser validates the committed snapshot instead of resolving
+    every semantic source a second time under update I/O pressure.
+    """
+
+    payload_ui = payload.get("ui") if isinstance(payload.get("ui"), Mapping) else {}
+    committed_scenario = str(
+        payload_ui.get("current_scenario")
+        or snapshot.get("current_scenario")
+        or payload.get("scenario_id")
+        or ""
+    ).strip()
+    changed = write_runtime_bootstrap_state(
+        ydoc,
+        webspace_id=webspace_id,
+        scenario_id=committed_scenario or "web_desktop",
+        state="ready",
+        stage="detached_materialization_commit",
+        ready=True,
+        mode="materialized_payload",
+        extra={
+            "space": str(payload.get("source_mode") or "workspace").strip()
+            or "workspace",
+            "reason": str(reason or "detached_materialization").strip(),
+            "room_effective_materialized": True,
+        },
+    )
+    return committed_scenario, bool(changed)
+
+
 def _apply_materialized_payload_detached_sync(
     webspace_id: str,
     payload: Mapping[str, Any],
@@ -7963,17 +8004,34 @@ def _apply_materialized_payload_detached_sync(
                 }
 
             stage_started = time.perf_counter()
+            committed_scenario, bootstrap_marker_changed = (
+                _write_detached_materialization_ready_marker(
+                    ydoc,
+                    webspace_id=webspace_id,
+                    payload=payload,
+                    snapshot=snapshot,
+                    reason=reason,
+                )
+            )
+            phase_timings_ms["bootstrap_ready_marker"] = _elapsed_ms_since(stage_started)
+
+            stage_started = time.perf_counter()
             update = bytes(Y.encode_state_as_update(ydoc, before) or b"")
             phase_timings_ms["encode_update"] = _elapsed_ms_since(stage_started)
 
+            # Detached startup hydration has no live room that can own a
+            # later compaction.  Returning only the incremental update leaves
+            # the next cold room to replay the previous snapshot plus this
+            # diff and makes a stale/corrupt history part of first paint.
+            # Carry a self-contained snapshot back to the async owner so it
+            # can atomically replace the persisted update log after the
+            # synchronous get_ydoc() context has flushed its diff.
+            stage_started = time.perf_counter()
+            full_state_update = bytes(Y.encode_state_as_update(ydoc) or b"")
+            state_vector = bytes(Y.encode_state_vector(ydoc) or b"")
+            phase_timings_ms["encode_full_state_update"] = _elapsed_ms_since(stage_started)
+
         phase_timings_ms["total"] = _elapsed_ms_since(total_started)
-        payload_ui = payload.get("ui") if isinstance(payload.get("ui"), Mapping) else {}
-        committed_scenario = str(
-            payload_ui.get("current_scenario")
-            or snapshot.get("current_scenario")
-            or payload.get("scenario_id")
-            or ""
-        ).strip()
         return update, {
             "ok": True,
             "ready": True,
@@ -7984,7 +8042,11 @@ def _apply_materialized_payload_detached_sync(
             "phase_timings_ms": phase_timings_ms,
             "worker_thread_id": worker_thread_id,
             "committed_scenario": committed_scenario,
+            "bootstrap_ready_marker_changed": bool(bootstrap_marker_changed),
             "update_bytes": len(update),
+            "snapshot_bytes": len(full_state_update),
+            "_snapshot_update": full_state_update,
+            "_state_vector": state_vector,
         }
     except BaseException as exc:
         if _is_control_flow_base_exception(exc):
@@ -8111,6 +8173,54 @@ async def _update_live_webspace_effective_branches(
                     reason=reason,
                     materialization_identity=materialization_identity,
                 )
+                snapshot_update = bytes(detached_result.pop("_snapshot_update", b"") or b"")
+                state_vector = bytes(detached_result.pop("_state_vector", b"") or b"")
+                snapshot_persisted = False
+                snapshot_result: dict[str, Any] | None = None
+                if bool(detached_result.get("ready")) and snapshot_update:
+                    snapshot_started = time.perf_counter()
+                    try:
+                        ystore = get_ystore_for_webspace(key)
+                        async with ystore_write_metadata(
+                            root_names=["ui", "data", "registry", "runtime"],
+                            source=f"yjs.gateway_ws.{reason}.detached_materialized_snapshot",
+                            owner="core:yjs_gateway",
+                            channel="core.yjs.gateway.detached_materialized_snapshot",
+                            governed=True,
+                        ):
+                            replace_result = await ystore.replace_snapshot_update(
+                                snapshot_update,
+                                state_vector=state_vector or None,
+                                backup_kind=f"{reason}.detached_materialized_snapshot",
+                                persist_snapshot=True,
+                                notify=False,
+                            )
+                        snapshot_result = (
+                            dict(replace_result)
+                            if isinstance(replace_result, Mapping)
+                            else {"ok": replace_result is not None}
+                        )
+                        snapshot_persisted = bool(snapshot_result.get("ok"))
+                    except Exception as exc:
+                        snapshot_result = {
+                            "ok": False,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                        _ylog.warning(
+                            "failed to replace detached materialized Yjs snapshot webspace=%s reason=%s",
+                            key,
+                            reason,
+                            exc_info=True,
+                        )
+                    phase_timings_ms["persist_detached_snapshot"] = _elapsed_ms_since(snapshot_started)
+                else:
+                    phase_timings_ms["persist_detached_snapshot"] = 0.0
+                detached_result["snapshot_persisted"] = snapshot_persisted
+                detached_result["snapshot_persist_result"] = snapshot_result
+                if bool(detached_result.get("ready")) and snapshot_update and not snapshot_persisted:
+                    detached_result["ready"] = False
+                    detached_result["ok"] = False
+                    detached_result["error"] = "detached_materialized_snapshot_not_persisted"
                 phase_timings_ms["room_create"] = 0.0
                 phase_timings_ms["detached_apply"] = _elapsed_ms_since(stage_started)
                 phase_timings_ms["total"] = _elapsed_ms_since(total_started)

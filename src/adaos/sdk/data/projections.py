@@ -666,7 +666,13 @@ class ProjectionRuntime:
         self._clock = clock or time.monotonic
         self._fingerprints: dict[tuple[str, str], str] = {}
         self._last_write_at: dict[tuple[str, str], float] = {}
-        self._write_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        # Projection runtimes are process singletons, but callers can arrive
+        # from the main runtime loop and from lifecycle/background worker
+        # loops.  asyncio.Lock binds to the first contended loop and then
+        # fails after a worker handoff.  A non-blocking-polled thread lock
+        # preserves per-slot serialization across event loops without ever
+        # blocking either loop's thread.
+        self._write_locks: dict[tuple[str, str], threading.Lock] = {}
         self._pending_refresh: dict[tuple[str, tuple[str, ...]], asyncio.Task[ProjectionRefreshResult]] = {}
         self._projections: dict[str, ProjectionSlot] = {}
         self._dispatcher_handlers: set[str] = set()
@@ -1099,10 +1105,12 @@ class ProjectionRuntime:
         with self._lock:
             write_lock = self._write_locks.get(key)
             if write_lock is None:
-                write_lock = asyncio.Lock()
+                write_lock = threading.Lock()
                 self._write_locks[key] = write_lock
 
-        async with write_lock:
+        while not write_lock.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+        try:
             return await self._set_if_changed_serialized(
                 slot_name=slot_name,
                 ws_id=ws_id,
@@ -1113,6 +1121,8 @@ class ProjectionRuntime:
                 force=force,
                 reason=reason,
             )
+        finally:
+            write_lock.release()
 
     async def _set_if_changed_serialized(
         self,

@@ -283,6 +283,41 @@ def test_bootstrap_trusts_nested_required_paths_from_ready_marker(monkeypatch) -
     assert store.write_calls == 0
 
 
+def test_persisted_effective_state_status_reports_bounded_rejection_reason() -> None:
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("ui").set(txn, "current_scenario", "web_desktop")
+        ydoc.get_map("runtime").set(
+            txn,
+            "environment",
+            {
+                "materialization": {
+                    "scenario_id": "web_desktop",
+                    "required_branches": ["ui.application"],
+                }
+            },
+        )
+        ydoc.get_map("runtime").set(
+            txn,
+            bootstrap_module.BOOTSTRAP_RUNTIME_KEY,
+            {
+                "scenario_id": "web_desktop",
+                "ready": True,
+                "stage": "detached_materialization_commit",
+            },
+        )
+
+    ready, reason, details = bootstrap_module._persisted_effective_state_status(
+        ydoc,
+        scenario_id="web_desktop",
+    )
+
+    assert ready is False
+    assert reason == "missing_required_branch"
+    assert details["missing_required_branch"] == "ui.application"
+    assert details["bootstrap_stage"] == "detached_materialization_commit"
+
+
 def test_bootstrap_requires_fresh_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
     class _PanicAfterPartialApplyStore(_FakeStore):
         def __init__(self) -> None:

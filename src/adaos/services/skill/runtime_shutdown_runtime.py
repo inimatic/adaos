@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, Iterable
 
@@ -41,12 +42,22 @@ def _shutdown_active_skills(*, reason: str, event_type: str, hooks: Iterable[str
 
 
 @subscribe("subnet.draining")
-def _on_subnet_draining(payload: Dict[str, Any]) -> None:
+async def _on_subnet_draining(payload: Dict[str, Any]) -> None:
     reason = str((payload or {}).get("reason") or "runtime_draining").strip() or "runtime_draining"
-    _shutdown_active_skills(reason=reason, event_type="subnet.draining", hooks=("drain",))
+    await asyncio.to_thread(
+        _shutdown_active_skills,
+        reason=reason,
+        event_type="subnet.draining",
+        hooks=("drain",),
+    )
 
 
 @subscribe("subnet.stopping")
-def _on_subnet_stopping(payload: Dict[str, Any]) -> None:
+async def _on_subnet_stopping(payload: Dict[str, Any]) -> None:
     reason = str((payload or {}).get("reason") or "runtime_stopping").strip() or "runtime_stopping"
-    _shutdown_active_skills(reason=reason, event_type="subnet.stopping", hooks=("dispose", "before_deactivate"))
+    await asyncio.to_thread(
+        _shutdown_active_skills,
+        reason=reason,
+        event_type="subnet.stopping",
+        hooks=("dispose", "before_deactivate"),
+    )

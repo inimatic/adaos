@@ -270,12 +270,16 @@ def _project_runtime_environment(ydoc: Y.YDoc) -> bool:
     return True
 
 
-def _persisted_effective_state_ready(ydoc: Y.YDoc, *, scenario_id: str) -> bool:
-    """Validate a materialized snapshot without decoding its large branches."""
+def _persisted_effective_state_status(
+    ydoc: Y.YDoc,
+    *,
+    scenario_id: str,
+) -> tuple[bool, str, dict[str, Any]]:
+    """Validate a materialized snapshot and retain a bounded rejection cause."""
 
     expected = str(scenario_id or "").strip()
     if not expected:
-        return False
+        return False, "missing_expected_scenario", {}
     try:
         ui_map = ydoc.get_map("ui")
         runtime_map = ydoc.get_map("runtime")
@@ -285,28 +289,53 @@ def _persisted_effective_state_ready(ydoc: Y.YDoc, *, scenario_id: str) -> bool:
         materialized = str(materialization.get("scenario_id") or "").strip()
         bootstrap = _coerce_dict(runtime_map.get(BOOTSTRAP_RUNTIME_KEY) or {})
         bootstrap_scenario = str(bootstrap.get("scenario_id") or "").strip()
-        if current != expected or materialized != expected:
-            return False
-        if not bool(bootstrap.get("ready")) or bootstrap_scenario != expected:
-            return False
+        details = {
+            "expected_scenario": expected,
+            "current_scenario": current or None,
+            "materialized_scenario": materialized or None,
+            "bootstrap_scenario": bootstrap_scenario or None,
+            "bootstrap_ready": bool(bootstrap.get("ready")),
+            "bootstrap_stage": str(bootstrap.get("stage") or "").strip() or None,
+        }
+        if current != expected:
+            return False, "current_scenario_mismatch", details
+        if materialized != expected:
+            return False, "materialized_scenario_mismatch", details
+        if not bool(bootstrap.get("ready")):
+            return False, "bootstrap_not_ready", details
+        if bootstrap_scenario != expected:
+            return False, "bootstrap_scenario_mismatch", details
         required = materialization.get("required_branches")
         if not isinstance(required, list) or not required:
-            return False
+            return False, "missing_required_branches_contract", details
         root_keys: dict[str, set[str]] = {}
         for raw_path in required:
             parts = [part for part in str(raw_path or "").split(".") if part]
             if len(parts) < 2:
-                return False
+                details["invalid_required_branch"] = str(raw_path or "")[:160]
+                return False, "invalid_required_branch", details
             root_name, key = parts[:2]
             keys = root_keys.get(root_name)
             if keys is None:
                 keys = {str(item) for item in ydoc.get_map(root_name).keys()}
                 root_keys[root_name] = keys
             if key not in keys:
-                return False
-        return True
-    except Exception:
-        return False
+                details["missing_required_branch"] = f"{root_name}.{key}"
+                return False, "missing_required_branch", details
+        details["required_branch_count"] = len(required)
+        return True, "ready", details
+    except Exception as exc:
+        return False, "validation_error", {"error_type": type(exc).__name__}
+
+
+def _persisted_effective_state_ready(ydoc: Y.YDoc, *, scenario_id: str) -> bool:
+    """Validate a materialized snapshot without decoding its large branches."""
+
+    ready, _reason, _details = _persisted_effective_state_status(
+        ydoc,
+        scenario_id=scenario_id,
+    )
+    return ready
 
 
 def _encode_bootstrap_diff(ydoc: Y.YDoc, before_state_vector: bytes | None) -> bytes | None:
@@ -497,11 +526,13 @@ async def ensure_webspace_seeded_from_scenario(
             ui_map.set(txn, "current_scenario", requested_scenario_id)
         current_scenario_overridden = True
         result["current_scenario_overridden"] = True
-    if not current_scenario_overridden and _persisted_effective_state_ready(
+    persisted_ready, persisted_reason, persisted_details = _persisted_effective_state_status(
         target_doc,
         scenario_id=requested_scenario_id,
-    ):
+    )
+    if not current_scenario_overridden and persisted_ready:
         result["persisted_effective_state_ready"] = True
+        result["persisted_effective_state_reason"] = persisted_reason
         if runtime_environment_changed:
             result["persisted_via"] = await _persist_bootstrap_seed_update(
                 ystore,
@@ -509,6 +540,11 @@ async def ensure_webspace_seeded_from_scenario(
                 before_state_vector=before_state_vector,
             )
         return _finish("persisted_effective_state")
+    result["persisted_effective_state_ready"] = False
+    result["persisted_effective_state_reason"] = (
+        "current_scenario_overridden" if current_scenario_overridden else persisted_reason
+    )
+    result["persisted_effective_state_details"] = persisted_details
 
     application = ui_map.get("application")
     bootstrap_marker_changed = write_runtime_bootstrap_state(
@@ -578,9 +614,16 @@ async def ensure_webspace_seeded_from_scenario(
                 before_state_vector=before_state_vector,
             )
         _log.info(
-            "webspace %s reused projected scenario seed for %s; room owner will materialize effective branches",
+            "webspace %s reused projected scenario seed for %s; room owner will materialize effective branches "
+            "persisted_rejection=%s details=%s",
             webspace_id,
             requested_scenario_id,
+            result.get("persisted_effective_state_reason"),
+            json.dumps(
+                result.get("persisted_effective_state_details") or {},
+                ensure_ascii=True,
+                sort_keys=True,
+            )[:800],
         )
         return _finish("projected_seed_reuse")
 

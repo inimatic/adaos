@@ -2969,6 +2969,58 @@ def test_materialized_payload_without_transport_commits_in_worker_without_room(m
         gateway_module._AUTHORITATIVE_SCENARIO_LEASES.pop(key, None)
 
 
+def test_detached_materialized_payload_replaces_persisted_snapshot(monkeypatch) -> None:
+    key = "gateway-detached-snapshot"
+    gateway_module.y_server.rooms.pop(key, None)
+    gateway_module._room_locks.pop(key, None)
+    replacements: list[dict[str, object]] = []
+
+    class _FakeStore:
+        async def replace_snapshot_update(self, snapshot: bytes, **kwargs):
+            replacements.append({"snapshot": bytes(snapshot), **kwargs})
+            return {"ok": True, "snapshot_bytes": len(snapshot)}
+
+    def _fake_detached(_webspace_id, _payload, **_kwargs):
+        return b"detached-diff", {
+            "ok": True,
+            "ready": True,
+            "committed_scenario": "web_desktop",
+            "worker_thread_id": threading.get_ident(),
+            "_snapshot_update": b"complete-snapshot",
+            "_state_vector": b"state-vector",
+        }
+
+    monkeypatch.setattr(gateway_module, "_webspace_has_live_transports", lambda _key: False)
+    monkeypatch.setattr(gateway_module, "_apply_materialized_payload_detached_sync", _fake_detached)
+    monkeypatch.setattr(gateway_module, "get_ystore_for_webspace", lambda _key: _FakeStore())
+
+    try:
+        result = asyncio.run(
+            gateway_module.apply_materialized_payload_to_live_room(
+                key,
+                {"scenario_id": "web_desktop", "ui": {"current_scenario": "web_desktop"}},
+                reason="startup_materialization_hydration",
+            )
+        )
+
+        assert result["ok"] is True
+        assert result["materialized_payload"]["snapshot_persisted"] is True
+        assert "_snapshot_update" not in result["materialized_payload"]
+        assert "_state_vector" not in result["materialized_payload"]
+        assert replacements == [
+            {
+                "snapshot": b"complete-snapshot",
+                "state_vector": b"state-vector",
+                "backup_kind": "startup_materialization_hydration.detached_materialized_snapshot",
+                "persist_snapshot": True,
+                "notify": False,
+            }
+        ]
+    finally:
+        gateway_module._room_locks.pop(key, None)
+        gateway_module._AUTHORITATIVE_SCENARIO_LEASES.pop(key, None)
+
+
 def test_reconcile_without_transport_defers_without_room_creation(monkeypatch) -> None:
     key = "gateway-detached-reconcile"
     gateway_module.y_server.rooms.pop(key, None)
@@ -3514,6 +3566,44 @@ def test_room_bootstrap_reuses_matching_persisted_effective_state(monkeypatch) -
     assert seed_result["room_effective_reused"] is True
     assert seed_result["room_effective_materialized"] is False
     assert gateway_module._room_effective_branches_ready(ydoc) is True
+
+
+def test_detached_materialization_commit_persists_cold_room_ready_marker() -> None:
+    import y_py as Y
+
+    from adaos.services.yjs.bootstrap import _persisted_effective_state_ready
+
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("ui").set(txn, "current_scenario", "web_desktop")
+        ydoc.get_map("ui").set(txn, "application", {"desktop": {}})
+        ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+        ydoc.get_map("runtime").set(
+            txn,
+            "environment",
+            {
+                "materialization": {
+                    "scenario_id": "web_desktop",
+                    "required_branches": ["ui.application", "data.catalog"],
+                }
+            },
+        )
+
+    scenario_id, changed = gateway_module._write_detached_materialization_ready_marker(
+        ydoc,
+        webspace_id="desktop",
+        payload={"scenario_id": "web_desktop", "source_mode": "workspace"},
+        snapshot={"ready": True, "current_scenario": "web_desktop"},
+        reason="candidate_promotion:startup_materialization_hydration",
+    )
+
+    bootstrap = ydoc.get_map("runtime").get("bootstrap")
+    assert scenario_id == "web_desktop"
+    assert changed is True
+    assert bootstrap["ready"] is True
+    assert bootstrap["stage"] == "detached_materialization_commit"
+    assert bootstrap["reason"] == "candidate_promotion:startup_materialization_hydration"
+    assert _persisted_effective_state_ready(ydoc, scenario_id="web_desktop") is True
 
 
 def test_room_bootstrap_accepts_bootstrap_validated_persisted_state(monkeypatch) -> None:

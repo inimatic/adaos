@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import threading
 
 import pytest
 
@@ -159,6 +160,53 @@ def test_projection_runtime_serializes_concurrent_identical_slot_writes() -> Non
     assert first.written is True
     assert second.skipped is True
     assert second.reason == "unchanged"
+    assert subnet.calls == [("infrastate.summary", {"state": "ok"}, "desktop")]
+
+
+def test_projection_runtime_serializes_same_slot_across_event_loops() -> None:
+    class _CrossLoopSubnet(_FakeSubnet):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        async def set_async(self, slot: str, value: object, *, webspace_id: str | None = None) -> None:
+            self.started.set()
+            await asyncio.to_thread(self.release.wait, 2.0)
+            await super().set_async(slot, value, webspace_id=webspace_id)
+
+    subnet = _CrossLoopSubnet()
+    runtime = ProjectionRuntime("infrastate_skill", ctx_subnet=subnet)
+    runtime.remember_projection(
+        "infrastate.summary", webspace_id="desktop", subscription_id="test"
+    )
+    results: list[object] = []
+
+    def _write() -> None:
+        results.append(
+            asyncio.run(
+                runtime.set_if_changed(
+                    "infrastate.summary",
+                    {"state": "ok"},
+                    webspace_id="desktop",
+                )
+            )
+        )
+
+    first = threading.Thread(target=_write)
+    second = threading.Thread(target=_write)
+    first.start()
+    assert subnet.started.wait(timeout=1.0)
+    second.start()
+    subnet.release.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert len(results) == 2
+    assert sum(bool(getattr(item, "written", False)) for item in results) == 1
+    assert sum(bool(getattr(item, "skipped", False)) for item in results) == 1
     assert subnet.calls == [("infrastate.summary", {"state": "ok"}, "desktop")]
 
 

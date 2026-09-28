@@ -1896,6 +1896,37 @@ Handle artifact provenance, scenario UX, and runtime lifecycle after the communi
 - [ ] `[should]` Preserve scenario install/open state through reload and
   rebuild of current Yjs projection.
 
+### Production checkpoint: restart and first-paint reuse (2026-09-28)
+
+The `.30` production hub exposed a redundant cold-start path: startup
+hydration committed effective desktop branches as an incremental Yjs update,
+but the first browser replay could not treat that commit as a complete durable
+materialization and resolved the same semantic sources again. The repaired
+contract is:
+
+- detached hydration writes the same bounded `runtime.bootstrap` readiness
+  evidence as room-owned materialization;
+- after a successful detached apply, the YStore update log is atomically
+  replaced by one complete snapshot and state vector;
+- cold-room admission validates scenario identity, materialization identity,
+  readiness and declared top-level branches, and reports the exact bounded
+  rejection reason when reuse is unsafe;
+- `ProjectionRuntime` serializes a `(webspace, slot)` across event loops, not
+  only within one loop. This prevents a lifecycle/background worker from
+  inheriting an `asyncio.Lock` owned by a different loop and leaving Infra
+  State on stale first-paint data.
+
+The same checkpoint removed a separate boot amplification: a git-authoritative
+workspace now filters its immutable `registry.json` by materialized manifest
+presence instead of reparsing every sparse-checkout manifest. On `.30`,
+`bootstrap_reconcile_workspace_registry` fell from `9.199 s` to `0.065-0.066 s`.
+With a valid durable desktop snapshot, the following restart opened the first
+YRoom without semantic rematerialization; the boot sequence fell from
+`46.567 s` under the incident load to `3.378 s`, and the first Home Application
+read fell from `14.068 s` to `0.926 s` (`0.186-0.358 s` warm). These numbers are
+operational evidence, not a universal latency guarantee: the host still showed
+material I/O pressure, which must remain separately observable.
+
 ### Candidate code areas
 
 - `src/adaos/services/skill/manager.py`

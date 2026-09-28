@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from adaos.services.skill import runtime_shutdown_runtime as runtime_module
 
 
@@ -27,7 +29,7 @@ def test_runtime_shutdown_runtime_maps_draining_to_drain_hook(monkeypatch) -> No
     fake = _FakeManager()
     monkeypatch.setattr(runtime_module, "_manager", lambda: fake)
 
-    runtime_module._on_subnet_draining({"reason": "core_update_prepare"})
+    asyncio.run(runtime_module._on_subnet_draining({"reason": "core_update_prepare"}))
 
     assert fake.calls == [
         {
@@ -42,7 +44,7 @@ def test_runtime_shutdown_runtime_maps_stopping_to_dispose_chain(monkeypatch) ->
     fake = _FakeManager()
     monkeypatch.setattr(runtime_module, "_manager", lambda: fake)
 
-    runtime_module._on_subnet_stopping({"reason": "admin_shutdown"})
+    asyncio.run(runtime_module._on_subnet_stopping({"reason": "admin_shutdown"}))
 
     assert fake.calls == [
         {

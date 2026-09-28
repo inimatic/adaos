@@ -527,12 +527,95 @@ def effective_registry_names(ctx, registry_names: list[str], workspace_root: Pat
     return [], False
 
 
+def _materialized_authoritative_registry_entries(
+    workspace_root: Path,
+    registry_payload: Mapping[str, Any],
+    *,
+    kind: str,
+) -> list[dict[str, Any]]:
+    """Filter a shared registry index to artifacts present in this sparse checkout.
+
+    Production ``registry.json`` is the immutable metadata authority, while a
+    sparse workspace contains only the selected runtime closure.  Directory
+    and manifest presence are sufficient to distinguish that closure; parsing
+    every manifest again on each boot duplicates registry work and turns disk
+    pressure into startup latency.
+    """
+
+    default_manifest = "skill.yaml" if kind == "skills" else "scenario.yaml"
+    root = Path(workspace_root).resolve()
+    entries: list[dict[str, Any]] = []
+    raw_entries = registry_payload.get(kind)
+    if not isinstance(raw_entries, list):
+        return entries
+    registry_dict = dict(registry_payload)
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        identity = str(entry.get("id") or entry.get("name") or "").strip()
+        install_name, _matched = resolve_registry_payload_install_name(
+            registry_dict,
+            kind=kind,
+            name_or_id=identity,
+        )
+        install_name = str(install_name or "").strip()
+        if not install_name or not _ARTIFACT_NAME_RE.fullmatch(install_name):
+            continue
+        artifact_dir = (root / kind / install_name).resolve()
+        try:
+            artifact_dir.relative_to(root)
+        except ValueError:
+            continue
+        if not artifact_dir.is_dir():
+            continue
+        manifest_value = str(entry.get("manifest") or "").strip().replace("\\", "/")
+        manifest_path: Path | None = None
+        if manifest_value:
+            candidate = (root / manifest_value).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                candidate = Path()
+            if candidate.is_file():
+                manifest_path = candidate
+        if manifest_path is None:
+            candidate = artifact_dir / default_manifest
+            if candidate.is_file():
+                manifest_path = candidate
+        if manifest_path is None:
+            continue
+        entries.append(entry)
+    return entries
+
+
 def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
     workspace_root = Path(ctx.paths.workspace_dir())
-    payload = rebuild_workspace_registry(workspace_root)
     registry_is_authoritative = workspace_registry_is_git_tracked(workspace_root)
-    if not registry_is_authoritative:
+    if registry_is_authoritative:
+        authoritative_registry = load_workspace_registry(
+            workspace_root,
+            fallback_to_scan=False,
+        )
+        payload: dict[str, Any] = {
+            **authoritative_registry,
+            "skills": _materialized_authoritative_registry_entries(
+                workspace_root,
+                authoritative_registry,
+                kind="skills",
+            ),
+            "scenarios": _materialized_authoritative_registry_entries(
+                workspace_root,
+                authoritative_registry,
+                kind="scenarios",
+            ),
+        }
+        registry_load_mode = "authoritative_index"
+    else:
+        payload = rebuild_workspace_registry(workspace_root)
         write_workspace_registry(workspace_root, payload)
+        authoritative_registry = payload
+        registry_load_mode = "materialized_scan"
 
     skill_entries = payload.get("skills") if isinstance(payload.get("skills"), list) else []
     scenario_entries = payload.get("scenarios") if isinstance(payload.get("scenarios"), list) else []
@@ -592,11 +675,6 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
         scenario_registry.unregister(name)
 
     try:
-        authoritative_registry = (
-            load_workspace_registry(workspace_root, fallback_to_scan=False)
-            if registry_is_authoritative
-            else payload
-        )
         runtime_requirements = _runtime_requirement_status(
             workspace_root,
             materialized_skills=set(materialized_skills),
@@ -631,6 +709,7 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
         "registry_updated_at": payload.get("updated_at"),
         "registry_persisted": not registry_is_authoritative,
         "registry_authority": "git" if registry_is_authoritative else "materialized_workspace",
+        "registry_load_mode": registry_load_mode,
         "runtime_requirements": runtime_requirements,
     }
 

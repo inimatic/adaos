@@ -1694,10 +1694,16 @@ def test_reconcile_workspace_db_preserves_git_authoritative_catalog(tmp_path: Pa
     sql = _Sql(tmp_path / "adaos.db")
     ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace), sql=sql)
     monkeypatch.setattr(workspace_sync_module, "workspace_registry_is_git_tracked", lambda _root: True)
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "rebuild_workspace_registry",
+        lambda _root: pytest.fail("git-authoritative startup must not rescan manifests"),
+    )
 
     result = reconcile_workspace_db_to_materialized(ctx)
 
     assert result["registry_persisted"] is False
     assert result["registry_authority"] == "git"
+    assert result["registry_load_mode"] == "authoritative_index"
     assert catalog_path.read_bytes() == original
     assert [row.name for row in SqliteSkillRegistry(sql).list()] == ["weather_skill"]
