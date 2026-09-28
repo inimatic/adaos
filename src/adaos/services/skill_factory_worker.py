@@ -8989,7 +8989,7 @@ No secret, placeholder code or blocker-report files. Use
 5. Search compact MCP headers, then read the selected method. Repeat for independently needed contracts and reuse prior results. Empty search/catalog headers are not proof of a missing capability: narrow the query or read the admitted public symbol before reporting a blocker.
 6. Use `ADAOS_PYTHON`, commit-bound `ADAOS_REPO_ROOT`/`PYTHONPATH`, `skill_data_root()` and ContentRef. Runtime files belong under `ADAOS_BASE_DIR`/`ADAOS_TASK_RUNTIME_DIR`. Declare imports, tools and data routes.
 7. Implement the behavior and focused coverage. Use `ADAOS_PYTHON` for bounded checks within {generated_test_timeout_seconds} seconds; inspect only scoped diff/status. Candidate checks are diagnostic. The trusted worker reruns tests and install-strict validation; independent acceptance owns browser journeys and deployed-runtime checks.
-8. Honor the application_permissions context facet: align Project declarations with inferred capabilities, enforce roles in tools, and test the access matrix.
+8. For application_permissions, Project uses permission_profile/application_roles, never application_permissions. Align capabilities, tool roles and access tests.
 9. No publication, installation, activation or external IO beyond the admitted read-only MCP discovery; the trusted worker owns finalization and rollback evidence.
 10. Map each acceptance point to source/test or a blocker. These are implementation claims, not passing checks. Explicitly mark checks not executed. Never claim browser, restart or authorization success without evidence; report unsupported requirements."""
             )

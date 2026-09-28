@@ -6268,7 +6268,9 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
         json.dumps(development_feedback_model_rules(), separators=(",", ":")) in prompt
     )
     assert "Candidate checks are diagnostic" in prompt
-    assert "application_permissions context facet" in prompt
+    assert "For application_permissions" in prompt
+    assert "Project uses permission_profile/application_roles" in prompt
+    assert "never application_permissions" in prompt
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
     assert "UTF-8" in prompt
