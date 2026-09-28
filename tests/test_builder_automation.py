@@ -7784,6 +7784,15 @@ def test_finalize_prepares_materialized_runtime_then_notifies(
     saved: list[dict] = []
 
     monkeypatch.setattr(
+        "adaos.services.core_update_policy.current_env_type", lambda: "dev"
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_reconcile_completed_workflow",
+        lambda self, session: None,
+    )
+
+    monkeypatch.setattr(
         BuilderAutomationService,
         "_checkpoint_completed_artifacts",
         lambda self, session: calls.append("checkpoint")
@@ -10472,6 +10481,11 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
 
     monkeypatch.setattr(
         "adaos.services.core_update_policy.current_env_type", lambda: "dev"
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_reconcile_completed_workflow",
+        lambda self, session: None,
     )
     monkeypatch.setattr(
         BuilderAutomationService,

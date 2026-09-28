@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 import pytest
 import yaml
+from click import unstyle
 from typer.testing import CliRunner
 
 from adaos.apps.cli.commands import builder as builder_cli
@@ -695,7 +696,7 @@ def test_builder_e2e_cli_is_registered() -> None:
     result = CliRunner().invoke(builder_cli.app, ["e2e", "--help"])
 
     assert result.exit_code == 0
-    assert "--baseline" in result.stdout
+    assert "--baseline" in unstyle(result.stdout)
     assert "--repetitions" in result.stdout
     assert "--resume" in result.stdout
     assert "--run-id" in result.stdout

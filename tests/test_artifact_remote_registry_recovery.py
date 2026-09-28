@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from adaos.apps.cli.commands import maintenance as maintenance_cli
@@ -409,7 +410,7 @@ def test_maintenance_cli_requires_reviewed_digest_before_remote_recovery(
     assert planned.exit_code == 0, planned.output
     assert json.loads(planned.output)["action"] == "restore_remote_registry"
     assert rejected.exit_code != 0
-    assert "reviewed-plan-digest" in rejected.output
+    assert "reviewed-plan-digest" in unstyle(rejected.output)
     assert applied.exit_code == 0, applied.output
     assert revalidation_rejected.exit_code != 0
     assert "--confirm" in revalidation_rejected.output

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from adaos.apps.cli.commands import dev_project
@@ -669,7 +670,7 @@ def test_dev_project_promote_requires_confirmation(monkeypatch) -> None:
     result = CliRunner().invoke(dev_project.app, ["promote", "candidate.kanban"])
 
     assert result.exit_code == 2
-    assert "requires explicit --confirm" in result.output
+    assert "requires explicit --confirm" in unstyle(result.output)
 
 
 def test_dev_project_promote_passes_permission_receipt(monkeypatch) -> None:
@@ -726,7 +727,7 @@ def test_dev_project_publish_requires_confirmation(monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "source registry publication requires explicit" in result.output
-    assert "--confirm" in result.output
+    assert "--confirm" in unstyle(result.output)
 
 
 def test_dev_project_publish_uses_exact_candidate_and_registry_target(monkeypatch) -> None:

@@ -782,7 +782,7 @@ def test_development_ticket_api_redacts_legacy_host_absolute_evidence_paths(tmp_
     assert ref["id"] == ".adaos/tasks/task.01M2PFNWR6HCPG1GX2JQG071ED/test_report.json"
     assert ref["logical_path"] == ref["id"]
     assert "path" not in ref
-    assert "D:" not in json.dumps(shown.json())
+    assert absolute not in json.dumps(shown.json())
 
 
 def test_development_ticket_api_updates_summary_and_keeps_artifact_refs(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from adaos.apps.cli.commands import skill as skill_cmd
@@ -170,7 +171,7 @@ def test_skill_install_recovery_requires_tests_and_allows_deactivated_prepare(mo
         ["install", "demo_skill", "--source", "workspace", "--local", "--recover", "--silent"],
     )
     assert rejected.exit_code != 0
-    assert "--recover requires --test" in rejected.output
+    assert "--recover requires --test" in unstyle(rejected.output)
 
     recovered = CliRunner().invoke(
         skill_cmd.app,

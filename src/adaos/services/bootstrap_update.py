@@ -106,6 +106,7 @@ UPDATE_CONTROL_PATHS: tuple[str, ...] = (
 RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/domain/__init__.py",
     "src/adaos/domain/application.py",
+    "src/adaos/domain/application_setup.py",
     "src/adaos/domain/artifact_release.py",
     "src/adaos/domain/conversation.py",
     "src/adaos/domain/development_report.py",

@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+INFRA_ROOT = REPO_ROOT / "src" / "adaos" / "integrations" / "infra-inimatic"
+
+if not (INFRA_ROOT / "vhost.d" / "api.inimatic.com").is_file():
+    pytest.skip(
+        "private infra-inimatic submodule is not available in this checkout",
+        allow_module_level=True,
+    )
 
 
 def _read(rel_path: str) -> str:

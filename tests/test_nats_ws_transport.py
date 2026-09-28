@@ -181,6 +181,11 @@ class _InboundBurstWebsocketsWS:
         self.recv_calls += 1
         if self.recv_calls == 1:
             self._transport.write(self._payload)
+        if self.recv_calls > 64:
+            # Keep the burst finite.  An unbounded zero-delay producer can
+            # survive a failed assertion and starve every later async test in
+            # the same pytest event loop.
+            await asyncio.Future()
         await asyncio.sleep(0)
         return b"MSG route.to_browser 1 2\r\nok\r\n"
 
@@ -442,15 +447,16 @@ async def test_websockets_transport_sends_between_inbound_burst_frames() -> None
     ws = _InboundBurstWebsocketsWS(transport, payload)
     transport._ws = ws
 
-    data = await asyncio.wait_for(transport.readline(), timeout=1.0)
+    try:
+        data = await asyncio.wait_for(transport.readline(), timeout=1.0)
 
-    assert data == b"MSG route.to_browser 1 2\r\nok\r\n"
-    await asyncio.wait_for(_wait_until(lambda: ws.sent == [payload]), timeout=1.0)
-    assert ws.recv_calls >= 2
-
-    if transport._io_task is not None:
-        transport._io_task.cancel()
-        await asyncio.gather(transport._io_task, return_exceptions=True)
+        assert data == b"MSG route.to_browser 1 2\r\nok\r\n"
+        await asyncio.wait_for(_wait_until(lambda: ws.sent == [payload]), timeout=1.0)
+        assert ws.recv_calls >= 2
+    finally:
+        if transport._io_task is not None:
+            transport._io_task.cancel()
+            await asyncio.gather(transport._io_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
