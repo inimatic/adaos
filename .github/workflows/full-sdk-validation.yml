@@ -23,7 +23,7 @@ jobs:
       matrix:
         index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 3
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.adaos/build/y-py-target
       PYTHONIOENCODING: utf-8
@@ -61,7 +61,7 @@ jobs:
             --index "${{ matrix.index }}" \
             --total 20 \
             -- \
-            -q \
+            -vv \
             --strict-markers \
             -o importmode=importlib \
             -o faulthandler_timeout=60 \

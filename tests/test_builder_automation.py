@@ -7869,6 +7869,14 @@ def test_finalize_prepares_materialized_runtime_then_notifies(
     monkeypatch.setattr(
         "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
     )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.materialize_revision_via_owner",
+        lambda webspace_id, **_kwargs: {
+            "ok": True,
+            "accepted": True,
+            "webspace_id": webspace_id,
+        },
+    )
     service.browser_feedback_service = FakeBrowserFeedback()
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -10554,6 +10562,14 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
 
     monkeypatch.setattr(
         "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.materialize_revision_via_owner",
+        lambda webspace_id, **_kwargs: {
+            "ok": True,
+            "accepted": True,
+            "webspace_id": webspace_id,
+        },
     )
     service.browser_feedback_service = FakeBrowserFeedback()
     monkeypatch.setattr(

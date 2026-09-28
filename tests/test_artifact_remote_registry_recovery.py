@@ -413,7 +413,7 @@ def test_maintenance_cli_requires_reviewed_digest_before_remote_recovery(
     assert "reviewed-plan-digest" in unstyle(rejected.output)
     assert applied.exit_code == 0, applied.output
     assert revalidation_rejected.exit_code != 0
-    assert "--confirm" in revalidation_rejected.output
+    assert "--confirm" in unstyle(revalidation_rejected.output)
     assert revalidated.exit_code == 0, revalidated.output
     assert calls == [
         ("plan", "scenario", "recipes", "stable"),

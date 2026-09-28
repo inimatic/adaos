@@ -697,7 +697,7 @@ def test_builder_e2e_cli_is_registered() -> None:
 
     assert result.exit_code == 0
     assert "--baseline" in unstyle(result.stdout)
-    assert "--repetitions" in result.stdout
+    assert "--repetitions" in unstyle(result.stdout)
     assert "--resume" in result.stdout
     assert "--run-id" in result.stdout
 

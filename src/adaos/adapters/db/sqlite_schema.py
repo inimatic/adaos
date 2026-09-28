@@ -142,9 +142,13 @@ _ENSURED_SCHEMA_REVISIONS: set[tuple[str, str]] = set()
 
 
 def _schema_identity(sql) -> str:
-    raw_path = getattr(sql, "_db_path", None)
-    if raw_path is not None:
+    for attribute in ("_db_path", "path"):
+        raw_path = getattr(sql, attribute, None)
+        if raw_path is None or callable(raw_path):
+            continue
         try:
+            if str(raw_path).strip() in {"", ":memory:"}:
+                break
             return str(Path(raw_path).resolve())
         except Exception:
             return str(raw_path)

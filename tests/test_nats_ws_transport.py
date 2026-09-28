@@ -328,13 +328,13 @@ async def test_aiohttp_transport_consumes_standalone_pong_out_of_band() -> None:
             ]
         )
 
-        data = await transport.readline()
+        data = await asyncio.wait_for(transport.readline(), timeout=1.0)
 
         assert nc.pings == 0
         assert nc.pongs == 1
         assert data == b"INFO {}\r\n"
     finally:
-        await transport._client.close()
+        await asyncio.wait_for(transport._client.close(), timeout=1.0)
 
 
 @pytest.mark.asyncio
@@ -358,12 +358,12 @@ async def test_aiohttp_transport_replies_to_standalone_ping_immediately() -> Non
             sent.append(bytes(payload))
 
         setattr(transport._ws, "send_bytes", _send_bytes)
-        data = await transport.readline()
+        data = await asyncio.wait_for(transport.readline(), timeout=1.0)
 
         assert sent == [b"PONG\r\n"]
         assert data == b"INFO {}\r\n"
     finally:
-        await transport._client.close()
+        await asyncio.wait_for(transport._client.close(), timeout=1.0)
 
 
 @pytest.mark.asyncio
@@ -382,12 +382,12 @@ async def test_aiohttp_transport_replies_to_coalesced_ping_before_msg() -> None:
             sent.append(bytes(payload))
 
         setattr(transport._ws, "send_bytes", _send_bytes)
-        data = await transport.readline()
+        data = await asyncio.wait_for(transport.readline(), timeout=1.0)
 
         assert sent == [b"PONG\r\n"]
         assert data == payload
     finally:
-        await transport._client.close()
+        await asyncio.wait_for(transport._client.close(), timeout=1.0)
 
 
 @pytest.mark.asyncio
