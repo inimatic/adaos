@@ -330,6 +330,7 @@ def _write_compact_json(path: Path, payload: Any) -> None:
 _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.access.caller",
     "adaos.sdk.access.require",
+    "adaos.sdk.data.lifecycle.ensure_database",
     "adaos.sdk.data.skill_env.skill_data_root",
     "adaos.sdk.llm.content.generate",
     "adaos.sdk.llm.content.get",
@@ -349,12 +350,13 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
     import inspect
 
     from adaos.sdk.core.exporter import export as sdk_export
+    from adaos.services.applications.data_lifecycle import automation_data_contract
 
     exported = sdk_export(
         level="std",
         query=(
             "llm content images resources access caller require skill data root "
-            "generate operate query"
+            "lifecycle ensure database generate operate query"
         ),
         limit=64,
     )
@@ -389,6 +391,9 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "missing_remote_import_is_not_a_capability_blocker": True,
         },
         "contracts": contracts,
+        "manifest_contracts": {
+            "owned_skill_data_lifecycle": automation_data_contract(),
+        },
         "runtime_rules": {
             "authorization": (
                 "Call access.require('workspace.read') before reads and "

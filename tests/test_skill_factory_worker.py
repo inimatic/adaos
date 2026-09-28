@@ -10503,6 +10503,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     sdk_names = {item["name"] for item in sdk_contracts["contracts"]}
     assert {
         "adaos.sdk.access.require",
+        "adaos.sdk.data.lifecycle.ensure_database",
         "adaos.sdk.data.skill_env.skill_data_root",
         "adaos.sdk.llm.content.generate",
         "adaos.sdk.llm.images.generate",
@@ -10514,6 +10515,25 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert sdk_contracts["response_contracts"]["image_draft"][
         "admitted_model_id"
     ] == "gpt-image-1"
+    lifecycle_contract = sdk_contracts["manifest_contracts"][
+        "owned_skill_data_lifecycle"
+    ]
+    assert lifecycle_contract["manifest_field"] == "skill.yaml:data_lifecycle"
+    assert lifecycle_contract["declaration"] == {
+        "schema": "adaos.skill.data_lifecycle.v1",
+        "execution": "native_tools",
+        "databases": [],
+        "state_files": [],
+        "coordination_files": [],
+        "operational_evidence_files": [],
+        "reconstructible_directories": [],
+    }
+    assert "full ordered list" in lifecycle_contract["database_fields"][
+        "migrations"
+    ]
+    assert "ensure_database(path)" in lifecycle_contract[
+        "initialization_contract"
+    ]["call"]
     assert "content_ref" in sdk_contracts["response_contracts"]["image_draft"][
         "completed_media"
     ]["fields"]
