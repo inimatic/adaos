@@ -272,3 +272,78 @@ def test_selected_application_is_webspace_exact_and_never_overrides_dev(tmp_path
     assert runtime_selection.selected_application(
         get_ctx(), "preview", "scenario", "screen"
     ) is None
+
+
+def test_selected_application_uses_exact_active_installation_without_runtime_selection(
+    tmp_path,
+    monkeypatch,
+):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.applications import runtime_selection
+    from adaos.services.workspaces import index
+
+    installation = SimpleNamespace(
+        application_id="research_platform",
+        installed_release_digest=DIGEST,
+        status="active",
+        component_refs=(
+            {"component_ref": "scenario:research_workbench"},
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_selection,
+        "ApplicationStore",
+        lambda _: SimpleNamespace(
+            list_runtime_selections=lambda: [],
+            list_installations=lambda: [installation],
+        ),
+    )
+    monkeypatch.setattr(index, "get_workspace", lambda _name: SimpleNamespace(is_dev=False))
+
+    selected = runtime_selection.selected_application(
+        get_ctx(), "desktop", "scenario", "research_workbench"
+    )
+
+    assert selected == runtime_selection.InstalledApplicationAuthority(
+        application_id="research_platform",
+        release_digest=DIGEST,
+        webspace_id="desktop",
+    )
+
+
+def test_selected_application_fails_closed_for_ambiguous_stable_owners(
+    tmp_path,
+    monkeypatch,
+):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.applications import runtime_selection
+    from adaos.services.workspaces import index
+
+    installations = [
+        SimpleNamespace(
+            application_id=application_id,
+            installed_release_digest=DIGEST,
+            status="active",
+            component_refs=(
+                {"component_ref": "scenario:research_workbench"},
+            ),
+        )
+        for application_id in ("research_a", "research_b")
+    ]
+    monkeypatch.setattr(
+        runtime_selection,
+        "ApplicationStore",
+        lambda _: SimpleNamespace(
+            list_runtime_selections=lambda: [],
+            list_installations=lambda: installations,
+        ),
+    )
+    monkeypatch.setattr(index, "get_workspace", lambda _name: SimpleNamespace(is_dev=False))
+
+    with pytest.raises(
+        runtime_selection.TrialRuntimeUnavailable,
+        match="Ambiguous installed Application authority",
+    ):
+        runtime_selection.selected_application(
+            get_ctx(), "desktop", "scenario", "research_workbench"
+        )

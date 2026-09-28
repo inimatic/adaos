@@ -1628,6 +1628,7 @@ class ProjectionService:
         *,
         user_id: Optional[str] = None,
         webspace_id: Optional[str] = None,
+        node_id: Optional[str] = None,
     ) -> None:
         """Durably apply a projection from a synchronous handler.
 
@@ -1639,15 +1640,10 @@ class ProjectionService:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(
-                self.apply(
-                    scope,
-                    slot,
-                    value,
-                    user_id=user_id,
-                    webspace_id=webspace_id,
-                )
-            )
+            kwargs = {"user_id": user_id, "webspace_id": webspace_id}
+            if node_id is not None:
+                kwargs["node_id"] = node_id
+            asyncio.run(self.apply(scope, slot, value, **kwargs))
             return
         raise RuntimeError(
             "ProjectionService.apply_sync() cannot run on an active event-loop thread; "
@@ -1662,6 +1658,7 @@ class ProjectionService:
         *,
         user_id: Optional[str] = None,
         webspace_id: Optional[str] = None,
+        node_id: Optional[str] = None,
     ) -> None:
         resolve_rule = getattr(self.registry, "resolve_rule", None)
         rule = resolve_rule(scope, slot) if callable(resolve_rule) else None
@@ -1680,7 +1677,16 @@ class ProjectionService:
             target_started = time.perf_counter()
             try:
                 if t.backend == "yjs":
-                    await self._apply_yjs(t, value, scope=scope, slot=slot, user_id=user_id, webspace_id=webspace_id, rule=rule)
+                    await self._apply_yjs(
+                        t,
+                        value,
+                        scope=scope,
+                        slot=slot,
+                        user_id=user_id,
+                        webspace_id=webspace_id,
+                        node_id=node_id,
+                        rule=rule,
+                    )
                 elif t.backend == "kv":
                     self._apply_kv(scope, slot, value, user_id=user_id)
                 else:
@@ -1708,6 +1714,7 @@ class ProjectionService:
         slot: str,
         user_id: Optional[str],
         webspace_id: Optional[str],
+        node_id: Optional[str],
         rule: Any = None,
     ) -> None:
         # For projections we trust the calling context (events_ws, ctx.* helpers)
@@ -1719,7 +1726,10 @@ class ProjectionService:
         path = target.path or ""
         if not path:
             return
-        if str(scope or "").strip() == "subnet":
+        target_node_id = str(node_id or "").strip()
+        if target_node_id:
+            path = node_scope_data_path(path, target_node_id)
+        elif str(scope or "").strip() == "subnet":
             path = node_scope_data_path(path, _context_local_node_id(self.ctx))
 
         # Allow simple {user_id} templating inside Yjs paths.

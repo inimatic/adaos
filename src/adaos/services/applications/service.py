@@ -1497,6 +1497,72 @@ class ApplicationService:
         self._publish_operation(saved)
         return saved
 
+    def _executor_materialized_exact_installation(
+        self,
+        operation: ApplicationOperation,
+        installation: ApplicationInstallation | None,
+        *,
+        snapshot_ref: str | None,
+    ) -> bool:
+        """Recognize the exact installation committed by the deployment executor.
+
+        The project deployment executor owns the atomic workspace activation and
+        may reconcile the ApplicationInstallation before returning.  That is not
+        a concurrent writer when the resulting revision and complete reviewed
+        closure are exactly the ones this operation requested.
+        """
+        if operation.kind not in {"install", "update"} or installation is None:
+            return False
+        if operation.plan.get("shared_dependency_rebindings"):
+            # Rebinding other installations is committed by this service as one
+            # compare-and-swap batch and cannot be inferred from the provider's
+            # installation alone.
+            return False
+        if installation.revision != operation.expected_revision + 1:
+            return False
+        if installation.status != "active":
+            return False
+        if installation.installed_release_digest != str(
+            operation.plan.get("release_digest") or ""
+        ):
+            return False
+
+        def component_identity(raw: Mapping[str, Any]) -> tuple[str, str, str]:
+            return (
+                str(raw.get("component_ref") or ""),
+                str(raw.get("package_digest") or ""),
+                str(raw.get("lifecycle") or ""),
+            )
+
+        reviewed_components = tuple(
+            sorted(
+                (
+                    component_identity(item)
+                    for item in operation.plan.get("components") or ()
+                    if isinstance(item, Mapping)
+                ),
+                key=lambda item: item[0],
+            )
+        )
+        materialized_components = tuple(
+            component_identity(item) for item in installation.component_refs
+        )
+        if materialized_components != reviewed_components:
+            return False
+        release = self.store.get_release(
+            operation.application_id,
+            str(operation.plan.get("release_digest") or ""),
+        )
+        if installation.shared_project_bindings != self._release_shared_project_bindings(
+            release
+        ):
+            return False
+        if installation.data_policy != str(
+            operation.plan.get("data_policy") or "retain"
+        ):
+            return False
+        return installation.snapshot_ref == snapshot_ref
+
     def apply_operation(
         self,
         operation_id: str,
@@ -1753,35 +1819,48 @@ class ApplicationService:
         except FileNotFoundError:
             current = None
         observed_revision = current.revision if current is not None else 0
+        executor_materialized_installation = False
         if observed_revision != operation.expected_revision:
-            return self._transition_operation(
-                applying,
-                "unknown",
-                result=result,
-                recovery_reason="installation_revision_changed_after_execution",
+            executor_materialized_installation = (
+                self._executor_materialized_exact_installation(
+                    operation,
+                    current,
+                    snapshot_ref=snapshot_ref,
+                )
             )
+            if not executor_materialized_installation:
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=result,
+                    recovery_reason="installation_revision_changed_after_execution",
+                )
         if operation.kind in {"install", "update"}:
-            installation = ApplicationInstallation(
-                installation_id=current.installation_id
-                if current
-                else f"installation:{operation.application_id}",
-                application_id=operation.application_id,
-                installed_release_digest=str(operation.plan["release_digest"]),
-                component_refs=tuple(operation.plan.get("components") or ()),
-                shared_project_bindings=self._release_shared_project_bindings(
-                    self.store.get_release(
-                        operation.application_id,
-                        str(operation.plan["release_digest"]),
-                    )
-                ),
-                data_policy=str(operation.plan.get("data_policy") or "retain"),
-                status="active",
-                revision=observed_revision + 1,
-                legacy_deployment_id=current.legacy_deployment_id if current else None,
-                snapshot_ref=snapshot_ref,
-                created_at=current.created_at if current else utc_now(),
-                updated_at=utc_now(),
-            )
+            if executor_materialized_installation:
+                assert current is not None
+                installation = current
+            else:
+                installation = ApplicationInstallation(
+                    installation_id=current.installation_id
+                    if current
+                    else f"installation:{operation.application_id}",
+                    application_id=operation.application_id,
+                    installed_release_digest=str(operation.plan["release_digest"]),
+                    component_refs=tuple(operation.plan.get("components") or ()),
+                    shared_project_bindings=self._release_shared_project_bindings(
+                        self.store.get_release(
+                            operation.application_id,
+                            str(operation.plan["release_digest"]),
+                        )
+                    ),
+                    data_policy=str(operation.plan.get("data_policy") or "retain"),
+                    status="active",
+                    revision=observed_revision + 1,
+                    legacy_deployment_id=current.legacy_deployment_id if current else None,
+                    snapshot_ref=snapshot_ref,
+                    created_at=current.created_at if current else utc_now(),
+                    updated_at=utc_now(),
+                )
         else:
             assert current is not None
             legacy_selections = tuple(
@@ -1821,7 +1900,9 @@ class ApplicationService:
                         f"{type(exc).__name__}:{exc}"
                     ),
                 )
-        if shared_rebindings:
+        if executor_materialized_installation:
+            pass
+        elif shared_rebindings:
             expected_revisions = {
                 operation.application_id: observed_revision,
                 **shared_expected_revisions,

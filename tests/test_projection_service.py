@@ -699,6 +699,41 @@ def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> 
     assert callable(metadata_calls[0]["write_update_callback"])
 
 
+def test_projection_service_can_target_an_explicit_remote_node(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap()}
+    target = SimpleNamespace(
+        backend="yjs",
+        path="data/infrastate/summary",
+        webspace_id=None,
+    )
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(
+        ctx=SimpleNamespace(),
+        registry=registry,
+    )
+
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(
+        projection_service_module,
+        "run_detached_ydoc_mutation",
+        _fake_run_detached_ydoc_mutation(fake_state),
+    )
+
+    asyncio.run(
+        service.apply(
+            "webspace",
+            "infrastate.summary",
+            {"value": "succeeded"},
+            webspace_id="desktop",
+            node_id="member-1",
+        )
+    )
+
+    assert fake_state["data"]["nodes"]["member-1"]["infrastate"]["summary"] == {
+        "value": "succeeded"
+    }
+
+
 def test_projection_service_uses_live_room_fast_path_for_skill_owned_writes(monkeypatch) -> None:
     fake_state = {"data": _FakeMap()}
     calls: list[dict[str, object]] = []

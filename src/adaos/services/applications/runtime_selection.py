@@ -1,11 +1,22 @@
 """Resolve product execution and launcher identity from persisted selections."""
 
 from contextlib import contextmanager, ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 
 from adaos.services.agent_context import AgentContext
 from adaos.services.applications.store import ApplicationStore
 from adaos.services.applications.trial_runtime import NativeTrialRuntime, TrialRuntimeUnavailable
+
+
+@dataclass(frozen=True, slots=True)
+class InstalledApplicationAuthority:
+    """Exact stable installation authority for one materialized component."""
+
+    application_id: str
+    release_digest: str
+    webspace_id: str
+    runtime_root_ref: str = "workspace"
 
 
 def selection_snapshot(ctx: AgentContext, webspace_id: str) -> list[dict]:
@@ -45,7 +56,38 @@ def selected_application(
         raise TrialRuntimeUnavailable(
             "Ambiguous Application runtime selection for component"
         )
-    return matches[0] if matches else None
+    if matches:
+        return matches[0]
+
+    # Stable compatibility installs intentionally do not require a per-Webspace
+    # RuntimeSelection.  They still have exact Application and release authority
+    # in ApplicationInstallation.  Omitting that authority from the
+    # materialization identity made the browser fall back to scenario names and
+    # broke Applications whose semantic identity differs from their presentation
+    # (for example research_platform -> scenario:research_workbench).  Resolve
+    # only one active exact installation and fail closed on conflicting owners.
+    installed = []
+    for installation in store.list_installations():
+        if installation.status != "active":
+            continue
+        if not any(
+            str(item.get("component_ref") or "").strip()
+            == f"{kind}:{component_id}"
+            for item in installation.component_refs
+        ):
+            continue
+        installed.append(
+            InstalledApplicationAuthority(
+                application_id=installation.application_id,
+                release_digest=installation.installed_release_digest,
+                webspace_id=target_webspace,
+            )
+        )
+    if len(installed) > 1:
+        raise TrialRuntimeUnavailable(
+            "Ambiguous installed Application authority for component"
+        )
+    return installed[0] if installed else None
 
 
 def selected_trial(ctx: AgentContext, webspace_id: str, kind: str, component_id: str):

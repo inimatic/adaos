@@ -1106,6 +1106,175 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(
     assert service.store.list_runtime_selections() == ()
 
 
+def test_update_accepts_exact_installation_materialized_by_executor(
+    tmp_path: Path,
+) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    service.register(_application())
+    first = service.register_release(_release())
+    second = service.register_release(
+        _release(version="1.1.0", package_digest=DIGEST_B)
+    )
+    service.executor = lambda _plan: {"ok": True, "status": "succeeded"}
+    install = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-before-executor-reconcile",
+        expected_revision=0,
+        release_digest=first.release_digest,
+    )
+    service.apply_operation(
+        install.operation_id,
+        plan_digest=install.plan_digest,
+        idempotency_key=install.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    snapshot_ref = "snapshot:recipes:executor-reconcile"
+
+    def reconcile_during_execution(plan):
+        current = service.store.get_installation("app_recipes")
+        service.store.save_installation(
+            ApplicationInstallation(
+                installation_id=current.installation_id,
+                application_id=current.application_id,
+                installed_release_digest=str(plan["release_digest"]),
+                component_refs=tuple(plan["components"]),
+                shared_project_bindings=service._release_shared_project_bindings(second),
+                data_policy=str(plan["data_policy"]),
+                status="active",
+                revision=current.revision + 1,
+                snapshot_ref=snapshot_ref,
+                created_at=current.created_at,
+            ),
+            expected_revision=current.revision,
+        )
+        return {
+            "ok": True,
+            "status": "active",
+            "snapshot_receipt": {
+                "snapshot_ref": snapshot_ref,
+                "source_release_digest": first.release_digest,
+                "consistency_boundary": "artifact_activation_transaction",
+            },
+        }
+
+    service.executor = reconcile_during_execution
+    update = service.plan_operation(
+        "app_recipes",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="executor-reconciles-installation",
+        expected_revision=1,
+        release_digest=second.release_digest,
+    )
+
+    applied = service.apply_operation(
+        update.operation_id,
+        plan_digest=update.plan_digest,
+        idempotency_key=update.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    assert applied.status == "succeeded"
+    assert applied.recovery_reason is None
+    assert applied.result["installation"]["revision"] == 2
+    assert (
+        service.store.get_installation("app_recipes").installed_release_digest
+        == second.release_digest
+    )
+
+
+def test_update_keeps_unknown_when_executor_materializes_different_installation(
+    tmp_path: Path,
+) -> None:
+    service = ApplicationService(ApplicationStore(tmp_path))
+    service.register(_application())
+    first = service.register_release(_release())
+    second = service.register_release(
+        _release(version="1.1.0", package_digest=DIGEST_B)
+    )
+    service.executor = lambda _plan: {"ok": True, "status": "succeeded"}
+    install = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-before-mismatched-reconcile",
+        expected_revision=0,
+        release_digest=first.release_digest,
+    )
+    service.apply_operation(
+        install.operation_id,
+        plan_digest=install.plan_digest,
+        idempotency_key=install.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+    snapshot_ref = "snapshot:recipes:mismatched-reconcile"
+
+    def reconcile_wrong_release(_plan):
+        current = service.store.get_installation("app_recipes")
+        service.store.save_installation(
+            ApplicationInstallation(
+                installation_id=current.installation_id,
+                application_id=current.application_id,
+                installed_release_digest=first.release_digest,
+                component_refs=current.component_refs,
+                data_policy=current.data_policy,
+                status="active",
+                revision=current.revision + 1,
+                snapshot_ref=snapshot_ref,
+                created_at=current.created_at,
+            ),
+            expected_revision=current.revision,
+        )
+        return {
+            "ok": True,
+            "status": "active",
+            "snapshot_receipt": {
+                "snapshot_ref": snapshot_ref,
+                "source_release_digest": first.release_digest,
+                "consistency_boundary": "artifact_activation_transaction",
+            },
+        }
+
+    service.executor = reconcile_wrong_release
+    update = service.plan_operation(
+        "app_recipes",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="executor-materializes-wrong-release",
+        expected_revision=1,
+        release_digest=second.release_digest,
+    )
+
+    applied = service.apply_operation(
+        update.operation_id,
+        plan_digest=update.plan_digest,
+        idempotency_key=update.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    assert applied.status == "unknown"
+    assert applied.recovery_reason == "installation_revision_changed_after_execution"
+
+
 def test_install_materializes_only_declared_grant_on_install_access(
     tmp_path: Path,
 ) -> None:
