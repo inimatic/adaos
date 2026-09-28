@@ -4429,9 +4429,21 @@ class SubprocessCodexExecutor:
 def _retained_codex_final_message(run_root: Path) -> str:
     """Read the latest authoritative final message, including a repair turn."""
 
+    runtime = run_root / "runtime"
+
+    def repair_attempt(path: Path) -> int:
+        match = re.fullmatch(r"codex-final-repair-(\d+)\.md", path.name)
+        return int(match.group(1)) if match else -1
+
+    repair_messages = sorted(
+        runtime.glob("codex-final-repair-*.md"),
+        key=repair_attempt,
+        reverse=True,
+    )
     for path in (
         run_root / "output" / "last_message.md",
-        run_root / "runtime" / "codex-final.md",
+        *repair_messages,
+        runtime / "codex-final.md",
     ):
         try:
             message = path.read_text(encoding="utf-8")

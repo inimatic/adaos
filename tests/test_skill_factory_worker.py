@@ -112,6 +112,48 @@ def test_preservable_feedback_unwraps_latest_structured_outcome(tmp_path: Path) 
     assert retained == report
 
 
+def test_preservable_feedback_prefers_latest_repair_outcome(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    runtime = run_root / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "codex-final.md").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "report": "Initial candidate completed without blocking feedback.",
+                "questions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    earlier_report = (
+        "```adaos-development-feedback\n"
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"insufficient_context","summary":"Earlier repair",'
+        '"blocking":true,"target_refs":["skill:recipes"]}]}\n'
+        "```"
+    )
+    latest_report = earlier_report.replace("Earlier repair", "Latest repair")
+    (runtime / "codex-final-repair-1.md").write_text(
+        json.dumps({"status": "blocked", "report": earlier_report, "questions": []}),
+        encoding="utf-8",
+    )
+    (runtime / "codex-final-repair-2.md").write_text(
+        json.dumps({"status": "blocked", "report": latest_report, "questions": []}),
+        encoding="utf-8",
+    )
+
+    retained = worker_module.preservable_blocking_feedback_message(
+        run_root,
+        {
+            "stage": "development_feedback",
+            "message": "Automation blocked by reported development feedback",
+        },
+    )
+
+    assert retained == latest_report
+
+
 def test_manifest_scope_feedback_requires_exact_safe_manifest_evidence(
     tmp_path: Path,
 ) -> None:
