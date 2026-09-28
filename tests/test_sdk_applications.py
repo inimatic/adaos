@@ -2316,6 +2316,77 @@ def _admit_setup_test_surface(monkeypatch, tmp_path, release, model, digest):
     )
 
 
+def test_application_setup_target_skips_full_detail_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stable_digest = "sha256:" + "a" * 64
+    selected_digest = "sha256:" + "b" * 64
+    release = SimpleNamespace(
+        release_digest=selected_digest,
+        lifecycle="trial",
+        setup_contract=None,
+    )
+
+    class Store:
+        def get_release(self, application_id, release_digest):
+            assert application_id == "app_weather"
+            assert release_digest == selected_digest
+            return release
+
+    class Service:
+        store = Store()
+
+        def get_model(self, application_id, *, subscriber_subnet_ref):
+            assert application_id == "app_weather"
+            assert subscriber_subnet_ref == "subnet:home"
+            return {
+                "application": {"application_id": application_id},
+                "installed": True,
+                "active_release": {
+                    "application_id": application_id,
+                    "release_digest": stable_digest,
+                    "project_release": {"components": []},
+                },
+            }
+
+    monkeypatch.setattr(applications, "_service", Service)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
+    monkeypatch.setattr(
+        applications,
+        "_execution_placement_index",
+        lambda application_ids: {
+            application_ids[0]: {"status": "active", "partial": False}
+        },
+    )
+    monkeypatch.setattr(
+        applications,
+        "get_runtime_selection",
+        lambda webspace_id, application_id: {
+            "webspace_id": webspace_id,
+            "application_id": application_id,
+            "source": "local_trial",
+            "release_digest": selected_digest,
+            "runtime_root_ref": "trial:app-weather",
+        },
+    )
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("setup must not expand the full detail projection")
+        ),
+    )
+
+    model, selected_release, channel = applications._application_setup_target(
+        "app_weather",
+        webspace_id="desktop",
+    )
+
+    assert model["execution_placement"] == {"status": "active", "partial": False}
+    assert selected_release is release
+    assert channel == "beta"
+
+
 def test_application_setup_surface_is_release_owned_and_secret_free(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

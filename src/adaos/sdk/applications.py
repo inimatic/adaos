@@ -2044,8 +2044,33 @@ def _application_setup_target(
     release_digest: str | None = None,
     webspace_id: str | None = None,
 ) -> tuple[dict[str, Any], Any, str]:
-    model = get_application(application_id, webspace_id=webspace_id)
+    # Setup needs the release, installation state, runtime selection and
+    # placement only.  Reusing the full Applications detail projection here
+    # also expands local development, Home and CBS lifecycle state.  During an
+    # auto-update those unrelated authorities can be busy long enough for the
+    # read-only setup panel to time out.
+    model = _application_read_model(
+        _service().get_model(
+            application_id,
+            subscriber_subnet_ref=_local_subnet_ref(),
+        )
+    )
+    model["execution_placement"] = _execution_placement_index(
+        [application_id]
+    ).get(
+        application_id,
+        _empty_execution_placement(
+            application_id,
+            status="not_materialized",
+            managed=False,
+            partial=False,
+        ),
+    )
+    selection = get_runtime_selection(str(webspace_id or "desktop"), application_id)
+    model["_setup_runtime_selection"] = selection
     selected_digest = str(release_digest or "").strip()
+    if not selected_digest and isinstance(selection, Mapping):
+        selected_digest = str(selection.get("release_digest") or "").strip()
     if not selected_digest:
         for field in (
             "active_release",
@@ -2064,8 +2089,6 @@ def _application_setup_target(
             f"Application has no setup-capable release: {application_id}"
         )
     release = _service().store.get_release(application_id, selected_digest)
-    selection = get_runtime_selection(str(webspace_id or "desktop"), application_id)
-    model["_setup_runtime_selection"] = selection
     channel = (
         "beta"
         if str((selection or {}).get("runtime_root_ref") or "").startswith("trial:")
