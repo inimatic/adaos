@@ -258,9 +258,7 @@ def test_ui_admission_selects_application_entrypoint_from_multiple_scenarios(
 def test_ui_admission_proves_logical_presentation_from_exact_skill_package(
     tmp_path: Path,
 ) -> None:
-    package = _provider(
-        tmp_path / "source", presentation_ref="notebook_skill_app"
-    )
+    package = _provider(tmp_path / "source", presentation_ref="notebook_skill_app")
     store = ContentAddressedPackageStore(tmp_path / "packages")
     store.put(package.archive_bytes, expected_digest=package.ref.digest)
     plan = build_project_release(
@@ -296,9 +294,7 @@ def test_ui_admission_proves_logical_presentation_from_exact_skill_package(
         "compiler_version": "1.3.0",
         "application_ref": "application:notebook",
         "presentation_ref": "notebook_skill_app",
-        "source_acceptance_digest": canonical_payload_digest(
-            {"project": "notebook"}
-        ),
+        "source_acceptance_digest": canonical_payload_digest({"project": "notebook"}),
         "semantic_revision_digest": canonical_payload_digest(requirement),
         "environment_target": target,
         "requirements": [requirement],
@@ -333,7 +329,9 @@ def test_ui_admission_proves_logical_presentation_from_exact_skill_package(
     assert admitted["resolutions"][0]["package_closure"][0]["kind"] == "skill"
 
 
-def test_exact_application_release_admits_every_requirement_and_plan(tmp_path: Path) -> None:
+def test_exact_application_release_admits_every_requirement_and_plan(
+    tmp_path: Path,
+) -> None:
     plan, store = _release(tmp_path)
     compilation = _compilation()
     service = NativeApplicationCBSAdmissionService(
@@ -361,12 +359,14 @@ def test_exact_application_release_admits_every_requirement_and_plan(tmp_path: P
     assert service.inspect("scenario:mail_client") == admitted
 
     catalog = json.loads(
-        (tmp_path / "state" / "capability-binding-state" / "portable" / "index.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            tmp_path / "state" / "capability-binding-state" / "portable" / "index.json"
+        ).read_text(encoding="utf-8")
     )
     assert "capability:mail.messages.manage@1.0.0" in catalog["identities"]
-    assert "binding-definition:mail.messages.google-gmail@1.0.0" in catalog["identities"]
+    assert (
+        "binding-definition:mail.messages.google-gmail@1.0.0" in catalog["identities"]
+    )
     assert all(
         item["schema"] != "adaos.environment.profile.v1"
         for item in catalog["records"].values()
@@ -425,7 +425,9 @@ def test_exact_release_publishes_and_imports_shared_semantic_registry(
     )
 
     consumer_state = tmp_path / "consumer-state"
-    imported = SemanticRegistryProjection(registry, consumer_state).import_to_local_catalog()
+    imported = SemanticRegistryProjection(
+        registry, consumer_state
+    ).import_to_local_catalog()
     assert imported["record_count"] == 6
     catalog = PortableContractCatalog(
         consumer_state / "capability-binding-state" / "portable"
@@ -472,14 +474,20 @@ def test_exact_release_admissions_are_selected_by_application_identity(
         workspace_ref="trial:project-mail",
     )
 
-    assert service.find_by_project_release(
-        plan.release.release_digest,
-        application_ref="scenario:mail_client",
-    ) == scenario_admission
-    assert service.find_by_project_release(
-        plan.release.release_digest,
-        application_ref="application:mail_client",
-    ) == project_admission
+    assert (
+        service.find_by_project_release(
+            plan.release.release_digest,
+            application_ref="scenario:mail_client",
+        )
+        == scenario_admission
+    )
+    assert (
+        service.find_by_project_release(
+            plan.release.release_digest,
+            application_ref="application:mail_client",
+        )
+        == project_admission
+    )
     with pytest.raises(
         ValueError,
         match="more than one CBS admission identity",
@@ -494,9 +502,7 @@ def test_public_application_catalog_imports_installable_aggregate_without_instal
     compilation = _compilation()
     publisher_state = tmp_path / "publisher-state"
     ApplicationCBSService(publisher_state).register(compilation)
-    NativeApplicationCBSAdmissionService(
-        publisher_state, now=lambda: FIXED_NOW
-    ).admit(
+    NativeApplicationCBSAdmissionService(publisher_state, now=lambda: FIXED_NOW).admit(
         application_ref="scenario:mail_client",
         compilation=compilation,
         release_plan=plan,
@@ -557,10 +563,7 @@ def test_public_application_catalog_imports_installable_aggregate_without_instal
     assert catalog_import["application_count"] == 1
     consumer_store = ApplicationStore(consumer_state)
     assert consumer_store.get_application("mail_client") == application
-    assert (
-        consumer_store.get_release("mail_client", release.release_digest)
-        == release
-    )
+    assert consumer_store.get_release("mail_client", release.release_digest) == release
     assert consumer_store.get_channels("mail_client")["channels"] == {
         "stable": release.release_digest
     }
@@ -581,8 +584,8 @@ def test_public_application_catalog_imports_installable_aggregate_without_instal
     assert requirement_source["schema"] == (
         "adaos.application.semantic_requirement_set.v1"
     )
-    assert requirement_source["compilation_digest"] == (
-        compilation["compilation_digest"]
+    assert (
+        requirement_source["compilation_digest"] == (compilation["compilation_digest"])
     )
     before_admission = consumer_cbs.lifecycle_projection(
         "application:mail_client",
@@ -626,7 +629,7 @@ def test_public_application_catalog_imports_installable_aggregate_without_instal
     assert after_admission["resolution"]["status"] == "admitted"
     assert after_admission["plan"]["status"] == "ready"
     assert after_admission["activation"]["status"] == "active"
-    assert after_admission["lock"]["status"] == "committed"
+    assert after_admission["lock"]["status"] == "not_observed"
 
 
 def test_reissued_evidence_for_a_recompiled_release_has_a_distinct_identity(
@@ -650,11 +653,7 @@ def test_reissued_evidence_for_a_recompiled_release_has_a_distinct_identity(
     recompiled = copy.deepcopy(compilation)
     recompiled["compiler_version"] = "1.2.0"
     recompiled["compilation_digest"] = canonical_payload_digest(
-        {
-            key: value
-            for key, value in recompiled.items()
-            if key != "compilation_digest"
-        }
+        {key: value for key, value in recompiled.items() if key != "compilation_digest"}
     )
     clock[0] += timedelta(seconds=1)
 

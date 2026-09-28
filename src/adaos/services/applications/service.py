@@ -559,6 +559,204 @@ class ApplicationService:
             value, expected_revision=expected_revision
         )
 
+    @staticmethod
+    def _native_admission_status(
+        *,
+        application_id: str,
+        release_digest: str,
+        admission: Mapping[str, Any] | None,
+    ) -> tuple[bool, str]:
+        """Qualify one exact Application admission for runtime activation.
+
+        Prototype/Scenario admissions intentionally remain on the compatibility
+        lifecycle.  An Application admission, on the other hand, is an
+        activation precondition and must be complete rather than being treated
+        as a best-effort hint returned by the deployment provider.
+        """
+
+        if not isinstance(admission, Mapping):
+            return False, "admission_absent"
+        expected_ref = f"application:{application_id}"
+        observed_ref = str(admission.get("application_ref") or "").strip()
+        if observed_ref != expected_ref:
+            return False, "compatibility_admission"
+        if str(admission.get("status") or "") != "admitted":
+            raise ApplicationServiceError("native CBS admission is not admitted")
+        if str(admission.get("project_release_digest") or "") != release_digest:
+            raise ApplicationServiceError(
+                "native CBS admission does not match the installed release"
+            )
+        admission_digest = str(admission.get("admission_digest") or "")
+        if not admission_digest.startswith("sha256:"):
+            raise ApplicationServiceError(
+                "native CBS admission has no immutable digest"
+            )
+        try:
+            total = int(admission.get("requirements_total"))
+            resolved = int(admission.get("requirements_resolved"))
+        except (TypeError, ValueError) as exc:
+            raise ApplicationServiceError(
+                "native CBS admission requirement counts are invalid"
+            ) from exc
+        resolutions = [
+            dict(item)
+            for item in admission.get("resolutions") or ()
+            if isinstance(item, Mapping)
+        ]
+        plans = [
+            dict(item)
+            for item in admission.get("plans") or ()
+            if isinstance(item, Mapping)
+        ]
+        if (
+            total <= 0
+            or resolved != total
+            or len(resolutions) != total
+            or len(plans) != total
+        ):
+            raise ApplicationServiceError("native CBS admission is incomplete")
+        resolution_identities = {
+            (
+                str(item.get("resolution_ref") or ""),
+                str(item.get("resolution_digest") or ""),
+            )
+            for item in resolutions
+            if str(item.get("project_release_digest") or "") == release_digest
+        }
+        planned_identities = {
+            (
+                str(item.get("application_resolution_ref") or ""),
+                str(item.get("application_resolution_digest") or ""),
+            )
+            for item in plans
+        }
+        if (
+            len(resolution_identities) != total
+            or resolution_identities != planned_identities
+            or any(not ref or not digest for ref, digest in resolution_identities)
+        ):
+            raise ApplicationServiceError(
+                "native CBS admission resolution plans are not exact"
+            )
+        return True, "native_application_admission"
+
+    def _activate_native_runtime(
+        self,
+        *,
+        application_id: str,
+        release_digest: str,
+        admission: Mapping[str, Any] | None,
+        runtime_target: Mapping[str, Any],
+        actor_ref: str,
+        subnet_ref: str,
+    ) -> dict[str, Any]:
+        native, reason = self._native_admission_status(
+            application_id=application_id,
+            release_digest=release_digest,
+            admission=admission,
+        )
+        if not native:
+            return {
+                "status": "compatibility_runtime",
+                "changed": False,
+                "reason": reason,
+            }
+        webspace_id = str(runtime_target.get("webspace_id") or "").strip()
+        source = str(runtime_target.get("source") or "")
+        runtime_root_ref = str(runtime_target.get("runtime_root_ref") or "")
+        try:
+            expected_revision = int(runtime_target.get("expected_revision"))
+        except (TypeError, ValueError) as exc:
+            raise ApplicationServiceError(
+                "native CBS runtime target revision is invalid"
+            ) from exc
+        if (
+            not webspace_id
+            or source != "stable_installation"
+            or runtime_root_ref != "workspace"
+        ):
+            raise ApplicationServiceError("native CBS runtime target is invalid")
+        try:
+            current = self.store.get_runtime_selection(webspace_id, application_id)
+        except FileNotFoundError:
+            current = None
+        if (
+            current is not None
+            and current.source == "stable_installation"
+            and current.release_digest == release_digest
+            and current.runtime_root_ref == "workspace"
+        ):
+            return {
+                "status": "current",
+                "changed": False,
+                "admission_digest": admission.get("admission_digest"),
+                "selection": current.to_dict(),
+            }
+        observed_revision = current.revision if current is not None else 0
+        if observed_revision != expected_revision:
+            raise ApplicationServiceError(
+                "native CBS runtime target changed after plan review"
+            )
+        selected = self.select_runtime(
+            webspace_id=webspace_id,
+            application_id=application_id,
+            source="stable_installation",
+            release_digest=release_digest,
+            runtime_root_ref="workspace",
+            expected_revision=expected_revision,
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.apply",
+        )
+        return {
+            "status": "activated",
+            "changed": True,
+            "admission_digest": admission.get("admission_digest"),
+            "selection": selected.to_dict(),
+        }
+
+    def reconcile_native_runtime_selection(
+        self,
+        *,
+        application_id: str,
+        release_digest: str,
+        admission: Mapping[str, Any] | None,
+        webspace_id: str = "desktop",
+        actor_ref: str,
+        subnet_ref: str,
+    ) -> dict[str, Any]:
+        """Adopt an already installed exact native release without overriding Trial."""
+
+        installation = self.store.get_installation(application_id)
+        if (
+            installation.status != "active"
+            or installation.installed_release_digest != release_digest
+        ):
+            return {"status": "not_current", "changed": False}
+        try:
+            current = self.store.get_runtime_selection(webspace_id, application_id)
+        except FileNotFoundError:
+            current = None
+        if current is not None and current.source != "stable_installation":
+            return {
+                "status": "trial_active",
+                "changed": False,
+                "selection": current.to_dict(),
+            }
+        return self._activate_native_runtime(
+            application_id=application_id,
+            release_digest=release_digest,
+            admission=admission,
+            runtime_target={
+                "webspace_id": webspace_id,
+                "source": "stable_installation",
+                "runtime_root_ref": "workspace",
+                "expected_revision": current.revision if current is not None else 0,
+            },
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+        )
+
     def reconcile_runtime_selection(
         self,
         webspace_id: str,
@@ -812,7 +1010,9 @@ class ApplicationService:
                 (
                     item
                     for item in (
-                        composition.project_dependencies if composition is not None else ()
+                        composition.project_dependencies
+                        if composition is not None
+                        else ()
                     )
                     if item.project_ref == provider_ref
                 ),
@@ -1119,6 +1319,7 @@ class ApplicationService:
         access_redemption_id: str | None = None,
         component_ref: str | None = None,
         target_node_id: str | None = None,
+        webspace_id: str = "desktop",
     ) -> ApplicationOperation:
         authority = _require_authority(
             actor_ref=actor_ref,
@@ -1403,6 +1604,34 @@ class ApplicationService:
             if operation_kind == "update"
             else None,
         }
+        runtime_target = None
+        if operation_kind in {"install", "update"}:
+            selected_webspace = str(webspace_id or "").strip()
+            if not selected_webspace:
+                raise ApplicationServiceError("webspace_id is required")
+            try:
+                current_runtime = self.store.get_runtime_selection(
+                    selected_webspace, application_id
+                )
+            except FileNotFoundError:
+                current_runtime = None
+            runtime_target = {
+                "webspace_id": selected_webspace,
+                "source": "stable_installation",
+                "release_digest": release_digest,
+                "runtime_root_ref": "workspace",
+                "expected_revision": (
+                    current_runtime.revision if current_runtime is not None else 0
+                ),
+                "previous_source": (
+                    current_runtime.source if current_runtime is not None else None
+                ),
+                "previous_release_digest": (
+                    current_runtime.release_digest
+                    if current_runtime is not None
+                    else None
+                ),
+            }
         plan = {
             "schema": "adaos.application.operation_plan.v1",
             "application_id": application_id,
@@ -1441,6 +1670,7 @@ class ApplicationService:
             "data_policy": data_policy,
             "subscription_change": subscription_change,
             "subscription_default": subscription_default,
+            "runtime_target": runtime_target,
             "placement_change": placement_change,
             "installation_revision": installation_revision,
             "access": {
@@ -1553,8 +1783,9 @@ class ApplicationService:
             operation.application_id,
             str(operation.plan.get("release_digest") or ""),
         )
-        if installation.shared_project_bindings != self._release_shared_project_bindings(
-            release
+        if (
+            installation.shared_project_bindings
+            != self._release_shared_project_bindings(release)
         ):
             return False
         if installation.data_policy != str(
@@ -1856,7 +2087,9 @@ class ApplicationService:
                     data_policy=str(operation.plan.get("data_policy") or "retain"),
                     status="active",
                     revision=observed_revision + 1,
-                    legacy_deployment_id=current.legacy_deployment_id if current else None,
+                    legacy_deployment_id=current.legacy_deployment_id
+                    if current
+                    else None,
                     snapshot_ref=snapshot_ref,
                     created_at=current.created_at if current else utc_now(),
                     updated_at=utc_now(),
@@ -1954,6 +2187,39 @@ class ApplicationService:
             operation_result["install_access"] = install_access
         if subscription_result is not None:
             operation_result["subscription"] = subscription_result.to_dict()
+        if operation.kind in {"install", "update"}:
+            raw_runtime_target = operation.plan.get("runtime_target")
+            if not isinstance(raw_runtime_target, Mapping):
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=operation_result,
+                    recovery_reason="native_cbs_runtime_target_missing",
+                )
+            try:
+                native_activation = self._activate_native_runtime(
+                    application_id=operation.application_id,
+                    release_digest=str(operation.plan.get("release_digest") or ""),
+                    admission=(
+                        result.get("cbs_admission")
+                        if isinstance(result.get("cbs_admission"), Mapping)
+                        else None
+                    ),
+                    runtime_target=raw_runtime_target,
+                    actor_ref=actor_ref,
+                    subnet_ref=subnet_ref,
+                )
+            except Exception as exc:
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=operation_result,
+                    recovery_reason=(
+                        "native_cbs_runtime_activation_failed:"
+                        f"{type(exc).__name__}:{exc}"
+                    ),
+                )
+            operation_result["native_cbs_activation"] = native_activation
         return self._transition_operation(
             applying,
             "succeeded",

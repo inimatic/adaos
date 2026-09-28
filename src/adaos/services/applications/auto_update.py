@@ -100,7 +100,9 @@ def _runtime_selection_requires_reconciliation(
 class ApplicationAutoUpdateService:
     """Apply exact safe updates for ``auto_compatible`` subscriptions."""
 
-    def __init__(self, state_dir: Path, application_service: ApplicationService) -> None:
+    def __init__(
+        self, state_dir: Path, application_service: ApplicationService
+    ) -> None:
         self.state_dir = Path(state_dir).expanduser().resolve()
         self.application_service = application_service
 
@@ -141,7 +143,9 @@ class ApplicationAutoUpdateService:
         """
 
         store = getattr(self.application_service, "store", None)
-        if store is None or not callable(getattr(store, "list_runtime_selections", None)):
+        if store is None or not callable(
+            getattr(store, "list_runtime_selections", None)
+        ):
             return {"status": "not_observed", "reason": "runtime_store_unavailable"}
         selections = [
             item
@@ -149,15 +153,35 @@ class ApplicationAutoUpdateService:
             if item.application_id == application_id
         ]
         if any(
-            item.source != "stable_installation"
-            or item.runtime_root_ref != "workspace"
+            item.source != "stable_installation" or item.runtime_root_ref != "workspace"
             for item in selections
         ):
             raise RuntimeError(
                 "automatic update cannot replace an active non-Stable runtime selection"
             )
         if not selections:
-            return {"status": "compatibility_runtime", "changed": False}
+            # Native Applications may have been imported before the stable
+            # RuntimeSelection rail existed.  Adopt only an exact
+            # application:<id> admission; legacy Scenario/Skill admissions
+            # intentionally remain on the compatibility lifecycle.
+            from .cbs_admission import NativeApplicationCBSAdmissionService
+
+            admission = NativeApplicationCBSAdmissionService(
+                store.state_dir
+            ).find_by_project_release(
+                release_digest,
+                application_ref=f"application:{application_id}",
+            )
+            if admission is None:
+                return {"status": "compatibility_runtime", "changed": False}
+            return self.application_service.reconcile_native_runtime_selection(
+                application_id=application_id,
+                release_digest=release_digest,
+                admission=admission,
+                webspace_id=webspace_id,
+                actor_ref=actor_ref,
+                subnet_ref=subnet_ref,
+            )
         if all(item.release_digest == release_digest for item in selections):
             return {
                 "status": "current",
@@ -199,9 +223,7 @@ class ApplicationAutoUpdateService:
         if not subnet.startswith("subnet:"):
             raise ValueError("subnet_ref must be a canonical subnet reference")
         trigger_token = _text(trigger) or "registry_sync"
-        requested = {
-            _text(item) for item in (application_ids or ()) if _text(item)
-        }
+        requested = {_text(item) for item in (application_ids or ()) if _text(item)}
         models = self.application_service.list_models(
             installed_only=True,
             subscriber_subnet_ref=subnet,
@@ -220,20 +242,28 @@ class ApplicationAutoUpdateService:
             if requested and app_id not in requested:
                 continue
             if not bool(model.get("auto_update_enabled")):
-                skipped.append({"application_id": app_id, "reason": "auto_update_disabled"})
+                skipped.append(
+                    {"application_id": app_id, "reason": "auto_update_disabled"}
+                )
                 continue
             if not isinstance(installation, Mapping):
-                skipped.append({"application_id": app_id, "reason": "stable_installation_required"})
+                skipped.append(
+                    {"application_id": app_id, "reason": "stable_installation_required"}
+                )
                 continue
             if list(installation.get("uncertain_operation_refs") or ()):
-                skipped.append({"application_id": app_id, "reason": "uncertain_operation_present"})
+                skipped.append(
+                    {"application_id": app_id, "reason": "uncertain_operation_present"}
+                )
                 continue
             if bool(model.get("local_beta_active")) or any(
                 _text(item.get("source")) != "stable_installation"
                 or _text(item.get("runtime_root_ref")) != "workspace"
                 for item in _model_runtime_selections(model)
             ):
-                skipped.append({"application_id": app_id, "reason": "active_non_stable_runtime"})
+                skipped.append(
+                    {"application_id": app_id, "reason": "active_non_stable_runtime"}
+                )
                 continue
             installed_digest = _text(installation.get("installed_release_digest"))
             if not bool(model.get("update_available")):
@@ -252,7 +282,9 @@ class ApplicationAutoUpdateService:
                         }
                     )
                 else:
-                    skipped.append({"application_id": app_id, "reason": "already_current"})
+                    skipped.append(
+                        {"application_id": app_id, "reason": "already_current"}
+                    )
                 continue
             target_digest = _text(
                 effective.get("release_digest")
@@ -260,7 +292,9 @@ class ApplicationAutoUpdateService:
                 else ""
             )
             if not target_digest:
-                skipped.append({"application_id": app_id, "reason": "target_release_unavailable"})
+                skipped.append(
+                    {"application_id": app_id, "reason": "target_release_unavailable"}
+                )
                 continue
             candidates.append(
                 {
@@ -322,9 +356,7 @@ class ApplicationAutoUpdateService:
                         capability="applications.plan",
                         idempotency_key=idempotency_key,
                     )
-                    operation_status = _text(
-                        getattr(operation, "status", "planned")
-                    )
+                    operation_status = _text(getattr(operation, "status", "planned"))
                     if operation_status == "planned":
                         break
                     if not _retryable_terminal_operation(operation):
@@ -341,9 +373,7 @@ class ApplicationAutoUpdateService:
                             f"{getattr(operation, 'revision', 0)}"
                         ).encode("utf-8")
                     ).hexdigest()[:20]
-                    idempotency_key = (
-                        f"application-auto-update:{child_identity}:retry:{retry_identity}"
-                    )
+                    idempotency_key = f"application-auto-update:{child_identity}:retry:{retry_identity}"
                 else:
                     raise RuntimeError("automatic update retry chain exhausted")
                 item["idempotency_key"] = idempotency_key

@@ -86,7 +86,9 @@ class ApplicationCBSService:
         unsigned = dict(value)
         unsigned.pop("projection_digest", None)
         if expected_projection != canonical_payload_digest(unsigned):
-            raise ApplicationCBSConflict("semantic Application projection digest mismatch")
+            raise ApplicationCBSConflict(
+                "semantic Application projection digest mismatch"
+            )
 
         application_ref = str(value.get("application_ref") or "").strip()
         project_id = str(value.get("project_id") or "").strip()
@@ -116,7 +118,9 @@ class ApplicationCBSService:
             if isinstance(item, Mapping)
         ]
         if len(requirements) != len(raw_requirements):
-            raise ApplicationCBSConflict("semantic requirements contain a malformed item")
+            raise ApplicationCBSConflict(
+                "semantic requirements contain a malformed item"
+            )
         targets = [dict(item.get("environment_target") or {}) for item in requirements]
         if any(target != targets[0] for target in targets[1:]):
             raise ApplicationCBSConflict(
@@ -181,7 +185,9 @@ class ApplicationCBSService:
         requested = str(application_ref or "").strip()
         alias_path = self.semantic_sources_root / "aliases" / f"{_key(requested)}.json"
         pointer = self._read_semantic_pointer(alias_path)
-        return str(pointer.get("application_ref") or requested) if pointer else requested
+        return (
+            str(pointer.get("application_ref") or requested) if pointer else requested
+        )
 
     def inspect_requirement_source(
         self,
@@ -299,7 +305,9 @@ class ApplicationCBSService:
         latest_path = directory / "latest.json"
         with mutation_lock(self.writer_lock_path):
             current = self._read_pointer(latest_path)
-            current_digest = str(current.get("compilation_digest") or "") if current else None
+            current_digest = (
+                str(current.get("compilation_digest") or "") if current else None
+            )
             if current_digest == digest:
                 return value
             if expected_previous_digest != current_digest:
@@ -311,7 +319,9 @@ class ApplicationCBSService:
             if record_path.is_file():
                 existing = json.loads(record_path.read_text(encoding="utf-8"))
                 if existing != value:
-                    raise ApplicationCBSConflict(f"CBS compilation digest collision: {digest}")
+                    raise ApplicationCBSConflict(
+                        f"CBS compilation digest collision: {digest}"
+                    )
             else:
                 atomic_write_json(record_path, value)
             atomic_write_json(
@@ -337,7 +347,9 @@ class ApplicationCBSService:
         value = json.loads(path.read_text(encoding="utf-8"))
         compilation = validate_cbs_compilation(value)
         if str(compilation["application_ref"]) != str(application_ref):
-            raise ApplicationCBSConflict("CBS compilation application identity mismatch")
+            raise ApplicationCBSConflict(
+                "CBS compilation application identity mismatch"
+            )
         return compilation
 
     def inspect_digest(
@@ -358,7 +370,9 @@ class ApplicationCBSService:
             return None
         value = validate_cbs_compilation(json.loads(path.read_text(encoding="utf-8")))
         if str(value["application_ref"]) != str(application_ref):
-            raise ApplicationCBSConflict("CBS compilation application identity mismatch")
+            raise ApplicationCBSConflict(
+                "CBS compilation application identity mismatch"
+            )
         if str(value["compilation_digest"]) != digest:
             raise ApplicationCBSConflict("CBS compilation digest mismatch")
         return value
@@ -369,9 +383,13 @@ class ApplicationCBSService:
             return []
         result = []
         for path in sorted(records.glob("*.json")):
-            value = validate_cbs_compilation(json.loads(path.read_text(encoding="utf-8")))
+            value = validate_cbs_compilation(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
             if str(value["application_ref"]) != str(application_ref):
-                raise ApplicationCBSConflict("CBS history application identity mismatch")
+                raise ApplicationCBSConflict(
+                    "CBS history application identity mismatch"
+                )
             result.append(value)
         return sorted(
             result,
@@ -417,7 +435,9 @@ class ApplicationCBSService:
         if compilation is None:
             raise KeyError(application_ref)
         contracts = tuple(
-            item if isinstance(item, CapabilityContract) else CapabilityContract.from_mapping(item)
+            item
+            if isinstance(item, CapabilityContract)
+            else CapabilityContract.from_mapping(item)
             for item in capability_contracts
         )
         resolver = SemanticResolver()
@@ -426,7 +446,9 @@ class ApplicationCBSService:
             for item in compilation["requirements"]
         ]
         claims = tuple(
-            item if isinstance(item, EvidenceClaim) else EvidenceClaim.from_mapping(item)
+            item
+            if isinstance(item, EvidenceClaim)
+            else EvidenceClaim.from_mapping(item)
             for item in evidence_claims
         )
         current_assessments = tuple(
@@ -658,7 +680,9 @@ class ApplicationCBSService:
             activation_summary = "The Workspace runtime is selected"
         elif trial.get("evidence_present"):
             activation_status = "trial_observed"
-            activation_summary = "Trial evidence exists; no current selection was observed"
+            activation_summary = (
+                "Trial evidence exists; no current selection was observed"
+            )
         else:
             activation_status = "inactive"
             activation_summary = "No Trial or Workspace runtime selection is active"
@@ -670,13 +694,16 @@ class ApplicationCBSService:
             "revision": selection.get("revision"),
         }
 
-        workspace_committed = source == "stable_installation"
         lock = {
-            "status": "committed" if workspace_committed else "unchanged",
+            # RuntimeSelection is the Application channel authority.  It is
+            # not evidence that the lower-level CBS WorkspaceLock transaction
+            # was committed, so this derived view must not overstate it.
+            "status": "not_observed",
             "summary": (
-                "Stable installation and Workspace runtime authority are observed"
-                if workspace_committed
-                else "Workspace authority remains unchanged by this view"
+                "Stable runtime selection is active; a CBS WorkspaceLock commit "
+                "was not observed by this read model"
+                if source == "stable_installation"
+                else "No CBS WorkspaceLock commit was observed by this read model"
             ),
         }
         return {
@@ -714,7 +741,10 @@ class ApplicationCBSService:
         if not path.is_file():
             return None
         value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, Mapping) or value.get("schema") != "adaos.application.cbs_pointer.v1":
+        if (
+            not isinstance(value, Mapping)
+            or value.get("schema") != "adaos.application.cbs_pointer.v1"
+        ):
             raise ApplicationCBSConflict("invalid Application CBS pointer")
         return dict(value)
 
@@ -746,11 +776,12 @@ class ApplicationCBSService:
             ) from exc
         if (
             not isinstance(value, Mapping)
-            or value.get("schema")
-            != "adaos.application.semantic_requirement_set.v1"
+            or value.get("schema") != "adaos.application.semantic_requirement_set.v1"
             or value.get("application_ref") != application_ref
         ):
-            raise ApplicationCBSConflict("semantic requirement source identity mismatch")
+            raise ApplicationCBSConflict(
+                "semantic requirement source identity mismatch"
+            )
         if (
             project_release_digest
             and value.get("project_release_digest") != project_release_digest

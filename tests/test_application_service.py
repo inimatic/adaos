@@ -9,6 +9,7 @@ import pytest
 from adaos.domain.application import (
     Application,
     ApplicationInstallation,
+    ApplicationOperation,
     ApplicationRelease,
 )
 from adaos.domain.application_access import (
@@ -42,6 +43,47 @@ DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
 DIGEST_C = "sha256:" + "c" * 64
 DIGEST_D = "sha256:" + "d" * 64
+
+
+def _native_admission(application_id: str, release_digest: str) -> dict[str, object]:
+    resolution_ref = f"application-resolution:{application_id}/production/exact"
+    resolution_digest = DIGEST_C
+    return {
+        "schema": "adaos.application.cbs_admission.v1",
+        "status": "admitted",
+        "application_ref": f"application:{application_id}",
+        "project_release_digest": release_digest,
+        "admission_digest": DIGEST_D,
+        "requirements_total": 1,
+        "requirements_resolved": 1,
+        "resolutions": [
+            {
+                "resolution_ref": resolution_ref,
+                "resolution_digest": resolution_digest,
+                "project_release_digest": release_digest,
+            }
+        ],
+        "plans": [
+            {
+                "application_resolution_ref": resolution_ref,
+                "application_resolution_digest": resolution_digest,
+                "plan_digest": DIGEST_B,
+            }
+        ],
+    }
+
+
+def _apply_reviewed(
+    service: ApplicationService, operation: ApplicationOperation
+) -> ApplicationOperation:
+    return service.apply_operation(
+        operation.operation_id,
+        plan_digest=operation.plan_digest,
+        idempotency_key=operation.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
 
 
 def _application(
@@ -282,7 +324,9 @@ def test_catalog_summary_reuses_bulk_channels_and_subscriptions(
         service.store,
         "get_subscription",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("catalog summary must not reread subscriptions per Application")
+            AssertionError(
+                "catalog summary must not reread subscriptions per Application"
+            )
         ),
     )
 
@@ -1145,7 +1189,9 @@ def test_update_accepts_exact_installation_materialized_by_executor(
                 application_id=current.application_id,
                 installed_release_digest=str(plan["release_digest"]),
                 component_refs=tuple(plan["components"]),
-                shared_project_bindings=service._release_shared_project_bindings(second),
+                shared_project_bindings=service._release_shared_project_bindings(
+                    second
+                ),
                 data_policy=str(plan["data_policy"]),
                 status="active",
                 revision=current.revision + 1,
@@ -1924,11 +1970,14 @@ def test_provider_update_rebinds_compatible_direct_component_consumers(
     assert applied.status == "succeeded"
     rebound = service.store.get_installation("consumer_app")
     assert rebound.shared_project_bindings == ()
-    assert next(
-        item
-        for item in rebound.component_refs
-        if item["component_ref"] == "skill:shared-mail-provider"
-    )["package_digest"] == DIGEST_B
+    assert (
+        next(
+            item
+            for item in rebound.component_refs
+            if item["component_ref"] == "skill:shared-mail-provider"
+        )["package_digest"]
+        == DIGEST_B
+    )
 
     provider_v2 = service.register_release(provider_release("2.0.0", DIGEST_D))
     incompatible = service.plan_operation(
@@ -2318,7 +2367,9 @@ def test_repeated_restore_receipt_keeps_first_observation_time(tmp_path: Path) -
     )
 
     assert replay == first
-    with pytest.raises(ApplicationStoreError, match="immutable snapshot receipt conflict"):
+    with pytest.raises(
+        ApplicationStoreError, match="immutable snapshot receipt conflict"
+    ):
         store.put_snapshot_receipt(
             f"restore:{snapshot_ref}",
             {**first, "restored_release_digest": DIGEST_C},
@@ -2850,3 +2901,169 @@ def test_git_stable_source_publisher_binds_candidate_release_and_registry() -> N
         "commit": "fedcba9876543210fedcba9876543210fedcba98",
         "source_revision": release["project_release"]["source_ref"]["revision"],
     }
+
+
+def test_native_cbs_install_commits_exact_stable_runtime_selection(
+    service: ApplicationService,
+) -> None:
+    release = service.register_release(_release())
+    service.executor = lambda plan: {
+        "ok": True,
+        "status": "succeeded",
+        "cbs_admission": _native_admission(
+            str(plan["application_id"]), str(plan["release_digest"])
+        ),
+    }
+    planned = service.plan_operation(
+        "app_recipes",
+        "install",
+        release_digest=release.release_digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="native-install",
+        webspace_id="desktop",
+    )
+
+    applied = _apply_reviewed(service, planned)
+
+    assert applied.status == "succeeded"
+    assert applied.result["native_cbs_activation"]["status"] == "activated"
+    selection = service.store.get_runtime_selection("desktop", "app_recipes")
+    assert selection.source == "stable_installation"
+    assert selection.release_digest == release.release_digest
+    assert selection.revision == 1
+
+
+def test_legacy_scenario_admission_keeps_compatibility_runtime(
+    service: ApplicationService,
+) -> None:
+    release = service.register_release(_release())
+    admission = _native_admission("app_recipes", release.release_digest)
+    admission["application_ref"] = "scenario:recipes"
+    service.executor = lambda _plan: {
+        "ok": True,
+        "status": "succeeded",
+        "cbs_admission": admission,
+    }
+    planned = service.plan_operation(
+        "app_recipes",
+        "install",
+        release_digest=release.release_digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="compatibility-install",
+    )
+
+    applied = _apply_reviewed(service, planned)
+
+    assert applied.status == "succeeded"
+    assert applied.result["native_cbs_activation"] == {
+        "status": "compatibility_runtime",
+        "changed": False,
+        "reason": "compatibility_admission",
+    }
+    with pytest.raises(FileNotFoundError):
+        service.store.get_runtime_selection("desktop", "app_recipes")
+
+
+def test_native_cbs_update_advances_reviewed_stable_runtime(
+    service: ApplicationService,
+) -> None:
+    first = service.register_release(_release())
+    second = service.register_release(
+        _release(version="1.1.0", package_digest=DIGEST_B)
+    )
+
+    def execute(plan):
+        result = {
+            "ok": True,
+            "status": "succeeded",
+            "cbs_admission": _native_admission(
+                str(plan["application_id"]), str(plan["release_digest"])
+            ),
+        }
+        if plan["kind"] == "update":
+            result["snapshot_receipt"] = {
+                "snapshot_ref": "snapshot:native-update",
+                "source_release_digest": first.release_digest,
+                "consistency_boundary": "artifact_activation_transaction",
+            }
+        return result
+
+    service.executor = execute
+    install = service.plan_operation(
+        "app_recipes",
+        "install",
+        release_digest=first.release_digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="native-install-before-update",
+    )
+    assert _apply_reviewed(service, install).status == "succeeded"
+    update = service.plan_operation(
+        "app_recipes",
+        "update",
+        release_digest=second.release_digest,
+        expected_revision=1,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="native-update",
+    )
+
+    applied = _apply_reviewed(service, update)
+
+    assert applied.status == "succeeded"
+    selection = service.store.get_runtime_selection("desktop", "app_recipes")
+    assert selection.release_digest == second.release_digest
+    assert selection.revision == 2
+
+
+def test_native_cbs_activation_fails_closed_when_runtime_changed_after_review(
+    service: ApplicationService,
+) -> None:
+    release = service.register_release(_release())
+    service.executor = lambda plan: {
+        "ok": True,
+        "status": "succeeded",
+        "cbs_admission": _native_admission(
+            str(plan["application_id"]), str(plan["release_digest"])
+        ),
+    }
+    planned = service.plan_operation(
+        "app_recipes",
+        "install",
+        release_digest=release.release_digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="native-runtime-conflict",
+    )
+    service.select_runtime(
+        webspace_id="desktop",
+        application_id="app_recipes",
+        source="local_trial",
+        release_digest=release.release_digest,
+        runtime_root_ref="trial:changed-after-review",
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+
+    applied = _apply_reviewed(service, planned)
+
+    assert applied.status == "unknown"
+    assert applied.recovery_reason is not None
+    assert applied.recovery_reason.startswith("native_cbs_runtime_activation_failed:")
+    assert (
+        service.store.get_runtime_selection("desktop", "app_recipes").source
+        == "local_trial"
+    )

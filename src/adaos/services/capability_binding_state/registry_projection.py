@@ -57,9 +57,7 @@ from .catalog import PortableContractCatalog, portable_record_identity
 
 
 SEMANTIC_REGISTRY_SCHEMA = "adaos.semantic_registry.index.v1"
-SEMANTIC_APPLICATION_RELEASE_SCHEMA = (
-    "adaos.semantic_registry.application_release.v1"
-)
+SEMANTIC_APPLICATION_RELEASE_SCHEMA = "adaos.semantic_registry.application_release.v1"
 PUBLIC_APPLICATION_CATALOG_SCHEMA = (
     "adaos.semantic_registry.public_application_catalog.v1"
 )
@@ -148,9 +146,7 @@ def _empty_application_catalog() -> dict[str, Any]:
 def _validate_application_catalog(value: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(value)
     if result.get("schema") != PUBLIC_APPLICATION_CATALOG_SCHEMA:
-        raise SemanticRegistryProjectionError(
-            "unsupported public Application catalog"
-        )
+        raise SemanticRegistryProjectionError("unsupported public Application catalog")
     for field in ("applications", "releases"):
         if not isinstance(result.get(field), Mapping):
             raise SemanticRegistryProjectionError(
@@ -304,9 +300,7 @@ class SemanticRegistryProjection:
             )
 
         semantic_index = self._read_index()
-        semantic_key = (
-            f"project:{app.legacy_project_id}@{app_release.release_digest}"
-        )
+        semantic_key = f"project:{app.legacy_project_id}@{app_release.release_digest}"
         semantic_entry = semantic_index["application_releases"].get(semantic_key)
         if not isinstance(semantic_entry, Mapping):
             raise SemanticRegistryProjectionError(
@@ -342,9 +336,7 @@ class SemanticRegistryProjection:
                         "public Application release is immutable"
                     )
 
-            relative = path.relative_to(
-                Path(self.registry_root).resolve()
-            ).as_posix()
+            relative = path.relative_to(Path(self.registry_root).resolve()).as_posix()
             release_key = f"{app.application_id}@{app_release.release_digest}"
             catalog["releases"][release_key] = {
                 "application_id": app.application_id,
@@ -441,11 +433,9 @@ class SemanticRegistryProjection:
             raise SemanticRegistryProjectionError(
                 "exact ProjectRelease has no CBS admission; semantic publication is fail-closed"
             )
-        if (
-            admission.get("status") != "admitted"
-            or int(admission.get("requirements_total") or 0)
-            != int(admission.get("requirements_resolved") or -1)
-        ):
+        if admission.get("status") != "admitted" or int(
+            admission.get("requirements_total") or 0
+        ) != int(admission.get("requirements_resolved") or -1):
             raise SemanticRegistryProjectionError(
                 "exact ProjectRelease CBS admission is unresolved"
             )
@@ -458,9 +448,8 @@ class SemanticRegistryProjection:
             raise SemanticRegistryProjectionError(
                 "exact CBS compilation referenced by admission is unavailable"
             )
-        if (
-            compilation.get("semantic_revision_digest")
-            != admission.get("semantic_revision_digest")
+        if compilation.get("semantic_revision_digest") != admission.get(
+            "semantic_revision_digest"
         ):
             raise SemanticRegistryProjectionError(
                 "CBS admission and compilation semantic revisions differ"
@@ -506,7 +495,8 @@ class SemanticRegistryProjection:
         missing = sorted(selected_digests - set(records))
         if missing:
             raise SemanticRegistryProjectionError(
-                "selected CBS records are absent from publication: " + ", ".join(missing)
+                "selected CBS records are absent from publication: "
+                + ", ".join(missing)
             )
 
         portable_evidence_digests: list[str] = []
@@ -535,7 +525,9 @@ class SemanticRegistryProjection:
             schema: sorted(set(digests))
             for schema, digests in sorted(artifacts_by_schema.items())
         }
-        packages = [item.to_dict() for item in sorted(plan.packages, key=lambda p: p.key)]
+        packages = [
+            item.to_dict() for item in sorted(plan.packages, key=lambda p: p.key)
+        ]
         application_release: dict[str, Any] = {
             "schema": SEMANTIC_APPLICATION_RELEASE_SCHEMA,
             "project_id": release.project_id,
@@ -594,7 +586,9 @@ class SemanticRegistryProjection:
                         )
                 else:
                     pending_records.append((path, payload))
-                relative = path.relative_to(Path(self.registry_root).resolve()).as_posix()
+                relative = path.relative_to(
+                    Path(self.registry_root).resolve()
+                ).as_posix()
                 raw_entry = record_index.get(digest)
                 entry = dict(raw_entry) if isinstance(raw_entry, Mapping) else {}
                 publishers = set(entry.get("published_by_release_digests") or ())
@@ -621,7 +615,9 @@ class SemanticRegistryProjection:
                 "version": release.version,
                 "application_ref": application_ref,
                 "project_release_digest": release_digest,
-                "semantic_revision_digest": str(compilation["semantic_revision_digest"]),
+                "semantic_revision_digest": str(
+                    compilation["semantic_revision_digest"]
+                ),
                 "path": app_path.relative_to(
                     Path(self.registry_root).resolve()
                 ).as_posix(),
@@ -785,17 +781,13 @@ class SemanticRegistryProjection:
             unsigned.pop("projection_digest", None)
             if (
                 expected_projection != canonical_payload_digest(unsigned)
-                or raw_release_entry.get("projection_digest")
-                != expected_projection
-                or raw_application_entry.get("projection_digest")
-                != expected_projection
+                or raw_release_entry.get("projection_digest") != expected_projection
+                or raw_application_entry.get("projection_digest") != expected_projection
             ):
                 raise SemanticRegistryProjectionError(
                     f"public Application projection digest mismatch: {release_key}"
                 )
-            application = Application.from_mapping(
-                payload.get("application") or {}
-            )
+            application = Application.from_mapping(payload.get("application") or {})
             release = ApplicationRelease.from_mapping(payload.get("release") or {})
             channels = payload.get("channels")
             stable_digest = (
@@ -810,13 +802,10 @@ class SemanticRegistryProjection:
                 != application.publisher_ref
                 or int(raw_application_entry.get("application_revision") or 0)
                 != application.revision
-                or raw_application_entry.get("stable_release_digest")
-                != stable_digest
+                or raw_application_entry.get("stable_release_digest") != stable_digest
                 or raw_release_entry.get("application_id") != application_id
-                or raw_release_entry.get("publisher_ref")
-                != application.publisher_ref
-                or raw_release_entry.get("release_digest")
-                != release.release_digest
+                or raw_release_entry.get("publisher_ref") != application.publisher_ref
+                or raw_release_entry.get("release_digest") != release.release_digest
             ):
                 raise SemanticRegistryProjectionError(
                     f"public Application catalog metadata mismatch: {application_id}"
@@ -830,16 +819,14 @@ class SemanticRegistryProjection:
                 registry_root / Path(str(semantic.get("path") or ""))
             ).resolve()
             if (
-                (registry_root != semantic_path and registry_root not in semantic_path.parents)
-                or not semantic_path.is_file()
-            ):
+                registry_root != semantic_path
+                and registry_root not in semantic_path.parents
+            ) or not semantic_path.is_file():
                 raise SemanticRegistryProjectionError(
                     f"public Application semantic projection is unavailable: {application_id}"
                 )
             try:
-                semantic_payload = json.loads(
-                    semantic_path.read_text(encoding="utf-8")
-                )
+                semantic_payload = json.loads(semantic_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise SemanticRegistryProjectionError(
                     f"public Application semantic projection is unreadable: {application_id}"
@@ -894,9 +881,7 @@ class SemanticRegistryProjection:
                         "project_release_digest": requirement_source[
                             "project_release_digest"
                         ],
-                        "compilation_digest": requirement_source[
-                            "compilation_digest"
-                        ],
+                        "compilation_digest": requirement_source["compilation_digest"],
                         "requirement_set_digest": requirement_source[
                             "requirement_set_digest"
                         ],
@@ -974,9 +959,7 @@ class SemanticRegistryProjection:
                     "missing_package_digests": missing,
                     "install_access": install_access,
                 }
-            subnet = str(local_publisher_ref or "subnet:local").removeprefix(
-                "subnet:"
-            )
+            subnet = str(local_publisher_ref or "subnet:local").removeprefix("subnet:")
             admission = NativeApplicationCBSAdmissionService(
                 Path(self.state_dir)
             ).admit(
@@ -990,7 +973,17 @@ class SemanticRegistryProjection:
                     "source": "semantic_registry_reconciliation",
                 },
             )
-        except (FileNotFoundError, OSError, ValueError) as exc:
+            runtime_selection = ApplicationService(
+                application_store
+            ).reconcile_native_runtime_selection(
+                application_id=application.application_id,
+                release_digest=str(release.release_digest),
+                admission=admission,
+                webspace_id="desktop",
+                actor_ref="system:semantic-registry-reconciliation",
+                subnet_ref=str(local_publisher_ref or "subnet:local"),
+            )
+        except (FileNotFoundError, OSError, ValueError, ApplicationServiceError) as exc:
             return {
                 "status": "failed",
                 "reason": "installed_cbs_reconciliation_failed",
@@ -1003,6 +996,7 @@ class SemanticRegistryProjection:
             "admission_digest": admission.get("admission_digest"),
             "requirements_total": admission.get("requirements_total"),
             "requirements_resolved": admission.get("requirements_resolved"),
+            "runtime_selection": runtime_selection,
             "install_access": install_access,
         }
 

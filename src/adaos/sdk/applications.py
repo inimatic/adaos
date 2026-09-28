@@ -697,8 +697,7 @@ def _effective_navigation(
             "webspace_id": webspace,
             "space_kind": "workspace",
             "application_id": application_id,
-            "release_digest": str(release.get("release_digest") or "").strip()
-            or None,
+            "release_digest": str(release.get("release_digest") or "").strip() or None,
         },
     }
 
@@ -1360,7 +1359,8 @@ def _enrich_application_models(
             if local is not None:
                 entrypoints = application.get("entrypoints") or []
                 presentation_ref = str(
-                    (entrypoints[0] if entrypoints else {}).get("presentation_ref") or ""
+                    (entrypoints[0] if entrypoints else {}).get("presentation_ref")
+                    or ""
                 )
                 object_type, _, object_id = presentation_ref.partition(":")
                 if object_type and object_id:
@@ -1374,14 +1374,18 @@ def _enrich_application_models(
                                 "stable": workflow["stable"],
                                 "accepted": workflow["accepted"],
                                 "publication_status": workflow["publication_status"],
-                                "updated_at": workflow["updated_at"] or local["updated_at"],
+                                "updated_at": workflow["updated_at"]
+                                or local["updated_at"],
                             }
                         )
             model["local_development"] = local
             model["execution_placement"] = placements.get(
                 application_id,
                 _empty_execution_placement(
-                    application_id, status="not_materialized", managed=False, partial=False
+                    application_id,
+                    status="not_materialized",
+                    managed=False,
+                    partial=False,
                 ),
             )
             application["distribution"] = {
@@ -1463,9 +1467,7 @@ def _enrich_application_models(
                     (source_receipt or {}).get("semantic_publication")
                 )
                 application_catalog_publication = deepcopy(
-                    (source_receipt or {}).get(
-                        "application_catalog_publication"
-                    )
+                    (source_receipt or {}).get("application_catalog_publication")
                 )
                 local["source_registry"] = {
                     "status": "published" if source_receipt else "not_published",
@@ -1484,9 +1486,7 @@ def _enrich_application_models(
                     ),
                     "installable_distribution": bool(
                         isinstance(semantic_publication, Mapping)
-                        and isinstance(
-                            application_catalog_publication, Mapping
-                        )
+                        and isinstance(application_catalog_publication, Mapping)
                     ),
                     "evidence_present": bool(source_receipt),
                 }
@@ -1636,8 +1636,7 @@ def list_applications(
         models = [
             item
             for item in models
-            if str(item["application"].get("kind") or "application")
-            == "application"
+            if str(item["application"].get("kind") or "application") == "application"
             and item["application"]["visibility"] == "public"
             and bool(item.get("channels", {}).get("stable"))
         ]
@@ -1725,7 +1724,7 @@ def get_application(
             )
             object_type = str(builder.get("selected_object_type") or "").strip()
             object_id = str(builder.get("selected_object_id") or "").strip()
-            application_ref = (
+            compatibility_application_ref = (
                 f"{object_type}:{object_id}"
                 if object_type in {"scenario", "skill"} and object_id
                 else f"application:{token}"
@@ -1762,9 +1761,21 @@ def get_application(
                     )
                 from adaos.services.applications.cbs import ApplicationCBSService
 
-                model["cbs_lifecycle"] = ApplicationCBSService(
-                    state_dir
-                ).lifecycle_projection(
+                cbs = ApplicationCBSService(state_dir)
+                canonical_application_ref = f"application:{token}"
+                selected_release = str(
+                    (selection_value or {}).get("release_digest") or ""
+                ).strip()
+                application_ref = (
+                    canonical_application_ref
+                    if cbs.inspect_requirement_source(
+                        canonical_application_ref,
+                        project_release_digest=selected_release or None,
+                    )
+                    is not None
+                    else compatibility_application_ref
+                )
+                model["cbs_lifecycle"] = cbs.lifecycle_projection(
                     application_ref,
                     runtime_selection=selection_value,
                     local_development=local,
@@ -2454,7 +2465,8 @@ def update_provider_configuration(
     contract = release.setup_contract
     declared = {
         str(item.get("id") or "").strip().lower()
-        for item in (contract.payload.get("connected_accounts") if contract else ()) or ()
+        for item in (contract.payload.get("connected_accounts") if contract else ())
+        or ()
     }
     normalized_provider = str(provider_id or "").strip().lower()
     if normalized_provider not in declared:
@@ -2798,9 +2810,7 @@ def list_home_targets(application_id: str) -> dict[str, Any]:
         if bool(getattr(row, "has_pinned_applications_overlay", False)):
             pinned_refs = {
                 str(item or "").strip()
-                for item in (
-                    getattr(row, "pinned_applications_overlay", []) or ()
-                )
+                for item in (getattr(row, "pinned_applications_overlay", []) or ())
                 if str(item or "").strip()
             }
         else:
@@ -2850,7 +2860,9 @@ def set_home_pinned_many(
         raise ValueError("Unknown desktop targets: " + ", ".join(unknown))
     unavailable = [item for item in requested if not bool(known[item].get("installed"))]
     if unavailable:
-        raise ValueError("Application is not installed for desktops: " + ", ".join(unavailable))
+        raise ValueError(
+            "Application is not installed for desktops: " + ", ".join(unavailable)
+        )
 
     service = WebDesktopService()
     before = {
