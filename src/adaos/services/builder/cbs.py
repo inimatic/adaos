@@ -272,7 +272,14 @@ def compile_prototype_cbs(
                 requirement_ref=f"requirement:{application_token}.records",
                 capability_ref="capability:resource.records.manage",
                 environment_target=environment_target,
-                stateful=True,
+                # Prototype resource attachments are explicitly reconstructible
+                # and never become production state.  Requiring a
+                # state_compatibility claim here would compare the provider to
+                # a StateContract that the compilation intentionally does not
+                # carry, making every exact Trial release impossible to admit.
+                # Durable production state is governed independently by the
+                # provider's data lifecycle declaration.
+                stateful=False,
             )
         )
         authoring_counts["generated"] += 1

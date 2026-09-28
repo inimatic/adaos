@@ -177,8 +177,11 @@ def test_project_trial_admits_the_exact_cbs_release_before_handoff(
         def __init__(self, state_dir: Path) -> None:
             assert state_dir == tmp_path / "state"
 
-        def find_by_project_release(self, digest: str):
+        def find_by_project_release(
+            self, digest: str, *, application_ref: str | None = None
+        ):
             assert digest == release_digest
+            assert application_ref == "application:mail_reader"
             return None
 
         def admit(self, **kwargs):

@@ -247,7 +247,6 @@ class ApplicationDeploymentExecutor:
         )
 
         admissions = NativeApplicationCBSAdmissionService(self.state_dir)
-        current = admissions.find_by_project_release(release_digest)
         cbs = ApplicationCBSService(self.state_dir)
         source = cbs.inspect_requirement_source(
             f"application:{application_id}",
@@ -266,8 +265,17 @@ class ApplicationDeploymentExecutor:
                 if source is not None:
                     break
         if source is None:
-            return current
+            return admissions.find_by_project_release(
+                release_digest,
+                application_ref=f"application:{application_id}",
+            )
         application_ref = str(source.get("application_ref") or "")
+        current = admissions.find_by_project_release(
+            release_digest,
+            application_ref=application_ref,
+        )
+        if current is not None:
+            return current
         try:
             release_plan = self.runtime.releases.get_release(
                 project_id, release_digest

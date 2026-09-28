@@ -180,11 +180,23 @@ class NativeApplicationCBSAdmissionService:
         return self._validate_record(record, application_ref=application_ref)
 
     def find_by_project_release(
-        self, project_release_digest: str
+        self,
+        project_release_digest: str,
+        *,
+        application_ref: str | None = None,
     ) -> dict[str, Any] | None:
-        """Find the unique immutable admission for an exact ProjectRelease."""
+        """Find one immutable admission for an exact release and Application.
+
+        A Project release may legitimately carry both the semantic Project
+        Application admission and the accepted Prototype/Scenario admission.
+        They protect different lifecycle boundaries while sharing the same
+        package closure.  Callers that know their Application identity must
+        therefore select it explicitly; an unqualified ambiguous lookup stays
+        fail-closed for legacy callers.
+        """
 
         expected = str(project_release_digest or "").strip().lower()
+        expected_application = str(application_ref or "").strip()
         matches: list[dict[str, Any]] = []
         if not self.root.is_dir():
             return None
@@ -201,8 +213,12 @@ class NativeApplicationCBSAdmissionService:
                 )
             if str(value.get("project_release_digest") or "").lower() != expected:
                 continue
-            application_ref = str(value.get("application_ref") or "")
-            matches.append(self._validate_record(value, application_ref=application_ref))
+            record_application = str(value.get("application_ref") or "")
+            if expected_application and record_application != expected_application:
+                continue
+            matches.append(
+                self._validate_record(value, application_ref=record_application)
+            )
         if len(matches) > 1:
             raise NativeApplicationCBSAdmissionError(
                 "ProjectRelease has more than one CBS admission identity"

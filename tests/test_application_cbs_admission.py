@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.domain.application import Application, ApplicationRelease
 from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
 from adaos.domain.capability_binding_state import ApplicationRequirement
@@ -439,6 +441,50 @@ def test_exact_release_publishes_and_imports_shared_semantic_registry(
     deliveries = catalog.deliveries_for_binding(bindings[0].digest)
     assert len(deliveries) == 1
     assert deliveries[0].to_dict()["package"]["id"] == "mail_provider"
+
+
+def test_exact_release_admissions_are_selected_by_application_identity(
+    tmp_path: Path,
+) -> None:
+    plan, store = _release(tmp_path)
+    scenario_compilation = _compilation()
+    project_compilation = copy.deepcopy(scenario_compilation)
+    project_compilation["application_ref"] = "application:mail_client"
+    project_compilation.pop("compilation_digest")
+    project_compilation["compilation_digest"] = canonical_payload_digest(
+        project_compilation
+    )
+    service = NativeApplicationCBSAdmissionService(
+        tmp_path / "state", now=lambda: FIXED_NOW
+    )
+    scenario_admission = service.admit(
+        application_ref="scenario:mail_client",
+        compilation=scenario_compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:scenario-mail",
+    )
+    project_admission = service.admit(
+        application_ref="application:mail_client",
+        compilation=project_compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:project-mail",
+    )
+
+    assert service.find_by_project_release(
+        plan.release.release_digest,
+        application_ref="scenario:mail_client",
+    ) == scenario_admission
+    assert service.find_by_project_release(
+        plan.release.release_digest,
+        application_ref="application:mail_client",
+    ) == project_admission
+    with pytest.raises(
+        ValueError,
+        match="more than one CBS admission identity",
+    ):
+        service.find_by_project_release(plan.release.release_digest)
 
 
 def test_public_application_catalog_imports_installable_aggregate_without_installing(

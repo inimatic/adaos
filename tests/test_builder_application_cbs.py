@@ -120,6 +120,14 @@ def test_compiler_preserves_semantic_identity_and_separates_simulation_state() -
         "capability:application.ui.render",
         "capability:resource.records.manage",
     }
+    records_requirement = next(
+        item
+        for item in first["requirements"]
+        if item["capability_ref"] == "capability:resource.records.manage"
+    )
+    assert records_requirement["evidence_threshold"]["required_claim_kinds"] == [
+        "capability_conformance"
+    ]
     assert first["simulation_attachments"] == [
         {
             "resource_type": "prototype.applications",

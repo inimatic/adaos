@@ -428,7 +428,15 @@ class SemanticRegistryProjection:
         release = plan.release.seal()
         release_digest = str(release.release_digest)
         admission_service = NativeApplicationCBSAdmissionService(Path(self.state_dir))
-        admission = admission_service.find_by_project_release(release_digest)
+        admission = admission_service.find_by_project_release(
+            release_digest,
+            application_ref=f"application:{release.project_id}",
+        )
+        if admission is None:
+            # Legacy component-first releases were admitted under their
+            # physical presentation identity before Project Applications
+            # acquired a stable semantic identity.
+            admission = admission_service.find_by_project_release(release_digest)
         if admission is None:
             raise SemanticRegistryProjectionError(
                 "exact ProjectRelease has no CBS admission; semantic publication is fail-closed"

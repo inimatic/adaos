@@ -2665,7 +2665,10 @@ class RootDeveloperService:
 
         release_digest = str(prepared.plan.release.release_digest)
         admissions = NativeApplicationCBSAdmissionService(state_dir)
-        admission = admissions.find_by_project_release(release_digest)
+        admission = admissions.find_by_project_release(
+            release_digest,
+            application_ref=application_ref,
+        )
         if admission is None:
             admission = admissions.admit(
                 application_ref=application_ref,

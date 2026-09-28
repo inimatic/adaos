@@ -197,7 +197,10 @@ class ApplicationCBSService:
         if expected_release:
             admission = NativeApplicationCBSAdmissionService(
                 self.state_dir
-            ).find_by_project_release(expected_release)
+            ).find_by_project_release(
+                expected_release,
+                application_ref=canonical_ref,
+            )
             if (
                 admission is not None
                 and admission.get("application_ref") == canonical_ref
@@ -390,7 +393,10 @@ class ApplicationCBSService:
         service = NativeApplicationCBSAdmissionService(self.state_dir)
         expected_release = str(project_release_digest or "").strip()
         if expected_release:
-            admission = service.find_by_project_release(expected_release)
+            admission = service.find_by_project_release(
+                expected_release,
+                application_ref=canonical_ref,
+            )
             if (
                 admission is not None
                 and admission.get("application_ref") == canonical_ref
