@@ -10350,6 +10350,21 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert bindings_path.resolve().as_posix() in prompt
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
     assert "sample_skill.save_record" in bindings_path.read_text(encoding="utf-8")
+    sdk_contracts_path = tmp_path / "input-blueprint/public-sdk-contracts.json"
+    sdk_contracts = json.loads(sdk_contracts_path.read_text(encoding="utf-8"))
+    sdk_names = {item["name"] for item in sdk_contracts["contracts"]}
+    assert {
+        "adaos.sdk.access.require",
+        "adaos.sdk.data.skill_env.skill_data_root",
+        "adaos.sdk.llm.content.generate",
+        "adaos.sdk.llm.images.generate",
+        "adaos.sdk.resources.operate",
+    } <= sdk_names
+    assert blueprint_packet["public_sdk_contracts_ref"] == (
+        sdk_contracts_path.resolve().as_posix()
+    )
+    assert sdk_contracts_path.resolve().as_posix() in prompt
+    assert "import failure there is not evidence" in prompt
     assert "stateKey" in bindings["binding_rules"]["creation"]
     assert "independent acceptance owns browser journeys" in prompt
     assert "Explicitly mark checks not executed" in prompt

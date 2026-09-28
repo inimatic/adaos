@@ -327,6 +327,95 @@ def _write_compact_json(path: Path, payload: Any) -> None:
     )
 
 
+_IMPLEMENTATION_SDK_SYMBOLS = {
+    "adaos.sdk.access.caller",
+    "adaos.sdk.access.require",
+    "adaos.sdk.data.skill_env.skill_data_root",
+    "adaos.sdk.llm.content.generate",
+    "adaos.sdk.llm.content.get",
+    "adaos.sdk.llm.images.generate",
+    "adaos.sdk.llm.images.get",
+    "adaos.sdk.llm.images.list_drafts",
+    "adaos.sdk.resources.definition",
+    "adaos.sdk.resources.operate",
+    "adaos.sdk.resources.query",
+}
+
+
+def _implementation_sdk_contract_bundle() -> dict[str, Any]:
+    """Return the bounded public SDK closure needed by application realization."""
+
+    from adaos.sdk.core.exporter import export as sdk_export
+
+    exported = sdk_export(
+        level="std",
+        query=(
+            "llm content images resources access caller require skill data root "
+            "generate operate query"
+        ),
+        limit=64,
+    )
+    contracts = [
+        {
+            key: item[key]
+            for key in ("name", "module", "summary", "signature_detail")
+            if key in item
+        }
+        for item in exported.get("tools") or []
+        if item.get("name") in _IMPLEMENTATION_SDK_SYMBOLS
+    ]
+    present = {str(item.get("name") or "") for item in contracts}
+    missing = sorted(_IMPLEMENTATION_SDK_SYMBOLS - present)
+    if missing:
+        raise RuntimeError(
+            "public implementation SDK export is incomplete: " + ", ".join(missing)
+        )
+    contracts.sort(key=lambda item: str(item["name"]))
+    return {
+        "schema": "adaos.builder.public_sdk_contracts.v1",
+        "authority": {
+            "source": "commit-bound public AdaOS SDK export",
+            "remote_worker_importable": False,
+            "origin_validation": True,
+            "missing_remote_import_is_not_a_capability_blocker": True,
+        },
+        "contracts": contracts,
+        "runtime_rules": {
+            "authorization": (
+                "Call access.require('workspace.read') before reads and "
+                "access.require('workspace.write') before mutation or generation; "
+                "never accept caller identity from tool arguments."
+            ),
+            "persistence": (
+                "After authorization, keep mutable application records under "
+                "skill_data_root(); stdlib sqlite3 transactions are supported."
+            ),
+            "content_generation": (
+                "Use one stable request_id for submit/retry, poll the same id with "
+                "get(), and persist application data only after status=completed. "
+                "Terminal failures are out_of_scope, refused, incomplete, failed, "
+                "invalid_output and cancelled."
+            ),
+            "image_generation": (
+                "Image generation is a separate explicit action. Use a stable "
+                "request_id and explicit admitted model, poll with get(), then store "
+                "only the returned media/ContentRef descriptor in the owned record. "
+                "Generation never mutates application records by itself."
+            ),
+            "manifest": (
+                "Declare accurate narrow tool permissions and side effects, including "
+                "workspace.read/workspace.write and llm.generate/model use where used."
+            ),
+        },
+        "imports": [
+            "from adaos.sdk import access",
+            "from adaos.sdk.data.skill_env import skill_data_root",
+            "from adaos.sdk.llm import content, images",
+            "from adaos.sdk import resources",
+        ],
+    }
+
+
 def _write_json_preserving_style(path: Path, payload: Any, original: str) -> None:
     newline = "\r\n" if "\r\n" in original else "\r" if "\r" in original else "\n"
     indent_match = re.search(r"(?:\r\n|\r|\n)([ \t]+)\"", original)
@@ -8564,6 +8653,14 @@ class LocalSkillFactoryWorker:
             packet["implementation_bindings_ref"] = (
                 (input_dir / "implementation-bindings.json").resolve().as_posix()
             )
+            public_sdk_contracts_path = input_dir / "public-sdk-contracts.json"
+            _write_compact_json(
+                public_sdk_contracts_path,
+                _implementation_sdk_contract_bundle(),
+            )
+            packet["public_sdk_contracts_ref"] = (
+                public_sdk_contracts_path.resolve().as_posix()
+            )
         external_mcp_contracts = (
             self._external_mcp_contract_bundle(
                 workspace,
@@ -8945,6 +9042,21 @@ the accepted semantic Application.
             if portable_contract_reuse_present
             else ""
         )
+        public_sdk_contracts_section = (
+            """## Commit-bound public AdaOS SDK contracts
+
+Read `public-sdk-contracts.json` before implementation. It is the bounded,
+authoritative signature and runtime-semantics closure for caller authorization,
+owned persistence, typed content generation, separate image generation and
+Resource Workbench access. The isolated remote worker intentionally does not
+install AdaOS Core, so an import failure there is not evidence that these
+origin-runtime contracts are absent. Author against this file and use bounded
+syntax/unit checks; the origin Builder performs authoritative SDK and package
+validation after applying the verified delta.
+"""
+            if packet.get("public_sdk_contracts_ref")
+            else ""
+        )
         external_mcp_section = ""
         if packet.get("external_mcp_contracts_ref"):
             external_mcp_section = """## Exact external MCP contracts
@@ -8979,6 +9091,10 @@ bookkeeping.
         resource_implementation_section = resource_implementation_section.replace(
             "`implementation-bindings.json`",
             f"`{(input_dir / 'implementation-bindings.json').resolve().as_posix()}`",
+        )
+        public_sdk_contracts_section = public_sdk_contracts_section.replace(
+            "`public-sdk-contracts.json`",
+            f"`{(input_dir / 'public-sdk-contracts.json').resolve().as_posix()}`",
         )
         external_mcp_section = external_mcp_section.replace(
             "`external-mcp-contracts.json`",
@@ -9169,6 +9285,8 @@ part of the submitted source snapshot.
 
 {resource_implementation_section}
 
+{public_sdk_contracts_section}
+
 {portable_contract_reuse_section}
 
 {contract_execution_section}
@@ -9200,6 +9318,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             "packet.json",
             "prototype-resource-handoff.json",
             "implementation-bindings.json",
+            "public-sdk-contracts.json",
             "external-mcp-contracts.json",
             "accepted-prototype-identity.json",
             "descriptor-working-set.json",
