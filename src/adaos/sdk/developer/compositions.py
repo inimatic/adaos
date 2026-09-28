@@ -29,6 +29,9 @@ from adaos.sdk.developer import projects as component_projects
 
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
+_CAPABILITY_CONTRACT_RE = re.compile(
+    r"^capability:[a-z0-9][a-z0-9_.:/-]{0,190}@[^\s]{1,80}$"
+)
 _SCHEMA = "adaos.project.v1"
 _MEMBER_DEFAULTS = {
     "exposure": "application",
@@ -675,6 +678,57 @@ def replace(
     return get(token)
 
 
+def set_capability_contracts(
+    project_id: str,
+    required_contracts: Sequence[str],
+    *,
+    expected_manifest_digest: str,
+) -> dict[str, Any]:
+    """Replace package-neutral CBS requirements through manifest CAS.
+
+    Older non-CBS compatibility contract names remain intact.  The mutation is
+    deliberately bounded to ``capability:*@range`` declarations so authoring
+    cannot leak a provider, package, skill, endpoint, account, or credential
+    identity into the semantic requirement.
+    """
+
+    normalized: list[str] = []
+    for raw in required_contracts:
+        declaration = str(raw or "").strip()
+        if not _CAPABILITY_CONTRACT_RE.fullmatch(declaration):
+            raise ProjectCompositionError(
+                "CBS contract must use capability:<stable-ref>@<version-range>"
+            )
+        if declaration not in normalized:
+            normalized.append(declaration)
+    current = get(project_id)
+    replacement = {
+        key: value
+        for key, value in current.items()
+        if key not in {"ref", "manifest_digest", "source_path"}
+    }
+    compatibility = dict(replacement.get("compatibility") or {})
+    legacy = [
+        str(item)
+        for item in compatibility.get("required_contracts") or ()
+        if not str(item).strip().startswith("capability:")
+    ]
+    combined = [*legacy, *normalized]
+    if combined:
+        compatibility["required_contracts"] = combined
+    else:
+        compatibility.pop("required_contracts", None)
+    if compatibility:
+        replacement["compatibility"] = compatibility
+    else:
+        replacement.pop("compatibility", None)
+    return replace(
+        project_id,
+        replacement,
+        expected_manifest_digest=expected_manifest_digest,
+    )
+
+
 def advance_version(
     project_id: str,
     *,
@@ -1268,6 +1322,7 @@ __all__ = [
     "create",
     "delete",
     "replace",
+    "set_capability_contracts",
     "create_with_primary_component",
     "create_for_existing_component",
     "ensure_owned_component",

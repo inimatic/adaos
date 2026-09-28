@@ -360,6 +360,57 @@ def show(
     _echo(_project(project_id), json_output=json_output)
 
 
+@app.command("contracts")
+def contracts(
+    project_id: str,
+    require: list[str] | None = typer.Option(
+        None,
+        "--require",
+        help=(
+            "Package-neutral CBS requirement in "
+            "capability:<stable-ref>@<version-range> form. Repeat as needed."
+        ),
+    ),
+    clear: bool = typer.Option(
+        False,
+        "--clear",
+        help="Remove all CBS capability requirements; retain legacy contracts.",
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Set compact CBS capability requirements with manifest CAS."""
+
+    requested = list(require or ())
+    if clear and requested:
+        raise typer.BadParameter("--clear cannot be combined with --require")
+    if not clear and not requested:
+        raise typer.BadParameter("at least one --require value is required")
+    project = _project(project_id)
+    try:
+        updated = compositions.set_capability_contracts(
+            project_id,
+            () if clear else requested,
+            expected_manifest_digest=str(project["manifest_digest"]),
+        )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc), param_hint="--require") from exc
+    _echo(
+        {
+            "status": "updated",
+            "project": updated,
+            "required_capability_contracts": [
+                str(item)
+                for item in dict(updated.get("compatibility") or {}).get(
+                    "required_contracts"
+                )
+                or ()
+                if str(item).startswith("capability:")
+            ],
+        },
+        json_output=json_output,
+    )
+
+
 @app.command("status")
 def status(
     project_id: str,

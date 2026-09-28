@@ -369,7 +369,7 @@ def test_application_cbs_lifecycle_projection_is_explicitly_non_authoritative(
     assert projection["resolution"]["status"] == "unresolved"
     assert projection["plan"]["status"] == "not_created"
     assert projection["activation"]["status"] == "trial_active"
-    assert projection["lock"]["status"] == "unchanged"
+    assert projection["lock"]["status"] == "not_observed"
 
 
 def test_application_api_compiles_and_assesses_without_activation(tmp_path) -> None:

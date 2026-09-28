@@ -835,6 +835,43 @@ def test_project_replace_is_identity_stable_and_optimistic(project_space) -> Non
         )
 
 
+def test_project_capability_contract_authoring_is_bounded_and_optimistic(
+    project_space,
+) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    value = _project("candidate_project", "candidate_skill")
+    value["compatibility"] = {
+        "required_contracts": ["adaos.research.manager.v1"]
+    }
+    created = compositions.create(value)
+
+    updated = compositions.set_capability_contracts(
+        "candidate_project",
+        (
+            "capability:mail.messages.manage@^1.0.0",
+            "capability:mail.messages.manage@^1.0.0",
+        ),
+        expected_manifest_digest=created["manifest_digest"],
+    )
+
+    assert updated["compatibility"]["required_contracts"] == [
+        "adaos.research.manager.v1",
+        "capability:mail.messages.manage@^1.0.0",
+    ]
+    with pytest.raises(compositions.ProjectCompositionError, match="changed since"):
+        compositions.set_capability_contracts(
+            "candidate_project",
+            ("capability:mail.messages.manage@^1.0.0",),
+            expected_manifest_digest=created["manifest_digest"],
+        )
+    with pytest.raises(compositions.ProjectCompositionError, match="must use"):
+        compositions.set_capability_contracts(
+            "candidate_project",
+            ("skill:gmail_provider@1",),
+            expected_manifest_digest=updated["manifest_digest"],
+        )
+
+
 def test_project_version_advance_is_optimistic_and_skips_occupied_versions(
     project_space,
 ) -> None:
