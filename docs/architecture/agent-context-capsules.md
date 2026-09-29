@@ -275,6 +275,29 @@ Root MCP is one agent-facing adapter over this control plane, not the authority
 or persistence model. API and SDK consumers use the same typed services without
 shelling out to MCP or CLI.
 
+Dev Ticket context follows the same rule. The Context Plan contains the exact
+ticket query and selected ticket/evidence refs, not an eagerly embedded copy of
+the workspace backlog. A local Builder reads them through its Root task lease;
+a remote Builder uses the same logical Root MCP endpoint through the automation
+gateway and an exchanged attempt-fenced ticket. The model sees identical tool
+semantics in both modes, while network routes and both bearer values remain
+outside the reusable capsule and prompt.
+
+The package projection is intentionally not a ticket database snapshot. It
+contains current issue/acceptance cards and exact MCP locators; event history,
+automation attempts, and token receipts are drill-down data. If a trusted
+worker materializes descriptor cards before the model turn, it removes those
+descriptor tools from the model catalog but preserves the read-only Dev Ticket
+catalog, so freshness does not require embedding an unbounded history.
+
+Context and execution token budgets are optimization targets, not task
+admission or result-discard rules. Crossing a target produces an auditable
+`target_exceeded` receipt and should tighten later projections, but the current
+model turn continues. Only a separately reported, substantially higher safety
+cap or wall-time/cancellation policy may terminate an in-flight turn. This
+keeps economic pressure visible without converting an estimate into a failed
+Automation result.
+
 The first executable prompt projection uses
 `packet.json.prompt_rule_capsules`. It deterministically selects a permanent
 execution-boundary capsule and conditional skill capsules from target type,
@@ -286,6 +309,15 @@ The same selection is retained for zero-model structured repairs. This is the
 seed of the generic Context Compiler, not an MCP-only mini representation:
 Root MCP search and exact drill-down may provide descriptor evidence, while
 prompt formation remains provider-neutral and auditable without an MCP call.
+
+For an incremental semantic Prototype revision, the current compiler view is a
+first-class baseline capsule, not evidence for choosing one new top-level UI
+recipe. Presentation tokens inside that baseline (for example one retained
+board among tables and cards) must not reclassify the whole request as a board.
+The candidate is checked for explicitly preserved resource/record/relationship/
+view/command identities and for every exact semantic id named in the repair
+instruction. This turns preservation from prompt advice into a deterministic
+postcondition and gives a bounded repair precise missing-id feedback.
 
 The target operations are equivalent to:
 

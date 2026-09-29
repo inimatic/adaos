@@ -28,6 +28,15 @@ const recordEditorCommands = new Set(
   String(process.env.ADAOS_E2E_RECORD_EDITOR_COMMANDS || '').split(',')
     .map(value => value.trim()).filter(Boolean),
 )
+let recordEditorWorkflows = new Map()
+try {
+  const parsed = JSON.parse(process.env.ADAOS_E2E_RECORD_EDITOR_WORKFLOWS || '[]')
+  recordEditorWorkflows = new Map(
+    (Array.isArray(parsed) ? parsed : [])
+      .filter(item => item && typeof item === 'object' && typeof item.open_command === 'string')
+      .map(item => [item.open_command, item]),
+  )
+} catch {}
 
 if (!scenario || !webspace || !subnet || !token) {
   throw new Error('Scenario, paired DEV webspace, subnet, and local control token are required')
@@ -219,6 +228,168 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
   return pending.length === 0 && nonAuthoritative.length === 0
 }
 
+function commandLocator(page, commandId, marker = null) {
+  const selector = `[data-command-id="${commandId}"]`
+  if (!marker) return page.locator(selector).filter({ visible: true }).first()
+  return page.locator([
+    'tr',
+    'ion-item.collection-focus-item',
+    'button.note-card-main',
+    '.tree-widget__node',
+  ].join(', ')).filter({ hasText: marker }).locator(selector).filter({ visible: true }).first()
+}
+
+function fallbackFieldValue(fieldId, inputType, marker) {
+  const id = String(fieldId || '').toLowerCase()
+  if (inputType === 'email') return `${marker}@example.invalid`
+  if (inputType === 'url') return 'https://example.invalid'
+  if (inputType === 'tel' || /phone/.test(id)) return '+10000000000'
+  if (/endpoint|address|ip/.test(id)) return '127.0.0.1'
+  if (/user|owner/.test(id)) return 'builder'
+  if (/secret.*ref|credential.*ref/.test(id)) return `secret/ssh/${marker}`
+  return marker
+}
+
+async function fillDisposableCreateForm(modal, marker) {
+  const fields = modal.locator('[data-webui-field-id]').filter({ visible: true })
+  const fieldCount = await fields.count()
+  let markerApplied = false
+  let populated = 0
+  for (let index = 0; index < fieldCount; index += 1) {
+    const field = fields.nth(index)
+    const fieldId = String(await field.getAttribute('data-webui-field-id') || '')
+    const fieldType = String(await field.getAttribute('data-webui-field-type') || '')
+    if (fieldType === 'singleChoice') {
+      const choice = field.locator('input[type="radio"]:not([disabled])').first()
+      if (await choice.count()) {
+        await choice.check()
+        populated += 1
+      }
+      continue
+    }
+    if (fieldType === 'multiChoice') {
+      const choice = field.locator('input[type="checkbox"]:not([disabled])').first()
+      if (await choice.count()) {
+        await choice.check()
+        populated += 1
+      }
+      continue
+    }
+    if (fieldType === 'toggle') {
+      const toggle = field.locator('input[type="checkbox"]:not([disabled])').first()
+      if (await toggle.count()) {
+        await toggle.check()
+        populated += 1
+      }
+      continue
+    }
+    const select = field.locator('select:not([disabled])').first()
+    if (await select.count()) {
+      const values = await select.locator('option').evaluateAll(options => options
+        .map(option => option.value)
+        .filter(value => String(value || '').trim()))
+      if (values.length) {
+        await select.selectOption(values[0])
+        populated += 1
+      }
+      continue
+    }
+    const control = field.locator('input:not([type="radio"]):not([type="checkbox"]):not([disabled]), textarea:not([disabled])').first()
+    if (!(await control.count())) continue
+    const inputType = String(await control.getAttribute('type') || 'text').toLowerCase()
+    const placeholder = String(await control.getAttribute('placeholder') || '').trim()
+    let value
+    if (inputType === 'number') {
+      value = /^-?\d+(?:\.\d+)?$/.test(placeholder) ? placeholder : '1'
+    } else if (['date', 'datetime-local'].includes(inputType)) {
+      value = inputType === 'date' ? '2030-01-01' : '2030-01-01T12:00'
+    } else if (inputType === 'time') {
+      value = '12:00'
+    } else if (!markerApplied && /(^|[._-])(name|title|hostname|label)($|[._-])/i.test(fieldId)) {
+      value = marker
+      markerApplied = true
+    } else {
+      value = placeholder || fallbackFieldValue(fieldId, inputType, marker)
+    }
+    await control.fill(String(value))
+    populated += 1
+  }
+  if (!markerApplied) {
+    throw new Error('Disposable browser record has no identifiable name/title field')
+  }
+  if (!populated) throw new Error('Disposable browser create form has no fillable controls')
+  return { field_count: fieldCount, populated }
+}
+
+async function ensureRecordEditorRow(page, sample, workflow, layout) {
+  const existing = commandLocator(page, workflow.open_command)
+  if (await existing.count()) return null
+  if (!workflow.create_command || !workflow.delete_command) {
+    throw new Error(
+      `Record editor ${workflow.open_command} has no safe create/delete browser setup`,
+    )
+  }
+  const create = commandLocator(page, workflow.create_command)
+  await create.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+  await create.click({ timeout: interactionTimeoutMs })
+  const modal = page.locator('ion-modal.show-modal').last()
+  await modal.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+  const marker = `builder-e2e-${layout}-${Date.now().toString(36)}`
+  const filled = await fillDisposableCreateForm(modal, marker)
+  const submit = modal.locator(`[data-command-id="${workflow.create_command}"]`).filter({ visible: true }).first()
+  await submit.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+  await submit.click({ timeout: interactionTimeoutMs })
+  await modal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
+  const createdRowAction = commandLocator(page, workflow.open_command, marker)
+  await createdRowAction.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+  sample.checks.push({
+    kind: 'disposable-record-create',
+    open_command: workflow.open_command,
+    create_command: workflow.create_command,
+    marker,
+    ...filled,
+  })
+  return { workflow, marker }
+}
+
+async function cleanupDisposableRecord(page, sample, created) {
+  const { workflow, marker } = created
+  const strayModal = page.locator('ion-modal.show-modal').last()
+  if (await strayModal.count()) {
+    const close = strayModal.locator('ada-schema-modal ion-header ion-button').last()
+    if (await close.count()) await close.click({ timeout: interactionTimeoutMs })
+    else await page.keyboard.press('Escape')
+    await strayModal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
+  }
+  const open = commandLocator(page, workflow.open_command, marker)
+  await open.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+  await open.click({ timeout: interactionTimeoutMs })
+  const modal = page.locator('ion-modal.show-modal').last()
+  await modal.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+  const deleteButton = modal.locator(`[data-command-id="${workflow.delete_command}"]`).filter({ visible: true }).first()
+  await deleteButton.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+  await deleteButton.click({ timeout: interactionTimeoutMs })
+  const alert = page.locator('ion-alert').filter({ visible: true }).last()
+  try {
+    await alert.waitFor({ state: 'visible', timeout: Math.min(interactionTimeoutMs, 3_000) })
+    const confirm = alert.locator('button.alert-button').last()
+    await confirm.click({ timeout: interactionTimeoutMs })
+  } catch {
+    // Confirmation is optional; a successful direct delete still closes the editor.
+  }
+  await modal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
+  await commandLocator(page, workflow.open_command, marker).waitFor({
+    state: 'hidden',
+    timeout: interactionTimeoutMs,
+  })
+  sample.checks.push({
+    kind: 'disposable-record-cleanup',
+    open_command: workflow.open_command,
+    delete_command: workflow.delete_command,
+    marker,
+  })
+}
+
 try {
   const layouts = {
     wide: { width: 1440, height: 1000 },
@@ -338,117 +509,145 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-initial.png`), fullPage: true })
       console.error(`[builder-browser-feedback] ${layout}:initial:captured`)
 
-      for (const step of commandSequence) {
-        const command = page.locator(`[data-command-id="${step.command}"]`).filter({ visible: true }).first()
-        await command.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
-        await command.click({ timeout: interactionTimeoutMs })
-        if (step.option) {
-          const option = page.locator(`[data-command-option="${step.option}"]`).filter({ visible: true }).first()
-          await option.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
-          await option.click({ timeout: interactionTimeoutMs })
-        }
-        sample.checks.push({ kind: 'command-sequence', command: step.command, option: step.option })
-        const activeModal = page.locator('ion-modal.show-modal').last()
-        if (recordEditorCommands.has(step.command)) {
-          try {
-            await activeModal.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
-          } catch {
-            sample.hard_failures.push(`Record editor command ${step.command} did not open a modal`)
+      const disposableRecords = []
+      let commandJourneyError = null
+      try {
+        for (const step of commandSequence) {
+          const workflow = recordEditorWorkflows.get(step.command)
+          if (workflow) {
+            const created = await ensureRecordEditorRow(page, sample, workflow, layout)
+            if (created) disposableRecords.push(created)
           }
-        }
-        if (await activeModal.count()) {
-          const activeModalId = await activeModal.getAttribute('id')
-          const inspectedModal = activeModalId
-            ? page.locator(`ion-modal#${activeModalId}`)
-            : activeModal
+          const createdRecord = disposableRecords.find(item => item.workflow.open_command === step.command)
+          const command = commandLocator(page, step.command, createdRecord?.marker || null)
+          await command.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+          await command.click({ timeout: interactionTimeoutMs })
+          if (step.option) {
+            const option = page.locator(`[data-command-option="${step.option}"]`).filter({ visible: true }).first()
+            await option.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+            await option.click({ timeout: interactionTimeoutMs })
+          }
+          sample.checks.push({ kind: 'command-sequence', command: step.command, option: step.option })
+          const activeModal = page.locator('ion-modal.show-modal').last()
           if (recordEditorCommands.has(step.command)) {
             try {
-              await page.waitForFunction(command => {
-                const modal = [...document.querySelectorAll('ion-modal.show-modal')].at(-1)
-                if (!modal) return false
-                const controls = [...modal.querySelectorAll('input, textarea, select, ion-select, ion-toggle')]
-                  .filter(element => {
-                    const style = getComputedStyle(element)
-                    return element.getClientRects().length > 0
-                      && style.visibility !== 'hidden'
-                      && style.display !== 'none'
-                  })
-                const populated = controls.filter(element => {
-                  if ('checked' in element && element.checked) return true
-                  const value = 'value' in element ? element.value : element.getAttribute('value')
-                  return value !== undefined && value !== null && String(value).trim() !== ''
-                })
-                const enabled = controls.filter(element => (
-                  !element.hasAttribute('disabled')
-                  && element.getAttribute('aria-disabled') !== 'true'
-                ))
-                return controls.length > 0 && populated.length > 0 && enabled.length > 0
-              }, step.command, { timeout: interactionTimeoutMs })
+              await activeModal.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
             } catch {
+              sample.hard_failures.push(`Record editor command ${step.command} did not open a modal`)
+            }
+          }
+          if (await activeModal.count()) {
+            const activeModalId = await activeModal.getAttribute('id')
+            const inspectedModal = activeModalId
+              ? page.locator(`ion-modal#${activeModalId}`)
+              : activeModal
+            if (recordEditorCommands.has(step.command)) {
+              try {
+                await page.waitForFunction(command => {
+                  const modal = [...document.querySelectorAll('ion-modal.show-modal')].at(-1)
+                  if (!modal) return false
+                  const controls = [...modal.querySelectorAll('input, textarea, select, ion-select, ion-toggle')]
+                    .filter(element => {
+                      const style = getComputedStyle(element)
+                      return element.getClientRects().length > 0
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none'
+                    })
+                  const populated = controls.filter(element => {
+                    if ('checked' in element && element.checked) return true
+                    const value = 'value' in element ? element.value : element.getAttribute('value')
+                    return value !== undefined && value !== null && String(value).trim() !== ''
+                  })
+                  const enabled = controls.filter(element => (
+                    !element.hasAttribute('disabled')
+                    && element.getAttribute('aria-disabled') !== 'true'
+                  ))
+                  return controls.length > 0 && populated.length > 0 && enabled.length > 0
+                }, step.command, { timeout: interactionTimeoutMs })
+              } catch {
+                sample.hard_failures.push(
+                  `Record editor opened by ${step.command} did not hydrate an editable record`,
+                )
+              }
+            }
+            const modalDiagnostics = await inspectedModal.evaluate(element => {
+              const visible = child => {
+                const style = getComputedStyle(child)
+                return child.getClientRects().length > 0
+                  && style.visibility !== 'hidden'
+                  && style.display !== 'none'
+              }
+              const widgets = [...element.querySelectorAll('[data-webui-widget-id]')].filter(visible)
+              const controls = [...element.querySelectorAll('input, textarea, select, ion-select, ion-toggle')]
+                .filter(visible)
+              const populatedControls = controls.filter(control => {
+                if ('checked' in control && control.checked) return true
+                const value = 'value' in control ? control.value : control.getAttribute('value')
+                return value !== undefined && value !== null && String(value).trim() !== ''
+              })
+              return {
+                id: element.id || null,
+                schema: Boolean(element.querySelector('ada-schema-modal')),
+                title: String(element.querySelector('ion-title')?.textContent || '').replace(/\s+/g, ' ').trim(),
+                visible_widget_ids: widgets
+                  .map(widget => widget.getAttribute('data-webui-widget-id'))
+                  .filter(Boolean),
+                control_count: controls.length,
+                populated_control_count: populatedControls.length,
+              }
+            })
+            sample.checks.push({
+              kind: 'modal-surface',
+              command: step.command,
+              ...modalDiagnostics,
+            })
+            if (modalDiagnostics.schema && !modalDiagnostics.visible_widget_ids.length) {
               sample.hard_failures.push(
-                `Record editor opened by ${step.command} did not hydrate an editable record`,
+                `Schema modal opened by ${step.command} has no visible widgets`,
               )
             }
-          }
-          const modalDiagnostics = await inspectedModal.evaluate(element => {
-            const visible = child => {
-              const style = getComputedStyle(child)
-              return child.getClientRects().length > 0
-                && style.visibility !== 'hidden'
-                && style.display !== 'none'
-            }
-            const widgets = [...element.querySelectorAll('[data-webui-widget-id]')].filter(visible)
-            const controls = [...element.querySelectorAll('input, textarea, select, ion-select, ion-toggle')]
-              .filter(visible)
-            const populatedControls = controls.filter(control => {
-              if ('checked' in control && control.checked) return true
-              const value = 'value' in control ? control.value : control.getAttribute('value')
-              return value !== undefined && value !== null && String(value).trim() !== ''
+            await page.screenshot({
+              path: path.join(output, `${layout}-command-${step.command}.png`),
+              fullPage: true,
             })
-            return {
-              id: element.id || null,
-              schema: Boolean(element.querySelector('ada-schema-modal')),
-              title: String(element.querySelector('ion-title')?.textContent || '').replace(/\s+/g, ' ').trim(),
-              visible_widget_ids: widgets
-                .map(widget => widget.getAttribute('data-webui-widget-id'))
-                .filter(Boolean),
-              control_count: controls.length,
-              populated_control_count: populatedControls.length,
+            const schemaClose = inspectedModal.locator('ada-schema-modal ion-header ion-button').last()
+            if (await schemaClose.count()) {
+              await schemaClose.click({ timeout: interactionTimeoutMs })
+            } else {
+              await page.keyboard.press('Escape')
             }
-          })
-          sample.checks.push({
-            kind: 'modal-surface',
-            command: step.command,
-            ...modalDiagnostics,
-          })
-          if (modalDiagnostics.schema && !modalDiagnostics.visible_widget_ids.length) {
+            try {
+              await inspectedModal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
+              await page.waitForTimeout(200)
+            } catch {
+              sample.hard_failures.push(`Modal opened by ${step.command} did not close after inspection`)
+            }
+          }
+          authoritativeDataSettled = await waitForAuthoritativeData(
+            page,
+            sample,
+            `command:${step.command}`,
+          ) && authoritativeDataSettled
+        }
+      } catch (error) {
+        commandJourneyError = error
+      } finally {
+        for (const created of [...disposableRecords].reverse()) {
+          try {
+            await cleanupDisposableRecord(page, sample, created)
+            authoritativeDataSettled = await waitForAuthoritativeData(
+              page,
+              sample,
+              `cleanup:${created.workflow.open_command}`,
+            ) && authoritativeDataSettled
+          } catch (error) {
             sample.hard_failures.push(
-              `Schema modal opened by ${step.command} has no visible widgets`,
+              `Disposable record cleanup failed: ${String(error?.message || error)}`,
             )
           }
-          await page.screenshot({
-            path: path.join(output, `${layout}-command-${step.command}.png`),
-            fullPage: true,
-          })
-          const schemaClose = inspectedModal.locator('ada-schema-modal ion-header ion-button').last()
-          if (await schemaClose.count()) {
-            await schemaClose.click({ timeout: interactionTimeoutMs })
-          } else {
-            await page.keyboard.press('Escape')
-          }
-          try {
-            await inspectedModal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
-            await page.waitForTimeout(200)
-          } catch {
-            sample.hard_failures.push(`Modal opened by ${step.command} did not close after inspection`)
-          }
         }
-        authoritativeDataSettled = await waitForAuthoritativeData(
-          page,
-          sample,
-          `command:${step.command}`,
-        ) && authoritativeDataSettled
       }
+      if (commandJourneyError) throw commandJourneyError
 
       const selectableSelector = [
         'tr.row-selectable',

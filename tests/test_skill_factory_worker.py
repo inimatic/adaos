@@ -40,21 +40,86 @@ from adaos.services.skill_factory_worker import (
     _codex_budget_exceeded_receipt,
     _codex_failure_detail,
     _codex_budget_observed_tokens,
+    _codex_hard_safety_limits,
     _codex_jsonl_usage,
     _codex_jsonl_live_budget_estimate,
     _codex_jsonl_root_mcp_evidence,
     _codex_prompt_budget_check,
     _classify_worker_failure,
     _context_packet_prompt_projection,
+    _descriptor_working_set_prompt_projection,
     _deterministic_repair_prompt,
     _enforce_continuation_model_policy,
     _loads_strict_json,
     _materialize_digest_addressed_compiler_views,
+    _implementation_brief_prompt,
+    _model_root_mcp_profile,
     _persisted_descriptor_working_set_evidence,
     _root_mcp_profile_from_assignment,
     _task_mcp_descriptor_working_set,
     _task_mcp_validation_evidence,
 )
+
+
+def test_model_root_mcp_keeps_only_dev_ticket_tools_after_descriptor_prefetch() -> None:
+    profile = _model_root_mcp_profile(
+        {
+            "mcp": {
+                "scope": [
+                    "read_capability_snapshot",
+                    "read_development_tickets",
+                ]
+            }
+        },
+        {
+            "enabled": True,
+            "server_name": "adaos_task_root",
+            "enabled_tools": task_scope_enabled_tools(
+                ["read_capability_snapshot", "read_development_tickets"]
+            ),
+        },
+        descriptor_working_set={"schema": "adaos.builder.descriptor_working_set.v1"},
+    )
+
+    assert profile is not None
+    assert profile["enabled_tools"] == task_scope_enabled_tools(
+        ["read_development_tickets"]
+    )
+
+
+def test_prototype_handoff_expands_exact_authorized_files_without_weakening_scope() -> None:
+    paths = LocalSkillFactoryWorker._prototype_resource_authorized_paths(
+        {
+            "project_ref": "scenario:manager",
+            "companion_skill_id": "manager_skill",
+            "resources": [
+                {
+                    "declaration_path": (
+                        "skills/manager_skill/resources/hosts.resource.json"
+                    )
+                },
+                {"declaration_path": "skills/other_skill/escape.json"},
+            ],
+        }
+    )
+
+    assert paths == {
+        "scenarios/manager/webui.json",
+        "skills/manager_skill/skill.yaml",
+        "skills/manager_skill/resources/hosts.resource.json",
+    }
+
+def test_model_root_mcp_is_omitted_after_prefetch_without_live_ticket_scope() -> None:
+    assert (
+        _model_root_mcp_profile(
+            {"mcp": {"scope": ["read_capability_snapshot"]}},
+            {"enabled": True, "enabled_tools": ["search_descriptors"]},
+            descriptor_working_set={
+                "schema": "adaos.builder.descriptor_working_set.v1"
+            },
+        )
+        is None
+    )
 
 
 def test_worker_failure_classification_forbids_model_after_platform_checkpoint() -> None:
@@ -3286,7 +3351,7 @@ def test_worker_rejects_webui_capability_drift_before_browser(tmp_path):
     )
 
 
-def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> None:
+def test_surgical_repair_enforces_exact_files_and_observes_file_target(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
         repo_root=Path(__file__).resolve().parents[1],
@@ -3316,15 +3381,26 @@ def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> 
             assignment,
             ["skills/demo_metrics_skill/handlers/main.py"],
         )
-    with pytest.raises(ValueError, match="more files"):
-        worker._validate_changed_paths(
-            assignment,
-            [
-                "skills/demo_metrics_skill/webui.json",
-                "skills/demo_metrics_skill/tests/test_resource_workbench.py",
-                "skills/demo_metrics_skill/README.md",
-            ],
-        )
+    assignment["constraints"]["exact_changed_paths"].append(
+        "skills/demo_metrics_skill/README.md"
+    )
+    changed = [
+        "skills/demo_metrics_skill/webui.json",
+        "skills/demo_metrics_skill/tests/test_resource_workbench.py",
+        "skills/demo_metrics_skill/README.md",
+    ]
+    worker._validate_changed_paths(assignment, changed)
+    assert worker_module._changed_file_target_observation(
+        assignment,
+        changed,
+    ) == {
+        "id": "changed_file_optimization_target",
+        "status": "exceeded",
+        "policy": "advisory_optimization_target",
+        "target": 2,
+        "observed": 3,
+        "overrun": 1,
+    }
 
 
 @pytest.mark.parametrize(
@@ -3597,6 +3673,104 @@ def test_worker_records_codex_development_feedback_as_workspace_resource(
         item.get("ref") == "trace:resources.query.demo"
         for item in records[0]["evidence_refs"]
     )
+
+
+def test_functional_beta_capability_gap_is_promoted_before_being_deferred(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    assignment = {
+        "task_id": "task.functional-beta-gap",
+        "target": {"type": "scenario", "id": "automation_manager"},
+        "realize_request": {
+            "links": {"automation_session_id": "automation.manager"},
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                        "policy": {
+                            "functional_beta_deferred_capabilities": {
+                                "allowed": True,
+                            }
+                        },
+                    }
+                )
+            },
+        },
+    }
+    feedback_item = {
+        "category": "missing_capability",
+        "summary": "Production inventory mutations are not available.",
+        "blocking": True,
+        "confidence": 0.98,
+        "impact": ["correctness", "reliability"],
+        "target_refs": ["sdk:adaos.sdk.automation.inventory"],
+        "details": "The production provider returns a typed unavailable blocker.",
+        "recommendation": "Add governed host and pod mutation contracts.",
+        "evidence_refs": [{"type": "file", "ref": "skills/manager/provider.py"}],
+    }
+
+    records = worker._record_codex_development_feedback(
+        assignment,
+        [feedback_item],
+    )
+
+    assert records[0]["status"] == "promoted"
+    assert records[0]["ticket_refs"]
+    assert records[0]["classification"]["deferred_for_stage"] == "functional_beta"
+    assert records[0]["classification"]["blocking_for_stage"] == "production"
+    assert (
+        worker_module._unresolved_blocking_feedback(
+            assignment,
+            [feedback_item],
+            records,
+        )
+        == []
+    )
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    tickets = DevelopmentTicketService(state_dir=tmp_path / "state").list_tickets()
+    promoted = next(
+        item for item in tickets if item["ticket_id"] == records[0]["ticket_refs"][0]
+    )
+    assert promoted["component_ref"] == "core:sdk.automation"
+
+
+def test_functional_beta_gap_without_durable_promotion_remains_blocking() -> None:
+    assignment = {
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "policy": {
+                            "functional_beta_deferred_capabilities": {
+                                "allowed": True,
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+    item = {
+        "category": "missing_capability",
+        "blocking": True,
+        "confidence": 0.99,
+        "impact": ["correctness"],
+        "target_refs": ["sdk:adaos.sdk.automation.inventory"],
+        "recommendation": "Add the contract.",
+    }
+
+    assert worker_module._unresolved_blocking_feedback(
+        assignment,
+        [item],
+        [{"feedback_id": "devfeedback.unpromoted", "status": "accepted"}],
+    ) == [{"feedback_id": "devfeedback.unpromoted", "status": "accepted"}]
 
 
 def test_worker_records_exhausted_public_contract_validation_feedback(
@@ -4938,6 +5112,82 @@ def test_bounded_dev_ticket_rejects_large_manifest_format_churn(tmp_path: Path) 
         )
 
 
+def test_large_scenario_inline_ui_diff_is_admitted_only_as_exact_webui_mirror(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    application = {
+        "desktop": {
+            "pageSchema": {
+                "widgets": [
+                    {
+                        "id": f"record-{index}",
+                        "type": "ui.table",
+                        "title": f"Record {index}",
+                        "description": "accepted",
+                        "area": "primary",
+                        "inputs": {"selectionMode": "single"},
+                    }
+                    for index in range(180)
+                ]
+            }
+        }
+    }
+    scenario_document = {
+        "schema": "adaos.scenario.v1",
+        "id": "demo",
+        "runtime": {"skills": {"required": ["demo_skill"]}},
+        "ui": {"application": copy.deepcopy(application)},
+    }
+    scenario_document["ui"]["application"]["version"] = "0.1"
+    webui_document = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": copy.deepcopy(application)},
+    }
+    scenario_path = scenario / "scenario.json"
+    webui_path = scenario / "webui.json"
+    scenario_path.write_text(json.dumps(scenario_document, indent=2), encoding="utf-8")
+    webui_path.write_text(json.dumps(webui_document, indent=2), encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+    for widget in application["desktop"]["pageSchema"]["widgets"]:
+        widget["description"] = "runtime-bound"
+    scenario_document["ui"]["application"] = copy.deepcopy(application)
+    webui_document["ui"]["application"] = copy.deepcopy(application)
+    scenario_path.write_text(json.dumps(scenario_document, indent=2), encoding="utf-8")
+    webui_path.write_text(json.dumps(webui_document, indent=2), encoding="utf-8")
+    worker = object.__new__(LocalSkillFactoryWorker)
+    baseline = worker._baseline_commit(workspace)
+
+    assert worker._is_exact_scenario_webui_mirror_edit(
+        workspace=workspace,
+        baseline=baseline,
+        path="scenarios/demo/scenario.json",
+    )
+
+    scenario_document["runtime"]["skills"]["required"].append("unexpected_skill")
+    scenario_path.write_text(json.dumps(scenario_document, indent=2), encoding="utf-8")
+    assert not worker._is_exact_scenario_webui_mirror_edit(
+        workspace=workspace,
+        baseline=baseline,
+        path="scenarios/demo/scenario.json",
+    )
+
+
 def test_bounded_task_admits_proportionate_semantic_webui_evolution(
     tmp_path: Path,
 ) -> None:
@@ -5128,6 +5378,82 @@ def test_automation_cannot_edit_accepted_semantic_document(tmp_path: Path) -> No
         worker._validate_changed_paths(
             assignment, worker._changed_from_baseline(workspace), workspace=workspace
         )
+
+
+def test_candidate_validation_requires_atomic_semantic_webui_pair(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    semantic = {
+        "schema": "adaos.webui.semantic.v2",
+        "resources": [],
+        "views": [],
+        "commands": [],
+        "requirement_bindings": [
+            {"requirement_ref": "change:I01", "semantic_refs": []}
+        ],
+    }
+    canonical = json.dumps(
+        semantic,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    actual_digest = "sha256:" + hashlib.sha256(canonical).hexdigest()
+    (scenario / "semantic.webui.json").write_text(
+        json.dumps(semantic, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    webui = {
+        "schema": "adaos.webui.v1",
+        "generated_by": "builder.semantic_compiler.v2",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "meta": {
+                            "builder": {
+                                "semantic_source": "adaos.webui.semantic.v2",
+                                "semantic_digest": "sha256:" + "a" * 64,
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    }
+    webui_path = scenario / "webui.json"
+    webui_path.write_text(json.dumps(webui) + "\n", encoding="utf-8")
+    worker = object.__new__(LocalSkillFactoryWorker)
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+
+    worker._validate_semantic_webui_source_integrity(workspace, checks, errors)
+
+    assert errors
+    assert checks == [
+        {
+            "kind": "webui.semantic_source_digest.strict",
+            "path": "scenarios/demo/semantic.webui.json",
+            "webui_path": "scenarios/demo/webui.json",
+            "ok": False,
+            "expected": "sha256:" + "a" * 64,
+            "actual": actual_digest,
+        }
+    ]
+
+    webui["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"][
+        "semantic_digest"
+    ] = actual_digest
+    webui_path.write_text(json.dumps(webui) + "\n", encoding="utf-8")
+    checks = []
+    errors = []
+    worker._validate_semantic_webui_source_integrity(workspace, checks, errors)
+
+    assert not errors
+    assert checks[0]["ok"] is True
 
 
 def test_stable_prototype_head_enforces_semantic_surface_without_acceptance_receipt(
@@ -5821,6 +6147,14 @@ def test_bound_staging_scope_omits_managed_target_discovery() -> None:
         "get_events_logs",
         "get_yjs_logs",
     ]
+    assert task_scope_enabled_tools(["read_development_tickets"]) == [
+        "list_dev_tickets",
+        "get_dev_ticket",
+        "get_core_dev_ticket_backlog",
+        "list_dev_ticket_events",
+        "list_dev_ticket_artifacts",
+        "get_dev_ticket_artifact",
+    ]
 
 
 def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
@@ -5908,7 +6242,7 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     assert "does not require a ceremonial call" in prompt
 
 
-def test_codex_prompt_budget_blocks_oversized_instruction_before_launch() -> None:
+def test_codex_prompt_budget_marks_oversized_instruction_as_advisory_target() -> None:
     assignment = {
         "realize_request": {
             "artifacts": {
@@ -5923,7 +6257,7 @@ def test_codex_prompt_budget_blocks_oversized_instruction_before_launch() -> Non
 
     check = _codex_prompt_budget_check(assignment, "x" * 12000)
 
-    assert check["status"] == "blocked"
+    assert check["status"] == "target_exceeded"
     assert check["declared"]["max_model_tokens"] == 1600
     assert check["declared"]["max_billable_tokens"] == 1600
     assert check["prompt_token_estimate"] > check["prompt_token_limit"]
@@ -5949,7 +6283,7 @@ def test_codex_prompt_budget_uses_one_turn_provider_overhead() -> None:
 
     check = _codex_prompt_budget_check(assignment, "x" * 4_828)
 
-    assert check["status"] == "blocked"
+    assert check["status"] == "target_exceeded"
     assert check["prompt_token_estimate"] == 1_207
     assert check["estimated_first_turn"] == {
         "primary_tokens": 5_508,
@@ -5984,6 +6318,80 @@ def test_codex_prompt_budget_admits_bounded_cached_turn() -> None:
     assert check["blocked_reasons"] == []
     assert check["estimated_first_turn"]["required_primary_tokens"] == 6_532
     assert check["estimated_first_turn"]["required_billable_tokens"] == 16_532
+
+
+def test_codex_hard_safety_cap_is_distinct_from_budget_target() -> None:
+    primary, billable = _codex_hard_safety_limits(
+        max_tokens=54_000,
+        max_billable_tokens=864_000,
+    )
+
+    assert primary == 500_000
+    assert billable == 3_456_000
+
+
+def test_full_automation_prompt_compacts_ticket_package_duplicates() -> None:
+    issue = {
+        "ticket_id": "dticket.demo",
+        "summary": "Keep the accepted table interaction.",
+        "component_ref": "scenario:demo",
+        "acceptance_checks": ["Selection remains independent."],
+    }
+    brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_package_brief.v1",
+            "package_id": "bpackage.demo",
+            "execution_mode": "surgical_dev_ticket_repair",
+            "summary": "Repair the accepted UI.",
+            "issues": [issue],
+            "acceptance": ["Selection remains independent."],
+            "repair_hints": {
+                "acceptance_checks": ["Selection remains independent."],
+                "target_files": ["webui.json"],
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    projected = json.loads(_implementation_brief_prompt(brief))
+
+    assert projected["issues"] == [issue]
+    assert "acceptance" not in projected
+    assert "repair_hints" not in projected
+
+
+def test_descriptor_prompt_projection_omits_large_tool_bodies() -> None:
+    projected = _descriptor_working_set_prompt_projection(
+        {
+            "schema": "adaos.builder.descriptor_working_set.v1",
+            "digest": "sha256:demo",
+            "headers": [
+                {
+                    "descriptor_id": "application_contracts",
+                    "item_id": "builder_lifecycle",
+                    "summary": "Builder operations.",
+                    "drill_down": {"secret": "not-needed"},
+                }
+            ],
+            "details": [
+                {
+                    "descriptor_id": "application_contracts",
+                    "item_id": "builder_lifecycle",
+                    "item": {
+                        "title": "Builder Lifecycle",
+                        "tool_ids": ["applications.development.create"],
+                        "tools": [{"input_schema": {"payload": "x" * 50_000}}],
+                    },
+                }
+            ],
+        }
+    )
+
+    assert projected["headers"][0]["summary"] == "Builder operations."
+    assert projected["details"][0]["tool_ids"] == [
+        "applications.development.create"
+    ]
+    assert "tools" not in projected["details"][0]
 
 
 def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) -> None:

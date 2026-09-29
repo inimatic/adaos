@@ -278,12 +278,20 @@
         "region_role": { "enum": ["primary", "supporting", "actions"] },
         "surface": { "enum": ["inline", "modal", "side_sheet"] },
         "presentation": { "enum": ["list", "table", "cards", "board", "tree", "chart", "accordion"] },
+        "compact_presentation": {
+          "anyOf": [{ "type": "string", "enum": ["cards"] }, { "type": "null" }],
+          "description": "Optional compact-screen override for a table collection."
+        },
         "presentation_options": { "anyOf": [{ "$ref": "#/$defs/presentationOptions" }, { "type": "null" }] },
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" } },
         "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }] },
         "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }] },
+        "activation_source_view_ref": {
+          "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }],
+          "description": "Details-only link to the collection whose row activation reveals this projection. Null for collections/editors and for details that are not activated from a collection row."
+        },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": {
           "type": "array",
@@ -331,7 +339,7 @@
       "properties": {
         "mode": { "enum": ["none", "single"] },
         "indicator": { "enum": ["none", "radio", "row_accent"] },
-        "row_activation": { "enum": ["none", "select"] }
+        "row_activation": { "enum": ["none", "select", "open_details"] }
       }
     },
     "queryControl": {

@@ -347,6 +347,79 @@ Machine-created tickets should start as `captured` or `proposed` unless policy
 or deterministic runtime evidence marks them as accepted blockers. A person or
 policy gate can later accept, defer, refuse, or route them to Builder.
 
+### Builder Dev Ticket retrieval contract
+
+Dev Tickets are available to local and remote Builder through the same
+task-scoped Root MCP lease. The default Builder scope includes
+`read_development_tickets`; its tool allow-list is limited to ticket/backlog,
+event, and artifact reads. It does not grant ticket mutation or general Root
+access.
+
+Retrieval is index-first: Builder lists active tickets for the exact project,
+scenario, skill, component, or owner and then opens only the tickets and
+evidence needed for the current decision. The complete backlog is not copied
+into every prompt. This preserves current user knowledge while keeping token
+cost and unrelated private context bounded.
+
+A packaged repair carries only ticket ids/revisions, current summaries,
+acceptance checks, compact artifact locators, and an exact `get_dev_ticket`
+locator. Historical evidence, previous automation attempts, and usage receipts
+remain addressable through MCP but are not duplicated into model input. When
+the trusted worker has already prefetched immutable SDK/architecture
+descriptors, the model-facing MCP catalog is narrowed again to the six
+read-only Dev Ticket tools.
+
+For remote execution, the originating Root lease is never exposed in public
+automation task metadata or to the automation pod. Automation control keeps it
+in volatile memory, issues a separate task/attempt/node-fenced worker ticket,
+and proxies the allow-listed MCP call through the standard AdaOS Root route.
+Completion, cancellation, lease loss, timeout, or restart revokes the worker
+ticket; restart also makes the non-persisted origin lease unavailable and the
+task fails closed.
+
+Numeric token, cost, duration, and changed-file budgets are optimization
+targets and observability signals. Exceeding one records an overrun for RCA and
+context improvement, but does not by itself discard an otherwise useful,
+authorized candidate. Exact path/effect authority, secret policy, task fencing,
+and destructive-operation approval remain hard limits and fail closed.
+
+### Clarification and platform ownership
+
+Qualification separates project-solvable work from a shared platform defect
+and from a missing platform capability. A high-confidence shared defect may be
+escalated automatically only when the record contains a stable `core:*`
+component, expected behavior, observed behavior, failure class, confidence,
+and evidence. The router creates or deduplicates a Core Dev Ticket, links it
+with `blocked_by`/`blocks`, and moves the originating ticket to
+`waiting_for_core`. The Application Builder must not patch a shared Client or
+Core component inside one subnet project.
+
+If ownership, intent, or acceptance remains ambiguous, qualification publishes
+a text-bound Pending Action linked to the ticket and qualification attempt.
+The answer is retained as bounded ticket evidence and re-runs qualification;
+at most two clarification rounds are allowed before explicit human triage.
+Thus `needs_user_clarification` is a resumable managed state, not an error or an
+invitation for the model to guess.
+
+The language qualifier uses a portable JSON response contract: model-specific
+reasoning or verbosity parameters are not assumed. Invalid structured output
+is retained in a bounded rejection record for RCA and retried only within the
+qualification budget. Previously answered clarifications are authoritative,
+and conjunctive requirements must not be rewritten as a false either/or
+choice. Provider failure produces the same Pending Action rather than silently
+selecting a default.
+
+A functional-beta brief may explicitly defer a high-confidence missing
+production capability without pretending that it exists. The reported
+capability remains blocking for production and must remain a typed unavailable
+operation in the beta. Before the candidate can continue, policy must qualify
+and promote the feedback to a linked Core Dev Ticket. No unavailable effect may
+be invoked or claimed, and the remaining beta behavior must pass deterministic
+validation. Automatic promotion failure leaves the feedback blocking. The Core
+ticket records the dependency, but project tickets are not moved to
+`waiting_for_core` when their accepted beta scope already permits the typed
+unavailability.
+
 ## Builder Intake, SDK Understanding, And Core Evolution Rails
 
 Builder and Codex operate in a project context. They may change a skill,

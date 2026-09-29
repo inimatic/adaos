@@ -70,6 +70,46 @@ def test_explicit_text_policy_survives_candidate_normalization():
     assert next(meta for meta in widget['inputs']['meta'] if meta['key'] == 'status')['align'] == 'end'
 
 
+def test_table_can_render_cards_only_on_compact_screens():
+    brief, semantic = _multi_resource_fixture()
+    view = semantic['views'][0]
+    view['presentation'] = 'table'
+    view['compact_presentation'] = 'cards'
+
+    result = compile_semantic_prototype_candidate(
+        _multi_resource_candidate(semantic), brief=brief
+    )
+
+    normalized = next(
+        item for item in result['semantic_document']['views'] if item['id'] == view['id']
+    )
+    widget = next(
+        item
+        for item in result['webui']['ui']['application']['desktop']['pageSchema']['widgets']
+        if item['id'] == view['id']
+    )
+    assert normalized['presentation'] == 'table'
+    assert normalized['compact_presentation'] == 'cards'
+    assert widget['type'] == 'ui.table'
+    assert widget['inputs']['compactPresentation'] == 'cards'
+
+
+def test_compact_card_override_rejects_non_table_collection():
+    from adaos.services.builder.semantic_presentations import presentation_findings
+
+    _, semantic = _multi_resource_fixture()
+    view = semantic['views'][0]
+    view['presentation'] = 'cards'
+    view['compact_presentation'] = 'cards'
+
+    findings = presentation_findings(semantic)
+
+    assert any(
+        'compact_presentation=cards requires a table collection' in item['detail']
+        for item in findings
+    )
+
+
 def test_non_numeric_chart_is_rejected_not_coerced():
     brief, semantic = _multi_resource_fixture()
     view = semantic['views'][0]

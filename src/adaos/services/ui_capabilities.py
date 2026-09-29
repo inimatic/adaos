@@ -388,6 +388,55 @@ def _contains_any_term(text: str, values: Iterable[str]) -> bool:
     )
 
 
+def _is_primary_board_request(
+    text: str,
+    *,
+    literal_text_change: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether the request is about a board, not merely mentioning one.
+
+    Revision prompts for composite applications commonly enumerate preserved
+    presentations (for example ``v_tasks remains board``) beside tables and
+    cards.  Treating that inventory token as the request's primary surface
+    selects the Kanban recipe and incorrectly applies its CRUD postconditions
+    to the whole application.
+    """
+
+    if literal_text_change and literal_text_change.get("target_kind") == "column":
+        return True
+    if not _contains_any_term(text, _BOARD_TERMS):
+        return False
+    normalized = _normalized_text(text)
+    composite_revision = bool(
+        re.search(
+            r"\b(?:current|existing)\s+(?:revision|semantic|application)\b|"
+            r"\b(?:preserve|keep)\s+(?:all|the)\s+(?:existing|current)\b|"
+            r"\bтекущ(?:ую|ей|ая)\s+(?:ревизи|semantic|приложени)|"
+            r"\bсохрани\s+все\s+существующ",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    )
+    presentation_inventory = bool(
+        re.search(
+            r"\b(?:remains?|stays?|оста[её]тся)\s+(?:a\s+)?board\b|"
+            r"\bpresentation\s*=\s*board\b",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    )
+    board_interaction = _contains_any(normalized, _DRAG_TERMS) or bool(
+        re.search(
+            r"\b(?:lanes?|status\s+columns?|колонки\s+статусов|дорожки)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    )
+    if composite_revision and presentation_inventory and not board_interaction:
+        return False
+    return True
+
+
 def _prototype_resource_signal(operation: Mapping[str, Any]) -> bool | None:
     """Return a conservative persistence signal for a deterministic Brief row.
 
@@ -756,8 +805,9 @@ def qualify_ui_request(
     text = _normalized_text(included_request)
     literal_text_change = _literal_text_change(included_request)
     prototype_iteration = _prototype_iteration(included_request)
-    board = _contains_any_term(text, _BOARD_TERMS) or bool(
-        literal_text_change and literal_text_change.get("target_kind") == "column"
+    board = _is_primary_board_request(
+        text,
+        literal_text_change=literal_text_change,
     )
     lane_count = (
         _nearby_number(text, r"(?:колон(?:ка|ки|ок|ку|ках)|columns?|lanes?)")

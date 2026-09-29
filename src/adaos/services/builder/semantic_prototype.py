@@ -906,7 +906,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["selectionFilter"]["required"].append("source_field_ref")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
-        contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section", "scope_filters", "selection", "selection_filter"])
+        contract["$defs"]["view"]["required"].extend(["compact_presentation", "presentation_options", "field_display", "section", "scope_filters", "selection", "selection_filter", "activation_source_view_ref"])
         contract["$defs"]["command"]["required"].append("exposure")
         if _view_variants:
             # Record projections cannot use collection presentations or query links.
@@ -919,7 +919,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             )
             record = copy.deepcopy(contract["$defs"]["view"])
             record["properties"]["role"] = {"type": "string", "enum": ["details", "editor"]}
-            for name in ("presentation", "presentation_options", "selection", "selection_filter", "filter", "empty_state"):
+            for name in ("presentation", "compact_presentation", "presentation_options", "selection", "selection_filter", "filter", "empty_state"):
                 record["properties"][name] = {"type": "null"}
             contract["$defs"]["view"] = {"anyOf": [collection, record]}
         if brief is not None:
@@ -1014,8 +1014,9 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
                           "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection. Equality filters accept only field_types, not long_text, markdown or array fields. Search has field_ref=null; use it for free text rather than adding an unsupported equality filter."},
         "command_ownership": "Every command belongs to one editor view, while command.exposure declares where the user invokes it. Use collection_header for create, row_action for explicit record edit/action, and editor_danger for destructive commands that share an editor with the record update. Never turn row selection into edit unless row_activation explicitly requests it. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs.",
-        "view_roles": "A collection browses repeated records and owns its presentation, query controls, empty state, explicit selection policy and selection links. Details projects fields from one selected record of the SAME resource. An editor owns commands and their inputs. Details/editor have presentation=null, presentation_options=null, selection=null, selection_filter=null, filter=null, empty_state=null and query_controls=[], field_display=[], scope_filters=[]. Use a collection for selectable or grouped summaries.",
-        "selection_links": "For every collection declare selection={mode,indicator,row_activation}; normal CRUD tables use single/radio/select. When selecting a row changes another collection, set the target selection_filter with field_ref, source_view_ref, source_field_ref (null means id), effect and empty_selection. Use effect=emphasize with empty_selection=show_all for a global child pool whose related rows should be highlighted without disappearing; use effect=filter only when selection is intended to narrow the child collection. Both endpoints must match one declared singular relationship. Links are acyclic and Core owns their state.",
+        "view_roles": "A collection browses repeated records and owns its presentation, query controls, empty state, explicit selection policy and selection links. Details projects fields from one selected record of the SAME resource. When a row opens details, set details.activation_source_view_ref to that collection and set its selection.row_activation=open_details; the selection marker still changes selection without opening details. Collections/editors use activation_source_view_ref=null. An editor owns commands and their inputs. Details/editor have presentation=null, compact_presentation=null, presentation_options=null, selection=null, selection_filter=null, filter=null, empty_state=null and query_controls=[], field_display=[], scope_filters=[]. Use a collection for selectable or grouped summaries.",
+        "revision_scope": "When current_semantic is supplied, treat it as the baseline: preserve unrelated resources, records, relationships, views, commands, IDs, executable flows and requirement evidence. Change or remove an existing element only when the current request requires it. A revision is not permission to redesign the whole application.",
+        "selection_links": "For every collection declare selection={mode,indicator,row_activation}. Use single/radio/select when a row only selects; use single/radio/open_details plus a same-resource details.activation_source_view_ref when a row also reveals details. The radio marker always selects without opening details. Edit/delete remain explicit command exposures. When selecting a row changes another collection, set the target selection_filter with field_ref, source_view_ref, source_field_ref (null means id), effect and empty_selection. Use effect=emphasize with empty_selection=show_all for a global child pool whose related rows should be highlighted without disappearing; use effect=filter only when selection is intended to narrow the child collection. Both endpoints must match one declared singular relationship. Links are acyclic and Core owns their state.",
         "deferred_computations": "When a requested computation or rule is deferred, show plausible representative OUTPUT values and their meaning in an inspectable view. A description or raw inputs alone do not illustrate the requested result. Clearly disclose that these values are fixtures, not live calculations. Do not build data concepts used only by future Automation.",
         "command_guards": "Guards reference fields of the command's own editor resource only. A predicate over several related records is not a single-record field guard; preserve such business rules for Automation with visible representative outcomes.",
         "form_guidance": "Use localized field.help_text for persistent guidance and field.placeholder for non-submitted examples. When scale or format is not obvious, include a realistic example such as a host name, IP address, secret reference, image tag, CPU count, or memory size. Examples are guidance, never default values.",
@@ -1025,7 +1026,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable selection_filter when the workflow requires inspecting one selected item's linked records: use effect=filter to narrow a contextual child collection, or effect=emphasize to retain a global pool and mark related rows. A raw list of foreign IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
-            "collection_presentations": "Use board for lanes of a choice field; presentation_options.draggable enables persisted moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. These are capabilities, not a mandatory checklist.",
+            "collection_presentations": "Use board for lanes of a choice field; presentation_options.draggable enables persisted moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. For a dense CRUD collection that should stay tabular on wide screens and become labeled cards only on narrow screens, use presentation=table with compact_presentation=cards. These are capabilities, not a mandatory checklist.",
             "sections": "Plan the requested content partitions before filling views. view.section is a visibility partition, NOT a resource or application category. If the user requests separate views of the same records, give each requested tab its own section.id and title while reusing resource_ref. Views with the SAME section.id are visible TOGETHER; null is visible across ALL tabs. Put contextual details and editor openers in the appropriate section unless intentionally shared. Settings contain real local resources/commands, not automatically implemented external effects; even a single settings record currently needs a collection for selection plus its editor. Do not invent additional sections just to fill the screen.",
             "query_toolbar": "Each collection's query_controls compile into one compact responsive search/filter toolbar with disclosure, active values and reset. Do not create separate resources or views for filter widgets.",
             "text": "Text wraps by default in list/card metadata and table cells. field_display can explicitly request wrap or truncate and start/center/end alignment per visible field on list/table/cards/accordion collections ONLY; other presentations, details and editors use field_display=[]. Keep essential values readable; use truncation only for compact summaries with details available.",
@@ -1414,6 +1415,14 @@ def _canonicalize_semantic_prototype_candidate(
                     }
                 )
             view_filter["state_ref"] = canonical_state_ref
+        if view.get("activation_source_view_ref") is not None:
+            view["activation_source_view_ref"] = _mapped_candidate_ref(
+                view["activation_source_view_ref"],
+                namespace="view",
+                identifiers=view_ids,
+                normalizations=normalizations,
+                target=f"$.views[{view_index}].activation_source_view_ref",
+            )
         for control_index, control in enumerate(view["query_controls"]):
             control["id"] = query_ids[str(control["id"]).strip()]
             if control.get("field_ref") is not None:
@@ -1752,6 +1761,16 @@ def _runtime_layout_v2(
         and str(view.get("role") or "") == "collection"
         for view in views
     )
+    has_open_detail = any(
+        str(view.get("role") or "") == "collection"
+        and str((view.get("selection") or {}).get("row_activation") or "")
+        == "open_details"
+        for view in views
+    ) and any(
+        str(view.get("role") or "") == "details"
+        and bool(view.get("activation_source_view_ref"))
+        for view in views
+    )
     has_primary = "primary" in region_roles
     if runtime_pattern == "workbench" and primary_is_collection and "supporting" in region_roles:
         runtime_pattern = "collection-detail"
@@ -1797,7 +1816,7 @@ def _runtime_layout_v2(
         "regions": regions,
         "interaction": {
             "selection": "single" if primary_is_collection else "none",
-            "rowActivation": "open-detail" if primary_is_collection and has_supporting else "select" if primary_is_collection else "none",
+            "rowActivation": "open-detail" if has_open_detail else "select" if primary_is_collection else "none",
             "detail": "inline" if has_supporting else "modal",
             "filters": "disclosure",
             "actions": "adaptive",
@@ -2744,6 +2763,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
     for view in candidate.get("views") or []:
         if isinstance(view, dict):
             view.setdefault("surface", "inline")
+            view.setdefault("compact_presentation", None)
             view.setdefault("presentation_options", None)
             view.setdefault("field_display", [])
             view.setdefault("section", None)
@@ -2760,6 +2780,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             else:
                 view.setdefault("selection", None)
             view.setdefault("selection_filter", None)
+            view.setdefault("activation_source_view_ref", None)
             view.setdefault("media", None)
             if view.get("selection_filter"):
                 view["selection_filter"].setdefault("source_field_ref", None)
@@ -2898,6 +2919,9 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 normalized_view["presentation"] = expected_presentation
             normalized_view["resource_ref"] = normalized_resource_id
             normalized_view["surface"] = raw_view.get("surface", "inline")
+            normalized_view["compact_presentation"] = raw_view.get(
+                "compact_presentation"
+            )
             normalized_view["media"] = {
                 key: field_refs_by_resource[raw_resource_id].get(str(ref), _canonical_candidate_identifier(ref, namespace="field")) if ref else None
                 for key, ref in raw_view["media"].items()
@@ -2916,6 +2940,13 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 for entry in raw_view.get("scope_filters") or []
             ]
             normalized_view["selection"] = copy.deepcopy(raw_view.get("selection"))
+            normalized_view["activation_source_view_ref"] = (
+                _canonical_candidate_identifier(
+                    raw_view["activation_source_view_ref"], namespace="view"
+                )
+                if raw_view.get("activation_source_view_ref")
+                else None
+            )
             link = raw_view.get("selection_filter")
             normalized_view["selection_filter"] = {
                 "field_ref": field_refs_by_resource[raw_resource_id].get(link["field_ref"], link["field_ref"]),

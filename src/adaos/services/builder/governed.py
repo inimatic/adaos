@@ -152,7 +152,13 @@ def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mappin
     action = str(action or "").strip().lower()
     if action in {"cancel_change", "supersede_change"}:
         prefix = "cancel" if action == "cancel_change" else "supersede"
-        return f"{prefix}_from_{legacy_state(workflow)}"
+        governed = workflow.get("governed")
+        governed_state = (
+            str(governed.get("state") or "").strip()
+            if isinstance(governed, Mapping)
+            else ""
+        )
+        return f"{prefix}_from_{governed_state or legacy_state(workflow)}"
     if action == "plan_change_set":
         issues = [item for item in metadata.get("issues") or [] if isinstance(item, Mapping)]
         return "plan_prototype_change" if any(str(item.get("lane") or "") == "prototype" for item in issues) else "plan_automation_change"

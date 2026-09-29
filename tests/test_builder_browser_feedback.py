@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from adaos.services.builder.automation import BuilderAutomationService
 from adaos.services.builder.browser_feedback import (
     BuilderBrowserFeedbackService,
+    _record_editor_workflows,
     browser_feedback_failures,
 )
 from adaos.services.skill_factory_worker import _browser_feedback_prompt_projection
@@ -40,6 +41,10 @@ def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> N
     assert "after.relatedRows > 0" in script
     assert 'is-open[data-region-role="detail"]' in script
     assert "recordEditorCommands.has(step.command)" in script
+    assert "ensureRecordEditorRow" in script
+    assert "cleanupDisposableRecord" in script
+    assert "disposable-record-create" in script
+    assert "disposable-record-cleanup" in script
     assert "did not hydrate an editable record" in script
     assert "populated_control_count" in script
     assert "did not close after inspection" in script
@@ -75,6 +80,12 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
             {
                 "commands": [
                     {
+                        "id": "create-item",
+                        "kind": "create",
+                        "view_ref": "item-editor",
+                        "exposure": {"placement": "collection_header"},
+                    },
+                    {
                         "id": "open-item-editor",
                         "kind": "update",
                         "view_ref": "item-editor",
@@ -92,7 +103,19 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
                         "view_ref": "item-editor",
                         "exposure": {"placement": "editor_danger"},
                     },
-                ]
+                ],
+                "views": [
+                    {
+                        "id": "items",
+                        "role": "collection",
+                        "resource_ref": "items",
+                    },
+                    {
+                        "id": "item-editor",
+                        "role": "editor",
+                        "resource_ref": "items",
+                    },
+                ],
             }
         ),
         encoding="utf-8",
@@ -102,6 +125,14 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
         assert kwargs["env"]["ADAOS_E2E_SPACE_KIND"] == "workspace"
         assert kwargs["env"]["ADAOS_E2E_COMMAND_SEQUENCE"] == "open-item-editor"
         assert kwargs["env"]["ADAOS_E2E_RECORD_EDITOR_COMMANDS"] == "open-item-editor"
+        assert json.loads(kwargs["env"]["ADAOS_E2E_RECORD_EDITOR_WORKFLOWS"]) == [
+            {
+                "open_command": "open-item-editor",
+                "create_command": "create-item",
+                "delete_command": "delete-item",
+                "collection_view_ref": "items",
+            }
+        ]
         output = Path(kwargs["env"]["ADAOS_E2E_OUTPUT"])
         (output / "wide.png").write_bytes(b"wide")
         (output / "compact.png").write_bytes(b"compact")
@@ -169,6 +200,65 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
     assert json.loads(Path(receipt["receipt_path"]).read_text(encoding="utf-8"))[
         "source"
     ]["digest"] == receipt["source"]["digest"]
+
+
+def test_record_editor_workflow_requires_matching_safe_crud_commands(
+    tmp_path: Path,
+) -> None:
+    scenario = tmp_path / "scenario"
+    scenario.mkdir()
+    (scenario / "semantic.webui.json").write_text(
+        json.dumps(
+            {
+                "views": [
+                    {"id": "records", "role": "collection", "resource_ref": "record"},
+                    {"id": "record-editor", "role": "editor", "resource_ref": "record"},
+                ],
+                "commands": [
+                    {
+                        "id": "create-record",
+                        "kind": "create",
+                        "view_ref": "record-editor",
+                        "exposure": {"placement": "collection_header"},
+                    },
+                    {
+                        "id": "open-record",
+                        "kind": "update",
+                        "view_ref": "record-editor",
+                        "exposure": {"placement": "row_action"},
+                    },
+                    {
+                        "id": "save-record",
+                        "kind": "update",
+                        "view_ref": "record-editor",
+                        "exposure": {"placement": "editor_primary"},
+                    },
+                    {
+                        "id": "delete-record",
+                        "kind": "delete",
+                        "view_ref": "record-editor",
+                        "exposure": {"placement": "editor_danger"},
+                    },
+                    {
+                        "id": "open-read-only",
+                        "kind": "update",
+                        "view_ref": "read-only",
+                        "exposure": {"placement": "row_action"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _record_editor_workflows(scenario) == [
+        {
+            "open_command": "open-record",
+            "create_command": "create-record",
+            "delete_command": "delete-record",
+            "collection_view_ref": "records",
+        }
+    ]
 
 
 def test_browser_feedback_rejects_success_without_authoritative_data(

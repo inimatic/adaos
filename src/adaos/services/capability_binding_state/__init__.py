@@ -111,13 +111,29 @@ from .tooling import (
     lint_persistent_terminology,
     portable_bundle_digest,
 )
-from .registry_distribution import (
-    ReleaseProvenanceAdmission,
-    THIN_DISTRIBUTION_RECEIPT_SCHEMA,
-    ThinDistributionError,
-    ThinDistributionRemote,
-    ThinSemanticDistributionResolver,
+
+_LAZY_REGISTRY_DISTRIBUTION_EXPORTS = frozenset(
+    {
+        "ReleaseProvenanceAdmission",
+        "THIN_DISTRIBUTION_RECEIPT_SCHEMA",
+        "ThinDistributionError",
+        "ThinDistributionRemote",
+        "ThinSemanticDistributionResolver",
+    }
 )
+
+
+def __getattr__(name: str):
+    # registry_distribution depends on the application CBS projection.  Eager
+    # re-exporting it makes importing applications.cbs recurse through this
+    # package and back into the partially initialized application module.
+    if name in _LAZY_REGISTRY_DISTRIBUTION_EXPORTS:
+        from . import registry_distribution
+
+        value = getattr(registry_distribution, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "CBSActivationCoordinator",

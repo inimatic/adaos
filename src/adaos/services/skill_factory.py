@@ -254,6 +254,9 @@ def _assignment_mcp_scope(raw_scope: Any) -> list[str]:
         "mock_data": "read_mock_data",
         "staging_validation": "run_staging_validation",
         "runtime_diagnostics": "read_runtime_diagnostics",
+        "dev_tickets": "read_development_tickets",
+        "development_tickets": "read_development_tickets",
+        "development_ticket": "read_development_tickets",
     }
     scope: list[str] = []
     for item in _string_list(raw_scope):
@@ -268,6 +271,7 @@ def _assignment_mcp_scope(raw_scope: Any) -> list[str]:
             "read_mock_data",
             "run_staging_validation",
             "read_runtime_diagnostics",
+            "read_development_tickets",
         ]
     return scope
 

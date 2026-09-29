@@ -392,6 +392,34 @@ def trial_verification_evidence(
             "reason": "completed_automation_required",
         }
 
+    return _sealed_trial_verification_evidence_for_task(
+        service,
+        task_id=task_id,
+        object_id=object_id,
+    )
+
+
+def _sealed_trial_verification_evidence_for_task(
+    service: Any,
+    *,
+    task_id: str,
+    object_id: str,
+) -> dict[str, Any]:
+    """Read one exact terminal worker envelope without projecting session state.
+
+    This is the shared evidence boundary used while Automation finalization is
+    still in ``commit_ready``.  Callers must bind ``task_id`` to their current
+    session first; this helper independently confines the path and validates
+    the sealed result/test/provenance artifacts before returning any evidence.
+    """
+
+    task_id = str(task_id or "").strip()
+    if not task_id or Path(task_id).name != task_id:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "completed_automation_required",
+        }
     run_root = (Path(service.runs_root) / task_id).resolve()
     runs_root = Path(service.runs_root).resolve()
     if not run_root.is_relative_to(runs_root):
@@ -711,13 +739,19 @@ def repackage_checkpoint(
     )
 
 
-def recover_validated_result(*, object_type: str, object_id: str) -> dict[str, Any]:
+def recover_validated_result(
+    *,
+    object_type: str,
+    object_id: str,
+    permission_decision: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Activate a preserved validated result without assigning Codex again."""
 
     return dict(
         _service().recover_validated_result(
             object_type=object_type,
             object_id=object_id,
+            permission_decision=permission_decision,
         )
         or {}
     )

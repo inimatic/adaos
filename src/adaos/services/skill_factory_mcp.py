@@ -30,6 +30,14 @@ TASK_SCOPE_TOOL_ALLOWLIST: dict[str, tuple[str, ...]] = {
         "get_events_logs",
         "get_yjs_logs",
     ),
+    "read_development_tickets": (
+        "list_dev_tickets",
+        "get_dev_ticket",
+        "get_core_dev_ticket_backlog",
+        "list_dev_ticket_events",
+        "list_dev_ticket_artifacts",
+        "get_dev_ticket_artifact",
+    ),
 }
 
 

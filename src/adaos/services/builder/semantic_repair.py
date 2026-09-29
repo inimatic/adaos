@@ -467,6 +467,7 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
         for view in repair.get("views") or []:
             view.setdefault("media", None)
             view.setdefault("presentation_options", None)
+            view.setdefault("compact_presentation", None)
             view.setdefault("field_display", [])
             view.setdefault("section", None)
             view.setdefault("scope_filters", [])
@@ -569,6 +570,7 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
                     continue
                 original = {**original, "surface": original.get("surface", "inline"), "media": original.get("media"),
                             "presentation_options": original.get("presentation_options"),
+                            "compact_presentation": original.get("compact_presentation"),
                             "field_display": original.get("field_display", []), "section": original.get("section"),
                             "scope_filters": original.get("scope_filters", []),
                             "selection_filter": original.get("selection_filter")}

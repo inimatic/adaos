@@ -364,6 +364,15 @@ def test_current_workflow_head_exposes_bounded_change_message_ownership(
             assert (kind, project_id) == ("scenario", "recipes")
             return {
                 "governed": {"state": "prototype_editing", "generation": 7},
+                "prototype": {
+                    "head_revision": "004",
+                    "acceptance": {
+                        "decision": "accepted",
+                        "revision": "004",
+                        "webui_digest": "sha256:webui",
+                        "digest": "sha256:acceptance",
+                    },
+                },
                 "change_set": {
                     "change_set_id": "builder_change.retry",
                     "status": "planned",
@@ -384,6 +393,80 @@ def test_current_workflow_head_exposes_bounded_change_message_ownership(
 
     assert head["source_message_ids"][0] == "m.bpackage.retry.prototype.request"
     assert len(head["source_message_ids"]) == 32
+    assert head["prototype_revision"] == "004"
+    assert head["prototype_webui_digest"] == "sha256:webui"
+    assert head["prototype_acceptance_digest"] == "sha256:acceptance"
+    assert head["prototype_accepted"] is True
+
+
+def test_failed_prototype_launch_releases_only_its_owned_workflow_head(
+    tmp_path,
+) -> None:
+    service = _service(tmp_path)
+    transitions: list[dict] = []
+
+    class _Workflow:
+        def describe(self, kind, project_id):
+            assert (kind, project_id) == ("scenario", "recipes")
+            return {
+                "generation": 100,
+                "governed": {"state": "prototype_editing", "generation": 8},
+                "change_set": {
+                    "change_set_id": "CH-package",
+                    "status": "changes_requested",
+                    "source_message_ids": [
+                        "m.bpackage.retry.prototype.request"
+                    ],
+                },
+            }
+
+        def transition(self, object_type, object_id, action, **kwargs):
+            transitions.append(
+                {
+                    "object_type": object_type,
+                    "object_id": object_id,
+                    "action": action,
+                    **kwargs,
+                }
+            )
+            return {"ok": True, "workflow": {"governed": {"state": "cancelled"}}}
+
+    service.workflow_service = _Workflow()
+
+    result = service.release_failed_prototype_launch(
+        object_type="scenario",
+        object_id="recipes",
+        package_id="bpackage.retry",
+        reason="prototype_start:ValueError",
+    )
+
+    assert result["released"] is True
+    assert transitions == [
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "action": "cancel_change",
+            "actor": "builder.prototype",
+            "reason": "prototype_start:ValueError",
+            "metadata": {
+                "change_id": "CH-package",
+                "originating_change_id": "CH-package",
+                "package_id": "bpackage.retry",
+                "source_message_id": "m.bpackage.retry.prototype.request",
+                "initiated_by": "builder.prototype",
+            },
+            "expected_generation": 100,
+        }
+    ]
+
+    transitions.clear()
+    skipped = service.release_failed_prototype_launch(
+        object_type="scenario",
+        object_id="recipes",
+        package_id="bpackage.other",
+    )
+    assert skipped["released"] is False
+    assert transitions == []
 
 
 def test_automation_attaches_created_components_to_project_authority(
@@ -816,7 +899,10 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
     assert constraints["must_update_manifest"] is False
     assert constraints["repair_profile"] == "surgical_ui"
     assert constraints["max_changed_files"] == 2
-    assert task["realize_request"]["mcp"] == {"enabled": False, "requested_scope": []}
+    assert task["realize_request"]["mcp"] == {
+        "enabled": True,
+        "requested_scope": ["requirement_spec", "development_tickets"],
+    }
     context_control = started["session"]["context_control"]
     assert context_control["model_call_expected"] is True
     assert context_control["required_estimated_tokens"] < 4_000
@@ -898,6 +984,7 @@ def test_dev_ticket_repair_with_root_mcp_admits_sdk_metadata_and_bound_validatio
             "requirement_spec",
             "staging_validation",
             "runtime_diagnostics",
+            "development_tickets",
         ],
         "subnet_id": "sn_demo",
         "bound_target_id": "hub:sn_demo",
@@ -3926,6 +4013,99 @@ def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_che
     assert "source_artifact:scenario:recipes" in {
         blocker["code"] for blocker in stale["blockers"]
     }
+
+
+def test_preserved_candidate_preflight_keeps_durable_lineage_after_package_replan(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    candidate_task_id = "task.before-package-replan"
+    run_root = service.runs_root / candidate_task_id
+    workspace = run_root / "workspace"
+    source = service.dev_scenarios_root / "recipes"
+    shutil.copytree(source, workspace / "scenarios" / "recipes")
+    LocalSkillFactoryWorker(
+        state_dir=service.state_dir,
+        repo_root=service.repo_root,
+        dev_skills_root=service.dev_skills_root,
+        dev_scenarios_root=service.dev_scenarios_root,
+        runs_root=service.runs_root,
+    )._init_git_workspace(workspace, "realize/before-package-replan")
+    (workspace / "scenarios" / "recipes" / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {"candidate": True}}),
+        encoding="utf-8",
+    )
+    snapshot = automation_module.capture_source_snapshot(
+        state_dir=service.state_dir,
+        artifacts=[("scenario", "recipes", source)],
+        attachments=[],
+        created_at="2026-09-23T00:00:00+00:00",
+    )
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "task_id": candidate_task_id,
+                "target": {"type": "scenario", "id": "recipes"},
+                "forge": {"source_snapshot": snapshot},
+                "realize_request": {
+                    "links": {
+                        "automation_session_id": "automation.scenario.recipes"
+                    },
+                    "artifacts": {
+                        "continuation_contract": automation_module._continuation_contract()
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_root / "output").mkdir()
+    report = (
+        "```adaos-development-feedback\n"
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"conflicting_contract","summary":"Repair envelope is stale",'
+        '"blocking":true,"target_refs":["scenario:recipes"]}]}\n```'
+    )
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps({"status": "blocked", "report": report, "questions": []}),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.before-package-replan",
+                    "stage": "development_feedback",
+                    "message": "Automation blocked by reported development feedback",
+                }
+            ],
+        }
+    )
+    session = {
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "task_history": ["task.after-package-replan"],
+    }
+
+    admission = service._preserved_candidate_admission(
+        session,
+        source_task_id=candidate_task_id,
+    )
+
+    assert admission["eligible"] is True, admission
+    lineage = next(
+        check for check in admission["checks"] if check["id"] == "source_task_lineage"
+    )
+    assert lineage == {
+        "id": "source_task_lineage",
+        "status": "passed",
+        "message": "source task belongs to the same durable Automation session",
+    }
+    assert admission["checkpoint"]["model_policy"] == "forbid"
 
 
 def test_preserved_candidate_validation_submits_successor_with_no_model_policy(
@@ -8526,6 +8706,7 @@ def test_governed_aprobation_trial_binds_candidate_and_changelog(
     monkeypatch: pytest.MonkeyPatch,
     delivery_status: str,
 ) -> None:
+    from adaos.sdk.builder import automation as automation_sdk
     from adaos.sdk.builder import lifecycle
 
     service = _service(tmp_path)
@@ -8573,6 +8754,20 @@ def test_governed_aprobation_trial_binds_candidate_and_changelog(
             },
         },
     )
+    monkeypatch.setattr(
+        automation_sdk,
+        "_sealed_trial_verification_evidence_for_task",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "source_commit": "a" * 40,
+            "regression_evidence": ["suite:checkpoint:test-report"],
+            "access_matrix_evidence": ["suite:access-matrix:application"],
+            "pending_action_evidence": ["suite:pending-action:behavior"],
+            "audit_evidence": ["provenance:task.demo"],
+            "disclosure_evidence": ["suite:external-effects:manifest"],
+            "redaction_evidence": ["suite:redaction:behavior"],
+        },
+    )
 
     receipt = service._ensure_governed_aprobation_trial(
         {
@@ -8609,6 +8804,101 @@ def test_governed_aprobation_trial_binds_candidate_and_changelog(
     ]
     assert receipt["component_update"]["stage"] == "beta"
     assert receipt["component_update"]["version"] == "0.2.0"
+
+
+def test_governed_aprobation_trial_forwards_only_exact_bound_permission_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import automation as automation_sdk
+    from adaos.sdk.builder import lifecycle
+
+    service = _service(tmp_path)
+    package_digest = "sha256:" + "1" * 64
+    decision = {
+        "approved": True,
+        "actor": "user:owner",
+        "actor_type": "user",
+        "approval_id": "pending-action:pa.1",
+        "task_id": "task.demo",
+        "package_digest": package_digest,
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            describe=lambda *_: {
+                "generation": 4,
+                "delivery": {
+                    "status": "checkpoint",
+                    "package_digest": package_digest,
+                },
+            }
+        ),
+    )
+    observed: dict = {}
+
+    def prepare_trial(*_args, **kwargs):
+        observed.update(kwargs)
+        return {
+            "ok": True,
+            "candidate": {
+                "candidate_id": "candidate.demo",
+                "package_digest": "sha256:" + "2" * 64,
+                "release_digest": "sha256:" + "3" * 64,
+            },
+            "release": {"version": "0.2.0"},
+            "trial_workspace": "trials/candidate.demo",
+            "trial_activation": {
+                "status": "active",
+                "runtime_binding": {
+                    "kind": "isolated_trial_workspace",
+                    "authority": "immutable_candidate",
+                    "path": "trials/candidate.demo",
+                },
+            },
+            "workflow": {
+                "generation": 6,
+                "delivery": {
+                    "status": "trial",
+                    "candidate_id": "candidate.demo",
+                    "package_digest": "sha256:" + "2" * 64,
+                    "release_digest": "sha256:" + "3" * 64,
+                },
+            },
+        }
+
+    monkeypatch.setattr(lifecycle, "prepare_trial", prepare_trial)
+    verification_evidence = {
+        "ok": True,
+        "source_commit": "a" * 40,
+        "regression_evidence": ["suite:checkpoint:test-report"],
+        "access_matrix_evidence": ["suite:access-matrix:application"],
+        "pending_action_evidence": ["suite:pending-action:behavior"],
+        "audit_evidence": ["provenance:task.demo"],
+        "disclosure_evidence": ["suite:external-effects:manifest"],
+        "redaction_evidence": ["suite:redaction:behavior"],
+    }
+    monkeypatch.setattr(
+        automation_sdk,
+        "_sealed_trial_verification_evidence_for_task",
+        lambda *_args, **_kwargs: verification_evidence,
+    )
+
+    service._ensure_governed_aprobation_trial(
+        {
+            "object_type": "scenario",
+            "object_id": "demo",
+            "current_task_id": "task.demo",
+            "webspace_id": "desktop",
+            "trial_permission_decision": decision,
+        },
+        {},
+        record_update=False,
+    )
+
+    assert observed["permission_decision"] == decision
+    assert observed["verification_evidence"] == verification_evidence
 
 
 def test_existing_trial_uses_project_version_when_delivery_omits_it(
@@ -8765,28 +9055,65 @@ def test_project_trial_idempotency_includes_composition_identity(
     assert key.startswith("dev-ticket-trial:task.demo:bbbbbbbbbbbbbbbbbbbbbbbb:epoch:")
     assert key.endswith(":project:aaaaaaaaaaaaaaaaaaaaaaaa")
 
+    approved = BuilderAutomationService._aprobation_trial_idempotency_key(
+        task_id="task.demo",
+        package_digest="sha256:" + "b" * 64,
+        publication_project_ref="project:demo_suite",
+        checkpoint_epoch="2026-09-02T12:00:00+00:00",
+        permission_decision={
+            "approved": True,
+            "actor": "user:owner",
+            "actor_type": "user",
+            "approval_id": "pending-action:pa.1",
+            "task_id": "task.demo",
+            "package_digest": "sha256:" + "b" * 64,
+        },
+        verification_evidence={
+            "ok": True,
+            "source_commit": "a" * 40,
+            "regression_evidence": ["suite:checkpoint:test-report"],
+        },
+    )
+
+    assert approved != key
+    assert ":p:" in approved
+    assert len(approved + ":failure") <= 160
+    assert approved.endswith(":project:aaaaaaaaaaaaaaaaaaaaaaaa")
+
+    changed_evidence = BuilderAutomationService._aprobation_trial_idempotency_key(
+        task_id="task.demo",
+        package_digest="sha256:" + "b" * 64,
+        publication_project_ref="project:demo_suite",
+        checkpoint_epoch="2026-09-02T12:00:00+00:00",
+        permission_decision={
+            "approved": True,
+            "actor": "user:owner",
+            "actor_type": "user",
+            "approval_id": "pending-action:pa.1",
+            "task_id": "task.demo",
+            "package_digest": "sha256:" + "b" * 64,
+        },
+        verification_evidence={
+            "ok": True,
+            "source_commit": "c" * 40,
+            "regression_evidence": ["suite:checkpoint:test-report"],
+        },
+    )
+    assert changed_evidence != approved
+
 
 def test_published_component_update_refreshes_stable_runtime_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from adaos.services import runtime_refresh
-    from adaos.services.scenario import webspace_runtime
+    from adaos.sdk.builder import applications
 
     service = _service(tmp_path)
-    invalidations: list[dict[str, object]] = []
-    rebuilds: list[dict[str, object]] = []
+    refreshes: list[str] = []
     monkeypatch.setattr(
-        webspace_runtime,
-        "invalidate_webspace_materialization_cache",
-        lambda webspace_id, **kwargs: invalidations.append(
-            {"webspace_id": webspace_id, **kwargs}
-        ),
-    )
-    monkeypatch.setattr(
-        runtime_refresh,
-        "rebuild_webspace_projection_sync",
-        lambda **kwargs: rebuilds.append(dict(kwargs))
+        applications,
+        "refresh_placement",
+        lambda webspace_id: refreshes.append(webspace_id)
         or {"ok": True, "materialization": {"ready": True}},
     )
 
@@ -8808,34 +9135,26 @@ def test_published_component_update_refreshes_stable_runtime_projection(
     assert result["attempts"] == [
         {"attempt": 1, "ok": True, "error": None, "request_id": None}
     ]
-    assert invalidations[0]["reason"] == "component_update_notice_changed"
     assert result["stage"] == "stable"
-    assert rebuilds[0]["source_of_truth"] == "component_update_notice"
-    assert rebuilds[0]["skill_source_mode"] == "workspace"
+    assert refreshes == ["desktop"]
 
 
-def test_pending_component_update_selects_exact_trial_preview(
+def test_pending_component_update_refreshes_production_trial_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from adaos.sdk.builder import preview
+    from adaos.sdk.builder import applications
 
     service = _service(tmp_path)
-    selections: list[dict[str, object]] = []
+    refreshes: list[str] = []
     monkeypatch.setattr(
-        preview,
-        "select_target",
-        lambda object_type, object_id, **kwargs: selections.append(
-            {"object_type": object_type, "object_id": object_id, **kwargs}
-        )
+        applications,
+        "refresh_placement",
+        lambda webspace_id: refreshes.append(webspace_id)
         or {
             "ok": True,
-            "preview_webspace_id": "desktop-dev",
-            "materialization": {
-                "ok": True,
-                "request_id": "trial-preview.1",
-                "materialization": {"ready": True},
-            },
+            "request_id": "trial-production.1",
+            "materialization": {"ready": True},
         },
     )
 
@@ -8854,23 +9173,14 @@ def test_pending_component_update_selects_exact_trial_preview(
     assert result is not None and result["ok"] is True
     assert result["stage"] == "beta"
     assert result["candidate_id"] == "candidate.recipes"
-    assert selections == [
-        {
-            "object_type": "scenario",
-            "object_id": "recipes",
-            "stage": "trial",
-            "source_webspace_id": "desktop",
-            "follow_active": False,
-        }
-    ]
+    assert refreshes == ["desktop"]
 
 
 def test_component_update_notice_retries_transient_webspace_rebuild(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from adaos.services import runtime_refresh
-    from adaos.services.scenario import webspace_runtime
+    from adaos.sdk.builder import applications
 
     service = _service(tmp_path)
     rebuilds: list[dict[str, object]] = []
@@ -8891,14 +9201,9 @@ def test_component_update_notice_retries_transient_webspace_rebuild(
         ]
     )
     monkeypatch.setattr(
-        webspace_runtime,
-        "invalidate_webspace_materialization_cache",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        runtime_refresh,
-        "rebuild_webspace_projection_sync",
-        lambda **kwargs: rebuilds.append(dict(kwargs)) or next(projections),
+        applications,
+        "refresh_placement",
+        lambda webspace_id: rebuilds.append(webspace_id) or next(projections),
     )
     monkeypatch.setattr("adaos.services.builder.automation.time.sleep", sleeps.append)
 
@@ -8939,20 +9244,14 @@ def test_component_update_notice_defers_exhausted_transient_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from adaos.services import runtime_refresh
-    from adaos.services.scenario import webspace_runtime
+    from adaos.sdk.builder import applications
 
     service = _service(tmp_path)
     sleeps: list[float] = []
     monkeypatch.setattr(
-        webspace_runtime,
-        "invalidate_webspace_materialization_cache",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        runtime_refresh,
-        "rebuild_webspace_projection_sync",
-        lambda **kwargs: {
+        applications,
+        "refresh_placement",
+        lambda webspace_id: {
             "ok": False,
             "error": "webspace_rebuild_failed",
             "request_id": "rebuild.deferred",
@@ -9057,6 +9356,66 @@ def test_completed_session_reconciles_retryable_component_update_projection(
         ]
         is True
     )
+
+
+def test_completed_session_reconciles_null_publication_gate_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    resolved = [{"ticket_id": "dticket.gate", "status": "resolved"}]
+    calls: list[str] = []
+    session = {
+        "object_type": "scenario",
+        "object_id": "automation_manager",
+        "status": "completed",
+        "current_task_id": "task.demo",
+        "links": {"development_ticket_id": "dticket.demo"},
+        "implementation_brief": json.dumps(
+            {
+                "execution_mode": "surgical_dev_ticket_repair",
+                "policy": {"publication_required": True},
+            }
+        ),
+        "completion_readiness": {
+            "ok": True,
+            "resolved_publication_gate_failures": None,
+            "aprobation": {
+                "ok": True,
+                "mode": "immutable_candidate_trial_workspace",
+                "activation": {
+                    "status": "active",
+                    "runtime_binding": {
+                        "kind": "isolated_trial_workspace",
+                        "authority": "immutable_candidate",
+                        "path": "trials/candidate.demo",
+                    },
+                },
+                "trial": {
+                    "status": "trial",
+                    "candidate_id": "candidate.demo",
+                    "candidate_digest": "sha256:" + "2" * 64,
+                },
+                "component_update_projection": {"ok": True},
+            },
+        },
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_resolve_publication_gate_findings_for_trial",
+        lambda self, current, readiness: calls.append(current["object_id"])
+        or resolved,
+    )
+
+    reconciled = service._reconcile_required_aprobation(session)
+
+    assert calls == ["automation_manager"]
+    assert (
+        reconciled["completion_readiness"]["resolved_publication_gate_failures"]
+        == resolved
+    )
+    persisted = service.get_session("scenario", "automation_manager")
+    assert persisted["completion_readiness"]["resolved_publication_gate_failures"] == resolved
 
 
 @pytest.mark.parametrize(
@@ -9865,6 +10224,7 @@ def test_completed_trial_reconciliation_recovers_missing_trial_receipt(
             "status": "trial",
             "candidate_id": candidate_id,
             "package_digest": candidate_digest,
+            "release_digest": "sha256:" + "3" * 64,
             "prepared_at": "2026-09-02T21:54:42+00:00",
         },
     }
@@ -9905,8 +10265,7 @@ def test_completed_trial_reconciliation_recovers_missing_trial_receipt(
         project_trial,
     )
 
-    reconciled = service._reconcile_completed_workflow(
-        {
+    session = {
             "object_type": "skill",
             "object_id": "subscription_status_skill",
             "companion_skill_ids": ["subscription_status_skill"],
@@ -9934,20 +10293,13 @@ def test_completed_trial_reconciliation_recovers_missing_trial_receipt(
                     }
                 ],
                 "project_composition_checkpoint": {"ok": True, "version": "0.1.2"},
-                "aprobation": {
-                    "ok": False,
-                    "trial": {
-                        "status": "trial",
-                        "candidate_id": candidate_id,
-                        "candidate_digest": candidate_digest,
-                        "workflow_generation": 38,
-                    },
-                },
+                "aprobation": {"ok": False},
             },
         }
-    )
+    reconciled = service._reconcile_completed_workflow(session)
 
     assert len(trial_calls) == 1
+    assert trial_calls[0]["receipt"] == {"ok": False}
     assert trial_calls[0]["kwargs"] == {}
     assert reconciled["completion_readiness"]["aprobation"]["ok"] is True
     assert reconciled["completion_readiness"]["workflow_reconciliation"]["status"] == (
@@ -9958,6 +10310,19 @@ def test_completed_trial_reconciliation_recovers_missing_trial_receipt(
         == candidate_id
     )
     assert saved[-1]["status"] == "completed"
+
+    conflicting = json.loads(json.dumps(session))
+    conflicting["completion_readiness"]["aprobation"] = {
+        "ok": False,
+        "trial": {
+            "status": "trial",
+            "candidate_id": "different-candidate",
+            "candidate_digest": candidate_digest,
+            "workflow_generation": 38,
+        },
+    }
+    assert service._reconcile_completed_workflow(conflicting) is None
+    assert len(trial_calls) == 1
 
 
 def test_completed_automation_synchronizes_linked_dev_ticket_without_status_recursion(
@@ -10608,6 +10973,64 @@ def test_finalize_follows_completed_automation_only_when_preview_choice_is_uncha
         == expected_transition
     )
     assert saved[-1]["status"] == "completed"
+
+
+def test_finalize_records_reconciliation_failure_as_durable_gate_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    transitions: list[str] = []
+
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_reconcile_completed_workflow",
+        lambda self, session: (_ for _ in ()).throw(
+            ValueError("Application Final Verification evidence is unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_report_publication_gate_failure",
+        lambda self, *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_sync_linked_development_ticket_tasks",
+        lambda self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            transition=lambda _kind, _name, action, **_kwargs: transitions.append(
+                action
+            )
+        ),
+    )
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "webspace_id": "desktop",
+            "current_task_id": "task.1",
+            "change_id": "change-1",
+            "status": "commit_ready",
+        }
+    )
+
+    assert saved[-1]["status"] == "failed"
+    assert saved[-1]["last_failure"]["stage"] == "live_readiness"
+    assert "Final Verification evidence" in saved[-1]["last_failure"]["message"]
+    assert transitions == ["automation_failed"]
 
 
 def test_finalize_preserves_checkpoint_when_builder_host_becomes_inactive(
@@ -11974,6 +12397,82 @@ def test_validated_result_recovery_reuses_completed_task_after_live_readiness_fa
     assert finalized[0]["reuse_confirmed_checkpoints"] is True
 
 
+def test_validated_result_recovery_binds_attended_permission_decision_without_codex(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    package_digest = "sha256:" + "4" * 64
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "change_id": "change-1",
+        "current_task_id": "task.1",
+        "status": "failed",
+        "task": {"task_id": "task.1", "status": "completed"},
+        "last_result": {"summary": "ready"},
+        "last_failure": {
+            "stage": "trial_projection",
+            "message": "explicit permission decision required",
+        },
+        "completion_readiness": {
+            "ok": False,
+            "task_id": "task.1",
+            "stage": "trial_projection",
+        },
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            describe=lambda *_: {
+                "delivery": {
+                    "status": "checkpoint",
+                    "package_digest": package_digest,
+                    "source_revision": "forge-1",
+                }
+            }
+        ),
+    )
+    finalized: list[dict] = []
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        _service._save_session(completed)
+
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not run")
+    )
+
+    result = service.recover_validated_result(
+        object_type="scenario",
+        object_id="recipes",
+        permission_decision={
+            "approved": True,
+            "actor": "user:owner",
+            "actor_type": "user",
+            "approval_id": "pending-action:pa.1",
+            "task_id": "task.1",
+            "package_digest": package_digest,
+        },
+    )
+
+    assert result["ok"] is True
+    assert finalized[0]["trial_permission_decision"]["approval_id"] == (
+        "pending-action:pa.1"
+    )
+    assert finalized[0]["trial_permission_decision"]["source_revision"] == "forge-1"
+
+
 def test_validated_result_recovery_records_missing_workflow_checkpoint_without_rerunning_codex(
     tmp_path: Path,
     monkeypatch,
@@ -12647,6 +13146,99 @@ def test_validated_result_recovery_rewinds_clean_platform_feedback_browser_repai
     assert result["session"]["current_task_id"] == "task.validated"
     assert recovery["cancelled_task_id"] == "task.platform-feedback"
     assert recovery["reason"] == "clean_platform_feedback_browser_repair_resolved"
+
+
+def test_validated_result_recovery_skips_repeated_clean_platform_feedback_repairs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task = {
+        "task_id": "task.validated",
+        "status": "completed",
+        "updated_at": "2026-09-20T17:10:00+00:00",
+        "result": {"summary": "Validated candidate."},
+    }
+    first_feedback = {
+        "task_id": "task.platform-feedback-1",
+        "status": "failed",
+        "attempts": 1,
+        "failure_history": [{"stage": "development_feedback"}],
+    }
+    second_feedback = {
+        "task_id": "task.platform-feedback-2",
+        "status": "failed",
+        "attempts": 1,
+    }
+    for task_id in (first_feedback["task_id"], second_feedback["task_id"]):
+        workspace = tmp_path / "runs" / task_id / "workspace"
+        workspace.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init"], cwd=workspace, check=True, capture_output=True
+        )
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": second_feedback["task_id"],
+        "status": "failed",
+        "iteration": 6,
+        "task": second_feedback,
+        "task_history": [
+            source_task["task_id"],
+            first_feedback["task_id"],
+            second_feedback["task_id"],
+        ],
+        "browser_feedback_repair_count": 2,
+        "pending_browser_feedback": {"ok": False, "receipt_digest": "sha256:1"},
+        "last_failure": {
+            "stage": "development_feedback",
+            "failure_class": "capability_blocked",
+        },
+        "completion_history": [
+            {
+                "task_id": source_task["task_id"],
+                "iteration": 4,
+                "browser_feedback_repair": {"status": "queued", "attempt": 1},
+            }
+        ],
+    }
+    service._save_session(session)
+    tasks = {
+        item["task_id"]: item
+        for item in (source_task, first_feedback, second_feedback)
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        type(service.factory),
+        "read_task",
+        lambda _self, task_id: tasks[task_id],
+    )
+
+    def finalize(_service, value):
+        completed = dict(value)
+        completed["status"] = "completed"
+        _service._save_session(completed)
+
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not rerun")
+    )
+
+    result = service.recover_validated_result(
+        object_type="scenario", object_id="recipes"
+    )
+
+    recovery = result["session"]["cancelled_repair_recovery_history"][-1]
+    assert result["ok"] is True
+    assert result["session"]["current_task_id"] == source_task["task_id"]
+    assert recovery["skipped_repair_task_ids"] == [
+        first_feedback["task_id"],
+        second_feedback["task_id"],
+    ]
 
 
 @pytest.mark.parametrize(

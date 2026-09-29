@@ -15,6 +15,11 @@ def _reachable(graph, start):
 
 def selection_findings(document):
     views = {view['id']: view for view in document['views']}
+    detail_sources = {}
+    for view in views.values():
+        source_ref = view.get('activation_source_view_ref')
+        if source_ref:
+            detail_sources.setdefault(source_ref, []).append(view['id'])
     graph = {}
     for view in views.values():
         if link := view.get('selection_filter'):
@@ -31,7 +36,10 @@ def selection_findings(document):
             })
         elif policy and (
             (policy.get('mode') == 'none' and policy.get('row_activation') != 'none')
-            or (policy.get('mode') == 'single' and policy.get('row_activation') != 'select')
+            or (
+                policy.get('mode') == 'single'
+                and policy.get('row_activation') not in {'select', 'open_details'}
+            )
             or (policy.get('indicator') == 'radio' and policy.get('mode') != 'single')
         ):
             findings.append({
@@ -40,6 +48,32 @@ def selection_findings(document):
                 'semantic_refs': [f"view:{view['id']}"],
                 'detail': 'selection mode, indicator and row_activation are inconsistent',
             })
+        if policy and policy.get('row_activation') == 'open_details' and not detail_sources.get(view['id']):
+            findings.append({
+                'code': 'semantic.detail_activation_missing',
+                'path': f'$.views[{index}].selection.row_activation',
+                'semantic_refs': [f"view:{view['id']}"],
+                'detail': 'row_activation=open_details requires a details view linked by activation_source_view_ref',
+            })
+        activation_source_ref = view.get('activation_source_view_ref')
+        if activation_source_ref is not None:
+            source = views.get(activation_source_ref)
+            detail = None
+            if view['role'] != 'details':
+                detail = 'activation_source_view_ref belongs to details views only'
+            elif not source or source.get('role') != 'collection':
+                detail = 'activation_source_view_ref must reference a collection view'
+            elif source.get('resource_ref') != view.get('resource_ref'):
+                detail = 'activated collection and details must project the same resource'
+            elif (source.get('selection') or {}).get('row_activation') != 'open_details':
+                detail = 'activation source collection must declare row_activation=open_details'
+            if detail:
+                findings.append({
+                    'code': 'semantic.detail_activation_invalid',
+                    'path': f'$.views[{index}].activation_source_view_ref',
+                    'semantic_refs': [f"view:{view['id']}"],
+                    'detail': detail,
+                })
         link = view.get('selection_filter')
         if not link:
             continue
@@ -108,11 +142,34 @@ def compile_selection_filters(document, webui, source_map):
                         selectedStateKey=key,
                         selectionMode=policy.get('mode', 'single'),
                         selectionIndicator=policy.get('indicator', 'row_accent'),
-                        rowActivation=policy.get('row_activation', 'select'),
+                        rowActivation=(
+                            'open-detail'
+                            if policy.get('row_activation') == 'open_details'
+                            else policy.get('row_activation', 'select')
+                        ),
                     )
                     source_map.setdefault(f"view:{view['id']}", []).append(
                         f"ui.application.desktop.pageSchema.widgets.@{view['id']}.inputs.selectedStateKey"
                     )
+
+    detail_activation_state_key = '__adaos_active_detail_source'
+    for view in document['views']:
+        source_ref = view.get('activation_source_view_ref')
+        if view.get('role') != 'details' or not source_ref:
+            continue
+        widget = widgets[view['id']]
+        widget.setdefault('inputs', {})['activationSourceWidgetId'] = source_ref
+        widget['visibleIf'] = (
+            f'$state.{detail_activation_state_key} === "{source_ref}"'
+        )
+        page.setdefault('initialState', {}).setdefault(detail_activation_state_key, '')
+        source_map.setdefault(f"view:{view['id']}", []).extend([
+            f"ui.application.desktop.pageSchema.widgets.@{view['id']}.inputs.activationSourceWidgetId",
+            f"ui.application.desktop.pageSchema.widgets.@{view['id']}.visibleIf",
+        ])
+        source_map.setdefault(f"view:{source_ref}", []).append(
+            f"ui.application.desktop.pageSchema.widgets.@{view['id']}.inputs.activationSourceWidgetId"
+        )
     graph, reverse, derived = {}, {}, {}
     for view in document['views']:
         link = view.get('selection_filter')

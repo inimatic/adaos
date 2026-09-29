@@ -14,9 +14,114 @@ from adaos.services.development_tickets import (
     COMPATIBILITY_PENDING_ACTION_KIND,
     COMPATIBILITY_RESPONSE_TOPIC,
     DevelopmentTicketService,
+    PUBLICATION_PERMISSION_PENDING_ACTION_KIND,
     development_source_options,
 )
 from adaos.services.skill.activation import stream_receiver_event_admission
+
+
+def test_prototype_ready_is_bound_to_current_package_link() -> None:
+    assert (
+        development_tickets_module._prototype_ready_for_package(
+            "automation_ready", None
+        )
+        is False
+    )
+    assert (
+        development_tickets_module._prototype_ready_for_package(
+            "automation_ready", {"session_id": "builder.session.current"}
+        )
+        is True
+    )
+
+
+def test_failed_automation_resume_requires_same_accepted_prototype() -> None:
+    old_session = {
+        "prototype_acceptance": {"revision": "007"},
+        "source_prototype_version": "UI 006",
+    }
+    current_session = {
+        "prototype_acceptance": {"revision": "007"},
+        "source_prototype_version": "UI 007",
+    }
+
+    assert (
+        development_tickets_module._automation_session_matches_prototype(
+            old_session,
+            "007",
+        )
+        is False
+    )
+    assert (
+        development_tickets_module._automation_session_matches_prototype(
+            current_session,
+            "007",
+        )
+        is True
+    )
+    assert (
+        development_tickets_module._prototype_ready_for_package(
+            "prototype_editing", {"session_id": "builder.session.current"}
+        )
+        is False
+    )
+    assert (
+        development_tickets_module._prototype_ready_for_package(
+            "automation_ready",
+            {"session_id": "builder.session.current", "revision": "006"},
+            accepted_revision="007",
+        )
+        is False
+    )
+    assert (
+        development_tickets_module._prototype_ready_for_package(
+            "automation_ready",
+            {"session_id": "builder.session.current", "revision": "007"},
+            accepted_revision="007",
+        )
+        is True
+    )
+
+
+def test_source_preconditions_resolve_exact_companion_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "dev" / "node"
+    scenario_root = workspace / "scenarios" / "manager"
+    skill_file = workspace / "skills" / "manager_skill" / "handlers" / "main.py"
+    scenario_root.mkdir(parents=True)
+    skill_file.parent.mkdir(parents=True)
+    webui = scenario_root / "webui.json"
+    webui.write_text("{}\n", encoding="utf-8")
+    skill_file.write_text("def query():\n    return []\n", encoding="utf-8")
+
+    def condition(path: str, absolute: Path) -> dict[str, object]:
+        payload = absolute.read_bytes()
+        return {
+            "path": path,
+            "sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+            "size": len(payload),
+        }
+
+    result = development_tickets_module._validate_repair_source_preconditions(
+        {
+            "source_preconditions": [
+                condition("scenarios/manager/webui.json", webui),
+                condition(
+                    "skills/manager_skill/handlers/main.py",
+                    skill_file,
+                ),
+            ]
+        },
+        development_source={"dev_source_path": str(scenario_root)},
+        target={"object_type": "scenario", "object_id": "manager"},
+    )
+
+    assert result["ok"] is True
+    assert [item["status"] for item in result["checks"]] == [
+        "matched",
+        "matched",
+    ]
 
 
 def test_state_read_cache_is_copy_safe_and_invalidated_on_write(
@@ -136,6 +241,79 @@ def test_default_builder_prototype_submitter_uses_shared_conversation_packet(
         "builder_repair:repair.test",
     ]
     assert params["instruction"] == "Rename Board to Dashboard."
+    assert params["_meta"]["builder_llm_async"] is False
+    assert calls[0]["timeout"] == 900
+
+
+def test_default_prototype_submitter_reconciles_failed_automation_before_recording_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from adaos.sdk.builder import workflow as builder_workflow
+
+    revision_path = tmp_path / "007.json"
+    revision_path.write_text(
+        json.dumps(
+            {
+                "change_id": "builder_change.test",
+                "patch": {
+                    "prototype_resource": {"webui_digest": "sha256:" + "a" * 64}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = {
+        "generation": 10,
+        "active_phase": "automation",
+        "automation": {"status": "failed"},
+        "prototype": {"head_revision": "006"},
+        "governed": {"state": "prototype_editing"},
+    }
+    transitions: list[tuple[str, dict[str, object]]] = []
+
+    def transition(_kind, _object_id, action, **kwargs):
+        transitions.append((action, kwargs))
+        state["generation"] += 1
+        if action == "prototype_acceptance_invalidated":
+            state["active_phase"] = "prototype"
+            state["automation"] = {"status": "not_started"}
+        elif action == "prototype_revision_recorded":
+            state["prototype"] = {"head_revision": kwargs["metadata"]["revision"]}
+        return {"workflow": dict(state)}
+
+    class _Manager:
+        def run_tool(self, *_args, **_kwargs):
+            return {
+                "ok": True,
+                "ui_revision": {"revision": "007", "path": str(revision_path)},
+            }
+
+    monkeypatch.setattr(builder_workflow, "get_state", lambda *_args: dict(state))
+    monkeypatch.setattr(builder_workflow, "transition", transition)
+    monkeypatch.setattr(
+        development_tickets_module, "_builder_skill_manager", lambda: _Manager()
+    )
+
+    result = development_tickets_module._default_builder_prototype_submitter(
+        instruction="Add typed details.",
+        object_id="automation_manager",
+        project_id="automation_manager",
+        package_id="bpackage.test",
+        repair_id="repair.test",
+        ticket_ids=["dticket.test"],
+        webspace_id="desktop",
+        conversation_id="conversation.test",
+    )
+
+    assert result["ok"] is True
+    assert [action for action, _ in transitions] == [
+        "prototype_acceptance_invalidated",
+        "prototype_revision_recorded",
+    ]
+    assert state["active_phase"] == "prototype"
+    assert state["prototype"]["head_revision"] == "007"
+    assert transitions[1][1]["metadata"]["prototype_acceptance_required"] is True
 
 
 def test_autonomous_repair_brief_excludes_historical_builder_noise() -> None:
@@ -903,6 +1081,76 @@ def test_publication_gate_failure_creates_linked_deduplicated_project_ticket(
     assert service.get_ticket(duplicate["ticket"]["ticket_id"])["status"] == "closed"
 
 
+def test_publication_permission_gate_waits_for_user_and_records_exact_decision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    published: list[dict] = []
+
+    def publish_pending_action(**kwargs):
+        published.append(kwargs)
+        return {
+            "id": "pa.permission.1",
+            "kind": kwargs["kind"],
+            "status": "pending",
+            "created_at": 1.0,
+        }
+
+    monkeypatch.setattr(
+        "adaos.services.pending_actions.publish_pending_action",
+        publish_pending_action,
+    )
+    failure = service.report_publication_gate_failure(
+        component_type="scenario",
+        component_id="automation_manager",
+        gate="trial_projection",
+        error="activation introduces permissions but has no explicit permission decision",
+        task_id="task.1",
+        autonomous_repair_eligible=False,
+        design_time_fixable=False,
+        run_policy="await_user_permission_decision",
+        metadata={"requires_user_decision": True},
+    )
+    pending = service.publish_publication_permission_pending_action(
+        failure["ticket"]["ticket_id"],
+        object_type="scenario",
+        object_id="automation_manager",
+        task_id="task.1",
+        package_digest="sha256:" + "4" * 64,
+        permissions=["workspace.write", "workspace.read"],
+    )
+
+    assert pending["ticket"]["status"] == "waiting_for_user"
+    assert published[0]["kind"] == PUBLICATION_PERMISSION_PENDING_ACTION_KIND
+    assert "workspace.read, workspace.write" in published[0]["request_text"]
+    assert pending["ticket"]["policy"]["design_time_fixable"] is False
+    assert pending["ticket"]["policy"]["autonomous_repair_eligible"] is False
+
+    answered = service.handle_publication_permission_response(
+        ticket_id=failure["ticket"]["ticket_id"],
+        response_action_id="approve",
+        object_type="scenario",
+        object_id="automation_manager",
+        task_id="task.1",
+        package_digest="sha256:" + "4" * 64,
+        pending_action_id="pa.permission.1",
+        responder={"id": "user:owner"},
+        resume=False,
+    )
+
+    assert answered["ok"] is True
+    assert answered["decision"]["approved"] is True
+    assert answered["decision"]["task_id"] == "task.1"
+    assert answered["ticket"]["status"] == "accepted"
+    ref = next(
+        item
+        for item in answered["ticket"]["pending_action_refs"]
+        if item["id"] == "pa.permission.1"
+    )
+    assert ref["status"] == "responded"
+
+
 def test_runtime_activation_observation_respects_policy_and_closes_on_retry(
     tmp_path: Path,
 ) -> None:
@@ -1606,6 +1854,15 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
     assert brief["ticket_ids"] == ticket_ids
     assert brief["policy"]["one_release_for_package"] is True
     assert [item["ticket_id"] for item in brief["issues"]] == ticket_ids
+    assert all("evidence_refs" not in item for item in brief["issues"])
+    assert [item["detail_source"] for item in brief["issues"]] == [
+        {
+            "server": "adaos_task_root",
+            "tool": "get_dev_ticket",
+            "arguments": {"ticket_id": ticket_id},
+        }
+        for ticket_id in ticket_ids
+    ]
     assert all(
         service.get_ticket(ticket_id)["builder_refs"][0]["automation_task_id"]
         == "factory.task.1"
@@ -1624,6 +1881,13 @@ def test_scenario_webui_package_requires_prototype_acceptance_before_automation(
     webui = source / "webui.json"
     original = b'{"schema":"adaos.webui.v1","title":"Board"}'
     webui.write_bytes(original)
+    semantic = source / "semantic.webui.json"
+    semantic_original = b'{"schema":"adaos.webui.semantic.v2","views":[]}'
+    semantic.write_bytes(semantic_original)
+    focused_test = source / "tests" / "test_board.py"
+    focused_test.parent.mkdir()
+    test_original = b"def test_board():\n    assert True\n"
+    focused_test.write_bytes(test_original)
     monkeypatch.setattr(
         "adaos.services.development_tickets.development_source_options",
         lambda _scope: {
@@ -1640,6 +1904,8 @@ def test_scenario_webui_package_requires_prototype_acceptance_before_automation(
     automation = _FakePrototypeFirstBuilderAutomation()
     summary = "Rename the Board heading to Board view. Change nothing else."
     target_file = f"scenarios/{scenario_id}/webui.json"
+    semantic_file = f"scenarios/{scenario_id}/semantic.webui.json"
+    test_file = f"scenarios/{scenario_id}/tests/test_board.py"
     signal = service.capture_signal(
         kind="development_request",
         summary=summary,
@@ -1657,17 +1923,29 @@ def test_scenario_webui_package_requires_prototype_acceptance_before_automation(
             "builder_repair": {
                 "profile": "surgical_ui",
                 "concepts": ["ui"],
-                "target_files": [target_file],
+                "target_files": [target_file, semantic_file, test_file],
                 "target_refs": ["page:board"],
                 "acceptance_checks": ["The heading is Board view."],
-                "max_changed_files": 1,
+                "max_changed_files": 3,
                 "requires_root_mcp": False,
                 "source_preconditions": [
                     {
                         "path": target_file,
                         "sha256": "sha256:" + hashlib.sha256(original).hexdigest(),
                         "size": len(original),
-                    }
+                    },
+                    {
+                        "path": semantic_file,
+                        "sha256": "sha256:"
+                        + hashlib.sha256(semantic_original).hexdigest(),
+                        "size": len(semantic_original),
+                    },
+                    {
+                        "path": test_file,
+                        "sha256": "sha256:"
+                        + hashlib.sha256(test_original).hexdigest(),
+                        "size": len(test_original),
+                    },
                 ],
             }
         },
@@ -2790,6 +3068,50 @@ def test_core_capability_request_blocks_project_ticket_and_filters_by_owner_area
     assert [item["ticket_id"] for item in service.list_tickets(component_ref="modal:nlu_teacher_modal")] == [
         project_ticket["ticket_id"]
     ]
+
+
+def test_platform_defect_escalation_routes_shared_client_bug_and_blocks_source(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="review_comment",
+        summary="Status badges stretch into ellipses in cards without previews.",
+        target_scope={"type": "scenario", "id": "automation_manager_prototype"},
+        source="client_feedback",
+        owner_area="scenario",
+        component_ref="scenario:automation_manager_prototype",
+    )["signal"]
+    source = service.ensure_ticket_for_signal(
+        signal,
+            kind="feedback",
+        status="captured",
+        owner_area="scenario",
+        component_ref="scenario:automation_manager_prototype",
+    )["ticket"]
+
+    escalated = service.escalate_platform_defect(
+        source["ticket_id"],
+        component_ref="core:client.renderer.list.cards.meta-badge",
+        expected_behavior="Card metadata badges keep intrinsic height when preview content is absent.",
+        observed_behavior="The badge stretches across the card grid row and appears as a tall ellipse.",
+        failure_class="layout.cross_axis_stretch",
+        actor="builder:platform-router",
+        confidence=0.98,
+        evidence_refs=[{"type": "test", "id": "list-card-meta-badge-layout"}],
+    )
+
+    assert escalated["platform_defect"] is True
+    assert escalated["ticket"]["owner_area"] == "core"
+    assert escalated["ticket"]["component_ref"] == (
+        "core:client.renderer.list.cards.meta-badge"
+    )
+    assert escalated["ticket"]["metadata"]["development_escalation_kind"] == (
+        "platform_defect"
+    )
+    updated_source = service.get_ticket(source["ticket_id"])
+    assert updated_source is not None
+    assert updated_source["status"] == "waiting_for_core"
 
 
 def test_core_release_fanout_unblocks_project_only_after_verification(tmp_path: Path) -> None:

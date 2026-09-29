@@ -226,3 +226,26 @@ def test_expire_pending_actions_marks_stale_items(pending_action_docs) -> None:
     assert projection["by_id"][action["id"]]["status"] == "expired"
     assert projection["active"] == []
     assert any(event.type == "pending_actions.expired" for event in ctx.bus.events)
+
+
+def test_cancel_pending_action_closes_obsolete_action_without_user_response(
+    pending_action_docs,
+) -> None:
+    ctx = _make_ctx()
+    action = _publish(ctx)
+
+    result = pending_actions.cancel_pending_action(
+        action["id"],
+        reason="qualification_superseded",
+        ctx=ctx,
+        webspace_id="default",
+        actor={"type": "system", "system_id": "development_tickets"},
+    )
+
+    assert result["duplicate"] is False
+    stored = result["snapshot"]["by_id"][action["id"]]
+    assert stored["status"] == "cancelled"
+    assert stored["cancellation"]["reason"] == "qualification_superseded"
+    assert result["snapshot"]["active"] == []
+    assert not stored.get("response")
+    assert any(event.type == "pending_actions.cancelled" for event in ctx.bus.events)

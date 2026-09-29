@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import subprocess
+import sys
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -8,6 +10,27 @@ from fastapi import APIRouter, FastAPI
 from adaos.apps.api import router_registry
 from adaos.apps.api.router_registry import RuntimeRouter
 from adaos.apps.api.runtime_lifecycle import RuntimeApplicationLifecycle
+
+
+def test_application_cbs_and_distribution_exports_import_in_fresh_process() -> None:
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from adaos.services.applications.cbs import ApplicationCBSService; "
+                "from adaos.services.capability_binding_state import "
+                "ThinSemanticDistributionResolver; "
+                "assert ApplicationCBSService and ThinSemanticDistributionResolver"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert probe.returncode == 0, probe.stderr
 
 
 @pytest.mark.asyncio

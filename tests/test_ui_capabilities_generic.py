@@ -1065,6 +1065,24 @@ def test_dashboard_authoring_refinement_does_not_require_resource_crud() -> None
     assert "recipe.data_entry" not in selection["root_item_ids"]
 
 
+def test_composite_revision_board_inventory_does_not_select_kanban_recipe() -> None:
+    request = (
+        "Исправь только текущую ревизию Automation Manager, не перепроектируя "
+        "приложение. Сохрани все существующие ресурсы, CRUD-команды и views. "
+        "v_hosts остается table, v_health остается cards, v_tasks остается board. "
+        "Добавь selection_filter к журналу выбранного pod."
+    )
+
+    qualification = qualify_ui_request(request)
+    selected = selected_ui_capabilities(request)
+
+    assert qualification["surface_kind"] == "interactive_collection"
+    assert "kanban_board" not in qualification["concepts"]
+    assert "recipe.kanban_board" not in {
+        item["id"] for item in selected["items"]
+    }
+
+
 def test_explicit_local_prototype_scope_overrides_crud_words() -> None:
     request = (
         "Extend the prototype with an Applications catalog. This remains a "

@@ -158,6 +158,7 @@ class BuilderAutomationTurnRequest(BaseModel):
 class BuilderAutomationRecoveryRequest(BaseModel):
     object_type: str = Field(..., pattern="^(skill|scenario|project)$")
     object_id: str = Field(..., min_length=1)
+    permission_decision: dict[str, Any] | None = None
 
 
 class BuilderAutomationPreservedCandidateRequest(BuilderAutomationRecoveryRequest):
@@ -517,6 +518,7 @@ def recover_validated_automation(
         return service.recover_validated_result(
             object_type=body.object_type,
             object_id=body.object_id,
+            permission_decision=body.permission_decision,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

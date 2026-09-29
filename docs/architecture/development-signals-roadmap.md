@@ -405,6 +405,33 @@ Ticket and signals, and closes only with evidence.
   only to propose intent and candidate refs, resolve every ref and precondition
   in core, persist its usage receipt, and ask the user rather than admit a
   low-confidence envelope.
+- [x] `[must]` `DS5-45` Expose Dev Ticket index/detail/event/artifact reads to
+  every Builder through a least-privilege `read_development_tickets` Root MCP
+  task scope. Preserve the same contract for remote execution by exchanging
+  the origin lease for a volatile attempt/node-fenced automation ticket; never
+  place either lease in public task metadata or persistent automation state.
+- [x] `[must]` `DS5-46` Turn low-confidence Builder qualification into a
+  text-bound Pending Action linked to the ticket and qualification attempt.
+  Persist the bounded answer as evidence, re-run qualification, deduplicate
+  repeated actions, and stop after two clarification rounds.
+- [ ] `[should]` `DS5-47` Add retrieval receipts and budget telemetry proving
+  that Builder used ticket filters and exact drill-down before model execution,
+  rather than embedding an unrelated backlog. Report avoided context bytes,
+  opened ticket refs, MCP calls, and stale/denied reads without storing MCP
+  bearer values.
+- [x] `[must]` `DS5-48` Keep Dev Ticket packages prompt-bounded: project only
+  ids/revisions, current summary and acceptance, compact artifact locators, and
+  an exact `get_dev_ticket` locator. Exclude historical evidence/usage from the
+  model prompt; after trusted descriptor prefetch, expose only the six
+  read-only Dev Ticket tools to Codex.
+- [x] `[must]` `DS5-49` Make language qualification fail managed: use a portable
+  JSON request, retain bounded rejected output for RCA, treat prior answers as
+  authoritative, reject false either/or clarification of conjunctive
+  requirements, and fall back to a text Pending Action on provider failure.
+- [x] `[should]` `DS5-50` Reconcile clarification Pending Actions when a newer
+  deterministic or language qualification becomes ready without using the old
+  response. Mark the obsolete action terminal with a machine-readable
+  supersession reason, update its ticket ref, and fence late responses.
 - [x] `[must]` `DS5-33` Require an authoritative owning DEV Project before a
   qualified repair package can create Builder work. Reuse the single existing
   DEV owner, require materialization when the owner exists only in Workspace,
@@ -733,8 +760,18 @@ is released and verified.
   blockers, generalization pressure, safety impact, and release proximity.
 - [ ] `[could]` `DS8-11` Add advanced-user inspection and subscription controls
   for core tickets that affect their projects.
+- [x] `[must]` `DS8-12` Add typed `platform_defect` escalation alongside
+  `core_capability_request`. Require a `core:*` owner, expected and observed
+  behavior, failure class, evidence, and high confidence; deduplicate the Core
+  ticket and visibly block the source ticket instead of modifying shared Core
+  or Client code in a project repair.
+- [ ] `[must]` `DS8-13` Complete the platform-defect loop on an Automation
+  Manager Client-renderer report: route the scenario ticket to `core:client`,
+  publish and verify the shared Client repair, fan the verified release back to
+  the linked ticket, and confirm the Application needs no private workaround.
+  Local routing and blocking are proven; shared release and fanout remain.
 
-Implementation note, updated 2026-09-02: the first core rail is implemented in the
+Implementation note, updated 2026-09-29: the first core rail is implemented in the
 Dev Ticket service, API, CLI, and Builder intake. Builder or Codex can create
 `core_capability_request` tickets with `owner_area = core`, stable
 `component_ref`, impact taxonomy, motivation, desired contract, observed
@@ -754,6 +791,18 @@ local-path, device, and credential-like material is excluded or redacted;
 draft export remains approval-gated, and Builder/Codex cannot approve it.
 Signed cross-subnet fanout, maintainer backlog UI, automatic public issue
 creation, and status mirroring remain open.
+
+The Automation Manager selection-indicator defect has exercised the local
+typed path: source ticket `dticket.01M3PNHXBX5SY6MMW6CF5SW02W` created the
+deduplicated `core:client.renderer.ui-table.selection-indicator` ticket
+`dticket.01M3PNJ3KPN6E1FZSHQY0B1RYF` and moved to `waiting_for_core`. The
+renderer correction is locally test-proven. The independently reported strange
+ellipses in the Global Root / RU-Global proxy cards exercised the same automatic
+classifier: source `dticket.01M3P7R1ZJQBBBN73YTEBF0RS3` is blocked by
+`dticket.01M3PEAM84351751J2K9HQX7K4`, owned by
+`core:client.renderer.list-card-meta`; no Application-local renderer workaround
+was admitted. DS8-13 stays open until those shared Client releases are
+published, verified, and fanned back to their source tickets.
 
 ## DS9. SDK Understanding And Agent Product UX
 

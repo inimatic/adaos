@@ -227,6 +227,17 @@ commit without requiring focus loss. False and zero are values, not empty filter
 Selection that drives a related collection must not also open an editor without
 an explicit command. Short isolated edit tasks may still use direct row editing.
 
+Parent/child workbenches separate three row interactions. A selection marker
+only changes the resource-scoped selection; an explicit row action opens the
+editor; and `selection.row_activation=open_details` selects the row and reveals
+a typed details view. Every such details view declares
+`activation_source_view_ref`, which must name a collection of the same resource.
+Core compiles that source identity into the row-activation event and dispatches
+only the matching details projection. Multiple Host/Pod details can therefore
+share one supporting region without the first details widget accidentally
+capturing every row click. Marker activation must not emit the details event,
+and details visibility must not be used as mutation authority.
+
 Visible text wraps by default. `field_display` can opt into truncation or choose
 start/center/end alignment per list/card/table field without changing stored data.
 Truncated content must remain inspectable. Model guidance explains these choices
@@ -821,10 +832,15 @@ count and field size, while immutable source references preserve access to the
 complete evidence. These reductions are context-selection decisions, not output
 limits, and require measured candidate-preservation and acceptance evidence.
 
-Every route has independent ceilings for fresh input, cached input, output,
-wall time, model attempts, and repair attempts. Exceeding a ceiling produces a
-typed partial result or clarification. It does not silently widen context or
-switch to a more expensive route.
+Every route has independent targets for fresh input, cached input, output,
+wall time, model attempts, and repair attempts. Crossing a target emits a typed
+`target_exceeded` receipt and informs later context packing, scheduling and
+review, but does not discard a useful authorized result or stop an in-flight
+turn. It does not silently widen authority or switch to a more expensive route.
+External provider capacity, explicit cancellation, revoked leases, wall-time
+enforcement and a separately declared high safety cap remain hard boundaries;
+when one of those interrupts work, AdaOS retains the partial output, usage and
+exact failure reason instead of reducing the event to a generic refusal.
 
 Output ceilings are selected from retained response distributions and task
 completeness evidence. During development evaluation, AdaOS first retains and
@@ -832,18 +848,20 @@ examines the complete provider response and exact sanitized request. It may
 reduce a limit only after showing that the removed tail is unnecessary rather
 than truncating the response and tuning against an incomplete artifact.
 
-The current Prototype-generation defaults preserve headroom for complete large
-manifests: 64,000 output tokens for the GPT-5/root full-document route, 128,000
-for GPT-5 semantic-v2 output, and 32,000 for GPT-4.1. These are ceilings, not
-generation targets. A per-request override remains bounded at 128,000 and is
-part of request identity. Codex realization has a separate execution budget;
-raising one budget must never be presented as raising the other.
+The current Prototype-generation provider requests preserve headroom for
+complete large manifests: 64,000 output tokens for the GPT-5/root full-document
+route, 128,000 for GPT-5 semantic-v2 output, and 32,000 for GPT-4.1. These are
+provider/safety capacities, not desired response sizes or economic refusal
+thresholds. A per-request override remains bounded by the admitted model
+capacity at 128,000 and is part of request identity. Codex realization has a
+separate advisory execution target and hard safety cap; raising one must never
+be presented as raising the other.
 
 These defaults are active in the `builder@0.2.177` DEV Candidate. A locked
 Workspace Builder adopts them only through the normal Trial/Publication
 decision; direct mutation of its selected immutable package is forbidden.
 
-Ceilings and timeouts are safety controls, not latency remediations. Stage
+Hard capacities and timeouts are safety controls, not latency remediations. Stage
 timings must first distinguish local orchestration, validation, Root transport
 and queueing, provider time-to-first-token, provider execution, output volume,
 and repair. A timeout may enforce a measured SLO after diagnosis; lowering it
@@ -1088,6 +1106,16 @@ provider profiles may retain supported assertions directly after an actual
 Root/provider canary; a quota failure proves neither support nor incompatibility.
 Measure the additional context and avoided repairs together. Do not lower
 output budgets merely because a complete response is larger than expected.
+
+Numeric token, cost and changed-file budgets are optimization targets with
+telemetry, not semantic authority. Exceeding one records an overrun and may
+trigger compaction or later review, but it does not erase a useful authorized
+candidate. Hard gates are separate and explicit: allowed path/effect scope,
+permissions, secret handling, destructive confirmations, leases, cancellation,
+wall timeout and a high safety cap. An acceptance-bound resource handoff may
+add only its exact owned declaration, manifest and WebUI rewrite paths to a
+repair envelope; it cannot turn a file-count target into directory-wide write
+authority.
 
 The independent grader receives revision-bound resources and executable provider
 policies, not just visible controls or schema property descriptions. Its pointer

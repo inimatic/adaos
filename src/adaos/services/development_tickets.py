@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -31,6 +32,14 @@ COMPATIBILITY_PENDING_ACTION_KIND = "development_ticket.runtime_compatibility.re
 COMPATIBILITY_RESPONSE_TOPIC = "development_tickets.compatibility.response"
 CORE_CAPABILITY_PENDING_ACTION_KIND = "development_ticket.core_capability.available"
 CORE_CAPABILITY_RESPONSE_TOPIC = "development_tickets.core_capability.response"
+BUILDER_CLARIFICATION_PENDING_ACTION_KIND = "development_ticket.builder.clarification"
+BUILDER_CLARIFICATION_RESPONSE_TOPIC = "development_tickets.builder.clarification.response"
+PUBLICATION_PERMISSION_PENDING_ACTION_KIND = (
+    "development_ticket.publication_permission.review"
+)
+PUBLICATION_PERMISSION_RESPONSE_TOPIC = (
+    "development_tickets.publication_permission.response"
+)
 DEV_TICKET_LIFECYCLE_EVENT_SCHEMA = "adaos.dev_ticket.lifecycle_event.v1"
 ACTIVE_SIGNAL_STATES = {
     "captured",
@@ -1102,8 +1111,100 @@ def _language_qualification_messages(
                     "scenario_id",
                 }
             },
+            "clarification_responses": [
+                {
+                    "question": _text(item.get("question"))[:500],
+                    "answer": _text(item.get("answer"))[:2000],
+                }
+                for item in _sequence_of_mappings(
+                    _mapping(ticket.get("metadata")).get("clarification_responses")
+                    or []
+                )[-2:]
+                if _text(item.get("answer"))
+            ],
         },
         "candidate_source_refs": entries,
+        "prompt_facts_contract": {
+            "required_keys": [
+                "schema",
+                "concepts",
+                "surface_kinds",
+                "operation_kinds",
+                "data_planes",
+                "effects",
+                "requires_i18n",
+                "requires_access",
+                "requires_conversation",
+                "requires_lifecycle",
+            ],
+            "schema": "adaos.builder.prompt_facts.v1",
+            "surface_kinds": [
+                "ui",
+                "page",
+                "modal",
+                "widget",
+                "panel",
+                "view",
+                "scenario",
+                "background",
+                "conversation",
+                "resource",
+            ],
+            "operation_kinds": [
+                "read",
+                "create",
+                "update",
+                "delete",
+                "command",
+                "transition",
+                "subscribe",
+                "handoff",
+                "validate",
+            ],
+            "data_planes": [
+                "yjs",
+                "stream",
+                "tool_details",
+                "skill_local",
+                "resource_provider",
+                "conversation",
+            ],
+            "effects": [
+                "read_only",
+                "local_write",
+                "external_io",
+                "device_control",
+                "destructive",
+                "publication",
+                "llm",
+            ],
+            "boolean_keys": [
+                "requires_i18n",
+                "requires_access",
+                "requires_conversation",
+                "requires_lifecycle",
+            ],
+        },
+        "output_example": {
+            "schema": "adaos.builder.language_qualification_proposal.v1",
+            "concepts": ["ui"],
+            "prompt_facts": {
+                "schema": "adaos.builder.prompt_facts.v1",
+                "concepts": ["ui"],
+                "surface_kinds": ["ui"],
+                "operation_kinds": ["read"],
+                "data_planes": [],
+                "effects": ["read_only"],
+                "requires_i18n": False,
+                "requires_access": False,
+                "requires_conversation": False,
+                "requires_lifecycle": False,
+            },
+            "candidate_paths": [entries[0]["workspace_path"]] if entries else [],
+            "confidence": 0.5,
+            "clarification_question": "One bounded question, or null",
+            "rationale": "Short classification rationale",
+        },
     }
     return [
         {
@@ -1114,14 +1215,22 @@ def _language_qualification_messages(
                 "Use one or more concepts from ui,data,crud,subnet,validation. "
                 "Return one JSON object with schema, concepts, prompt_facts, candidate_paths, confidence "
                 "from 0 to 1, clarification_question, and a short rationale. prompt_facts must use only "
-                "the enums defined by adaos.builder.prompt_facts.v1 and must describe the requested surface, "
-                "operations, data planes, effects, and i18n/access/conversation/lifecycle requirements. "
+                "the exact keys and enums in prompt_facts_contract; do not use shorter aliases such as "
+                "surface, operations, i18n, access, conversation, or lifecycle. Its schema field must be "
+                "adaos.builder.prompt_facts.v1, its concepts/surface_kinds/operation_kinds/data_planes/effects "
+                "fields must be arrays, and all requires_* fields must be booleans. "
+                "Follow output_example's nesting exactly: the top-level schema is the language qualification "
+                "proposal schema, while the prompt-facts schema and semantic arrays stay inside prompt_facts. "
+                "output_example demonstrates shape only; select paths and values from the actual ticket. "
                 "When the admitted source or public contract is insufficient, ambiguous, conflicting, or "
                 "needlessly expensive, add up to four development_feedback observations. Omit that optional "
                 "array for a routine qualification with no product feedback. Feedback is advisory and cannot "
                 "expand source or execution authority. "
-                "If the target is ambiguous, use low confidence "
-                "and ask one bounded clarification question. Never invent a path or SDK capability."
+                "If the target is ambiguous, use low confidence and ask one bounded clarification question. "
+                "Treat clarification_responses as authoritative user input and do not ask again for information "
+                "already answered there. Do not force a choice between requirements that the ticket or answers "
+                "state conjunctively; keep all acceptance points when they remain inside the same bounded "
+                "component repair. Never invent a path or SDK capability."
             ),
         },
         {
@@ -1385,12 +1494,21 @@ def _builder_package_execution_route(
         for path in target_files
         if _text(path)
     ]
-    scenario_webui = f"scenarios/{object_id}/webui.json" if object_id else ""
-    prototype_safe = bool(
+    scenario_root = f"scenarios/{object_id}/" if object_id else ""
+    scenario_webui = f"{scenario_root}webui.json" if scenario_root else ""
+    scenario_semantic = (
+        f"{scenario_root}semantic.webui.json" if scenario_root else ""
+    )
+    prototype_owned = bool(
         object_type == "scenario"
-        and scenario_webui
+        and scenario_root
         and normalized_files
-        and set(normalized_files) == {scenario_webui}
+        and all(path.startswith(scenario_root) for path in normalized_files)
+        and bool({scenario_webui, scenario_semantic} & set(normalized_files))
+        and any("ui" in set(item.get("concepts") or []) for item in qualifications)
+    )
+    prototype_safe = bool(
+        prototype_owned
         and not hints.get("structured_edits")
         and not hints.get("contract_closure")
         and hints.get("requires_root_mcp") is not True
@@ -1403,6 +1521,38 @@ def _builder_package_execution_route(
     if routes == {"validation_only"}:
         return "validation_only"
     return "bounded_patch_agent"
+
+
+def _prototype_ready_for_package(
+    workflow_state: str,
+    prototype_link: Mapping[str, Any] | None,
+    *,
+    accepted_revision: str | None = None,
+) -> bool:
+    """Return true only for an accepted Prototype linked to this package."""
+
+    link = _mapping(prototype_link)
+    if _text(workflow_state) != "automation_ready" or not link:
+        return False
+    revision = _text(accepted_revision)
+    return not revision or _text(link.get("revision")) == revision
+
+
+def _automation_session_matches_prototype(
+    session: Mapping[str, Any],
+    accepted_revision: str | None,
+) -> bool:
+    """Return whether a failed session can safely resume the accepted UI head."""
+
+    expected = _text(accepted_revision)
+    if not expected:
+        return True
+    acceptance = _mapping(session.get("prototype_acceptance"))
+    accepted = _text(acceptance.get("revision"))
+    source = _text(session.get("source_prototype_version"))
+    if source.lower().startswith("ui "):
+        source = source[3:].strip()
+    return accepted == expected and source == expected
 
 
 def _builder_skill_manager() -> Any:
@@ -1435,6 +1585,13 @@ def _builder_prototype_meta(
     topic_id = f"prompt-project:scenario:{object_id}"
     return {
         "action_source": "api_tool_call",
+        # Prototype generation currently executes inside a one-shot skill
+        # worker.  A daemon thread started by that worker is not a durable job
+        # owner: the process may exit after returning the submit receipt while
+        # Root LLM is still generating, leaving the package permanently
+        # ``llm_pending``.  Keep package-driven Prototype work synchronous
+        # until its observer is owned by a durable Core worker.
+        "builder_llm_async": False,
         "request_origin_id": "development_tickets",
         "request_origin_label": "Dev Tickets",
         "message_id": f"m.{package_id}.prototype.request",
@@ -1480,7 +1637,87 @@ def _default_builder_prototype_submitter(
         webspace_id=webspace_id,
         conversation_id=conversation_id,
     )
-    return _builder_skill_manager().run_tool(
+    def reconcile_workflow_for_revision(
+        result: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Keep governed and compatibility workflow heads aligned around ticket revisions."""
+
+        from adaos.sdk.builder import workflow as builder_workflow
+
+        try:
+            state = builder_workflow.get_state("scenario", object_id)
+        except AttributeError as exc:
+            # Lightweight SDK/unit-test contexts may intentionally omit the
+            # Builder workspace paths. The production bootstrap always owns
+            # them; do not turn a submitter contract test into workflow I/O.
+            if "dev_skills_dir" in str(exc) or "dev_scenarios_dir" in str(exc):
+                return None
+            raise
+        active_phase = _text(state.get("active_phase"))
+        automation_status = _text(_mapping(state.get("automation")).get("status"))
+        governed_state = _text(_mapping(state.get("governed")).get("state"))
+        if (
+            active_phase == "automation"
+            and automation_status == "failed"
+            and governed_state == "prototype_editing"
+        ):
+            transitioned = builder_workflow.transition(
+                "scenario",
+                object_id,
+                "prototype_acceptance_invalidated",
+                actor="builder.prototype_intake",
+                reason="Dev Ticket feedback requalified failed Automation as Prototype work.",
+                metadata={
+                    "reason": "automation_development_feedback_requalification",
+                    "builder_package_id": package_id,
+                    "builder_repair_id": repair_id,
+                    "development_ticket_ids": list(ticket_ids),
+                },
+                expected_generation=int(state.get("generation") or 0),
+            )
+            state = _mapping(transitioned.get("workflow"))
+
+        revision_result = _mapping(result)
+        revision_ref = _mapping(revision_result.get("ui_revision"))
+        revision = _text(revision_ref.get("revision"))
+        if not revision or _text(_mapping(state.get("prototype")).get("head_revision")) == revision:
+            return state
+        if _text(state.get("active_phase")) != "prototype":
+            raise RuntimeError(
+                "Builder produced a Prototype revision while the workflow compatibility head remained outside Prototype"
+            )
+        revision_document: dict[str, Any] = {}
+        revision_path = _text(revision_ref.get("path"))
+        if revision_path:
+            path = Path(revision_path)
+            if path.is_file():
+                revision_document = _mapping(json.loads(path.read_text(encoding="utf-8")))
+        patch = _mapping(revision_document.get("patch"))
+        prototype_resource = _mapping(patch.get("prototype_resource"))
+        recorded = builder_workflow.transition(
+            "scenario",
+            object_id,
+            "prototype_revision_recorded",
+            actor="builder.prototype",
+            metadata={
+                "object_type": "scenario",
+                "revision": revision,
+                "change_id": _text(revision_document.get("change_id") or patch.get("change_id")) or None,
+                "webui_digest": _text(prototype_resource.get("webui_digest")) or None,
+                "prototype_acceptance_required": True,
+                "builder_package_id": package_id,
+                "builder_repair_id": repair_id,
+                "development_ticket_ids": list(ticket_ids),
+            },
+            expected_generation=int(state.get("generation") or 0),
+        )
+        return _mapping(recorded.get("workflow"))
+
+    # Package intake may have already moved the governed Change back to
+    # Prototype after Automation reported a contract conflict. Align the
+    # compatibility projection before the Builder writes a new revision.
+    reconcile_workflow_for_revision()
+    result = _builder_skill_manager().run_tool(
         "builder_skill",
         "update_current_scenario",
         {
@@ -1506,8 +1743,15 @@ def _default_builder_prototype_submitter(
             },
             "_meta": meta,
         },
-        timeout=120,
+        # The Root job itself is durable, but the one-shot Builder worker must
+        # stay alive through validation, bounded repair and atomic artifact
+        # persistence.  This bound matches the Builder job ceiling rather
+        # than the short submit-only timeout used by interactive async calls.
+        timeout=900,
     )
+    if isinstance(result, Mapping) and result.get("ok") is True:
+        reconcile_workflow_for_revision(result)
+    return result
 
 
 def _default_builder_prototype_status_reader(
@@ -1607,13 +1851,26 @@ def _validate_repair_source_preconditions(
     source_root = Path(source_root_text).expanduser().resolve()
     collection = "skills" if _text(target.get("object_type")) == "skill" else "scenarios"
     prefix = f"{collection}/{_text(target.get('object_id'))}/"
+    workspace_root = source_root
+    if (
+        source_root.name == _text(target.get("object_id"))
+        and source_root.parent.name == collection
+    ):
+        # A DEV source locator addresses the primary artifact directory.  A
+        # governed package may also name exact companion-artifact files from
+        # the same DEV workspace (for example scenario + owned skill).  Resolve
+        # those paths from the shared workspace root without admitting globs or
+        # weakening the digest precondition.
+        workspace_root = source_root.parent.parent.resolve()
     checks: list[dict[str, Any]] = []
     for item in preconditions:
         workspace_path = _text(item.get("path")).replace("\\", "/").strip("/")
         relative_path = workspace_path[len(prefix):] if workspace_path.startswith(prefix) else workspace_path
-        candidates = [source_root / relative_path, source_root / workspace_path]
+        candidates = [source_root / relative_path, workspace_root / workspace_path]
         source_path = next((path.resolve() for path in candidates if path.is_file()), None)
-        if source_path is None or source_root not in source_path.parents:
+        if source_path is None or not (
+            source_path == workspace_root or workspace_root in source_path.parents
+        ):
             checks.append({"path": workspace_path, "status": "missing"})
             continue
         raw = source_path.read_bytes()
@@ -1742,18 +1999,48 @@ def _autonomous_package_brief(
 ) -> str:
     context = _mapping(repair.get("context"))
     package = _mapping(context.get("package"))
-    ticket_items = [
-        {
+    ticket_items = []
+    for ticket in tickets:
+        ticket_id = _text(ticket.get("ticket_id"))
+        artifact_refs = [
+            {
+                key: ref.get(key)
+                for key in (
+                    "type",
+                    "artifact_id",
+                    "uri",
+                    "filename",
+                    "content_type",
+                    "sha256",
+                )
+                if ref.get(key) not in (None, "", [], {})
+            }
+            for ref in _sequence_of_mappings(ticket.get("artifact_refs") or [])[:4]
+        ]
+        ticket_items.append({
             "ticket_id": _text(ticket.get("ticket_id")),
+            "revision": int(ticket.get("revision") or 1),
             "kind": _text(ticket.get("kind")),
             "summary": _text(ticket.get("summary")),
             "component_ref": _text(ticket.get("component_ref")) or None,
             "acceptance_checks": _bounded_repair_hints(ticket).get("acceptance_checks") or [],
-            "evidence_refs": _sequence_of_mappings(ticket.get("evidence_refs") or []),
-            "artifact_refs": _sequence_of_mappings(ticket.get("artifact_refs") or []),
+            "artifact_refs": [ref for ref in artifact_refs if ref],
+            "detail_source": {
+                "server": "adaos_task_root",
+                "tool": "get_dev_ticket",
+                "arguments": {"ticket_id": ticket_id},
+            },
+        })
+    repair_hints = _mapping(package.get("repair_hints"))
+    if _text(repair_hints.get("execution_route")) == "prototype_first":
+        repair_hints = {
+            **repair_hints,
+            # File count controls cost and review size; it is not authority.
+            # Accepted Prototype realization may deterministically expand into
+            # several owned resource declarations.  Preserve that useful work
+            # and report the overrun instead of asking the model to refuse it.
+            "max_changed_files_policy": "advisory_optimization_target",
         }
-        for ticket in tickets
-    ]
     payload = {
         "schema": "adaos.dev_ticket.autonomous_repair_package_brief.v1",
         "execution_mode": "surgical_dev_ticket_repair",
@@ -1769,14 +2056,24 @@ def _autonomous_package_brief(
             "one_release_for_package": True,
             "individual_ticket_evidence_required": True,
             "stop_on_core_or_sdk_boundary": True,
+            "functional_beta_deferred_capabilities": {
+                "allowed": True,
+                "requirements": [
+                    "The unavailable production effect is represented by a typed capability blocker.",
+                    "No unavailable production effect is claimed or invoked.",
+                    "A high-confidence missing capability is promoted to a linked Core Dev Ticket.",
+                    "The remaining local/read-only beta behavior passes deterministic validation.",
+                ],
+            },
         },
-        "repair_hints": _mapping(package.get("repair_hints")),
+        "repair_hints": repair_hints,
         "guardrails": [
             "Use only public AdaOS SDK/API surfaces available to the project.",
             "Do not modify AdaOS core/runtime from project Builder automation.",
             "Implement all package issues in one bounded project change and one release.",
             "Do not close an issue that lacks its own validation evidence.",
-            "Stop and create a linked core capability request when project-owned repair is impossible.",
+            "Stop only the unavailable effect and create a linked Core capability request. For functional beta, retain the validated candidate with typed unavailability instead of blocking unrelated local/read-only behavior.",
+            "Treat numeric file/token/cost budgets as optimization targets: report overruns, but do not discard an otherwise authorized useful candidate.",
         ],
         "acceptance": [
             "Every included ticket has a satisfied acceptance check or an explicit blocker.",
@@ -1799,6 +2096,26 @@ def _merge_refs(current: Sequence[Mapping[str, Any]], incoming: Sequence[Mapping
         seen.add(key)
         out.append(item)
     return out[-100:]
+
+
+def _with_pending_action_ref_status(
+    refs: Sequence[Mapping[str, Any]],
+    *,
+    action_id: str | None,
+    status: str,
+    reason: str | None = None,
+) -> list[dict[str, Any]]:
+    token = _text(action_id)
+    updated: list[dict[str, Any]] = []
+    for raw in refs:
+        item = dict(raw)
+        if token and _text(item.get("id")) == token:
+            item["status"] = _text(status)
+            item["resolved_at"] = _now()
+            if _text(reason):
+                item["resolution_reason"] = _text(reason)[:1000]
+        updated.append(item)
+    return updated[-100:]
 
 
 _HOST_ABSOLUTE_PATH_RE = re.compile(r"^(?:[a-zA-Z]:/|/)")
@@ -3534,6 +3851,44 @@ class DevelopmentTicketService:
         workflow_state = _text(workflow_head.get("state"))
         repair_id = _text(repair.get("repair_id"))
         prototype_link = _mapping(_mapping(repair.get("context")).get("prototype"))
+        accepted_prototype_revision = _text(workflow_head.get("prototype_revision"))
+        if (
+            execution_route == "prototype_first"
+            and workflow_state == "automation_ready"
+            and workflow_head.get("prototype_accepted") is True
+            and accepted_prototype_revision
+            and _text(prototype_link.get("revision")) != accepted_prototype_revision
+        ):
+            # Prototype revisions may be accepted after a previous Automation
+            # iteration returned development feedback.  Refresh the package
+            # link from the authoritative workflow head before dispatch so the
+            # next worker cannot receive stale Prototype identity.
+            repair = service.link_prototype(
+                repair_id,
+                prototype={
+                    "session_id": _text(prototype_link.get("session_id"))
+                    or target["object_id"],
+                    "status": "prototype_accepted",
+                    "patch": {"change_id": workflow_head.get("change_set_id")},
+                    "ui_revision": {"revision": accepted_prototype_revision},
+                },
+                actor=_text(actor) or "builder.prototype",
+            )
+            prototype_link = _mapping(_mapping(repair.get("context")).get("prototype"))
+            ticket_list = [
+                self._link_builder_prototype(
+                    ticket_id,
+                    repair_id=repair_id,
+                    prototype=prototype_link,
+                    actor=_text(actor) or "builder.prototype",
+                )
+                for ticket_id in ticket_ids
+            ]
+        package_prototype_ready = _prototype_ready_for_package(
+            workflow_state,
+            prototype_link,
+            accepted_revision=accepted_prototype_revision,
+        )
         prototype_message_id = f"m.{package_id}.prototype.request"
         workflow_source_message_ids = {
             _text(item)
@@ -3556,7 +3911,7 @@ class DevelopmentTicketService:
             "conversation_id": _text(conversation_id)
             or f"dev-ticket-package:{package_id}",
         }
-        if execution_route == "prototype_first" and workflow_state != "automation_ready":
+        if execution_route == "prototype_first" and not package_prototype_ready:
             if workflow_state == "prototype_editing" and prototype_link:
                 reader = prototype_status_reader or _default_builder_prototype_status_reader
                 prototype_session_id = _text(prototype_link.get("session_id"))
@@ -3619,6 +3974,7 @@ class DevelopmentTicketService:
                 "published",
                 "cancelled",
                 "superseded",
+                "automation_ready",
             } and not resumable_package_prototype:
                 return {
                     "ok": True,
@@ -3641,7 +3997,7 @@ class DevelopmentTicketService:
             development_source=development_source,
             target=target,
         )
-        if execution_route == "prototype_first" and workflow_state == "automation_ready":
+        if execution_route == "prototype_first" and package_prototype_ready:
             source_preconditions = {
                 "schema": "adaos.builder.source_precondition_validation.v1",
                 "status": "superseded_by_accepted_prototype",
@@ -3686,7 +4042,7 @@ class DevelopmentTicketService:
                 "materialization": materialization,
                 "rollup": service.package_rollup(_text(package_id)),
             }
-        if execution_route == "prototype_first" and workflow_state != "automation_ready":
+        if execution_route == "prototype_first" and not package_prototype_ready:
             submit = prototype_submitter or _default_builder_prototype_submitter
             try:
                 submitted = submit(
@@ -3720,6 +4076,26 @@ class DevelopmentTicketService:
                     for ticket_id in ticket_ids
                 ]
             except Exception as exc:
+                release_failed_head = getattr(
+                    automation_service,
+                    "release_failed_prototype_launch",
+                    None,
+                )
+                if callable(release_failed_head):
+                    try:
+                        release_failed_head(
+                            object_type=target["object_type"],
+                            object_id=target["object_id"],
+                            package_id=_text(package_id),
+                            actor=_text(actor) or "builder.prototype",
+                            reason=f"prototype_start:{type(exc).__name__}",
+                        )
+                    except Exception:
+                        _log.exception(
+                            "failed to release Builder prototype head package=%s repair=%s",
+                            package_id,
+                            repair_id,
+                        )
                 try:
                     service.transition_work_item(
                         repair_id,
@@ -3794,6 +4170,10 @@ class DevelopmentTicketService:
         resume = (
             _text(current_session.get("status")) == "failed"
             and _text(current_links.get("builder_package_id")) == _text(package_id)
+            and _automation_session_matches_prototype(
+                current_session,
+                accepted_prototype_revision,
+            )
             and callable(getattr(automation_service, "resume_failed_dev_ticket_repair", None))
         )
         followup = (
@@ -4004,6 +4384,7 @@ class DevelopmentTicketService:
                         blocked_ticket_ids=blocked_ticket_ids,
                         evidence_refs=_merge_refs(refs, [escalation_ref]),
                         metadata={
+                            "development_escalation_kind": escalation["kind"],
                             "source_task_id": task_id or None,
                             "builder_repair_id": linked_repair_id,
                             "builder_session_id": _text(session.get("session_id")) or None,
@@ -4284,6 +4665,67 @@ class DevelopmentTicketService:
             "lifecycle_event": lifecycle["event"],
         }
 
+    def escalate_platform_defect(
+        self,
+        ticket_id: str,
+        *,
+        component_ref: str,
+        expected_behavior: str,
+        observed_behavior: str,
+        failure_class: str,
+        actor: str,
+        confidence: float,
+        evidence_refs: Sequence[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
+        """Route a qualified non-project defect to the shared Core/Client backlog."""
+
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        component = _text(component_ref)
+        expected = _text(expected_behavior)
+        observed = _text(observed_behavior)
+        defect_class = _text(failure_class)
+        if not component.startswith("core:"):
+            raise ValueError("platform defect component_ref must start with core:")
+        if not expected or not observed or not defect_class:
+            raise ValueError(
+                "platform defect requires expected_behavior, observed_behavior, and failure_class"
+            )
+        bounded_confidence = max(0.0, min(1.0, float(confidence)))
+        if bounded_confidence < 0.85:
+            raise ValueError("platform defect confidence is insufficient for automatic escalation")
+        result = self.create_core_capability_request(
+            summary=_text(ticket.get("summary")),
+            component_ref=component,
+            desired_contract=expected,
+            actor=_text(actor) or "builder.platform_router",
+            impact="compatibility_debt",
+            motivation=(
+                "The behavior belongs to a shared AdaOS component and must not be "
+                "reimplemented inside a generated application."
+            ),
+            observed_limitation=observed,
+            blocked_ticket_ids=[ticket_id],
+            evidence_refs=_merge_refs(
+                ticket.get("evidence_refs") or [], evidence_refs
+            ),
+            metadata={
+                "development_escalation_kind": "platform_defect",
+                "failure_class": defect_class,
+                "classification_confidence": bounded_confidence,
+                "source_ticket_id": ticket_id,
+                "source_component_ref": ticket.get("component_ref"),
+            },
+            source="platform_defect_router",
+            origin_scope={
+                "type": "builder",
+                "surface": "platform_defect_router",
+                "id": _text(actor) or "builder.platform_router",
+            },
+        )
+        return {**result, "platform_defect": True, "source_ticket_id": ticket_id}
+
     def report_artifact_activation_observation(
         self,
         observation: Mapping[str, Any],
@@ -4381,6 +4823,7 @@ class DevelopmentTicketService:
         producer: str = "builder_publication_gate",
         publication_required: bool = True,
         autonomous_repair_eligible: bool = True,
+        design_time_fixable: bool = True,
         dedup_namespace: str = "publication-gate",
         metadata: Mapping[str, Any] | None = None,
         summary: str | None = None,
@@ -4471,7 +4914,7 @@ class DevelopmentTicketService:
             policy={
                 "blocking": True,
                 "run_policy": _text(run_policy) or "block_publication",
-                "design_time_fixable": True,
+                "design_time_fixable": bool(design_time_fixable),
                 "autonomous_repair_eligible": bool(autonomous_repair_eligible),
                 "publication_required": bool(publication_required),
             },
@@ -4490,6 +4933,32 @@ class DevelopmentTicketService:
             component_ref=component_ref,
         )
         failure_ticket = ticket_result["ticket"]
+        desired_policy = {
+            "blocking": True,
+            "run_policy": _text(run_policy) or "block_publication",
+            "design_time_fixable": bool(design_time_fixable),
+            "autonomous_repair_eligible": bool(autonomous_repair_eligible),
+            "publication_required": bool(publication_required),
+        }
+        current_metadata = _mapping(failure_ticket.get("metadata"))
+        merged_metadata = {**current_metadata, **gate_metadata}
+        if (
+            _mapping(failure_ticket.get("policy")) != desired_policy
+            or merged_metadata != current_metadata
+        ):
+            failure_ticket = self._update_ticket(
+                failure_ticket["ticket_id"],
+                policy=desired_policy,
+                metadata=merged_metadata,
+                history_item={
+                    "kind": "publication_gate_reclassified",
+                    "gate": gate_token,
+                    "run_policy": desired_policy["run_policy"],
+                    "requires_user_decision": bool(
+                        gate_metadata.get("requires_user_decision")
+                    ),
+                },
+            )
         for ticket_id in linked_ids:
             if ticket_id == failure_ticket["ticket_id"]:
                 continue
@@ -5872,7 +6341,20 @@ class DevelopmentTicketService:
                 self._validate_signal(signal)
             self._validate_ticket(stored)
             self._write(state)
-            return {"ok": True, "ticket": _normalized_ticket(stored), "closure": _clone(closure)}
+            resolved_ticket = _normalized_ticket(stored)
+        resolved_ticket = self._supersede_builder_clarification_pending_actions(
+            resolved_ticket,
+            reason="ticket_resolved",
+        )
+        resolved_ticket = self._supersede_publication_permission_pending_actions(
+            resolved_ticket,
+            reason="ticket_resolved",
+        )
+        return {
+            "ok": True,
+            "ticket": resolved_ticket,
+            "closure": _clone(closure),
+        }
 
     @staticmethod
     def _unresolved_core_blockers(
@@ -7210,6 +7692,538 @@ class DevelopmentTicketService:
         )
         return result
 
+    def publish_publication_permission_pending_action(
+        self,
+        ticket_id: str,
+        *,
+        object_type: str,
+        object_id: str,
+        task_id: str,
+        package_digest: str = "",
+        permissions: Sequence[str] = (),
+        ctx: Any = None,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Ask for the attended permission decision required by Trial.
+
+        This is deliberately separate from Builder repair qualification.  A
+        missing permission decision is not source code that Codex can repair;
+        it is an operator decision bound to one validated task/checkpoint.
+        """
+
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        active = [
+            ref
+            for ref in _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+            if ref.get("kind") == PUBLICATION_PERMISSION_PENDING_ACTION_KIND
+            and _text(ref.get("status") or "pending") in {"pending", "postponed"}
+        ]
+        if active:
+            return {
+                "ok": True,
+                "published": False,
+                "reason": "permission_decision_already_pending",
+                "pending_action": active[-1],
+                "ticket": ticket,
+            }
+
+        permission_ids = sorted(
+            dict.fromkeys(_text(item) for item in permissions if _text(item))
+        )
+        permission_text = ", ".join(permission_ids) or "the permissions in the Trial plan"
+        question = (
+            f"Allow the validated beta candidate {object_type}:{object_id} to use "
+            f"{permission_text}? The decision applies only to task {task_id}."
+        )
+        from adaos.services import pending_actions
+
+        action = pending_actions.publish_pending_action(
+            ctx=ctx,
+            webspace_id=webspace_id,
+            kind=PUBLICATION_PERMISSION_PENDING_ACTION_KIND,
+            title="Trial permission approval required",
+            summary=ticket["summary"],
+            request_text=question,
+            producer={"type": "system", "system_id": "development_tickets"},
+            owner_scope=ticket.get("owner_scope")
+            or {"type": "workspace", "id": "local"},
+            domain_ref={
+                "ticket_id": ticket["ticket_id"],
+                "object_type": _text(object_type),
+                "object_id": _text(object_id),
+                "task_id": _text(task_id),
+                "package_digest": _text(package_digest),
+            },
+            allowed_actions=[
+                {"id": "approve", "label": "Approve", "terminal": True},
+                {"id": "refuse", "label": "Refuse", "terminal": True},
+                {"id": "postpone", "label": "Later", "terminal": False},
+            ],
+            response_topic=PUBLICATION_PERMISSION_RESPONSE_TOPIC,
+            metadata={
+                "schema": "adaos.dev_ticket.publication_permission.pending_action_metadata.v1",
+                "ticket_id": ticket["ticket_id"],
+                "task_id": _text(task_id),
+                "package_digest": _text(package_digest) or None,
+                "permissions": permission_ids,
+                "question": question,
+            },
+        )
+        ref = {
+            "id": action.get("id"),
+            "kind": action.get("kind"),
+            "status": action.get("status"),
+            "created_at": action.get("created_at"),
+            "task_id": _text(task_id),
+            "package_digest": _text(package_digest) or None,
+        }
+        updated = self._update_ticket(
+            ticket["ticket_id"],
+            pending_action_refs=_merge_refs(
+                ticket.get("pending_action_refs") or [], [ref]
+            ),
+            status="waiting_for_user",
+            history_item={
+                "kind": "publication_permission_requested",
+                "pending_action_id": ref.get("id"),
+                "task_id": _text(task_id),
+                "package_digest": _text(package_digest) or None,
+                "permissions": permission_ids,
+            },
+        )
+        return {
+            "ok": True,
+            "published": True,
+            "pending_action": action,
+            "ticket": updated,
+        }
+
+    def handle_publication_permission_response(
+        self,
+        *,
+        ticket_id: str,
+        response_action_id: str,
+        object_type: str,
+        object_id: str,
+        task_id: str,
+        package_digest: str = "",
+        pending_action_id: str | None = None,
+        responder: Mapping[str, Any] | None = None,
+        response_payload: Mapping[str, Any] | None = None,
+        resume: bool = True,
+    ) -> dict[str, Any]:
+        """Record an attended permission decision and resume without Codex."""
+
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        action = _text(response_action_id)
+        actor = (
+            _text(_mapping(responder).get("actor") or _mapping(responder).get("id"))
+            or "user:owner"
+        )
+        if action == "postpone":
+            updated = self._update_ticket(
+                ticket_id,
+                pending_action_refs=_with_pending_action_ref_status(
+                    ticket.get("pending_action_refs") or [],
+                    action_id=pending_action_id,
+                    status="postponed",
+                ),
+                status="waiting_for_user",
+                history_item={
+                    "kind": "publication_permission_postponed",
+                    "pending_action_id": _text(pending_action_id),
+                    "actor": actor,
+                },
+            )
+            return {"ok": True, "action": action, "ticket": updated, "recovery": None}
+        if action not in {"approve", "refuse"}:
+            raise ValueError(f"unsupported publication permission response: {action}")
+
+        approved = action == "approve"
+        decision = {
+            "approved": approved,
+            "actor": actor,
+            "actor_type": "user",
+            "approval_id": f"pending-action:{_text(pending_action_id) or ticket_id}",
+            "reason": _text(_mapping(response_payload).get("text"))[:1000]
+            or ("approved in Pending Actions" if approved else "refused in Pending Actions"),
+            "task_id": _text(task_id),
+            "package_digest": _text(package_digest) or None,
+        }
+        metadata = _mapping(ticket.get("metadata"))
+        metadata["publication_permission_decision"] = decision
+        updated = self._update_ticket(
+            ticket_id,
+            pending_action_refs=_with_pending_action_ref_status(
+                ticket.get("pending_action_refs") or [],
+                action_id=pending_action_id,
+                status="responded",
+            ),
+            metadata=metadata,
+            status="accepted",
+            history_item={
+                "kind": "publication_permission_decided",
+                "pending_action_id": _text(pending_action_id),
+                "actor": actor,
+                "approved": approved,
+                "task_id": _text(task_id),
+                "package_digest": _text(package_digest) or None,
+            },
+        )
+        recovery = None
+        if approved and resume:
+            from adaos.services.builder.automation import BuilderAutomationService
+
+            recovery = BuilderAutomationService.from_context(
+                background=True
+            ).recover_validated_result(
+                object_type=_text(object_type),
+                object_id=_text(object_id),
+                permission_decision=decision,
+            )
+        return {
+            "ok": bool(not approved or not resume or _mapping(recovery).get("ok")),
+            "action": action,
+            "ticket": self.get_ticket(ticket_id) or updated,
+            "decision": decision,
+            "recovery": recovery,
+        }
+
+    def publish_builder_clarification_pending_action(
+        self,
+        ticket_id: str,
+        *,
+        question: str,
+        qualification_request_id: str,
+        reason: str = "",
+        ctx: Any = None,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        question_text = _text(question)[:500]
+        if not question_text:
+            raise ValueError("clarification question is required")
+        metadata = _mapping(ticket.get("metadata"))
+        responses = _sequence_of_mappings(metadata.get("clarification_responses") or [])
+        if len(responses) >= 2:
+            return {
+                "ok": True,
+                "published": False,
+                "reason": "clarification_limit_reached",
+                "ticket": ticket,
+            }
+        answered_action_ids = {
+            _text(item.get("pending_action_id"))
+            for item in responses
+            if _text(item.get("pending_action_id"))
+        }
+        unresolved = [
+            ref
+            for ref in _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+            if ref.get("kind") == BUILDER_CLARIFICATION_PENDING_ACTION_KIND
+            and _text(ref.get("id")) not in answered_action_ids
+        ]
+        if unresolved:
+            return {
+                "ok": True,
+                "published": False,
+                "reason": "clarification_already_pending",
+                "pending_action": unresolved[-1],
+                "ticket": ticket,
+            }
+        existing = [
+            ref
+            for ref in _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+            if ref.get("kind") == BUILDER_CLARIFICATION_PENDING_ACTION_KIND
+            and _text(ref.get("qualification_request_id"))
+            == _text(qualification_request_id)
+        ]
+        if existing:
+            return {
+                "ok": True,
+                "published": False,
+                "reason": "pending_action_already_linked",
+                "pending_action": existing[-1],
+                "ticket": ticket,
+            }
+        from adaos.services import pending_actions
+
+        action = pending_actions.publish_pending_action(
+            ctx=ctx,
+            webspace_id=webspace_id,
+            kind=BUILDER_CLARIFICATION_PENDING_ACTION_KIND,
+            title="Builder needs clarification",
+            summary=ticket["summary"],
+            request_text=question_text,
+            producer={"type": "system", "system_id": "development_tickets"},
+            owner_scope=ticket.get("owner_scope")
+            or {"type": "workspace", "id": "local"},
+            domain_ref={
+                "ticket_id": ticket["ticket_id"],
+                "ticket_revision": ticket.get("revision"),
+                "qualification_request_id": _text(qualification_request_id),
+            },
+            allowed_actions=[
+                {"id": "submit_answer", "label": "Submit answer", "terminal": True},
+                {"id": "postpone", "label": "Later", "terminal": True},
+            ],
+            default_text_binding=True,
+            response_topic=BUILDER_CLARIFICATION_RESPONSE_TOPIC,
+            metadata={
+                "schema": "adaos.dev_ticket.builder_clarification.pending_action_metadata.v1",
+                "ticket_id": ticket["ticket_id"],
+                "qualification_request_id": _text(qualification_request_id),
+                "question": question_text,
+                "reason": _text(reason)[:1000] or None,
+                "response_schema": {"type": "text", "min_length": 1, "max_length": 2000},
+            },
+        )
+        ref = {
+            "id": action.get("id"),
+            "kind": action.get("kind"),
+            "status": action.get("status"),
+            "created_at": action.get("created_at"),
+            "qualification_request_id": _text(qualification_request_id),
+        }
+        updated = self._update_ticket(
+            ticket["ticket_id"],
+            pending_action_refs=_merge_refs(
+                ticket.get("pending_action_refs") or [], [ref]
+            ),
+            status="waiting_for_user",
+            history_item={
+                "kind": "builder_clarification_requested",
+                "pending_action_id": ref.get("id"),
+                "qualification_request_id": _text(qualification_request_id),
+                "question": question_text,
+            },
+        )
+        return {
+            "ok": True,
+            "published": True,
+            "pending_action": action,
+            "ticket": updated,
+        }
+
+    def _supersede_builder_clarification_pending_actions(
+        self,
+        ticket: Mapping[str, Any],
+        *,
+        reason: str,
+        ctx: Any = None,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        refs = _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+        active = [
+            ref
+            for ref in refs
+            if ref.get("kind") == BUILDER_CLARIFICATION_PENDING_ACTION_KIND
+            and _text(ref.get("status") or "pending") in {"pending", "postponed"}
+            and _text(ref.get("id"))
+        ]
+        if not active:
+            return dict(ticket)
+        from adaos.services import pending_actions
+
+        updated_refs = [dict(ref) for ref in refs]
+        cancelled_ids: list[str] = []
+        for ref in active:
+            action_id = _text(ref.get("id"))
+            try:
+                pending_actions.cancel_pending_action(
+                    action_id,
+                    reason=reason,
+                    ctx=ctx,
+                    webspace_id=webspace_id,
+                    actor={"type": "system", "system_id": "development_tickets"},
+                )
+            except Exception:
+                continue
+            updated_refs = _with_pending_action_ref_status(
+                updated_refs,
+                action_id=action_id,
+                status="cancelled",
+                reason=reason,
+            )
+            cancelled_ids.append(action_id)
+        if not cancelled_ids:
+            return dict(ticket)
+        return self._update_ticket(
+            _text(ticket.get("ticket_id")),
+            pending_action_refs=updated_refs,
+            history_item={
+                "kind": "builder_clarifications_superseded",
+                "pending_action_ids": cancelled_ids,
+                "reason": _text(reason),
+            },
+        )
+
+    def _supersede_publication_permission_pending_actions(
+        self,
+        ticket: Mapping[str, Any],
+        *,
+        reason: str,
+        ctx: Any = None,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        refs = _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+        active = [
+            ref
+            for ref in refs
+            if ref.get("kind") == PUBLICATION_PERMISSION_PENDING_ACTION_KIND
+            and _text(ref.get("status") or "pending") in {"pending", "postponed"}
+            and _text(ref.get("id"))
+        ]
+        if not active:
+            return dict(ticket)
+        from adaos.services import pending_actions
+
+        updated_refs = [dict(ref) for ref in refs]
+        cancelled_ids: list[str] = []
+        for ref in active:
+            action_id = _text(ref.get("id"))
+            try:
+                pending_actions.cancel_pending_action(
+                    action_id,
+                    ctx=ctx,
+                    webspace_id=webspace_id,
+                    reason=_text(reason) or "ticket_terminal",
+                )
+            except (KeyError, ValueError):
+                pass
+            updated_refs = _with_pending_action_ref_status(
+                updated_refs,
+                action_id=action_id,
+                status="cancelled",
+            )
+            cancelled_ids.append(action_id)
+        return self._update_ticket(
+            _text(ticket.get("ticket_id")),
+            pending_action_refs=updated_refs,
+            history_item={
+                "kind": "publication_permission_requests_superseded",
+                "pending_action_ids": cancelled_ids,
+                "reason": _text(reason) or "ticket_terminal",
+            },
+        )
+
+    def handle_builder_clarification_response(
+        self,
+        *,
+        ticket_id: str,
+        response_action_id: str,
+        response_payload: Mapping[str, Any] | None = None,
+        pending_action_id: str | None = None,
+        qualification_request_id: str | None = None,
+        responder: Mapping[str, Any] | None = None,
+        requalify: bool = True,
+        llm_call: Callable[..., Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        action = _text(response_action_id)
+        actor = (
+            _text(_mapping(responder).get("actor") or _mapping(responder).get("id"))
+            or "pending_action"
+        )
+        if action == "postpone":
+            updated = self._update_ticket(
+                ticket_id,
+                status="deferred",
+                pending_action_refs=_with_pending_action_ref_status(
+                    ticket.get("pending_action_refs") or [],
+                    action_id=pending_action_id,
+                    status="responded",
+                    reason="user_postponed",
+                ),
+                history_item={
+                    "kind": "builder_clarification_postponed",
+                    "pending_action_id": _text(pending_action_id),
+                    "actor": actor,
+                },
+            )
+            return {"ok": True, "action": action, "ticket": updated, "qualification": None}
+        if action != "submit_answer":
+            raise ValueError(f"unsupported clarification response: {action}")
+        payload = _mapping(response_payload)
+        answer = _text(payload.get("text") or payload.get("answer"))[:2000]
+        if not answer:
+            raise ValueError("clarification answer is required")
+        metadata = _mapping(ticket.get("metadata"))
+        qualification = _mapping(metadata.get("builder_language_qualification"))
+        candidate = _mapping(qualification.get("qualification_candidate"))
+        question = _text(candidate.get("clarification_question")) or _text(
+            payload.get("question")
+        )
+        response_record = {
+            "schema": "adaos.dev_ticket.clarification_response.v1",
+            "qualification_request_id": _text(qualification_request_id)
+            or _text(qualification.get("request_id")),
+            "pending_action_id": _text(pending_action_id) or None,
+            "question": question[:500] or None,
+            "answer": answer,
+            "actor": actor,
+            "recorded_at": _now(),
+        }
+        responses = [
+            *_sequence_of_mappings(metadata.get("clarification_responses") or []),
+            response_record,
+        ][-2:]
+        metadata["clarification_responses"] = responses
+        updated = self._update_ticket(
+            ticket_id,
+            metadata=metadata,
+            status="captured",
+            pending_action_refs=_with_pending_action_ref_status(
+                ticket.get("pending_action_refs") or [],
+                action_id=pending_action_id,
+                status="responded",
+                reason="user_answered",
+            ),
+            evidence_refs=_merge_refs(
+                ticket.get("evidence_refs") or [],
+                [
+                    {
+                        "type": "user_clarification",
+                        "id": response_record["qualification_request_id"],
+                        "pending_action_id": response_record["pending_action_id"],
+                    }
+                ],
+            ),
+            history_item={
+                "kind": "builder_clarification_answered",
+                "pending_action_id": response_record["pending_action_id"],
+                "qualification_request_id": response_record[
+                    "qualification_request_id"
+                ],
+                "actor": actor,
+            },
+        )
+        rerun = None
+        if requalify:
+            rerun = self.qualify_builder_repair_language(
+                ticket_id,
+                actor="builder.clarification",
+                apply=True,
+                expected_revision=int(updated.get("revision") or 1),
+                llm_call=llm_call,
+                publish_pending_action=True,
+            )
+            updated = rerun["ticket"]
+        return {
+            "ok": True,
+            "action": action,
+            "ticket": updated,
+            "qualification": rerun,
+        }
+
     def qualify_builder_repair_language(
         self,
         ticket_id: str,
@@ -7218,6 +8232,9 @@ class DevelopmentTicketService:
         apply: bool = False,
         expected_revision: int | None = None,
         llm_call: Callable[..., Mapping[str, Any]] | None = None,
+        publish_pending_action: bool = True,
+        ctx: Any = None,
+        webspace_id: str | None = None,
     ) -> dict[str, Any]:
         """Use one Root-accounted LLM call only when local qualification is ambiguous."""
 
@@ -7236,6 +8253,14 @@ class DevelopmentTicketService:
                     actor=actor,
                     apply=True,
                     expected_revision=expected_revision,
+                )
+                deterministic["ticket"] = (
+                    self._supersede_builder_clarification_pending_actions(
+                        deterministic["ticket"],
+                        reason="qualification_ready",
+                        ctx=ctx,
+                        webspace_id=webspace_id,
+                    )
                 )
             return {
                 **deterministic,
@@ -7272,8 +8297,7 @@ class DevelopmentTicketService:
             response = caller(
                 _language_qualification_messages(ticket, candidate),
                 max_tokens=800,
-                reasoning={"effort": "low"},
-                text={"format": {"type": "json_object"}, "verbosity": "low"},
+                text={"format": {"type": "json_object"}},
                 request_id=request_id,
                 prompt_cache_key="adaos.builder.ticket-language-qualification.v1",
                 timeout=45,
@@ -7286,7 +8310,23 @@ class DevelopmentTicketService:
                 request_id=request_id,
                 status="failed",
             )
-            self._record_builder_language_qualification(
+            fallback = {
+                "schema": "adaos.builder.repair_qualification_candidate.v1",
+                "status": "needs_clarification",
+                "ready": False,
+                "confidence": "low",
+                "model_call_expected": False,
+                "recommended_next": "user_clarification",
+                "reason": (
+                    "Root language qualification is unavailable; user clarification "
+                    "is required before Builder model spend"
+                ),
+                "clarification_question": (
+                    "Which visible component or action should change, and what should "
+                    "happen instead?"
+                ),
+            }
+            updated_ticket = self._record_builder_language_qualification(
                 ticket_id,
                 record={
                     "schema": "adaos.builder.language_qualification_record.v1",
@@ -7302,15 +8342,44 @@ class DevelopmentTicketService:
                 expected_updated_at=_text(ticket.get("updated_at")),
                 expected_revision=expected_revision,
             )
-            raise RuntimeError(
-                f"Root language qualification failed for {ticket_id}: {exc}"
-            ) from exc
+            pending_action = None
+            pending_action_published = False
+            if publish_pending_action:
+                clarification = self.publish_builder_clarification_pending_action(
+                    ticket_id,
+                    question=fallback["clarification_question"],
+                    qualification_request_id=request_id,
+                    reason=fallback["reason"],
+                    ctx=ctx,
+                    webspace_id=webspace_id,
+                )
+                pending_action = clarification.get("pending_action")
+                pending_action_published = bool(clarification.get("published"))
+                updated_ticket = clarification.get("ticket") or updated_ticket
+            return {
+                "ok": True,
+                "applied": False,
+                "ticket": updated_ticket,
+                "development_source": deterministic.get("development_source"),
+                "qualification_candidate": fallback,
+                "autonomous_repair_qualification": _autonomous_repair_qualification(
+                    updated_ticket
+                ),
+                "qualification_mode": "user_clarification_fallback",
+                "language_model_called": True,
+                "language_qualification_usage": usage,
+                "development_feedback": [],
+                "pending_action": pending_action,
+                "pending_action_published": pending_action_published,
+            }
 
         usage = _language_qualification_usage_receipt(
             response,
             request_id=request_id,
             status="completed",
         )
+        rejected_output = ""
+        rejection_error = ""
         try:
             proposal = _parse_language_qualification_output(response.get("output_text"))
             errors = sorted(
@@ -7343,6 +8412,8 @@ class DevelopmentTicketService:
                 actor=actor,
             )
         except ValueError as exc:
+            rejected_output = _text(response.get("output_text"))[:8000]
+            rejection_error = _text(exc)[:1000]
             proposal = {}
             feedback_records = []
             resolved = {
@@ -7393,6 +8464,9 @@ class DevelopmentTicketService:
             "base_ticket_revision": ticket.get("revision"),
             "recorded_at": _now(),
         }
+        if rejected_output:
+            record["rejected_output"] = rejected_output
+            record["rejection_error"] = rejection_error
         updated_ticket = self._record_builder_language_qualification(
             ticket_id,
             record=record,
@@ -7400,6 +8474,31 @@ class DevelopmentTicketService:
             expected_updated_at=_text(updated_ticket.get("updated_at")),
             expected_revision=None if applied else expected_revision,
         )
+        if applied:
+            updated_ticket = self._supersede_builder_clarification_pending_actions(
+                updated_ticket,
+                reason="qualification_ready",
+                ctx=ctx,
+                webspace_id=webspace_id,
+            )
+        pending_action = None
+        pending_action_published = False
+        if (
+            publish_pending_action
+            and resolved.get("ready") is not True
+            and _text(resolved.get("clarification_question"))
+        ):
+            clarification = self.publish_builder_clarification_pending_action(
+                ticket_id,
+                question=_text(resolved.get("clarification_question")),
+                qualification_request_id=request_id,
+                reason=_text(resolved.get("reason")),
+                ctx=ctx,
+                webspace_id=webspace_id,
+            )
+            pending_action = clarification.get("pending_action")
+            pending_action_published = bool(clarification.get("published"))
+            updated_ticket = clarification.get("ticket") or updated_ticket
         return {
             "ok": True,
             "applied": applied,
@@ -7413,6 +8512,8 @@ class DevelopmentTicketService:
             "language_model_called": True,
             "language_qualification_usage": usage,
             "development_feedback": feedback_records,
+            "pending_action": pending_action,
+            "pending_action_published": pending_action_published,
         }
 
     def _record_language_development_feedback(
@@ -8063,7 +9164,15 @@ class DevelopmentTicketService:
                     self._validate_signal(signal)
             self._validate_ticket(ticket)
             self._write(state)
-            return _normalized_ticket(ticket)
+            closed_ticket = _normalized_ticket(ticket)
+        closed_ticket = self._supersede_builder_clarification_pending_actions(
+            closed_ticket,
+            reason="ticket_closed",
+        )
+        return self._supersede_publication_permission_pending_actions(
+            closed_ticket,
+            reason="ticket_closed",
+        )
 
     @staticmethod
     def _latest_repair_id(ticket: Mapping[str, Any]) -> str:
@@ -8221,6 +9330,72 @@ async def _on_compatibility_pending_action_response(evt: Any) -> None:
         _log.warning("failed to handle compatibility ticket pending action response", exc_info=True)
 
 
+@subscribe(BUILDER_CLARIFICATION_RESPONSE_TOPIC)
+async def _on_builder_clarification_pending_action_response(evt: Any) -> None:
+    payload = _event_payload(evt)
+    response = _mapping(payload.get("response"))
+    domain_ref = _mapping(payload.get("domain_ref"))
+    ticket_id = _text(
+        domain_ref.get("ticket_id")
+        or _mapping(response.get("payload")).get("ticket_id")
+    )
+    response_action_id = _text(
+        payload.get("response_action_id") or response.get("response_action_id")
+    )
+    if not ticket_id or not response_action_id:
+        return
+    try:
+        DevelopmentTicketService().handle_builder_clarification_response(
+            ticket_id=ticket_id,
+            response_action_id=response_action_id,
+            pending_action_id=_text(payload.get("pending_action_id")),
+            qualification_request_id=_text(
+                domain_ref.get("qualification_request_id")
+            ),
+            responder=_mapping(response.get("responder")),
+            response_payload=_mapping(response.get("payload")),
+        )
+    except Exception:
+        _log.warning(
+            "failed to handle Builder clarification pending action response",
+            exc_info=True,
+        )
+
+
+@subscribe(PUBLICATION_PERMISSION_RESPONSE_TOPIC)
+async def _on_publication_permission_pending_action_response(evt: Any) -> None:
+    payload = _event_payload(evt)
+    response = _mapping(payload.get("response"))
+    domain_ref = _mapping(payload.get("domain_ref"))
+    ticket_id = _text(
+        domain_ref.get("ticket_id")
+        or _mapping(response.get("payload")).get("ticket_id")
+    )
+    response_action_id = _text(
+        payload.get("response_action_id") or response.get("response_action_id")
+    )
+    if not ticket_id or not response_action_id:
+        return
+    try:
+        await asyncio.to_thread(
+            DevelopmentTicketService().handle_publication_permission_response,
+            ticket_id=ticket_id,
+            response_action_id=response_action_id,
+            object_type=_text(domain_ref.get("object_type")),
+            object_id=_text(domain_ref.get("object_id")),
+            task_id=_text(domain_ref.get("task_id")),
+            package_digest=_text(domain_ref.get("package_digest")),
+            pending_action_id=_text(payload.get("pending_action_id")),
+            responder=_mapping(response.get("responder")),
+            response_payload=_mapping(response.get("payload")),
+        )
+    except Exception:
+        _log.warning(
+            "failed to handle publication permission pending action response",
+            exc_info=True,
+        )
+
+
 @subscribe("skills.activation.failed")
 @subscribe("scenarios.activation.failed")
 async def _on_runtime_activation_failed(evt: Any) -> None:
@@ -8258,6 +9433,8 @@ __all__ = [
     "COMPATIBILITY_RESPONSE_TOPIC",
     "CORE_CAPABILITY_PENDING_ACTION_KIND",
     "CORE_CAPABILITY_RESPONSE_TOPIC",
+    "BUILDER_CLARIFICATION_PENDING_ACTION_KIND",
+    "BUILDER_CLARIFICATION_RESPONSE_TOPIC",
     "DEVELOPMENT_SIGNAL_SCHEMA",
     "DEV_TICKET_LIFECYCLE_EVENT_SCHEMA",
     "DEV_TICKET_SCHEMA",

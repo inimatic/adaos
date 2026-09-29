@@ -240,6 +240,13 @@
             { "type": "null" }
           ]
         },
+        "compact_presentation": {
+          "anyOf": [
+            { "type": "string", "enum": ["cards"] },
+            { "type": "null" }
+          ],
+          "description": "Responsive override for a table collection. cards keeps the wide layout tabular and renders labeled record cards on compact screens. Null preserves the presentation at every breakpoint."
+        },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
         "presentation_options": { "anyOf": [{ "$ref": "#/$defs/presentationOptions" }, { "type": "null" }] },
@@ -248,6 +255,10 @@
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" }, "description": "Permanent equality predicates defining this collection, independent of user search/filter controls. Reset never removes these. Empty for an unrestricted view. Do not also offer a query control for the same field." },
         "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }], "description": "Explicit collection interaction contract. Keep row activation separate from record commands: select changes selection, while edit/delete use declared command exposure." },
         "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }], "description": "Selection-driven relationship projection. Match this collection's field_ref to source_field_ref (null means id) of the selected source record. effect=filter narrows the target; effect=emphasize keeps the global collection visible and marks related rows. Requires an exact declared singular relationship. Do not duplicate this field in other filters." },
+        "activation_source_view_ref": {
+          "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }],
+          "description": "Details-only link to the collection whose row activation reveals this projection. Set the source collection selection.row_activation=open_details. Null for collections and editors."
+        },
         "filter": {
           "anyOf": [{ "$ref": "#/$defs/viewFilter" }, { "type": "null" }]
         },
@@ -273,7 +284,7 @@
       "properties": {
         "mode": { "enum": ["none", "single"] },
         "indicator": { "enum": ["none", "radio", "row_accent"] },
-        "row_activation": { "enum": ["none", "select"] }
+        "row_activation": { "enum": ["none", "select", "open_details"] }
       }
     },
     "scopeFilter": {

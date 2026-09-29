@@ -18,3 +18,7 @@
 	path = src/adaos/integrations/redevice-agent
 	url = https://github.com/inimatic/adaos-redevice-agent.git
 	branch = main
+[submodule "src/adaos/integrations/automaion"]
+	path = src/adaos/integrations/automaion
+	url = https://github.com/inimatic/automaion.git
+	branch = main

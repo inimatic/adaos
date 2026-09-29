@@ -868,6 +868,76 @@ def _expire_in_doc(ydoc: Any, *, now: float) -> tuple[list[dict[str, Any]], dict
     return expired, snapshot
 
 
+def _cancel_in_doc(
+    ydoc: Any,
+    *,
+    action_id: str,
+    reason: str,
+    actor: Mapping[str, Any] | None,
+    ctx: AgentContext | None,
+    now: float,
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    data_map, projection = _read_projection(ydoc)
+    by_id: dict[str, dict[str, Any]] = projection["by_id"]
+    action = by_id.get(action_id)
+    if not isinstance(action, dict):
+        return {"id": action_id, "status": "cancelled", "stale": True}, _build_projection(projection, updated_at=now), True
+    if _text(action.get("status")) in _TERMINAL_STATUSES:
+        return _json_clone(action), _build_projection(projection, updated_at=now), True
+    action["status"] = "cancelled"
+    action["updated_at"] = now
+    action["finished_at"] = now
+    action["cancellation"] = {
+        "reason": _text(reason)[:1000] or "superseded",
+        "actor": _normalize_actor(actor or {}, ctx=ctx, default_type="system"),
+        "cancelled_at": now,
+    }
+    _append_history(
+        action,
+        {
+            "kind": "cancelled",
+            "reason": action["cancellation"]["reason"],
+            "ts": now,
+        },
+    )
+    by_id[action_id] = action
+    snapshot = _build_projection(projection, updated_at=now)
+    _write_projection(data_map, ydoc, snapshot)
+    return _json_clone(action), snapshot, False
+
+
+def cancel_pending_action(
+    action_id: str,
+    *,
+    reason: str,
+    ctx: AgentContext | None = None,
+    webspace_id: str | None = None,
+    actor: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Terminally close an obsolete action without forging a user response."""
+
+    ctx = ctx or get_ctx()
+    ws = _resolve_webspace_id(webspace_id)
+    token = _text(action_id)
+    if not token:
+        raise ValueError("action_id is required")
+    with _LOCK:
+        with _pending_actions_sync_write_meta():
+            with get_ydoc(ws, load_mark_roots=["data"], governed=True) as ydoc:
+                action, snapshot, duplicate = _cancel_in_doc(
+                    ydoc,
+                    action_id=token,
+                    reason=reason,
+                    actor=actor,
+                    ctx=ctx,
+                    now=_now_ts(),
+                )
+    if not duplicate:
+        _emit(ctx, "pending_actions.cancelled", {"action": action, "webspace_id": ws})
+        _emit(ctx, "pending_actions.changed", {"webspace_id": ws, "pending_actions": snapshot})
+    return {"action": action, "snapshot": snapshot, "duplicate": duplicate}
+
+
 def expire_pending_actions(*, ctx: AgentContext | None = None, webspace_id: str | None = None) -> dict[str, Any]:
     ctx = ctx or get_ctx()
     ws = _resolve_webspace_id(webspace_id)

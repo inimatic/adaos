@@ -216,6 +216,7 @@ _TASK_MCP_SCOPE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "operations.read.targets",
     ),
     "read_runtime_diagnostics": ("audit.read",),
+    "read_development_tickets": ("development.read.tickets",),
 }
 
 

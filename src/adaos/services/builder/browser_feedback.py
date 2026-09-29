@@ -65,8 +65,15 @@ def _git_revision(path: Path) -> str | None:
     return revision if completed.returncode == 0 and revision else None
 
 
-def _record_editor_commands(source: Path) -> list[str]:
-    """Return bounded, non-mutating row commands that only open record editors."""
+def _record_editor_workflows(source: Path) -> list[dict[str, str | None]]:
+    """Describe bounded CRUD journeys for accepted record editors.
+
+    A fresh installation is allowed to have an empty collection.  In that case
+    a row action cannot be exercised until the browser journey creates a
+    disposable record through the application's own create command.  Returning
+    the related create/delete commands lets the trusted browser runner do that
+    without seeding application storage or inventing an out-of-band write.
+    """
 
     root = source if source.is_dir() else source.parent
     semantic_path = root / "semantic.webui.json"
@@ -85,7 +92,23 @@ def _record_editor_commands(source: Path) -> list[str]:
         if str((item.get("exposure") or {}).get("placement") or "")
         == "editor_primary"
     }
-    result: list[str] = []
+    views = [
+        item
+        for item in document.get("views") or []
+        if isinstance(item, Mapping)
+    ]
+    view_resources = {
+        str(item.get("id") or "").strip(): str(item.get("resource_ref") or "").strip()
+        for item in views
+        if str(item.get("id") or "").strip()
+    }
+    collection_views = {
+        str(item.get("resource_ref") or "").strip(): str(item.get("id") or "").strip()
+        for item in views
+        if str(item.get("resource_ref") or "").strip()
+        and str(item.get("role") or "").strip() == "collection"
+    }
+    result: list[dict[str, str | None]] = []
     for item in commands:
         command_id = str(item.get("id") or "").strip()
         exposure = item.get("exposure") or {}
@@ -100,8 +123,48 @@ def _record_editor_commands(source: Path) -> list[str]:
             and str(exposure.get("placement") or "") == "row_action"
             and signature in editor_primaries
         ):
-            result.append(command_id)
-    return list(dict.fromkeys(result))[:3]
+            view_ref = str(item.get("view_ref") or "").strip()
+            related = [
+                candidate
+                for candidate in commands
+                if str(candidate.get("view_ref") or "").strip() == view_ref
+            ]
+
+            def related_command(placement: str, kind: str) -> str | None:
+                return next(
+                    (
+                        str(candidate.get("id") or "").strip()
+                        for candidate in related
+                        if str((candidate.get("exposure") or {}).get("placement") or "").strip()
+                        == placement
+                        and str(candidate.get("kind") or "").strip() == kind
+                        and str(candidate.get("id") or "").strip()
+                    ),
+                    None,
+                )
+
+            resource_ref = view_resources.get(view_ref, "")
+            result.append(
+                {
+                    "open_command": command_id,
+                    "create_command": related_command("collection_header", "create"),
+                    "delete_command": related_command("editor_danger", "delete"),
+                    "collection_view_ref": collection_views.get(resource_ref) or None,
+                }
+            )
+    unique: dict[str, dict[str, str | None]] = {}
+    for item in result:
+        unique.setdefault(str(item["open_command"]), item)
+    return list(unique.values())[:3]
+
+
+def _record_editor_commands(source: Path) -> list[str]:
+    """Return bounded, non-mutating row commands that only open record editors."""
+
+    return [
+        str(item["open_command"])
+        for item in _record_editor_workflows(source)
+    ]
 
 
 @dataclass(slots=True)
@@ -176,7 +239,10 @@ class BuilderBrowserFeedbackService:
         if not webui_path.is_file():
             raise RuntimeError(f"candidate WebUI is missing: {webui_path}")
         source_digest = _file_digest(webui_path)
-        record_editor_commands = _record_editor_commands(source)
+        record_editor_workflows = _record_editor_workflows(source)
+        record_editor_commands = [
+            str(item["open_command"]) for item in record_editor_workflows
+        ]
         attempt, output = _next_attempt(self.root / task)
         output.mkdir(parents=True, exist_ok=False)
 
@@ -197,6 +263,11 @@ class BuilderBrowserFeedbackService:
             "ADAOS_E2E_TIMEOUT_MS": str(max(30, int(self.timeout_seconds)) * 1000),
             "ADAOS_E2E_COMMAND_SEQUENCE": ",".join(record_editor_commands),
             "ADAOS_E2E_RECORD_EDITOR_COMMANDS": ",".join(record_editor_commands),
+            "ADAOS_E2E_RECORD_EDITOR_WORKFLOWS": json.dumps(
+                record_editor_workflows,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
         }
         log_path = output / "browser.log"
         timed_out = False

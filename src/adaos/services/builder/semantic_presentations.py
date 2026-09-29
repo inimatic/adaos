@@ -9,7 +9,7 @@ from .workflow import BuilderWorkflowError
 
 
 EXTENDED_PRESENTATIONS = frozenset({"board", "tree", "chart", "accordion"})
-VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "field_display", "section", "scope_filters", "selection", "selection_filter"})
+VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "compact_presentation", "field_display", "section", "scope_filters", "selection", "selection_filter", "activation_source_view_ref"})
 
 
 def legacy_view(view: Mapping) -> dict:
@@ -37,7 +37,14 @@ def presentation_findings(document: Mapping) -> list[dict]:
         fields = {field["id"]: field for field in resources[view["resource_ref"]]["fields"]}
         visible = view["field_refs"]
         presentation = view.get("presentation")
+        compact_presentation = view.get("compact_presentation")
         options = view.get("presentation_options") or {}
+        if compact_presentation is not None and (
+            view["role"] != "collection"
+            or presentation != "table"
+            or compact_presentation != "cards"
+        ):
+            reject("compact_presentation=cards requires a table collection")
         if options and view['role'] != 'collection':
             reject("Record details/editor views require presentation_options=null; use a collection for grouped records")
         elif options and presentation not in EXTENDED_PRESENTATIONS:
@@ -104,7 +111,10 @@ def compile_presentations(document: Mapping, webui: dict, source_map: dict) -> N
         root = f"ui.application.desktop.pageSchema.widgets.@{view['id']}"
         refs = view["field_refs"]
         presentation = view.get("presentation")
+        compact_presentation = view.get("compact_presentation")
         options = view.get("presentation_options") or {}
+        if presentation == "table" and compact_presentation == "cards":
+            inputs["compactPresentation"] = "cards"
         group, parent, value = (options.get(key) for key in ("group_field_ref", "parent_field_ref", "value_field_ref"))
         resource_fields = fields[view["resource_ref"]]
         if presentation in EXTENDED_PRESENTATIONS:

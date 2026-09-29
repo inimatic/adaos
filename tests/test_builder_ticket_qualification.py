@@ -9,7 +9,10 @@ from adaos.services.builder.ticket_qualification import (
     prepare_repair_qualification,
     resolve_language_qualification_proposal,
 )
-from adaos.services.development_tickets import DevelopmentTicketService
+from adaos.services.development_tickets import (
+    BUILDER_CLARIFICATION_PENDING_ACTION_KIND,
+    DevelopmentTicketService,
+)
 
 
 def _source_tree(root: Path) -> Path:
@@ -629,6 +632,26 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
             "dev_source_path": str(source),
         },
     )
+    ticket = service._update_ticket(
+        ticket["ticket_id"],
+        pending_action_refs=[
+            {
+                "id": "pa.obsolete",
+                "kind": BUILDER_CLARIFICATION_PENDING_ACTION_KIND,
+                "status": "pending",
+            }
+        ],
+    )
+    cancelled_actions: list[tuple[str, str]] = []
+
+    def cancel_pending_action(action_id: str, *, reason: str, **_kwargs):
+        cancelled_actions.append((action_id, reason))
+        return {"action": {"id": action_id, "status": "cancelled"}}
+
+    monkeypatch.setattr(
+        "adaos.services.pending_actions.cancel_pending_action",
+        cancel_pending_action,
+    )
     calls: list[dict] = []
 
     def fake_llm(messages, **kwargs):
@@ -682,7 +705,24 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
     assert result["language_qualification_usage"]["total_tokens"] == 402
     assert len(calls) == 1
     assert calls[0]["max_tokens"] == 800
-    assert calls[0]["reasoning"] == {"effort": "low"}
+    assert "reasoning" not in calls[0]
+    assert calls[0]["text"] == {"format": {"type": "json_object"}}
+    request_payload = json.loads(calls[0]["messages"][1]["content"])
+    facts_contract = request_payload["prompt_facts_contract"]
+    assert "surface_kinds" in facts_contract["required_keys"]
+    assert "surface" not in facts_contract["required_keys"]
+    assert set(facts_contract["boolean_keys"]) == {
+        "requires_i18n",
+        "requires_access",
+        "requires_conversation",
+        "requires_lifecycle",
+    }
+    assert request_payload["output_example"]["schema"] == (
+        "adaos.builder.language_qualification_proposal.v1"
+    )
+    assert request_payload["output_example"]["prompt_facts"]["schema"] == (
+        "adaos.builder.prompt_facts.v1"
+    )
     assert calls[0]["request_id"].startswith("builder.language_qualification.")
     updated = result["ticket"]
     assert updated["metadata"]["builder_repair"]["concepts"] == ["data", "ui"]
@@ -692,7 +732,11 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
     assert {"read", "command"}.issubset(prompt_facts["operation_kinds"])
     assert "tool_details" in prompt_facts["data_planes"]
     assert updated["metadata"]["builder_language_qualification"]["status"] == "applied"
-    assert updated["history"][-1]["kind"] == "builder_language_qualification"
+    assert any(
+        item["kind"] == "builder_language_qualification"
+        for item in updated["history"]
+    )
+    assert updated["history"][-1]["kind"] == "builder_clarifications_superseded"
     usage_ref = next(
         ref
         for ref in updated["evidence_refs"]
@@ -701,6 +745,11 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
     assert usage_ref["total_tokens"] == 402
     assert result["autonomous_repair_qualification"]["ready"] is True
     assert len(result["development_feedback"]) == 1
+    assert cancelled_actions == [("pa.obsolete", "qualification_ready")]
+    obsolete_ref = next(
+        ref for ref in updated["pending_action_refs"] if ref["id"] == "pa.obsolete"
+    )
+    assert obsolete_ref["status"] == "cancelled"
     assert result["development_feedback"][0]["source"] == "pre_codex_llm"
     assert result["development_feedback"][0]["relation_refs"] == [
         {"type": "dev_ticket", "id": ticket["ticket_id"]}
@@ -755,6 +804,282 @@ def test_service_skips_language_model_when_deterministic_qualification_is_ready(
     assert result["language_model_called"] is False
     assert result["language_qualification_usage"] is None
     assert result["ticket"]["revision"] == ticket["revision"]
+
+
+def test_language_qualification_publishes_text_clarification_and_reuses_answer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = _source_tree(tmp_path / "subscription_status_skill")
+    service = DevelopmentTicketService(state_dir=tmp_path / "state")
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="The shape in the card is wrong.",
+        target_scope={
+            "type": "skill",
+            "id": "subscription_status_skill",
+            "source": "workspace",
+            "surface": "modal",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:subscription_status_skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="feedback",
+        status="captured",
+        owner_area="skill",
+        component_ref="skill:subscription_status_skill",
+    )["ticket"]
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.development_source_options",
+        lambda _scope: {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": "skill",
+            "target_id": "subscription_status_skill",
+            "dev_source_path": str(source),
+        },
+    )
+    published: list[dict] = []
+
+    def publish_pending_action(**kwargs):
+        published.append(kwargs)
+        return {
+            "id": "pa.clarify.1",
+            "kind": kwargs["kind"],
+            "status": "pending",
+            "created_at": 1.0,
+        }
+
+    monkeypatch.setattr(
+        "adaos.services.pending_actions.publish_pending_action",
+        publish_pending_action,
+    )
+    cancelled: list[tuple[str, str]] = []
+
+    def cancel_pending_action(action_id: str, *, reason: str, **_kwargs):
+        cancelled.append((action_id, reason))
+        return {"action": {"id": action_id, "status": "cancelled"}}
+
+    monkeypatch.setattr(
+        "adaos.services.pending_actions.cancel_pending_action",
+        cancel_pending_action,
+    )
+
+    def proposal(confidence: float, question: str | None):
+        return {
+            "id": "resp.clarification",
+            "output_text": json.dumps(
+                {
+                    "schema": LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
+                    "concepts": ["ui"],
+                    "prompt_facts": _prompt_facts(),
+                    "candidate_paths": [
+                        "skills/subscription_status_skill/webui.json",
+                    ],
+                    "confidence": confidence,
+                    "clarification_question": question,
+                    "rationale": "The visual target needs one bounded identification.",
+                }
+            ),
+            "usage": {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20},
+        }
+
+    first = service.qualify_builder_repair_language(
+        ticket["ticket_id"],
+        expected_revision=ticket["revision"],
+        llm_call=lambda *_args, **_kwargs: proposal(
+            0.4, "Which visible element has the wrong shape?"
+        ),
+    )
+
+    assert first["pending_action_published"] is True
+    assert first["ticket"]["status"] == "waiting_for_user"
+    assert published[0]["default_text_binding"] is True
+    assert published[0]["request_text"] == "Which visible element has the wrong shape?"
+
+    answered = service.handle_builder_clarification_response(
+        ticket_id=ticket["ticket_id"],
+        response_action_id="submit_answer",
+        response_payload={"text": "The status badge inside the Global Root card."},
+        pending_action_id="pa.clarify.1",
+        qualification_request_id=first["pending_action"]["id"],
+        requalify=False,
+    )
+    assert answered["ticket"]["metadata"]["clarification_responses"][-1]["answer"] == (
+        "The status badge inside the Global Root card."
+    )
+    answered_ref = next(
+        ref
+        for ref in answered["ticket"]["pending_action_refs"]
+        if ref["id"] == "pa.clarify.1"
+    )
+    assert answered_ref["status"] == "responded"
+
+    calls: list[list[dict[str, str]]] = []
+
+    def final_llm(messages, **_kwargs):
+        calls.append(messages)
+        return proposal(0.95, None)
+
+    final = service.qualify_builder_repair_language(
+        ticket["ticket_id"],
+        apply=True,
+        expected_revision=answered["ticket"]["revision"],
+        llm_call=final_llm,
+    )
+    assert final["applied"] is True
+    assert "The status badge inside the Global Root card." in calls[0][1]["content"]
+    assert cancelled == []
+    clarification_ref = next(
+        ref
+        for ref in final["ticket"]["pending_action_refs"]
+        if ref["id"] == "pa.clarify.1"
+    )
+    assert clarification_ref["status"] == "responded"
+
+
+def test_terminal_ticket_transitions_cancel_unanswered_builder_clarifications(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path / "state")
+    cancelled: list[tuple[str, str]] = []
+
+    def cancel_pending_action(action_id: str, *, reason: str, **_kwargs):
+        cancelled.append((action_id, reason))
+        return {"action": {"id": action_id, "status": "cancelled"}}
+
+    monkeypatch.setattr(
+        "adaos.services.pending_actions.cancel_pending_action",
+        cancel_pending_action,
+    )
+
+    def ticket_with_pending(action_id: str) -> dict:
+        signal = service.capture_signal(
+            kind="feedback_note",
+            summary=f"Clarify {action_id}",
+            target_scope={"type": "skill", "id": action_id},
+            source="client_feedback",
+            owner_area="skill",
+            component_ref=f"skill:{action_id}",
+        )["signal"]
+        ticket = service.ensure_ticket_for_signal(
+            signal,
+            kind="feedback",
+            status="waiting_for_user",
+            owner_area="skill",
+            component_ref=f"skill:{action_id}",
+        )["ticket"]
+        return service._update_ticket(
+            ticket["ticket_id"],
+            pending_action_refs=[
+                {
+                    "id": action_id,
+                    "kind": BUILDER_CLARIFICATION_PENDING_ACTION_KIND,
+                    "status": "pending",
+                }
+            ],
+        )
+
+    resolved_source = ticket_with_pending("pa.resolve")
+    resolved = service.record_resolution(
+        resolved_source["ticket_id"],
+        evidence_refs=[{"type": "test", "id": "browser.acceptance"}],
+        actor="builder.automation",
+        resolved_by_overlay="candidate.1",
+        expected_revision=resolved_source["revision"],
+    )["ticket"]
+    closed_source = ticket_with_pending("pa.close")
+    closed = service.close_ticket(
+        closed_source["ticket_id"],
+        reason="refused",
+        actor="user:owner",
+        expected_revision=closed_source["revision"],
+    )
+
+    assert cancelled == [
+        ("pa.resolve", "ticket_resolved"),
+        ("pa.close", "ticket_closed"),
+    ]
+    for ticket, action_id in ((resolved, "pa.resolve"), (closed, "pa.close")):
+        ref = next(
+            item for item in ticket["pending_action_refs"] if item["id"] == action_id
+        )
+        assert ref["status"] == "cancelled"
+        assert ticket["history"][-1]["kind"] == "builder_clarifications_superseded"
+
+
+def test_language_qualification_failure_falls_back_to_pending_clarification(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = _source_tree(tmp_path / "subscription_status_skill")
+    service = DevelopmentTicketService(state_dir=tmp_path / "state")
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="The shape in the card is wrong.",
+        target_scope={
+            "type": "skill",
+            "id": "subscription_status_skill",
+            "source": "workspace",
+            "surface": "modal",
+        },
+        source="client_feedback",
+        owner_area="skill",
+        component_ref="skill:subscription_status_skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="feedback",
+        status="captured",
+        owner_area="skill",
+        component_ref="skill:subscription_status_skill",
+    )["ticket"]
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.development_source_options",
+        lambda _scope: {
+            "status": "source_available",
+            "source": "dev",
+            "target_type": "skill",
+            "target_id": "subscription_status_skill",
+            "dev_source_path": str(source),
+        },
+    )
+    published: list[dict] = []
+
+    def publish_pending_action(**kwargs):
+        published.append(kwargs)
+        return {
+            "id": "pa.clarify.failure",
+            "kind": kwargs["kind"],
+            "status": "pending",
+            "created_at": 1.0,
+        }
+
+    monkeypatch.setattr(
+        "adaos.services.pending_actions.publish_pending_action",
+        publish_pending_action,
+    )
+
+    result = service.qualify_builder_repair_language(
+        ticket["ticket_id"],
+        expected_revision=ticket["revision"],
+        llm_call=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("subnet_identity_required")
+        ),
+    )
+
+    assert result["applied"] is False
+    assert result["qualification_mode"] == "user_clarification_fallback"
+    assert result["language_model_called"] is True
+    assert result["language_qualification_usage"]["status"] == "failed"
+    assert result["pending_action_published"] is True
+    assert result["ticket"]["status"] == "waiting_for_user"
+    assert published[0]["default_text_binding"] is True
+    assert "what should happen instead" in published[0]["request_text"]
 
 
 def test_package_plan_qualifies_related_tickets_once_with_bounded_budget(

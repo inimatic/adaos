@@ -8,6 +8,11 @@ from typing import Any
 DEVELOPMENT_ESCALATION_SCHEMA = "adaos.development_escalations.v1"
 DEVELOPMENT_ESCALATION_FENCE = "adaos-development-escalation"
 CORE_CAPABILITY_REQUEST_KIND = "core_capability_request"
+PLATFORM_DEFECT_KIND = "platform_defect"
+DEVELOPMENT_ESCALATION_KINDS = {
+    CORE_CAPABILITY_REQUEST_KIND,
+    PLATFORM_DEFECT_KIND,
+}
 CORE_IMPACT_CLASSES = {
     "blocker",
     "speed",
@@ -91,7 +96,7 @@ def normalize_development_escalations(value: Any) -> list[dict[str, Any]]:
                 f"development escalation item {index} has an unsupported schema"
             )
         kind = _bounded_text(item.get("kind"), field="kind", limit=80, required=True)
-        if kind != CORE_CAPABILITY_REQUEST_KIND:
+        if kind not in DEVELOPMENT_ESCALATION_KINDS:
             raise ValueError(f"unsupported development escalation kind: {kind}")
         impact = _bounded_text(
             item.get("impact") or "contract_gap",
@@ -193,6 +198,8 @@ def parse_development_escalations(message: str) -> list[dict[str, Any]]:
 
 __all__ = [
     "CORE_CAPABILITY_REQUEST_KIND",
+    "PLATFORM_DEFECT_KIND",
+    "DEVELOPMENT_ESCALATION_KINDS",
     "CORE_IMPACT_CLASSES",
     "DEVELOPMENT_ESCALATION_FENCE",
     "DEVELOPMENT_ESCALATION_SCHEMA",

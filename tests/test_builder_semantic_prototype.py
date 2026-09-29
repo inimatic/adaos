@@ -328,6 +328,11 @@ def test_many_to_many_requires_an_explicit_link_resource() -> None:
 def test_generation_guidance_exposes_nested_authoring_bounds() -> None:
     guidance = semantic_prototype_generation_guidance()
     assert "wide supporting pane" in guidance["ux_recommendations"]["editor_surface"]
+    assert "preserve unrelated" in guidance["revision_scope"]
+    assert (
+        "compact_presentation=cards"
+        in guidance["ux_recommendations"]["collection_presentations"]
+    )
     contract = semantic_prototype_candidate_contract(version="v2")
     constraints = guidance["authoring_constraints"]
     assert constraints["#/$defs/relationship/properties/label_field_refs"] == {
@@ -1030,6 +1035,7 @@ def _multi_resource_candidate(semantic: dict) -> dict:
         view.setdefault("filter", None)
         view.setdefault("query_controls", [])
         view.setdefault("empty_state", None)
+        view.setdefault("activation_source_view_ref", None)
         if view["empty_state"] is not None:
             view["empty_state"].setdefault("detail", None)
     for command in candidate["commands"]:
@@ -1094,7 +1100,8 @@ def test_provider_record_views_cannot_claim_collection_presentations(role) -> No
 
     _, semantic = _multi_resource_fixture()
     view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == role))
-    view.update(surface="inline", media=None, presentation_options=None,
+    view.update(surface="inline", media=None, compact_presentation=None,
+                presentation_options=None,
                 field_display=[], section=None, scope_filters=[], selection=None, selection_filter=None)
     contract = semantic_prototype_provider_contract(version="v2")
     validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
@@ -1113,7 +1120,8 @@ def test_provider_collection_requires_a_presentation_and_inline_surface() -> Non
 
     _, semantic = _multi_resource_fixture()
     view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == "collection"))
-    view.update(surface="inline", media=None, presentation_options=None,
+    view.update(surface="inline", media=None, compact_presentation=None,
+                presentation_options=None,
                 field_display=[], section=None, scope_filters=[],
                 selection={"mode": "single", "indicator": "radio", "row_activation": "select"},
                 selection_filter=None)
@@ -3234,6 +3242,58 @@ def test_compiled_regions_use_client_placement_roles() -> None:
     regions = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]["regions"]
     assert {item["id"]: item["role"] for item in regions}["supporting"] == "detail"
     assert all(item["role"] in {"collection", "main", "detail", "commands"} for item in regions)
+
+
+def test_row_detail_activation_is_typed_and_targets_its_own_details_view() -> None:
+    brief, semantic = _multi_resource_fixture()
+    collection = next(
+        view for view in semantic["views"]
+        if view["role"] == "collection" and view["resource_ref"] == semantic["resources"][0]["id"]
+    )
+    details = next(
+        view for view in semantic["views"]
+        if view["role"] == "details" and view["resource_ref"] == collection["resource_ref"]
+    )
+    collection["selection"] = {
+        "mode": "single", "indicator": "radio", "row_activation": "open_details",
+    }
+    details["activation_source_view_ref"] = collection["id"]
+    details["region_role"] = "supporting"
+
+    compiled = compile_semantic_prototype_candidate(
+        _multi_resource_candidate(semantic), brief=brief
+    )
+
+    page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    detail_widget = next(widget for widget in page["widgets"] if widget["id"] == details["id"])
+    source_widget = next(widget for widget in page["widgets"] if widget["id"] == collection["id"])
+    assert page["layout"]["interaction"]["rowActivation"] == "open-detail"
+    assert page["layout"]["scroll"] == "regions"
+    assert next(region for region in page["layout"]["regions"] if region["id"] == "supporting")["scroll"] == "region"
+    assert source_widget["inputs"]["rowActivation"] == "open-detail"
+    assert detail_widget["inputs"]["activationSourceWidgetId"] == collection["id"]
+    assert detail_widget["visibleIf"] == (
+        f'$state.__adaos_active_detail_source === "{collection["id"]}"'
+    )
+    assert page["initialState"]["__adaos_active_detail_source"] == ""
+
+
+def test_row_detail_activation_rejects_cross_resource_details() -> None:
+    brief, semantic = _multi_resource_fixture()
+    collections = [view for view in semantic["views"] if view["role"] == "collection"]
+    details = next(view for view in semantic["views"] if view["role"] == "details")
+    source = next(
+        view for view in collections if view["resource_ref"] != details["resource_ref"]
+    )
+    source["selection"] = {
+        "mode": "single", "indicator": "radio", "row_activation": "open_details",
+    }
+    details["activation_source_view_ref"] = source["id"]
+
+    with pytest.raises(BuilderWorkflowError, match="same resource"):
+        compile_semantic_prototype_candidate(
+            _multi_resource_candidate(semantic), brief=brief
+        )
 
 
 @pytest.mark.parametrize("locale", ["en", "ru"])

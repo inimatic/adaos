@@ -1601,6 +1601,16 @@ class BuilderAutomationService:
             if isinstance(workflow.get("change_set"), Mapping)
             else {}
         )
+        prototype = (
+            workflow.get("prototype")
+            if isinstance(workflow.get("prototype"), Mapping)
+            else {}
+        )
+        prototype_acceptance = (
+            prototype.get("acceptance")
+            if isinstance(prototype.get("acceptance"), Mapping)
+            else {}
+        )
         source_message_ids = [
             str(item).strip()
             for item in change_set.get("source_message_ids") or []
@@ -1612,9 +1622,96 @@ class BuilderAutomationService:
             "object_id": project_id,
             "state": str(governed.get("state") or "").strip() or None,
             "generation": governed.get("generation"),
+            "workflow_generation": workflow.get("generation"),
             "change_set_id": str(change_set.get("change_set_id") or "").strip() or None,
             "change_set_status": str(change_set.get("status") or "").strip() or None,
+            # Package routing must bind Automation to the exact accepted
+            # Prototype rather than treating any historical package link as
+            # sufficient.  Keep this projection intentionally small: callers
+            # need identity/digests, not the full (potentially very large)
+            # Prototype evidence document.
+            "prototype_revision": str(
+                prototype_acceptance.get("revision")
+                or prototype.get("head_revision")
+                or ""
+            ).strip()
+            or None,
+            "prototype_webui_digest": str(
+                prototype_acceptance.get("webui_digest") or ""
+            ).strip()
+            or None,
+            "prototype_acceptance_digest": str(
+                prototype_acceptance.get("digest") or ""
+            ).strip()
+            or None,
+            "prototype_accepted": bool(
+                prototype_acceptance.get("decision") == "accepted"
+            ),
             "source_message_ids": source_message_ids,
+        }
+
+    def release_failed_prototype_launch(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        package_id: str,
+        actor: str = "builder.prototype",
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Cancel only the Prototype head opened by a failed package submit.
+
+        Builder records the Change before it calls the model.  If generation
+        fails before a Prototype link can be persisted, leaving that Change in
+        ``prototype_editing`` prevents the same package or a replacement from
+        resuming.  The package message id makes this cleanup ownership-safe.
+        """
+
+        package_token = str(package_id or "").strip()
+        expected_message_id = f"m.{package_token}.prototype.request"
+        head = self.current_workflow_head(
+            object_type=object_type,
+            object_id=object_id,
+        )
+        source_message_ids = {
+            str(item).strip()
+            for item in head.get("source_message_ids") or []
+            if str(item).strip()
+        }
+        if (
+            not package_token
+            or head.get("state") != "prototype_editing"
+            or expected_message_id not in source_message_ids
+        ):
+            return {
+                "ok": True,
+                "released": False,
+                "reason": "prototype_head_not_owned_by_package",
+                "workflow_head": head,
+            }
+        result = self._workflow().transition(
+            object_type,
+            object_id,
+            "cancel_change",
+            actor="builder.prototype",
+            reason=str(reason or "prototype_launch_failed"),
+            metadata={
+                "change_id": head.get("change_set_id"),
+                "originating_change_id": head.get("change_set_id"),
+                "package_id": package_token,
+                "source_message_id": expected_message_id,
+                "initiated_by": str(actor or "builder.prototype"),
+            },
+            expected_generation=(
+                int(head["workflow_generation"])
+                if head.get("workflow_generation") is not None
+                else None
+            ),
+        )
+        return {
+            "ok": bool(result.get("ok")),
+            "released": bool(result.get("ok")),
+            "workflow": result.get("workflow"),
         }
 
     def _compile_iteration_context(
@@ -4290,27 +4387,9 @@ class BuilderAutomationService:
             if str(item).strip()
         ]
         selected_task_id = str(source_task_id or "").strip()
+        selected_from_history = False
         if selected_task_id:
-            in_lineage = selected_task_id in history
-            record(
-                "source_task_lineage",
-                in_lineage,
-                (
-                    "source task belongs to the Automation session"
-                    if in_lineage
-                    else "source task is not present in the Automation session lineage"
-                ),
-            )
-            if not in_lineage:
-                return {
-                    "schema": "adaos.builder.preserved_candidate_preflight.v1",
-                    "eligible": False,
-                    "model_policy": "forbid",
-                    "source_task_id": selected_task_id or None,
-                    "checks": checks,
-                    "blockers": blockers,
-                    "checkpoint": None,
-                }
+            selected_from_history = selected_task_id in history
         else:
             candidate = self._latest_blocking_candidate_source(
                 session,
@@ -4318,6 +4397,7 @@ class BuilderAutomationService:
             )
             if candidate is not None:
                 selected_task_id = candidate[0]
+                selected_from_history = selected_task_id in history
             record(
                 "source_task_selected",
                 bool(selected_task_id),
@@ -4455,6 +4535,31 @@ class BuilderAutomationService:
             if assignment_available
             else {}
         )
+        source_links = (
+            dict(source_request.get("links") or {})
+            if isinstance(source_request.get("links"), Mapping)
+            else {}
+        )
+        durable_session_id = str(session.get("session_id") or "").strip()
+        source_session_id = str(
+            source_links.get("automation_session_id") or ""
+        ).strip()
+        persistent_lineage = bool(
+            durable_session_id and source_session_id == durable_session_id
+        )
+        source_in_lineage = selected_from_history or persistent_lineage
+        record(
+            "source_task_lineage",
+            source_in_lineage,
+            (
+                "source task belongs to the current task history"
+                if selected_from_history
+                else "source task belongs to the same durable Automation session"
+                if persistent_lineage
+                else "source task is not present in the Automation session lineage"
+            ),
+        )
+
         source_artifacts = (
             dict(source_request.get("artifacts") or {})
             if isinstance(source_request.get("artifacts"), Mapping)
@@ -4770,6 +4875,59 @@ class BuilderAutomationService:
                 "preflight": admission,
             }
 
+    def _task_belongs_to_durable_session(
+        self,
+        session: Mapping[str, Any],
+        task_id: str,
+    ) -> bool:
+        """Keep candidate lineage across a package replan for the same session.
+
+        ``task_history`` is a convenience projection and can be replaced when a
+        Dev Ticket package is requalified. The immutable assignment remains the
+        authority: it must name the same durable Automation session and target.
+        """
+
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return False
+        if task_id in {
+            str(item).strip()
+            for item in session.get("task_history") or []
+            if str(item).strip()
+        }:
+            return True
+        assignment_path = (
+            Path(self.runs_root) / _safe_token(task_id) / "input" / "assignment.json"
+        )
+        try:
+            assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return False
+        request = (
+            dict(assignment.get("realize_request") or {})
+            if isinstance(assignment, Mapping)
+            else {}
+        )
+        links = (
+            dict(request.get("links") or {})
+            if isinstance(request.get("links"), Mapping)
+            else {}
+        )
+        target = (
+            dict(assignment.get("target") or {})
+            if isinstance(assignment, Mapping)
+            else {}
+        )
+        return bool(
+            str(session.get("session_id") or "").strip()
+            and str(links.get("automation_session_id") or "").strip()
+            == str(session.get("session_id") or "").strip()
+            and str(target.get("type") or "").strip().lower().rstrip("s")
+            == str(session.get("object_type") or "").strip().lower().rstrip("s")
+            and str(target.get("id") or "").strip()
+            == str(session.get("object_id") or "").strip()
+        )
+
     def validate_preserved_candidate(
         self,
         *,
@@ -4927,7 +5085,9 @@ class BuilderAutomationService:
                     != "validate_preserved_candidate"
                     or continuation_checkpoint.get("model_policy") != "forbid"
                     or not source_task_id
-                    or source_task_id not in session.get("task_history", [])
+                    or not self._task_belongs_to_durable_session(
+                        session, source_task_id
+                    )
                 ):
                     raise ValueError(
                         "preserved candidate checkpoint failed internal admission"
@@ -6604,7 +6764,11 @@ class BuilderAutomationService:
         }
 
     def recover_validated_result(
-        self, *, object_type: str, object_id: str
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        permission_decision: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Activate a preserved validated task result without rerunning Codex."""
 
@@ -6614,6 +6778,12 @@ class BuilderAutomationService:
                 raise ValueError("automation_session_not_found")
             current = self.refresh_session(session)
             current = self._restore_cancelled_browser_feedback_source(current)
+            if permission_decision is not None:
+                current["trial_permission_decision"] = (
+                    self._record_trial_permission_decision(
+                        current, permission_decision
+                    )
+                )
             task = (
                 current.get("task") if isinstance(current.get("task"), Mapping) else {}
             )
@@ -6904,37 +7074,81 @@ class BuilderAutomationService:
         current_index = len(task_history) - 1 - task_history[::-1].index(current_task_id)
         if current_index <= 0:
             return current
-        source_task_id = task_history[current_index - 1]
-        completion = next(
-            (
+        completion_history = [
+            dict(item)
+            for item in current.get("completion_history") or []
+            if isinstance(item, Mapping)
+        ]
+
+        def clean_platform_repair(task_id: str) -> bool:
+            try:
+                linked_task = self.factory.read_task(task_id)
+            except (KeyError, RuntimeError):
+                return False
+            status = str(linked_task.get("status") or "").strip()
+            if status not in {"cancelled", "failed"}:
+                return False
+            task_attempts = max(0, int(linked_task.get("attempts") or 0))
+            if task_attempts > 0 and not _preserved_candidate_is_clean(
+                Path(self.runs_root) / _safe_token(task_id)
+            ):
+                return False
+            if status == "cancelled":
+                return True
+            if task_id == current_task_id:
+                return platform_feedback_repair
+            failures = [
                 dict(item)
-                for item in reversed(current.get("completion_history") or [])
+                for item in linked_task.get("failure_history") or []
                 if isinstance(item, Mapping)
-                and str(item.get("task_id") or "").strip() == source_task_id
-                and isinstance(item.get("browser_feedback_repair"), Mapping)
-                and str(item["browser_feedback_repair"].get("status") or "").strip()
-                == "queued"
-            ),
-            None,
-        )
-        if completion is None:
+            ]
+            return bool(
+                failures
+                and str(failures[-1].get("stage") or "").strip()
+                == "development_feedback"
+            )
+
+        source_task_id = ""
+        completion: dict[str, Any] | None = None
+        restored: dict[str, Any] | None = None
+        skipped_repair_task_ids: list[str] = []
+        for candidate_completion in reversed(completion_history):
+            candidate_source = str(candidate_completion.get("task_id") or "").strip()
+            repair = candidate_completion.get("browser_feedback_repair")
+            if (
+                not candidate_source
+                or candidate_source not in task_history[:current_index]
+                or not isinstance(repair, Mapping)
+                or str(repair.get("status") or "").strip() != "queued"
+            ):
+                continue
+            source_index = task_history.index(candidate_source)
+            skipped = task_history[source_index + 1 : current_index + 1]
+            if not skipped or not all(clean_platform_repair(item) for item in skipped):
+                continue
+            candidate_session = self._session_for_linked_task(
+                current, candidate_source
+            )
+            candidate_task = (
+                candidate_session.get("task")
+                if isinstance(candidate_session, Mapping)
+                and isinstance(candidate_session.get("task"), Mapping)
+                else {}
+            )
+            if (
+                not isinstance(candidate_session, Mapping)
+                or str(candidate_task.get("status") or "") != "completed"
+                or not isinstance(candidate_session.get("last_result"), Mapping)
+            ):
+                continue
+            source_task_id = candidate_source
+            completion = candidate_completion
+            restored = dict(candidate_session)
+            skipped_repair_task_ids = list(skipped)
+            break
+        if not source_task_id or completion is None or restored is None:
             return current
 
-        restored = self._session_for_linked_task(current, source_task_id)
-        restored_task = (
-            restored.get("task")
-            if isinstance(restored, Mapping)
-            and isinstance(restored.get("task"), Mapping)
-            else {}
-        )
-        if (
-            not isinstance(restored, Mapping)
-            or str(restored_task.get("status") or "") != "completed"
-            or not isinstance(restored.get("last_result"), Mapping)
-        ):
-            return current
-
-        restored = dict(restored)
         restored["iteration"] = max(0, int(completion.get("iteration") or 0))
         restored["task_history"] = task_history
         restored["completion_history"] = copy.deepcopy(
@@ -6945,22 +7159,23 @@ class BuilderAutomationService:
             for item in current.get("cancelled_repair_recovery_history") or []
             if isinstance(item, Mapping)
         ]
-        recovery_history.append(
-            {
-                "schema": "adaos.builder.cancelled_repair_recovery.v1",
-                "cancelled_task_id": current_task_id,
-                "source_task_id": source_task_id,
-                "reason": (
-                    "clean_platform_feedback_browser_repair_resolved"
-                    if platform_feedback_repair
-                    else
-                    "clean_started_browser_feedback_repair_cancelled"
-                    if attempts > 0
-                    else "unstarted_browser_feedback_repair_cancelled"
-                ),
-                "recovered_at": _now_iso(),
-            }
-        )
+        recovery_receipt = {
+            "schema": "adaos.builder.cancelled_repair_recovery.v1",
+            "cancelled_task_id": current_task_id,
+            "source_task_id": source_task_id,
+            "reason": (
+                "clean_platform_feedback_browser_repair_resolved"
+                if platform_feedback_repair
+                else
+                "clean_started_browser_feedback_repair_cancelled"
+                if attempts > 0
+                else "unstarted_browser_feedback_repair_cancelled"
+            ),
+            "recovered_at": _now_iso(),
+        }
+        if len(skipped_repair_task_ids) > 1:
+            recovery_receipt["skipped_repair_task_ids"] = skipped_repair_task_ids
+        recovery_history.append(recovery_receipt)
         restored["cancelled_repair_recovery_history"] = recovery_history[-20:]
         restored["updated_at"] = recovery_history[-1]["recovered_at"]
         self._save_session(restored, allow_lineage_rewind=True)
@@ -7937,7 +8152,7 @@ class BuilderAutomationService:
                 if isinstance(readiness.get("aprobation"), Mapping)
                 else {}
             )
-            and "resolved_publication_gate_failures" not in readiness
+            and readiness.get("resolved_publication_gate_failures") is None
         ):
             reconciled_readiness = dict(readiness)
             reconciled_readiness["resolved_publication_gate_failures"] = (
@@ -10153,9 +10368,17 @@ class BuilderAutomationService:
             if target_files:
                 realization_constraints["exact_changed_paths"] = target_files
             if repair_hints.get("max_changed_files"):
-                realization_constraints["max_changed_files"] = int(
-                    repair_hints["max_changed_files"]
-                )
+                if str(repair_hints.get("execution_route") or "").strip() == "prototype_first":
+                    realization_constraints["target_changed_files"] = int(
+                        repair_hints["max_changed_files"]
+                    )
+                    realization_constraints["changed_file_target_policy"] = (
+                        "advisory_optimization_target"
+                    )
+                else:
+                    realization_constraints["max_changed_files"] = int(
+                        repair_hints["max_changed_files"]
+                    )
         elif accepted_prototype_validation:
             realization_constraints.update(
                 {
@@ -10175,15 +10398,29 @@ class BuilderAutomationService:
         if accepted_prototype_validation:
             request_mcp = {"enabled": False, "requested_scope": []}
         elif is_dev_ticket_repair:
-            if repair_hints.get("requires_root_mcp") is False:
-                request_mcp = {"enabled": False, "requested_scope": []}
-            else:
-                request_mcp = _sanitized_mcp_profile(session.get("mcp")) or {}
-                request_mcp["enabled"] = True
+            # A Dev Ticket package is itself governed Root data.  The
+            # ``requires_root_mcp`` hint describes whether the implementation
+            # additionally needs subnet requirements/runtime data; it must not
+            # disable access to the tickets that define the work.
+            request_mcp = _sanitized_mcp_profile(session.get("mcp")) or {}
+            request_mcp["enabled"] = True
+            # Even a source-local ticket repair needs the exact public
+            # capability contracts selected by its context compiler.  The
+            # worker prefetches that bounded descriptor slice before Codex and
+            # then exposes only the live read-only ticket tools to the model.
+            # Without requirement_spec the packet contains digest references
+            # that the isolated worker cannot resolve, causing expensive
+            # rediscovery and false platform escalations.
+            request_mcp["requested_scope"] = [
+                "requirement_spec",
+                "development_tickets",
+            ]
+            if repair_hints.get("requires_root_mcp") is not False:
                 request_mcp["requested_scope"] = [
                     "requirement_spec",
                     "staging_validation",
                     "runtime_diagnostics",
+                    "development_tickets",
                 ]
         else:
             request_mcp = _sanitized_mcp_profile(session.get("mcp")) or {
@@ -10193,6 +10430,7 @@ class BuilderAutomationService:
                     "mock_runtime",
                     "staging_validation",
                     "runtime_diagnostics",
+                    "development_tickets",
                 ]
             }
         subnet_id = _builder_subnet_id(session)
@@ -10859,19 +11097,33 @@ class BuilderAutomationService:
             if isinstance(workflow.get("change"), Mapping)
             else {}
         )
-        trial_matches = bool(
+        canonical_trial_matches = bool(
             automation_matches
             and delivery_status == "trial"
             and str(readiness.get("task_id") or "").strip() == task_id
             and confirmed_checkpoints
             and str(workflow_change.get("status") or "").strip() == "trial"
-            and str(existing_trial.get("status") or "").strip() == "trial"
+            and str(delivery.get("candidate_id") or "").strip()
+            and str(delivery.get("package_digest") or "").strip()
+            and str(delivery.get("release_digest") or "").strip()
+        )
+        existing_trial_matches = bool(
+            str(existing_trial.get("status") or "").strip() == "trial"
             and str(delivery.get("candidate_id") or "").strip()
             == str(existing_trial.get("candidate_id") or "").strip()
             and str(delivery.get("package_digest") or "").strip()
             == str(existing_trial.get("candidate_digest") or "").strip()
             and str(workflow.get("generation") or "").strip()
             == str(existing_trial.get("workflow_generation") or "").strip()
+        )
+        # The canonical workflow owns immutable Candidate/Trial identity.  A
+        # missing local receipt is a recoverable derived-state gap; an existing
+        # but conflicting receipt is not.  The governed Trial recovery below
+        # still verifies the Candidate, activation, and isolated workspace
+        # before it persists a replacement receipt.
+        trial_matches = bool(
+            canonical_trial_matches
+            and (not existing_trial or existing_trial_matches)
         )
         if not checkpoint_matches and not trial_matches:
             return None
@@ -11529,7 +11781,16 @@ class BuilderAutomationService:
 
     def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
         """Prepare the DEV runtime, refresh the paired UI, then notify chat."""
-        reconciled = self._reconcile_completed_workflow(session)
+        reconciled = None
+        reconciliation_error: Exception | None = None
+        try:
+            reconciled = self._reconcile_completed_workflow(session)
+        except Exception as exc:
+            # Reconciliation can include governed Trial preparation.  It is
+            # part of finalization and must therefore produce the same durable
+            # failed projection/ticket as the non-recovery path instead of
+            # escaping with the session indefinitely left at commit_ready.
+            reconciliation_error = exc
         if reconciled is not None:
             self._notify_completed_session(reconciled)
             return
@@ -11572,6 +11833,8 @@ class BuilderAutomationService:
         if not snapshot_project_ref.startswith("project:"):
             snapshot_project_ref = ""
         try:
+            if reconciliation_error is not None:
+                raise reconciliation_error
             if object_type == "scenario" and object_id:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
 
@@ -12310,11 +12573,35 @@ class BuilderAutomationService:
                             if isinstance(gate_result.get("ticket"), Mapping)
                             else {}
                         )
+                        pending_action = (
+                            dict(gate_result.get("pending_action"))
+                            if isinstance(gate_result.get("pending_action"), Mapping)
+                            else {}
+                        )
+                        requires_user_decision = bool(
+                            (failure_ticket.get("metadata") or {}).get(
+                                "requires_user_decision"
+                            )
+                        )
                         readiness["publication_gate_failure"] = {
                             "ticket_id": failure_ticket.get("ticket_id"),
                             "duplicate": bool(gate_result.get("ticket_duplicate")),
                             "gate": failed_gate,
+                            "requires_user_decision": requires_user_decision,
+                            "pending_action_id": pending_action.get("id"),
                         }
+                        if requires_user_decision:
+                            current["last_failure"] = {
+                                **dict(current.get("last_failure") or {}),
+                                "failure_class": "user_input_required",
+                                "retryable": True,
+                                "details": {
+                                    "ticket_id": failure_ticket.get("ticket_id"),
+                                    "pending_action_id": pending_action.get("id"),
+                                    "recovery_command": "recover_validated_result",
+                                    "model_rerun_required": False,
+                                },
+                            }
                         current["completion_readiness"] = readiness
                         current["updated_at"] = _now_iso()
                         self._save_session(current)
@@ -12833,6 +13120,105 @@ class BuilderAutomationService:
             policy.get("publication_required") is True or is_autonomous_ticket_repair
         )
 
+    def _record_trial_permission_decision(
+        self,
+        session: Mapping[str, Any],
+        raw_decision: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Bind an attended permission decision to one exact checkpoint."""
+
+        decision = dict(raw_decision)
+        if not isinstance(decision.get("approved"), bool):
+            raise ValueError("permission_decision.approved must be a boolean")
+        actor = str(decision.get("actor") or "").strip()
+        actor_type = str(decision.get("actor_type") or "").strip().lower()
+        approval_id = str(decision.get("approval_id") or "").strip()
+        if not actor or actor_type not in {"user", "operator"} or not approval_id:
+            raise ValueError(
+                "permission_decision requires actor, actor_type=user|operator, and approval_id"
+            )
+        object_type = str(session.get("object_type") or "").strip()
+        object_id = str(session.get("object_id") or "").strip()
+        task_id = str(session.get("current_task_id") or "").strip()
+        workflow = self._workflow().describe(object_type, object_id)
+        delivery = (
+            dict(workflow.get("delivery"))
+            if isinstance(workflow.get("delivery"), Mapping)
+            else {}
+        )
+        package_digest = str(delivery.get("package_digest") or "").strip()
+        supplied_task_id = str(decision.get("task_id") or "").strip()
+        supplied_digest = str(decision.get("package_digest") or "").strip()
+        if supplied_task_id and supplied_task_id != task_id:
+            raise ValueError("permission_decision task_id does not match the validated task")
+        if supplied_digest and supplied_digest != package_digest:
+            raise ValueError(
+                "permission_decision package_digest does not match the exact checkpoint"
+            )
+        if str(delivery.get("status") or "").strip() not in {"checkpoint", "activating"}:
+            raise ValueError("permission_decision requires an exact Trial checkpoint")
+        return {
+            **decision,
+            "actor": actor,
+            "actor_type": actor_type,
+            "approval_id": approval_id,
+            "task_id": task_id,
+            "change_id": str(session.get("change_id") or "").strip() or None,
+            "package_digest": package_digest,
+            "source_revision": str(delivery.get("source_revision") or "").strip()
+            or None,
+            "recorded_at": _now_iso(),
+        }
+
+    @staticmethod
+    def _bound_trial_permission_decision(
+        session: Mapping[str, Any],
+        delivery: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        decision = (
+            dict(session.get("trial_permission_decision"))
+            if isinstance(session.get("trial_permission_decision"), Mapping)
+            else {}
+        )
+        if not decision:
+            return None
+        if str(decision.get("task_id") or "").strip() != str(
+            session.get("current_task_id") or ""
+        ).strip():
+            return None
+        if str(decision.get("package_digest") or "").strip() != str(
+            delivery.get("package_digest") or ""
+        ).strip():
+            return None
+        return decision
+
+    def _declared_trial_permission_ids(
+        self, session: Mapping[str, Any]
+    ) -> list[str]:
+        """Return bounded, non-secret permission context for the operator prompt."""
+
+        skill_ids = self._session_changed_companion_skill_ids(session)
+        if str(session.get("object_type") or "").strip() == "skill":
+            skill_ids.append(str(session.get("object_id") or "").strip())
+        permissions: set[str] = set()
+        for skill_id in dict.fromkeys(item for item in skill_ids if item):
+            manifest_path = self.dev_skills_root / skill_id / "skill.yaml"
+            try:
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, yaml.YAMLError):
+                continue
+            if not isinstance(manifest, Mapping):
+                continue
+            for tool in manifest.get("tools") or []:
+                if not isinstance(tool, Mapping):
+                    continue
+                permissions.update(
+                    str(item).strip()
+                    for item in tool.get("permissions") or []
+                    if str(item).strip()
+                )
+        return sorted(permissions)
+
     def _ensure_governed_aprobation_trial(
         self,
         session: Mapping[str, Any],
@@ -12855,10 +13241,30 @@ class BuilderAutomationService:
         delivery_status = str(delivery.get("status") or "").strip()
         result: dict[str, Any] = {}
         if delivery_status in {"checkpoint", "activating"}:
+            from adaos.sdk.builder import automation as automation_sdk
             from adaos.sdk.builder import lifecycle
 
             task_id = str(session.get("current_task_id") or "").strip()
             package_digest = str(delivery.get("package_digest") or "").strip()
+            verification_evidence = (
+                automation_sdk._sealed_trial_verification_evidence_for_task(
+                    self,
+                    task_id=task_id,
+                    object_id=object_id,
+                )
+            )
+            if verification_evidence.get("ok") is not True:
+                raise ValueError(
+                    "Builder Trial verification evidence is unavailable: "
+                    + str(
+                        verification_evidence.get("reason")
+                        or verification_evidence.get("status")
+                        or "unknown"
+                    )
+                )
+            permission_decision = self._bound_trial_permission_decision(
+                session, delivery
+            )
             links = (
                 session.get("links")
                 if isinstance(session.get("links"), Mapping)
@@ -12882,11 +13288,15 @@ class BuilderAutomationService:
                         or delivery.get("source_revision")
                         or ""
                     ),
+                    permission_decision=permission_decision,
+                    verification_evidence=verification_evidence,
                 ),
                 source_webspace_id=str(session.get("webspace_id") or "desktop").strip()
                 or "desktop",
                 target_webspace_id=None,
                 publication_project_ref=publication_project_ref or None,
+                permission_decision=permission_decision,
+                verification_evidence=verification_evidence,
             )
             workflow = (
                 dict(result.get("workflow"))
@@ -13163,6 +13573,8 @@ class BuilderAutomationService:
         package_digest: str,
         publication_project_ref: str | None,
         checkpoint_epoch: str | None = None,
+        permission_decision: Mapping[str, Any] | None = None,
+        verification_evidence: Mapping[str, Any] | None = None,
     ) -> str:
         key = (
             f"dev-ticket-trial:{str(task_id or '').strip() or 'task'}:"
@@ -13172,6 +13584,36 @@ class BuilderAutomationService:
         if epoch:
             epoch_digest = hashlib.sha256(epoch.encode("utf-8")).hexdigest()[:16]
             key = f"{key}:epoch:{epoch_digest}"
+        if permission_decision or verification_evidence:
+            trial_context_identity = {
+                "permission_decision": {
+                    key: permission_decision.get(key)
+                    for key in (
+                        "approved",
+                        "actor",
+                        "actor_type",
+                        "approval_id",
+                        "task_id",
+                        "package_digest",
+                    )
+                }
+                if permission_decision
+                else None,
+                "verification_evidence": dict(verification_evidence or {}),
+            }
+            context_digest = hashlib.sha256(
+                json.dumps(
+                    trial_context_identity,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()[:12]
+            # Lifecycle appends ``:start``/``:failure``.  Keep the semantic
+            # discriminator compact so the canonical 160-character run-id
+            # ceiling remains available to long generated task identities.
+            discriminator = "p" if permission_decision else "v"
+            key = f"{key}:{discriminator}:{context_digest}"
         project_ref = str(publication_project_ref or "").strip()
         if not project_ref:
             return key
@@ -13295,10 +13737,28 @@ class BuilderAutomationService:
             )
         )
         from adaos.services.development_tickets import DevelopmentTicketService
-
-        return DevelopmentTicketService(
-            state_dir=self.state_dir
-        ).report_publication_gate_failure(
+        permission_decision_required = (
+            "activation introduces permissions but has no explicit permission decision"
+            in str(error or "").lower()
+        )
+        permission_ids = (
+            self._declared_trial_permission_ids(session)
+            if permission_decision_required
+            else []
+        )
+        package_digest = ""
+        try:
+            workflow = self._workflow().describe(object_type, object_id)
+            delivery = (
+                workflow.get("delivery")
+                if isinstance(workflow.get("delivery"), Mapping)
+                else {}
+            )
+            package_digest = str(delivery.get("package_digest") or "").strip()
+        except Exception:
+            pass
+        service = DevelopmentTicketService(state_dir=self.state_dir)
+        result = service.report_publication_gate_failure(
             component_type=object_type,
             component_id=object_id,
             gate=gate,
@@ -13311,7 +13771,44 @@ class BuilderAutomationService:
             session_id=str(session.get("session_id") or "").strip() or None,
             webspace_id=str(session.get("webspace_id") or "desktop").strip()
             or "desktop",
+            autonomous_repair_eligible=not permission_decision_required,
+            design_time_fixable=not permission_decision_required,
+            run_policy=(
+                "await_user_permission_decision"
+                if permission_decision_required
+                else "block_publication"
+            ),
+            metadata={
+                "requires_user_decision": permission_decision_required,
+                "decision_kind": (
+                    "trial_permission"
+                    if permission_decision_required
+                    else None
+                ),
+                "declared_permissions": permission_ids,
+                "package_digest": package_digest or None,
+            },
         )
+        if permission_decision_required:
+            ticket = (
+                dict(result.get("ticket"))
+                if isinstance(result.get("ticket"), Mapping)
+                else {}
+            )
+            pending = service.publish_publication_permission_pending_action(
+                str(ticket.get("ticket_id") or ""),
+                object_type=object_type,
+                object_id=object_id,
+                task_id=str(session.get("current_task_id") or "").strip(),
+                package_digest=package_digest,
+                permissions=permission_ids,
+                webspace_id=str(session.get("webspace_id") or "desktop").strip()
+                or "desktop",
+            )
+            result["pending_action"] = pending.get("pending_action")
+            result["pending_action_published"] = bool(pending.get("published"))
+            result["ticket"] = pending.get("ticket") or ticket
+        return result
 
     def _capture_worker_publication_gate_failure(
         self,
@@ -13472,55 +13969,7 @@ class BuilderAutomationService:
         object_id = str(session.get("object_id") or "").strip()
         if object_type != "scenario" or not object_id:
             return None
-        if trial_pending:
-            from adaos.sdk.builder import preview
-
-            selected = preview.select_target(
-                object_type,
-                object_id,
-                stage="trial",
-                source_webspace_id=webspace_id,
-                follow_active=False,
-            )
-            projection = (
-                dict(selected.get("materialization"))
-                if isinstance(selected.get("materialization"), Mapping)
-                else {}
-            )
-            materialization = (
-                dict(projection.get("materialization"))
-                if isinstance(projection.get("materialization"), Mapping)
-                else {}
-            )
-            ready = bool(selected.get("ok")) and bool(projection.get("ok", True))
-            if materialization:
-                ready = ready and materialization.get("ready") is True
-            return {
-                "ok": ready,
-                "webspace_id": webspace_id,
-                "preview_webspace_id": selected.get("preview_webspace_id"),
-                "stage": "beta",
-                "candidate_id": trial.get("candidate_id"),
-                "materialization": materialization or projection,
-                "attempts": [
-                    {
-                        "attempt": 1,
-                        "ok": ready,
-                        "error": projection.get("error"),
-                        "request_id": projection.get("request_id"),
-                    }
-                ],
-                "recovered": False,
-                "retryable": not ready,
-                "error": None
-                if ready
-                else projection.get("error") or "trial_preview_not_ready",
-            }
-
-        from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
-        from adaos.services.scenario.webspace_runtime import (
-            invalidate_webspace_materialization_cache,
-        )
+        from adaos.sdk.builder import applications
 
         transient_errors = {
             "stale_rebuild_superseded",
@@ -13531,18 +13980,11 @@ class BuilderAutomationService:
         projection: dict[str, Any] = {}
         materialization: dict[str, Any] = {}
         for attempt in range(1, COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS + 1):
-            invalidate_webspace_materialization_cache(
-                webspace_id,
-                reason="component_update_notice_changed",
-                action="builder_component_update_sync",
-                source_of_truth="component_update_notice",
-            )
-            projection = rebuild_webspace_projection_sync(
-                webspace_id=webspace_id,
-                action="builder_component_update_sync",
-                source_of_truth="component_update_notice",
-                skill_source_mode="workspace",
-            )
+            # Finalization can run in a one-shot Builder process while the API
+            # owns Yjs/runtime state.  Refresh through that owner instead of
+            # opening the production document locally.  The selected
+            # RuntimeSelection decides between immutable Beta and Stable.
+            projection = applications.refresh_placement(webspace_id)
             materialization = (
                 dict(projection.get("materialization"))
                 if isinstance(projection.get("materialization"), Mapping)
@@ -13574,7 +14016,8 @@ class BuilderAutomationService:
         return {
             "ok": projection_ready,
             "webspace_id": webspace_id,
-            "stage": "stable",
+            "stage": "beta" if trial_pending else "stable",
+            "candidate_id": trial.get("candidate_id") if trial_pending else None,
             "materialization": materialization,
             "attempts": attempt_receipts,
             "recovered": projection_ready and len(attempt_receipts) > 1,

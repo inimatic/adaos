@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import copy
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -91,6 +92,14 @@ MANIFEST_REWRITE_MAX_SIZE_RATIO = 1.3
 CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS = 2.0
 CODEX_TOKEN_BUDGET_EXIT_CODE = 124
 CODEX_LIVE_BUDGET_SAFETY_FACTOR = 1.25
+# Execution budgets are planning targets. They drive context shaping and cost
+# reporting, but crossing a target must not discard a useful in-flight result.
+# A separate, deliberately distant circuit breaker still protects an unattended
+# worker from a genuinely runaway tool loop.
+CODEX_HARD_SAFETY_PRIMARY_MULTIPLIER = 8
+CODEX_HARD_SAFETY_PRIMARY_FLOOR = 500_000
+CODEX_HARD_SAFETY_BILLABLE_MULTIPLIER = 4
+CODEX_HARD_SAFETY_BILLABLE_FLOOR = 2_000_000
 # Calibrated from an isolated one-turn Codex invocation. Provider input also
 # includes the agent harness and tool schemas, so it is additive to the task
 # prompt. Each completed tool call can trigger another model turn and replay
@@ -222,6 +231,114 @@ def _safe_config_token(value: Any, *, fallback: str = "adaos_root") -> str:
     if token and not (token[0].isalpha() or token[0] == "_"):
         token = f"mcp_{token}"
     return token or fallback
+
+
+def _functional_beta_deferred_capability_policy(
+    assignment: Mapping[str, Any],
+    item: Mapping[str, Any],
+) -> bool:
+    """Recognize a production gap explicitly admitted by a beta brief.
+
+    This does not make the capability available.  It permits the rest of a
+    validated candidate to continue only when the missing effect is escalated
+    and remains represented as unavailable.
+    """
+
+    if (
+        str(item.get("category") or "").strip() != "missing_capability"
+        or not item.get("blocking")
+        or item.get("clarification_questions")
+        or "policy" in {str(value).strip() for value in item.get("impact") or []}
+    ):
+        return False
+    request = dict(assignment.get("realize_request") or {})
+    artifacts = dict(request.get("artifacts") or {})
+    try:
+        brief = json.loads(str(artifacts.get("implementation_brief") or ""))
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(brief, Mapping):
+        return False
+    policy = dict(brief.get("policy") or {})
+    deferred = dict(policy.get("functional_beta_deferred_capabilities") or {})
+    refs = [str(value).strip() for value in item.get("target_refs") or []]
+    return bool(
+        deferred.get("allowed") is True
+        and float(item.get("confidence") or 0.0) >= 0.9
+        and str(item.get("recommendation") or "").strip()
+        and any(ref.startswith(("sdk:", "api:", "core:")) for ref in refs)
+    )
+
+
+def _core_owner_ref_for_feedback(item: Mapping[str, Any]) -> str:
+    refs = [str(value).strip() for value in item.get("target_refs") or []]
+    direct = next((ref for ref in refs if ref.startswith("core:")), "")
+    if direct:
+        return direct
+    sdk_ref = next((ref for ref in refs if ref.startswith("sdk:")), "")
+    if sdk_ref:
+        identifier = sdk_ref.split(":", 1)[1]
+        identifier = identifier.removeprefix("adaos.sdk.")
+        area = identifier.split(".", 1)[0] or "unknown"
+        return f"core:sdk.{area}"
+    api_ref = next((ref for ref in refs if ref.startswith("api:")), "")
+    if api_ref:
+        area = api_ref.split(":", 1)[1].split(".", 1)[0] or "unknown"
+        return f"core:api.{area}"
+    return ""
+
+
+def _unresolved_blocking_feedback(
+    assignment: Mapping[str, Any],
+    items: Sequence[Mapping[str, Any]],
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return blockers that were not governed as functional-beta debt.
+
+    A production capability gap remains a blocking development signal.  It is
+    deferred for the explicitly named beta stage only after the signal has
+    been promoted to a durable ticket.  Pairing is positional because capture
+    returns exactly one record for every parsed item, including idempotent
+    replays.
+    """
+
+    unresolved: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not item.get("blocking"):
+            continue
+        record = dict(records[index]) if index < len(records) else {}
+        deferred = bool(
+            _functional_beta_deferred_capability_policy(assignment, item)
+            and record.get("status") == "promoted"
+            and record.get("ticket_refs")
+        )
+        if not deferred:
+            unresolved.append(record)
+    return unresolved
+
+
+def _changed_file_target_observation(
+    assignment: Mapping[str, Any],
+    changed_paths: Sequence[str],
+) -> dict[str, Any] | None:
+    """Project a numeric changed-file goal without turning it into authority."""
+
+    constraints = dict(assignment.get("constraints") or {})
+    try:
+        target = int(constraints.get("max_changed_files") or 0)
+    except (TypeError, ValueError):
+        target = 0
+    if target <= 0:
+        return None
+    observed = len(set(changed_paths))
+    return {
+        "id": "changed_file_optimization_target",
+        "status": "met" if observed <= target else "exceeded",
+        "policy": "advisory_optimization_target",
+        "target": target,
+        "observed": observed,
+        "overrun": max(0, observed - target),
+    }
 
 
 def _text_for_newline_style(value: str, newline: str) -> str:
@@ -1671,6 +1788,25 @@ def _codex_budget_exceeded_receipt(
     }
 
 
+def _codex_hard_safety_limits(
+    *,
+    max_tokens: int,
+    max_billable_tokens: int | None,
+) -> tuple[int, int | None]:
+    """Derive a circuit breaker without turning work targets into stop rules."""
+
+    primary = max(
+        CODEX_HARD_SAFETY_PRIMARY_FLOOR,
+        max(0, int(max_tokens or 0)) * CODEX_HARD_SAFETY_PRIMARY_MULTIPLIER,
+    )
+    billable_target = max(0, int(max_billable_tokens or 0))
+    billable = max(
+        CODEX_HARD_SAFETY_BILLABLE_FLOOR,
+        billable_target * CODEX_HARD_SAFETY_BILLABLE_MULTIPLIER,
+    )
+    return primary, billable
+
+
 def _prototype_acceptance_prompt_projection(value: Any) -> dict[str, Any]:
     acceptance = dict(value) if isinstance(value, Mapping) else {}
     evaluation = (
@@ -2400,6 +2536,118 @@ def _bounded_repair_hints_prompt(
     if acceptance_checks:
         projected["focused_checks"] = acceptance_checks[:12]
     return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _implementation_brief_prompt(value: str) -> str:
+    """Remove governed package duplication from a full Automation prompt."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return "Use the existing prototype and project files as the complete source of requirements."
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw[:20_000]
+    if not isinstance(parsed, Mapping):
+        return raw[:20_000]
+    if str(parsed.get("schema") or "").strip() != (
+        "adaos.dev_ticket.autonomous_repair_package_brief.v1"
+    ):
+        return raw[:20_000]
+
+    issues: list[dict[str, Any]] = []
+    for value in parsed.get("issues") or []:
+        if not isinstance(value, Mapping):
+            continue
+        issue = {
+            key: copy.deepcopy(value.get(key))
+            for key in (
+                "ticket_id",
+                "kind",
+                "summary",
+                "component_ref",
+                "acceptance_checks",
+                "artifact_refs",
+                "detail_source",
+            )
+            if value.get(key) not in (None, "", [], {})
+        }
+        if issue:
+            issues.append(issue)
+    projected = {
+        key: copy.deepcopy(parsed.get(key))
+        for key in (
+            "schema",
+            "package_id",
+            "repair_id",
+            "execution_mode",
+            "summary",
+            "target",
+            "guardrails",
+        )
+        if parsed.get(key) not in (None, "", [], {})
+    }
+    projected["issues"] = issues
+    return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _descriptor_working_set_prompt_projection(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Expose discovery evidence without embedding the complete descriptor body."""
+
+    working_set = dict(value or {})
+    headers = []
+    for item in working_set.get("headers") or []:
+        if not isinstance(item, Mapping):
+            continue
+        headers.append(
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in (
+                    "descriptor_id",
+                    "item_id",
+                    "kind",
+                    "title",
+                    "summary",
+                    "stability",
+                    "fingerprint",
+                )
+                if item.get(key) not in (None, "", [], {})
+            }
+        )
+    details = []
+    for item in working_set.get("details") or []:
+        if not isinstance(item, Mapping):
+            continue
+        body = item.get("item") if isinstance(item.get("item"), Mapping) else {}
+        details.append(
+            {
+                key: copy.deepcopy(candidate)
+                for key, candidate in (
+                    ("descriptor_id", item.get("descriptor_id")),
+                    ("item_id", item.get("item_id")),
+                    ("level", item.get("level")),
+                    ("title", body.get("title")),
+                    ("summary", body.get("summary")),
+                    ("tool_ids", body.get("tool_ids")),
+                    ("capabilities", body.get("capabilities")),
+                )
+                if candidate not in (None, "", [], {})
+            }
+        )
+    return {
+        key: copy.deepcopy(candidate)
+        for key, candidate in (
+            ("schema", working_set.get("schema")),
+            ("digest", working_set.get("digest")),
+            ("query_digest", working_set.get("query_digest")),
+            ("headers", headers),
+            ("details", details),
+            ("evidence", working_set.get("evidence")),
+        )
+        if candidate not in (None, "", [], {})
+    }
 
 
 def _bounded_repair_iteration_prompt(value: str, *, approved_brief: str) -> str:
@@ -3436,6 +3684,50 @@ def _root_mcp_profile_from_assignment(
     return profile
 
 
+def _model_root_mcp_profile(
+    assignment: Mapping[str, Any],
+    root_mcp: Mapping[str, Any] | None,
+    *,
+    descriptor_working_set: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Project the smallest task MCP catalog still useful to the model.
+
+    Descriptor prefetch normally removes Root MCP from the model turn because
+    the trusted worker has already materialized the requested descriptors.
+    Dev Tickets are different: they are live, addressable work records.  Keep
+    their read-only tools available while hiding the already-prefetched
+    descriptor/runtime catalog.
+    """
+
+    profile = dict(root_mcp or {})
+    if not profile or profile.get("enabled") is False:
+        return None
+    if not descriptor_working_set:
+        return profile
+    mcp = (
+        dict(assignment.get("mcp"))
+        if isinstance(assignment.get("mcp"), Mapping)
+        else {}
+    )
+    scopes = {
+        str(item).strip()
+        for item in [*(mcp.get("scope") or []), *(mcp.get("requested_scope") or [])]
+        if str(item).strip()
+    }
+    if "read_development_tickets" not in scopes:
+        return None
+    ticket_tools = task_scope_enabled_tools(["read_development_tickets"])
+    admitted_tools = {
+        str(item).strip()
+        for item in profile.get("enabled_tools") or []
+        if str(item).strip()
+    }
+    profile["enabled_tools"] = [
+        tool for tool in ticket_tools if not admitted_tools or tool in admitted_tools
+    ]
+    return profile if profile["enabled_tools"] else None
+
+
 def _toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -3835,7 +4127,10 @@ def _codex_prompt_budget_check(
         blocked_reasons.append("primary_budget_below_estimated_first_turn")
     if max_billable_tokens and required_billable_tokens > max_billable_tokens:
         blocked_reasons.append("billable_budget_below_estimated_first_turn")
-    status = "blocked" if blocked_reasons else "ok"
+    # The estimate is an optimization signal, not task admission authority.
+    # Keeping the historical ``blocked_reasons`` vocabulary makes existing
+    # telemetry comparable while the status states the new soft-target policy.
+    status = "target_exceeded" if blocked_reasons else "ok"
     return {
         "schema": "adaos.skill_factory.codex_prompt_budget_check.v1",
         "status": status,
@@ -4125,7 +4420,12 @@ class SubprocessCodexExecutor:
                 next_budget_check = (
                     time.monotonic() + CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS
                 )
-                budget_exceeded: dict[str, Any] | None = None
+                budget_target_receipt: dict[str, Any] | None = None
+                safety_cap_receipt: dict[str, Any] | None = None
+                hard_primary_limit, hard_billable_limit = _codex_hard_safety_limits(
+                    max_tokens=int(max_model_tokens or 0),
+                    max_billable_tokens=max_billable_tokens,
+                )
                 while process.poll() is None:
                     if cancel_check is not None and cancel_check():
                         self._terminate_process_tree(process)
@@ -4138,14 +4438,21 @@ class SubprocessCodexExecutor:
                                 live_events_path,
                                 prompt=prompt,
                             )
-                            budget_exceeded = _codex_budget_exceeded_receipt(
+                            budget_target_receipt = _codex_budget_exceeded_receipt(
                                 provider_usage=provider_usage,
                                 live_estimate=live_estimate,
                                 metric=token_budget_metric,
                                 max_tokens=int(max_model_tokens),
                                 max_billable_tokens=max_billable_tokens,
                             )
-                            if budget_exceeded is not None:
+                            safety_cap_receipt = _codex_budget_exceeded_receipt(
+                                provider_usage=provider_usage,
+                                live_estimate=live_estimate,
+                                metric=token_budget_metric,
+                                max_tokens=hard_primary_limit,
+                                max_billable_tokens=hard_billable_limit,
+                            )
+                            if safety_cap_receipt is not None:
                                 self._terminate_process_tree(process)
                                 break
                             next_budget_check = (
@@ -4171,7 +4478,7 @@ class SubprocessCodexExecutor:
             else ""
         )
         outcome_error = ""
-        if process.returncode == 0 and budget_exceeded is None:
+        if process.returncode == 0 and safety_cap_receipt is None:
             try:
                 final_message = outcome_message(final_message)
             except (TypeError, ValueError) as exc:
@@ -4180,7 +4487,7 @@ class SubprocessCodexExecutor:
                 outcome_error = f"Invalid Automation outcome: {exc}"
                 stderr = stderr.rstrip() + "\n" + outcome_error + "\n"
         if (
-            budget_exceeded is None
+            safety_cap_receipt is None
             and max_model_tokens is not None
             and max_model_tokens > 0
         ):
@@ -4188,20 +4495,55 @@ class SubprocessCodexExecutor:
             live_estimate = _codex_jsonl_live_budget_estimate(
                 live_events_path, prompt=prompt
             )
-            budget_exceeded = _codex_budget_exceeded_receipt(
+            budget_target_receipt = _codex_budget_exceeded_receipt(
                 provider_usage=provider_usage,
                 live_estimate=live_estimate,
                 metric=token_budget_metric,
                 max_tokens=int(max_model_tokens),
                 max_billable_tokens=max_billable_tokens,
             )
-        if budget_exceeded is not None:
+            safety_cap_receipt = _codex_budget_exceeded_receipt(
+                provider_usage=provider_usage,
+                live_estimate=live_estimate,
+                metric=token_budget_metric,
+                max_tokens=hard_primary_limit,
+                max_billable_tokens=hard_billable_limit,
+            )
+        token_budget_receipt: dict[str, Any] | None = None
+        if safety_cap_receipt is not None:
+            token_budget_receipt = {
+                **safety_cap_receipt,
+                "status": "safety_cap_exceeded",
+                "enforcement": "hard_circuit_breaker",
+                "target": {
+                    "max_tokens": int(max_model_tokens or 0),
+                    "max_billable_tokens": max_billable_tokens,
+                },
+            }
             stderr = (
                 stderr.rstrip()
-                + "\nCodex token budget exceeded: "
-                + f"observed {budget_exceeded['trigger_observed_tokens']} "
-                + f"of {budget_exceeded['trigger_limit']} "
-                + f"{budget_exceeded['trigger_metric']} tokens."
+                + "\nCodex token safety cap exceeded: "
+                + f"observed {safety_cap_receipt['trigger_observed_tokens']} "
+                + f"of {safety_cap_receipt['trigger_limit']} "
+                + f"{safety_cap_receipt['trigger_metric']} tokens."
+                + "\n"
+            )
+        elif budget_target_receipt is not None:
+            token_budget_receipt = {
+                **budget_target_receipt,
+                "status": "target_exceeded",
+                "enforcement": "advisory",
+                "safety_cap": {
+                    "max_tokens": hard_primary_limit,
+                    "max_billable_tokens": hard_billable_limit,
+                },
+            }
+            stderr = (
+                stderr.rstrip()
+                + "\nCodex token budget target exceeded; execution continued: "
+                + f"observed {budget_target_receipt['trigger_observed_tokens']} "
+                + f"of {budget_target_receipt['trigger_limit']} "
+                + f"{budget_target_receipt['trigger_metric']} tokens."
                 + "\n"
             )
         sdk_snapshot = (
@@ -4211,14 +4553,14 @@ class SubprocessCodexExecutor:
         )
         return CodexRunResult(
             returncode=CODEX_TOKEN_BUDGET_EXIT_CODE
-            if budget_exceeded is not None
+            if safety_cap_receipt is not None
             else int(process.returncode or (1 if outcome_error else 0)),
             events=events,
             stderr=stderr,
             final_message=final_message,
             command=tuple(command),
             sdk_snapshot=sdk_snapshot,
-            token_budget=budget_exceeded,
+            token_budget=token_budget_receipt,
         )
 
     @staticmethod
@@ -6001,16 +6343,6 @@ class LocalSkillFactoryWorker:
                     ),
                 }
             _write_json(input_dir / "token_budget_preflight.json", prompt_budget)
-            if prompt_budget.get("status") == "blocked":
-                first_turn = dict(prompt_budget.get("estimated_first_turn") or {})
-                raise ValueError(
-                    "Codex token budget cannot admit the estimated first turn: "
-                    f"required primary {first_turn.get('required_primary_tokens', 0)} / "
-                    f"declared {prompt_budget['declared']['max_model_tokens']}; "
-                    f"required billable {first_turn.get('required_billable_tokens', 0)} / "
-                    f"declared {prompt_budget['declared']['max_billable_tokens']}; "
-                    f"reasons={','.join(prompt_budget.get('blocked_reasons') or [])}"
-                )
             structured_edit_receipt: dict[str, Any] | None = None
             prototype_resource_receipt: dict[str, Any] | None = None
             root_mcp_evidence: dict[str, Any] | None = (
@@ -6138,7 +6470,11 @@ class LocalSkillFactoryWorker:
                     prompt=prompt,
                     output_dir=output_dir,
                     agent_profile=agent_profile,
-                    root_mcp=None if descriptor_working_set else root_mcp,
+                    root_mcp=_model_root_mcp_profile(
+                        assignment,
+                        root_mcp,
+                        descriptor_working_set=descriptor_working_set,
+                    ),
                 )
                 self._ensure_task_active(task_id)
                 self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
@@ -6165,9 +6501,16 @@ class LocalSkillFactoryWorker:
                 assignment,
                 feedback_items,
             )
-            if any(item.get("blocking") for item in feedback_items):
+            unresolved_feedback = _unresolved_blocking_feedback(
+                assignment,
+                feedback_items,
+                development_feedback,
+            )
+            if unresolved_feedback:
                 failure_feedback_refs = [
-                    item["feedback_id"] for item in development_feedback
+                    str(item.get("feedback_id") or "").strip()
+                    for item in unresolved_feedback
+                    if str(item.get("feedback_id") or "").strip()
                 ]
                 raise ValueError(
                     "Automation blocked by reported development feedback; candidate was not applied"
@@ -6273,6 +6616,14 @@ class LocalSkillFactoryWorker:
                             assignment,
                             workspace,
                         )
+                        changed_file_target = _changed_file_target_observation(
+                            assignment,
+                            changed_paths,
+                        )
+                        if changed_file_target:
+                            test_report.setdefault("checks", []).append(
+                                changed_file_target
+                            )
                         # Generated tests are untrusted code and may create files
                         # after the pre-test scope check.  Re-establish the source
                         # boundary before accepting the report so a side effect
@@ -6338,12 +6689,21 @@ class LocalSkillFactoryWorker:
                 failure_stage = "development_feedback"
                 repair_feedback = parse_development_feedback(codex_result.final_message)
                 clarification_questions = required_user_questions(repair_feedback)
-                development_feedback.extend(
-                    self._record_codex_development_feedback(assignment, repair_feedback)
+                repair_feedback_records = self._record_codex_development_feedback(
+                    assignment,
+                    repair_feedback,
                 )
-                if any(item.get("blocking") for item in repair_feedback):
+                development_feedback.extend(repair_feedback_records)
+                unresolved_repair_feedback = _unresolved_blocking_feedback(
+                    assignment,
+                    repair_feedback,
+                    repair_feedback_records,
+                )
+                if unresolved_repair_feedback:
                     failure_feedback_refs = [
-                        item["feedback_id"] for item in development_feedback
+                        str(item.get("feedback_id") or "").strip()
+                        for item in unresolved_repair_feedback
+                        if str(item.get("feedback_id") or "").strip()
                     ]
                     raise ValueError(
                         "Automation blocked by reported development feedback; candidate was not applied"
@@ -6923,15 +7283,17 @@ class LocalSkillFactoryWorker:
                 }
             )
         max_changed_files = int(constraints.get("max_changed_files") or len(allowed))
-        if len(changed_files) > max_changed_files:
-            raise ValueError(
-                "structured edits changed more files than max_changed_files"
-            )
         return {
             "schema": "adaos.skill_factory.structured_edit_receipt.v1",
             "strategy": "structured_edits",
             "operation_count": len(receipts),
             "changed_files": sorted(changed_files),
+            "changed_file_target": {
+                "policy": "advisory_optimization_target",
+                "target": max_changed_files,
+                "observed": len(changed_files),
+                "overrun": max(0, len(changed_files) - max_changed_files),
+            },
             "operations": receipts,
             "model_tokens": 0,
             "created_at": _now_iso(),
@@ -7047,7 +7409,40 @@ class LocalSkillFactoryWorker:
                 cancel_check=lambda: self._task_status(task_id)
                 in {"cancelled", "expired"},
             )
-        result = self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
+        token_budget = _codex_execution_token_budget(assignment)
+        executor_kwargs: dict[str, Any] = {
+            "workspace": workspace,
+            "prompt": prompt,
+            "output_dir": output_dir,
+            "assignment": dict(assignment or {}),
+            "root_mcp": root_mcp,
+            "max_model_tokens": int(token_budget.get("max_model_tokens") or 0)
+            or None,
+            "max_billable_tokens": int(
+                token_budget.get("max_billable_tokens") or 0
+            )
+            or None,
+            "token_budget_metric": str(
+                token_budget.get("metric") or "model_tokens"
+            ),
+            "cancel_check": lambda: self._task_status(task_id)
+            in {"cancelled", "expired"},
+        }
+        # Custom/local executors historically accepted only the three core
+        # arguments. Pass richer governed context when declared, while keeping
+        # that stable seam usable by tests and third-party runners.
+        signature = inspect.signature(self.executor)
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        if not accepts_kwargs:
+            executor_kwargs = {
+                key: value
+                for key, value in executor_kwargs.items()
+                if key in signature.parameters
+            }
+        result = self.executor(**executor_kwargs)
         if getattr(self.executor, "returns_structured_outcome", False):
             try:
                 normalized = outcome_message(result.final_message)
@@ -7208,6 +7603,10 @@ class LocalSkillFactoryWorker:
         service = DevelopmentFeedbackService(state_dir=self.state_dir)
         records: list[dict[str, Any]] = []
         for item in items[:8]:
+            functional_beta_deferred = _functional_beta_deferred_capability_policy(
+                assignment,
+                item,
+            )
             application_trace = (
                 dict(item.get("application_trace"))
                 if isinstance(item.get("application_trace"), Mapping)
@@ -7252,6 +7651,17 @@ class LocalSkillFactoryWorker:
                     "target_type": target_type,
                     "target_id": target_id,
                     **(
+                        {
+                            "deferred_for_stage": "functional_beta",
+                            "blocking_for_stage": "production",
+                            "defer_policy": (
+                                "linked_core_ticket_and_typed_unavailability"
+                            ),
+                        }
+                        if functional_beta_deferred
+                        else {}
+                    ),
+                    **(
                         {"clarification_questions": item["clarification_questions"]}
                         if item.get("clarification_questions")
                         else {}
@@ -7295,7 +7705,79 @@ class LocalSkillFactoryWorker:
                 actor=f"codex:{self.node_id}",
                 idempotent_replay=True,
             )
-            records.append(result["feedback"])
+            record = dict(result["feedback"])
+            if functional_beta_deferred:
+                actor = "policy:builder.functional_beta"
+                core_ref = _core_owner_ref_for_feedback(item)
+                try:
+                    qualification = (
+                        dict(record.get("classification") or {}).get(
+                            "qualification"
+                        )
+                        or {}
+                    )
+                    if record.get("status") != "promoted" and not (
+                        isinstance(qualification, Mapping)
+                        and qualification.get("status") == "qualified"
+                        and qualification.get("promotion_route") == "core"
+                    ):
+                        record = service.qualify(
+                            record["feedback_id"],
+                            owner_route="sdk_implementation",
+                            promotion_route="core",
+                            actor=actor,
+                            rationale=(
+                                "The functional-beta brief explicitly permits this "
+                                "production capability gap only as typed unavailable "
+                                "behavior backed by a durable Core Dev Ticket."
+                            ),
+                            owner_ref=core_ref,
+                        )
+                    if record.get("status") not in {"accepted", "promoted"}:
+                        record = service.transition(
+                            record["feedback_id"],
+                            status="accepted",
+                            actor=actor,
+                            reason=(
+                                "Accepted as production-blocking capability debt; "
+                                "deferred only for the functional-beta stage."
+                            ),
+                        )
+                    if record.get("status") != "promoted":
+                        promoted = service.promote(
+                            record["feedback_id"],
+                            route="qualified",
+                            actor=actor,
+                            payload={
+                                "component_ref": core_ref,
+                                "desired_contract": str(
+                                    item.get("recommendation") or ""
+                                ).strip(),
+                                "observed_limitation": str(
+                                    item.get("details")
+                                    or item.get("summary")
+                                    or ""
+                                ).strip(),
+                                # The beta candidate remains eligible for
+                                # validation, so do not mark its project tickets
+                                # as waiting_for_core.  The feedback and Core
+                                # ticket retain the dependency relation.
+                                "blocked_ticket_ids": [],
+                            },
+                        )
+                        record = dict(promoted["feedback"])
+                except Exception:
+                    # Fail closed: the caller will still see an unresolved
+                    # blocker because no promoted ticket reference is present.
+                    _log.warning(
+                        "functional-beta capability escalation failed feedback=%s",
+                        record.get("feedback_id"),
+                        exc_info=True,
+                    )
+                    latest = service.get(str(record.get("feedback_id") or ""))
+                    if latest:
+                        record = latest
+            records.append(record)
         return records
 
     def _record_validator_development_feedback(
@@ -8399,6 +8881,40 @@ class LocalSkillFactoryWorker:
         )
         return handoff
 
+    @staticmethod
+    def _prototype_resource_authorized_paths(
+        handoff: Mapping[str, Any],
+    ) -> set[str]:
+        """Return the exact files authorized by a trusted Prototype handoff.
+
+        This expands path authority, never effect authority.  The handoff is
+        acceptance-bound and already verifies that every declaration stays
+        under the owned companion skill.  Its deterministic manifest and WebUI
+        rewrites are part of the same realization even when the count exceeds
+        a package's advisory review-size target.
+        """
+
+        companion = _safe_token(handoff.get("companion_skill_id"), fallback="")
+        project_ref = str(handoff.get("project_ref") or "").strip()
+        target_id = _safe_token(project_ref.removeprefix("scenario:"), fallback="")
+        if not companion or not target_id or project_ref != f"scenario:{target_id}":
+            return set()
+        paths = {
+            f"skills/{companion}/skill.yaml",
+            f"scenarios/{target_id}/webui.json",
+        }
+        for raw in handoff.get("resources") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            relative = (
+                str(raw.get("declaration_path") or "")
+                .replace("\\", "/")
+                .strip("/")
+            )
+            if relative.startswith(f"skills/{companion}/"):
+                paths.add(relative)
+        return paths
+
     def _apply_prototype_resource_handoff(
         self,
         workspace: Path,
@@ -8969,6 +9485,23 @@ class LocalSkillFactoryWorker:
             if isinstance(prototype_resource_handoff, Mapping)
             else self._prototype_resource_handoff_from_assignment(assignment, workspace)
         )
+        if prototype_resource_handoff:
+            trusted_generated_paths = self._prototype_resource_authorized_paths(
+                prototype_resource_handoff
+            )
+            exact_changed_paths = {
+                str(item).replace("\\", "/").strip("/")
+                for item in constraints.get("exact_changed_paths") or []
+                if str(item).strip()
+            }
+            exact_changed_paths.update(
+                str(item).replace("\\", "/").strip("/")
+                for item in repair_hints.get("target_files") or []
+                if str(item).strip()
+            )
+            exact_changed_paths.update(trusted_generated_paths)
+            constraints["exact_changed_paths"] = sorted(exact_changed_paths)
+            constraints["trusted_generated_paths"] = sorted(trusted_generated_paths)
         existing_prompt_facts = (
             dict(capsule_repair_hints.get("prompt_facts") or {})
             if isinstance(capsule_repair_hints.get("prompt_facts"), Mapping)
@@ -9221,7 +9754,7 @@ This is a bounded Dev Ticket repair, not a full project implementation pass. Tre
 Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.json`, `webui.json`, `scenario.yaml`, or `skill.yaml` unless the ticket explicitly requires that manifest change. It is acceptable for a Dev Ticket repair to leave manifests untouched when the fix is in handlers, tests, resource data, comments, or scoped UI text. If the requested result needs core/API/SDK support that is unavailable to this project, do not edit source and do not patch around the limitation. Return exactly one machine-readable proposal in the final response so the trusted orchestrator can create and link the governed Core Dev Ticket. Use this bounded form (one envelope can contain several independently actionable core tasks):
 
 ```adaos-development-escalation
-{"schema":"adaos.development_escalations.v1","items":[{"kind":"core_capability_request","summary":"...","component_ref":"core:sdk.<area>","desired_contract":"...","impact":"blocker","motivation":"...","observed_limitation":"...","rejected_workarounds":[{"approach":"...","reason":"..."}]}]}
+{"schema":"adaos.development_escalations.v1","items":[{"kind":"core_capability_request|platform_defect","summary":"...","component_ref":"core:sdk.<area> or core:client.<component>","desired_contract":"...","impact":"blocker|compatibility_debt|...","motivation":"...","observed_limitation":"...","rejected_workarounds":[{"approach":"...","reason":"..."}]}]}
 ```
 
 Allowed impact values are `blocker`, `speed`, `generalization`, `contract_gap`, `observability_gap`, `lifecycle_gap`, `policy_boundary`, `compatibility_debt`, and `security_governance`. Do not create a documentation, issue, TODO, or placeholder implementation file. The orchestrator, not this task, owns ticket mutation.
@@ -9464,6 +9997,8 @@ Read `prototype-resource-handoff.json` for the reviewed resource shapes and
 pending Automation obligations. Before broad discovery, read
 `implementation-bindings.json` for exact owned-tool data sources, form selection,
 revision-aware commands, result/error behavior, caller access and upload limits.
+Read only the keys needed for the current binding and keep each command output
+below 8 KiB; do not print this file or the public SDK bundle wholesale.
 Its examples are generic binding shapes, not a UI to copy over the accepted design.
 The proposed local CRUD declarations are a
 starting point, not proof of implementation. Implement the explicit brief using
@@ -9618,15 +10153,23 @@ bookkeeping.
             else "No task-scoped Root MCP route was admitted."
         )
         if descriptor_working_set:
+            descriptor_prompt_projection = _descriptor_working_set_prompt_projection(
+                descriptor_working_set
+            )
             root_mcp_section = f"""## Prefetched descriptor working set
 
 ```json
-{json.dumps(dict(descriptor_working_set), ensure_ascii=False, indent=2, sort_keys=True)}
+{json.dumps(descriptor_prompt_projection, ensure_ascii=False, indent=2, sort_keys=True)}
 ```
 
 The trusted worker already performed the task-scoped MCP search and exact
-drill-downs above. Treat this bounded working set as authoritative evidence.
-No MCP server is exposed to this model turn; do not repeat descriptor discovery.
+drill-downs above. Treat this bounded projection as authoritative evidence.
+The complete receipt is available at
+`{(input_dir / 'descriptor-working-set.json').resolve().as_posix()}`; inspect only
+specific missing fields and never print the whole file. Do not repeat descriptor
+discovery. When the task-scoped Root route is present, its read-only Dev Ticket
+tools remain available for an exact ticket or artifact drill-down; use them only
+when the compact approved brief is insufficient.
 """
         elif root_mcp:
             root_mcp_section = f"""## Task-scoped Root MCP route
@@ -9748,7 +10291,7 @@ Implement the approved AdaOS change and focused tests in this checkout, or repor
 
 ## Approved implementation brief
 
-{brief or "Use the existing prototype and project files as the complete source of requirements."}
+{_implementation_brief_prompt(brief)}
 
 ## Current chat iteration
 
@@ -10117,6 +10660,91 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         return overlap >= MANIFEST_REWRITE_MIN_IDENTITY_OVERLAP
 
     @classmethod
+    def _is_exact_scenario_webui_mirror_edit(
+        cls,
+        *,
+        workspace: Path,
+        baseline: str,
+        path: str,
+    ) -> bool:
+        """Admit only an exact derived ``scenario.json`` WebUI mirror update.
+
+        The separate ``webui.json`` remains the guarded source of truth.  This
+        recognizes the compiler-owned inline copy without turning a large-file
+        threshold into authority over unrelated Scenario fields.
+        """
+
+        normalized = path.replace("\\", "/")
+        if Path(normalized).name != "scenario.json":
+            return False
+        webui_path = str(Path(normalized).with_name("webui.json")).replace(
+            "\\", "/"
+        )
+        try:
+            before_scenario = json.loads(
+                _git(["show", f"{baseline}:{normalized}"], cwd=workspace)
+            )
+            before_webui = json.loads(
+                _git(["show", f"{baseline}:{webui_path}"], cwd=workspace)
+            )
+            after_scenario = json.loads(
+                (workspace / normalized).read_text(encoding="utf-8")
+            )
+            after_webui = json.loads(
+                (workspace / webui_path).read_text(encoding="utf-8")
+            )
+        except (RuntimeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not all(
+            isinstance(item, Mapping)
+            for item in (before_scenario, before_webui, after_scenario, after_webui)
+        ):
+            return False
+
+        def detach_application(document: Mapping[str, Any]) -> tuple[dict[str, Any], Any]:
+            projected = copy.deepcopy(dict(document))
+            ui = projected.get("ui")
+            if not isinstance(ui, Mapping):
+                return projected, None
+            mutable_ui = copy.deepcopy(dict(ui))
+            application = mutable_ui.pop("application", None)
+            projected["ui"] = mutable_ui
+            return projected, application
+
+        before_without_app, before_application = detach_application(before_scenario)
+        after_without_app, after_application = detach_application(after_scenario)
+        before_webui_application = (
+            dict(before_webui.get("ui") or {}).get("application")
+            if isinstance(before_webui.get("ui"), Mapping)
+            else None
+        )
+        after_webui_application = (
+            dict(after_webui.get("ui") or {}).get("application")
+            if isinstance(after_webui.get("ui"), Mapping)
+            else None
+        )
+
+        def application_behavior(value: Any) -> Any:
+            if not isinstance(value, Mapping):
+                return value
+            projected = copy.deepcopy(dict(value))
+            # Scenario materialization may carry release bookkeeping that the
+            # standalone canonical WebUI intentionally omits.
+            projected.pop("version", None)
+            projected.pop("updated_at", None)
+            return projected
+
+        return bool(
+            before_application is not None
+            and after_application is not None
+            and before_without_app == after_without_app
+            and application_behavior(before_application)
+            == application_behavior(before_webui_application)
+            and application_behavior(after_application)
+            == application_behavior(after_webui_application)
+        )
+
+    @classmethod
     def _validate_manifest_rewrite_bounds(
         cls,
         assignment: Mapping[str, Any],
@@ -10191,6 +10819,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     path=path,
                     additions=additions,
                     deletions=deletions,
+                ):
+                    continue
+                if cls._is_exact_scenario_webui_mirror_edit(
+                    workspace=workspace,
+                    baseline=baseline,
+                    path=path,
                 ):
                     continue
                 violations.append(
@@ -10377,14 +11011,33 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             for item in constraints.get("exact_changed_paths") or []
             if str(item).strip()
         }
-        try:
-            max_changed_files = int(constraints.get("max_changed_files") or 0)
-        except (TypeError, ValueError):
-            max_changed_files = 0
-        if max_changed_files > 0 and len(changed_paths) > max_changed_files:
-            raise ValueError(
-                "Codex changed more files than the bounded repair admits: "
-                f"{len(changed_paths)} > {max_changed_files}"
+        handoff = self._prototype_resource_handoff_from_assignment(
+            assignment,
+            workspace,
+        ) if workspace is not None else None
+        if handoff:
+            request = dict(assignment.get("realize_request") or {})
+            artifacts = dict(request.get("artifacts") or {})
+            repair_hints = (
+                dict(artifacts.get("repair_hints") or {})
+                if isinstance(artifacts.get("repair_hints"), Mapping)
+                else {}
+            )
+            exact.update(
+                str(item).replace("\\", "/").strip("/")
+                for item in repair_hints.get("target_files") or []
+                if str(item).strip()
+            )
+            exact.update(self._prototype_resource_authorized_paths(handoff))
+        target_observation = _changed_file_target_observation(
+            assignment,
+            changed_paths,
+        )
+        if target_observation and target_observation["status"] == "exceeded":
+            _log.warning(
+                "Builder changed-file optimization target exceeded observed=%s target=%s",
+                target_observation["observed"],
+                target_observation["target"],
             )
         outside_exact = [path for path in changed_paths if exact and path not in exact]
         if outside_exact:
@@ -10552,6 +11205,98 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 "role_matrix": dict(report.get("role_matrix") or {}),
             }
         )
+
+    @staticmethod
+    def _validate_semantic_webui_source_integrity(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Keep a semantic Prototype source and its compiled UI atomic.
+
+        ``semantic_digest`` addresses the complete canonical semantic source,
+        including traceability annotations.  Allowing Automation to update
+        only ``semantic.webui.json`` leaves the next Prototype turn without a
+        digest-addressed base and used to fail much later in Builder.  Report
+        the ownership boundary during candidate validation instead.
+        """
+
+        for semantic_path in sorted(
+            workspace.glob("scenarios/*/semantic.webui.json")
+        ):
+            if not LocalSkillFactoryWorker._candidate_file(semantic_path, workspace):
+                continue
+            webui_path = semantic_path.with_name("webui.json")
+            if not webui_path.is_file():
+                continue
+            relative = semantic_path.relative_to(workspace).as_posix()
+            try:
+                semantic = _read_json(semantic_path)
+                webui = _read_json(webui_path)
+            except Exception:
+                # The general JSON validation records the parse failure.
+                continue
+            application = (
+                (webui.get("ui") or {}).get("application")
+                if isinstance(webui.get("ui"), Mapping)
+                else {}
+            )
+            desktop = (
+                application.get("desktop")
+                if isinstance(application, Mapping)
+                else {}
+            )
+            page_schema = (
+                desktop.get("pageSchema") if isinstance(desktop, Mapping) else {}
+            )
+            meta = (
+                page_schema.get("meta")
+                if isinstance(page_schema, Mapping)
+                else {}
+            )
+            builder = (
+                meta.get("builder") if isinstance(meta, Mapping) else {}
+            )
+            expected = str(
+                builder.get("semantic_digest")
+                if isinstance(builder, Mapping)
+                else ""
+            ).strip()
+            generated_by = str(webui.get("generated_by") or "").strip()
+            semantic_source = str(
+                builder.get("semantic_source")
+                if isinstance(builder, Mapping)
+                else ""
+            ).strip()
+            compiler_owned = generated_by.startswith(
+                "builder.semantic_compiler."
+            ) or semantic_source.startswith("adaos.webui.semantic.")
+            if not compiler_owned:
+                continue
+            canonical = json.dumps(
+                semantic,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            actual = "sha256:" + hashlib.sha256(canonical).hexdigest()
+            ok = bool(expected) and expected == actual
+            checks.append(
+                {
+                    "kind": "webui.semantic_source_digest.strict",
+                    "path": relative,
+                    "webui_path": webui_path.relative_to(workspace).as_posix(),
+                    "ok": ok,
+                    "expected": expected or None,
+                    "actual": actual,
+                }
+            )
+            if not ok:
+                errors.append(
+                    f"{relative}: semantic Prototype source digest {actual} does not "
+                    f"match compiled webui.json digest {expected or '<missing>'}; "
+                    "return the change to Prototype and compile both artifacts atomically"
+                )
 
     def _validate_automation_webui_authority(
         self,
@@ -10829,6 +11574,11 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         self._validate_admitted_operation_schemas(assignment, workspace, checks, errors)
         self._validate_prototype_resource_handoff(
             assignment,
+            workspace,
+            checks,
+            errors,
+        )
+        self._validate_semantic_webui_source_integrity(
             workspace,
             checks,
             errors,

@@ -135,6 +135,25 @@ def test_active_change_reconciliation_is_not_masked_by_previous_publication() ->
     )
 
 
+def test_terminal_command_uses_governed_state_during_legacy_projection_lag() -> None:
+    workflow = {
+        "active_phase": "automation",
+        "automation": {"status": "failed"},
+        "change": {
+            "change_id": "CH-prototype-repair",
+            "status": "changes_requested",
+            "gate": "prototype",
+        },
+        "governed": {"state": "prototype_editing"},
+    }
+
+    assert legacy_state(workflow) == "automation_ready"
+    assert (
+        canonical_command("cancel_change", workflow, {})
+        == "cancel_from_prototype_editing"
+    )
+
+
 def test_normative_builder_definition_is_compiled_and_explainable() -> None:
     compiled = compiled_builder_change_definition()
     report = definition_review_report(compiled)
