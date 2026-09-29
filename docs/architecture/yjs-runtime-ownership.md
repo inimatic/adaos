@@ -203,6 +203,24 @@ p95. Rebuild time was 4.175 s p50 and 4.936 s p95. These timings remain the
 input to materialization parallelism work; they are not part of the ownership
 fix.
 
+### Unchanged-projection comparison correction, 2026-09-29
+
+Runtime watchdog evidence identified a separate CPU stall in
+`yjs.json_merge`: an unchanged, nested page/catalog projection was compared on
+the room owner loop through Python recursion and repeated `YMap.get()` calls.
+One observed live stall remained in `mapping_items` for 1.109 seconds while
+the room was preparing roughly 155-157 KiB sync updates.
+
+The correction keeps all live-YDoc mutation on the owner loop, but uses native
+equality for ordinary JSON list/dict values, reuses already enumerated desired
+mapping items, and reads each current YMap branch once instead of crossing the
+Python/Rust boundary once per child. A local 327,709-character unchanged
+projection diagnostic improved from 137.7 ms median / 175.5 ms p95 in the
+least-contended pre-change run (up to 466.9/796.2 ms under concurrent runtime
+load) to 53.9 ms median / 67.7 ms p95 after the change. This is a focused
+comparison diagnostic, not an end-to-end first-paint claim. All 413 Yjs and
+projection-service regression tests passed.
+
 ### Switch-path acceptance, 2026-07-23
 
 After resolver, bootstrap, and live-apply ownership were simplified, the local
