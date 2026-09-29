@@ -62,6 +62,21 @@ def json_like_equal(current: Any, next_value: Any) -> bool:
         except Exception:
             return False
 
+    if type(current) is list and type(next_value) is list:
+        # Values read from a YMap JSON array are ordinary Python JSON
+        # containers.  Their C-level equality is materially faster than a
+        # Python recursive walk for large page/catalog projections.
+        try:
+            return current == next_value
+        except Exception:
+            return False
+
+    if type(current) is dict and type(next_value) is dict:
+        try:
+            return current == next_value
+        except Exception:
+            return False
+
     if isinstance(current, (list, tuple)) or isinstance(next_value, (list, tuple)):
         if not isinstance(current, (list, tuple)) or not isinstance(next_value, (list, tuple)):
             return False
@@ -109,17 +124,16 @@ def _attach_empty_y_map(parent_map: Any, txn: Any, key: str) -> Any | None:
     return attached if is_y_map_value(attached) else None
 
 
-def reconcile_attached_y_map(node: Any, txn: Any, next_value: Any) -> bool:
-    next_items = mapping_items(next_value)
-    if next_items is None:
-        return False
+def _reconcile_attached_y_map_items(
+    node: Any,
+    txn: Any,
+    next_items: list[tuple[str, Any]],
+) -> bool:
     changed = False
     next_keys = {key for key, _item in next_items}
-    try:
-        current_keys = tuple(str(key) for key in node.keys() if str(key))
-    except Exception:
-        current_keys = ()
-    for current_key in current_keys:
+    current_items = mapping_items(node) or []
+    current_by_key = dict(current_items)
+    for current_key in current_by_key:
         if current_key in next_keys:
             continue
         try:
@@ -129,13 +143,14 @@ def reconcile_attached_y_map(node: Any, txn: Any, next_value: Any) -> bool:
             continue
     for child_key, raw_child in next_items:
         child_items = mapping_items(raw_child)
-        try:
-            current_child = node.get(child_key)
-        except Exception:
-            current_child = None
+        current_child = current_by_key.get(child_key)
         if child_items is not None:
             if is_y_map_value(current_child):
-                if reconcile_attached_y_map(current_child, txn, raw_child):
+                if _reconcile_attached_y_map_items(
+                    current_child,
+                    txn,
+                    child_items,
+                ):
                     changed = True
                 continue
             if json_like_equal(current_child, raw_child):
@@ -155,23 +170,31 @@ def reconcile_attached_y_map(node: Any, txn: Any, next_value: Any) -> bool:
     return changed
 
 
+def reconcile_attached_y_map(node: Any, txn: Any, next_value: Any) -> bool:
+    next_items = mapping_items(next_value)
+    if next_items is None:
+        return False
+    return _reconcile_attached_y_map_items(node, txn, next_items)
+
+
 def set_map_value_if_changed(y_map: Any, txn: Any, key: str, value: Any) -> tuple[bool, str]:
     try:
         current = y_map.get(key)
     except Exception:
         current = None
-    if mapping_items(value) is not None:
+    value_items = mapping_items(value)
+    if value_items is not None:
         if is_y_map_value(current):
-            return reconcile_attached_y_map(current, txn, value), "diff"
+            return _reconcile_attached_y_map_items(current, txn, value_items), "diff"
         if json_like_equal(current, value):
             attached = _attach_empty_y_map(y_map, txn, key)
             if attached is not None:
-                reconcile_attached_y_map(attached, txn, value)
+                _reconcile_attached_y_map_items(attached, txn, value_items)
                 return True, "diff"
             return False, "diff"
         attached = _attach_empty_y_map(y_map, txn, key)
         if attached is not None:
-            reconcile_attached_y_map(attached, txn, value)
+            _reconcile_attached_y_map_items(attached, txn, value_items)
             return True, "diff"
         y_map.set(txn, key, clone_json_like(value))
         return True, "replace"
