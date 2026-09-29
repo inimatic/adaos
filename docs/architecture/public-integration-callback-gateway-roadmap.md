@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [External Integration Ingress And Public Callback Gateway](public-integration-callback-gateway.md).
 
-Last reviewed: 2026-09-25.
+Last reviewed: 2026-09-29.
 
 Implementation checkpoint (2026-09-25): EIG0's OAuth contracts and inventory,
 the EIG1 broker/loopback implementation, and the repository implementation of
@@ -11,10 +11,15 @@ EIG2's Root rendezvous, encrypted delivery, bounded retry, neutral response and
 exact Core acknowledgement are complete. The zone-aware isolated nginx/ACME
 configuration is committed for `integrations.inimatic.com` and
 `ru.integrations.inimatic.com`. Both DNS records resolve to their zone hosts;
-certificate issuance, vhost activation, WAF/rate-limit policy and a live
-Internet-to-Core proof remain deployment work. Accordingly
-`EIG2-01` and the live EIG3 items stay open; repository tests are not presented
-as external operational evidence.
+the RU TLS vhost is externally reachable, and Google has returned a real
+authorization response to its zonal URI. That run exposed an acknowledgement
+boundary defect: the browser reached the neutral page while Root timed out
+waiting for provider token exchange. Core now durably accepts and
+deterministically acknowledges the encrypted envelope before performing token
+exchange in a recoverable worker, with restart-recovery tests. WAF/rate-limit
+evidence and a post-fix live reconnect remain open. Accordingly `EIG2-01` and
+the live EIG3 items stay open; repository tests are not presented as external
+operational evidence.
 
 ## Outcome
 

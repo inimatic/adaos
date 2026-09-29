@@ -1,10 +1,10 @@
 # External Integration Ingress And Public Callback Gateway
 
-Status: target architecture. OAuth redirect materialization is the first
-delivery slice; durable webhooks and other callback classes follow only after
-the OAuth slice is proven.
+Status: target architecture with the OAuth redirect slice implemented; live
+end-to-end acceptance evidence remains in progress. Durable webhooks and other
+callback classes follow only after the OAuth slice is proven.
 
-Last reviewed: 2026-09-25.
+Last reviewed: 2026-09-29.
 
 Roadmap: [External Integration Ingress Roadmap](public-integration-callback-gateway-roadmap.md).
 Compatibility inventory: [External Integration Route Inventory](external-integration-route-inventory.md).
@@ -28,16 +28,18 @@ public_uri = materialize(IngressEndpointRevision, EnvironmentProfile)
 Applications and skills never construct this URI, use it as authority, or
 persist physical subnet and node routes in portable artifacts.
 
-The current Gmail development callback remains valid while the public gateway
-is not implemented:
+The Gmail development callback remains a supported local-development
+materialization during the public migration window:
 
 ```text
 http://127.0.0.1:8777/api/providers/google/gmail/oauth/callback
 ```
 
 It is the `local-development` materialization of the first OAuth ingress
-profile. Skills and Applications must not invent tunnels, callback ports or
-alternative public routes.
+profile. `public-connected` materializes the admitted zonal authority instead;
+the two forms do not change Application or capability identity. Skills and
+Applications must not invent tunnels, callback ports or alternative public
+routes.
 
 ## Ingress Classes
 
