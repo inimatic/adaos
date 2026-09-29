@@ -13,8 +13,11 @@ import json
 import re
 import zipfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+from jsonschema import Draft202012Validator
 
 from adaos.domain.application import Application, ApplicationRelease
 from adaos.domain.artifact_release import canonical_payload_digest
@@ -74,6 +77,18 @@ _MODEL_BY_SCHEMA: dict[str, type[CanonicalRecord]] = {
     BINDING_DELIVERY_SCHEMA: BindingDelivery,
     EVIDENCE_CLAIM_SCHEMA: EvidenceClaim,
 }
+
+
+@lru_cache(maxsize=1)
+def _application_release_validator() -> Draft202012Validator:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "abi"
+        / "semantic_registry.application_release.v1.schema.json"
+    )
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema)
 
 
 class SemanticRegistryProjectionError(ValueError):
@@ -266,6 +281,94 @@ class SemanticRegistryProjection:
             index=self._read_index(),
             registry_revision=registry_revision,
         )
+
+    def read_application_release(
+        self,
+        project_id: str,
+        project_release_digest: str,
+    ) -> dict[str, Any]:
+        """Read and verify one immutable semantic Application projection."""
+
+        project = str(project_id or "").strip()
+        digest = f"sha256:{_digest_token(project_release_digest)}"
+        if not project:
+            raise SemanticRegistryProjectionError("project_id is required")
+        index = self._read_index()
+        key = f"project:{project}@{digest}"
+        raw_entry = index["application_releases"].get(key)
+        if not isinstance(raw_entry, Mapping):
+            raise SemanticRegistryProjectionError(
+                f"semantic Application release is not indexed: {key}"
+            )
+        registry_root = Path(self.registry_root).resolve()
+        relative = Path(str(raw_entry.get("path") or ""))
+        path = (registry_root / relative).resolve()
+        if registry_root != path and registry_root not in path.parents:
+            raise SemanticRegistryProjectionError(
+                "semantic Application release path escapes registry root"
+            )
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SemanticRegistryProjectionError(
+                f"cannot read semantic Application release: {key}"
+            ) from exc
+        if not isinstance(value, Mapping):
+            raise SemanticRegistryProjectionError(
+                "semantic Application release must be an object"
+            )
+        result = dict(value)
+        errors = sorted(
+            _application_release_validator().iter_errors(result),
+            key=lambda item: list(item.absolute_path),
+        )
+        if errors:
+            first = errors[0]
+            location = ".".join(str(item) for item in first.absolute_path)
+            suffix = f" at {location}" if location else ""
+            raise SemanticRegistryProjectionError(
+                f"invalid semantic Application release{suffix}: {first.message}"
+            )
+        expected_projection = str(result["projection_digest"])
+        unsigned = dict(result)
+        unsigned.pop("projection_digest", None)
+        if canonical_payload_digest(unsigned) != expected_projection:
+            raise SemanticRegistryProjectionError(
+                "semantic Application release projection digest mismatch"
+            )
+        if (
+            result["project_id"] != project
+            or result["project_release_digest"] != digest
+            or raw_entry.get("project_id") != project
+            or raw_entry.get("project_release_digest") != digest
+            or raw_entry.get("projection_digest") != expected_projection
+            or raw_entry.get("semantic_revision_digest")
+            != result["semantic_revision_digest"]
+        ):
+            raise SemanticRegistryProjectionError(
+                "semantic Application release index metadata mismatch"
+            )
+        requirements = [
+            ApplicationRequirement.from_mapping(item).to_dict()
+            for item in result["requirements"]
+        ]
+        if len({item["requirement_ref"] for item in requirements}) != len(
+            requirements
+        ):
+            raise SemanticRegistryProjectionError(
+                "semantic Application release contains duplicate requirements"
+            )
+        result["requirements"] = requirements
+        indexed_records = index["records"]
+        for schema, digests in result["portable_artifacts"].items():
+            for record_digest in digests:
+                entry = indexed_records.get(record_digest)
+                if not isinstance(entry, Mapping) or entry.get("schema") != schema:
+                    raise SemanticRegistryProjectionError(
+                        "semantic Application release references an unindexed portable artifact: "
+                        + str(record_digest)
+                    )
+        return result
 
     def _record_path(self, digest: str) -> Path:
         token = _digest_token(digest)
@@ -675,6 +778,7 @@ class SemanticRegistryProjection:
         digests: Iterable[str] | None = None,
         application_store: ApplicationStore | None = None,
         local_publisher_ref: str | None = None,
+        import_applications: bool = True,
     ) -> dict[str, Any]:
         """Verify shared records and hydrate the node-local portable cache."""
 
@@ -730,9 +834,19 @@ class SemanticRegistryProjection:
             imported_records.append(record)
             imported.append(digest)
         catalog.put_many(imported_records)
-        application_catalog = self.import_public_applications(
-            application_store=application_store,
-            local_publisher_ref=local_publisher_ref,
+        application_catalog = (
+            self.import_public_applications(
+                application_store=application_store,
+                local_publisher_ref=local_publisher_ref,
+            )
+            if import_applications
+            else {
+                "schema": "adaos.semantic_registry.public_application_import.v1",
+                "status": "skipped",
+                "application_count": 0,
+                "release_count": 0,
+                "applications": [],
+            }
         )
         return {
             "schema": "adaos.semantic_registry.import.v1",

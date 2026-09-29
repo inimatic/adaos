@@ -10,10 +10,12 @@ distribution contracts instead of creating a semantic package manager.
 The semantic registry is already a working **publication and replication
 index**. It is not yet a complete **distribution system**.
 
-Update, 2026-09-29: `CBS10-08` closed the discovery-contract gap. The v1
-snapshot-pinned query/result ABI is implemented and tested as a read-only
-projection over the existing registry. Thin acquisition, sealed offline
-bundles, and clean-subnet distribution proofs remain open.
+Update, 2026-09-29: `CBS10-08` closed the discovery-contract gap and
+`CBS10-09` closed the cold-cache thin-resolution gap. The v1 snapshot-pinned
+query/result ABI is implemented as a read-only projection, and the thin path
+now verifies the exact semantic Application release, provenance and package
+closure before producing immutable `ApplicationResolution` records. Sealed
+offline bundles and clean-subnet install/activation proofs remain open.
 
 The following production properties are implemented and covered by tests:
 
@@ -30,13 +32,17 @@ The following production properties are implemented and covered by tests:
 - public Application catalog import creates installable product and release
   facts without activating them;
 - the Gmail clean-subnet proof exercised publication, import, native admission,
-  exact delivery selection, stable runtime selection, and auto-update.
+  exact delivery selection, stable runtime selection, and auto-update;
+- a cold local cache can now acquire only the selected portable records and the
+  exact existing ProjectRelease package closure, admit provenance/policy/
+  evidence, and emit an immutable resolution without local authority.
 
-The missing boundary is install-time acquisition. Today a subnet normally
-replicates the complete Git semantic projection, imports it wholesale, and
-then uses local catalog scans. The published `distribution.thin` and
-`distribution.resolved` objects describe intent, but neither is yet an
-executable, independently validated distribution protocol.
+The remaining missing boundary is portable offline installation and full
+clean-subnet install/activation proof. Online thin acquisition is executable,
+but it intentionally stops at `ApplicationResolution`; local provisioning,
+reviewed planning and activation stay on the established installation rails.
+The published `distribution.resolved` object still describes intent rather
+than a sealed, independently admitted offline bundle.
 
 ## Authority Findings
 
@@ -47,7 +53,7 @@ executable, independently validated distribution protocol.
 | Package bytes | existing content-addressed package store | Correct authority; semantic distribution must reference it, never copy its ownership model. |
 | Local resolution | `PortableContractCatalog` and CBS resolver/admission | Implemented after records have been imported. |
 | Online discovery | snapshot-pinned v1 query/result ABI over one verified local registry snapshot | Contract implemented; remote/selective acquisition from a cold cache remains part of thin installation. |
-| Thin installation | descriptive fields in Application projection | Gap: no snapshot-pinned query/fetch/admit pipeline. |
+| Thin installation | snapshot-pinned query plus `ThinSemanticDistributionResolver` over existing registry/package/provenance services | Resolution boundary implemented; clean-subnet install, provisioning and activation E2E remains in `CBS10-11`. |
 | Offline installation | exact package/artifact lists in Application projection | Gap: no sealed bundle manifest, carried byte closure, or offline admission receipt. |
 | Explanation | immutable v1 query result plus local resolver facts | Implemented for portable discovery with typed eligible/rejected candidates; activation explanations remain local. |
 | Revocation/federation | existing release/channel policy within one registry | Sufficient for the current single-registry proof; cross-registry conflicts and global revocation remain deferred. |
@@ -72,10 +78,10 @@ digests, reject schema drift and tampering, and assert that the query creates
 no `BindingInstance`, credential attachment, state mutation, or activation.
 This does not yet acquire a missing snapshot from a remote registry.
 
-### 2. Thin distribution is not executable
+### 2. Thin distribution — closed by CBS10-09
 
-The current projection says that registry access is required, but no runtime
-path takes a thin Application requirement set from a cold cache through:
+The runtime path now takes an exact thin Application requirement set from a
+cold cache through:
 
 ```text
 snapshot-pinned semantic query
@@ -83,11 +89,19 @@ snapshot-pinned semantic query
   -> existing exact package resolver/fetch
   -> evidence and policy admission
   -> immutable ApplicationResolution
-  -> reviewed ResolutionPlan
+  -> explicit provisioning obligations
 ```
 
-This path must preserve the established authority order. Semantic discovery
-does not select mutable local credentials or bypass the package resolver.
+The resolver verifies that the query requirement set is exactly the immutable
+Application release requirement set; selects only candidates published in the
+same release; compares the semantic and ProjectRelease package closures;
+requires the existing provenance admission; verifies fetched package bytes in
+the existing content-addressed store; and imports only selected portable
+records. It returns immutable resolutions but no local materialization. Tests
+prove that provenance rejection and package tampering fail before any
+resolution or authority is returned. Mutable credentials, local provider
+instances, state attachments, plans, locks and activation remain outside this
+boundary.
 
 ### 3. Resolved distribution is not a portable bundle
 
@@ -128,8 +142,8 @@ Complete this boundary in the existing registry and resolver:
 
 1. **Done (`CBS10-08`):** define a snapshot-pinned semantic
    query/result/explanation ABI.
-2. Implement cold-cache thin resolution as a read-only acquisition step ahead
-   of the existing resolver/admission order.
+2. **Done (`CBS10-09`):** implement cold-cache thin resolution as a verified
+   acquisition step after read-only discovery and before local provisioning.
 3. Define and implement one sealed resolved-bundle manifest that imports into
    the existing semantic catalog and package store.
 4. Prove both paths on a clean subnet with Gmail provider reuse, while creating

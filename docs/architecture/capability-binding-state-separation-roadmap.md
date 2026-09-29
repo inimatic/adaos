@@ -1009,11 +1009,21 @@ its own local account attachment and credential authority.
   index digest, verify every returned portable record, reject unknown fields,
   explain policy, evidence, dependency and environment failures, and explicitly
   prove that discovery neither activates a release nor creates local authority.
-- [ ] `[must]` `CBS10-09` Resolve a thin distribution from a cold local cache:
+- [x] `[must]` `CBS10-09` Resolve a thin distribution from a cold local cache:
   acquire and verify only the required portable records, invoke the existing
   exact package resolver/fetch path, admit evidence and policy, and only then
   create an immutable `ApplicationResolution`. Discovery remains read-only and
-  never creates local authority.
+  never creates local authority. The implemented resolver verifies the exact
+  semantic Application projection and requirement set, pins the query to the
+  registry revision/index digest, selects only records published by that exact
+  release, admits the existing release-provenance receipt, fetches and verifies
+  the exact ProjectRelease package closure into the existing content-addressed
+  store, selectively hydrates the portable cache, and returns immutable
+  resolutions with explicit pre-activation provisioning obligations. Tests
+  cover an empty package/portable cache, exclusion of an unrelated registry
+  record, provenance rejection before cache mutation, requirement substitution,
+  and tampered package bytes. No `BindingInstance`, `StateSpace`, credential,
+  `ResolutionPlan`, `WorkspaceLock`, or activation is created.
 - [ ] `[must]` `CBS10-10` Export and admit a sealed resolved portable
   distribution bundle with the exact Application, registry snapshot, package,
   semantic-artifact, and portable-evidence closure for offline use. Imported
@@ -1033,8 +1043,9 @@ its own local account attachment and credential authority.
 
 The 2026-09-29 [distribution gap audit](semantic-registry-distribution-gap-audit-2026-09-29.md)
 is the evidence basis for `CBS10-08` through `CBS10-14`. In particular, the
-existing `distribution.thin` and `distribution.resolved` fields are descriptive
-publication metadata, not yet executable installer contracts.
+`distribution.thin` is now consumed only through the verified `CBS10-09`
+resolution boundary; `distribution.resolved` is still publication metadata,
+not yet the sealed offline installer contract required by `CBS10-10`.
 
 ## Cross-Cutting Acceptance Gates
 

@@ -111,6 +111,13 @@ from .tooling import (
     lint_persistent_terminology,
     portable_bundle_digest,
 )
+from .registry_distribution import (
+    ReleaseProvenanceAdmission,
+    THIN_DISTRIBUTION_RECEIPT_SCHEMA,
+    ThinDistributionError,
+    ThinDistributionRemote,
+    ThinSemanticDistributionResolver,
+)
 
 __all__ = [
     "CBSActivationCoordinator",
@@ -157,6 +164,11 @@ __all__ = [
     "SemanticCandidate",
     "SemanticRegistryQueryError",
     "SemanticResolver",
+    "ReleaseProvenanceAdmission",
+    "THIN_DISTRIBUTION_RECEIPT_SCHEMA",
+    "ThinDistributionError",
+    "ThinDistributionRemote",
+    "ThinSemanticDistributionResolver",
     "ScriptedReservationProvider",
     "SimulationReservationProvider",
     "StateAttachmentError",
