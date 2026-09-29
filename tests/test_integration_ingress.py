@@ -51,6 +51,9 @@ class Vault:
     def delete(self, key: str, *, scope="profile") -> None:
         self.values.pop(key, None)
 
+    def list(self, *, scope="profile") -> list[dict]:
+        return [{"key": key, "meta": {}} for key in sorted(self.values)]
+
 
 def _begin(broker: IntegrationIngressBroker) -> dict:
     return broker.begin_authorization(
@@ -349,12 +352,26 @@ def test_root_routed_tool_call_selects_zonal_public_materialization() -> None:
 
 
 def test_public_delivery_returns_digest_addressed_exact_acknowledgement(monkeypatch) -> None:
-    envelope = {
-        "envelope_ref": "ingress-envelope:test",
-        "attempt_ref": "callback-attempt:test",
-        "endpoint_ref": "ingress-endpoint:google-oauth-public-us",
-        "audience": "ingress-route:google-oauth-public-us",
-    }
+    now = 2_000_000_000.0
+    envelope = RoutedIngressEnvelope.create(
+        envelope_ref="ingress-envelope:test",
+        attempt_ref="callback-attempt:test",
+        endpoint_ref="ingress-endpoint:google-oauth-public-us",
+        endpoint_revision=1,
+        profile_ref=GOOGLE_OAUTH_INGRESS_PROFILE_REF,
+        issuer_ref=GOOGLE_ISSUER_REF,
+        zone_id="us",
+        audience="ingress-route:google-oauth-public-us",
+        route_binding_ref="ingress-route:google-oauth-public-us",
+        generation=1,
+        issued_at=datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+        expires_at=datetime.fromtimestamp(now + 120, tz=timezone.utc).isoformat(),
+        algorithm="RSA-OAEP-256+A256GCM",
+        encrypted_key="e" * 32,
+        nonce="n" * 12,
+        ciphertext="ciphertext",
+        auth_tag="t" * 16,
+    ).to_dict()
 
     class Broker:
         def decrypt_routed_envelope(self, _envelope):
@@ -366,25 +383,19 @@ def test_public_delivery_returns_digest_addressed_exact_acknowledgement(monkeypa
                 "error": "",
             }
 
-    class Provider:
-        def complete_authorization(self, **_values):
-            return {"email_address": "owner@example.test"}
-
     monkeypatch.setattr(
         provider_oauth,
         "broker_from_context",
         lambda _ctx, **_kwargs: Broker(),
     )
-    monkeypatch.setattr(
-        provider_oauth.GoogleGmailProvider,
-        "from_context",
-        classmethod(lambda _cls, _ctx, **_kwargs: Provider()),
-    )
+    scheduled: list[str] = []
+    monkeypatch.setattr(provider_oauth, "_schedule_oauth_delivery", lambda _ctx, key: scheduled.append(key))
+    vault = Vault()
 
     response = asyncio.run(
         provider_oauth.deliver_oauth_ingress(
             envelope=envelope,
-            ctx=SimpleNamespace(),
+            ctx=SimpleNamespace(credential_vault=vault),
         )
     )
     acknowledgement = json.loads(response.body)
@@ -395,4 +406,55 @@ def test_public_delivery_returns_digest_addressed_exact_acknowledgement(monkeypa
     assert acknowledgement["attempt_ref"] == envelope["attempt_ref"]
     assert acknowledgement["status"] == "accepted"
     assert acknowledgement["ack_digest"].startswith("sha256:")
+    assert len(scheduled) == 1
+
+    repeated = asyncio.run(
+        provider_oauth.deliver_oauth_ingress(
+            envelope=envelope,
+            ctx=SimpleNamespace(credential_vault=vault),
+        )
+    )
+    assert json.loads(repeated.body) == acknowledgement
+    assert len(scheduled) == 2
+
+
+def test_pending_public_delivery_is_recovered_after_restart(monkeypatch) -> None:
+    now = 2_000_000_000.0
+    envelope = RoutedIngressEnvelope.create(
+        envelope_ref="ingress-envelope:recover",
+        attempt_ref="callback-attempt:recover",
+        endpoint_ref="ingress-endpoint:google-oauth-public-us",
+        endpoint_revision=1,
+        profile_ref=GOOGLE_OAUTH_INGRESS_PROFILE_REF,
+        issuer_ref=GOOGLE_ISSUER_REF,
+        zone_id="us",
+        audience="ingress-route:google-oauth-public-us",
+        route_binding_ref="ingress-route:google-oauth-public-us",
+        generation=1,
+        issued_at=datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+        expires_at=datetime.fromtimestamp(now + 120, tz=timezone.utc).isoformat(),
+        algorithm="RSA-OAEP-256+A256GCM",
+        encrypted_key="e" * 32,
+        nonce="n" * 12,
+        ciphertext="ciphertext",
+        auth_tag="t" * 16,
+    ).to_dict()
+    vault = Vault()
+    store = provider_oauth.OAuthIngressDeliveryStore(vault, clock=lambda: now)
+    accepted = store.accept(envelope)
+    scheduled: list[str] = []
+    monkeypatch.setattr(provider_oauth, "_delivery_store", lambda _ctx: store)
+    monkeypatch.setattr(provider_oauth, "_schedule_oauth_delivery", lambda _ctx, key: scheduled.append(key))
+
+    provider_oauth.schedule_pending_oauth_ingress_recovery(
+        SimpleNamespace(credential_vault=vault)
+    )
+    for _ in range(100):
+        if scheduled:
+            break
+        import time
+
+        time.sleep(0.001)
+
+    assert scheduled == [accepted["delivery_key"]]
 

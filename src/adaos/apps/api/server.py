@@ -1627,6 +1627,15 @@ async def _runtime_context(app: FastAPI):
         app.state.restart_marker = _consume_restart_marker(os.getenv("ADAOS_SELF_BASE_URL"))
         app.state.realtime_sidecar_proc = None
         app.state.status_registry = app.state.ctx.status_registry
+
+        # Public OAuth ingress acknowledges only after Core has durably stored
+        # the encrypted delivery.  Resume any accepted delivery outside the
+        # startup critical path; provider I/O must never delay first paint.
+        from adaos.apps.api.provider_oauth import (
+            schedule_pending_oauth_ingress_recovery,
+        )
+
+        schedule_pending_oauth_ingress_recovery(app.state.ctx)
     except Exception:
         pass
 
