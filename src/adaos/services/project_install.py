@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -148,6 +149,31 @@ def ensure_workspace_project_materialized(ctx: Any, project_id: str) -> None:
         raise ProjectInstallError("Project path escapes workspace")
     if (project_root / "project.yaml").is_file():
         return
+    # Project manifests live in the same registry workspace as scenarios and
+    # skills.  A clean base directory has no checkout yet, so sparse-add alone
+    # would only create a partial ``.git/info/sparse-checkout`` directory and
+    # leave the required Project unavailable.  Establish the managed registry
+    # checkout before asking for the Project subpath.
+    settings = getattr(ctx, "settings", None)
+    registry_url = str(
+        os.getenv("ADAOS_WORKSPACE_REGISTRY_REPO")
+        or getattr(settings, "scenarios_monorepo_url", None)
+        or getattr(settings, "skills_monorepo_url", None)
+        or ""
+    ).strip()
+    registry_branch = str(
+        os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH")
+        or getattr(settings, "scenarios_monorepo_branch", None)
+        or getattr(settings, "skills_monorepo_branch", None)
+        or "main"
+    ).strip()
+    ensure_repo = getattr(getattr(ctx, "git", None), "ensure_repo", None)
+    if callable(ensure_repo) and registry_url:
+        ensure_repo(
+            str(workspace_root),
+            registry_url,
+            branch=registry_branch or "main",
+        )
     sparse_add = getattr(getattr(ctx, "git", None), "sparse_add", None)
     if callable(sparse_add):
         sparse_add(str(workspace_root), f"projects/{project_id}")

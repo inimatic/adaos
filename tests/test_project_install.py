@@ -40,11 +40,14 @@ def test_project_install_materializes_project_manifest_from_sparse_checkout(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, ...]] = []
 
     class _Git:
+        def ensure_repo(self, root: str, url: str, branch: str | None = None) -> None:
+            calls.append(("ensure", root, url, str(branch or "")))
+
         def sparse_add(self, root: str, path: str) -> None:
-            calls.append((root, path))
+            calls.append(("sparse", root, path))
             project = workspace / "projects" / "web_desktop"
             project.mkdir(parents=True)
             (project / "project.yaml").write_text(
@@ -73,11 +76,23 @@ def test_project_install_materializes_project_manifest_from_sparse_checkout(
     ctx = SimpleNamespace(
         paths=SimpleNamespace(workspace_dir=lambda: workspace),
         git=_Git(),
+        settings=SimpleNamespace(
+            scenarios_monorepo_url="https://example.test/registry.git",
+            scenarios_monorepo_branch="main",
+        ),
     )
 
     ensure_workspace_project_materialized(ctx, "web_desktop")
 
-    assert calls == [(str(workspace.resolve()), "projects/web_desktop")]
+    assert calls == [
+        (
+            "ensure",
+            str(workspace.resolve()),
+            "https://example.test/registry.git",
+            "main",
+        ),
+        ("sparse", str(workspace.resolve()), "projects/web_desktop"),
+    ]
     assert (workspace / "projects" / "web_desktop" / "project.yaml").is_file()
 
 

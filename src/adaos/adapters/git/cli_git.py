@@ -211,6 +211,8 @@ def _rebuild_workspace_index(cwd: Optional[StrOrPath], details: str) -> bool:
             cwd=str(Path(cwd)),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_s,
         )
     except subprocess.TimeoutExpired as exc:
@@ -230,7 +232,15 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
     timeout_s = _git_command_timeout_s()
     with _git_repo_lock(cwd):
         try:
-            p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
+            p = subprocess.run(
+                ["git", *args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_s,
+            )
         except subprocess.TimeoutExpired as exc:
             raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
         if p.returncode != 0:
@@ -241,7 +251,15 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
                 details = f"{details}\n{stdout}".strip()
             if _clear_stale_workspace_index_lock(cwd, details):
                 try:
-                    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
+                    p = subprocess.run(
+                        ["git", *args],
+                        cwd=cwd,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=timeout_s,
+                    )
                 except subprocess.TimeoutExpired as exc:
                     raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
             if p.returncode != 0:
@@ -252,7 +270,15 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
                     details = f"{details}\n{stdout}".strip()
                 if _rebuild_workspace_index(cwd, details):
                     try:
-                        p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
+                        p = subprocess.run(
+                            ["git", *args],
+                            cwd=cwd,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=timeout_s,
+                        )
                     except subprocess.TimeoutExpired as exc:
                         raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
     # TODO Проверить, git нет, но папка не пустая. Вместо операции c git даем дружественную ошибку
@@ -633,8 +659,12 @@ class CliGitClient(GitClient):
         d = Path(dir)
         d.mkdir(parents=True, exist_ok=True)
         git_dir = d / ".git"
-        managed_repo_created = not git_dir.exists()
-        if not git_dir.exists():
+        # A failed/legacy sparse-add can leave only .git/info behind. Treat
+        # that as an incomplete checkout and repair it in place instead of
+        # assuming that any directory named .git is a usable repository.
+        repo_ready = (git_dir / "HEAD").is_file() and (git_dir / "config").is_file()
+        managed_repo_created = not repo_ready
+        if not repo_ready:
             # Prefer clone into empty directory; if directory is non-empty, fall back to init+fetch
             try:
                 args = ["-c", "core.autocrlf=false", "clone", url, str(d)]

@@ -22,6 +22,42 @@ def _git_available() -> bool:
 
 
 @pytest.mark.skipif(not _git_available(), reason="git is not available")
+def test_ensure_repo_repairs_partial_sparse_metadata(tmp_path):
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    dest = tmp_path / "dest"
+
+    _run(["git", "init", "--bare", str(remote)], cwd=tmp_path)
+    _run(["git", "clone", str(remote), str(seed)], cwd=tmp_path)
+    env = dict(**__import__("os").environ)
+    env.setdefault("GIT_AUTHOR_NAME", "adaos")
+    env.setdefault("GIT_AUTHOR_EMAIL", "adaos@example.local")
+    env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
+    env.setdefault("GIT_COMMITTER_EMAIL", env["GIT_AUTHOR_EMAIL"])
+    (seed / "registry.json").write_text(
+        '{"version": 1, "title": "📦"}\n', encoding="utf-8"
+    )
+    _run(["git", "add", "."], cwd=seed, env=env)
+    _run(["git", "commit", "-m", "init"], cwd=seed, env=env)
+    _run(["git", "branch", "-M", "main"], cwd=seed, env=env)
+    _run(["git", "push", "-u", "origin", "main"], cwd=seed, env=env)
+    _run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=remote, env=env)
+
+    # This is the footprint left by the historical sparse-add-before-clone
+    # path: .git exists, but it is not a repository.
+    info = dest / ".git" / "info"
+    info.mkdir(parents=True)
+    (info / "sparse-checkout").write_text("projects/web_desktop\n", encoding="utf-8")
+
+    client = CliGitClient(depth=0)
+    client.ensure_repo(dest, str(remote), branch="main")
+
+    assert (dest / ".git" / "HEAD").is_file()
+    assert (dest / ".git" / "config").is_file()
+    assert client.show(dest, "HEAD:registry.json") == '{"version": 1, "title": "📦"}'
+
+
+@pytest.mark.skipif(not _git_available(), reason="git is not available")
 def test_pull_works_without_upstream(tmp_path):
     """
     Reproduce the common case where a repo is initialized in-place (non-empty dest),
