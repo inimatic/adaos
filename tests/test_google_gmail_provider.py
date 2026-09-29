@@ -930,6 +930,76 @@ def test_provider_refreshes_expired_token_and_updates_redacted_account_generatio
     assert any("new-access" in value for value in vault.values.values())
 
 
+def test_provider_coalesces_concurrent_refresh_for_one_connected_account(
+    tmp_path: Path,
+) -> None:
+    now = [2_000_000_000.0]
+    provider, _vault, _transport, release = _provider(
+        tmp_path,
+        [
+            FakeResponse(
+                200,
+                {
+                    "access_token": "old-access",
+                    "refresh_token": "refresh-secret",
+                    "scope": GMAIL_MODIFY_SCOPE,
+                    "expires_in": 1,
+                },
+            ),
+            FakeResponse(200, {"emailAddress": "owner@example.test"}),
+        ],
+        clock=lambda: now[0],
+    )
+    start = provider.begin_authorization(
+        application_id="gmail_mail_client",
+        release_digest=release.release_digest,
+        subject_ref="user:owner",
+    )
+    provider.complete_authorization(
+        state=parse_qs(urlparse(start["authorization_url"]).query)["state"][0],
+        code="code",
+    )
+    now[0] += 100.0
+    refresh_entered = threading.Event()
+    allow_refresh = threading.Event()
+    refresh_count = [0]
+
+    def refresh(credential):
+        refresh_count[0] += 1
+        refresh_entered.set()
+        assert allow_refresh.wait(timeout=2.0)
+        return {
+            **credential,
+            "access_token": "new-access",
+            "expires_at": now[0] + 3600,
+            "updated_at": now[0],
+        }
+
+    provider._refresh = refresh
+
+    def authorize():
+        return provider._authorized_credential(
+            application_id="gmail_mail_client",
+            release_digest=release.release_digest,
+            subject_ref="user:owner",
+            account_id="google.gmail",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(authorize)
+        second = executor.submit(authorize)
+        assert refresh_entered.wait(timeout=2.0)
+        allow_refresh.set()
+        first_credential, first_account = first.result(timeout=2.0)
+        second_credential, second_account = second.result(timeout=2.0)
+
+    assert refresh_count == [1]
+    assert first_credential["access_token"] == "new-access"
+    assert second_credential["access_token"] == "new-access"
+    assert first_account["revision"] == 2
+    assert second_account["revision"] == 2
+
+
 def test_trial_release_compiles_connected_account_setup_from_immutable_declarations(
     tmp_path: Path,
 ) -> None:

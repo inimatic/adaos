@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 from typing import Any, Callable, Mapping, Protocol
 from urllib.parse import quote, urlencode
@@ -25,6 +26,7 @@ from urllib.parse import quote, urlencode
 import requests
 
 from adaos.services.applications import (
+    ApplicationAccessError,
     ApplicationAccessManagementService,
     get_application_service,
 )
@@ -73,6 +75,20 @@ _OPERATIONS = frozenset(
         "trash_message",
     }
 )
+
+
+# One provider credential is shared by every explicitly attached Application.
+# Initial page materialization can invoke several read projections at once, so
+# token refresh must be single-flight for that credential.  Without this
+# boundary, concurrent calls can all refresh the same token and then race the
+# optimistic revision of one Application's redacted connected-account record.
+_CREDENTIAL_REFRESH_LOCKS_GUARD = threading.Lock()
+_CREDENTIAL_REFRESH_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _credential_refresh_lock(account_key: str) -> threading.Lock:
+    with _CREDENTIAL_REFRESH_LOCKS_GUARD:
+        return _CREDENTIAL_REFRESH_LOCKS.setdefault(account_key, threading.Lock())
 
 
 class GoogleGmailProviderError(RuntimeError):
@@ -978,51 +994,93 @@ class GoogleGmailProvider:
         declared_account_id = self._declared_account_id(declaration)
         if account_id != declared_account_id:
             raise GoogleGmailProviderError("gmail_account_not_declared")
-        account = next(
-            (
-                item
-                for item in self.access.connected_accounts(
-                    application_id, subject_ref=subject_ref
-                )
-                if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
-                and item.get("account_id") == account_id
-            ),
-            None,
-        )
-        if account is None or account.get("status") not in {"connected", "expired"}:
-            raise GoogleGmailProviderError("gmail_account_not_connected")
         account_key = self._account_key(subject_ref, account_id)
-        credential = self._vault_get_json(account_key)
-        identity = {
-            "schema": "adaos.provider.google.gmail.credential.v1",
-            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
-            "subject_ref": subject_ref,
-            "account_id": account_id,
-        }
-        if credential is None or any(
-            credential.get(key) != value for key, value in identity.items()
-        ):
-            raise GoogleGmailProviderError("gmail_reconnect_required")
-        if GMAIL_MODIFY_SCOPE not in set(credential.get("scopes") or ()):
-            raise GoogleGmailProviderError("gmail_required_scope_missing")
-        if float(credential.get("expires_at") or 0.0) <= float(self.clock()) + _REFRESH_SKEW_S:
-            credential = self._refresh(credential)
-            self._vault_put_json(account_key, credential)
-            account = self.access.put_connected_account(
-                application_id,
-                {
-                    "release_digest": release_digest,
-                    "account_id": account_id,
-                    "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
-                    "subject_ref": subject_ref,
-                    "mode": "delegated_user",
-                    "scopes": [GMAIL_MODIFY_SCOPE],
-                    "status": "connected",
-                    "token_expires_at": _utc_iso(float(credential["expires_at"])),
-                },
-                expected_revision=int(account["revision"]),
-                candidate_permission_profile=candidate_permission_profile,
+        with _credential_refresh_lock(account_key):
+            # Re-read both records inside the single-flight boundary.  A
+            # preceding page projection may already have refreshed the shared
+            # credential while this invocation was waiting for the lock.
+            account = next(
+                (
+                    item
+                    for item in self.access.connected_accounts(
+                        application_id, subject_ref=subject_ref
+                    )
+                    if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                    and item.get("account_id") == account_id
+                ),
+                None,
             )
+            if account is None or account.get("status") not in {
+                "connected",
+                "expired",
+            }:
+                raise GoogleGmailProviderError("gmail_account_not_connected")
+            credential = self._vault_get_json(account_key)
+            identity = {
+                "schema": "adaos.provider.google.gmail.credential.v1",
+                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "subject_ref": subject_ref,
+                "account_id": account_id,
+            }
+            if credential is None or any(
+                credential.get(key) != value for key, value in identity.items()
+            ):
+                raise GoogleGmailProviderError("gmail_reconnect_required")
+            if GMAIL_MODIFY_SCOPE not in set(credential.get("scopes") or ()):
+                raise GoogleGmailProviderError("gmail_required_scope_missing")
+            if (
+                float(credential.get("expires_at") or 0.0)
+                <= float(self.clock()) + _REFRESH_SKEW_S
+            ):
+                credential = self._refresh(credential)
+                self._vault_put_json(account_key, credential)
+
+            # An attached consumer can retain the expiry of the token that was
+            # current when it attached even though another consumer refreshed
+            # the same provider-owned credential.  Reconcile only the redacted
+            # local projection; the credential remains singular and Core-owned.
+            token_expires_at = _utc_iso(float(credential["expires_at"]))
+            if (
+                account.get("status") != "connected"
+                or account.get("token_expires_at") != token_expires_at
+            ):
+                try:
+                    account = self.access.put_connected_account(
+                        application_id,
+                        {
+                            "release_digest": release_digest,
+                            "account_id": account_id,
+                            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                            "subject_ref": subject_ref,
+                            "mode": "delegated_user",
+                            "scopes": [GMAIL_MODIFY_SCOPE],
+                            "status": "connected",
+                            "token_expires_at": token_expires_at,
+                        },
+                        expected_revision=int(account["revision"]),
+                        candidate_permission_profile=candidate_permission_profile,
+                    )
+                except ApplicationAccessError:
+                    # A second process may have committed the same projection.
+                    # Accept only a now-current winner; any other conflict is a
+                    # real authority change and remains fail-closed.
+                    winner = next(
+                        (
+                            item
+                            for item in self.access.connected_accounts(
+                                application_id, subject_ref=subject_ref
+                            )
+                            if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                            and item.get("account_id") == account_id
+                        ),
+                        None,
+                    )
+                    if not winner or (
+                        winner.get("status") != "connected"
+                        or winner.get("token_expires_at") != token_expires_at
+                    ):
+                        raise
+                    account = winner
         return credential, account
 
     @staticmethod
