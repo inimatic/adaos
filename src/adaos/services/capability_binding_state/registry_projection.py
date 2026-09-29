@@ -245,6 +245,28 @@ class SemanticRegistryProjection:
             )
         return _validate_application_catalog(value)
 
+    def query(
+        self,
+        request: Mapping[str, Any],
+        *,
+        registry_revision: str,
+    ) -> dict[str, Any]:
+        """Discover portable candidates at one exact registry snapshot.
+
+        Querying is deliberately read-only. It does not hydrate the local
+        catalog, fetch package bytes, create installation-local identities, or
+        authorize activation.
+        """
+
+        from .registry_query import execute_semantic_registry_query
+
+        return execute_semantic_registry_query(
+            request,
+            registry_root=Path(self.registry_root),
+            index=self._read_index(),
+            registry_revision=registry_revision,
+        )
+
     def _record_path(self, digest: str) -> Path:
         token = _digest_token(digest)
         return self.root / "records" / "sha256" / token[:2] / f"{token}.json"

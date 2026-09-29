@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/semantic_registry.query.v1.schema.json",
+  "title": "AdaOS snapshot-pinned semantic registry query v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "query_ref",
+    "snapshot",
+    "requirements",
+    "environment_profile",
+    "target_mode",
+    "policy_inputs",
+    "evidence_inputs"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.semantic_registry.query.v1" },
+    "query_ref": { "type": "string", "pattern": "^registry-query:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$" },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry_revision", "index_digest"],
+      "properties": {
+        "registry_revision": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "index_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": { "$ref": "https://adaos.dev/abi/application.requirement.v1.schema.json" }
+    },
+    "environment_profile": { "$ref": "https://adaos.dev/abi/environment.profile.v1.schema.json" },
+    "target_mode": { "enum": ["simulation", "sandbox", "production"] },
+    "policy_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_publisher_refs", "denied_publisher_refs", "required_authorities"],
+      "properties": {
+        "allowed_publisher_refs": { "$ref": "#/$defs/textSet" },
+        "denied_publisher_refs": { "$ref": "#/$defs/textSet" },
+        "required_authorities": { "$ref": "#/$defs/textSet" }
+      }
+    },
+    "evidence_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["as_of", "required_claim_kinds", "accepted_results", "dependency_observations"],
+      "properties": {
+        "as_of": { "type": "string", "format": "date-time" },
+        "required_claim_kinds": {
+          "type": "array",
+          "items": { "enum": ["capability_conformance", "state_compatibility"] },
+          "uniqueItems": true
+        },
+        "accepted_results": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["verified", "incompatible"] },
+          "uniqueItems": true
+        },
+        "dependency_observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref"],
+            "properties": {
+              "ref": { "type": "string", "minLength": 1 },
+              "observed_version": { "type": "string", "minLength": 1 },
+              "fingerprint": { "type": "string", "minLength": 1 }
+            },
+            "anyOf": [
+              { "required": ["observed_version"] },
+              { "required": ["fingerprint"] }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "textSet": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  }
+}

@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/semantic_registry.query_result.v1.schema.json",
+  "title": "AdaOS snapshot-pinned semantic registry query result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "query_ref",
+    "query_digest",
+    "snapshot",
+    "status",
+    "requirements",
+    "record_digests",
+    "application_releases",
+    "activation_performed",
+    "local_authority_created",
+    "result_digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.semantic_registry.query_result.v1" },
+    "query_ref": { "type": "string", "pattern": "^registry-query:" },
+    "query_digest": { "$ref": "#/$defs/digest" },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry_revision", "index_digest"],
+      "properties": {
+        "registry_revision": { "type": "string", "minLength": 1 },
+        "index_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "status": { "enum": ["matched", "partial", "unmatched"] },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement_ref", "requirement_digest", "status", "candidates", "rejections"],
+        "properties": {
+          "requirement_ref": { "type": "string", "pattern": "^requirement:" },
+          "requirement_digest": { "$ref": "#/$defs/digest" },
+          "status": { "enum": ["matched", "unmatched"] },
+          "candidates": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/candidate" }
+          },
+          "rejections": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/rejection" }
+          }
+        }
+      }
+    },
+    "record_digests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/digest" },
+      "uniqueItems": true
+    },
+    "application_releases": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/applicationRelease" }
+    },
+    "activation_performed": { "const": false },
+    "local_authority_created": { "const": false },
+    "result_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "contractRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "version", "digest"],
+      "properties": {
+        "ref": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "bindingRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "version", "digest"],
+      "properties": {
+        "ref": { "type": "string", "pattern": "^binding-definition:" },
+        "version": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "deliveryRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "binding_definition_digest", "logical_entrypoint", "package"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/digest" },
+        "binding_definition_digest": { "$ref": "#/$defs/digest" },
+        "logical_entrypoint": { "type": "string", "minLength": 1 },
+        "package": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "version", "digest"],
+          "properties": {
+            "kind": { "enum": ["skill", "scenario"] },
+            "id": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 },
+            "digest": { "$ref": "#/$defs/digest" }
+          }
+        }
+      }
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_ref", "claim_kind", "claim_digest", "status"],
+      "properties": {
+        "claim_ref": { "type": "string", "pattern": "^evidence-claim:" },
+        "claim_kind": { "enum": ["capability_conformance", "state_compatibility"] },
+        "claim_digest": { "$ref": "#/$defs/digest" },
+        "status": { "enum": ["admissible", "stale_allowed"] }
+      }
+    },
+    "applicationRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["application_ref", "project_id", "version", "project_release_digest", "semantic_revision_digest", "projection_digest"],
+      "properties": {
+        "application_ref": { "type": "string", "minLength": 1 },
+        "project_id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "project_release_digest": { "$ref": "#/$defs/digest" },
+        "semantic_revision_digest": { "$ref": "#/$defs/digest" },
+        "projection_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_digest", "capability_contract", "supporting_contracts", "state_contracts", "binding_definition", "delivery", "evidence", "publisher_release_digests", "explanation"],
+      "properties": {
+        "candidate_digest": { "$ref": "#/$defs/digest" },
+        "capability_contract": { "$ref": "#/$defs/contractRef" },
+        "supporting_contracts": { "type": "array", "items": { "$ref": "#/$defs/contractRef" } },
+        "state_contracts": { "type": "array", "items": { "$ref": "#/$defs/contractRef" } },
+        "binding_definition": { "$ref": "#/$defs/bindingRef" },
+        "delivery": { "$ref": "#/$defs/deliveryRef" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidenceRef" } },
+        "publisher_release_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" }, "uniqueItems": true },
+        "explanation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "rejection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "environment_mismatch",
+            "missing_authority",
+            "unmet_requirement",
+            "missing_capability_dependency",
+            "environment_constraint",
+            "missing_ingress_guarantee",
+            "incompatible_state_support",
+            "no_binding_definition",
+            "no_binding_delivery",
+            "publisher_denied",
+            "missing_evidence",
+            "stale_evidence",
+            "evidence_dependency_unobserved",
+            "evidence_dependency_mismatch",
+            "evidence_environment_mismatch",
+            "evidence_incompatible"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1 },
+        "subject_ref": { "type": "string", "minLength": 1 },
+        "subject_digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

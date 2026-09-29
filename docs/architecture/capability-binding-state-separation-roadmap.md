@@ -1001,10 +1001,14 @@ its own local account attachment and credential authority.
   connected-account attachment and an injected production recovery exercise
   before this item is complete; credentials are intentionally neither copied
   from the publisher nor published in Git.
-- [ ] `[must]` `CBS10-08` Define a fail-closed, snapshot-pinned registry
+- [x] `[must]` `CBS10-08` Define a fail-closed, snapshot-pinned registry
   query/result/explanation ABI for capability ranges, state requirements,
   environment/policy/evidence inputs, eligible contracts, bindings, exact
-  deliveries, publishers, and typed rejection reasons.
+  deliveries, publishers, and typed rejection reasons. The v1 request/result
+  schemas and read-only projection query pin both Git revision and semantic
+  index digest, verify every returned portable record, reject unknown fields,
+  explain policy, evidence, dependency and environment failures, and explicitly
+  prove that discovery neither activates a release nor creates local authority.
 - [ ] `[must]` `CBS10-09` Resolve a thin distribution from a cold local cache:
   acquire and verify only the required portable records, invoke the existing
   exact package resolver/fetch path, admit evidence and policy, and only then

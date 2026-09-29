@@ -10,6 +10,11 @@ distribution contracts instead of creating a semantic package manager.
 The semantic registry is already a working **publication and replication
 index**. It is not yet a complete **distribution system**.
 
+Update, 2026-09-29: `CBS10-08` closed the discovery-contract gap. The v1
+snapshot-pinned query/result ABI is implemented and tested as a read-only
+projection over the existing registry. Thin acquisition, sealed offline
+bundles, and clean-subnet distribution proofs remain open.
+
 The following production properties are implemented and covered by tests:
 
 - exact admitted Application releases publish content-addressed portable CBS
@@ -41,18 +46,18 @@ executable, independently validated distribution protocol.
 | Application publication | existing governed Application/source publish commit | Implemented; no second publisher path is needed. |
 | Package bytes | existing content-addressed package store | Correct authority; semantic distribution must reference it, never copy its ownership model. |
 | Local resolution | `PortableContractCatalog` and CBS resolver/admission | Implemented after records have been imported. |
-| Online discovery | none with a versioned request/result contract | Gap: clients must already possess the replicated index. |
+| Online discovery | snapshot-pinned v1 query/result ABI over one verified local registry snapshot | Contract implemented; remote/selective acquisition from a cold cache remains part of thin installation. |
 | Thin installation | descriptive fields in Application projection | Gap: no snapshot-pinned query/fetch/admit pipeline. |
 | Offline installation | exact package/artifact lists in Application projection | Gap: no sealed bundle manifest, carried byte closure, or offline admission receipt. |
-| Explanation | local resolver facts and logs | Gap: no portable query result that preserves eligible/rejected candidates and reasons. |
+| Explanation | immutable v1 query result plus local resolver facts | Implemented for portable discovery with typed eligible/rejected candidates; activation explanations remain local. |
 | Revocation/federation | existing release/channel policy within one registry | Sufficient for the current single-registry proof; cross-registry conflicts and global revocation remain deferred. |
 
 ## Contract Gaps
 
-### 1. Registry query is not a protocol
+### 1. Registry query protocol — closed by CBS10-08
 
-The shared index can be read, but there is no fail-closed request/result schema
-for:
+The shared index now has fail-closed request/result schemas and a read-only
+execution path for:
 
 - capability ref plus compatible contract range;
 - optional StateContract requirements;
@@ -61,8 +66,11 @@ for:
 - required portable evidence and observed freshness dependencies;
 - exact registry snapshot/commit and rejection explanations.
 
-A query result must contain immutable references only. It must not create a
-`BindingInstance`, attach credentials, mutate state, or activate a release.
+The result contains immutable references and typed rejection explanations
+only. Tests pin the Git revision and index digest, validate portable record
+digests, reject schema drift and tampering, and assert that the query creates
+no `BindingInstance`, credential attachment, state mutation, or activation.
+This does not yet acquire a missing snapshot from a remote registry.
 
 ### 2. Thin distribution is not executable
 
@@ -118,7 +126,8 @@ after query correctness and measured cold-start cost.
 
 Complete this boundary in the existing registry and resolver:
 
-1. Define a snapshot-pinned semantic query/result/explanation ABI.
+1. **Done (`CBS10-08`):** define a snapshot-pinned semantic
+   query/result/explanation ABI.
 2. Implement cold-cache thin resolution as a read-only acquisition step ahead
    of the existing resolver/admission order.
 3. Define and implement one sealed resolved-bundle manifest that imports into

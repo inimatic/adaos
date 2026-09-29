@@ -37,6 +37,12 @@ from .resolver import (
     SemanticCandidate,
     SemanticResolver,
 )
+from .registry_query import (
+    SEMANTIC_REGISTRY_QUERY_RESULT_SCHEMA,
+    SEMANTIC_REGISTRY_QUERY_SCHEMA,
+    SemanticRegistryQueryError,
+    execute_semantic_registry_query,
+)
 from .telemetry import (
     CBSBenchmarkTelemetryConflict,
     CBSBenchmarkTelemetryStore,
@@ -146,7 +152,10 @@ __all__ = [
     "ResolutionPlanCache",
     "ResolutionPlanner",
     "ResolutionRejection",
+    "SEMANTIC_REGISTRY_QUERY_RESULT_SCHEMA",
+    "SEMANTIC_REGISTRY_QUERY_SCHEMA",
     "SemanticCandidate",
+    "SemanticRegistryQueryError",
     "SemanticResolver",
     "ScriptedReservationProvider",
     "SimulationReservationProvider",
@@ -158,6 +167,7 @@ __all__ = [
     "build_reverification_claim",
     "dependency_evidence_impact",
     "explain_evidence_assessment",
+    "execute_semantic_registry_query",
     "redacted_graph_record",
     "stage_authority_transition",
     "validate_state_attachment",
