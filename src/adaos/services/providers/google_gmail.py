@@ -8,6 +8,7 @@ than one Application without copying credentials into either package.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email import policy as email_policy
@@ -84,11 +85,84 @@ _OPERATIONS = frozenset(
 # optimistic revision of one Application's redacted connected-account record.
 _CREDENTIAL_REFRESH_LOCKS_GUARD = threading.Lock()
 _CREDENTIAL_REFRESH_LOCKS: dict[str, threading.Lock] = {}
+# A first paint executes several distinct Gmail projections concurrently. They
+# must each validate their Application release, but they can share one
+# successful credential admission from the same burst. This one-second cache
+# is deliberately much shorter than provider data caches: it coalesces disk and
+# OS-keyring work without turning account disconnect/revocation into a lasting
+# authorization cache.
+_CREDENTIAL_ADMISSION_CACHE_TTL_S = 1.0
+_CREDENTIAL_ADMISSION_CACHE_MAX_ENTRIES = 64
+_CREDENTIAL_ADMISSION_CACHE_GUARD = threading.RLock()
+_CREDENTIAL_ADMISSION_CACHE: dict[
+    tuple[str, ...], tuple[float, dict[str, Any], dict[str, Any]]
+] = {}
 
 
 def _credential_refresh_lock(account_key: str) -> threading.Lock:
     with _CREDENTIAL_REFRESH_LOCKS_GUARD:
         return _CREDENTIAL_REFRESH_LOCKS.setdefault(account_key, threading.Lock())
+
+
+def _credential_admission_cache_key(
+    provider: "GoogleGmailProvider",
+    *,
+    application_id: str,
+    release_digest: str,
+    subject_ref: str,
+    account_id: str,
+    candidate_permission_profile: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    store = getattr(provider.applications, "store", None)
+    authority = str(getattr(store, "state_dir", "") or "")
+    permission_digest = hashlib.sha256(
+        json.dumps(
+            dict(candidate_permission_profile or {}),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return (
+        authority,
+        application_id,
+        release_digest,
+        subject_ref,
+        account_id,
+        permission_digest,
+    )
+
+
+def _cached_credential_admission(
+    key: tuple[str, ...],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    now = time.monotonic()
+    with _CREDENTIAL_ADMISSION_CACHE_GUARD:
+        for stale_key, (expires_at, _credential, _account) in list(
+            _CREDENTIAL_ADMISSION_CACHE.items()
+        ):
+            if expires_at <= now:
+                _CREDENTIAL_ADMISSION_CACHE.pop(stale_key, None)
+        cached = _CREDENTIAL_ADMISSION_CACHE.get(key)
+        if cached is None:
+            return None
+        return copy.deepcopy(cached[1]), copy.deepcopy(cached[2])
+
+
+def _store_credential_admission(
+    key: tuple[str, ...],
+    credential: Mapping[str, Any],
+    account: Mapping[str, Any],
+) -> None:
+    with _CREDENTIAL_ADMISSION_CACHE_GUARD:
+        _CREDENTIAL_ADMISSION_CACHE[key] = (
+            time.monotonic() + _CREDENTIAL_ADMISSION_CACHE_TTL_S,
+            copy.deepcopy(dict(credential)),
+            copy.deepcopy(dict(account)),
+        )
+        while len(_CREDENTIAL_ADMISSION_CACHE) > _CREDENTIAL_ADMISSION_CACHE_MAX_ENTRIES:
+            _CREDENTIAL_ADMISSION_CACHE.pop(next(iter(_CREDENTIAL_ADMISSION_CACHE)))
 
 
 class GoogleGmailProviderError(RuntimeError):
@@ -556,7 +630,6 @@ class GoogleGmailProvider:
         except IntegrationIngressError as exc:
             raise GoogleGmailProviderError(exc.code, retryable=exc.retryable) from exc
         state = str(authorization["state"])
-        verifier = str(authorization["code_verifier"])
         challenge = str(authorization["code_challenge"])
         redirect_uri = str(authorization["redirect_uri"])
         authorization_url = GOOGLE_AUTHORIZATION_ENDPOINT + "?" + urlencode(
@@ -986,16 +1059,30 @@ class GoogleGmailProvider:
         account_id: str,
         candidate_permission_profile: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        _release, declaration = self._provider_declaration(
-            application_id,
-            release_digest,
+        account_key = self._account_key(subject_ref, account_id)
+        admission_key = _credential_admission_cache_key(
+            self,
+            application_id=application_id,
+            release_digest=release_digest,
+            subject_ref=subject_ref,
+            account_id=account_id,
             candidate_permission_profile=candidate_permission_profile,
         )
-        declared_account_id = self._declared_account_id(declaration)
-        if account_id != declared_account_id:
-            raise GoogleGmailProviderError("gmail_account_not_declared")
-        account_key = self._account_key(subject_ref, account_id)
         with _credential_refresh_lock(account_key):
+            cached = _cached_credential_admission(admission_key)
+            if cached is not None:
+                return cached
+            # An immutable release digest (or exact DEV permission-profile
+            # digest) is part of the burst key, so a cache hit above can only
+            # reuse a declaration already admitted for this exact authority.
+            _release, declaration = self._provider_declaration(
+                application_id,
+                release_digest,
+                candidate_permission_profile=candidate_permission_profile,
+            )
+            declared_account_id = self._declared_account_id(declaration)
+            if account_id != declared_account_id:
+                raise GoogleGmailProviderError("gmail_account_not_declared")
             # Re-read both records inside the single-flight boundary.  A
             # preceding page projection may already have refreshed the shared
             # credential while this invocation was waiting for the lock.
@@ -1081,6 +1168,7 @@ class GoogleGmailProvider:
                     ):
                         raise
                     account = winner
+            _store_credential_admission(admission_key, credential, account)
         return credential, account
 
     @staticmethod

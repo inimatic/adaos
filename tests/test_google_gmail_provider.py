@@ -22,6 +22,7 @@ from adaos.domain.artifact_release import (
     canonical_payload_digest,
 )
 from adaos.services.applications import ApplicationService, ApplicationStore
+from adaos.services.providers import google_gmail as google_gmail_provider
 from adaos.services.providers.google_gmail import (
     GMAIL_API_ORIGIN,
     GMAIL_MODIFY_SCOPE,
@@ -998,6 +999,47 @@ def test_provider_coalesces_concurrent_refresh_for_one_connected_account(
     assert second_credential["access_token"] == "new-access"
     assert first_account["revision"] == 2
     assert second_account["revision"] == 2
+
+
+def test_provider_reuses_one_credential_admission_burst_but_revalidates_release(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monotonic = [100.0]
+    monkeypatch.setattr(google_gmail_provider.time, "monotonic", lambda: monotonic[0])
+    provider, _vault, _transport, release, _result = _connect(tmp_path)
+    vault_reads = 0
+    declaration_checks = 0
+    original_vault_get = provider._vault_get_json
+    original_declaration = provider._provider_declaration
+
+    def _vault_get(key: str):
+        nonlocal vault_reads
+        vault_reads += 1
+        return original_vault_get(key)
+
+    def _declaration(*args, **kwargs):
+        nonlocal declaration_checks
+        declaration_checks += 1
+        return original_declaration(*args, **kwargs)
+
+    provider._vault_get_json = _vault_get
+    provider._provider_declaration = _declaration
+    arguments = {
+        "application_id": "gmail_mail_client",
+        "release_digest": release.release_digest,
+        "subject_ref": "user:owner",
+        "account_id": "google.gmail",
+    }
+
+    first = provider._authorized_credential(**arguments)
+    second = provider._authorized_credential(**arguments)
+    monotonic[0] += 2.0
+    third = provider._authorized_credential(**arguments)
+
+    assert first == second == third
+    assert vault_reads == 2
+    assert declaration_checks == 2
 
 
 def test_trial_release_compiles_connected_account_setup_from_immutable_declarations(

@@ -24,6 +24,10 @@ from adaos.services.providers.google_gmail import (
 
 _log = logging.getLogger("adaos.sdk.providers.gmail")
 _READ_CACHE_TTL_S = {
+    # This projection has no provider IO, but it performs the same governed
+    # credential admission as every read. Initial layouts commonly request it
+    # twice; keep the cache deliberately short so disconnect state stays fresh.
+    "connection_status": 1.0,
     "get_message": 5.0,
     "list_labels": 30.0,
     "list_message_summaries": 5.0,

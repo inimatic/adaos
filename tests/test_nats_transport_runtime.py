@@ -1,12 +1,32 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import nats
 import pytest
 
 from adaos.services.bootstrap_runtime import nats_root_runtime, nats_transport_runtime
+
+
+@pytest.mark.asyncio
+async def test_realtime_candidate_discovery_runs_off_event_loop(monkeypatch) -> None:
+    event_loop_thread = threading.get_ident()
+    worker_threads: list[int] = []
+
+    def _resolve() -> list[str]:
+        worker_threads.append(threading.get_ident())
+        return ["wss://example.test/nats"]
+
+    monkeypatch.setattr(
+        nats_transport_runtime, "resolve_realtime_remote_candidates", _resolve
+    )
+
+    assert await nats_transport_runtime._resolve_realtime_remote_candidates_off_loop() == [
+        "wss://example.test/nats"
+    ]
+    assert worker_threads and worker_threads[0] != event_loop_thread
 
 
 def test_protocol_roundtrip_requires_confirmation_and_bounds_retry(monkeypatch) -> None:

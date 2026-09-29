@@ -119,6 +119,12 @@ class _ControlledSidecarFailback(RuntimeError):
     pass
 
 
+async def _resolve_realtime_remote_candidates_off_loop() -> list[str]:
+    """Keep filesystem-backed runtime discovery outside the event loop."""
+
+    return await asyncio.to_thread(resolve_realtime_remote_candidates)
+
+
 async def _probe_nats_protocol_roundtrip(nc: Any, *, timeout_s: float) -> dict[str, Any]:
     """Verify bidirectional NATS progress without leaving a cancelled PONG waiter."""
 
@@ -351,7 +357,11 @@ async def _run_nats_root_transport(
                 except Exception:
                     realtime_enabled = False
                 try:
-                    realtime_remote_candidates = resolve_realtime_remote_candidates() if realtime_enabled else []
+                    realtime_remote_candidates = (
+                        await _resolve_realtime_remote_candidates_off_loop()
+                        if realtime_enabled
+                        else []
+                    )
                 except Exception:
                     realtime_remote_candidates = []
                 # Best-effort outbox for telegram replies when NATS is flapping.
@@ -558,7 +568,7 @@ async def _run_nats_root_transport(
                         remote_candidates: list[str] = []
                         try:
                             if realtime_enabled:
-                                remote_candidates = resolve_realtime_remote_candidates()
+                                remote_candidates = await _resolve_realtime_remote_candidates_off_loop()
                                 if remote_candidates:
                                     original_candidates = list(candidates)
                                     local_candidate = realtime_sidecar_local_url()
