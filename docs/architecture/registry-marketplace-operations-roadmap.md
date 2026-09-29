@@ -3,7 +3,7 @@
 Status: domain roadmap for registry, publication, installation, and durable
 operation mechanics.
 
-Last reviewed: 2026-09-25.
+Last reviewed: 2026-09-29.
 
 Application product identity, full-screen Applications UX, channel semantics,
 subscriptions, publisher authority, Trial access, and Development Reports are
@@ -81,6 +81,15 @@ clean subnet synchronized and recorded all three installed Applications as
 `already_current`. Boot/core-update polling remains a compatibility and
 recovery path. Thin semantic-only online resolution, offline resolved bundles,
 and cross-registry federation remain later CBS10 work.
+
+The [2026-09-29 semantic distribution gap audit](semantic-registry-distribution-gap-audit-2026-09-29.md)
+now separates those concerns precisely. Publication and full-index replication
+are implemented; online cold-cache query/acquisition and sealed offline bundles
+are not. `CBS10-08` through `CBS10-11` are therefore required distribution
+gates. They must reuse this roadmap's existing package store, Application
+install lifecycle, operation receipts, and activation authority rather than
+introducing a second package manager or install path. Selective indexes and
+caches remain measured follow-up work; federation remains deferred.
 
 ## Why This Note Exists
 

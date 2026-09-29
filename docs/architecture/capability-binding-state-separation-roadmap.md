@@ -1001,17 +1001,36 @@ its own local account attachment and credential authority.
   connected-account attachment and an injected production recovery exercise
   before this item is complete; credentials are intentionally neither copied
   from the publisher nor published in Git.
-- [ ] `[should]` `CBS10-08` Resolve a thin distribution online by semantic
-  requirement and exact environment/policy/evidence constraints.
-- [ ] `[should]` `CBS10-09` Export and admit a resolved portable distribution
-  bundle with the exact immutable package and semantic closure for offline use.
-- [ ] `[should]` `CBS10-10` Add registry query/explanation surfaces for eligible
-  contracts, bindings, deliveries, publishers, and rejection reasons.
-- [ ] `[could]` `CBS10-11` Add bounded registry-side search/ranking caches after
-  correctness and cold-start costs are measured.
-- [ ] `[deferred]` `CBS10-12` Define global cross-registry naming governance,
-  federation conflict resolution, revocation propagation, and ecosystem-wide
-  garbage collection.
+- [ ] `[must]` `CBS10-08` Define a fail-closed, snapshot-pinned registry
+  query/result/explanation ABI for capability ranges, state requirements,
+  environment/policy/evidence inputs, eligible contracts, bindings, exact
+  deliveries, publishers, and typed rejection reasons.
+- [ ] `[must]` `CBS10-09` Resolve a thin distribution from a cold local cache:
+  acquire and verify only the required portable records, invoke the existing
+  exact package resolver/fetch path, admit evidence and policy, and only then
+  create an immutable `ApplicationResolution`. Discovery remains read-only and
+  never creates local authority.
+- [ ] `[must]` `CBS10-10` Export and admit a sealed resolved portable
+  distribution bundle with the exact Application, registry snapshot, package,
+  semantic-artifact, and portable-evidence closure for offline use. Imported
+  bytes enter the existing stores; credentials and local records are rejected.
+- [ ] `[must]` `CBS10-11` Prove cold-cache thin installation and registry-offline
+  bundle installation on a clean subnet with equivalent exact selections,
+  distinct local account/binding identities, idempotent receipts, negative
+  secret scans, tamper tests, and activation fault injection.
+- [ ] `[should]` `CBS10-12` Add selective synchronization, reverse indexes,
+  pagination, and bounded registry/local caches after correctness and
+  cold-start costs are measured.
+- [ ] `[could]` `CBS10-13` Add precomputed registry-side ranking and mirrors only
+  after query telemetry demonstrates a need.
+- [ ] `[deferred]` `CBS10-14` Add cross-registry federation, global naming
+  arbitration, ecosystem-wide revocation propagation, and global garbage
+  collection.
+
+The 2026-09-29 [distribution gap audit](semantic-registry-distribution-gap-audit-2026-09-29.md)
+is the evidence basis for `CBS10-08` through `CBS10-14`. In particular, the
+existing `distribution.thin` and `distribution.resolved` fields are descriptive
+publication metadata, not yet executable installer contracts.
 
 ## Cross-Cutting Acceptance Gates
 
