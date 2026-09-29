@@ -4993,6 +4993,200 @@ def test_bounded_task_admits_proportionate_semantic_webui_evolution(
     )
 
 
+def test_automation_preserves_accepted_semantic_webui_surface(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    manifest = scenario / "webui.json"
+    semantic = scenario / "semantic.webui.json"
+    document = {
+        "schema": "adaos.webui.v1",
+        "generated_by": "builder.semantic_compiler.v2",
+        "ui": {"application": {"desktop": {"pageSchema": {
+            "meta": {"builder": {
+                "semantic_source": "adaos.webui.semantic.v2",
+                "semantic_digest": "sha256:" + "a" * 64,
+            }},
+            "widgets": [{
+            "id": "records", "type": "ui.table",
+            "inputs": {
+                "columns": [{"key": "name"}],
+                "headerActions": [{"id": "create", "label": "Create"}],
+            },
+            "dataSource": {"kind": "static", "value": []},
+            "actions": [{"on": "click:create", "type": "openModal", "params": {"modalId": "edit"}}],
+        }]}}}},
+    }
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    semantic.write_text('{"schema":"adaos.webui.semantic.v2"}\n', encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=workspace, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "accepted prototype"], cwd=workspace, check=True, capture_output=True)
+    worker = object.__new__(LocalSkillFactoryWorker)
+    assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "constraints": {},
+        "realize_request": {"artifacts": {
+            "prototype_acceptance": {"revision": "001"},
+            "execution_budget": {"max_wall_seconds": 300},
+        }},
+    }
+
+    document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["dataSource"] = {
+        "kind": "skill", "name": "demo.list_records"
+    }
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    worker._validate_changed_paths(
+        assignment, worker._changed_from_baseline(workspace), workspace=workspace
+    )
+
+    builder_meta = document["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]
+    document["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"] = {}
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="accepted semantic UI surface"):
+        worker._validate_changed_paths(
+            assignment, worker._changed_from_baseline(workspace), workspace=workspace
+        )
+    document["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"] = builder_meta
+
+    document["ui"]["application"]["desktop"]["pageSchema"]["widgets"].append({
+        "id": "page-bottom-delete", "type": "ui.actions",
+        "inputs": {"buttons": [{"id": "delete", "label": "Delete"}]},
+        "actions": [{"on": "click:delete", "type": "openModal", "params": {"modalId": "delete"}}],
+    })
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="accepted semantic UI surface"):
+        worker._validate_changed_paths(
+            assignment, worker._changed_from_baseline(workspace), workspace=workspace
+        )
+
+
+def test_automation_cannot_edit_accepted_semantic_document(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    (scenario / "webui.json").write_text('{"schema":"adaos.webui.v1"}\n', encoding="utf-8")
+    semantic = scenario / "semantic.webui.json"
+    semantic.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.webui.semantic.v2",
+                "views": [{"id": "records", "kind": "table"}],
+                "requirement_bindings": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=workspace, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "accepted prototype"], cwd=workspace, check=True, capture_output=True)
+    worker = object.__new__(LocalSkillFactoryWorker)
+    assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "constraints": {},
+        "realize_request": {"artifacts": {
+            "prototype_acceptance": {"revision": "001"},
+            "execution_budget": {"max_wall_seconds": 300},
+        }},
+    }
+    semantic.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.webui.semantic.v2",
+                "views": [{"id": "records", "kind": "table"}],
+                "requirement_bindings": [
+                    {"requirement_ref": "change:I01", "semantic_refs": ["view:records"]}
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    worker._validate_changed_paths(
+        assignment, worker._changed_from_baseline(workspace), workspace=workspace
+    )
+
+    semantic.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.webui.semantic.v2",
+                "views": [{"id": "renamed", "kind": "table"}],
+                "requirement_bindings": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="accepted semantic UI behavior"):
+        worker._validate_changed_paths(
+            assignment, worker._changed_from_baseline(workspace), workspace=workspace
+        )
+
+
+def test_stable_prototype_head_enforces_semantic_surface_without_acceptance_receipt(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    (scenario / "webui.json").write_text(
+        '{"schema":"adaos.webui.v1"}\n', encoding="utf-8"
+    )
+    semantic = scenario / "semantic.webui.json"
+    semantic.write_text(
+        '{"schema":"adaos.webui.semantic.v2","views":[{"id":"records"}]}\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "stable prototype"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+    semantic.write_text(
+        '{"schema":"adaos.webui.semantic.v2","views":[{"id":"other"}]}\n',
+        encoding="utf-8",
+    )
+    assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "constraints": {},
+        "realize_request": {
+            "artifacts": {
+                "context_projection": {
+                    "artifacts": {
+                        "prototype": {
+                            "stable": True,
+                            "head_revision": "003",
+                        }
+                    }
+                }
+            }
+        },
+    }
+
+    worker = object.__new__(LocalSkillFactoryWorker)
+    with pytest.raises(ValueError, match="accepted semantic UI behavior"):
+        worker._validate_changed_paths(
+            assignment, worker._changed_from_baseline(workspace), workspace=workspace
+        )
+
+
 def test_bounded_task_admits_large_semantically_scoped_widget_edit(
     tmp_path: Path,
 ) -> None:
@@ -6584,6 +6778,46 @@ def test_worker_prompt_distinguishes_accepted_design_from_editable_candidate(tmp
     assert "not a new Prototype acceptance" in prompt
     assert "after_webui slices" in prompt
     assert "its materialized source authority" not in prompt
+
+
+def test_worker_prompt_uses_stable_prototype_head_without_formal_acceptance(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
+    )
+    assignment = {
+        "task_id": "task.optional-acceptance",
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "realize_request": {
+            "target": {"type": "scenario", "id": "demo"},
+            "artifacts": {
+                "implementation_brief": "Preserve the stable semantic interface.",
+                "context_projection": {
+                    "artifacts": {
+                        "prototype": {
+                            "stable": True,
+                            "head_revision": "003",
+                            "acceptance_required": False,
+                        }
+                    }
+                },
+            },
+        },
+    }
+    workspace = tmp_path / "workspace"
+    (workspace / "scenarios/demo").mkdir(parents=True)
+
+    worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    prompt = (tmp_path / "input/task.md").read_text(encoding="utf-8")
+    assert "immutable design baseline is accepted Prototype revision 003" in prompt
+    assert "never print either complete document" in prompt
+    assert "Automation may add trace-only requirement_bindings" in prompt
 
 
 def test_worker_prompt_adds_provider_contract_capsule_only_for_admitted_contract(

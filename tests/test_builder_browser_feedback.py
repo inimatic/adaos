@@ -32,6 +32,31 @@ def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> N
     assert "detail.toolResult?.detail" in script
     assert "response.text()" in script
     assert "Promise.allSettled(responseDiagnosticTasks)" in script
+    assert "selectableCandidates.sort" in script
+    assert "Primary selection activated without an observable selected state" in script
+    assert "Primary selection did not change selection or relationship emphasis state" in script
+    assert "related_rows_before" in script
+    assert "selectableCandidates.slice(0, 3)" in script
+    assert "after.relatedRows > 0" in script
+    assert 'is-open[data-region-role="detail"]' in script
+    assert "recordEditorCommands.has(step.command)" in script
+    assert "did not hydrate an editable record" in script
+    assert "populated_control_count" in script
+    assert "did not close after inspection" in script
+    table_renderer = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "adaos"
+        / "integrations"
+        / "adaos-client"
+        / "src"
+        / "app"
+        / "renderer"
+        / "widgets"
+        / "table.widget.component.ts"
+    ).read_text(encoding="utf-8")
+    assert table_renderer.count('[attr.data-command-id]="b.id"') == 2
+    assert '[attr.data-command-id]="action.id"' in table_renderer
 
 
 def test_browser_feedback_binds_runtime_source_and_evidence(
@@ -45,9 +70,38 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
         json.dumps({"schema": "adaos.webui.v1", "title": "Проверка"}, ensure_ascii=False),
         encoding="utf-8",
     )
+    (scenario / "semantic.webui.json").write_text(
+        json.dumps(
+            {
+                "commands": [
+                    {
+                        "id": "open-item-editor",
+                        "kind": "update",
+                        "view_ref": "item-editor",
+                        "exposure": {"placement": "row_action"},
+                    },
+                    {
+                        "id": "save-item",
+                        "kind": "update",
+                        "view_ref": "item-editor",
+                        "exposure": {"placement": "editor_primary"},
+                    },
+                    {
+                        "id": "delete-item",
+                        "kind": "delete",
+                        "view_ref": "item-editor",
+                        "exposure": {"placement": "editor_danger"},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
 
     def runner(*args, **kwargs):
         assert kwargs["env"]["ADAOS_E2E_SPACE_KIND"] == "workspace"
+        assert kwargs["env"]["ADAOS_E2E_COMMAND_SEQUENCE"] == "open-item-editor"
+        assert kwargs["env"]["ADAOS_E2E_RECORD_EDITOR_COMMANDS"] == "open-item-editor"
         output = Path(kwargs["env"]["ADAOS_E2E_OUTPUT"])
         (output / "wide.png").write_bytes(b"wide")
         (output / "compact.png").write_bytes(b"compact")

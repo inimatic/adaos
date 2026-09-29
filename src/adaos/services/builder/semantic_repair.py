@@ -390,6 +390,12 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     include("representativeState")
     if version == 1:
         include("view")
+        # Interaction contracts are immutable during a legacy state repair.
+        # Older accepted candidates do not echo them, so the repair schema
+        # accepts either shape while the normal compiler supplies defaults.
+        definitions["view"]["required"] = [
+            name for name in definitions["view"]["required"] if name != "selection"
+        ]
     else:
         properties = {("add_" + name if version >= 3 and name in {"field_refs", "query_controls"} else name):
                       copy.deepcopy(available["view"]["properties"][name])

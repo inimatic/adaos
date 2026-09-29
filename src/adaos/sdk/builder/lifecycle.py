@@ -879,6 +879,12 @@ def invoke_activity_command(
         object_id,
         actor=actor,
         idempotency_key=idempotency_key,
+        expected_candidate_id=(
+            str(details.get("expected_candidate_id") or "").strip() or None
+        ),
+        expected_candidate_digest=(
+            str(details.get("expected_candidate_digest") or "").strip() or None
+        ),
     )
 
 

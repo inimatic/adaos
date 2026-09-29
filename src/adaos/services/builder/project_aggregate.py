@@ -251,7 +251,7 @@ def normalize_project(
     dependencies = [
         copy.deepcopy(dict(item)) for item in raw.get("dependencies") or [] if isinstance(item, Mapping)
     ][:1000]
-    timestamp = str(raw.get("updated_at") or now or _now())
+    timestamp = str(now or raw.get("updated_at") or _now())
     prototype = dict(workflow.get("prototype") or {})
     automation = dict(workflow.get("automation") or {})
     governed = dict(workflow.get("governed") or {})
@@ -285,14 +285,14 @@ def normalize_project(
         else None
     )
     candidate_ref = (
-        copy.deepcopy(raw.get("candidate_ref"))
-        if isinstance(raw.get("candidate_ref"), Mapping)
-        else {
+        {
             "kind": "candidate",
             "id": str(delivery.get("candidate_id")),
             "digest": delivery.get("package_digest") or delivery.get("release_digest"),
         }
         if str(delivery.get("candidate_id") or "").strip()
+        else copy.deepcopy(raw.get("candidate_ref"))
+        if isinstance(raw.get("candidate_ref"), Mapping)
         else None
     )
     issue_refs = _refs(
@@ -344,6 +344,21 @@ def normalize_project(
             and str(item.get("to_ref") or "").strip()
         }.values()
     )[-2000:]
+    superseded_change_ids = {
+        str(item.get("to_ref") or "").removeprefix("change:")
+        for item in change_edges
+        if str(item.get("relation") or "") == "supersedes"
+        and str(item.get("to_ref") or "").startswith("change:")
+    }
+    for item in normalized_changes:
+        if (
+            str(item.get("change_id") or "") in superseded_change_ids
+            and str(item.get("status") or "") not in _TERMINAL_CHANGE_STATES
+        ):
+            item["status"] = "superseded"
+            item["gate"] = "complete"
+            item["mutation_status"] = "idle"
+            item["updated_at"] = timestamp
     trials = [
         copy.deepcopy(dict(item))
         for item in raw.get("trials") or []
@@ -368,7 +383,13 @@ def normalize_project(
             "decided_at": delivery.get("decided_at"),
         }
         trials = [
-            item for item in trials if item.get("trial_ref") != current_trial["trial_ref"]
+            item
+            for item in trials
+            if item.get("trial_ref") != current_trial["trial_ref"]
+            and not (
+                current_trial["workspace_ref"]
+                and item.get("workspace_ref") == current_trial["workspace_ref"]
+            )
         ]
         trials.append(current_trial)
     placements = normalize_project_placements(raw.get("placements"), project_ref=project_ref)

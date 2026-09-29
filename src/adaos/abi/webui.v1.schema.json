@@ -1774,7 +1774,7 @@
           "type": "array",
           "maxItems": 2,
           "items": { "$ref": "#/$defs/actionButton" },
-          "description": "At most a few compact contextual or presentation commands rendered beside the collection heading. Domain collection mutations belong in a sibling ui.actions toolbar."
+          "description": "At most a few compact commands rendered beside the collection heading. A primary create mutation belongs here when it is the collection's main action."
         },
         "meta": {
           "type": "array",

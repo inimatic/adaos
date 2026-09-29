@@ -104,6 +104,40 @@ def test_cli_validate_json_reports_failure_observation(monkeypatch, tmp_path) ->
     assert failures[0]["report_policy"] == "project_inbox"
 
 
+def test_cli_validate_explicit_path_accepts_manifest_scenario_or_collection_root(
+    monkeypatch, tmp_path
+) -> None:
+    collection = tmp_path / "trials" / "scenarios"
+    scenario = collection / "dashboard"
+    scenario.mkdir(parents=True)
+    manifest = scenario / "scenario.yaml"
+    manifest.write_text("id: dashboard\nversion: 0.1.0\nsteps: []\n", encoding="utf-8")
+    observed = []
+    monkeypatch.setattr(
+        scenario_cli,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(scenarios_workspace_dir=lambda: collection)
+        ),
+    )
+    monkeypatch.setattr(
+        scenario_cli,
+        "validate_scenario_path",
+        lambda value: observed.append(value)
+        or SimpleNamespace(ok=True, errors=[], scenario_id="dashboard", issues=[]),
+    )
+
+    runner = CliRunner()
+    for explicit in (manifest, scenario, collection):
+        result = runner.invoke(
+            scenario_cli.app,
+            ["validate", "dashboard", "--path", str(explicit), "--json"],
+        )
+        assert result.exit_code == 0, result.output
+
+    assert observed == [scenario.resolve(), scenario.resolve(), scenario.resolve()]
+
+
 def test_cli_test_runs_packaged_scenario_tests(monkeypatch, tmp_path) -> None:
     tests_dir = tmp_path / "workspace" / "scenarios" / "dashboard" / "tests"
     tests_dir.mkdir(parents=True)

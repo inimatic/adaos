@@ -9,7 +9,7 @@ from .workflow import BuilderWorkflowError
 
 
 EXTENDED_PRESENTATIONS = frozenset({"board", "tree", "chart", "accordion"})
-VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "field_display", "section", "scope_filters", "selection_filter"})
+VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "field_display", "section", "scope_filters", "selection", "selection_filter"})
 
 
 def legacy_view(view: Mapping) -> dict:

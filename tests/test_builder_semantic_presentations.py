@@ -143,7 +143,38 @@ def test_selection_filter_resolves_source_action_and_preserves_independent_queri
                     for key, expression in action['params'].items() if expression == '$event.id')
     assert widgets[view['id']]['dataSource']['query']['filters']['work_owner_id'] == f'$state.{selected}'
     assert page['initialState'][selected] == ''
-    assert result['semantic_document']['views'][0]['selection_filter'] == {**view['selection_filter'], 'source_field_ref': None}
+    assert result['semantic_document']['views'][0]['selection_filter'] == {
+        **view['selection_filter'], 'source_field_ref': None,
+        'effect': 'filter', 'empty_selection': 'show_all',
+    }
+
+
+def test_related_table_emphasis_preserves_global_collection_and_visible_selection():
+    brief, semantic = _multi_resource_fixture()
+    target = semantic['views'][0]
+    target['presentation'] = 'table'
+    target['selection_filter'] = {
+        'field_ref': 'work_owner_id',
+        'source_view_ref': 'people-list',
+        'effect': 'emphasize',
+        'empty_selection': 'show_all',
+    }
+
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    page = result['webui']['ui']['application']['desktop']['pageSchema']
+    widgets = {widget['id']: widget for widget in page['widgets']}
+    source = widgets['people-list']
+    target_widget = widgets[target['id']]
+    selected = source['inputs']['selectedStateKey']
+
+    assert source['inputs']['selectionIndicator'] == 'radio'
+    assert target_widget['inputs']['selectionIndicator'] == 'radio'
+    assert target_widget['inputs']['relationshipEmphasis'] == {
+        'stateKey': selected,
+        'fieldKey': 'work_owner_id',
+        'emptySelection': 'show_all',
+    }
+    assert 'work_owner_id' not in target_widget['dataSource']['query'].get('filters', {})
 
 
 def test_record_presentation_error_explains_the_role_not_a_lost_presentation():

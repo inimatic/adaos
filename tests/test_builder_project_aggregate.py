@@ -11,6 +11,7 @@ from adaos.services.builder.project_aggregate import (
     BuilderProjectError,
     begin_mutation,
     finish_mutation,
+    normalize_project,
 )
 from adaos.services.builder.workflow import BuilderWorkflowService
 from adaos.services.builder.workflow import BuilderWorkflowError
@@ -91,6 +92,89 @@ def test_project_aggregate_is_schema_valid_and_reference_oriented(service: Build
     assert project["policy"]["risk_policy"]["fail_closed"] is True
     assert project["explanation"]["status"] == "active"
     assert "request" not in project["changes"][0]
+
+
+def test_project_aggregate_prefers_current_delivery_and_closes_superseded_changes() -> None:
+    project = normalize_project(
+        {
+            "candidate_ref": {
+                "kind": "candidate",
+                "id": "demo-0-1-1-old",
+                "digest": "sha256:" + "1" * 64,
+            },
+            "changes": [
+                {
+                    "change_id": "CH-old",
+                    "change_ref": "change:CH-old",
+                    "status": "changes_requested",
+                    "gate": "prototype",
+                    "base_generation": 1,
+                    "affected_refs": ["scenario:demo"],
+                    "issue_refs": [],
+                    "depends_on_change_ids": [],
+                    "workflow_instance_ref": "change:old",
+                    "workflow_state": "prototype_editing",
+                    "mutation_status": "idle",
+                    "updated_at": "2026-09-01T00:00:00+00:00",
+                }
+            ],
+            "trials": [
+                {
+                    "trial_ref": "trial:demo-0-1-1-old",
+                    "candidate_ref": {
+                        "kind": "candidate",
+                        "id": "demo-0-1-1-old",
+                        "digest": "sha256:" + "1" * 64,
+                    },
+                    "status": "accepted",
+                    "workspace_ref": "C:/trial/current",
+                }
+            ],
+            "updated_at": "2026-09-01T00:00:00+00:00",
+        },
+        object_type="scenario",
+        object_id="demo",
+        archived=False,
+        workflow={
+            "change": {
+                "change_id": "CH-current",
+                "status": "accepted",
+                "gate": "publication",
+                "affected_refs": ["scenario:demo"],
+                "issues": [],
+                "supersedes_change_id": "CH-old",
+            },
+            "governed": {
+                "instance_id": "change:current",
+                "state": "publication_ready",
+                "definition_version": "1.2.0",
+            },
+            "prototype": {"stable": True, "head_revision": "003"},
+            "automation": {"status": "completed", "head_task_id": "task.3"},
+            "delivery": {
+                "status": "accepted",
+                "candidate_id": "demo-0-1-6-current",
+                "package_digest": "sha256:" + "6" * 64,
+                "trial_workspace": "C:/trial/current",
+            },
+            "publication": {"status": "not_started"},
+        },
+        now="2026-09-29T08:16:16+00:00",
+    )
+
+    assert project["candidate_ref"] == {
+        "kind": "candidate",
+        "id": "demo-0-1-6-current",
+        "digest": "sha256:" + "6" * 64,
+    }
+    assert project["active_candidate_refs"] == [project["candidate_ref"]]
+    assert len(project["trials"]) == 1
+    assert project["trials"][-1]["trial_ref"] == "trial:demo-0-1-6-current"
+    assert next(
+        item for item in project["changes"] if item["change_id"] == "CH-old"
+    )["status"] == "superseded"
+    assert project["conflicts"] == []
+    assert project["updated_at"] == "2026-09-29T08:16:16+00:00"
 
 
 def test_parallel_changes_are_preserved_and_focus_is_not_a_business_transition(

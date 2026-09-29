@@ -7575,6 +7575,11 @@ class BuilderWorkflowService:
                 update_change_set(status="in_progress", gate="prototype")
             add_change_evidence(metadata.get("change_id"))
             return
+        if action == "request_prototype_review":
+            self._require_active(workflow, "prototype", action)
+            prototype.update({"status": "working", "stable": False})
+            update_change_set(status="in_progress", gate="prototype")
+            return
         if action == "prototype_experiment_recorded":
             self._require_active(workflow, "prototype", action)
             revision = str(metadata.get("revision") or "").strip()
@@ -7722,6 +7727,32 @@ class BuilderWorkflowService:
             )
             update_change_set(status="changes_requested", gate="prototype")
             invalidate_delivery("prototype_acceptance_invalidated")
+            return
+        if action == "revise_prototype":
+            # The governed workflow exposes this command from Prototype review,
+            # verification and Trial review. Keep the compatibility projection
+            # in lockstep instead of forcing callers through an unrelated
+            # acceptance-constraint transition.
+            workflow["active_phase"] = "prototype"
+            automation.update(
+                {
+                    "status": "not_started",
+                    "source_prototype_revision": prototype.get("head_revision"),
+                }
+            )
+            prototype.update(
+                {
+                    "status": "working",
+                    "stable": False,
+                    "acceptance": None,
+                    "acceptance_invalidated_at": changed_at,
+                    "acceptance_invalidation_reason": str(
+                        metadata.get("reason") or "prototype_revision_requested"
+                    ),
+                }
+            )
+            update_change_set(status="changes_requested", gate="prototype")
+            invalidate_delivery("prototype_revision_requested")
             return
         if action in {"handoff_to_automation", "automation_started"}:
             governed_state = str(

@@ -65,6 +65,45 @@ def _git_revision(path: Path) -> str | None:
     return revision if completed.returncode == 0 and revision else None
 
 
+def _record_editor_commands(source: Path) -> list[str]:
+    """Return bounded, non-mutating row commands that only open record editors."""
+
+    root = source if source.is_dir() else source.parent
+    semantic_path = root / "semantic.webui.json"
+    try:
+        document = json.loads(semantic_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    commands = [
+        item
+        for item in document.get("commands") or []
+        if isinstance(item, Mapping)
+    ]
+    editor_primaries = {
+        (str(item.get("view_ref") or ""), str(item.get("kind") or ""))
+        for item in commands
+        if str((item.get("exposure") or {}).get("placement") or "")
+        == "editor_primary"
+    }
+    result: list[str] = []
+    for item in commands:
+        command_id = str(item.get("id") or "").strip()
+        exposure = item.get("exposure") or {}
+        signature = (
+            str(item.get("view_ref") or ""),
+            str(item.get("kind") or ""),
+        )
+        if (
+            command_id
+            and "," not in command_id
+            and ":" not in command_id
+            and str(exposure.get("placement") or "") == "row_action"
+            and signature in editor_primaries
+        ):
+            result.append(command_id)
+    return list(dict.fromkeys(result))[:3]
+
+
 @dataclass(slots=True)
 class BuilderBrowserFeedbackService:
     """Observe one materialized DEV candidate before Forge checkpoints exist."""
@@ -137,6 +176,7 @@ class BuilderBrowserFeedbackService:
         if not webui_path.is_file():
             raise RuntimeError(f"candidate WebUI is missing: {webui_path}")
         source_digest = _file_digest(webui_path)
+        record_editor_commands = _record_editor_commands(source)
         attempt, output = _next_attempt(self.root / task)
         output.mkdir(parents=True, exist_ok=False)
 
@@ -155,6 +195,8 @@ class BuilderBrowserFeedbackService:
             "ADAOS_E2E_OUTPUT": str(output),
             "ADAOS_E2E_SOURCE_DIGEST": str(source_digest or ""),
             "ADAOS_E2E_TIMEOUT_MS": str(max(30, int(self.timeout_seconds)) * 1000),
+            "ADAOS_E2E_COMMAND_SEQUENCE": ",".join(record_editor_commands),
+            "ADAOS_E2E_RECORD_EDITOR_COMMANDS": ",".join(record_editor_commands),
         }
         log_path = output / "browser.log"
         timed_out = False

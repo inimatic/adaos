@@ -2559,6 +2559,37 @@ def _prototype_acceptance_from_context(value: Mapping[str, Any]) -> dict[str, An
     return copy.deepcopy(dict(acceptance))
 
 
+def _accepted_prototype_revision(artifacts: Mapping[str, Any]) -> str:
+    """Resolve the immutable Prototype head even when formal CBS acceptance is optional."""
+
+    acceptance = (
+        artifacts.get("prototype_acceptance")
+        if isinstance(artifacts.get("prototype_acceptance"), Mapping)
+        else {}
+    )
+    revision = str(acceptance.get("revision") or "").strip()
+    if revision:
+        return revision
+    context_projection = (
+        artifacts.get("context_projection")
+        if isinstance(artifacts.get("context_projection"), Mapping)
+        else {}
+    )
+    context_artifacts = (
+        context_projection.get("artifacts")
+        if isinstance(context_projection.get("artifacts"), Mapping)
+        else {}
+    )
+    prototype = (
+        context_artifacts.get("prototype")
+        if isinstance(context_artifacts.get("prototype"), Mapping)
+        else {}
+    )
+    if prototype.get("stable") is True:
+        return str(prototype.get("head_revision") or "").strip()
+    return ""
+
+
 def _production_resource_type(skill_name: str, prototype_type: str) -> str:
     suffix = str(prototype_type or "").strip().removeprefix("prototype.")
     suffix = _safe_token(suffix, fallback="records")
@@ -9248,16 +9279,28 @@ No secret, placeholder code or blocker-report files. Use
             if isinstance(prototype_artifact.get("acceptance"), Mapping)
             else {}
         )
-        accepted_revision = str(prototype_acceptance.get("revision") or "").strip()
+        accepted_revision = _accepted_prototype_revision(
+            dict((assignment.get("realize_request") or {}).get("artifacts") or {})
+        ) or str(prototype_acceptance.get("revision") or "").strip()
+        if not accepted_revision and prototype_artifact.get("stable") is True:
+            accepted_revision = str(
+                prototype_artifact.get("head_revision") or ""
+            ).strip()
         accepted_prototype_instruction = (
             f" The immutable design baseline is accepted Prototype revision {accepted_revision}. "
             f"The editable candidate is scenarios/{target_id}/webui.json; on a correction it "
             "already contains Automation changes and is not a new Prototype acceptance. "
             "Use the approved brief for initial realization; on a correction preserve authorized "
             "working behavior and apply only that correction. "
+            "The accepted widget, modal, and visible command topology is compiler-owned: Automation may replace bindings but must not add, remove, or relocate user-visible commands or surfaces. Return a UX change to Prototype acceptance first. "
             "Admitted handlers, manifests, locales and tests remain editable. "
             f"ui_revisions/{accepted_revision}.json is immutable audit evidence; read only bounded "
-            "after_webui slices when a preservation question or digest mismatch requires comparison."
+            "after_webui slices when a preservation question or digest mismatch requires comparison. "
+            "Inspect accepted semantic/WebUI documents through targeted IDs, counts, and exact slices; "
+            "never print either complete document. Bundle independent reads into one tool call, then "
+            "prefer one coherent patch and one focused test run. Automation may add trace-only "
+            "requirement_bindings, but it must not change accepted semantic resources, fields, views, "
+            "commands, relationships, selection, layout, or presentation behavior."
             if target_type == "scenario" and accepted_revision
             else ""
         )
@@ -10160,6 +10203,154 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 + "; ".join(violations)
             )
 
+    @classmethod
+    def _validate_accepted_webui_surface(
+        cls,
+        assignment: Mapping[str, Any],
+        changed_paths: Sequence[str],
+        *,
+        workspace: Path | None,
+    ) -> None:
+        """Keep Automation bindings inside the accepted semantic UI topology."""
+
+        if workspace is None or not (workspace / ".git").is_dir():
+            return
+        target = assignment.get("target") or {}
+        if target.get("type") != "scenario":
+            return
+        request = assignment.get("realize_request") or {}
+        artifacts = request.get("artifacts") if isinstance(request, Mapping) else {}
+        revision = _accepted_prototype_revision(artifacts)
+        constraints = assignment.get("constraints") or {}
+        if not revision or bool(constraints.get("allow_semantic_ui_delta")):
+            return
+        scenario_id = str(target.get("id") or "").strip()
+        webui_path = f"scenarios/{scenario_id}/webui.json"
+        semantic_path = f"scenarios/{scenario_id}/semantic.webui.json"
+        baseline = cls._baseline_commit(workspace)
+        if semantic_path in changed_paths:
+            try:
+                semantic_before = json.loads(
+                    _git(["show", f"{baseline}:{semantic_path}"], cwd=workspace)
+                )
+                semantic_after = json.loads(
+                    (workspace / semantic_path).read_text(encoding="utf-8")
+                )
+            except (RuntimeError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    "accepted semantic UI behavior cannot be compared to its Automation candidate"
+                ) from exc
+
+            def semantic_behavior(document: Mapping[str, Any]) -> dict[str, Any]:
+                normalized = copy.deepcopy(dict(document))
+                # Requirement bindings are traceability annotations. They do
+                # not participate in compilation or runtime interaction.
+                normalized.pop("requirement_bindings", None)
+                return normalized
+
+            before_behavior = semantic_behavior(semantic_before)
+            after_behavior = semantic_behavior(semantic_after)
+            if before_behavior != after_behavior:
+                changed_sections = sorted(
+                    key
+                    for key in set(before_behavior) | set(after_behavior)
+                    if before_behavior.get(key) != after_behavior.get(key)
+                )
+                raise ValueError(
+                    "Automation changed accepted semantic UI behavior; update and accept the Prototype first: "
+                    + json.dumps(changed_sections, ensure_ascii=False)
+                )
+        if webui_path not in changed_paths:
+            return
+        try:
+            before = json.loads(_git(["show", f"{baseline}:{webui_path}"], cwd=workspace))
+            after = json.loads((workspace / webui_path).read_text(encoding="utf-8"))
+        except (RuntimeError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("accepted WebUI surface cannot be compared to its Automation candidate") from exc
+
+        def signature(document: Mapping[str, Any]) -> dict[str, list[str]]:
+            application = (
+                ((document.get("ui") or {}).get("application") or {})
+                if isinstance(document.get("ui"), Mapping)
+                else {}
+            )
+            widgets: set[str] = set()
+            commands: set[str] = set()
+            modals: set[str] = set()
+
+            def visit_schema(schema: Any, owner: str) -> None:
+                if not isinstance(schema, Mapping):
+                    return
+                for widget in schema.get("widgets") or []:
+                    if not isinstance(widget, Mapping):
+                        continue
+                    widget_id = str(widget.get("id") or "").strip()
+                    widget_type = str(widget.get("type") or "").strip()
+                    if widget_id:
+                        widgets.add(f"{owner}:{widget_id}:{widget_type}")
+                    inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
+                    for group in ("buttons", "headerActions", "secondaryActions"):
+                        for button in inputs.get(group) or []:
+                            if isinstance(button, Mapping) and str(button.get("id") or "").strip():
+                                commands.add(f"{owner}:{widget_id}:{group}:{str(button['id']).strip()}")
+                    for action in widget.get("actions") or []:
+                        if not isinstance(action, Mapping):
+                            continue
+                        event = str(action.get("on") or "").strip()
+                        if event.startswith("click:"):
+                            commands.add(f"{owner}:{widget_id}:event:{event}")
+
+            desktop = application.get("desktop") if isinstance(application, Mapping) else {}
+            page_schema = (
+                desktop.get("pageSchema") if isinstance(desktop, Mapping) else {}
+            )
+            visit_schema(
+                page_schema,
+                "desktop",
+            )
+            page_meta = (
+                page_schema.get("meta") if isinstance(page_schema, Mapping) else {}
+            )
+            builder_meta = (
+                page_meta.get("builder") if isinstance(page_meta, Mapping) else {}
+            )
+            compiler_provenance = [
+                str(document.get("generated_by") or "").strip(),
+                json.dumps(
+                    builder_meta if isinstance(builder_meta, Mapping) else {},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ]
+            for modal_id, modal in (application.get("modals") or {}).items() if isinstance(application, Mapping) else []:
+                modal_id = str(modal_id)
+                modals.add(modal_id)
+                if isinstance(modal, Mapping):
+                    visit_schema(modal.get("schema") or modal.get("pageSchema"), f"modal:{modal_id}")
+            return {
+                "widgets": sorted(widgets),
+                "commands": sorted(commands),
+                "modals": sorted(modals),
+                "compiler_provenance": compiler_provenance,
+            }
+
+        before_signature = signature(before)
+        after_signature = signature(after)
+        if before_signature != after_signature:
+            changes = {
+                key: {
+                    "added": sorted(set(after_signature[key]) - set(before_signature[key])),
+                    "removed": sorted(set(before_signature[key]) - set(after_signature[key])),
+                }
+                for key in before_signature
+                if before_signature[key] != after_signature[key]
+            }
+            raise ValueError(
+                "Automation changed the accepted semantic UI surface; update and accept the Prototype first: "
+                + json.dumps(changes, ensure_ascii=False, separators=(",", ":"))
+            )
+
     def _validate_changed_paths(
         self,
         assignment: Mapping[str, Any],
@@ -10234,10 +10425,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             raise ValueError(
                 f"Automation may not modify the previous Automation baseline: {immutable_automation}"
             )
-        acceptance = artifacts.get("prototype_acceptance") or {}
-        revision = (
-            acceptance.get("revision") if isinstance(acceptance, Mapping) else None
+        self._validate_accepted_webui_surface(
+            assignment, changed_paths, workspace=workspace
         )
+        revision = _accepted_prototype_revision(artifacts)
         target = assignment.get("target") or {}
         if revision and target.get("type") == "scenario":
             accepted_path = f"scenarios/{target.get('id')}/ui_revisions/{revision}.json"

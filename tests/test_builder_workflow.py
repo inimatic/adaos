@@ -1060,6 +1060,67 @@ def test_change_set_routes_interface_work_through_prototype_first(
     assert approved["change_set"]["issues"][1]["status"] == "open"
 
 
+def test_canonical_revise_prototype_command_returns_review_to_editing(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-revise-prototype",
+            "request": "Refine the linked collection interaction.",
+            "issues": [
+                {
+                    "issue_id": "linked-collections",
+                    "title": "Expose selection and contextual editing",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The selected record is visible."],
+                }
+            ],
+        },
+    )
+    reviewed = service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={
+            "revision": "002",
+            "object_type": "scenario",
+            "change_id": "CS-revise-prototype",
+        },
+    )["workflow"]
+    reviewed = service.invoke_command(
+        "scenario",
+        "recipes",
+        "request_prototype_review",
+        actor="user:owner",
+        idempotency_key="review-linked-collections",
+        input_value={"confirmed": True},
+    )["workflow"]
+    assert "revise_prototype" in {
+        item["command"]
+        for item in reviewed["workflow_description"]["allowed_commands"]
+    }
+
+    revised = service.invoke_command(
+        "scenario",
+        "recipes",
+        "revise_prototype",
+        actor="user:owner",
+        idempotency_key="revise-linked-collections",
+        input_value={"confirmed": True, "reason": "User requested a clearer CRUD model."},
+    )["workflow"]
+
+    assert revised["active_phase"] == "prototype"
+    assert revised["prototype"]["status"] == "working"
+    assert revised["prototype"]["stable"] is False
+    assert revised["change_set"]["status"] == "changes_requested"
+    assert revised["change_set"]["gate"] == "prototype"
+    assert revised["governed"]["state"] == "prototype_editing"
+
+
 def test_specification_delta_is_canonical_scoped_and_not_implicitly_accepted(
     workflow_project,
 ):

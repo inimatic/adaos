@@ -21,6 +21,25 @@ def selection_findings(document):
             graph.setdefault(link['source_view_ref'], set()).add(view['id'])
     findings = []
     for index, view in enumerate(document['views']):
+        policy = view.get('selection')
+        if view['role'] != 'collection' and policy is not None:
+            findings.append({
+                'code': 'semantic.selection_policy_invalid',
+                'path': f'$.views[{index}].selection',
+                'semantic_refs': [f"view:{view['id']}"],
+                'detail': 'selection policy belongs to collection views only',
+            })
+        elif policy and (
+            (policy.get('mode') == 'none' and policy.get('row_activation') != 'none')
+            or (policy.get('mode') == 'single' and policy.get('row_activation') != 'select')
+            or (policy.get('indicator') == 'radio' and policy.get('mode') != 'single')
+        ):
+            findings.append({
+                'code': 'semantic.selection_policy_invalid',
+                'path': f'$.views[{index}].selection',
+                'semantic_refs': [f"view:{view['id']}"],
+                'detail': 'selection mode, indicator and row_activation are inconsistent',
+            })
         link = view.get('selection_filter')
         if not link:
             continue
@@ -31,9 +50,11 @@ def selection_findings(document):
         detail = None
         if view['role'] != 'collection' or not source or source['role'] != 'collection' or source['id'] == view['id']:
             detail = 'selection_filter requires distinct source and target collections'
-        elif source.get('presentation') == 'chart':
+        elif source.get('presentation') == 'chart' or (source.get('selection') or {}).get('mode') == 'none':
             detail = 'selection_filter source must support record selection; charts do not'
-        elif link['field_ref'] in other_filters:
+        elif link.get('effect', 'filter') == 'emphasize' and view.get('presentation') != 'table':
+            detail = 'selection_filter effect=emphasize currently requires a table target'
+        elif link.get('effect', 'filter') == 'filter' and link['field_ref'] in other_filters:
             detail = 'selection_filter cannot overlap resettable, permanent or legacy filters'
         elif view['id'] in _reachable(graph, view['id']):
             detail = 'selection_filter links must not form a cycle'
@@ -63,13 +84,35 @@ def compile_selection_filters(document, webui, source_map):
     for view in document['views']:
         if view['role'] != 'collection':
             continue
-        for action in widgets[view['id']].get('actions', []):
+        widget = widgets[view['id']]
+        policy = view.get('selection') or {
+            'mode': 'single', 'indicator': 'row_accent', 'row_activation': 'select',
+        }
+        if policy.get('mode') == 'none' or policy.get('row_activation') == 'none':
+            widget['actions'] = [
+                action for action in widget.get('actions', [])
+                if action.get('on') != 'select'
+            ]
+            widget.setdefault('inputs', {}).update(
+                selectionMode='none', selectionIndicator='none', rowActivation='none'
+            )
+            continue
+        for action in widget.get('actions', []):
             if action.get('on') != 'select' or action.get('type') != 'updateState':
                 continue
             for key, expression in action.get('params', {}).items():
                 if expression == '$event.id':
                     selections[view['id']] = key
                     actions_by_selection.setdefault(key, []).append(action)
+                    widget.setdefault('inputs', {}).update(
+                        selectedStateKey=key,
+                        selectionMode=policy.get('mode', 'single'),
+                        selectionIndicator=policy.get('indicator', 'row_accent'),
+                        rowActivation=policy.get('row_activation', 'select'),
+                    )
+                    source_map.setdefault(f"view:{view['id']}", []).append(
+                        f"ui.application.desktop.pageSchema.widgets.@{view['id']}.inputs.selectedStateKey"
+                    )
     graph, reverse, derived = {}, {}, {}
     for view in document['views']:
         link = view.get('selection_filter')
@@ -94,8 +137,17 @@ def compile_selection_filters(document, webui, source_map):
                 for action in actions_by_selection[selection]:
                     action['params'][value_key] = f'$event.{field}'
             value_key = derived[pair]
-        widgets[view['id']]['dataSource']['query'].setdefault('filters', {})[link['field_ref']] = f'$state.{value_key}'
-        path = f"ui.application.desktop.pageSchema.widgets.@{view['id']}.dataSource.query.filters.{link['field_ref']}"
+        target_widget = widgets[view['id']]
+        if link.get('effect', 'filter') == 'emphasize':
+            target_widget.setdefault('inputs', {})['relationshipEmphasis'] = {
+                'stateKey': value_key,
+                'fieldKey': link['field_ref'],
+                'emptySelection': link.get('empty_selection', 'show_all'),
+            }
+            path = f"ui.application.desktop.pageSchema.widgets.@{view['id']}.inputs.relationshipEmphasis.fieldKey"
+        else:
+            target_widget['dataSource']['query'].setdefault('filters', {})[link['field_ref']] = f'$state.{value_key}'
+            path = f"ui.application.desktop.pageSchema.widgets.@{view['id']}.dataSource.query.filters.{link['field_ref']}"
         source_map.setdefault(f"field:{link['field_ref']}", []).append(path)
         source_map.setdefault(f"view:{view['id']}", []).append(path)
         source_map.setdefault(f'field:{field}', []).append(path)

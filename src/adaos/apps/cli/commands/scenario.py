@@ -649,15 +649,17 @@ def validate_cmd(
     """
     ctx = get_ctx()
     if path:
-        scenario_path = Path(path).expanduser().resolve()
-        if scenario_path.is_dir():
-            scenario_path = scenario_path
+        explicit = Path(path).expanduser().resolve()
+        if explicit.is_file():
+            scenario_path = explicit.parent
         else:
             # если указали путь до файла – поддержим и это
-            scenario_path = scenario_path.parent
+            if (explicit / "scenario.yaml").is_file():
+                scenario_path = explicit
+            else:
+                scenario_path = explicit / scenario_id
     else:
-        scenario_path = ctx.paths.scenarios_workspace_dir()
-    scenario_path = scenario_path / scenario_id
+        scenario_path = ctx.paths.scenarios_workspace_dir() / scenario_id
     report = validate_scenario_path(scenario_path)
     errors = report.errors
     observation = {

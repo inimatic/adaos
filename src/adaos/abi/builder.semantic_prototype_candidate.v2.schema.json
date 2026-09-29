@@ -246,7 +246,8 @@
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" }, "description": "Permanent equality predicates defining this collection, independent of user search/filter controls. Reset never removes these. Empty for an unrestricted view. Do not also offer a query control for the same field." },
-        "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }], "description": "Match this collection's field_ref to source_field_ref (null means id) of the selected source record. Requires an exact declared singular relationship in either direction; prefer implicit id, or use a declared unique target field. Null leaves it unlinked. No selection shows all records. Do not duplicate this field in other filters." },
+        "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }], "description": "Explicit collection interaction contract. Keep row activation separate from record commands: select changes selection, while edit/delete use declared command exposure." },
+        "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }], "description": "Selection-driven relationship projection. Match this collection's field_ref to source_field_ref (null means id) of the selected source record. effect=filter narrows the target; effect=emphasize keeps the global collection visible and marks related rows. Requires an exact declared singular relationship. Do not duplicate this field in other filters." },
         "filter": {
           "anyOf": [{ "$ref": "#/$defs/viewFilter" }, { "type": "null" }]
         },
@@ -257,8 +258,23 @@
       }
     },
     "selectionFilter": {
-      "type": "object", "additionalProperties": false, "required": ["field_ref", "source_view_ref"],
-      "properties": { "field_ref": { "$ref": "#/$defs/id" }, "source_view_ref": { "$ref": "#/$defs/id" }, "source_field_ref": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }], "description": "Selected source record field, not the target field. Null or omitted means implicit id." } }
+      "type": "object", "additionalProperties": false, "required": ["field_ref", "source_view_ref", "effect", "empty_selection"],
+      "properties": {
+        "field_ref": { "$ref": "#/$defs/id" },
+        "source_view_ref": { "$ref": "#/$defs/id" },
+        "source_field_ref": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }], "description": "Selected source record field, not the target field. Null means implicit id." },
+        "effect": { "enum": ["filter", "emphasize"], "description": "filter narrows the target collection; emphasize keeps every target row visible and marks related rows." },
+        "empty_selection": { "type": "string", "const": "show_all", "description": "Before a source row is selected the target stays visible. Additional empty-selection policies remain an ABI extension point." }
+      }
+    },
+    "selectionPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "indicator", "row_activation"],
+      "properties": {
+        "mode": { "enum": ["none", "single"] },
+        "indicator": { "enum": ["none", "radio", "row_accent"] },
+        "row_activation": { "enum": ["none", "select"] }
+      }
     },
     "scopeFilter": {
       "type": "object", "additionalProperties": false, "required": ["field_ref", "value"],
@@ -325,10 +341,20 @@
         },
         "input_field_refs": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
         "fixed_values": { "type": "array", "maxItems": 12, "items": { "$ref": "#/$defs/fieldEntry" } },
+        "exposure": { "$ref": "#/$defs/commandExposure" },
         "guard": {
           "anyOf": [{ "$ref": "#/$defs/guard" }, { "type": "null" }]
         }
       }
+    },
+    "commandExposure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["placement", "presentation"],
+      "properties": {
+        "placement": { "enum": ["collection_header", "row_action", "editor_primary", "editor_danger"] },
+        "presentation": { "enum": ["button", "icon"] }
+      },
+      "description": "User-visible placement of a command. Create normally belongs in collection_header, record editing in row_action, and destructive commands sharing an editor with update belong in editor_danger."
     },
     "representativeState": {
       "type": "object",

@@ -17,6 +17,10 @@ from adaos.services.builder.semantic_prototype import (
     semantic_prototype_generation_guidance,
     validate_semantic_prototype,
 )
+from adaos.services.builder.semantic_revision import (
+    SemanticRevisionError,
+    reconcile_semantic_revision,
+)
 from adaos.services.builder.workflow import BuilderWorkflowError
 from adaos.services.builder_intent import compile_prototype_brief
 
@@ -48,6 +52,69 @@ def test_nonvisual_process_constraints_remain_in_compiled_provenance_not_ui_bind
     brief["residual_requirements"][-1]["statement"] = "Retain the queue when the editor closes"
     with pytest.raises(BuilderWorkflowError, match="no semantic binding or gap"):
         compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+def test_source_preserving_revision_restores_removed_and_retargeted_commands():
+    brief, previous = _multi_resource_fixture()
+    brief.setdefault("residual_requirements", []).append(
+        {
+            "id": "residual:preserve",
+            "statement": (
+                "Preserve the existing resources, fields, commands, operations, "
+                "localization, tasks and audit."
+            ),
+            "evidence": ["intent.statement#char=0:1"],
+            "confidence": 1.0,
+        }
+    )
+    current = copy.deepcopy(previous)
+    current["commands"] = [
+        {
+            **next(item for item in current["commands"] if item["id"] == "save"),
+            "view_ref": "people-list",
+        }
+    ]
+    current["views"] = [
+        item for item in current["views"] if item["id"] != "work-editor"
+    ]
+
+    reconciled = reconcile_semantic_revision(previous, current, brief=brief)
+
+    command_by_id = {
+        item["id"]: item for item in reconciled["semantic_document"]["commands"]
+    }
+    assert command_by_id["save"]["view_ref"] == "work-editor"
+    assert command_by_id["complete"]["view_ref"] == "work-editor"
+    assert "work-editor" in {
+        item["id"] for item in reconciled["semantic_document"]["views"]
+    }
+    assert {
+        (item["kind"], item["id"], item.get("reason"))
+        for item in reconciled["normalizations"]
+        if item["kind"] == "semantic_preserved_command_restored"
+    } == {
+        ("semantic_preserved_command_restored", "save", "retargeted"),
+        ("semantic_preserved_command_restored", "complete", "missing"),
+    }
+
+
+def test_source_preserving_revision_rejects_structural_loss():
+    brief, previous = _multi_resource_fixture()
+    brief.setdefault("residual_requirements", []).append(
+        {
+            "id": "residual:preserve",
+            "statement": "Preserve the existing resources, fields and operations.",
+            "evidence": ["intent.statement#char=0:1"],
+            "confidence": 1.0,
+        }
+    )
+    current = copy.deepcopy(previous)
+    current["resources"][0]["fields"] = current["resources"][0]["fields"][1:]
+
+    with pytest.raises(SemanticRevisionError) as caught:
+        reconcile_semantic_revision(previous, current, brief=brief)
+
+    assert caught.value.findings[0]["code"] == "semantic.preserved_fields_missing"
 
 
 def _text(key: str, en: str, ru: str) -> dict[str, str]:
@@ -1028,7 +1095,7 @@ def test_provider_record_views_cannot_claim_collection_presentations(role) -> No
     _, semantic = _multi_resource_fixture()
     view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == role))
     view.update(surface="inline", media=None, presentation_options=None,
-                field_display=[], section=None, scope_filters=[], selection_filter=None)
+                field_display=[], section=None, scope_filters=[], selection=None, selection_filter=None)
     contract = semantic_prototype_provider_contract(version="v2")
     validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
     validator.validate(view)
@@ -1047,7 +1114,9 @@ def test_provider_collection_requires_a_presentation_and_inline_surface() -> Non
     _, semantic = _multi_resource_fixture()
     view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == "collection"))
     view.update(surface="inline", media=None, presentation_options=None,
-                field_display=[], section=None, scope_filters=[], selection_filter=None)
+                field_display=[], section=None, scope_filters=[],
+                selection={"mode": "single", "indicator": "radio", "row_activation": "select"},
+                selection_filter=None)
     contract = semantic_prototype_provider_contract(version="v2")
     validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
     validator.validate(view)
@@ -1065,6 +1134,8 @@ def test_semantic_model_contract_is_strict_and_bounded(version) -> None:
             if node.get("type") == "object" and "properties" in node:
                 assert node.get("additionalProperties") is False
                 assert set(node.get("required") or []) == set(node["properties"])
+            if "const" in node:
+                assert "type" in node
             for child in node.values():
                 assert_strict(child)
         elif isinstance(node, list):
@@ -3414,19 +3485,64 @@ def test_semantic_v2_editor_surface_preserves_commands_and_source_map(surface, p
     assert all("selected_" in action["enabledIf"] for action in form["actions"])
     assert all(widget["id"] != editor["id"] for widget in application["desktop"]["pageSchema"]["widgets"])
     assert all("ui.application.modals." in ref for ref in result["source_map"][f"view:{editor['id']}"])
-    assert any(widget["id"] == f"open-{editor['id']}" for widget in application["desktop"]["pageSchema"]["widgets"])
     widgets = application["desktop"]["pageSchema"]["widgets"]
-    opener = next(widget for widget in widgets if widget["id"] == f"open-{editor['id']}")
-    assert [button["id"] for button in opener["inputs"]["buttons"]] == ["new"]
-    assert opener["inputs"]["buttons"][0]["label"] == editor["title"]["en"]
-    details = next(widget for widget in widgets if widget["type"] == "item.details")
-    assert any(action["type"] == "openModal" for action in details["actions"])
+    collection = next(widget for widget in widgets if widget["type"] in {"ui.list", "ui.table"})
+    assert [button["id"] for button in collection["inputs"]["headerActions"]] == ["create-item"]
+    expected_row_commands = [
+        command["id"] for command in result["semantic_document"]["commands"]
+        if command["view_ref"] == editor["id"]
+        and command.get("exposure", {}).get("placement") == "row_action"
+    ]
+    assert [button["id"] for button in collection["inputs"]["buttons"]] == expected_row_commands
+    assert {action["on"] for action in collection["actions"]} >= {
+        "click:create-item", f"click:{candidate['commands'][0]['id']}"
+    }
+    assert not any(widget["type"] == "ui.actions" for widget in widgets)
     assert "prototype.editor.new" not in result["locale_dictionaries"]["ru"]
     from jsonschema import ValidationError
     import adaos.services.builder.semantic_prototype as compiler
     modal["pageSchema"] = modal.pop("schema")
     with pytest.raises(ValidationError):
         compiler._validator("webui.v1.schema.json").validate(result["webui"])
+
+
+def test_delete_can_share_record_editor_danger_zone_without_a_page_action() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    editor = next(item for item in candidate["views"] if item["role"] == "editor")
+    editor["surface"] = "modal"
+    owned = [command for command in candidate["commands"] if command["view_ref"] == editor["id"]]
+    owned[0]["exposure"] = {"placement": "row_action", "presentation": "icon"}
+    primary = copy.deepcopy(owned[0])
+    primary.update(
+        id="save-record",
+        exposure={"placement": "editor_primary", "presentation": "button"},
+    )
+    candidate["commands"].append(primary)
+    owned[1].update(
+        kind="delete",
+        input_field_refs=[],
+        fixed_values=[],
+        guard=None,
+        exposure={"placement": "editor_danger", "presentation": "button"},
+    )
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    application = result["webui"]["ui"]["application"]
+    collection = next(
+        widget for widget in application["desktop"]["pageSchema"]["widgets"]
+        if widget["type"] in {"ui.list", "ui.table"}
+    )
+    form = application["modals"][f"editor-{editor['id']}"]["schema"]["widgets"][0]
+
+    assert [button["id"] for button in collection["inputs"]["buttons"]] == [owned[0]["id"]]
+    assert owned[0]["id"] not in {
+        button["id"] for button in form["inputs"]["buttons"]
+    }
+    assert owned[0]["id"] not in {action["id"] for action in form["actions"]}
+    danger = next(button for button in form["inputs"]["buttons"] if button["id"] == owned[1]["id"])
+    assert danger["kind"] == "danger"
+    assert not any(widget["type"] == "ui.actions" for widget in application["desktop"]["pageSchema"]["widgets"])
 
 
 def test_delete_editor_requires_explicit_toolbar_action_instead_of_row_activation() -> None:

@@ -147,6 +147,21 @@ def compile_semantic_candidate(
     )
 
 
+def reconcile_semantic_revision(
+    previous: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply deterministic preservation invariants to an incremental revision."""
+
+    from adaos.services.builder.semantic_revision import (
+        reconcile_semantic_revision as reconcile,
+    )
+
+    return reconcile(previous, current, brief=brief)
+
+
 def expand_requirement_aliases(
     candidate: Mapping[str, Any], *, brief: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -307,6 +322,7 @@ __all__ = [
     "model_context",
     "semantic_revision_context",
     "output_locales",
+    "reconcile_semantic_revision",
     "merge_briefs",
     "normalize_semantic_candidate",
     "semantic_candidate_contract",

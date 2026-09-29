@@ -909,3 +909,38 @@ def test_activity_dispatch_infers_project_composition_for_trial(monkeypatch) -> 
     assert captured["source_webspace_id"] == "desktop-dev"
     assert captured["permission_decision"] is True
     assert captured["verification_evidence"] == sealed_evidence
+
+
+def test_activity_dispatch_preserves_expected_candidate_identity_for_publication(
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    candidate_digest = "sha256:" + "d" * 64
+
+    def publish(*args, **kwargs):
+        captured["args"] = args
+        captured.update(kwargs)
+        return {"ok": True, "status": "published"}
+
+    monkeypatch.setattr(lifecycle, "publish_candidate", publish)
+
+    lifecycle.invoke_activity_command(
+        "begin_publication",
+        "scenario",
+        "automation_manager_prototype",
+        actor="agent:codex-local-beta",
+        idempotency_key="publish-1",
+        input_value={
+            "expected_candidate_id": "automation_manager_prototype-0-1-6-candidate",
+            "expected_candidate_digest": candidate_digest,
+        },
+    )
+
+    assert captured["args"] == ("scenario", "automation_manager_prototype")
+    assert captured["actor"] == "agent:codex-local-beta"
+    assert captured["idempotency_key"] == "publish-1"
+    assert (
+        captured["expected_candidate_id"]
+        == "automation_manager_prototype-0-1-6-candidate"
+    )
+    assert captured["expected_candidate_digest"] == candidate_digest

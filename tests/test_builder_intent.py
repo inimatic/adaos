@@ -68,6 +68,8 @@ def test_review_stop_is_a_retained_process_boundary(statement):
         "The Prototype visibly and coherently satisfies: Make exactly one copy edit in widget role-guide, item owners: change the English content sentence 'Owner remains unique.' to 'The owner remains unique.' Do not add, remove, reorder, or rename any widget, field, action, binding, resource, locale key, or layout region.",
         "The Prototype visibly and coherently satisfies: In widget role-guide item owners, change only the English sentence 'Owner remains unique.' to 'The owner remains unique.'.",
         "The Prototype visibly and coherently satisfies: Produce one coherent Prototype revision containing only these validation and copy corrections.",
+        "Preserve the existing resources, fields, localization, Codex operations, readiness, tasks and audit.",
+        "Сохрани существующие ресурсы, поля, локализацию, операции Codex, readiness, задачи и аудит.",
     ],
 )
 def test_source_revision_instructions_are_process_constraints(statement):

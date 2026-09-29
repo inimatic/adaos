@@ -24,6 +24,10 @@ const commandSequence = String(process.env.ADAOS_E2E_COMMAND_SEQUENCE || '').spl
     const [command, option] = value.split(':', 2).map(part => part.trim())
     return { command, option: option || null }
   })
+const recordEditorCommands = new Set(
+  String(process.env.ADAOS_E2E_RECORD_EDITOR_COMMANDS || '').split(',')
+    .map(value => value.trim()).filter(Boolean),
+)
 
 if (!scenario || !webspace || !subnet || !token) {
   throw new Error('Scenario, paired DEV webspace, subnet, and local control token are required')
@@ -343,15 +347,50 @@ try {
           await option.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
           await option.click({ timeout: interactionTimeoutMs })
         }
-        authoritativeDataSettled = await waitForAuthoritativeData(
-          page,
-          sample,
-          `command:${step.command}`,
-        ) && authoritativeDataSettled
         sample.checks.push({ kind: 'command-sequence', command: step.command, option: step.option })
         const activeModal = page.locator('ion-modal.show-modal').last()
+        if (recordEditorCommands.has(step.command)) {
+          try {
+            await activeModal.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+          } catch {
+            sample.hard_failures.push(`Record editor command ${step.command} did not open a modal`)
+          }
+        }
         if (await activeModal.count()) {
-          const modalDiagnostics = await activeModal.evaluate(element => {
+          const activeModalId = await activeModal.getAttribute('id')
+          const inspectedModal = activeModalId
+            ? page.locator(`ion-modal#${activeModalId}`)
+            : activeModal
+          if (recordEditorCommands.has(step.command)) {
+            try {
+              await page.waitForFunction(command => {
+                const modal = [...document.querySelectorAll('ion-modal.show-modal')].at(-1)
+                if (!modal) return false
+                const controls = [...modal.querySelectorAll('input, textarea, select, ion-select, ion-toggle')]
+                  .filter(element => {
+                    const style = getComputedStyle(element)
+                    return element.getClientRects().length > 0
+                      && style.visibility !== 'hidden'
+                      && style.display !== 'none'
+                  })
+                const populated = controls.filter(element => {
+                  if ('checked' in element && element.checked) return true
+                  const value = 'value' in element ? element.value : element.getAttribute('value')
+                  return value !== undefined && value !== null && String(value).trim() !== ''
+                })
+                const enabled = controls.filter(element => (
+                  !element.hasAttribute('disabled')
+                  && element.getAttribute('aria-disabled') !== 'true'
+                ))
+                return controls.length > 0 && populated.length > 0 && enabled.length > 0
+              }, step.command, { timeout: interactionTimeoutMs })
+            } catch {
+              sample.hard_failures.push(
+                `Record editor opened by ${step.command} did not hydrate an editable record`,
+              )
+            }
+          }
+          const modalDiagnostics = await inspectedModal.evaluate(element => {
             const visible = child => {
               const style = getComputedStyle(child)
               return child.getClientRects().length > 0
@@ -359,6 +398,13 @@ try {
                 && style.display !== 'none'
             }
             const widgets = [...element.querySelectorAll('[data-webui-widget-id]')].filter(visible)
+            const controls = [...element.querySelectorAll('input, textarea, select, ion-select, ion-toggle')]
+              .filter(visible)
+            const populatedControls = controls.filter(control => {
+              if ('checked' in control && control.checked) return true
+              const value = 'value' in control ? control.value : control.getAttribute('value')
+              return value !== undefined && value !== null && String(value).trim() !== ''
+            })
             return {
               id: element.id || null,
               schema: Boolean(element.querySelector('ada-schema-modal')),
@@ -366,6 +412,8 @@ try {
               visible_widget_ids: widgets
                 .map(widget => widget.getAttribute('data-webui-widget-id'))
                 .filter(Boolean),
+              control_count: controls.length,
+              populated_control_count: populatedControls.length,
             }
           })
           sample.checks.push({
@@ -382,7 +430,24 @@ try {
             path: path.join(output, `${layout}-command-${step.command}.png`),
             fullPage: true,
           })
+          const schemaClose = inspectedModal.locator('ada-schema-modal ion-header ion-button').last()
+          if (await schemaClose.count()) {
+            await schemaClose.click({ timeout: interactionTimeoutMs })
+          } else {
+            await page.keyboard.press('Escape')
+          }
+          try {
+            await inspectedModal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
+            await page.waitForTimeout(200)
+          } catch {
+            sample.hard_failures.push(`Modal opened by ${step.command} did not close after inspection`)
+          }
         }
+        authoritativeDataSettled = await waitForAuthoritativeData(
+          page,
+          sample,
+          `command:${step.command}`,
+        ) && authoritativeDataSettled
       }
 
       const selectableSelector = [
@@ -470,10 +535,35 @@ try {
       let selectableItems = collectionRegions.locator(selectableSelector)
       if (compactSelectionRegion) selectableItems = compactSelectionRegion.locator(selectableSelector)
       const selectableCount = await selectableItems.count()
+      const selectableCandidates = []
       for (let index = 0; index < selectableCount; index += 1) {
         const item = selectableItems.nth(index)
         if (!(await item.isVisible())) continue
-        console.error(`[builder-browser-feedback] ${layout}:selection:${index + 1}:start`)
+        selectableCandidates.push({
+          index,
+          selected: (await item.getAttribute('aria-selected')) === 'true'
+            || (await item.getAttribute('aria-current')) === 'true'
+            || (await item.getAttribute('aria-current')) === 'step'
+            || (await item.getAttribute('class') || '').split(/\s+/).some(value => (
+              value === 'row-selected' || value === 'is-selected'
+            )),
+        })
+      }
+      // A preselected first row is common for master/detail tables. Exercise an
+      // actual transition whenever another visible candidate exists; clicking
+      // the already selected row produces a misleading green browser receipt.
+      selectableCandidates.sort((left, right) => Number(left.selected) - Number(right.selected))
+      let selectionAttempts = 0
+      for (const candidate of selectableCandidates.slice(0, 3)) {
+        selectionAttempts += 1
+        const item = selectableItems.nth(candidate.index)
+        console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:start`)
+        const before = await item.evaluate(element => ({
+          ariaSelected: element.getAttribute('aria-selected'),
+          ariaCurrent: element.getAttribute('aria-current'),
+          className: element.getAttribute('class') || '',
+          relatedRows: document.querySelectorAll('tr.row-related').length,
+        }))
         try {
           await item.focus({ timeout: interactionTimeoutMs })
           await item.click({ timeout: interactionTimeoutMs })
@@ -481,18 +571,61 @@ try {
           sample.hard_failures.push(
             `Primary selection could not be activated: ${String(error?.message || error)}`,
           )
-          console.error(`[builder-browser-feedback] ${layout}:selection:${index + 1}:failed`)
+          console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:failed`)
           break
+        }
+        await page.waitForTimeout(100)
+        const after = await item.evaluate(element => ({
+          ariaSelected: element.getAttribute('aria-selected'),
+          ariaCurrent: element.getAttribute('aria-current'),
+          className: element.getAttribute('class') || '',
+          relatedRows: document.querySelectorAll('tr.row-related').length,
+        }))
+        const declaresSelection = before.ariaSelected !== null
+          || /(^|\s)(row-selectable|is-selectable)(\s|$)/.test(before.className)
+        const becameSelected = after.ariaSelected === 'true'
+          || after.ariaCurrent === 'true'
+          || after.ariaCurrent === 'step'
+          || /(^|\s)(row-selected|is-selected)(\s|$)/.test(after.className)
+        if (declaresSelection && !becameSelected) {
+          sample.hard_failures.push('Primary selection activated without an observable selected state')
+        }
+        if (!candidate.selected && JSON.stringify(before) === JSON.stringify(after)) {
+          sample.hard_failures.push('Primary selection did not change selection or relationship emphasis state')
         }
         authoritativeDataSettled = await waitForAuthoritativeData(
           page,
           sample,
           'primary-selection',
         ) && authoritativeDataSettled
-        sample.checks.push({ kind: 'primary-selection', count: selectableCount })
+        sample.checks.push({
+          kind: 'primary-selection',
+          count: selectableCount,
+          candidate_index: candidate.index,
+          was_selected: candidate.selected,
+          became_selected: becameSelected,
+          related_rows_before: before.relatedRows,
+          related_rows_after: after.relatedRows,
+        })
         await page.screenshot({ path: path.join(output, `${layout}-selection.png`), fullPage: true })
-        console.error(`[builder-browser-feedback] ${layout}:selection:${index + 1}:captured`)
-        break
+        console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:captured`)
+        // Relationship-emphasis tables need more than a generic selection
+        // proof: exercise up to three parents until a related child becomes
+        // observable. Ordinary collections remain bounded to the same limit.
+        if (after.relatedRows > 0 || selectionAttempts >= 3) break
+        if (layout === 'compact') {
+          const overlayRegion = interactionRoot.locator([
+            'ada-layout-region.is-open[data-region-role="detail"]',
+            'ada-layout-region.is-open[data-region-role="inspector"]',
+          ].join(', ')).filter({ visible: true }).last()
+          if (await overlayRegion.count()) {
+            const close = overlayRegion.locator('.layout-region__header button').first()
+            if (await close.count()) {
+              await close.click({ timeout: interactionTimeoutMs })
+              await page.waitForTimeout(150)
+            }
+          }
+        }
       }
 
       const semanticTabList = interactionRoot.locator(

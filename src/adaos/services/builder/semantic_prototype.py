@@ -906,7 +906,8 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["selectionFilter"]["required"].append("source_field_ref")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
-        contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section", "scope_filters", "selection_filter"])
+        contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section", "scope_filters", "selection", "selection_filter"])
+        contract["$defs"]["command"]["required"].append("exposure")
         if _view_variants:
             # Record projections cannot use collection presentations or query links.
             # Keep retained authoring/patch shapes compatible; constrain fresh output.
@@ -918,7 +919,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             )
             record = copy.deepcopy(contract["$defs"]["view"])
             record["properties"]["role"] = {"type": "string", "enum": ["details", "editor"]}
-            for name in ("presentation", "presentation_options", "selection_filter", "filter", "empty_state"):
+            for name in ("presentation", "presentation_options", "selection", "selection_filter", "filter", "empty_state"):
                 record["properties"][name] = {"type": "null"}
             contract["$defs"]["view"] = {"anyOf": [collection, record]}
         if brief is not None:
@@ -1012,16 +1013,16 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
                           "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection. Equality filters accept only field_types, not long_text, markdown or array fields. Search has field_ref=null; use it for free text rather than adding an unsupported equality filter."},
-        "command_ownership": "Every command, including delete or a fixed-value transition, belongs to an editor view. A collection or details view is not a command owner. For a focused action use an editor with surface=modal/side_sheet and the necessary context fields; Core provides its opener and selected record. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs.",
-        "view_roles": "A collection browses repeated records and owns its presentation, query controls, empty state and selection links. Details projects fields from one selected record of the SAME resource; it is not a grouped collection or relationship lookup. An editor owns commands and their inputs. Details/editor have presentation=null, presentation_options=null, selection_filter=null, filter=null, empty_state=null and query_controls=[], field_display=[], scope_filters=[]. Use a collection, not details, for selectable or grouped summaries. When an exact product-view budget requires selected-record details and commands on one surface, use one supporting inline editor as the combined detail/action surface; do not add separate details plus editor views.",
-        "selection_links": "When selecting a row or tree node must change another collection, set that target's selection_filter={field_ref: target field, source_view_ref: source collection id, source_field_ref: selected source field (null means id)}. Parent-to-children uses target FK/source key; selected child-to-parent uses target key/source FK. Prefer implicit id as key; a declared unique business key is also supported. Both endpoints must exactly match the declared singular relationship, not matching names. Links must be acyclic. Core owns selection state and clears descendant selections when their parent changes; do not guess state_ref names. No selection shows all records. A dropdown is not following a selected row. Do not expose other filters on this linked field. Prefer selection_filter over legacy filter.",
+        "command_ownership": "Every command belongs to one editor view, while command.exposure declares where the user invokes it. Use collection_header for create, row_action for explicit record edit/action, and editor_danger for destructive commands that share an editor with the record update. Never turn row selection into edit unless row_activation explicitly requests it. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs.",
+        "view_roles": "A collection browses repeated records and owns its presentation, query controls, empty state, explicit selection policy and selection links. Details projects fields from one selected record of the SAME resource. An editor owns commands and their inputs. Details/editor have presentation=null, presentation_options=null, selection=null, selection_filter=null, filter=null, empty_state=null and query_controls=[], field_display=[], scope_filters=[]. Use a collection for selectable or grouped summaries.",
+        "selection_links": "For every collection declare selection={mode,indicator,row_activation}; normal CRUD tables use single/radio/select. When selecting a row changes another collection, set the target selection_filter with field_ref, source_view_ref, source_field_ref (null means id), effect and empty_selection. Use effect=emphasize with empty_selection=show_all for a global child pool whose related rows should be highlighted without disappearing; use effect=filter only when selection is intended to narrow the child collection. Both endpoints must match one declared singular relationship. Links are acyclic and Core owns their state.",
         "deferred_computations": "When a requested computation or rule is deferred, show plausible representative OUTPUT values and their meaning in an inspectable view. A description or raw inputs alone do not illustrate the requested result. Clearly disclose that these values are fixtures, not live calculations. Do not build data concepts used only by future Automation.",
         "command_guards": "Guards reference fields of the command's own editor resource only. A predicate over several related records is not a single-record field guard; preserve such business rules for Automation with visible representative outcomes.",
         "form_guidance": "Use localized field.help_text for persistent guidance and field.placeholder for non-submitted examples. When scale or format is not obvious, include a realistic example such as a host name, IP address, secret reference, image tag, CPU count, or memory size. Examples are guidance, never default values.",
         "field_validation": "An unconditionally mandatory input uses field.required=true, editable=true and belongs to the editor's field_refs and command.input_field_refs. This compiles to executable local form validation; conditional guards are for conditional obligations, not a substitute for required. Bind a validation requirement to the field and its editor/command, even if the Brief calls it a representative state. An invalid UNSAVED form is not a stored record state: never add empty/invalid records or a field_predicate fixture to demonstrate rejection. The browser must exercise invalid submit and cancel; structural bindings alone are not behavioral acceptance.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
         "state_rules": "States are test cases of the same UI, not separate resources. Every independent state requirement from the Brief must bind exactly one distinct state proof; binding only a view or field is not state evidence. collection_empty runs that collection with an empty response fixture; keep its normal populated records and declare empty_state. Never clone a resource or add a separate Samples collection just to demonstrate emptiness. Other proofs count normal fixtures satisfying ALL predicates. States do not inherit other states' filters; view.filter is a user-controlled value, not a fixed base predicate. query_empty needs a reachable combination of equality filters with zero matches; choice values must be declared options. Predicate fields must be visible. An illustrative result is not a business computation. Choose proofs relevant to the request, not one of each kind.",
-        "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable relationship filter when the workflow requires inspecting one selected item's linked records; an unfiltered list of raw IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
+        "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable selection_filter when the workflow requires inspecting one selected item's linked records: use effect=filter to narrow a contextual child collection, or effect=emphasize to retain a global pool and mark related rows. A raw list of foreign IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
             "collection_presentations": "Use board for lanes of a choice field; presentation_options.draggable enables persisted moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. These are capabilities, not a mandatory checklist.",
@@ -1030,7 +1031,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "text": "Text wraps by default in list/card metadata and table cells. field_display can explicitly request wrap or truncate and start/center/end alignment per visible field on list/table/cards/accordion collections ONLY; other presentations, details and editors use field_display=[]. Keep essential values readable; use truncation only for compact summaries with details available.",
             "query_scope": "scope_filters define permanent equality constraints for a collection, not user filter defaults. They survive reset. Use them when a tab must always show only a subset. Query controls narrow that scope on other fields; never reuse its field for a resettable filter. Representative states count records inside the permanent scope. A section title alone does not filter records.",
             "editor_inputs": "Only fields consumed by this editor's command input_field_refs are writable here. Other listed fields are read-only context; fixed_values are not editable inputs. A field may be writable in one editor and read-only in another.",
-            "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. region_role is actual placement: primary for the main task, supporting for selected details or secondary work, actions for a footer. Putting every view in primary creates one long column even in split. Prefer one primary collection and contextual details; reserve flow for genuinely linear work. Supporting is a real region, not merely a label.",
+            "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. A related-collections workspace may use stacked table collections in one region: their selection_filter expresses filter or emphasis independently of geometry. region_role is actual placement. Prefer one primary collection and contextual supporting work; reserve flow for genuinely linear work.",
             "editor_surface": "Use surface=modal for a short focused create/edit task, side_sheet for an overlay while surrounding context remains visible, and inline for a persistent work area. An explicit wide supporting pane or in-place selected detail requires surface=inline: side_sheet/modal is an overlay and does not satisfy that request. Collections and details stay inline. The compiler owns openers, selection, form hydration, save/error and dismissal. No surface is mandatory unless the requested interaction names or entails it.",
             "progressive_disclosure": "Keep the main screen focused on the user's primary job. Put secondary fields in details and consider an on-demand editor instead of showing every form at once. Do not add hypothetical features or multiply views only to look complete.",
         },
@@ -2747,10 +2748,34 @@ def _canonicalize_semantic_prototype_candidate_v2(
             view.setdefault("field_display", [])
             view.setdefault("section", None)
             view.setdefault("scope_filters", [])
+            if view.get("role") == "collection":
+                view.setdefault(
+                    "selection",
+                    {
+                        "mode": "none" if view.get("presentation") == "chart" else "single",
+                        "indicator": "none" if view.get("presentation") == "chart" else "radio",
+                        "row_activation": "none" if view.get("presentation") == "chart" else "select",
+                    },
+                )
+            else:
+                view.setdefault("selection", None)
             view.setdefault("selection_filter", None)
             view.setdefault("media", None)
             if view.get("selection_filter"):
                 view["selection_filter"].setdefault("source_field_ref", None)
+                view["selection_filter"].setdefault("effect", "filter")
+                view["selection_filter"].setdefault("empty_selection", "show_all")
+    for command in candidate.get("commands") or []:
+        if not isinstance(command, dict):
+            continue
+        kind = str(command.get("kind") or "")
+        command.setdefault(
+            "exposure",
+            {
+                "placement": "collection_header" if kind == "create" else "row_action",
+                "presentation": "button" if kind == "create" else "icon",
+            },
+        )
     try:
         Draft202012Validator(
             semantic_prototype_provider_contract(version="v2", locales=_text_locales(candidate["title"]), _view_variants=False)
@@ -2814,7 +2839,10 @@ def _canonicalize_semantic_prototype_candidate_v2(
                     legacy_view(item)
                 for item in resource_views
             ],
-            "commands": copy.deepcopy(resource_commands),
+            "commands": [
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "exposure"}
+                for item in resource_commands
+            ],
             "representative_states": [
                 {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
                 for item in resource_states
@@ -2887,10 +2915,13 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 {**entry, "field_ref": field_refs_by_resource[raw_resource_id].get(entry["field_ref"], entry["field_ref"])}
                 for entry in raw_view.get("scope_filters") or []
             ]
+            normalized_view["selection"] = copy.deepcopy(raw_view.get("selection"))
             link = raw_view.get("selection_filter")
             normalized_view["selection_filter"] = {
                 "field_ref": field_refs_by_resource[raw_resource_id].get(link["field_ref"], link["field_ref"]),
                 "source_view_ref": _canonical_candidate_identifier(link["source_view_ref"], namespace="view"),
+                "effect": link["effect"],
+                "empty_selection": link["empty_selection"],
             } if link else None
             if link and "source_field_ref" in link:
                 source_view = next((item for item in raw_views if item.get("id") == link["source_view_ref"]), {})
@@ -2923,7 +2954,9 @@ def _canonicalize_semantic_prototype_candidate_v2(
             command_ids[str(raw_command.get("id") or "")] = str(
                 normalized_command["id"]
             )
-            normalized_commands.append(dict(normalized_command))
+            normalized_commands.append(
+                {**dict(normalized_command), "exposure": copy.deepcopy(raw_command["exposure"])}
+            )
 
         for raw_state, normalized_state in zip(
             resource_states, normalized["representative_states"], strict=True
@@ -3277,7 +3310,10 @@ def _lower_semantic_prototype_candidate_v2(
                     legacy_view(item)
                     for item in views
                 ],
-                "commands": copy.deepcopy(commands),
+                "commands": [
+                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "exposure"}
+                    for item in commands
+                ],
                 "representative_states": [
                     {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
                     for item in states
@@ -3290,7 +3326,10 @@ def _lower_semantic_prototype_candidate_v2(
         lowered_resources.append(dict(lowered["resource"]))
         for original, view in zip(views, lowered["views"], strict=True):
             lowered_views.append({**dict(view), "resource_ref": resource_id, **view_extras(original)})
-        lowered_commands.extend(dict(item) for item in lowered["commands"])
+        for original, command in zip(commands, lowered["commands"], strict=True):
+            lowered_commands.append(
+                {**dict(command), "exposure": copy.deepcopy(original["exposure"])}
+            )
         for original, state in zip(states, lowered["representative_states"], strict=True):
             lowered_states.append(
                 {**dict(state), "proof": copy.deepcopy(dict(original["proof"]))}
@@ -3536,6 +3575,30 @@ def _semantic_v2_model_findings(
                 }
             )
         resource = resources.get(str(view.get("resource_ref") or ""))
+        exposure = command.get("exposure") or {}
+        placement = str(exposure.get("placement") or "")
+        kind = str(command.get("kind") or "")
+        exposure_error = ""
+        if placement == "collection_header" and kind != "create":
+            exposure_error = "collection_header is reserved for create commands"
+        elif placement == "row_action" and kind == "create":
+            exposure_error = "create commands belong in collection_header, not a record row"
+        elif placement == "editor_danger" and kind != "delete":
+            exposure_error = "editor_danger is reserved for delete commands"
+        elif placement == "editor_danger" and not any(
+            other is not command
+            and other.get("view_ref") == view_ref
+            and (other.get("exposure") or {}).get("placement") in {"collection_header", "row_action"}
+            for other in document.get("commands") or []
+        ):
+            exposure_error = "a modal editor_danger command needs a sibling command that opens the same editor"
+        if exposure_error:
+            findings.append({
+                "code": "semantic.command_exposure_invalid",
+                "path": f"$.commands[{command_index}].exposure",
+                "semantic_refs": [f"command:{command_id}", f"view:{view_ref}"],
+                "detail": f"command {command_id!r}: {exposure_error}",
+            })
         if resource:
             local_fields = {field["id"] for field in resource["fields"]}
             guard = command.get("guard") or {}
@@ -3849,7 +3912,11 @@ def _validate_semantic_prototype_v2(
                 for item in resource_views
             ],
             "commands": [
-                copy.deepcopy(item)
+                {
+                    key: copy.deepcopy(value)
+                    for key, value in item.items()
+                    if key != "exposure"
+                }
                 for item in commands.values()
                 if str(item["view_ref"]) in view_ids
             ],
@@ -4096,6 +4163,143 @@ def _normalize_v2_ownership(document: dict[str, Any], *, brief: Mapping[str, Any
     return close_bindings(document, brief)
 
 
+def _compile_declared_editor_exposure(
+    *,
+    document: Mapping[str, Any],
+    view: Mapping[str, Any],
+    commands: Sequence[Mapping[str, Any]],
+    editor: dict[str, Any],
+    widgets: list[dict[str, Any]],
+    application: dict[str, Any],
+    source_map: dict[str, list[str]],
+) -> bool:
+    """Compile explicit semantic command placement instead of positional toolbars."""
+
+    if not commands or any(not isinstance(command.get("exposure"), Mapping) for command in commands):
+        return False
+    selection = str(editor["inputs"]["selectedStateKey"])
+    surface = str(view.get("surface", "inline"))
+    collections = [
+        item
+        for item in document["views"]
+        if item.get("resource_ref") == view["resource_ref"] and item.get("role") == "collection"
+    ]
+    collection_widgets = [
+        next((widget for widget in widgets if widget.get("id") == item.get("id")), None)
+        for item in collections
+    ]
+    collection_widgets = [widget for widget in collection_widgets if widget is not None]
+    modal_id = f"editor-{view['id']}"
+    if surface != "inline":
+        widgets.remove(editor)
+        editor["area"] = "main"
+        editor["inputs"]["closeOnSuccess"] = True
+        application.setdefault("modals", {})[modal_id] = {
+            "title": editor["title"],
+            "title_i18n": editor["title_i18n"],
+            "presentation": {"kind": "sideSheet" if surface == "side_sheet" else "modal"},
+            "schema": {
+                "id": modal_id,
+                "layout": {
+                    "version": 2,
+                    "pattern": "task-flow",
+                    "density": "comfortable",
+                    "contentWidth": "reading",
+                    "scroll": "page",
+                    "regions": [{
+                        "id": "main", "role": "main", "priority": 100, "scroll": "page",
+                        "presentation": {"wide": "pane", "compact": "stack"},
+                    }],
+                    "interaction": {"actions": "adaptive"},
+                },
+                "widgets": [editor],
+            },
+        }
+        old = f"ui.application.desktop.pageSchema.widgets.@{view['id']}"
+        new = f"ui.application.modals.{modal_id}.schema.widgets.@{view['id']}"
+        for refs in source_map.values():
+            refs[:] = [ref.replace(old, new) if ref == old or ref.startswith(old + ".") else ref for ref in refs]
+
+    form_buttons = {
+        str(button.get("id")): button
+        for button in editor.get("inputs", {}).get("buttons", [])
+        if isinstance(button, Mapping)
+    }
+    external_openers = 0
+    for command in commands:
+        command_id = str(command["id"])
+        kind = str(command["kind"])
+        exposure = command["exposure"]
+        placement = str(exposure["placement"])
+        presentation = str(exposure["presentation"])
+        form_button = form_buttons.get(command_id, {})
+        if placement in {"editor_primary", "editor_danger"}:
+            if form_button:
+                form_button["kind"] = "danger" if placement == "editor_danger" else "primary"
+            continue
+        if not collection_widgets:
+            raise BuilderWorkflowError(
+                f"command {command_id!r} exposure {placement!r} requires a collection for resource {view['resource_ref']!r}"
+            )
+        collection = collection_widgets[0]
+        label = str(form_button.get("label") or editor.get("title") or command_id)
+        button: dict[str, Any] = {
+            "id": command_id,
+            "label": label,
+            **({"label_i18n": copy.deepcopy(form_button["label_i18n"])} if form_button.get("label_i18n") else {}),
+            "icon": "add-outline" if kind == "create" else "trash-outline" if kind == "delete" else "create-outline",
+        }
+        if placement == "row_action" and presentation == "icon":
+            button["title"] = label
+            button.pop("label", None)
+        is_editor_opener = placement == "row_action" and any(
+            other is not command
+            and other.get("view_ref") == command.get("view_ref")
+            and other.get("kind") == command.get("kind")
+            and (other.get("exposure") or {}).get("placement") == "editor_primary"
+            for other in commands
+        )
+        if is_editor_opener:
+            # A row action is the record-aware entry point into the editor.  It
+            # must not also survive as a submit button inside that editor: doing
+            # so turns an innocent "Edit" affordance into a second, partial
+            # resource mutation.  The matching editor_primary command is the
+            # explicit evidence that this row command is an opener.  Without
+            # that sibling we preserve the older direct row-command behaviour.
+            editor.get("inputs", {})["buttons"] = [
+                item
+                for item in editor.get("inputs", {}).get("buttons", [])
+                if str(item.get("id") or "") != command_id
+            ]
+            editor["actions"] = [
+                item
+                for item in editor.get("actions", [])
+                if str(item.get("id") or "") != command_id
+            ]
+            source_map[f"command:{command_id}"] = []
+        input_key = "headerActions" if placement == "collection_header" else "buttons"
+        collection.setdefault("inputs", {}).setdefault(input_key, []).append(button)
+        event = f"click:{command_id}"
+        collection.setdefault("actions", []).append({
+            "on": event,
+            "type": "updateState",
+            "params": {selection: "" if kind == "create" else "$event.id"},
+        })
+        if surface != "inline":
+            collection["actions"].append({
+                "on": event, "type": "openModal", "params": {"modalId": modal_id},
+            })
+        source_map.setdefault(f"command:{command_id}", []).append(
+            f"ui.application.desktop.pageSchema.widgets.@{collection['id']}.inputs.{input_key}.@{command_id}"
+        )
+        external_openers += 1
+    if surface != "inline" and not external_openers:
+        raise BuilderWorkflowError(
+            f"modal editor {view['id']!r} needs at least one collection_header or row_action command exposure"
+        )
+    return True
+
+
 def _compile_editor_surfaces(
     document: Mapping[str, Any], webui: dict[str, Any], source_map: dict[str, list[str]],
     dictionaries: dict[str, dict[str, str]],
@@ -4111,6 +4315,16 @@ def _compile_editor_surfaces(
         editor = next(widget for widget in widgets if widget["id"] == view["id"])
         selection = editor["inputs"]["selectedStateKey"]
         commands = [command for command in document["commands"] if command["view_ref"] == view["id"]]
+        if _compile_declared_editor_exposure(
+            document=document,
+            view=view,
+            commands=commands,
+            editor=editor,
+            widgets=widgets,
+            application=application,
+            source_map=source_map,
+        ):
+            continue
         toolbar: dict[str, Any] = {
             "id": f"open-{view['id']}", "area": view["region_role"], "type": "ui.actions",
             "inputs": {"variant": "adaptiveToolbar", "buttons": []}, "actions": [],
@@ -4265,7 +4479,11 @@ def _compile_semantic_prototype_v2(
                 for item in resource_views
             ],
             "commands": [
-                copy.deepcopy(item)
+                {
+                    key: copy.deepcopy(value)
+                    for key, value in item.items()
+                    if key != "exposure"
+                }
                 for item in document["commands"]
                 if str(item["view_ref"]) in view_ids
             ],

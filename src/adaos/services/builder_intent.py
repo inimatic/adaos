@@ -74,6 +74,8 @@ def process_constraint_kind(statement: str) -> str | None:
             r"(?:it )?must never (?:create|copy|fork|edit)(?:,? (?:or|and)? ?(?:create|copy|fork|edit))* (?:a |the )?provider implementation",
             r"(?:сохрани|используй) (?:существующие|текущие) языки(?: интерфейса)?",
             r"не переименовывай (?:существующие )?идентификаторы полей",
+            r"(?:preserve|keep|retain)\s+(?:the\s+)?existing\s+.{1,320}\b(?:resources?|fields?|commands?|operations?|locali[sz]ation|views?|tasks?|audit)\b.*",
+            r"сохран\w*\s+существующ\w*\s+.{1,320}\b(?:resources?|fields?|commands?|operations?|locali[sz]ation|codex|readiness|audit|ресурс\w*|пол\w*|команд\w*|операц\w*|локализ\w*|задач\w*|аудит\w*)\b.*",
         ),
         "automation_scope": (
             r"(?:describe|document|outline|explain) (?:the )?(?:implementation|data migration|implementation/data migration)(?: work)? (?:needed by|required (?:by|for)|for) (?:the )?(?:automation|codex)(?: (?:stage|phase))?",

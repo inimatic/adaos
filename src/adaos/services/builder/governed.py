@@ -172,6 +172,8 @@ def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mappin
         )
     mapping = {
         "prototype_revision_recorded": "record_prototype_revision",
+        "request_prototype_review": "request_prototype_review",
+        "revise_prototype": "revise_prototype",
         "prototype_experiment_recorded": "record_prototype_experiment",
         "adopt_experiment": "adopt_prototype_experiment",
         "discard_experiment": "discard_prototype_experiment",
@@ -215,6 +217,8 @@ def legacy_action_for_command(command: str) -> str | None:
         return "supersede_change"
     mapping = {
         "record_prototype_revision": "prototype_revision_recorded",
+        "request_prototype_review": "request_prototype_review",
+        "revise_prototype": "revise_prototype",
         "record_prototype_experiment": "prototype_experiment_recorded",
         "adopt_prototype_experiment": "adopt_experiment",
         "discard_prototype_experiment": "discard_experiment",

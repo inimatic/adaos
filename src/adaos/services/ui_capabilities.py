@@ -1733,6 +1733,60 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                                 "option_values": sorted(option_values),
                             }
                         )
+            if widget_type == "ui.table":
+                action_events = {
+                    str(action.get("on") or "").strip()
+                    for action in actions
+                    if isinstance(action, Mapping)
+                }
+                for button_group in ("buttons", "headerActions"):
+                    declared = (
+                        inputs.get(button_group)
+                        if isinstance(inputs.get(button_group), list)
+                        else []
+                    )
+                    for button_index, button in enumerate(declared):
+                        button_id = (
+                            str(button.get("id") or "").strip()
+                            if isinstance(button, Mapping)
+                            else ""
+                        )
+                        if button_id and f"click:{button_id}" not in action_events:
+                            findings.append(
+                                {
+                                    "code": "ui.table.button_action_missing",
+                                    "severity": "error",
+                                    "path": f"{widget_path}.inputs.{button_group}[{button_index}]",
+                                    "message": (
+                                        f"ui.table {button_group} command {button_id!r} requires "
+                                        f"widget.actions on='click:{button_id}'."
+                                    ),
+                                }
+                            )
+                selected_state_key = str(inputs.get("selectedStateKey") or "").strip()
+                indicator = str(inputs.get("selectionIndicator") or "none")
+                if indicator != "none" and not selected_state_key:
+                    findings.append(
+                        {
+                            "code": "ui.table.selection_state_missing",
+                            "severity": "error",
+                            "path": f"{widget_path}.inputs.selectionIndicator",
+                            "message": "A visible table selection indicator requires inputs.selectedStateKey.",
+                        }
+                    )
+                emphasis = inputs.get("relationshipEmphasis")
+                if isinstance(emphasis, Mapping) and not (
+                    str(emphasis.get("stateKey") or "").strip()
+                    and str(emphasis.get("fieldKey") or "").strip()
+                ):
+                    findings.append(
+                        {
+                            "code": "ui.table.relationship_emphasis_invalid",
+                            "severity": "error",
+                            "path": f"{widget_path}.inputs.relationshipEmphasis",
+                            "message": "Table relationship emphasis requires stateKey and fieldKey.",
+                        }
+                    )
             if (
                 widget_type == "item.details"
                 and str(data_source.get("kind") or "") == "static"

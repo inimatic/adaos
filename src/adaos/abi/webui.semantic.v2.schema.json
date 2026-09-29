@@ -282,6 +282,7 @@
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" } },
+        "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }] },
         "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }] },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": {
@@ -314,8 +315,24 @@
       ]
     },
     "selectionFilter": {
-      "type": "object", "additionalProperties": false, "required": ["field_ref", "source_view_ref"],
-      "properties": { "field_ref": { "$ref": "#/$defs/id" }, "source_view_ref": { "$ref": "#/$defs/id" }, "source_field_ref": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] } }
+      "type": "object", "additionalProperties": false,
+      "required": ["field_ref", "source_view_ref", "effect", "empty_selection"],
+      "properties": {
+        "field_ref": { "$ref": "#/$defs/id" },
+        "source_view_ref": { "$ref": "#/$defs/id" },
+        "source_field_ref": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "effect": { "enum": ["filter", "emphasize"] },
+        "empty_selection": { "type": "string", "const": "show_all" }
+      }
+    },
+    "selectionPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "indicator", "row_activation"],
+      "properties": {
+        "mode": { "enum": ["none", "single"] },
+        "indicator": { "enum": ["none", "radio", "row_accent"] },
+        "row_activation": { "enum": ["none", "select"] }
+      }
     },
     "queryControl": {
       "type": "object",
@@ -408,6 +425,7 @@
           "items": { "$ref": "#/$defs/id" }
         },
         "fixed_values": { "type": "object" },
+        "exposure": { "$ref": "#/$defs/commandExposure" },
         "guard": {
           "type": "object",
           "additionalProperties": false,
@@ -422,6 +440,14 @@
             }
           }
         }
+      }
+    },
+    "commandExposure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["placement", "presentation"],
+      "properties": {
+        "placement": { "enum": ["collection_header", "row_action", "editor_primary", "editor_danger"] },
+        "presentation": { "enum": ["button", "icon"] }
       }
     }
   }
