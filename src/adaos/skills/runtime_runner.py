@@ -20,6 +20,43 @@ _MODULE_LOAD_LOCK = threading.RLock()
 _MODULE_LOAD_COMPLETE = "__adaos_runtime_load_complete__"
 _MODULE_LOAD_SLOW_SECONDS = 0.25
 _PREPARED_IMPORT_CONTEXT: tuple[str, str, tuple[str, ...]] | None = None
+# Collapse the concurrent first-paint burst, then return to the normal
+# filesystem/source-drift check. Exact revisions and slot paths are part of the
+# key; the short TTL keeps tamper detection bounded instead of trusting a
+# process-lifetime module cache.
+_PREPARED_MODULE_CACHE_TTL_SECONDS = 1.0
+_PREPARED_MODULE_CACHE_MAX_ENTRIES = 128
+_PREPARED_MODULE_CACHE: dict[
+    tuple[str, str, tuple[str, ...], str], tuple[float, Any]
+] = {}
+
+
+def _live_prepared_module(
+    key: tuple[str, str, tuple[str, ...], str],
+) -> Any | None:
+    cached = _PREPARED_MODULE_CACHE.get(key)
+    if cached is None:
+        return None
+    expires_at, module = cached
+    if expires_at <= time.monotonic():
+        _PREPARED_MODULE_CACHE.pop(key, None)
+        return None
+    module_name = str(getattr(module, "__name__", "") or "")
+    if not module_name or sys.modules.get(module_name) is not module:
+        _PREPARED_MODULE_CACHE.pop(key, None)
+        return None
+    return module
+
+
+def _remember_prepared_module(
+    key: tuple[str, str, tuple[str, ...], str], module: Any
+) -> None:
+    _PREPARED_MODULE_CACHE[key] = (
+        time.monotonic() + _PREPARED_MODULE_CACHE_TTL_SECONDS,
+        module,
+    )
+    while len(_PREPARED_MODULE_CACHE) > _PREPARED_MODULE_CACHE_MAX_ENTRIES:
+        _PREPARED_MODULE_CACHE.pop(next(iter(_PREPARED_MODULE_CACHE)))
 
 
 @contextmanager
@@ -104,6 +141,9 @@ def execute_tool(
             revision,
             tuple(str(path) for path in import_paths),
         )
+        context_was_prepared = bool(
+            revision and _PREPARED_IMPORT_CONTEXT == prepared_key
+        )
         if not revision or _PREPARED_IMPORT_CONTEXT != prepared_key:
             _prioritize_import_paths(import_paths)
             _purge_conflicting_local_modules(skill_path)
@@ -113,7 +153,12 @@ def execute_tool(
             )
             _bind_owned_namespace_packages(skill_path)
             _PREPARED_IMPORT_CONTEXT = prepared_key if revision else None
-        mod = _load_skill_module(skill_path, module_name)
+        module_key = (*prepared_key, module_name)
+        mod = _live_prepared_module(module_key) if context_was_prepared else None
+        if mod is None:
+            mod = _load_skill_module(skill_path, module_name)
+            if revision:
+                _remember_prepared_module(module_key, mod)
         load_seconds = time.perf_counter() - load_started
     if lock_wait_seconds >= _MODULE_LOAD_SLOW_SECONDS or load_seconds >= _MODULE_LOAD_SLOW_SECONDS:
         import logging

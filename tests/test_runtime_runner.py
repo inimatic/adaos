@@ -284,18 +284,34 @@ def test_execute_tool_reuses_prepared_import_context_for_immutable_revision(
     tmp_path: Path, monkeypatch
 ) -> None:
     skill_dir = _write_skill(tmp_path, "immutable_skill", "one")
+    monotonic = [100.0]
+    monkeypatch.setattr(
+        runtime_runner_module.time, "monotonic", lambda: monotonic[0]
+    )
     purge_calls = 0
+    module_load_calls = 0
     original_purge = runtime_runner_module._purge_conflicting_local_modules
+    original_module_load = runtime_runner_module._load_skill_module
 
     def counted_purge(skill_path: Path) -> None:
         nonlocal purge_calls
         purge_calls += 1
         original_purge(skill_path)
 
+    def counted_module_load(skill_path: Path, module_name: str):
+        nonlocal module_load_calls
+        module_load_calls += 1
+        return original_module_load(skill_path, module_name)
+
     monkeypatch.setattr(
         runtime_runner_module,
         "_purge_conflicting_local_modules",
         counted_purge,
+    )
+    monkeypatch.setattr(
+        runtime_runner_module,
+        "_load_skill_module",
+        counted_module_load,
     )
     previous_context = runtime_runner_module._PREPARED_IMPORT_CONTEXT
     runtime_runner_module._PREPARED_IMPORT_CONTEXT = None
@@ -314,12 +330,22 @@ def test_execute_tool_reuses_prepared_import_context_for_immutable_revision(
             payload={},
             source_revision="sha256:one",
         )
+        monotonic[0] += 2.0
+        third = runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+            source_revision="sha256:one",
+        )
     finally:
         runtime_runner_module._PREPARED_IMPORT_CONTEXT = previous_context
 
     assert first["marker"] == "one"
     assert second["marker"] == "one"
+    assert third["marker"] == "one"
     assert purge_calls == 1
+    assert module_load_calls == 2
 
 
 def test_execute_tool_revision_change_reloads_even_with_preserved_mtime(tmp_path: Path) -> None:
