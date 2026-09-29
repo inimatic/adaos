@@ -280,7 +280,16 @@ def selected_project_component_refs(
                     for ref in feature.get("components") or []
                     if str(ref).strip()
                 )
-    return tuple(ref for ref in owned if ref in selected)
+    selected_owned = [ref for ref in owned if ref in selected]
+    dependencies = [
+        str(item.get("ref") or "")
+        for item in (definition.get("components") or {}).get("dependencies") or []
+        if str(item.get("ref") or "").strip()
+    ]
+    # Project dependencies are required shared deliveries, not optional catalog
+    # decoration.  Install them after owned components so the primary scenario
+    # remains the deterministic home/seed candidate.
+    return tuple(dict.fromkeys([*selected_owned, *dependencies]))
 
 
 def _installed_projects_path(ctx: Any) -> Path:

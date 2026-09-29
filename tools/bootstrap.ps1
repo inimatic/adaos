@@ -430,7 +430,7 @@ if ($NoVoice) {
 Configure-RasaNlu
 Invoke-Adaos @installArgs
 if ($LASTEXITCODE -ne 0) {
-    Write-Warning "adaos install failed (check output above)."
+    throw "Required default Applications installation failed (check output above)."
 }
 
 $effectiveRootUrl = Resolve-EffectiveRootUrl -RootUrlValue $RootUrl -ZoneValue $ZoneId

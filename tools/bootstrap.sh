@@ -724,7 +724,7 @@ if [[ "${NO_VOICE:-0}" == "1" ]]; then
 fi
 configure_rasa_nlu
 if ! python -m adaos "${install_args[@]}"; then
-  warn "adaos install failed (check output above)"
+  fail "Required default Applications installation failed (check output above)"
 fi
 
 export ADAOS_REV="$REV"

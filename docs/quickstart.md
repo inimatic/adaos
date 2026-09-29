@@ -109,7 +109,18 @@ adaos install
 adaos update
 ```
 
-`adaos install` prepares the optional Rasa NLU service-skill and trains it once by default. Use `adaos install --no-rasa-nlu` on nodes that should use regex/neural NLU only, or `adaos install --no-train-nlu` when you want to train later.
+`adaos install` installs the required default Application set in deterministic
+order: Management (`web_desktop`), Applications, and Users & Access. Project
+manifests bring their owned scenarios and required shared skill dependencies;
+the obsolete Prompt IDE is not part of a clean install. Failure of any required
+Application fails the install instead of leaving a superficially successful but
+unmanageable node.
+
+The command also prepares the optional Rasa NLU service-skill and trains it once
+by default. Use `adaos install --no-rasa-nlu` on nodes that should use
+regex/neural NLU only, or `adaos install --no-train-nlu` when you want to train
+later. The PowerShell and Linux/macOS bootstrap scripts invoke this same preset,
+so OS-specific installers do not maintain separate Application lists.
 
 Inspect local assets:
 

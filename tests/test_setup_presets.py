@@ -10,8 +10,21 @@ from adaos.services.setup.presets import get_preset
 
 def test_default_preset_installs_default_projects() -> None:
     preset = get_preset("default")
-    assert preset.projects == ("web_desktop", "default_app_bundle")
-    assert "web_desktop" in preset.scenarios
+    assert preset.projects == ("web_desktop", "applications", "users_access")
+    assert preset.scenarios == ("web_desktop", "applications", "users_access")
+    assert "prompt_engineer_scenario" not in preset.scenarios
+    assert "web_desktop_runtime_skill" in preset.skills
+
+
+def test_default_project_order_keeps_management_as_home_candidate() -> None:
+    chosen = get_preset("default")
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: "unused"))
+
+    assert setup_cmd._project_ids_for_preset(ctx, chosen) == [
+        "web_desktop",
+        "applications",
+        "users_access",
+    ]
 
 
 def test_workspace_only_update_skips_runtime_refresh_and_yjs_sync(monkeypatch, capsys) -> None:

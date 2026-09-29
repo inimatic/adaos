@@ -9,7 +9,30 @@ from adaos.services.project_install import (
     list_workspace_projects,
     load_installed_projects,
     record_project_install,
+    selected_project_component_refs,
 )
+
+
+def test_project_selection_includes_required_shared_dependencies_after_owned() -> None:
+    definition = {
+        "components": {
+            "owned": [
+                {"ref": "scenario:management", "role": "primary"},
+                {"ref": "skill:management_runtime", "role": "implementation"},
+            ],
+            "dependencies": [
+                {"ref": "skill:browsers_skill", "lifecycle": "shared"},
+                {"ref": "skill:management_runtime", "lifecycle": "shared"},
+            ],
+        },
+        "install": {"features": []},
+    }
+
+    assert selected_project_component_refs(definition) == (
+        "scenario:management",
+        "skill:management_runtime",
+        "skill:browsers_skill",
+    )
 
 
 def test_project_install_materializes_project_manifest_from_sparse_checkout(

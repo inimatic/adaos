@@ -117,7 +117,9 @@ def _project_ids_for_preset(ctx, chosen) -> list[str]:
     project_ids = [str(item).strip() for item in getattr(chosen, "projects", ()) if str(item).strip()]
     if not project_ids:
         project_ids = list(default_install_project_ids(Path(ctx.paths.workspace_dir())))
-    return sorted(dict.fromkeys(project_ids))
+    # Preset order is semantic: Management must be installed first so its
+    # scenario is selected as the initial desktop seed.
+    return list(dict.fromkeys(project_ids))
 
 
 def _notify_live_skill_runtime_activated(skill_name: str, *, webspace_id: str) -> dict:
@@ -261,6 +263,7 @@ def install(
     installed = {"projects": [], "scenarios": [], "skills": [], "warnings": []}
 
     project_ids = _project_ids_for_preset(ctx, chosen)
+    required_project_failures: list[str] = []
     for project_id in project_ids:
         try:
             result = install_workspace_project(
@@ -283,8 +286,19 @@ def install(
             installed["warnings"].extend(
                 f"project {project_id}: {warning}" for warning in result.get("warnings") or []
             )
+            if result.get("warnings"):
+                required_project_failures.append(
+                    f"{project_id}: " + "; ".join(str(item) for item in result["warnings"])
+                )
         except Exception as exc:
             installed["warnings"].append(f"project {project_id}: {exc}")
+            required_project_failures.append(f"{project_id}: {exc}")
+
+    if required_project_failures:
+        raise RuntimeError(
+            "required default Application installation failed: "
+            + " | ".join(required_project_failures)
+        )
 
     if _legacy_component_install_enabled() and (chosen.scenarios or chosen.skills):
         installed["legacy_components"] = {"enabled": True, "reason": "ENV_TYPE=dev"}

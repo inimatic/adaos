@@ -4,7 +4,12 @@ AdaOS no longer installs upstream `rasa==3.6.x` into the root environment. Rasa 
 
 ## Install model
 
-`adaos install` prepares the default scenarios/skills, installs `rasa_nlu_service_skill`, stages it into an active skill slot, and trains NLU once by default.
+`adaos install` first installs the canonical required Application set
+(Management, Applications, and Users & Access) with its project-owned scenarios
+and required shared skills. It then installs `rasa_nlu_service_skill`, stages it
+into an active skill slot, and trains NLU once by default. Required Application
+failure makes the command fail closed so a bootstrap cannot report success for
+a node without its management surfaces.
 
 Useful switches:
 
