@@ -508,6 +508,43 @@ class ApplicationAutoUpdateService:
         registry_snapshot = _text(registry_index_digest) or "registry-index:unavailable"
         outcomes: list[dict[str, Any]] = []
         for candidate in candidates:
+            rebound_source = next(
+                (
+                    (previous, value)
+                    for previous in outcomes
+                    if previous.get("status") == "succeeded"
+                    for value in (
+                        (previous.get("result") or {}).get(
+                            "shared_dependency_rebindings"
+                        )
+                        or ()
+                    )
+                    if isinstance(value, Mapping)
+                    and _text(value.get("application_id"))
+                    == candidate["application_id"]
+                ),
+                None,
+            )
+            if rebound_source is not None:
+                previous, rebound = rebound_source
+                rebound_revision = int(rebound.get("revision") or 0)
+                if rebound_revision <= int(candidate["installation_revision"]):
+                    raise RuntimeError(
+                        "automatic update shared rebinding revision is invalid"
+                    )
+                candidate = {
+                    **candidate,
+                    "installation_revision": rebound_revision,
+                    "continuation": {
+                        "reason": "shared_dependency_rebinding",
+                        "source_application_id": _text(
+                            previous.get("application_id")
+                        ),
+                        "authority_digest": canonical_payload_digest(
+                            dict(rebound)
+                        ),
+                    },
+                }
             app_id = candidate["application_id"]
             target_digest = candidate["target_release_digest"]
             child_identity = hashlib.sha256(

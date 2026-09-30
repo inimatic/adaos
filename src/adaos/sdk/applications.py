@@ -4368,6 +4368,8 @@ def plan_available_updates(
                 "title": item["title"],
                 "installed_version": item["installed_version"],
                 "available_version": item["available_version"],
+                "target_release_digest": item["target_release_digest"],
+                "expected_revision": int(item["installation_revision"] or 0),
                 "operation_id": operation["operation_id"],
                 "operation_plan_digest": operation["plan_digest"],
                 "apply_idempotency_key": child_key,
@@ -4439,7 +4441,7 @@ def apply_update_batch(
         raise ValueError("Application update batch belongs to another subnet")
     if batch.get("plan_digest") != str(plan_digest or "").strip():
         raise ValueError("Application update batch plan digest does not match")
-    if batch.get("status") in {"succeeded", "partial", "failed"}:
+    if batch.get("status") == "succeeded":
         return batch
     known_apply_key = str(batch.get("apply_idempotency_key") or "")
     if known_apply_key and known_apply_key != key:
@@ -4454,6 +4456,78 @@ def apply_update_batch(
         if item.get("status") == "succeeded":
             continue
         try:
+            # A preceding update may have atomically rebound this Application's
+            # shared CBS runtime.  That advances only its installation revision;
+            # the reviewed target release is unchanged.  Derive and persist an
+            # exact continuation plan from that signed local receipt instead of
+            # failing the remainder of the reviewed batch on a stale revision.
+            rebound = next(
+                (
+                    value
+                    for previous in outcomes[:index]
+                    if previous.get("status") == "succeeded"
+                    for value in (
+                        ((previous.get("receipt") or {}).get("result") or {}).get(
+                            "shared_dependency_rebindings"
+                        )
+                        or ()
+                    )
+                    if isinstance(value, Mapping)
+                    and str(value.get("application_id") or "")
+                    == str(item.get("application_id") or "")
+                ),
+                None,
+            )
+            if rebound is not None:
+                rebound_revision = int(rebound.get("revision") or 0)
+                if rebound_revision <= int(item.get("expected_revision") or 0):
+                    raise ValueError(
+                        "shared dependency continuation revision is invalid"
+                    )
+                original_operation_id = str(item.get("operation_id") or "")
+                continuation_key = (
+                    "batch-continuation:"
+                    + canonical_payload_digest(
+                        {
+                            "batch_id": batch_id,
+                            "application_id": item.get("application_id"),
+                            "target_release_digest": item.get(
+                                "target_release_digest"
+                            ),
+                            "rebound_revision": rebound_revision,
+                            "original_operation_id": original_operation_id,
+                        }
+                    ).split(":", 1)[1]
+                )
+                continuation = plan_update(
+                    str(item.get("application_id") or ""),
+                    release_digest=str(item.get("target_release_digest") or ""),
+                    expected_revision=rebound_revision,
+                    actor_ref=actor,
+                    subnet_ref=subnet,
+                    capability="applications.plan",
+                    idempotency_key=continuation_key,
+                )
+                item["superseded_operation_id"] = original_operation_id
+                item["operation_id"] = continuation["operation_id"]
+                item["operation_plan_digest"] = continuation["plan_digest"]
+                item["apply_idempotency_key"] = continuation_key
+                item["expected_revision"] = rebound_revision
+                item["continuation"] = {
+                    "reason": "shared_dependency_rebinding",
+                    "authority_digest": canonical_payload_digest(
+                        {
+                            "batch_plan_digest": batch.get("plan_digest"),
+                            "target_release_digest": item.get(
+                                "target_release_digest"
+                            ),
+                            "rebound_installation": dict(rebound),
+                        }
+                    ),
+                }
+                batch["operations"] = outcomes
+                batch["updated_at"] = utc_now()
+                store.save(batch)
             receipt = apply_operation(
                 str(item.get("operation_id") or ""),
                 plan_digest=str(item.get("operation_plan_digest") or ""),

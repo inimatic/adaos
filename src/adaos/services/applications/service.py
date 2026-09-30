@@ -23,6 +23,7 @@ from adaos.services.artifact_pipeline.packages import ContentAddressedPackageSto
 from adaos.services.artifact_pipeline.trial_activation import (
     shared_skill_contract_fingerprint,
 )
+from adaos.services.mutation_lock import mutation_lock
 
 from .store import ApplicationStore
 from .runtime_channel import ApplicationRuntimeChannel
@@ -45,7 +46,7 @@ ApplicationOperationPublisher = Callable[[Mapping[str, Any]], Any]
 # release. Bump this only when the same immutable update intent can produce a
 # materially different reviewed plan (for example after adding native CBS
 # rebinding evidence). Existing operations remain immutable audit records.
-APPLICATION_OPERATION_PLANNER_REVISION = "native-cbs-rebinding.v1"
+APPLICATION_OPERATION_PLANNER_REVISION = "resolved-dependency-cbs-rebinding.v2"
 
 
 def _require_authority(
@@ -923,6 +924,67 @@ class ApplicationService:
             result.append(item)
         return result
 
+    def _release_package_refs(
+        self, release: ApplicationRelease
+    ) -> dict[str, Any]:
+        """Resolve complete immutable package identities for lifecycle proof.
+
+        Owned components carry full package references in ProjectRelease while
+        resolved dependencies deliberately carry only compact lock data.  Read
+        already materialized dependencies from the content-addressed store and
+        ask the authenticated deployment release transport for missing target
+        identities.  A mismatch remains fail-closed.
+        """
+
+        result = {item.key: item for item in release.project_release.components}
+        dependencies = {
+            item.key: item for item in release.project_release.resolved_dependencies
+        }
+        missing = [key for key in dependencies if key not in result]
+        package_store = ContentAddressedPackageStore(
+            self.store.state_dir / "artifact_pipeline" / "packages"
+        )
+        for key in tuple(missing):
+            dependency = dependencies[key]
+            try:
+                _archive, verified = package_store.read_verified(
+                    dependency.package_digest
+                )
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+            package = verified.ref
+            if (
+                package.key != key
+                or package.version != dependency.version
+                or package.digest != dependency.package_digest
+            ):
+                raise ApplicationServiceError(
+                    "resolved dependency package identity changed"
+                )
+            result[key] = package
+            missing.remove(key)
+        if missing:
+            provider = getattr(self.executor, "release_packages", None)
+            if callable(provider):
+                supplied = provider(
+                    release.project_release.project_id,
+                    release.release_digest,
+                )
+                for package in supplied:
+                    dependency = dependencies.get(package.key)
+                    if dependency is None or package.key not in missing:
+                        continue
+                    if (
+                        package.version != dependency.version
+                        or package.digest != dependency.package_digest
+                    ):
+                        raise ApplicationServiceError(
+                            "release transport dependency identity changed"
+                        )
+                    result[package.key] = package
+                    missing.remove(package.key)
+        return result
+
     def _component_conflicts(
         self,
         application_id: str,
@@ -1009,10 +1071,8 @@ class ApplicationService:
         target_by_ref = {
             item["component_ref"]: item["package_digest"] for item in components
         }
-        current_packages = {
-            item.key: item for item in provider_release.project_release.components
-        }
-        target_packages = {item.key: item for item in target_project.components}
+        current_packages = self._release_package_refs(provider_release)
+        target_packages = self._release_package_refs(release)
         provider_ref = f"project:{target_project.project_id}"
         result: list[dict[str, Any]] = []
         for installation in self.store.list_installations():
@@ -1879,6 +1939,36 @@ class ApplicationService:
         subnet_ref: str,
         capability: str,
     ) -> ApplicationOperation:
+        """Serialize authority changes for one Application aggregate.
+
+        Registry auto-update, an operator-reviewed batch, and recovery can all
+        observe the same revision.  Only one may execute its expensive runtime
+        transition; followers revalidate after the winner releases the lease.
+        """
+
+        operation = self.store.get_operation(operation_id)
+        token = hashlib.sha256(operation.application_id.encode("utf-8")).hexdigest()
+        lease = self.store.root / "operation-leases" / f"{token}.lock"
+        with mutation_lock(lease, timeout_s=900.0):
+            return self._apply_operation_locked(
+                operation_id,
+                plan_digest=plan_digest,
+                idempotency_key=idempotency_key,
+                actor_ref=actor_ref,
+                subnet_ref=subnet_ref,
+                capability=capability,
+            )
+
+    def _apply_operation_locked(
+        self,
+        operation_id: str,
+        *,
+        plan_digest: str,
+        idempotency_key: str,
+        actor_ref: str,
+        subnet_ref: str,
+        capability: str,
+    ) -> ApplicationOperation:
         operation = self.store.get_operation(operation_id)
         _require_authority(
             actor_ref=actor_ref,
@@ -1913,6 +2003,25 @@ class ApplicationService:
         conflicts = list(operation.plan.get("conflicts") or [])
         if conflicts:
             raise ApplicationPlanConflict(conflicts)
+        if operation.kind in {"install", "update", "remove"}:
+            try:
+                current_installation = self.store.get_installation(
+                    operation.application_id
+                )
+            except FileNotFoundError:
+                current_installation = None
+            current_revision = (
+                current_installation.revision
+                if current_installation is not None
+                else 0
+            )
+            if current_revision != operation.expected_revision:
+                from .store import ApplicationRevisionConflict
+
+                raise ApplicationRevisionConflict(
+                    expected=operation.expected_revision,
+                    observed=current_revision,
+                )
         application = self.store.get_application(operation.application_id)
         self._assert_management_preconditions(application, operation.kind)
         if operation.kind == "select_track":

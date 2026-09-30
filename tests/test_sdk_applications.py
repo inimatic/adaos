@@ -634,6 +634,95 @@ def test_reviewed_update_batch_is_durable_and_resumable(
     assert len(applied) == 1
 
 
+def test_update_batch_derives_continuation_after_shared_dependency_rebinding(
+    monkeypatch, tmp_path: Path
+) -> None:
+    releases = {
+        "app_a": "sha256:" + "a" * 64,
+        "app_b": "sha256:" + "b" * 64,
+    }
+    models = [
+        {
+            "application": {
+                "application_id": application_id,
+                "aggregate_backed": True,
+                "display": {"title": application_id},
+            },
+            "installed": True,
+            "installation": {"revision": 1},
+            "active_release": {"version": "1.0.0"},
+            "effective_release": {
+                "release_digest": release_digest,
+                "release": {"version": "1.1.0"},
+            },
+            "update_available": True,
+            "attention": {},
+        }
+        for application_id, release_digest in releases.items()
+    ]
+    planned = []
+    applied = []
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
+    monkeypatch.setattr(applications, "list_applications", lambda **_kwargs: models)
+
+    def plan_update(application_id, **kwargs):
+        planned.append((application_id, dict(kwargs)))
+        revision = kwargs["expected_revision"]
+        return {
+            "operation_id": f"appop.{application_id}.r{revision}",
+            "plan_digest": "sha256:" + str(revision) * 64,
+        }
+
+    def apply_operation(operation_id, **kwargs):
+        applied.append((operation_id, dict(kwargs)))
+        result = {}
+        if operation_id == "appop.app_a.r1":
+            result["shared_dependency_rebindings"] = [
+                {
+                    "application_id": "app_b",
+                    "installed_release_digest": "sha256:" + "c" * 64,
+                    "revision": 2,
+                }
+            ]
+        return {
+            "operation_id": operation_id,
+            "status": "succeeded",
+            "result": result,
+        }
+
+    monkeypatch.setattr(applications, "plan_update", plan_update)
+    monkeypatch.setattr(applications, "apply_operation", apply_operation)
+    batch = applications.plan_available_updates(
+        application_ids=None,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="shared-batch-1",
+    )
+
+    receipt = applications.apply_update_batch(
+        batch["batch_id"],
+        plan_digest=batch["plan_digest"],
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+        idempotency_key="apply-shared-batch-1",
+    )
+
+    assert receipt["status"] == "succeeded"
+    assert [item[0] for item in applied] == ["appop.app_a.r1", "appop.app_b.r2"]
+    assert planned[-1][0] == "app_b"
+    assert planned[-1][1]["expected_revision"] == 2
+    continued = receipt["operations"][1]
+    assert continued["superseded_operation_id"] == "appop.app_b.r1"
+    assert continued["continuation"]["reason"] == "shared_dependency_rebinding"
+    assert continued["continuation"]["authority_digest"].startswith("sha256:")
+
+
 def test_update_assessment_exposes_blocked_legacy_projection(monkeypatch) -> None:
     monkeypatch.setattr(
         applications,

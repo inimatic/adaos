@@ -264,6 +264,25 @@ class ApplicationDeploymentExecutor:
                 f"verified package identity changed for {package.key}"
             )
 
+    def release_packages(
+        self, project_id: str, release_digest: str
+    ) -> tuple[ArtifactPackageRef, ...]:
+        """Return the authenticated immutable closure for one Project release.
+
+        ApplicationRelease intentionally keeps resolved dependencies compact.
+        Lifecycle planning still needs their complete package identities when
+        it proves a native-CBS shared-runtime transition.  The deployment
+        transport is the authority for that immutable closure; callers never
+        supply paths or package metadata.
+        """
+
+        plan = self.runtime.releases.get_release(project_id, release_digest)
+        if plan.release.release_digest != release_digest:
+            raise ApplicationDeploymentExecutorError(
+                "release package closure identity changed"
+            )
+        return tuple(plan.packages)
+
     def _native_cbs_admission(
         self, plan: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:

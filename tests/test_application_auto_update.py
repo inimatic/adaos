@@ -90,6 +90,69 @@ def test_automatic_update_applies_safe_exact_plan_and_persists_receipt(tmp_path)
     assert persisted == result
 
 
+def test_automatic_update_continues_after_shared_dependency_rebinding(tmp_path) -> None:
+    class SharedApplicationService(_ApplicationService):
+        def __init__(self) -> None:
+            super().__init__(_plan())
+            self.expected_revisions: list[tuple[str, int]] = []
+
+        def list_models(self, **_kwargs):
+            return [
+                {
+                    **_model(),
+                    "application": {
+                        "application_id": app_id,
+                        "legacy_project_id": app_id,
+                    },
+                    "installation": {
+                        "revision": 1,
+                        "uncertain_operation_refs": [],
+                    },
+                    "effective_release": {
+                        "release_digest": "sha256:" + digest * 64
+                    },
+                }
+                for app_id, digest in (("app_a", "a"), ("app_b", "b"))
+            ]
+
+        def plan_operation(self, application_id, kind, **kwargs):
+            self.expected_revisions.append(
+                (application_id, kwargs["expected_revision"])
+            )
+            return SimpleNamespace(
+                operation_id=f"appop.{application_id}",
+                plan_digest="sha256:" + "c" * 64,
+                plan=self.plan,
+                status="planned",
+                revision=1,
+            )
+
+        def apply_operation(self, operation_id, **kwargs):
+            result = {"ok": True, "status": "succeeded"}
+            if operation_id == "appop.app_a":
+                result["shared_dependency_rebindings"] = [
+                    {"application_id": "app_b", "revision": 2}
+                ]
+            return SimpleNamespace(status="succeeded", revision=3, result=result)
+
+    service = SharedApplicationService()
+    result = ApplicationAutoUpdateService(
+        tmp_path, service  # type: ignore[arg-type]
+    ).run(
+        subnet_ref="subnet:test",
+        trigger="applications.registry.updated",
+    )
+
+    assert result["status"] == "completed"
+    assert service.expected_revisions == [("app_a", 1), ("app_b", 2)]
+    assert result["outcomes"][1]["continuation"]["reason"] == (
+        "shared_dependency_rebinding"
+    )
+    assert result["outcomes"][1]["continuation"]["source_application_id"] == (
+        "app_a"
+    )
+
+
 def test_automatic_update_requires_review_for_authority_or_migration_change(tmp_path) -> None:
     for name, plan, blocker in (
         (

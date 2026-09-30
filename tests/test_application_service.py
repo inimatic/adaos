@@ -1150,6 +1150,65 @@ def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(
     assert service.store.list_runtime_selections() == ()
 
 
+def test_stale_concurrent_update_is_rejected_before_runtime_execution(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    service = ApplicationService(ApplicationStore(tmp_path))
+    service.register(_application())
+    first = service.register_release(_release())
+    second = service.register_release(
+        _release(version="1.1.0", package_digest=DIGEST_B)
+    )
+
+    def executor(plan):
+        calls.append(str(plan["idempotency_key"]))
+        if plan["kind"] == "update":
+            return {
+                "ok": True,
+                "status": "succeeded",
+                "snapshot_receipt": {
+                    "snapshot_ref": "snapshot:recipes:concurrent",
+                    "source_release_digest": first.release_digest,
+                    "consistency_boundary": "artifact_activation_transaction",
+                },
+            }
+        return {"ok": True, "status": "succeeded"}
+
+    service.executor = executor
+    install = service.plan_operation(
+        "app_recipes",
+        "install",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-concurrent",
+        expected_revision=0,
+        release_digest=first.release_digest,
+    )
+    _apply_reviewed(service, install)
+    updates = [
+        service.plan_operation(
+            "app_recipes",
+            "update",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.plan",
+            idempotency_key=f"concurrent-update-{index}",
+            expected_revision=1,
+            release_digest=second.release_digest,
+        )
+        for index in (1, 2)
+    ]
+
+    _apply_reviewed(service, updates[0])
+    with pytest.raises(ApplicationRevisionConflict):
+        _apply_reviewed(service, updates[1])
+
+    assert calls == ["install-concurrent", "concurrent-update-1"]
+    assert service.store.get_operation(updates[1].operation_id).status == "planned"
+
+
 def test_update_accepts_exact_installation_materialized_by_executor(
     tmp_path: Path,
 ) -> None:
@@ -2075,6 +2134,163 @@ def test_provider_update_rebinds_compatible_direct_component_consumers(
     assert incompatible.plan["conflicts"][0]["active_application_id"] == (
         "consumer_app"
     )
+
+
+def test_update_rebinds_cbs_equivalent_resolved_dependency_consumers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/shared-runtime-consumers",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("projects/",),
+    )
+    voice_v1 = ArtifactPackageRef(
+        kind="skill",
+        artifact_id="voice_chat_skill",
+        version="0.7.7",
+        digest=DIGEST_C,
+        manifest_digest=DIGEST_A,
+        source_ref=source,
+    )
+    voice_v2 = ArtifactPackageRef(
+        kind="skill",
+        artifact_id="voice_chat_skill",
+        version="0.7.8",
+        digest=DIGEST_D,
+        manifest_digest=DIGEST_B,
+        source_ref=source,
+    )
+
+    class Executor:
+        def __init__(self) -> None:
+            self.packages: dict[tuple[str, str], tuple[ArtifactPackageRef, ...]] = {}
+            self.ensured: list[str] = []
+
+        def release_packages(
+            self, project_id: str, release_digest: str
+        ) -> tuple[ArtifactPackageRef, ...]:
+            return self.packages[(project_id, release_digest)]
+
+        def ensure_verified_package(self, package: ArtifactPackageRef) -> None:
+            self.ensured.append(package.digest)
+
+        def __call__(self, _plan: object) -> dict[str, object]:
+            return {"ok": True, "status": "succeeded"}
+
+    executor = Executor()
+    service = ApplicationService(ApplicationStore(tmp_path), executor=executor)
+    service.register(_application("consumer_a", "consumer_a"))
+    service.register(_application("consumer_b", "consumer_b"))
+
+    def release(
+        application_id: str,
+        project_id: str,
+        version: str,
+        scenario_digest: str,
+        voice: ArtifactPackageRef,
+    ) -> ApplicationRelease:
+        scenario = ArtifactPackageRef(
+            kind="scenario",
+            artifact_id=project_id,
+            version=version,
+            digest=scenario_digest,
+            manifest_digest=DIGEST_A,
+            source_ref=source,
+        )
+        project = ProjectRelease(
+            project_id=project_id,
+            version=version,
+            source_ref=source,
+            components=(scenario,),
+            resolved_dependencies=(
+                ResolvedDependency(
+                    kind="skill",
+                    artifact_id=voice.artifact_id,
+                    version=voice.version,
+                    package_digest=voice.digest,
+                    version_spec=f"=={voice.version}",
+                ),
+            ),
+            validation_evidence=({"status": "passed"},),
+        ).seal()
+        result = ApplicationRelease(
+            application_id=application_id,
+            publisher_ref="subnet:sn_home",
+            project_release=project,
+            accepted_candidate_id=f"candidate.{project_id}.{version}",
+            acceptance_evidence=(
+                {"decision": "accepted", "release_digest": project.release_digest},
+            ),
+            provenance_refs=(DIGEST_A,),
+            lifecycle="stable",
+        )
+        executor.packages[(project_id, result.release_digest)] = (scenario, voice)
+        return service.register_release(result)
+
+    a_v1 = release("consumer_a", "consumer_a", "1.0.0", DIGEST_A, voice_v1)
+    b_v1 = release("consumer_b", "consumer_b", "1.0.0", DIGEST_B, voice_v1)
+    for application_id, installed_release in (
+        ("consumer_a", a_v1),
+        ("consumer_b", b_v1),
+    ):
+        operation = service.plan_operation(
+            application_id,
+            "install",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.plan",
+            idempotency_key=f"install-{application_id}",
+            expected_revision=0,
+            release_digest=installed_release.release_digest,
+        )
+        _apply_reviewed(service, operation)
+
+    a_v2 = release("consumer_a", "consumer_a", "1.1.0", DIGEST_A, voice_v2)
+    monkeypatch.setattr(
+        "adaos.services.applications.service.shared_skill_contract_fingerprint",
+        lambda _package, _store: {
+            "contract_members": {"identity": "voice-v1"},
+            "entrypoints": [["binding-definition:voice", "voice.run"]],
+        },
+    )
+
+    update = service.plan_operation(
+        "consumer_a",
+        "update",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-consumer-a",
+        expected_revision=1,
+        release_digest=a_v2.release_digest,
+    )
+
+    assert update.plan["conflicts"] == []
+    assert executor.ensured == [DIGEST_D]
+    assert update.plan["shared_dependency_rebindings"] == [
+        {
+            "consumer_application_id": "consumer_b",
+            "consumer_installation_id": "installation:consumer_b",
+            "expected_consumer_revision": 1,
+            "component_ref": "skill:voice_chat_skill",
+            "from_package_digest": DIGEST_C,
+            "to_package_digest": DIGEST_D,
+            "binding_kind": "native_cbs_contract",
+            "from_component_version": "0.7.7",
+            "to_component_version": "0.7.8",
+            "admitted_by": (
+                "exact_capability_binding_and_entrypoint_equivalence"
+            ),
+            "contract_fingerprint": {
+                "contract_members": {"identity": "voice-v1"},
+                "entrypoints": [["binding-definition:voice", "voice.run"]],
+            },
+            "evidence_digest": update.plan["shared_dependency_rebindings"][0][
+                "evidence_digest"
+            ],
+        }
+    ]
 
 
 def test_workspace_adoption_requires_resolved_dependency_closure(
