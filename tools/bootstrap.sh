@@ -668,7 +668,10 @@ if [[ "$BUILD_VENDORED_Y_PY" == "1" ]]; then
   python -m pip install -e .[dev] || fail "pip install -e .[dev] failed"
   python -m pip install --force-reinstall --no-deps ./vendor/y-py || fail "vendored y-py install failed"
 else
-  python -m pip install --only-binary :all: -e "$USER_INSTALL_SPEC" || fail "pip install -e $USER_INSTALL_SPEC failed"
+  Y_PY_WHEELHOUSE="$PWD/.adaos/bootstrap/wheels"
+  python tools/install_patched_y_py.py --installer pip --wheelhouse "$Y_PY_WHEELHOUSE" \
+    || fail "published patched y-py wheel installation failed"
+  python -m pip install --find-links "$Y_PY_WHEELHOUSE" --only-binary :all: -e "$USER_INSTALL_SPEC" || fail "pip install -e $USER_INSTALL_SPEC failed"
 fi
 python -c 'import importlib.metadata as m; assert m.version("y-py") == "0.6.2+adaos.1", m.version("y-py")' \
   || fail "AdaOS requires patched y-py==0.6.2+adaos.1"

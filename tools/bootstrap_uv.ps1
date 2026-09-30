@@ -228,8 +228,11 @@ if ($BuildVendoredYPy) {
   uv venv --python $env:UV_PYTHON .venv
   if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
   $adaosPython = Join-Path $PWD ".venv\Scripts\python.exe"
+  $yPyWheelhouse = Join-Path $PWD ".adaos\bootstrap\wheels"
+  & $adaosPython tools\install_patched_y_py.py --installer uv --wheelhouse $yPyWheelhouse
+  if ($LASTEXITCODE -ne 0) { throw "published patched y-py wheel installation failed" }
   $userInstallSpec = if ($Dev) { ".[dev]" } else { "." }
-  uv pip install --python $adaosPython --no-sources --only-binary :all: --editable $userInstallSpec
+  uv pip install --python $adaosPython --no-sources --find-links $yPyWheelhouse --only-binary :all: --editable $userInstallSpec
   if ($LASTEXITCODE -ne 0) { throw "AdaOS dependency install failed" }
 }
 .\.venv\Scripts\python.exe -c "import importlib.metadata as m; assert m.version('y-py') == '0.6.2+adaos.1', m.version('y-py')"

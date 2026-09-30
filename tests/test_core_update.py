@@ -104,13 +104,13 @@ def test_manifest_target_match_accepts_build_version() -> None:
 def test_core_update_command_uses_builtin_runner_when_not_configured(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.delenv("ADAOS_CORE_UPDATE_CMD", raising=False)
-    monkeypatch.setenv("ADAOS_CORE_UPDATE_SOURCE_MODE", "archive-first")
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_SOURCE_MODE", "git-first")
     monkeypatch.setenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL_TEMPLATE", "https://example.invalid/{target_version}.tar.gz")
     cmd = configured_update_command({"target_rev": "rev2026", "target_slot": "B", "inactive_slot_dir": str(tmp_path / "slot-b")})
     assert cmd is not None
     assert "adaos.apps.core_update_apply" in cmd
     assert "rev2026" in cmd
-    assert '--source-mode "archive-first"' in cmd
+    assert '--source-mode "archive-only"' in cmd
     assert '--source-archive-url-template "https://example.invalid/{target_version}.tar.gz"' in cmd
     assert '--slot "B"' in cmd
     assert f'--slot-dir "{tmp_path / "slot-b"}"' in cmd
@@ -486,7 +486,7 @@ def test_prepare_pending_update_defers_skill_runtime_migration(monkeypatch, tmp_
     assert captured["migrate_skill_runtimes"] is False
 
 
-def test_prepare_pending_update_uses_archive_first_for_supervisor_managed_node(monkeypatch, tmp_path) -> None:
+def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
     monkeypatch.delenv("ADAOS_DEV_ALLOW_CORE_UPDATE", raising=False)
@@ -501,7 +501,7 @@ def test_prepare_pending_update_uses_archive_first_for_supervisor_managed_node(m
     result = prepare_pending_update({"target_rev": "rev2026", "target_slot": "B"})
 
     assert result["state"] == "prepared"
-    assert captured["source_mode"] == "archive-first"
+    assert captured["source_mode"] == "archive-only"
 
 
 def test_prepare_pending_update_keeps_git_first_for_dev_core_update(monkeypatch, tmp_path) -> None:

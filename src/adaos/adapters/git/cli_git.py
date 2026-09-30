@@ -1035,14 +1035,45 @@ class CliGitClient(GitClient):
         try:
             _run_git(["sparse-checkout", "add", path], cwd=dir)
         except GitError:
-            # fallback: перечитать и расширить вручную (как в твоей логике)
-            info = Path(dir) / ".git" / "info"
-            sp = info / "sparse-checkout"
-            lines = sp.read_text(encoding="utf-8").splitlines() if sp.exists() else []
-            if path not in lines:
-                info.mkdir(parents=True, exist_ok=True)
-                lines.append(path)
-                sp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            # ``sparse-checkout add`` was introduced after the Git version
+            # shipped by Ubuntu 20.04.  Merely appending a path to the
+            # patterns file is not equivalent: a freshly cloned workspace is
+            # in cone mode, so a literal ``projects/foo`` line is interpreted
+            # as a cone pattern and does not materialize the directory.
+            # Rebuild the full selection through the older, supported ``set``
+            # command and explicitly switch to non-cone mode so both
+            # directories and top-level files remain valid selections.
+            selected = [
+                item.strip()
+                for item in _safe_git(
+                    dir,
+                    ["sparse-checkout", "list"],
+                ).splitlines()
+                if item.strip()
+            ]
+            patterns_path = Path(dir) / ".git" / "info" / "sparse-checkout"
+            literal_patterns: list[str] = []
+            if patterns_path.is_file():
+                literal_patterns = [
+                    item.strip()
+                    for item in patterns_path.read_text(encoding="utf-8").splitlines()
+                    if item.strip()
+                    and not item.lstrip().startswith(("/", "!", "#", "-"))
+                ]
+            # Repair the exact malformed shape produced by the historical
+            # fallback (Git reports ``projects/foo`` as ``rojects/foo`` when
+            # the literal was appended to a cone-mode patterns file).
+            malformed = {item[1:] for item in literal_patterns if len(item) > 1}
+            selected = [item for item in selected if item not in malformed]
+            for item in (*literal_patterns, str(path).strip()):
+                if item and item not in selected:
+                    selected.append(item)
+            if not selected:
+                raise
+            _run_git(
+                ["sparse-checkout", "set", "--no-cone", "--", *selected],
+                cwd=dir,
+            )
 
     def sparse_reapply(self, dir: StrOrPath) -> None:
         try:

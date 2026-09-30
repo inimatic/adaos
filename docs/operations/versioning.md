@@ -24,7 +24,7 @@ The architecture contract is described in
 
 | Subsystem | Served source | Used source | Primary operator surface |
 | --- | --- | --- | --- |
-| AdaOS core / CLI | `adaos_core` in `adaos-versions.json`, Git branch, or update target commit | Active core runtime: dev workspace build metadata or active slot manifest repaired by local `pyproject.toml` / Git subject when a stale default manifest says `0.1.0` | `adaos autostart update-status`, Infra State summary |
+| AdaOS core / CLI | `adaos_core` in `adaos-versions.json` and immutable archive target; Git branch/commit only for a dev build | Active core runtime: archive-backed stable slot manifest, or dev workspace build metadata repaired by local `pyproject.toml` / Git subject when a stale default manifest says `0.1.0` | `adaos autostart update-status`, Infra State summary |
 | Root/backend | Backend package and deployed container build | `/healthz` on the exact Root zone handling traffic | `https://api.inimatic.com/healthz`, `https://ru.api.inimatic.com/healthz` |
 | Hosted client | Hosting build `version.json` | Browser session `client_build_version` reported during the YJS/client handshake | `https://inimatic.com/version.json`, Browsers modal |
 | ReDevice/member nodes | Target core update report, Root rollout intent, or `redevice_agent` in `adaos-versions.json` | Member snapshot build/runtime payload or endpoint `agent_version` report | Infra State node selector, ReDevice List, ReDevice Settings |

@@ -100,11 +100,15 @@ if (-not [string]::IsNullOrWhiteSpace($WorkspaceRegistryRepo)) {
 if ($Archive -and -not [string]::IsNullOrWhiteSpace($UseGitFrom)) {
   throw "-Archive/-NoGit cannot be combined with -UseGitFrom"
 }
+if (-not [string]::IsNullOrWhiteSpace($UseGitFrom) -and -not $Dev) {
+  throw "-UseGitFrom is supported only for development installs. Add -Dev, or use the stable archive default."
+}
 
 Write-Info ("Preparing repo at: {0}" -f $Dest)
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 
-if (-not (Have "git")) {
+$useArchive = [bool]$Archive -or -not [bool]$Dev
+if (-not $useArchive -and -not (Have "git")) {
   Write-Info "git not found; trying to install (best-effort)..."
   try {
     if (Have "winget") {
@@ -117,7 +121,7 @@ if (-not (Have "git")) {
   if (Have "git") {
     Write-Ok "git installed"
   } else {
-    Write-Warn "git is not available; AdaOS will run in archive (no-git) mode for skills/scenarios until you enable git"
+    Write-Warn "git is not available; the requested development checkout cannot be prepared"
   }
 }
 if (-not (Have "git") -and -not [string]::IsNullOrWhiteSpace($UseGitFrom)) {
@@ -126,7 +130,6 @@ if (-not (Have "git") -and -not [string]::IsNullOrWhiteSpace($UseGitFrom)) {
 
 $cloneUrl = if (-not [string]::IsNullOrWhiteSpace($UseGitFrom)) { $UseGitFrom } else { "https://github.com/$RepoOwner/$RepoName.git" }
 $zipUrl = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/$Rev.zip"
-$useArchive = [bool]$Archive -or -not (Have "git")
 $tmp = Join-Path $env:TEMP ("adaos_init_{0}" -f [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $zipPath = Join-Path $tmp "adaos.zip"
@@ -171,9 +174,7 @@ try {
     Write-Ok ("Source ready at: {0}" -f $Dest)
   }
   else {
-    if ($Archive) {
-      Write-Warn "Archive mode requested; git metadata and submodules will not be available."
-    }
+    Write-Info "Using stable archive source (Git metadata and submodules are intentionally absent)."
     Write-Info ("Downloading source archive: {0}" -f $zipUrl)
     Invoke-WebRequest -UseBasicParsing -Uri $zipUrl -OutFile $zipPath
     Write-Info "Extracting..."

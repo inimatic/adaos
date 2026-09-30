@@ -96,6 +96,60 @@ def test_project_install_materializes_project_manifest_from_sparse_checkout(
     assert (workspace / "projects" / "web_desktop" / "project.yaml").is_file()
 
 
+def test_project_install_materializes_project_manifest_from_archive_without_git(
+    monkeypatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "adaos.services.git.availability.get_git_availability",
+        lambda **_kwargs: SimpleNamespace(enabled=False, git_path=None),
+    )
+
+    def _materialize(**kwargs) -> Path:
+        calls.append(dict(kwargs))
+        project = workspace / "projects" / "applications"
+        project.mkdir(parents=True)
+        (project / "project.yaml").write_text(
+            "schema: adaos.project.v1\n"
+            "kind: project\n"
+            "id: applications\n"
+            "version: 0.1.0\n",
+            encoding="utf-8",
+        )
+        return project
+
+    monkeypatch.setattr(
+        "adaos.services.git.archive.materialize_subpath_from_github_zip",
+        _materialize,
+    )
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            workspace_dir=lambda: workspace,
+            base_dir=lambda: tmp_path / ".adaos",
+        ),
+        git=SimpleNamespace(),
+        settings=SimpleNamespace(
+            scenarios_monorepo_url="https://github.com/inimatic/adaos-registry.git",
+            scenarios_monorepo_branch="main",
+        ),
+    )
+
+    ensure_workspace_project_materialized(ctx, "applications")
+
+    assert calls == [
+        {
+            "repo_url": "https://github.com/inimatic/adaos-registry.git",
+            "branch": "main",
+            "dest_root": workspace.resolve(),
+            "subpath": "projects/applications",
+        }
+    ]
+    assert (workspace / "projects" / "applications" / "project.yaml").is_file()
+
+
 def test_project_install_record_preserves_project_i18n(tmp_path: Path) -> None:
     ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path / "state"))
     definition = {

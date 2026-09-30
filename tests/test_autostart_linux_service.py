@@ -213,3 +213,6 @@ def test_bootstrap_core_slot_disables_remote_repo_for_archive_install(monkeypatc
     assert "--repo-url" in calls[0]
     idx = calls[0].index("--repo-url")
     assert calls[0][idx + 1] == ""
+    assert "--source-mode" in calls[0]
+    source_mode_idx = calls[0].index("--source-mode")
+    assert calls[0][source_mode_idx + 1] == "local-copy"

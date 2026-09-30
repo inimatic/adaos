@@ -167,6 +167,25 @@ def ensure_workspace_project_materialized(ctx: Any, project_id: str) -> None:
         or getattr(settings, "skills_monorepo_branch", None)
         or "main"
     ).strip()
+    from adaos.services.git.availability import get_git_availability
+
+    base_dir = None
+    base_dir_getter = getattr(getattr(ctx, "paths", None), "base_dir", None)
+    if callable(base_dir_getter):
+        base_dir = Path(base_dir_getter()).expanduser().resolve()
+    git_availability = get_git_availability(base_dir=base_dir)
+    if not (git_availability.enabled and git_availability.git_path):
+        if not registry_url:
+            return
+        from adaos.services.git.archive import materialize_subpath_from_github_zip
+
+        materialize_subpath_from_github_zip(
+            repo_url=registry_url,
+            branch=registry_branch or "main",
+            dest_root=workspace_root,
+            subpath=f"projects/{project_id}",
+        )
+        return
     ensure_repo = getattr(getattr(ctx, "git", None), "ensure_repo", None)
     if callable(ensure_repo) and registry_url:
         ensure_repo(

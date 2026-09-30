@@ -1451,6 +1451,7 @@ def test_prepare_checkout_repo_uses_source_archive_before_git(monkeypatch, tmp_p
     archive_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
 
     checkout_dir = tmp_path / "checkout"
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
     monkeypatch.setattr(
         mod,
@@ -1479,6 +1480,35 @@ def test_prepare_checkout_repo_uses_source_archive_before_git(monkeypatch, tmp_p
     assert not (checkout_dir / ".git").exists()
 
 
+def test_prepare_checkout_repo_local_copy_bootstraps_archive_install(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    source_root = tmp_path / "source"
+    (source_root / "src" / "adaos" / "apps").mkdir(parents=True)
+    (source_root / "pyproject.toml").write_text("[project]\nname='adaos'\n", encoding="utf-8")
+    checkout_dir = tmp_path / "checkout"
+    monkeypatch.setattr(
+        mod,
+        "_clone_repo",
+        lambda *_args, **_kwargs: pytest.fail("local bootstrap must not clone Git"),
+    )
+
+    source_kind, diagnostics = mod._prepare_checkout_repo(
+        checkout_dir=checkout_dir,
+        source_repo_dir=source_root,
+        repo_url="",
+        target_rev="rev2026",
+        target_version="0.1.0+archive",
+        source_mode="local-copy",
+    )
+
+    assert source_kind == "local_source_tree"
+    assert diagnostics["source_mode"] == "local-copy"
+    assert (checkout_dir / "pyproject.toml").is_file()
+
+
 def test_prepare_checkout_repo_archive_only_fails_without_archive_url(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
@@ -1501,6 +1531,7 @@ def test_prepare_checkout_repo_falls_back_to_remote_when_local_source_misses_tar
     import adaos.apps.core_update_apply as mod
 
     target_version = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    monkeypatch.setenv("ENV_TYPE", "dev")
     source_repo = tmp_path / "source"
     checkout_dir = tmp_path / "checkout"
     (source_repo / ".git").mkdir(parents=True, exist_ok=True)
@@ -1548,6 +1579,7 @@ def test_prepare_checkout_repo_skips_stale_local_source_and_uses_clean_remote_ch
     import adaos.apps.core_update_apply as mod
 
     target_version = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    monkeypatch.setenv("ENV_TYPE", "dev")
     source_repo = tmp_path / "source"
     checkout_dir = tmp_path / "checkout"
     (source_repo / ".git").mkdir(parents=True, exist_ok=True)
@@ -1589,6 +1621,7 @@ def test_prepare_checkout_repo_removes_partial_local_checkout_before_remote_fall
     import adaos.apps.core_update_apply as mod
 
     target_version = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    monkeypatch.setenv("ENV_TYPE", "dev")
     source_repo = tmp_path / "source"
     checkout_dir = tmp_path / "checkout"
     (source_repo / ".git").mkdir(parents=True, exist_ok=True)
@@ -1750,6 +1783,7 @@ def test_prepare_slot_preserves_pinned_target_version(monkeypatch, tmp_path: Pat
 def test_prepare_slot_resolves_unpinned_target_rev_to_remote_head(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
+    monkeypatch.setenv("ENV_TYPE", "dev")
     head_sha = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
     captured: dict[str, object] = {}
 
@@ -1788,6 +1822,62 @@ def test_prepare_slot_resolves_unpinned_target_rev_to_remote_head(monkeypatch, t
     assert manifest["requested_target_version"] == ""
     assert manifest["resolved_target_version"] == head_sha
     assert manifest["target_resolution"] == "remote_branch_head"
+
+
+def test_prepare_slot_stable_archive_does_not_resolve_ref_through_git(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.setattr(
+        mod,
+        "_resolve_branch_head",
+        lambda *_args, **_kwargs: pytest.fail("stable archive preparation must not call Git"),
+    )
+
+    def _fake_prepare_checkout_repo(**kwargs):
+        captured.update(kwargs)
+        checkout_dir = Path(kwargs["checkout_dir"])
+        apps_dir = checkout_dir / "src" / "adaos" / "apps"
+        apps_dir.mkdir(parents=True, exist_ok=True)
+        (apps_dir / "__init__.py").write_text("", encoding="utf-8")
+        return "source_archive"
+
+    monkeypatch.setattr(mod, "_prepare_checkout_repo", _fake_prepare_checkout_repo)
+    monkeypatch.setattr(mod, "_prepare_seed_venv", lambda **_kwargs: {"ok": True})
+    monkeypatch.setattr(mod, "_install_slot_project", lambda **_kwargs: {"ok": True})
+    monkeypatch.setattr(mod, "_strip_repo_vcs_metadata", lambda _repo_dir: None)
+    monkeypatch.setattr(
+        mod,
+        "_replace_slot_dir",
+        lambda prepared_slot, slot_dir: shutil.move(str(prepared_slot), str(slot_dir)),
+    )
+    monkeypatch.setattr(mod, "_repair_moved_venv", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(
+        mod, "_validate_prepared_slot_imports", lambda _python_bin: {"ok": True}
+    )
+    monkeypatch.setattr(mod, "_git_text", lambda *_args: "")
+    monkeypatch.setattr(
+        mod,
+        "_detect_bootstrap_promotion_requirement",
+        lambda *_args, **_kwargs: {"required": False},
+    )
+    monkeypatch.setattr(mod, "_cleanup_stale_temp_slot_dirs", lambda *_args, **_kwargs: {"ok": True})
+
+    manifest = mod.prepare_slot(
+        slot="B",
+        slot_dir_path=str(tmp_path / "slots" / "B"),
+        target_rev="rev2026",
+        target_version="",
+        repo_url="https://github.com/inimatic/adaos.git",
+        migrate_skill_runtimes=False,
+    )
+
+    assert captured["source_mode"] == "archive-only"
+    assert captured["target_version"] == ""
+    assert manifest["target_resolution"] == "archive_ref"
 
 
 def test_detect_bootstrap_promotion_requirement_reports_changed_paths(tmp_path: Path) -> None:

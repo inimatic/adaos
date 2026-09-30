@@ -1446,22 +1446,21 @@ def _clone_repo(repo_url: str, target_rev: str, target_version: str, checkout_di
 
 def _source_mode_token(source_mode: str) -> str:
     token = str(source_mode or "").strip().lower().replace("_", "-")
+    development = (
+        str(os.getenv("ADAOS_DEV_ALLOW_CORE_UPDATE") or "").strip().lower()
+        in {"1", "true", "yes", "on"}
+        or str(os.getenv("ENV_TYPE") or "").strip().lower() == "dev"
+    )
     if token in {"", "auto", "default"}:
-        if str(os.getenv("ADAOS_DEV_ALLOW_CORE_UPDATE") or "").strip().lower() in {"1", "true", "yes", "on"}:
-            return "git-first"
-        if (
-            str(os.getenv("ADAOS_AUTOSTART_MANAGED") or "").strip().lower() in {"1", "true", "yes", "on"}
-            or str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
-            or str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
-        ):
-            return "archive-first"
-        return "git-first"
+        return "git-first" if development else "archive-only"
     if token in {"archive", "archives", "archive-first", "artifact", "artifact-first"}:
-        return "archive-first"
+        return "archive-first" if development else "archive-only"
     if token in {"archive-only", "artifact-only"}:
         return "archive-only"
     if token in {"git", "repo", "repository", "git-first", "local", "local-first"}:
-        return "git-first"
+        return "git-first" if development else "archive-only"
+    if token in {"local-copy", "bootstrap-local"}:
+        return "local-copy"
     return token
 
 
@@ -1822,6 +1821,23 @@ def _prepare_checkout_repo(
     archive_error: Exception | None = None
     attempts: list[dict[str, object]] = []
     mode = _source_mode_token(source_mode)
+
+    if mode == "local-copy":
+        if not source_exists or source_repo_dir is None:
+            raise RuntimeError("local-copy source mode requires an existing source tree")
+        if _is_probably_git_sha(str(target_version or "").strip()):
+            raise RuntimeError(
+                f"local-copy source cannot prove immutable target_version {target_version}"
+            )
+        _clone_local_repo(source_repo_dir, target_rev, target_version, checkout_dir)
+        attempts.append(
+            {"source": "local_source_tree", "state": "succeeded", "mode": "copy"}
+        )
+        return "local_source_tree", {
+            "kind": "local_source_tree",
+            "source_mode": mode,
+            "attempts": attempts,
+        }
 
     if mode in {"archive-first", "archive-only"}:
         archive_candidates = _source_archive_candidates(
@@ -2250,7 +2266,7 @@ def prepare_slot(
         # branch head: doing so can install a different build than requested.
         resolved_target_version = target_version
         target_resolution = "pinned_commit"
-    elif target_rev and repo_url:
+    elif target_rev and repo_url and source_mode == "git-first":
         try:
             resolved_target_version = _resolve_branch_head(repo_url, target_rev)
             if resolved_target_version:
@@ -2260,6 +2276,8 @@ def prepare_slot(
             if source_mode not in {"archive-first", "archive-only"}:
                 raise
             target_resolution = "archive_ref"
+    elif source_mode in {"archive-first", "archive-only"}:
+        target_resolution = "archive_ref"
     source_repo_dir = Path(str(source_repo_root or "")).expanduser().resolve() if str(source_repo_root or "").strip() else None
     shared_dotenv = str(shared_dotenv_path or "").strip()
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"adaos-core-{slot_name.lower()}-", dir=str(slot_dir.parent)))

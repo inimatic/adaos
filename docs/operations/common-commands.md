@@ -51,9 +51,14 @@ Notes:
 
 ## One-line bootstrap variants
 
-The init scripts prefer a real git checkout when `git` is available. Archive
-mode is available via `--archive` / `-Archive`, but it does not include git
-metadata or submodules.
+Stable init and core updates are archive-only even when `git` is installed.
+The initial slot is copied from the verified unpacked tree and subsequent
+updates download an immutable archive; neither path may fall back to a branch
+clone. Git core source is limited to explicit development installs
+(`--dev --use-git`, `--dev --use-git-from`, `-Dev -UseGitFrom`) and Codespaces.
+`--archive` / `-Archive` remain accepted as explicit documentation of the
+stable default. Registry package/source publication has its own authority and
+is not implied by the core-source choice.
 
 Linux:
 
@@ -63,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/l
 curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code CODE --zone ru
 curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --node-name "Codespace Member" --zone ru
 curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --no-core-update --zone ru
-curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
+curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --dev --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
 curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --archive --zone ru
 curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
 curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
@@ -76,7 +81,7 @@ Windows PowerShell:
 & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content))
 & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
 & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -JoinCode CODE -ZoneId ru
-& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
+& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -Dev -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
 & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -Archive -ZoneId ru
 & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru
 & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru -Dev
@@ -87,7 +92,7 @@ Windows CMD:
 ```bat
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -JoinCode CODE"
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -ZoneId ru"
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch"
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -Dev -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch"
 ```
 
 ## Manual bootstrap
@@ -131,7 +136,16 @@ uv sync --locked --extra dev
 adaos --help
 ```
 
-Normal bootstrap requires wheels for every dependency, uses the patched `y-py` wheels (including Intel macOS 10.15), and omits the optional Vosk offline-STT backend. Intel macOS also resolves Catalina-compatible WebRTC and `cryptography` branches. Rust is needed only for the explicit vendored source-build commands and manual repository-development sync above. On systems for which Vosk publishes a wheel, add offline STT explicitly with `uv pip install --python .venv/bin/python -e ".[offline-stt]"`.
+Normal bootstrap requires wheels for every dependency and downloads the exact
+published patched `y-py` wheel through `tools/install_patched_y_py.py`. The
+helper selects Linux x86-64/aarch64, Windows x86-64, or macOS arm64/x86-64 and
+verifies a compiled-in SHA-256 before installation, so an archive checkout does
+not depend on the omitted `vendor/y-py` Git submodule. Intel macOS uses the
+Catalina-compatible wheel and compatible WebRTC and `cryptography` branches.
+Bootstrap omits the optional Vosk offline-STT backend. Rust is needed only for
+the explicit vendored source-build commands and manual repository-development
+sync above. On systems for which Vosk publishes a wheel, add offline STT
+explicitly with `uv pip install --python .venv/bin/python -e ".[offline-stt]"`.
 
 ## Git checkout maintenance
 

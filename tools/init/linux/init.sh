@@ -77,18 +77,19 @@ fetch_to_file() {
 
 usage() {
   cat <<EOF
-Usage: init.sh [--dest DIR] [--rev REV] [--use-git] [--archive|--no-git] [--force] [--use-git-from URL] [--workspace-registry-repo URL] [--codespaces] [--] [bootstrap args...]
+Usage: init.sh [--dest DIR] [--rev REV] [--dev --use-git] [--archive|--no-git] [--force] [--use-git-from URL] [--workspace-registry-repo URL] [--codespaces] [--] [bootstrap args...]
 
 Defaults:
   --rev  ${REV_DEFAULT}
   --dest ${DEST_DEFAULT}
+  stable installs use a source archive; Git source is limited to --dev/Codespaces
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code ABCD --zone ru
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code ABCD --node-name "Codespace Member" --zone ru
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --role hub --install-service auto --zone ru
-  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --dev --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --archive --zone ru
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
 EOF
@@ -135,23 +136,21 @@ FORCE_REPLACE="${ADAOS_INIT_FORCE:-0}"
 REPO_URL="$REPO_URL_DEFAULT"
 CODESPACES_MODE="${ADAOS_INIT_CODESPACES:-0}"
 WORKSPACE_REGISTRY_URL="${ADAOS_WORKSPACE_REGISTRY_REPO:-}"
+DEV_REQUESTED=0
 BOOTSTRAP_ARGS=()
-
-if [[ -n "${REPO_URL:-}" ]]; then
-  USE_GIT="1"
-fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --dest) DEST="${2:-}"; shift 2 ;;
     --rev) REV="${2:-}"; shift 2 ;;
+    --dev) DEV_REQUESTED=1; BOOTSTRAP_ARGS+=("$1"); shift ;;
     --use-git) USE_GIT="1"; shift ;;
     --archive|--no-git) ARCHIVE_MODE="1"; USE_GIT="0"; shift ;;
     --force) FORCE_REPLACE="1"; shift ;;
     --use-git-from) REPO_URL="${2:-}"; USE_GIT="1"; shift 2 ;;
     --workspace-registry-repo|--use-workspace-registry-from) WORKSPACE_REGISTRY_URL="${2:-}"; shift 2 ;;
-    --codespaces) CODESPACES_MODE="1"; shift ;;
+    --codespaces) CODESPACES_MODE="1"; DEV_REQUESTED=1; shift ;;
     --) shift; BOOTSTRAP_ARGS+=("$@"); break ;;
     *) BOOTSTRAP_ARGS+=("$1"); shift ;;
   esac
@@ -159,6 +158,21 @@ done
 
 if [[ "$CODESPACES_MODE" == "1" ]]; then
   DEST="$(current_dir_resolved)"
+fi
+
+if [[ -n "${REPO_URL:-}" ]]; then
+  USE_GIT="1"
+fi
+
+if [[ "$USE_GIT" == "auto" ]]; then
+  if [[ "$DEV_REQUESTED" == "1" ]]; then
+    USE_GIT="1"
+  else
+    USE_GIT="0"
+  fi
+fi
+if [[ "$USE_GIT" == "1" && "$DEV_REQUESTED" != "1" ]]; then
+  die "Git source is supported only for development installs. Add --dev, or use the stable archive default."
 fi
 
 [[ -n "${DEST:-}" ]] || die "--dest is empty"
@@ -182,22 +196,15 @@ CORE_UPDATE_REPO_URL="${ADAOS_CORE_UPDATE_REPO_URL:-}"
 log "Preparing repo at: ${REPO_DIR}"
 mkdir -p "$REPO_DIR"
 
-if ! have git; then
+if [[ "$USE_GIT" == "1" ]] && ! have git; then
   log "git not found; trying to install (best-effort)..."
   if try_install_git; then
     ok "git installed"
   else
-    warn "git is not available; AdaOS will run in archive (no-git) mode for skills/scenarios until you enable git"
+    warn "git is not available; the requested development checkout cannot be prepared"
   fi
 fi
 
-if [[ "$USE_GIT" == "auto" ]]; then
-  if have git; then
-    USE_GIT="1"
-  else
-    USE_GIT="0"
-  fi
-fi
 if [[ "$USE_GIT" == "1" ]] && ! have git; then
   die "git is not installed (required for git mode). Either install git, or run with --archive."
 fi

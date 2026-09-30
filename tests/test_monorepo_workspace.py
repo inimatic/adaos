@@ -477,6 +477,40 @@ def test_sparse_set_separates_options_from_patterns(monkeypatch, tmp_path):
     assert ["sparse-checkout", "set", "--no-cone", "--", "registry.json", "skills/news_skill"] in calls
 
 
+def test_sparse_add_repairs_legacy_git_cone_fallback(monkeypatch, tmp_path):
+    root = tmp_path / ".adaos" / "workspace"
+    patterns = root / ".git" / "info" / "sparse-checkout"
+    patterns.parent.mkdir(parents=True, exist_ok=True)
+    patterns.write_text(
+        "/*\n!/*/\nprojects/web_desktop\n",
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run_git(args, cwd=None):
+        calls.append(list(args))
+        if args[:2] == ["sparse-checkout", "add"]:
+            raise cli_git_module.GitError("unknown subcommand: add")
+        if args[:2] == ["sparse-checkout", "list"]:
+            return "rojects/web_desktop\n"
+        if args[:2] == ["sparse-checkout", "set"]:
+            return ""
+        raise AssertionError(f"unexpected git call: {args!r}")
+
+    monkeypatch.setattr(cli_git_module, "_run_git", fake_run_git)
+
+    CliGitClient(depth=0).sparse_add(str(root), "projects/applications")
+
+    assert calls[-1] == [
+        "sparse-checkout",
+        "set",
+        "--no-cone",
+        "--",
+        "projects/web_desktop",
+        "projects/applications",
+    ]
+
+
 def test_sparse_set_removes_stale_blocker_in_non_dev(monkeypatch, tmp_path):
     monkeypatch.setenv("ENV_TYPE", "prod")
     root = tmp_path / ".adaos" / "workspace"

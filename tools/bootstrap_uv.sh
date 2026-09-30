@@ -588,11 +588,14 @@ else
   uv venv --python "$UV_PYTHON" "$PWD/.venv" || die "uv venv failed"
   ADAOS_PY="$PWD/.venv/bin/python"
   [[ -x "$ADAOS_PY" ]] || die "Expected venv python at $ADAOS_PY"
+  Y_PY_WHEELHOUSE="$PWD/.adaos/bootstrap/wheels"
+  "$ADAOS_PY" tools/install_patched_y_py.py --installer uv --wheelhouse "$Y_PY_WHEELHOUSE" \
+    || die "published patched y-py wheel installation failed"
   USER_INSTALL_SPEC="."
   if [[ "${DEV_MODE:-0}" == "1" ]]; then
     USER_INSTALL_SPEC=".[dev]"
   fi
-  uv pip install --python "$ADAOS_PY" --no-sources --only-binary :all: --editable "$USER_INSTALL_SPEC" || die "AdaOS dependency install failed"
+  uv pip install --python "$ADAOS_PY" --no-sources --find-links "$Y_PY_WHEELHOUSE" --only-binary :all: --editable "$USER_INSTALL_SPEC" || die "AdaOS dependency install failed"
 fi
 ok "Python environment ready"
 

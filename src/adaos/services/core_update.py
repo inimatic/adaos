@@ -1272,17 +1272,14 @@ def _shared_dotenv_path() -> str:
 
 def _core_update_source_mode() -> str:
     explicit = str(os.getenv("ADAOS_CORE_UPDATE_SOURCE_MODE") or "").strip()
-    if explicit:
-        return explicit
-    if env_bool("ADAOS_DEV_ALLOW_CORE_UPDATE"):
-        return "git-first"
-    if (
-        env_bool("ADAOS_AUTOSTART_MANAGED")
-        or env_bool("ADAOS_SUPERVISOR_ENABLED")
-        or str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
-    ):
-        return "archive-first"
-    return "git-first"
+    development = env_bool("ADAOS_DEV_ALLOW_CORE_UPDATE") or str(
+        os.getenv("ENV_TYPE") or ""
+    ).strip().lower() == "dev"
+    if development:
+        return explicit or "git-first"
+    # Stable core provenance is an immutable archive. Do not silently fall
+    # through to a branch clone when the archive is absent or invalid.
+    return "archive-only"
 
 
 def _core_update_source_archive_url() -> str:
