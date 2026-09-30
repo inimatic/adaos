@@ -448,6 +448,7 @@ if ($desiredRole -eq "hub") {
 function Configure-RasaNlu {
     if ($NoVoice) {
         $env:ADAOS_NLU_RASA = "0"
+        Write-EnvVar -Key "ADAOS_NLU_RASA" -Value "0" -EnvFile ".env"
         Write-Host "Rasa NLU service disabled by -NoVoice."
         return
     }

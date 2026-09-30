@@ -122,6 +122,21 @@ def test_user_bootstraps_create_runtime_identity_before_native_applications() ->
         assert 'throw "adaos dev root init failed' in script
 
 
+def test_no_voice_persists_rasa_disablement_for_autostart() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    for relative_path in ("tools/bootstrap.sh", "tools/bootstrap_uv.sh"):
+        script = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert 'write_env_var "ADAOS_NLU_RASA" "0" ".env"' in script
+
+    for relative_path in ("tools/bootstrap.ps1", "tools/bootstrap_uv.ps1"):
+        script = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert (
+            'Write-EnvVar -Key "ADAOS_NLU_RASA" -Value "0" -EnvFile ".env"'
+            in script
+        )
+
+
 def test_wheel_workflow_builds_both_macos_architectures() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workflow = (repo_root / ".github" / "workflows" / "y-py-wheels.yml").read_text(encoding="utf-8")

@@ -378,6 +378,7 @@ print_next_steps() {
 configure_rasa_nlu() {
   if [[ "${NO_VOICE:-0}" == "1" ]]; then
     export ADAOS_NLU_RASA=0
+    write_env_var "ADAOS_NLU_RASA" "0" ".env"
     log "Rasa NLU service disabled by --no_voice"
     return 0
   fi
