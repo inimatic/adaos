@@ -225,6 +225,15 @@ Two distribution views refer to the same immutable facts:
 - a **resolved distribution** pins and, when required, carries the exact
   package and portable-artifact closure for offline installation.
 
+The resolved transport is a deterministic bundle envelope, not a new storage
+authority. Its expected archive digest is delivered by the trusted
+registry/distribution channel. Offline admission verifies the canonical
+Application/query/result/thin receipt, admitted provenance-receipt digest,
+exact release, selected portable evidence, and every package byte before
+placing them into the same local content-addressed stores. It rejects local
+authority and credentials and stops before provisioning, planning, or
+activation.
+
 Registry sync always materializes the compact semantic index and imports its
 verified portable records into the node-local cache. This makes a reusable
 contract visible before the Application that first published it is installed.

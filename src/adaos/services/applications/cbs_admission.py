@@ -496,8 +496,15 @@ class NativeApplicationCBSAdmissionService:
                     ],
                 },
                 result="verified",
-                redaction={"portable": False, "omitted_fields": ["credentials"]},
-                portability_scope="local",
+                # The claim contains only immutable release/contract identities
+                # and digests of validation material.  Local evidence context
+                # (including credentials) is deliberately not embedded, so the
+                # conformance result can travel with a resolved distribution.
+                redaction={
+                    "portable": True,
+                    "omitted_fields": ["credentials", "local_evidence_context"],
+                },
+                portability_scope="portable",
             )
             assessment = EvidenceAssessment.create(
                 assessment_ref=f"evidence-assessment:application-release/{claim_token}",

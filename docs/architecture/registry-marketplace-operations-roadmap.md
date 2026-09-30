@@ -79,17 +79,21 @@ revision after reconnect. Revision
 production global and RU-zone route to the local and clean-subnet hubs; the
 clean subnet synchronized and recorded all three installed Applications as
 `already_current`. Boot/core-update polling remains a compatibility and
-recovery path. Thin semantic-only online resolution, offline resolved bundles,
-and cross-registry federation remain later CBS10 work.
+recovery path. Snapshot-pinned thin semantic resolution and sealed offline
+resolved-bundle admission are now implemented in `CBS10-08` through
+`CBS10-10`; the final real Gmail clean-subnet provisioning/activation exercise
+remains in `CBS10-11`. Cross-registry federation remains deferred.
 
 The [2026-09-29 semantic distribution gap audit](semantic-registry-distribution-gap-audit-2026-09-29.md)
-now separates those concerns precisely. Publication and full-index replication
-are implemented; online cold-cache query/acquisition and sealed offline bundles
-are not. `CBS10-08` through `CBS10-11` are therefore required distribution
-gates. They must reuse this roadmap's existing package store, Application
-install lifecycle, operation receipts, and activation authority rather than
-introducing a second package manager or install path. Selective indexes and
-caches remain measured follow-up work; federation remains deferred.
+now separates those concerns precisely. Publication, full-index replication,
+online cold-cache query/acquisition, and the sealed offline bundle ABI are
+implemented. `CBS10-11` remains the real-Application distribution gate because
+the legacy Gmail publication lacks portable conformance evidence; corrected
+native admissions now publish a redacted portable claim. The implementation
+reuses this roadmap's existing package store, Application install lifecycle,
+operation receipts, and activation authority rather than introducing a second
+package manager or install path. Selective indexes and caches remain measured
+follow-up work; federation remains deferred.
 
 ## Why This Note Exists
 

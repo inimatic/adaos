@@ -487,9 +487,9 @@ def test_exact_release_publishes_and_imports_shared_semantic_registry(
     published = projection.prepare_release(plan, package_store=store)
 
     assert published["status"] == "prepared"
-    assert published["record_count"] == 6
-    assert published["portable_evidence_count"] == 0
-    assert published["omitted_local_evidence_count"] == 2
+    assert published["record_count"] == 8
+    assert published["portable_evidence_count"] == 2
+    assert published["omitted_local_evidence_count"] == 0
     assert published == projection.prepare_release(plan, package_store=store)
     assert (
         admission_service.find_by_project_release(plan.release.release_digest)
@@ -506,7 +506,7 @@ def test_exact_release_publishes_and_imports_shared_semantic_registry(
     imported = SemanticRegistryProjection(
         registry, consumer_state
     ).import_to_local_catalog()
-    assert imported["record_count"] == 6
+    assert imported["record_count"] == 8
     catalog = PortableContractCatalog(
         consumer_state / "capability-binding-state" / "portable"
     )
@@ -521,6 +521,10 @@ def test_exact_release_publishes_and_imports_shared_semantic_registry(
     deliveries = catalog.deliveries_for_binding(bindings[0].digest)
     assert len(deliveries) == 1
     assert deliveries[0].to_dict()["package"]["id"] == "mail_provider"
+    assert sum(
+        catalog.load_mapping(digest)["schema"] == "adaos.evidence.claim.v1"
+        for digest in imported["record_digests"]
+    ) == 2
 
 
 def test_exact_release_admissions_are_selected_by_application_identity(

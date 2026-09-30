@@ -9,10 +9,16 @@ from pathlib import Path
 
 import pytest
 
-from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
+from adaos.domain.artifact_release import (
+    ArtifactSourceRef,
+    canonical_json_bytes,
+    canonical_payload_digest,
+    sha256_digest,
+)
 from adaos.domain.capability_binding_state import (
     ApplicationRequirement,
     BindingDefinition,
+    BindingInstance,
     CapabilityContract,
     EnvironmentProfile,
     EvidenceClaim,
@@ -20,6 +26,7 @@ from adaos.domain.capability_binding_state import (
 from adaos.services.artifact_pipeline import (
     ContentAddressedPackageStore,
     PackageCatalog,
+    ReleaseRepository,
     build_artifact_package,
     build_project_release,
 )
@@ -34,6 +41,11 @@ from adaos.services.capability_binding_state.registry_distribution import (
 )
 from adaos.services.capability_binding_state.registry_projection import (
     SemanticRegistryProjection,
+)
+from adaos.services.capability_binding_state.resolved_bundle import (
+    ResolvedBundleError,
+    ResolvedSemanticBundleAdmission,
+    ResolvedSemanticBundleExporter,
 )
 
 
@@ -438,3 +450,241 @@ def test_thin_distribution_requires_exact_application_requirements(
 
     assert rejected.value.code == "application_requirements_mismatch"
     assert remote.release_calls == 0
+
+
+def _offline_admission(root: Path) -> ResolvedSemanticBundleAdmission:
+    return ResolvedSemanticBundleAdmission(
+        package_store=ContentAddressedPackageStore(root / "packages"),
+        portable_catalog=PortableContractCatalog(root / "portable"),
+        release_repository=ReleaseRepository(root / "releases"),
+        receipt_root=root / "receipts",
+    )
+
+
+def test_resolved_bundle_offline_admission_matches_thin_selection_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    online = tmp_path / "online"
+    built, plan, query, _requirement, unrelated = _write_fixture(online)
+    exported = ResolvedSemanticBundleExporter(
+        _resolver(online, _Remote(plan, built.archive_bytes), _Provenance())
+    ).export(
+        project_id="thin_mail",
+        project_release_digest=str(plan.release.release_digest),
+        query=query,
+        registry_revision=REVISION,
+    )
+
+    offline = tmp_path / "offline"
+    admission = _offline_admission(offline)
+    first = admission.admit(
+        exported.archive_bytes,
+        expected_bundle_digest=exported.bundle_digest,
+    )
+    second = admission.admit(
+        exported.archive_bytes,
+        expected_bundle_digest=exported.bundle_digest,
+    )
+
+    assert first == second
+    assert first["receipt_digest"] == canonical_payload_digest(
+        {key: value for key, value in first.items() if key != "receipt_digest"}
+    )
+    assert first["resolution_digests"] == sorted(
+        item["resolution_digest"] for item in exported.thin_receipt["resolutions"]
+    )
+    assert first["activation_performed"] is False
+    assert first["local_authority_created"] is False
+    assert admission.package_store.has(built.ref.digest)
+    assert admission.release_repository.get_release(
+        "thin_mail", str(plan.release.release_digest)
+    ) == plan
+    with pytest.raises(KeyError):
+        admission.portable_catalog.load_mapping(unrelated.digest)
+
+
+def test_resolved_bundle_rejects_member_tamper_before_cold_cache_mutation(
+    tmp_path: Path,
+) -> None:
+    online = tmp_path / "online"
+    built, plan, query, _requirement, _unrelated = _write_fixture(online)
+    exported = ResolvedSemanticBundleExporter(
+        _resolver(online, _Remote(plan, built.archive_bytes), _Provenance())
+    ).export(
+        project_id="thin_mail",
+        project_release_digest=str(plan.release.release_digest),
+        query=query,
+        registry_revision=REVISION,
+    )
+    changed = BytesIO()
+    with zipfile.ZipFile(BytesIO(exported.archive_bytes), "r") as source:
+        with zipfile.ZipFile(changed, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for info in source.infolist():
+                payload = source.read(info.filename)
+                if info.filename == "application.json":
+                    payload = b"{}"
+                target.writestr(info.filename, payload)
+    tampered = changed.getvalue()
+    offline = tmp_path / "offline"
+
+    with pytest.raises(ResolvedBundleError) as rejected:
+        _offline_admission(offline).admit(
+            tampered,
+            expected_bundle_digest="sha256:" + __import__("hashlib").sha256(tampered).hexdigest(),
+        )
+
+    assert rejected.value.code == "member_digest_mismatch"
+    assert not offline.exists()
+
+
+def test_resolved_bundle_rejects_undeclared_credentials_member(
+    tmp_path: Path,
+) -> None:
+    online = tmp_path / "online"
+    built, plan, query, _requirement, _unrelated = _write_fixture(online)
+    exported = ResolvedSemanticBundleExporter(
+        _resolver(online, _Remote(plan, built.archive_bytes), _Provenance())
+    ).export(
+        project_id="thin_mail",
+        project_release_digest=str(plan.release.release_digest),
+        query=query,
+        registry_revision=REVISION,
+    )
+    changed = BytesIO()
+    with zipfile.ZipFile(BytesIO(exported.archive_bytes), "r") as source:
+        with zipfile.ZipFile(changed, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for info in source.infolist():
+                target.writestr(info.filename, source.read(info.filename))
+            target.writestr("credentials/refresh-token.json", b'{"refresh_token":"secret"}')
+    injected = changed.getvalue()
+
+    with pytest.raises(ResolvedBundleError) as rejected:
+        _offline_admission(tmp_path / "offline").admit(
+            injected,
+            expected_bundle_digest="sha256:" + __import__("hashlib").sha256(injected).hexdigest(),
+        )
+
+    assert rejected.value.code == "local_authority_forbidden"
+
+
+def test_resolved_bundle_requires_out_of_band_sealed_digest(tmp_path: Path) -> None:
+    online = tmp_path / "online"
+    built, plan, query, _requirement, _unrelated = _write_fixture(online)
+    exported = ResolvedSemanticBundleExporter(
+        _resolver(online, _Remote(plan, built.archive_bytes), _Provenance())
+    ).export(
+        project_id="thin_mail",
+        project_release_digest=str(plan.release.release_digest),
+        query=query,
+        registry_revision=REVISION,
+    )
+
+    with pytest.raises(ResolvedBundleError) as rejected:
+        _offline_admission(tmp_path / "offline").admit(
+            exported.archive_bytes + b"changed",
+            expected_bundle_digest=exported.bundle_digest,
+        )
+
+    assert rejected.value.code == "bundle_digest_mismatch"
+
+
+def test_resolved_bundle_rejects_resealed_cross_object_closure_drift(
+    tmp_path: Path,
+) -> None:
+    online = tmp_path / "online"
+    built, plan, query, _requirement, _unrelated = _write_fixture(online)
+    exported = ResolvedSemanticBundleExporter(
+        _resolver(online, _Remote(plan, built.archive_bytes), _Provenance())
+    ).export(
+        project_id="thin_mail",
+        project_release_digest=str(plan.release.release_digest),
+        query=query,
+        registry_revision=REVISION,
+    )
+    with zipfile.ZipFile(BytesIO(exported.archive_bytes), "r") as source:
+        members = {
+            info.filename: source.read(info.filename) for info in source.infolist()
+        }
+    thin = json.loads(members["resolution-receipt.json"])
+    thin["portable_record_digests"] = []
+    thin.pop("receipt_digest")
+    thin["receipt_digest"] = canonical_payload_digest(thin)
+    members["resolution-receipt.json"] = canonical_json_bytes(thin)
+    manifest = json.loads(members["manifest.json"])
+    for entry in manifest["members"]:
+        if entry["name"] == "resolution-receipt.json":
+            entry["digest"] = sha256_digest(members["resolution-receipt.json"])
+            entry["size"] = len(members["resolution-receipt.json"])
+    manifest["thin_resolution_receipt_digest"] = thin["receipt_digest"]
+    manifest.pop("manifest_digest")
+    manifest["manifest_digest"] = canonical_payload_digest(manifest)
+    members["manifest.json"] = canonical_json_bytes(manifest)
+    changed = BytesIO()
+    with zipfile.ZipFile(changed, "w", compression=zipfile.ZIP_DEFLATED) as target:
+        for name, payload in sorted(members.items()):
+            target.writestr(name, payload)
+    resealed = changed.getvalue()
+
+    with pytest.raises(ResolvedBundleError) as rejected:
+        _offline_admission(tmp_path / "offline").admit(
+            resealed,
+            expected_bundle_digest=sha256_digest(resealed),
+        )
+
+    assert rejected.value.code == "portable_closure_mismatch"
+    assert not (tmp_path / "offline").exists()
+
+
+def test_resolved_bundle_preserves_selection_but_not_local_account_identity(
+    tmp_path: Path,
+) -> None:
+    online = tmp_path / "online"
+    built, plan, query, _requirement, _unrelated = _write_fixture(online)
+    exported = ResolvedSemanticBundleExporter(
+        _resolver(online, _Remote(plan, built.archive_bytes), _Provenance())
+    ).export(
+        project_id="thin_mail",
+        project_release_digest=str(plan.release.release_digest),
+        query=query,
+        registry_revision=REVISION,
+    )
+    admitted_a = _offline_admission(tmp_path / "subnet-a").admit(
+        exported.archive_bytes, expected_bundle_digest=exported.bundle_digest
+    )
+    admitted_b = _offline_admission(tmp_path / "subnet-b").admit(
+        exported.archive_bytes, expected_bundle_digest=exported.bundle_digest
+    )
+    assert admitted_a["resolution_digests"] == admitted_b["resolution_digests"]
+    resolution = admitted_a["resolutions"][0]
+    common = {
+        "revision": 1,
+        "predecessor_digest": None,
+        "tenant_ref": None,
+        "binding_definition_ref": resolution["binding_definition"]["ref"],
+        "binding_definition_digest": resolution["binding_definition"]["digest"],
+        "delivery_digest": resolution["delivery"]["delivery_digest"],
+        "environment_profile_ref": resolution["environment_profile_ref"],
+        "environment_profile_digest": resolution["environment_profile_digest"],
+        "mode": "production",
+        "authority_epoch": 1,
+    }
+    local_a = BindingInstance.create(
+        binding_instance_ref="binding-instance:subnet-a/gmail-primary",
+        workspace_ref="workspace:subnet-a/desktop",
+        local_binding_ref="provider-account:subnet-a/gmail-primary",
+        **common,
+    )
+    local_b = BindingInstance.create(
+        binding_instance_ref="binding-instance:subnet-b/gmail-primary",
+        workspace_ref="workspace:subnet-b/desktop",
+        local_binding_ref="provider-account:subnet-b/gmail-primary",
+        **common,
+    )
+
+    assert local_a.stable_ref != local_b.stable_ref
+    assert local_a.digest != local_b.digest
+    assert local_a.to_dict()["binding_definition_digest"] == local_b.to_dict()[
+        "binding_definition_digest"
+    ]
+    assert b"provider-account:subnet-a" not in exported.archive_bytes
+    assert b"provider-account:subnet-b" not in exported.archive_bytes

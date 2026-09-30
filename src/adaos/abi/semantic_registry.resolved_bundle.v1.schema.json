@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/adaos/abi/semantic_registry.resolved_bundle.v1.schema.json",
+  "title": "AdaOS Sealed Resolved Semantic Distribution Bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "project_id", "application_ref", "project_release_digest",
+    "semantic_revision_digest", "application_projection_digest", "snapshot",
+    "query_digest", "query_result_digest", "thin_resolution_receipt_digest",
+    "provenance_receipt_digest", "portable_record_digests", "package_digests",
+    "resolution_digests", "members", "local_authority_excluded",
+    "activation_performed", "local_authority_created", "manifest_digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.semantic_registry.resolved_bundle.v1"},
+    "project_id": {"type": "string", "minLength": 1, "maxLength": 255},
+    "application_ref": {"type": "string", "pattern": "^application:"},
+    "project_release_digest": {"$ref": "#/$defs/digest"},
+    "semantic_revision_digest": {"$ref": "#/$defs/digest"},
+    "application_projection_digest": {"$ref": "#/$defs/digest"},
+    "snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["registry_revision", "index_digest"],
+      "properties": {
+        "registry_revision": {"type": "string", "minLength": 1},
+        "index_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "query_digest": {"$ref": "#/$defs/digest"},
+    "query_result_digest": {"$ref": "#/$defs/digest"},
+    "thin_resolution_receipt_digest": {"$ref": "#/$defs/digest"},
+    "provenance_receipt_digest": {"$ref": "#/$defs/digest"},
+    "portable_record_digests": {"$ref": "#/$defs/digests"},
+    "package_digests": {"$ref": "#/$defs/digests"},
+    "resolution_digests": {"$ref": "#/$defs/digests"},
+    "members": {
+      "type": "array", "minItems": 6, "maxItems": 511,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "kind", "digest", "size"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 512},
+          "kind": {"enum": ["semantic_application", "semantic_query", "semantic_query_result", "thin_resolution", "release_plan", "portable_record", "package"]},
+          "digest": {"$ref": "#/$defs/digest"},
+          "size": {"type": "integer", "minimum": 0, "maximum": 268435456}
+        }
+      }
+    },
+    "local_authority_excluded": {
+      "type": "array", "minItems": 6, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "activation_performed": {"const": false},
+    "local_authority_created": {"const": false},
+    "manifest_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "digests": {
+      "type": "array", "uniqueItems": true,
+      "items": {"$ref": "#/$defs/digest"}
+    }
+  }
+}

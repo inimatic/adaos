@@ -1024,14 +1024,37 @@ its own local account attachment and credential authority.
   record, provenance rejection before cache mutation, requirement substitution,
   and tampered package bytes. No `BindingInstance`, `StateSpace`, credential,
   `ResolutionPlan`, `WorkspaceLock`, or activation is created.
-- [ ] `[must]` `CBS10-10` Export and admit a sealed resolved portable
+- [x] `[must]` `CBS10-10` Export and admit a sealed resolved portable
   distribution bundle with the exact Application, registry snapshot, package,
   semantic-artifact, and portable-evidence closure for offline use. Imported
   bytes enter the existing stores; credentials and local records are rejected.
-- [ ] `[must]` `CBS10-11` Prove cold-cache thin installation and registry-offline
+  The v1 deterministic ZIP ABI is digest-sealed out of band and contains the
+  canonical Application/query/result/thin receipt, exact `ReleasePlan`, only
+  selected portable records, and verified package archives. Admission verifies
+  all member bytes and cross-object identities before the first store mutation,
+  then populates the existing package, release, and portable-contract stores.
+  Duplicate admission returns the same content-addressed receipt; unknown,
+  undeclared, traversal, symlink, credential, local-authority, closure-drift,
+  and tampered members fail closed. Bundle admission performs no provisioning
+  or activation and creates no credential, `BindingInstance`, `StateSpace`,
+  `ResolutionPlan`, or `WorkspaceLock`.
+- [~] `[must]` `CBS10-11` Prove cold-cache thin installation and registry-offline
   bundle installation on a clean subnet with equivalent exact selections,
   distinct local account/binding identities, idempotent receipts, negative
-  secret scans, tamper tests, and activation fault injection.
+  secret scans, tamper tests, and activation fault injection. The executable
+  fixture proves equivalent thin/offline resolution digests, two independent
+  local binding/account identities, idempotency, pre-mutation tamper/secret
+  rejection, and the existing pre-commit activation fault invariant. The
+  archive-only clean node `.34` also fetched and verified the exact published
+  Gmail `0.1.11` release, both package archives, and its three-attestation set.
+  Full Gmail closure remains fail-closed because that legacy publication
+  contains no portable `EvidenceClaim`: native admission previously marked its
+  conformance evidence local-only. New admissions now publish a redacted
+  portable claim that contains immutable identities/digests but no credentials
+  or local evidence context. Close this item by publishing a new Gmail release,
+  syncing it to `.34`, repeating thin and offline bundle installation with the
+  registry disabled for the latter, and injecting the production activation
+  failure after local account provisioning.
 - [ ] `[should]` `CBS10-12` Add selective synchronization, reverse indexes,
   pagination, and bounded registry/local caches after correctness and
   cold-start costs are measured.
@@ -1044,8 +1067,10 @@ its own local account attachment and credential authority.
 The 2026-09-29 [distribution gap audit](semantic-registry-distribution-gap-audit-2026-09-29.md)
 is the evidence basis for `CBS10-08` through `CBS10-14`. In particular, the
 `distribution.thin` is now consumed only through the verified `CBS10-09`
-resolution boundary; `distribution.resolved` is still publication metadata,
-not yet the sealed offline installer contract required by `CBS10-10`.
+resolution boundary. `distribution.resolved` remains compact publication
+metadata; the independent sealed bundle ABI now materializes and admits its
+verified byte closure without becoming a second package store. See the
+[CBS10-10/11 proof](cbs10-resolved-bundle-proof-2026-09-30.md).
 
 ## Cross-Cutting Acceptance Gates
 

@@ -121,6 +121,16 @@ _LAZY_REGISTRY_DISTRIBUTION_EXPORTS = frozenset(
         "ThinSemanticDistributionResolver",
     }
 )
+_LAZY_RESOLVED_BUNDLE_EXPORTS = frozenset(
+    {
+        "RESOLVED_BUNDLE_ADMISSION_SCHEMA",
+        "RESOLVED_BUNDLE_SCHEMA",
+        "ResolvedBundleError",
+        "ResolvedBundleExport",
+        "ResolvedSemanticBundleAdmission",
+        "ResolvedSemanticBundleExporter",
+    }
+)
 
 
 def __getattr__(name: str):
@@ -131,6 +141,12 @@ def __getattr__(name: str):
         from . import registry_distribution
 
         value = getattr(registry_distribution, name)
+        globals()[name] = value
+        return value
+    if name in _LAZY_RESOLVED_BUNDLE_EXPORTS:
+        from . import resolved_bundle
+
+        value = getattr(resolved_bundle, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -185,6 +201,12 @@ __all__ = [
     "ThinDistributionError",
     "ThinDistributionRemote",
     "ThinSemanticDistributionResolver",
+    "RESOLVED_BUNDLE_ADMISSION_SCHEMA",
+    "RESOLVED_BUNDLE_SCHEMA",
+    "ResolvedBundleError",
+    "ResolvedBundleExport",
+    "ResolvedSemanticBundleAdmission",
+    "ResolvedSemanticBundleExporter",
     "ScriptedReservationProvider",
     "SimulationReservationProvider",
     "StateAttachmentError",

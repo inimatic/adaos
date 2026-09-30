@@ -10,12 +10,15 @@ distribution contracts instead of creating a semantic package manager.
 The semantic registry is already a working **publication and replication
 index**. It is not yet a complete **distribution system**.
 
-Update, 2026-09-29: `CBS10-08` closed the discovery-contract gap and
-`CBS10-09` closed the cold-cache thin-resolution gap. The v1 snapshot-pinned
-query/result ABI is implemented as a read-only projection, and the thin path
-now verifies the exact semantic Application release, provenance and package
-closure before producing immutable `ApplicationResolution` records. Sealed
-offline bundles and clean-subnet install/activation proofs remain open.
+Update, 2026-09-30: `CBS10-08` closed the discovery-contract gap,
+`CBS10-09` closed the cold-cache thin-resolution gap, and `CBS10-10` closed the
+sealed offline bundle/admission contract. The v1 snapshot-pinned query/result
+ABI is a read-only projection; the thin path verifies the exact semantic
+Application release, provenance, and package closure before producing immutable
+`ApplicationResolution` records. The resolved bundle carries that exact byte
+closure and admits it into the same existing stores after complete pre-mutation
+verification. The final real Gmail clean-subnet install/activation exercise in
+`CBS10-11` remains partial pending a new publication with portable evidence.
 
 The following production properties are implemented and covered by tests:
 
@@ -36,13 +39,21 @@ The following production properties are implemented and covered by tests:
 - a cold local cache can now acquire only the selected portable records and the
   exact existing ProjectRelease package closure, admit provenance/policy/
   evidence, and emit an immutable resolution without local authority.
+- the same exact selection can be exported as one deterministic, digest-sealed
+  resolved bundle and admitted without registry access into the existing
+  package, release, and portable-contract stores;
+- bundle admission rejects undeclared members, secrets/local authority,
+  traversal/symlinks, member or closure drift, and tampered bytes before any
+  destination store mutation, and emits an idempotent receipt.
 
-The remaining missing boundary is portable offline installation and full
-clean-subnet install/activation proof. Online thin acquisition is executable,
-but it intentionally stops at `ApplicationResolution`; local provisioning,
-reviewed planning and activation stay on the established installation rails.
-The published `distribution.resolved` object still describes intent rather
-than a sealed, independently admitted offline bundle.
+The remaining missing boundary is the full real-Application clean-subnet
+install/activation proof. Online thin acquisition and registry-offline bundle
+admission are executable, but both intentionally stop at
+`ApplicationResolution`; local provisioning, reviewed planning, and activation
+stay on the established installation rails. The published
+`distribution.resolved` object remains compact intent metadata; the sealed
+bundle is a separate transport envelope over the same authoritative records
+and package bytes, not a second store or package manager.
 
 ## Authority Findings
 
@@ -54,7 +65,7 @@ than a sealed, independently admitted offline bundle.
 | Local resolution | `PortableContractCatalog` and CBS resolver/admission | Implemented after records have been imported. |
 | Online discovery | snapshot-pinned v1 query/result ABI over one verified local registry snapshot | Contract implemented; remote/selective acquisition from a cold cache remains part of thin installation. |
 | Thin installation | snapshot-pinned query plus `ThinSemanticDistributionResolver` over existing registry/package/provenance services | Resolution boundary implemented; clean-subnet install, provisioning and activation E2E remains in `CBS10-11`. |
-| Offline installation | exact package/artifact lists in Application projection | Gap: no sealed bundle manifest, carried byte closure, or offline admission receipt. |
+| Offline installation | sealed resolved-bundle v1 over the exact Application/query/result/release/package/portable-record closure | Implemented; complete real Gmail install/activation E2E remains in `CBS10-11`. |
 | Explanation | immutable v1 query result plus local resolver facts | Implemented for portable discovery with typed eligible/rejected candidates; activation explanations remain local. |
 | Revocation/federation | existing release/channel policy within one registry | Sufficient for the current single-registry proof; cross-registry conflicts and global revocation remain deferred. |
 
@@ -103,22 +114,28 @@ resolution or authority is returned. Mutable credentials, local provider
 instances, state attachments, plans, locks and activation remain outside this
 boundary.
 
-### 3. Resolved distribution is not a portable bundle
+### 3. Resolved distribution bundle — closed by CBS10-10
 
-The existing `resolved` object lists exact closure members, but it is neither a
-sealed manifest nor a transport bundle. A first executable bundle needs:
+The compact `resolved` object still lists exact closure members and remains a
+projection. The new executable transport bundle adds:
 
 - ApplicationRelease and semantic requirement-set digests;
 - registry snapshot/commit identity;
 - exact portable-record digests and payloads;
 - exact existing package refs and optionally their verified bytes;
 - portable evidence digests;
-- bundle digest and producer provenance;
+- an out-of-band expected bundle digest bound by the registry/distribution
+  channel and the admitted online provenance-receipt digest;
 - explicit exclusions for local authority and secrets;
 - an admission receipt proving every carried member was verified.
 
-The bundle may carry bytes, but it does not become a second store. Imported
-packages enter the existing content-addressed package store.
+The deterministic ZIP validates its fail-closed manifest, every member digest,
+the canonical query/result/Application/thin receipt, exact `ReleasePlan`,
+portable record identities, package refs/archives, and every resolution
+closure before mutation. The bundle may carry bytes, but it does not become a
+second store. Imported packages enter the existing content-addressed package
+store, semantic records enter `PortableContractCatalog`, and the exact release
+enters `ReleaseRepository`. Local authority is explicitly excluded.
 
 ### 4. Existing schemas are too permissive at the distribution edge
 
@@ -144,8 +161,8 @@ Complete this boundary in the existing registry and resolver:
    query/result/explanation ABI.
 2. **Done (`CBS10-09`):** implement cold-cache thin resolution as a verified
    acquisition step after read-only discovery and before local provisioning.
-3. Define and implement one sealed resolved-bundle manifest that imports into
-   the existing semantic catalog and package store.
+3. **Done (`CBS10-10`):** define and implement one sealed resolved-bundle
+   manifest that imports into the existing semantic catalog and package store.
 4. Prove both paths on a clean subnet with Gmail provider reuse, while creating
    credentials and connected-account attachment locally.
 5. Only then optimize full-index replication and local scans.
