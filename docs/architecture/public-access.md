@@ -7,6 +7,12 @@ desktop session. A public URL names a zone and a public token. The zone selects
 the root server. The root server resolves the public token to the target
 subnet, node, skill, public face, resource, and hub verification token.
 
+Public sites use the same "public visitor is not an authenticated desktop
+session" rule, but their projection, domain, route, and renderer contract is
+owned by [Public Site Projection And Addressing](public-site-projection-and-addressing.md).
+This page owns resource grants such as readonly Drive sharing; it does not own
+public site release publishing or custom-domain routing.
+
 This keeps public links target-addressed: a link may expose one resource inside
 a skill, such as one AdaOS Drive file or folder, without implying access to the
 whole skill or subnet.

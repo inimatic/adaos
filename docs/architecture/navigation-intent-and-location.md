@@ -8,6 +8,10 @@ AdaOS. It covers links produced by Desktop connections, Builder, notifications, 
 controls, and future skills. It does not grant access and does not replace the
 authorization or workflow models.
 
+Public site URL and projection routing extends the same separation of intent,
+resolved location, transition, and browser history. See
+[Public Site Projection And Addressing](public-site-projection-and-addressing.md).
+
 ## Decision
 
 AdaOS uses a canonical `intent`, not a UI `mode`, to describe why a link was
@@ -172,6 +176,30 @@ Navigation intent and current location are different lifetimes:
 - `intent` is an ingress instruction that may require several transitions;
 - canonical location is the resolved, shareable state currently displayed;
 - authentication codes and other one-time inputs are transient secrets.
+
+The target browser architecture has one owner for URL writes and history
+traversal. The current `NavigationLocation` service is the low-level adapter,
+but a higher-level address router must own:
+
+- conversion from ingress destination to transition plan;
+- resolved location projection into the address bar;
+- `pushState` versus `replaceState` policy;
+- `popstate` re-entry into the same resolver;
+- public site host/path/anchor resolution;
+- modal, view, and route history binding.
+
+The model follows the common modern data-router split:
+
+- Destination/intent: a requested target that may require effects.
+- Location: the resolved, copyable state with no secrets.
+- Transition: the effectful plan needed to reach the location.
+- History entry: the browser-visible location projection.
+
+Components may request navigation, but they must not directly mutate
+`window.location`, `history`, or public route query strings. Effectful services
+such as Webspace/scenario switching may execute a transition, but after success
+the browser history entry is a resolved location rather than the original
+replayable command.
 
 The target client model is a versioned `NavigationLocation` projection. Once a
 destination is resolved, the client should replace the ingress URL with a

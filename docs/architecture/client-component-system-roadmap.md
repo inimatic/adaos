@@ -6,12 +6,19 @@ Last reviewed: 2026-09-21.
 
 Architecture owner: [Web UI Architecture](web-ui-architecture.md).
 Builder dependency: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
+Public site dependency:
+[Public Site Projection Roadmap](public-site-projection-roadmap.md).
 
 This roadmap removes application-domain knowledge from the universal browser
 runtime, makes the semantic/component ABI truthful, and establishes a
 repeatable way to grow the Client component set. It owns Client work only.
 Builder intent interpretation, capability selection, compilation, and
 evaluation remain in their Builder architecture and roadmap.
+
+Public site projection has its own roadmap. This Client roadmap owns shared
+renderer integrity, registry truth, layout conformance, and generic component
+growth that public sites consume. It does not own domain routing, custom-domain
+binding, public projection publishing, or site authoring source maps.
 
 The Builder-side dependency and current qualification scope are tracked once in
 [BIP-08](builder-intent-to-prototype-roadmap.md#bip-08) and

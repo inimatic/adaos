@@ -23,6 +23,7 @@ Current implementation details remain documented in:
 - [Webspace Evolution Roadmap](webspace-evolution-roadmap.md)
 - [Device Access and Browsers](device-access-and-browsers.md)
 - [Named Entities and Canonical Naming](named-entities.md)
+- [Public Site Projection And Addressing](public-site-projection-and-addressing.md)
 
 ## Governing Rules
 
@@ -49,6 +50,56 @@ This document does not require:
 ## Addressing Layers
 
 AdaOS now needs one model with several layers, not one flat namespace.
+
+### Browser Address Envelope
+
+Browser-visible addresses need one versioned envelope above the individual ref
+families. The same envelope must describe authenticated app/workspace surfaces
+and public site surfaces without making one look like an implementation detail
+of the other.
+
+Target shape:
+
+```json
+{
+  "scope": "site",
+  "public": {
+    "host": "example.com",
+    "site_id": "st_8f3k2q",
+    "domain_id": "dom_123",
+    "release_id": "rel_456",
+    "projection_digest": "sha256:..."
+  },
+  "workspace": {
+    "zone": "ru",
+    "subnet_id": "sn_...",
+    "webspace_id": "desktop",
+    "scenario_id": "home",
+    "surface": "desktop"
+  },
+  "view": {
+    "route": "/docs/install",
+    "page": "docs.install",
+    "view": "notebook.note.edit",
+    "modal": "note-editor",
+    "anchor": "sdk"
+  },
+  "ephemeral": {
+    "preview": false,
+    "edit": false
+  }
+}
+```
+
+Only the fields relevant to the active `scope` are present. `public` names a
+resolved site release/projection and custom-domain binding. `workspace` names a
+private AdaOS runtime context. `view` names the renderable route, page, view,
+modal, anchor, or selection. `ephemeral` names non-canonical UI state such as
+preview/edit/diagnostic modes.
+
+This envelope is not an ingress command. Ingress commands remain navigation
+intents. The envelope is the resolved, shareable location that may be committed
+to browser history.
 
 ### 1. Logical authoring layer
 
@@ -165,6 +216,13 @@ Examples:
 This document treats `projection:<projection_key>` as the addressing form used
 when projection identity must participate in a broader ref vocabulary.
 
+Public site projections use the same class for sealed public artifacts:
+
+- `projection:site:st_8f3k2q:rel_456`
+- `projection:site:st_8f3k2q:sha256-...`
+
+These refs identify a public projection release, not a mutable Webspace room.
+
 ### Action refs
 
 Action refs identify typed browser-visible or runtime-visible operations.
@@ -224,6 +282,15 @@ Modals may opt in to browser URL/history binding through
 `schema.interface.history`. When enabled, the browser writes the current modal
 id, route, view, and params into query parameters so addressed modal states can
 be copied, reviewed, and restored by later deeplink handling.
+
+Public site view refs identify public routes and sections. They are separate
+from private skill task views even when the same renderer can display both.
+
+Examples:
+
+- `view:site.home`
+- `view:site.docs.install`
+- `view:site.pricing`
 
 ### Domain refs
 

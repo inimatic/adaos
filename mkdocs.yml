@@ -180,6 +180,8 @@ nav:
       - Infrascope: architecture/infrascope.md
       - UI Addressing: architecture/ui-addressing.md
       - Web UI Architecture: architecture/web-ui-architecture.md
+      - Public Site Projection And Addressing: architecture/public-site-projection-and-addressing.md
+      - Public Site Projection Roadmap: architecture/public-site-projection-roadmap.md
       - Observability Map: monitoring/observability.md
       - Version Observability: architecture/version-observability.md
       - Operational Event Model: architecture/operational-event-model.md

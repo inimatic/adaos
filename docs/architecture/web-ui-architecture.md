@@ -58,6 +58,9 @@ The [Client Component System Roadmap](client-component-system-roadmap.md) owns
 the corrective sequence for removing product logic from this universal layer,
 making component contracts authoritative, and growing the renderer set from
 measured cross-domain capability gaps.
+[Public Site Projection And Addressing](public-site-projection-and-addressing.md)
+owns the target public-site surface that reuses the same renderer foundation
+without joining the authenticated Desktop/Yjs runtime by default.
 
 ## Governing Rules
 
@@ -96,6 +99,13 @@ The current runtime already provides important pieces of the target:
 - coarse intent-level `loadHint` support
 
 The target architecture builds on those pieces rather than replacing them.
+
+Public site projection reuses the same lower-level renderer pieces: page schema,
+layout render plan, region rendering, widget registry, widget host, resource
+loading, static data sources, API data sources, and theme tokens. It does not
+reuse Desktop chrome, Webspace switching, private MCP/resource queries, direct
+Yjs room admission, or authenticated runtime overlays unless a later public
+adapter explicitly admits them.
 
 ## Layout Baseline And Cutover
 
@@ -178,6 +188,13 @@ Responsibilities:
 - load hints
 
 This layer remains the shipped contribution contract for current skills.
+
+Public sites add a compiled projection profile on top of this layer. The
+authored public source is `adaos.site.v1`; the browser consumes a sealed
+projection manifest that contains a compatible `adaos.webui.v1` page graph with
+`site.*` widgets and `surfaceClass = "site"`. This projection is cacheable and
+public-safe by construction, while skill `webui.json` remains the shipped
+Application/Webspace contribution contract.
 
 ### 3. Semantic view layer
 

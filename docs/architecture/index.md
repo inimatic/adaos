@@ -71,6 +71,8 @@ Current target-state control-plane extensions are documented in:
 - [Infrascope Retirement Architecture](infrascope.md): decomposition of the legacy operator product into Desktop, Applications, Users & Access, Builder, and neutral platform contracts
 - [UI Addressing](ui-addressing.md): target typed ref vocabulary for browser-facing state, projections, domain identity, and actions
 - [Public Access Grants](public-access.md): root-visible public grants, public faces, Drive readonly sharing, guest device identity, and the no-YJS public rendering direction
+- [Public Site Projection And Addressing](public-site-projection-and-addressing.md): target public-site source/projection/runtime/address model for static public pages, custom domains, `site.*` components, theme tokens, and Back/Forward-safe location handling
+- [Public Site Projection Roadmap](public-site-projection-roadmap.md): prioritized `must` through `deferred` sequence for address router cleanup, public projection runtime, domain resolution, editing source maps, backend components, and hardening
 - [Named Entities and Canonical Naming](named-entities.md): target architecture and roadmap for display names, localized labels, observed names, aliases, canonical refs, and NLU entity canonicalization
 - [AdaOS Builder](builder.md): canonical role and end-to-end workflow for turning ideas into governed skills, scenarios, UI descriptors, NLU hints, tests, and runtime-ready changes
 - [Builder Conversational Development Architecture](builder-conversational-development.md): chat-first, state-backed development control plane; Project/Issue/Change/Run model; statechart; context packets; semantic UI/data changes; negotiated interactions; rich views; and multi-user proposal seams
