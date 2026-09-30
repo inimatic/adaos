@@ -207,7 +207,14 @@ class ApplicationService:
             raise ApplicationServiceError(
                 "subnet_ref is required for install-time Application access"
             )
-        subject_ref = f"user:{subnet}"
+        issuer = str(issuer_ref or "").strip()
+        # A reviewed install performed by an authenticated user must grant the
+        # declared install-time permissions to that user.  The old subnet
+        # surrogate (user:<subnet-id>) was never the browser subject and left
+        # owners facing an unfulfillable approval prompt immediately after a
+        # successful install.  System callers retain the surrogate fallback;
+        # bootstrap resolves the actual local owner before calling us.
+        subject_ref = issuer if issuer.startswith("user:") else f"user:{subnet}"
         for grant in self.store.list_application_access_grants(
             application_id,
             subject_ref=subject_ref,

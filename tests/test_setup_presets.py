@@ -12,6 +12,12 @@ def test_default_preset_installs_default_projects() -> None:
     preset = get_preset("default")
     assert preset.projects == ("web_desktop", "applications", "users_access")
     assert preset.scenarios == ("web_desktop", "applications", "users_access")
+    assert preset.applications == (
+        "web_desktop",
+        "applications",
+        "users_access",
+        "voice",
+    )
     assert "prompt_engineer_scenario" not in preset.scenarios
     assert "web_desktop_runtime_skill" in preset.skills
 
@@ -25,6 +31,83 @@ def test_default_project_order_keeps_management_as_home_candidate() -> None:
         "applications",
         "users_access",
     ]
+
+
+def test_default_application_order_includes_voice_provider() -> None:
+    assert setup_cmd._application_ids_for_preset(get_preset("default")) == [
+        "web_desktop",
+        "applications",
+        "users_access",
+        "voice",
+    ]
+
+
+def test_default_application_lifecycle_uses_reviewed_plan_and_apply(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class Applications:
+        @staticmethod
+        def get_application(application_id, *, webspace_id):
+            calls.append(("get", (application_id, webspace_id)))
+            return {
+                "installed": False,
+                "effective_release": {"release_digest": "sha256:" + "a" * 64},
+            }
+
+        @staticmethod
+        def plan_install(application_id, **kwargs):
+            calls.append(("plan", (application_id, kwargs)))
+            return {
+                "operation_id": "appop.bootstrap",
+                "plan_digest": "sha256:" + "b" * 64,
+                "plan": {"conflicts": []},
+            }
+
+        @staticmethod
+        def apply_operation(operation_id, **kwargs):
+            calls.append(("apply", (operation_id, kwargs)))
+            return {
+                "status": "succeeded",
+                "result": {
+                    "installation": {
+                        "installed_release_digest": "sha256:" + "a" * 64
+                    }
+                },
+                "home": {"pinned": True},
+            }
+
+    import adaos.sdk
+
+    monkeypatch.setattr(adaos.sdk, "applications", Applications)
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(subnet_id="sn_bootstrap"),
+        settings=SimpleNamespace(owner_id="local-owner"),
+    )
+
+    result = setup_cmd._install_default_application_lifecycle(
+        ctx,
+        application_ids=["applications"],
+        webspace_id="desktop",
+    )
+
+    assert result == [
+        {
+            "id": "applications",
+            "status": "installed",
+            "release_digest": "sha256:" + "a" * 64,
+            "home": {"pinned": True},
+        }
+    ]
+    assert calls[1][0] == "plan"
+    assert calls[2][0] == "apply"
+    _, apply_kwargs = calls[2][1]
+    assert apply_kwargs["webspace_id"] == "desktop"
+    assert apply_kwargs["actor_ref"] == "user:local-owner"
+    assert apply_kwargs["idempotency_key"].startswith(
+        "bootstrap-default:applications:"
+    )
 
 
 def test_workspace_only_update_skips_runtime_refresh_and_yjs_sync(monkeypatch, capsys) -> None:

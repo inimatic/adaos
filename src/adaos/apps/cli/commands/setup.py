@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 import os
-import sys
 import time
 import subprocess
 import traceback
@@ -37,8 +36,6 @@ from adaos.services.autostart import enable as autostart_enable
 from adaos.services.autostart import restart_service as autostart_restart_service
 from adaos.services.autostart import status as autostart_status
 from adaos.services.core_slots import active_slot_manifest, read_slot_manifest, slot_dir, slot_status as core_slot_status
-from adaos.services.core_update import last_result_path as core_update_last_result_path
-from adaos.services.core_update import plan_path as core_update_plan_path
 from adaos.services.core_update import restore_root_from_backup as restore_root_promotion_backup
 from adaos.services.core_update import status_path as core_update_status_path
 from adaos.services.settings import _parse_env_file
@@ -120,6 +117,114 @@ def _project_ids_for_preset(ctx, chosen) -> list[str]:
     # Preset order is semantic: Management must be installed first so its
     # scenario is selected as the initial desktop seed.
     return list(dict.fromkeys(project_ids))
+
+
+def _application_ids_for_preset(chosen) -> list[str]:
+    application_ids = [
+        str(item).strip()
+        for item in getattr(chosen, "applications", ())
+        if str(item).strip()
+    ]
+    if not application_ids:
+        application_ids = [
+            str(item).strip()
+            for item in getattr(chosen, "projects", ())
+            if str(item).strip()
+        ]
+    return list(dict.fromkeys(application_ids))
+
+
+def _local_subnet_ref(ctx) -> str:
+    config = getattr(ctx, "config", None)
+    subnet_id = str(
+        getattr(config, "subnet_id_value", None)
+        or getattr(config, "subnet_id", None)
+        or ""
+    ).strip()
+    if not subnet_id:
+        raise RuntimeError("local subnet identity is unavailable")
+    return subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
+
+
+def _install_default_application_lifecycle(
+    ctx,
+    *,
+    application_ids: list[str],
+    webspace_id: str,
+) -> list[dict[str, object]]:
+    """Commit bootstrap Applications through the reviewed lifecycle."""
+
+    from adaos.sdk import applications as applications_sdk
+
+    subnet_ref = _local_subnet_ref(ctx)
+    from adaos.services.personalization_runtime import current_user_id
+
+    actor_ref = f"user:{current_user_id(ctx)}"
+    results: list[dict[str, object]] = []
+    for application_id in application_ids:
+        model = applications_sdk.get_application(
+            application_id,
+            webspace_id=webspace_id,
+        )
+        if bool(model.get("installed")):
+            installation = model.get("installation") or {}
+            results.append(
+                {
+                    "id": application_id,
+                    "status": "already_installed",
+                    "release_digest": installation.get("installed_release_digest"),
+                }
+            )
+            continue
+        effective = model.get("effective_release") or {}
+        release_digest = str(effective.get("release_digest") or "").strip()
+        if not release_digest:
+            raise RuntimeError(
+                f"{application_id}: no exact stable Application release is available"
+            )
+        idempotency_key = (
+            f"bootstrap-default:{application_id}:{release_digest.removeprefix('sha256:')}"
+        )
+        operation = applications_sdk.plan_install(
+            application_id,
+            release_digest=release_digest,
+            expected_revision=0,
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.plan",
+            idempotency_key=idempotency_key,
+        )
+        conflicts = list((operation.get("plan") or {}).get("conflicts") or [])
+        if conflicts:
+            raise RuntimeError(
+                f"{application_id}: Application install conflicts: "
+                + json.dumps(conflicts, ensure_ascii=False, sort_keys=True)
+            )
+        receipt = applications_sdk.apply_operation(
+            str(operation.get("operation_id") or ""),
+            plan_digest=str(operation.get("plan_digest") or ""),
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.apply",
+            idempotency_key=idempotency_key,
+            webspace_id=webspace_id,
+        )
+        status = str(receipt.get("status") or "").strip()
+        if status != "succeeded":
+            raise RuntimeError(
+                f"{application_id}: Application install finished with {status or 'unknown'}"
+            )
+        installation = (receipt.get("result") or {}).get("installation") or {}
+        results.append(
+            {
+                "id": application_id,
+                "status": "installed",
+                "release_digest": installation.get("installed_release_digest")
+                or release_digest,
+                "home": receipt.get("home"),
+            }
+        )
+    return results
 
 
 def _notify_live_skill_runtime_activated(skill_name: str, *, webspace_id: str) -> dict:
@@ -299,6 +404,27 @@ def install(
             "required default Application installation failed: "
             + " | ".join(required_project_failures)
         )
+
+    # Source materialization above is only the compatibility bootstrap.  The
+    # semantic index supplies exact immutable releases; installing those via
+    # the normal lifecycle creates ApplicationInstallation, RuntimeSelection,
+    # CBS authority records, access grants, and the durable Home projection.
+    try:
+        sync_result = _sync_workspace_sparse_to_registry(ctx)
+        installed["registry_sync"] = sync_result
+        if not bool(sync_result.get("ok")):
+            raise RuntimeError(
+                str(sync_result.get("error") or "registry sync failed")
+            )
+        installed["applications"] = _install_default_application_lifecycle(
+            ctx,
+            application_ids=_application_ids_for_preset(chosen),
+            webspace_id=target_webspace,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"required default Application lifecycle installation failed: {exc}"
+        ) from exc
 
     if _legacy_component_install_enabled() and (chosen.scenarios or chosen.skills):
         installed["legacy_components"] = {"enabled": True, "reason": "ENV_TYPE=dev"}

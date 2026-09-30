@@ -9,6 +9,7 @@ class InstallPreset:
     scenarios: tuple[str, ...]
     skills: tuple[str, ...]
     projects: tuple[str, ...] = ()
+    applications: tuple[str, ...] = ()
 
 
 DEFAULT_PRESET = InstallPreset(
@@ -17,6 +18,12 @@ DEFAULT_PRESET = InstallPreset(
         "web_desktop",
         "applications",
         "users_access",
+    ),
+    applications=(
+        "web_desktop",
+        "applications",
+        "users_access",
+        "voice",
     ),
     scenarios=(
         "web_desktop",

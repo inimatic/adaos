@@ -1400,7 +1400,7 @@ def test_install_materializes_only_declared_grant_on_install_access(
     assert access["permissions"] == ["workspace.read"]
     assert access["application_roles"] == ["owner"]
     grants = service.store.list_application_access_grants(
-        "app_recipes", subject_ref="user:sn_home"
+        "app_recipes", subject_ref="user:owner"
     )
     assert len(grants) == 1
     assert grants[0].permission_ceiling == ("workspace.read",)
@@ -1411,18 +1411,27 @@ def test_install_materializes_only_declared_grant_on_install_access(
         "app_recipes",
         release_digest=release.release_digest,
         subnet_ref="subnet:sn_home",
-        issuer_ref="system:test",
+        issuer_ref="user:owner",
     )
     assert replay["status"] == "ready"
     assert replay["created"] is False
     assert (
         len(
             service.store.list_application_access_grants(
-                "app_recipes", subject_ref="user:sn_home"
+                "app_recipes", subject_ref="user:owner"
             )
         )
         == 1
     )
+
+    system_result = service.ensure_install_access(
+        "app_recipes",
+        release_digest=release.release_digest,
+        subnet_ref="subnet:sn_home",
+        issuer_ref="system:semantic-registry-reconciliation",
+    )
+    assert system_result["status"] == "ready"
+    assert system_result["grant"]["subject_ref"] == "user:sn_home"
 
 
 def test_install_plans_exact_shared_dependencies_and_reuses_active_reference(
