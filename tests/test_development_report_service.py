@@ -159,6 +159,93 @@ def test_offline_report_accept_release_verify_round_trip(tmp_path: Path) -> None
     assert guest.public_status(report_id)["status"] == "verified"
 
 
+def test_receive_refreshes_signed_directory_for_new_reporter(tmp_path: Path) -> None:
+    clock = [datetime(2026, 9, 5, 12, tzinfo=timezone.utc)]
+    release = _release("1.0.0", DIGEST_A)
+    guest_store = ApplicationStore(tmp_path / "guest")
+    publisher_store = ApplicationStore(tmp_path / "publisher")
+    _prepare_application(guest_store, release, install=True)
+    _prepare_application(publisher_store, release, install=False)
+    guest_keys = SubnetPurposeKeyStore(tmp_path / "guest", now=lambda: clock[0])
+    publisher_keys = SubnetPurposeKeyStore(
+        tmp_path / "publisher", now=lambda: clock[0]
+    )
+    for key_store, subnet in (
+        (guest_keys, "subnet:guest"),
+        (publisher_keys, "subnet:publisher"),
+    ):
+        key_store.ensure_key(subnet, "message_signing")
+        key_store.ensure_key(subnet, "message_encryption")
+    authority = SubnetKeyDirectoryAuthority(
+        tmp_path / "directory", zone_id="zone_a", now=lambda: clock[0]
+    )
+    stale_projection = authority.publish_subnet(
+        "subnet:publisher",
+        home_zone="zone_a",
+        keys=publisher_keys.list_public("subnet:publisher"),
+    )
+    fresh_projection = authority.publish_subnet(
+        "subnet:guest",
+        home_zone="zone_a",
+        keys=guest_keys.list_public("subnet:guest"),
+    )
+    guest_directory = SubnetKeyDirectoryClient()
+    guest_directory.update(fresh_projection)
+    publisher_directory = SubnetKeyDirectoryClient()
+    publisher_directory.update(stale_projection)
+    relay_directory = SubnetKeyDirectoryClient()
+    relay_directory.update(fresh_projection)
+    relay = DurableDevelopmentReportRelay(
+        tmp_path / "root",
+        zone_id="zone_a",
+        directory=relay_directory,
+        now=lambda: clock[0],
+    )
+    guest = DevelopmentReportService(
+        tmp_path / "guest",
+        subnet_ref="subnet:guest",
+        application_store=guest_store,
+        key_store=guest_keys,
+        directory=guest_directory,
+        relay=relay,
+        now=lambda: clock[0],
+    )
+    refresh_calls: list[None] = []
+    publisher = DevelopmentReportService(
+        tmp_path / "publisher",
+        subnet_ref="subnet:publisher",
+        application_store=publisher_store,
+        key_store=publisher_keys,
+        directory=publisher_directory,
+        relay=relay,
+        directory_refresher=lambda: (
+            refresh_calls.append(None) or fresh_projection
+        ),
+        now=lambda: clock[0],
+    )
+
+    report_id = guest.create_report(
+        application_id="app_recipes",
+        summary="New reporter",
+        details="The publisher must refresh its signed directory once.",
+        idempotency_key="new-reporter-1",
+    )["report"]["report_id"]
+
+    delivered = publisher.receive()
+
+    # One refresh admits the previously unknown sender; the second is the
+    # existing fail-closed refresh before sealing the initial status event.
+    assert refresh_calls == [None, None]
+    assert delivered == [
+        {
+            "ok": True,
+            "duplicate": False,
+            "report_id": report_id,
+            "intake_id": publisher.list_publisher_intakes()[0]["intake_id"],
+            "delivery_disposition": "accepted",
+        }
+    ]
+
 def test_publisher_triage_is_explainable_and_appeal_reopens_without_auto_accept(
     tmp_path: Path,
 ) -> None:

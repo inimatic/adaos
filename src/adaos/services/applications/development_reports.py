@@ -22,7 +22,10 @@ from adaos.services.applications.report_admission import (
     normalize_report_text,
 )
 from adaos.services.applications.report_crypto import DevelopmentReportEnvelopeCrypto
-from adaos.services.applications.report_directory import SubnetKeyDirectoryClient
+from adaos.services.applications.report_directory import (
+    SubnetDirectoryError,
+    SubnetKeyDirectoryClient,
+)
 from adaos.services.applications.report_keys import SubnetPurposeKeyStore
 from adaos.services.applications.report_relay import (
     DevelopmentReportRelayPeer,
@@ -150,6 +153,24 @@ class DevelopmentReportService:
         if self.directory_refresher is not None:
             self.directory.update(self.directory_refresher())
         return self.crypto.seal(*args, **kwargs)
+
+    def _open(self, envelope: Mapping[str, Any]) -> dict[str, Any]:
+        """Open an envelope against a fresh signed directory when required.
+
+        Publisher processes can keep a valid directory projection that predates
+        a newly enrolled reporter subnet.  Refresh exactly once after a typed
+        directory lookup failure, then repeat the complete cryptographic open.
+        The retry never weakens signature, generation, key-purpose, expiry, or
+        recipient checks.
+        """
+
+        try:
+            return self.crypto.open(envelope, recipient_subnet_ref=self.subnet_ref)
+        except SubnetDirectoryError:
+            if self.directory_refresher is None:
+                raise
+            self.directory.update(self.directory_refresher())
+            return self.crypto.open(envelope, recipient_subnet_ref=self.subnet_ref)
 
     def ensure_message_keys(self) -> tuple[dict[str, Any], dict[str, Any]]:
         signing = self.key_store.ensure_key(self.subnet_ref, "message_signing")
@@ -493,7 +514,7 @@ class DevelopmentReportService:
                 result = dict(processed)
             else:
                 try:
-                    payload = self.crypto.open(envelope, recipient_subnet_ref=self.subnet_ref)
+                    payload = self._open(envelope)
                     result = self._consume(envelope, payload)
                     disposition = "accepted"
                 except Exception as exc:
