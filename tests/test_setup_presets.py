@@ -42,6 +42,20 @@ def test_default_application_order_includes_voice_provider() -> None:
     ]
 
 
+def test_default_application_runtime_is_authoritative(monkeypatch) -> None:
+    calls: list[tuple[object, bool]] = []
+
+    monkeypatch.setattr(
+        "adaos.services.project_deployment.default_runtime.configure_default_distributed_runtimes",
+        lambda ctx, *, authoritative: calls.append((ctx, authoritative)),
+    )
+    ctx = object()
+
+    setup_cmd._configure_application_lifecycle_runtime(ctx)
+
+    assert calls == [(ctx, True)]
+
+
 def test_default_application_lifecycle_uses_reviewed_plan_and_apply(
     monkeypatch,
 ) -> None:

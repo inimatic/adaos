@@ -311,6 +311,37 @@ New-Item -ItemType Directory -Force -Path $env:ADAOS_BASE_DIR | Out-Null
 Show-BootstrapConfig
 Write-Host "Detecting git availability (adaos git autodetect)..."
 try { Invoke-Adaos git autodetect | Out-Null } catch { }
+
+$effectiveRootUrl = Resolve-EffectiveRootUrl -RootUrlValue $RootUrl -ZoneValue $ZoneId
+$env:ADAOS_REV = $Rev
+$env:ADAOS_API_BASE = $effectiveRootUrl
+if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
+  $env:ADAOS_ZONE_ID = $ZoneId.Trim().ToLower()
+}
+$desiredRole = if (-not [string]::IsNullOrWhiteSpace($Role)) {
+  $Role.Trim().ToLower()
+} elseif (-not [string]::IsNullOrWhiteSpace($JoinCode)) {
+  "member"
+} else {
+  "hub"
+}
+if ($desiredRole -notin @("hub", "member")) {
+  throw "Invalid Role '$desiredRole' (expected hub|member)."
+}
+if (-not [string]::IsNullOrWhiteSpace($JoinCode)) {
+  Write-Host "Joining subnet via join-code..."
+  Invoke-Adaos node join --code $JoinCode --root $effectiveRootUrl | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "adaos node join failed (see output above)." }
+}
+Write-Host "Setting node role: $desiredRole"
+Invoke-Adaos node role set --role $desiredRole | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "adaos node role set failed (check output above)." }
+if ($desiredRole -eq "hub") {
+  Write-Host "Initializing Root subnet (adaos dev root init)..."
+  Invoke-Adaos dev root init | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "adaos dev root init failed (check output above)." }
+}
+
 Write-Host "Installing default webspace content (adaos install)..."
 $installArgs = @("install")
 if ($NoVoice) {
@@ -328,13 +359,6 @@ try {
 } catch {
   Write-Error "AdaOS is not importable from .venv. Try: uv sync (or delete .venv and re-run bootstrap)."
   exit 1
-}
-
-$effectiveRootUrl = Resolve-EffectiveRootUrl -RootUrlValue $RootUrl -ZoneValue $ZoneId
-$env:ADAOS_REV = $Rev
-$env:ADAOS_API_BASE = $effectiveRootUrl
-if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
-  $env:ADAOS_ZONE_ID = $ZoneId.Trim().ToLower()
 }
 
 function Test-TcpPortAvailable {
@@ -460,15 +484,6 @@ function Show-OptionalModulesNote {
   }
 }
 
-if (-not [string]::IsNullOrWhiteSpace($JoinCode)) {
-  Write-Host "Joining subnet via join-code..."
-  Invoke-Adaos node join --code $JoinCode --root $effectiveRootUrl | Out-Null
-  if ($LASTEXITCODE -ne 0) {
-    Write-Error "adaos node join failed (see output above)."
-    exit 1
-  }
-}
-
 try {
   $roleNow = Get-AdaosNodeYamlField -FieldName "role"
   $hubNow = Get-AdaosRuntimeStateField -FieldName "hub_url"
@@ -478,32 +493,6 @@ try {
     Write-Host ("Local bootstrap/runtime state: node_id={0} subnet_id={1} role={2} hub_url={3}" -f $nodeNow, $subnetNow, $roleNow, $hubNow)
   }
 } catch { }
-
-function Resolve-DesiredRole {
-  if (-not [string]::IsNullOrWhiteSpace($Role)) { return $Role.Trim().ToLower() }
-  if (-not [string]::IsNullOrWhiteSpace($JoinCode)) { return "member" }
-  return "hub"
-}
-
-$desiredRole = Resolve-DesiredRole
-if (-not [string]::IsNullOrWhiteSpace($desiredRole)) {
-  if ($desiredRole -notin @("hub", "member")) {
-    Write-Warning "Invalid Role '$desiredRole' (expected hub|member). Skipping role set."
-  }
-  else {
-    Write-Host "Setting node role: $desiredRole"
-    Invoke-Adaos node role set --role $desiredRole | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Warning "adaos node role set failed (check output above)." }
-  }
-}
-
-if ($desiredRole -eq "hub") {
-  try {
-    Write-Host "Initializing Root subnet (adaos dev root init)..."
-    Invoke-Adaos dev root init | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Warning "adaos dev root init failed (check output above)." }
-  } catch { Write-Warning "adaos dev root init failed: $($_.Exception.Message)" }
-}
 
 Write-Host ("Runtime state targets: {0} + {1}" -f (Join-Path $env:ADAOS_BASE_DIR "node.yaml"), (Join-Path $env:ADAOS_BASE_DIR "state/node_runtime.json"))
 Write-Host ("Starting AdaOS API ({0}:{1}) ..." -f $ServeHost, $ServePort)

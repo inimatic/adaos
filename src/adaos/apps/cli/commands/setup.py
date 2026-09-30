@@ -146,6 +146,21 @@ def _local_subnet_ref(ctx) -> str:
     return subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
 
 
+def _configure_application_lifecycle_runtime(ctx) -> None:
+    """Compose the authoritative deployment executor used by bootstrap installs.
+
+    The long-lived API configures this runtime during its boot sequence.  ``adaos
+    install`` runs before that process exists, so the CLI must compose the same
+    executor explicitly before it applies reviewed Application operations.
+    """
+
+    from adaos.services.project_deployment.default_runtime import (
+        configure_default_distributed_runtimes,
+    )
+
+    configure_default_distributed_runtimes(ctx, authoritative=True)
+
+
 def _install_default_application_lifecycle(
     ctx,
     *,
@@ -416,6 +431,7 @@ def install(
             raise RuntimeError(
                 str(sync_result.get("error") or "registry sync failed")
             )
+        _configure_application_lifecycle_runtime(ctx)
         installed["applications"] = _install_default_application_lifecycle(
             ctx,
             application_ids=_application_ids_for_preset(chosen),

@@ -104,6 +104,24 @@ def test_user_bootstraps_only_require_rust_for_explicit_vendored_builds() -> Non
     assert "--only-binary :all:" in uv_powershell
 
 
+def test_user_bootstraps_create_runtime_identity_before_native_applications() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    for relative_path in ("tools/bootstrap.sh", "tools/bootstrap_uv.sh"):
+        script = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert script.index('log "Initializing Root subnet') < script.index(
+            'log "Installing default webspace content'
+        )
+        assert 'die "adaos dev root init failed' in script
+
+    for relative_path in ("tools/bootstrap.ps1", "tools/bootstrap_uv.ps1"):
+        script = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert script.index('Write-Host "Initializing Root subnet') < script.index(
+            'Write-Host "Installing default webspace content'
+        )
+        assert 'throw "adaos dev root init failed' in script
+
+
 def test_wheel_workflow_builds_both_macos_architectures() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workflow = (repo_root / ".github" / "workflows" / "y-py-wheels.yml").read_text(encoding="utf-8")

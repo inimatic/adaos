@@ -656,16 +656,6 @@ print_bootstrap_config
 log "Detecting git availability (adaos git autodetect)..."
 "$ADAOS_PY" -m adaos git autodetect >/dev/null 2>&1 || true
 
-log "Installing default webspace content (adaos install)..."
-install_args=(install)
-if [[ "${NO_VOICE:-0}" == "1" ]]; then
-  install_args+=(--no-rasa-nlu --no-train-nlu)
-fi
-configure_rasa_nlu
-if ! "$ADAOS_PY" -m adaos "${install_args[@]}"; then
-  die "Required default Applications installation failed (check output above)"
-fi
-
 export ADAOS_REV="$REV"
 EFFECTIVE_ROOT_URL="$(effective_root_url "$ROOT_URL" "${ZONE_ID:-}")"
 export ADAOS_API_BASE="$EFFECTIVE_ROOT_URL"
@@ -673,6 +663,10 @@ if [[ -n "${ZONE_ID:-}" ]]; then
   export ADAOS_ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
 fi
 
+# Native Application installation resolves immutable packages through the
+# authenticated Root repository.  Establish node identity and certificates
+# before running `adaos install`; the compatibility bootstrap no longer hides
+# a missing deployment authority.
 if [[ -n "${JOIN_CODE:-}" ]]; then
   log "Joining subnet via join-code..."
   if ! "$ADAOS_PY" -m adaos node join --code "$JOIN_CODE" --root "$EFFECTIVE_ROOT_URL"; then
@@ -683,15 +677,25 @@ fi
 if [[ -n "${ROLE:-}" ]]; then
   log "Setting node role: $ROLE"
   if ! "$ADAOS_PY" -m adaos node role set --role "$ROLE"; then
-    warn "adaos node role set failed (check output above)"
+    die "adaos node role set failed (check output above)"
   fi
 fi
 
 if [[ "${ROLE:-}" == "hub" ]]; then
   log "Initializing Root subnet (adaos dev root init)..."
   if ! "$ADAOS_PY" -m adaos dev root init; then
-    warn "adaos dev root init failed (check output above)"
+    die "adaos dev root init failed (check output above)"
   fi
+fi
+
+log "Installing default webspace content (adaos install)..."
+install_args=(install)
+if [[ "${NO_VOICE:-0}" == "1" ]]; then
+  install_args+=(--no-rasa-nlu --no-train-nlu)
+fi
+configure_rasa_nlu
+if ! "$ADAOS_PY" -m adaos "${install_args[@]}"; then
+  die "Required default Applications installation failed (check output above)"
 fi
 
 if [[ "${NO_CORE_UPDATE:-0}" == "1" ]]; then
