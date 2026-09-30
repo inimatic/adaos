@@ -260,6 +260,46 @@ def test_ui_admission_selects_application_entrypoint_from_multiple_scenarios(
     assert admitted["requirements_total"] == admitted["requirements_resolved"] == 2
 
 
+def test_ui_admission_uses_physical_presentation_for_application_aggregate(
+    tmp_path: Path,
+) -> None:
+    plan, store = _release(tmp_path, include_supporting_scenario=True)
+    compilation = _compilation()
+    compilation["application_ref"] = "application:mail_client"
+    compilation["presentation_ref"] = "scenario:mail_client"
+    compilation["compilation_digest"] = canonical_payload_digest(
+        {
+            key: value
+            for key, value in compilation.items()
+            if key != "compilation_digest"
+        }
+    )
+
+    admitted = NativeApplicationCBSAdmissionService(
+        tmp_path / "state", now=lambda: FIXED_NOW
+    ).admit(
+        application_ref="application:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:candidate-mail",
+        evidence_context={"candidate_id": "candidate-mail"},
+    )
+
+    assert admitted["status"] == "admitted"
+    ui_resolution = next(
+        item
+        for item in admitted["resolutions"]
+        if item["requirement_ref"] == "requirement:scenario.mail_client.ui"
+    )
+    main_package = next(
+        item
+        for item in plan.packages
+        if item.kind == "scenario" and item.artifact_id == "mail_client"
+    )
+    assert ui_resolution["delivery"]["package_digest"] == main_package.digest
+
+
 def test_native_application_commits_all_requirement_resolutions_in_one_workspace_lock(
     tmp_path: Path,
 ) -> None:

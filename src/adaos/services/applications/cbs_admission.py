@@ -321,8 +321,21 @@ class NativeApplicationCBSAdmissionService:
         ]
         if ui_requirements:
             ui_packages = logical_ui_packages if presentation_ref and ":" not in presentation_ref else scenario_packages
+            presentation_kind, presentation_separator, presentation_id = (
+                presentation_ref.partition(":")
+            )
+            if presentation_separator and presentation_kind == "scenario":
+                ui_packages = [
+                    item
+                    for item in scenario_packages
+                    if item.artifact_id == presentation_id
+                ]
             application_kind, separator, application_id = application_ref.partition(":")
-            if separator and application_kind == "scenario":
+            if (
+                not presentation_ref
+                and separator
+                and application_kind == "scenario"
+            ):
                 matching_packages = [
                     item for item in scenario_packages if item.artifact_id == application_id
                 ]
