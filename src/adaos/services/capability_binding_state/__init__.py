@@ -125,6 +125,7 @@ _LAZY_RESOLVED_BUNDLE_EXPORTS = frozenset(
     {
         "RESOLVED_BUNDLE_ADMISSION_SCHEMA",
         "RESOLVED_BUNDLE_SCHEMA",
+        "MAX_RESOLVED_BUNDLE_BYTES",
         "ResolvedBundleError",
         "ResolvedBundleExport",
         "ResolvedSemanticBundleAdmission",
@@ -203,6 +204,7 @@ __all__ = [
     "ThinSemanticDistributionResolver",
     "RESOLVED_BUNDLE_ADMISSION_SCHEMA",
     "RESOLVED_BUNDLE_SCHEMA",
+    "MAX_RESOLVED_BUNDLE_BYTES",
     "ResolvedBundleError",
     "ResolvedBundleExport",
     "ResolvedSemanticBundleAdmission",

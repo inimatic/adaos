@@ -18,7 +18,10 @@ Application release, provenance, and package closure before producing immutable
 `ApplicationResolution` records. The resolved bundle carries that exact byte
 closure and admits it into the same existing stores after complete pre-mutation
 verification. The final real Gmail clean-subnet install/activation exercise in
-`CBS10-11` remains partial pending a new publication with portable evidence.
+`CBS10-11` remains partial. Gmail `0.1.12` is now published with portable
+evidence and its exact resolved bundle is admitted idempotently on clean node
+`.34`; online thin acquisition there still requires a Root-authenticated
+publisher-key trust projection.
 
 The following production properties are implemented and covered by tests:
 
@@ -54,6 +57,14 @@ stay on the established installation rails. The published
 `distribution.resolved` object remains compact intent metadata; the sealed
 bundle is a separate transport envelope over the same authoritative records
 and package bytes, not a second store or package manager.
+
+The real Gmail proof now pins registry revision
+`c4571d2351e80dd592a7b60a2b4b396215fc4161` and ProjectRelease
+`sha256:08dbd8e6bf70ff1436aaf39a24dd2100f3a79c751ffa97b18defb9f4713a9795`.
+The clean node matched both requirements and admitted the two-package,
+eight-record bundle with stable receipt and no activation or local authority.
+The remaining trust-projection and local provisioning/activation work does not
+change the one-registry/one-package-store decision.
 
 ## Authority Findings
 

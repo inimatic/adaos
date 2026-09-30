@@ -248,6 +248,127 @@ def _echo_project_release(payload: dict[str, object], *, json_output: bool) -> N
     )
 
 
+def _read_json_object(path: Path, *, parameter: str) -> dict[str, Any]:
+    source = Path(path).expanduser().resolve()
+    try:
+        value = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(
+            f"cannot read JSON object: {source}", param_hint=parameter
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise typer.BadParameter("JSON value must be an object", param_hint=parameter)
+    return dict(value)
+
+
+def _export_resolved_distribution(
+    *,
+    project_id: str,
+    release_digest: str,
+    query: Mapping[str, Any],
+    registry_revision: str,
+    output: Path,
+    workspace_root: Path | None,
+) -> dict[str, Any]:
+    from adaos.services.applications.runtime import (
+        resolve_application_distribution_service,
+    )
+    from adaos.services.artifact_pipeline.storage import atomic_write_bytes
+    from adaos.services.capability_binding_state.registry_distribution import (
+        ThinSemanticDistributionResolver,
+    )
+    from adaos.services.capability_binding_state.registry_projection import (
+        SemanticRegistryProjection,
+    )
+    from adaos.services.capability_binding_state.resolved_bundle import (
+        ResolvedSemanticBundleExporter,
+    )
+
+    ctx = get_ctx()
+    workspace, _artifact_root = _roots(workspace_root)
+    distribution = resolve_application_distribution_service(ctx)
+    resolver = ThinSemanticDistributionResolver(
+        projection=SemanticRegistryProjection(
+            workspace,
+            Path(ctx.paths.state_dir()).resolve(),
+        ),
+        package_store=distribution.packages,
+        remote=distribution.remote,
+        provenance=distribution.admission,
+    )
+    exported = ResolvedSemanticBundleExporter(resolver).export(
+        project_id=project_id,
+        project_release_digest=release_digest,
+        query=query,
+        registry_revision=registry_revision,
+    )
+    target = Path(output).expanduser().resolve()
+    atomic_write_bytes(target, exported.archive_bytes)
+    return {
+        "schema": "adaos.semantic_registry.resolved_bundle_export.v1",
+        "status": "exported",
+        "path": str(target),
+        "bundle_digest": exported.bundle_digest,
+        "manifest_digest": exported.manifest["manifest_digest"],
+        "project_id": project_id,
+        "project_release_digest": release_digest,
+        "resolution_digests": list(exported.manifest["resolution_digests"]),
+        "package_digests": list(exported.manifest["package_digests"]),
+        "portable_record_digests": list(
+            exported.manifest["portable_record_digests"]
+        ),
+        "activation_performed": False,
+        "local_authority_created": False,
+    }
+
+
+def _admit_resolved_distribution(
+    *,
+    bundle: Path,
+    expected_digest: str,
+) -> dict[str, Any]:
+    from adaos.services.capability_binding_state.catalog import (
+        PortableContractCatalog,
+    )
+    from adaos.services.capability_binding_state.resolved_bundle import (
+        MAX_RESOLVED_BUNDLE_BYTES,
+        ResolvedBundleError,
+        ResolvedSemanticBundleAdmission,
+    )
+
+    ctx = get_ctx()
+    state_dir = Path(ctx.paths.state_dir()).resolve()
+    artifact_root = state_dir / "artifact_pipeline"
+    source = Path(bundle).expanduser().resolve()
+    try:
+        if source.stat().st_size > MAX_RESOLVED_BUNDLE_BYTES:
+            raise typer.BadParameter(
+                "resolved bundle exceeds the admission size limit",
+                param_hint="bundle",
+            )
+        archive = source.read_bytes()
+    except typer.BadParameter:
+        raise
+    except OSError as exc:
+        raise typer.BadParameter(
+            f"cannot read resolved bundle: {source}", param_hint="bundle"
+        ) from exc
+    try:
+        receipt = ResolvedSemanticBundleAdmission(
+            package_store=ContentAddressedPackageStore(artifact_root / "packages"),
+            portable_catalog=PortableContractCatalog(
+                state_dir / "capability-binding-state" / "portable"
+            ),
+            release_repository=ReleaseRepository(artifact_root / "release-cache"),
+            receipt_root=artifact_root / "resolved-bundle-admissions",
+        ).admit(archive, expected_bundle_digest=expected_digest)
+    except ResolvedBundleError as exc:
+        raise typer.BadParameter(
+            f"{exc.code}: {exc}", param_hint="bundle"
+        ) from exc
+    return {**receipt, "path": str(source)}
+
+
 def _publish_project_release(
     payload: dict[str, object],
     *,
@@ -384,6 +505,69 @@ def release_inspect(
         f"{plan.release.project_id}@{plan.release.version} "
         f"{plan.release.release_digest} packages={len(plan.packages)}"
     )
+
+
+@app.command("distribution-export")
+def distribution_export(
+    project_id: str = typer.Argument(..., help="Exact published Project id."),
+    release_digest: str = typer.Option(..., "--release-digest"),
+    query_file: Path = typer.Option(..., "--query", help="Snapshot-pinned query JSON."),
+    output: Path = typer.Option(..., "--output", help="Destination bundle ZIP."),
+    registry_revision: str | None = typer.Option(None, "--registry-revision"),
+    workspace_root: Path | None = typer.Option(None, "--workspace-root"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Export an exact CBS closure after online registry/provenance admission."""
+
+    workspace, _artifact_root = _roots(workspace_root)
+    revision = str(registry_revision or _git_text(workspace, "rev-parse", "HEAD")).strip()
+    if not revision:
+        raise typer.BadParameter(
+            "registry revision is required outside a Git-backed registry checkout",
+            param_hint="--registry-revision",
+        )
+    result = _export_resolved_distribution(
+        project_id=project_id,
+        release_digest=release_digest,
+        query=_read_json_object(query_file, parameter="--query"),
+        registry_revision=revision,
+        output=output,
+        workspace_root=workspace_root,
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        typer.echo(
+            f"exported {result['bundle_digest']} to {result['path']} "
+            f"packages={len(result['package_digests'])} "
+            f"records={len(result['portable_record_digests'])}"
+        )
+
+
+@app.command("distribution-admit")
+def distribution_admit(
+    bundle: Path = typer.Argument(..., help="Resolved distribution bundle ZIP."),
+    expected_digest: str = typer.Option(
+        ...,
+        "--expected-digest",
+        help="Trusted out-of-band SHA-256 identity for the complete bundle.",
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Admit an exact CBS closure without registry access or activation."""
+
+    result = _admit_resolved_distribution(
+        bundle=bundle,
+        expected_digest=expected_digest,
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        typer.echo(
+            f"admitted {result['bundle_digest']} receipt={result['receipt_digest']} "
+            f"packages={len(result['package_digests'])} "
+            f"records={len(result['portable_record_digests'])}"
+        )
 
 
 __all__ = ["app"]

@@ -11,13 +11,24 @@ distribution and admit it without registry access. The envelope reuses the
 existing semantic catalog, release repository, and content-addressed package
 store; it is not a semantic package manager or a second blob store.
 
-`CBS10-11` is partial. The mechanism proof passes, and the clean node can fetch
-the real Gmail release closure and its attestation set. The published Gmail
-`0.1.11` semantic projection cannot pass thin resolution because it predates
-portable native conformance evidence. The resolver correctly fails closed.
-Native admission now emits a redacted portable `EvidenceClaim`; closing the
-real-Application proof requires a new Gmail publication rather than mutating or
-implicitly trusting the old immutable release.
+`CBS10-11` is partial, but the real-Application publication and offline
+admission portions now pass. Gmail CBS Cleanroom `0.1.12` was built through the
+governed release rail, admitted 2-of-2, accepted, promoted, and published to
+`adaos-registry/main`. Its semantic projection contains two redacted portable
+`EvidenceClaim` records and no credential or local evidence context. The clean
+node synchronized that immutable registry revision, matched both requirements
+through the read-only query ABI, and admitted the resulting exact bundle with
+registry access absent from the admission path.
+
+The clean install still exposes a `CBS10-11` prerequisite: it has no
+artifact trust store and defaults to `ADAOS_ARTIFACT_ATTESTATIONS_MODE=off`.
+The production export composition therefore stops with `Application
+publication requires required artifact attestation mode`. The Root can return
+the exact Gmail release and its attestation set over authenticated transport,
+but the node still needs a Root-authenticated projection of the publisher key
+before it can verify those Ed25519 attestations independently. Treating
+HTTPS/mTLS as the artifact signature would weaken the existing provenance
+boundary and is intentionally not used as a fallback.
 
 ## Bundle Contract
 
@@ -44,6 +55,11 @@ portable records to `PortableContractCatalog`, and the exact plan to
 `ReleaseRepository`. It returns a deterministic receipt. It does not provision
 an account, create a credential, create a `BindingInstance` or `StateSpace`,
 plan a transition, write a `WorkspaceLock`, or activate code.
+
+The operator rail is exposed as `adaos project distribution-export` and
+`adaos project distribution-admit`. Export requires the online registry and
+configured artifact-provenance admission. Admit is deliberately registry-
+offline and requires the trusted out-of-band bundle digest.
 
 ## Executable Evidence
 
@@ -79,25 +95,44 @@ covered. The rerun installed the required `web_desktop`, `applications`, and
 `users_access` projects, scenarios, and skills; initialized the node; reached
 API readiness; and produced an initial core slot without Git metadata.
 
-From that clean node, the existing authenticated Root artifact rail returned
-Gmail CBS Cleanroom `0.1.11`, its exact scenario and skill archives, and the
-three-entry release attestation set. This proves that package/release transport
-is available independently of a core Git checkout.
+The historical `0.1.11` release remains useful negative evidence: it has no
+portable claim and fails closed. It was not mutated. A new immutable release was
+published instead:
+
+- Project `gmail_cbs_cleanroom@0.1.12`, release digest
+  `sha256:08dbd8e6bf70ff1436aaf39a24dd2100f3a79c751ffa97b18defb9f4713a9795`;
+- scenario `gmail_cbs_cleanroom@0.1.9`, digest
+  `sha256:353d66081638c8eb000d48994531bf6ad14bb29b64de0c6d34a9de4b106eabbc`;
+- skill `gmail_cbs_cleanroom_skill@0.1.10`, digest
+  `sha256:f3de83a3e530d064151ff34ef1b71bdded28ddd6b882bf3cb9deb743735b7022`;
+- registry revision `c4571d2351e80dd592a7b60a2b4b396215fc4161`, with eight
+  portable records including two portable evidence claims.
+
+On `.34`, the snapshot-pinned query at that revision returned `matched` for
+both Application requirements while proving `activation_performed=false` and
+`local_authority_created=false`. The trusted publisher exported bundle
+`sha256:2ab89eaef3415d9bc858a1aef18d622bc58906de00b0af35ae5b0ff510672780`.
+The clean node admitted it to its existing stores and emitted receipt
+`sha256:bc25f67323db8ba3d645018dbb199adc4346b1edef00b204c7ad9d1a44f39172`.
+The receipt preserves the same two resolution digests, two package digests,
+eight portable-record digests, and the exact registry snapshot. Admission
+again reported no activation or local authority. Re-admission returned the
+same receipt; substitution of the expected whole-bundle digest failed before
+parsing or mutation.
 
 ## Remaining CBS10-11 Closure
 
-Publish a new Gmail release using the corrected native admission, then on the
-clean node:
+Publication, snapshot synchronization, real Gmail bundle export, clean-node
+offline admission, exact-selection comparison, idempotent receipt, and the
+negative digest test are complete. The remaining closure is:
 
-1. synchronize the new semantic snapshot;
-2. run thin installation from empty local package/portable caches;
-3. export the sealed bundle and record its trusted digest;
-4. clear a second isolated cache and disable registry access;
-5. admit the bundle and compare exact selections with the thin receipt;
-6. provision a distinct local Gmail account/credential attachment;
-7. run reviewed planning/activation, including injected failure before commit;
-8. rerun import/install to confirm idempotency and scan all transported members
-   for forbidden local or secret material.
+1. enroll or synchronize a Root-authenticated publisher-key trust projection;
+2. run the online thin acquisition on `.34` from empty local package/portable
+   caches and compare its receipt with the already admitted offline closure;
+3. provision a distinct local Gmail account/credential attachment;
+4. run reviewed planning/activation, including injected failure before commit;
+5. scan the transported real-Application archive again in CI for forbidden
+   local or secret material.
 
 The legacy `0.1.11` projection must remain unchanged. Its absence of portable
 evidence is useful negative evidence that the new distribution rail fails

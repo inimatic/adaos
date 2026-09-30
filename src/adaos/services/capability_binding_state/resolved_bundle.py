@@ -47,7 +47,7 @@ RESOLVED_BUNDLE_ADMISSION_SCHEMA = (
 )
 _MAX_MEMBERS = 512
 _MAX_MEMBER_BYTES = 256 * 1024 * 1024
-_MAX_BUNDLE_BYTES = 1024 * 1024 * 1024
+MAX_RESOLVED_BUNDLE_BYTES = 1024 * 1024 * 1024
 _FORBIDDEN_MEMBER_TOKENS = {
     "credential",
     "credentials",
@@ -138,7 +138,7 @@ def _safe_member_name(name: str) -> str:
 
 
 def _read_bundle(data: bytes) -> dict[str, bytes]:
-    if len(data) > _MAX_BUNDLE_BYTES:
+    if len(data) > MAX_RESOLVED_BUNDLE_BYTES:
         raise ResolvedBundleError("bundle_too_large", "resolved bundle exceeds size limit")
     try:
         with zipfile.ZipFile(io.BytesIO(data), "r") as archive:
@@ -167,7 +167,7 @@ def _read_bundle(data: bytes) -> dict[str, bytes]:
                         "member_too_large", f"bundle member exceeds size limit: {name}"
                     )
                 total += info.file_size
-                if total > _MAX_BUNDLE_BYTES:
+                if total > MAX_RESOLVED_BUNDLE_BYTES:
                     raise ResolvedBundleError(
                         "bundle_too_large", "expanded resolved bundle exceeds size limit"
                     )
@@ -577,6 +577,7 @@ class ResolvedSemanticBundleAdmission:
 
 
 __all__ = [
+    "MAX_RESOLVED_BUNDLE_BYTES",
     "RESOLVED_BUNDLE_ADMISSION_SCHEMA",
     "RESOLVED_BUNDLE_SCHEMA",
     "ResolvedBundleError",

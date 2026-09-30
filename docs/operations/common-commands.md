@@ -147,6 +147,24 @@ the explicit vendored source-build commands and manual repository-development
 sync above. On systems for which Vosk publishes a wheel, add offline STT
 explicitly with `uv pip install --python .venv/bin/python -e ".[offline-stt]"`.
 
+## Sealed CBS distribution
+
+Export requires the online semantic snapshot, exact artifact provenance, and a
+snapshot-pinned query. Admission needs only the bundle plus its digest received
+through the trusted distribution channel; it does not contact the registry or
+activate the Application.
+
+```bash
+adaos project distribution-export gmail_cbs_cleanroom \
+  --release-digest sha256:<release> \
+  --query .tmp/gmail-install-query.json \
+  --registry-revision <registry-commit> \
+  --output .tmp/gmail-cbs.bundle.zip --json
+
+adaos project distribution-admit .tmp/gmail-cbs.bundle.zip \
+  --expected-digest sha256:<bundle> --json
+```
+
 ## Git checkout maintenance
 
 ```bash

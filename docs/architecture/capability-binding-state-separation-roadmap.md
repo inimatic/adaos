@@ -1045,16 +1045,22 @@ its own local account attachment and credential authority.
   fixture proves equivalent thin/offline resolution digests, two independent
   local binding/account identities, idempotency, pre-mutation tamper/secret
   rejection, and the existing pre-commit activation fault invariant. The
-  archive-only clean node `.34` also fetched and verified the exact published
-  Gmail `0.1.11` release, both package archives, and its three-attestation set.
-  Full Gmail closure remains fail-closed because that legacy publication
-  contains no portable `EvidenceClaim`: native admission previously marked its
-  conformance evidence local-only. New admissions now publish a redacted
-  portable claim that contains immutable identities/digests but no credentials
-  or local evidence context. Close this item by publishing a new Gmail release,
-  syncing it to `.34`, repeating thin and offline bundle installation with the
-  registry disabled for the latter, and injecting the production activation
-  failure after local account provisioning.
+  real Gmail `0.1.12` release is now governed, promoted, and published with two
+  redacted portable `EvidenceClaim` records. Clean archive-only node `.34`
+  synchronized registry revision `c4571d2351e80dd592a7b60a2b4b396215fc4161`,
+  matched both requirements through the read-only query ABI, and admitted its
+  exact two-package/eight-record bundle offline. The admitted closure has the
+  same exact resolution and package digests as publisher-side thin resolution,
+  returns one stable receipt on repeated admission, rejects a substituted
+  whole-bundle digest, and creates neither activation nor local authority. The
+  legacy `0.1.11` projection remains unchanged as negative evidence. The clean
+  install still has no authenticated artifact trust projection, so online thin
+  acquisition correctly fails before resolution while attestation mode is
+  `off`; HTTPS/mTLS transport must not be substituted for publisher-signature
+  admission. Close this item by delivering a Root-authenticated publisher-key/
+  trust projection during enrollment or registry sync, repeating online thin
+  acquisition from empty caches on `.34`, provisioning its distinct local Gmail
+  account attachment, and injecting the production activation failure.
 - [ ] `[should]` `CBS10-12` Add selective synchronization, reverse indexes,
   pagination, and bounded registry/local caches after correctness and
   cold-start costs are measured.
