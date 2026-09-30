@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-09-26.
+Last reviewed: 2026-09-30.
 
 This document defines the canonical AdaOS model for creating, testing,
 publishing, discovering, installing, updating, removing, and improving an
@@ -59,6 +59,14 @@ and the Users & Access product projection are owned by
 That architecture also defines Builder final verification for permission,
 role, access, secret, disclosure, and regression evidence before Trial,
 publication, or external install/update review.
+
+The compact `Private Alpha/Beta/Stable` and `Public Beta/Stable` instrument
+panel, runtime-choice coordination, `What's New`, guided acceptance,
+mock-backed demonstration, recorded walkthroughs, cooperative contribution,
+and Application-family presentation are owned by
+[Application Experience, Guided Acceptance, and Cooperative Evolution](application-experience-and-guided-acceptance.md).
+Those labels are a user-facing projection over the canonical lifecycle in this
+document; they are not additional release channels or authorization states.
 
 Fast Application inventory, Catalog, component ownership, release availability,
 permission-declaration summaries, startup snapshot trust, background manifest
@@ -808,6 +816,14 @@ it does not purge an archive solely because a newer stable release exists.
 Applications is a full-screen scenario modeled after the information density
 and navigation ergonomics of a mature extension manager, without copying an
 IDE-specific information architecture.
+
+Its lifecycle summary is a relationship-oriented instrument panel rather than
+a flat list of unrelated status fields. The normative compact positions,
+adaptive controls, runtime selector, participation policy, and guided review
+companion are defined by the
+[Application Experience architecture](application-experience-and-guided-acceptance.md).
+This document remains authoritative for the records and operations projected
+there.
 
 The wide layout has two primary information zones: a catalog sidebar with
 `Installed`, `Marketplace`, and `Builder`, and one selected Application detail.

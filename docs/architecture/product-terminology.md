@@ -12,6 +12,9 @@ pack, solution agent, endpoint, and channel is governed by the
 
 The canonical product and distribution boundary is governed by
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
+The `Private Alpha/Beta/Stable` and `Public Beta/Stable` Application-panel
+labels, guided acceptance, and cooperative adaptation language are governed by
+[Application Experience, Guided Acceptance, and Cooperative Evolution](application-experience-and-guided-acceptance.md).
 Semantic capability, binding, package, local state, and resolution identities
 are governed by
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
@@ -157,6 +160,12 @@ Project is not identical to the direction, task, candidate, or experiment.
 | `browser`, `member`, `hub`, `subnet endpoint` | Agent | Software participant of the assistant subnet. |
 | `device` | Device | Physical or virtual host. One device may host multiple agents. |
 | `marketplace` | Catalog | Place to add Applications, with skills, scenarios, widgets/panels, interfaces, agents, and integrations available in advanced views. Prerelease is selected from Application detail, not global search. |
+| mutable DEV preview | Private Alpha | User-facing preview/Builder plane only; never a release channel or selectable installed runtime. |
+| private Trial/candidate release | Private Beta | Immutable Beta in the authorized Publisher development space; acceptance remains digest-bound. |
+| accepted private release | Private Stable | Publisher-owned stable source that has not necessarily been distributed. |
+| publisher prerelease | Public Beta | Explicit opt-in prerelease; public does not imply global Catalog discovery. |
+| Marketplace stable release | Public Stable | General distribution release promoted from the exact evaluated Public Beta digest. |
+| technical fork/derived DEV lineage | My adaptation | Ordinary UI term for a user's independently editable Application lineage; diagnostics retain exact fork/base terminology. |
 | `install` | Add to assistant | Use install/deploy wording only in advanced or developer UI. |
 | `application role` | App role | Role declared by an Application, such as viewer, editor, assignee, student, teacher, reviewer, or moderator. It is distinct from subnet role presets such as owner, member, child, and guest. |
 | `permission profile` | App permissions | Human-facing summary of what an Application may do, derived from structured Application permission declarations and enforced by platform policy. |

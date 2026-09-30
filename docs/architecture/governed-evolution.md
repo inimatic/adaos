@@ -5,6 +5,8 @@ shared vocabulary, boundaries, and long-term shape of governed software
 evolution in AdaOS. It is not a delivery commitment and does not replace the
 domain roadmaps linked below.
 
+Last reviewed: 2026-09-30.
+
 ## Purpose
 
 AdaOS is intended to make software change a continuous, governed product
@@ -306,6 +308,17 @@ This creates room for LLM-guided frequent integration and joint design at
 component boundaries while keeping ownership, accountability, and rollback
 local. The proposal protocol, group identity, discovery model, and conflict
 semantics are hypotheses to specify after the single-Builder loop is proven.
+
+For Applications, the first product projection of this cooperation model is
+defined by
+[Application Experience, Guided Acceptance, and Cooperative Evolution](application-experience-and-guided-acceptance.md).
+It prefers personal adaptation, accepted contribution sharing, and delegated
+maintenance before Publisher succession or an independent continuation. It
+preserves lineage across all paths while keeping historical attribution,
+current governance authority, observed benefit, and any future economic
+entitlement distinct. Before the Evolnomics Gate A2, only shadow observation
+and attribution are permitted; no payout, royalty, currency, ownership, or
+allocation formula is implied.
 
 ## Verified Capability Package
 

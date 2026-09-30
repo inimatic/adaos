@@ -6,7 +6,7 @@ residual Brief interpretation, total component contracts and clean held-out
 reliability are not complete. Historical Applications recipe-guided results
 must not be conflated with the newer pack-free development cohorts.
 
-Last reviewed: 2026-09-22.
+Last reviewed: 2026-09-30.
 
 This page owns how Builder turns an ordinary user request into an executable
 Prototype. [AdaOS Builder](builder.md) continues to own the complete governed
@@ -385,6 +385,16 @@ The normal routes are:
 Prototype acceptance is not application readiness. The same user requirement
 has different evidence obligations at different stages; it must not disappear
 because its final business behavior cannot run in the declarative preview.
+
+For Application candidates, Builder also produces the digest-bound text
+companion defined by
+[Application Experience, Guided Acceptance, and Cooperative Evolution](application-experience-and-guided-acceptance.md):
+`What's New` plus `adaos.application.change_story.v1`. Iterative review uses
+that lightweight story over package-owned synthetic data. Publication video is
+derived later from the same accepted story; it is not regenerated on every
+Builder iteration. `Open for revision` returns the exact candidate, story step,
+feedback, Dev Tickets, and evidence to Builder rather than asking the model to
+reconstruct intent from a generic complaint.
 
 - Supported local CRUD, selection, details, search/filter and field validation
   must work in Prototype. A label or a pending obligation cannot replace them.

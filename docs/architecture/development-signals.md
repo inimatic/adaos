@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-09-05.
+Last reviewed: 2026-09-30.
 
 This document defines the AdaOS boundary for user, runtime, review, and
 conversation feedback that may drive software evolution. It sits between raw
@@ -24,6 +24,15 @@ artifact version before triage chooses the appropriate lifecycle.
 A Dev Ticket is the human- and Codex-visible backlog object built from one or
 more Development Signals. People, Codex, and Builder should work with Dev
 Tickets; Development Signals remain the lower evidence records.
+
+Application guided acceptance adds a structured source of such feedback. A
+Change Story observation binds the exact Application candidate and story
+digests, chapter/step, semantic view or control reference, observed state, and
+human comment. It may create or update a scoped Development Signal/Dev Ticket,
+but does not change the authority or lifecycle defined here. The walkthrough,
+mock-data boundary, contribution packaging, and `Open for revision` handoff are
+owned by
+[Application Experience, Guided Acceptance, and Cooperative Evolution](application-experience-and-guided-acceptance.md).
 
 The model follows established human-AI interaction practice:
 

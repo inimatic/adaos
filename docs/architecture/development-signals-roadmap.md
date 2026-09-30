@@ -2,7 +2,7 @@
 
 Status: proposed cross-domain roadmap.
 
-Last reviewed: 2026-09-27.
+Last reviewed: 2026-09-30.
 
 This roadmap sequences the work needed to make evolution feedback a governed,
 natural AdaOS interface for both people and Codex. It is subordinate to
@@ -1028,6 +1028,10 @@ project ticket blocked by missing SDK/API capability
 - [Application Lifecycle and Distribution Roadmap](application-lifecycle-and-distribution-roadmap.md)
   owns encrypted relay, publisher Application authority, release binding, and
   cross-subnet end-to-end proof.
+- [Application Experience and Guided Acceptance Roadmap](application-experience-and-guided-acceptance-roadmap.md)
+  owns Change Story feedback anchors, guided-acceptance handoff, contribution
+  packaging, and the contributor/Publisher product loop; this roadmap retains
+  Development Signal and Dev Ticket lifecycle authority.
 - [Pending Actions](pending-actions.md) owns durable user decisions.
 - Future AdaOS Issue architecture owns accepted support/development work after
   Issue-first repair is admitted.

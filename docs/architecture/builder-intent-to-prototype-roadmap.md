@@ -4,13 +4,16 @@ Status: active corrective roadmap. Small generic Prototype and DEV Automation
 slices work; target ownership, repeatable reliability and installed lifecycle
 acceptance remain incomplete.
 
-Last reviewed: 2026-09-19.
+Last reviewed: 2026-09-30.
 
 Architecture: [Intent-to-Prototype](builder-intent-to-prototype.md).
 Cross-document owner: [Builder Roadmap](builder-roadmap.md).
 Evaluation: [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md).
 Client owner: [Client Component System Roadmap](client-component-system-roadmap.md).
 Measurements and audit increments: [Builder Engineering Journal](builder-engineering-journal.md).
+Application-facing Change Story, guided acceptance, mock/user binding, and
+publication-demo sequencing:
+[Application Experience and Guided Acceptance Roadmap](application-experience-and-guided-acceptance-roadmap.md).
 
 ## Closure Rules
 
@@ -66,6 +69,13 @@ The parent roadmap and SDK migration retain their distinct obligations.
    Applications from a generic scaffold: BIP-17, BIP-21, BIP-29.
 5. Resume installed delivery only after an explicit decision: BIP-28.
 6. Evaluate conditional could work against measured benefit.
+
+Application Story production is a consumer of the Builder contracts in this
+roadmap, not another source of Builder lifecycle truth. Its detailed tasks are
+owned by `AEX3`; Builder supplies exact semantic requirements, candidate and
+package digests, evidence, limitations, and scoped revision context. Video
+generation and the demonstration runtime remain outside the iterative model
+loop.
 
 The user accepted DEV Builder design 071 on 2026-09-14 and authorized its
 Automation and a complete isolated TEST application journey through the new

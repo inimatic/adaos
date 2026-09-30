@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-26.
+Last reviewed: 2026-09-30.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
@@ -12,6 +12,8 @@ Companion fast-read projection architecture and embedded roadmap:
 [Application Registry Projection](application-registry-projection.md).
 Cross-roadmap semantic creation and evolution sequence:
 [Semantic Application Composition And Evolution](application-semantic-composition-roadmap.md).
+Companion lifecycle projection and guided-acceptance sequence:
+[Application Experience and Guided Acceptance](application-experience-and-guided-acceptance-roadmap.md).
 
 This roadmap sequences the Application domain, SDK/MCP surface, Builder-built
 Applications product, trusted prerelease pilot, stable release proof, and later
@@ -60,6 +62,10 @@ tests, operation receipts, or end-to-end evidence.
 12. Applications adopts additive browser-safe requirement/resolution fields
     before the semantic resolver is complete and renders unavailable facts
     explicitly. It must not invent them from component names.
+13. `Private Alpha/Beta/Stable` and `Public Beta/Stable` are presentation
+    labels over this roadmap's records. Their dashboard, runtime-choice,
+    walkthrough, and contribution experience are sequenced by the Application
+    Experience roadmap and must not create parallel lifecycle truth.
 
 ## Current Baseline
 
@@ -1025,8 +1031,11 @@ These tasks remain visible but do not block APP0-APP6.
   scanner versions, and policy revision; never map `not_evaluated` to `passed`.
 - [ ] `[deferred]` `APP7-03` Run risky Guard parsers/scanners in isolated
   workers and prove quarantine cannot mutate signed bytes.
-- [ ] `[deferred]` `APP7-04` Add ownership transfer, publisher succession,
-  organization publisher principals, threshold stable approval, and audit.
+- [ ] `[deferred]` `APP7-04` Add the canonical ownership-transfer and Publisher
+  succession mechanics, organization publisher principals, threshold stable
+  approval, and audit required by `AEX7`. The user-facing cooperation,
+  continuation, and Application-family sequence remains owned by the
+  Application Experience roadmap.
 - [ ] `[deferred]` `APP7-05` Add multi-user Application development, trusted
   development groups, reviewable proposals, and WorkLog/ChangeSet semantics.
 - [ ] `[deferred]` `APP7-06` Add backward data migration and separately

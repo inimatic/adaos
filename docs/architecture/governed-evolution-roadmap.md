@@ -2,7 +2,7 @@
 
 Status: cross-cutting product and architecture roadmap.
 
-Last reviewed: 2026-08-18.
+Last reviewed: 2026-09-30.
 
 AdaOS is intended to make software change a governed, observable lifecycle:
 
@@ -52,6 +52,11 @@ is described.
 9. When this document and a domain owner disagree on implementation state, the
    domain owner is authoritative. Correct the summary here; do not fork the
    detailed task.
+10. The Application-specific guided-acceptance, contribution, Publisher
+    continuity, and Application-family sequence is owned by the
+    [Application Experience and Guided Acceptance Roadmap](application-experience-and-guided-acceptance-roadmap.md).
+    This roadmap supplies the cross-domain admission gates and does not copy
+    its task list.
 
 ## Progress Model
 
@@ -330,7 +335,9 @@ release evidence without shared write access.
   future collaboration architecture and future Issue architecture.
 - [ ] `[should]` `GE4-04` Support LLM-guided integration that presents user
   impact, alternatives, validation evidence, and unresolved decisions rather
-  than raw merge mechanics. Owner: [Builder Roadmap](builder-roadmap.md).
+  than raw merge mechanics. Owner: [Builder Roadmap](builder-roadmap.md); the
+  Application contribution and guided-review projection is owned by `AEX6` in
+  the [Application Experience roadmap](application-experience-and-guided-acceptance-roadmap.md).
 - [ ] `[could]` `GE4-05` Explore joint design sessions whose durable outputs
   are Issues, contracts, proposals, and decisions. Owner:
   [Conversation Architecture](conversation-and-channel-architecture.md).

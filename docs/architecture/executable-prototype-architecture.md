@@ -11,6 +11,11 @@ Interpretation of an ordinary user request, adaptive planning, capability
 retrieval, semantic UI generation, and compilation into this executable model
 are owned by the
 [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
+Application-level `What's New`, Change Story, guided acceptance, publication
+recording, and the retained synthetic demonstration package are owned by
+[Application Experience, Guided Acceptance, and Cooperative Evolution](application-experience-and-guided-acceptance.md).
+
+Last reviewed: 2026-09-30.
 
 ## Decision Summary
 
@@ -37,6 +42,14 @@ behavior:
   claims that a backend already exists;
 - Automation replaces mock activity bindings with implementations while
   preserving accepted UI, data, conversational, and outcome contracts.
+
+An Application implementation must keep demonstration and user bindings
+replaceable beneath the same semantic schemas, views, commands, and result
+contracts. Mock data are package-owned and synthetic, remain available with
+the Beta while it is current or evidence-held, and never mix into user runtime
+state. Narrated or recorded walkthroughs use only the demonstration profile;
+private operational verification of user bindings is a separate non-recording
+activity. A separate mock-only product branch is not an acceptable shortcut.
 
 Screenshots remain outside the default context and never replace structural
 evidence. A bounded opt-in compact/wide revision gate is a post-MVP `should`;
