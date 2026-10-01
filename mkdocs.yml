@@ -1,10 +1,11 @@
 strict: true
 site_name: AdaOS
-site_description: "AdaOS product, developer, runtime, and architecture documentation"
+site_description: "AdaOS 2027 stable public documentation"
 site_url: https://inimatic.github.io/adaos/
 repo_url: https://github.com/inimatic/adaos
 repo_name: inimatic/adaos
-edit_uri: edit/main/docs/
+edit_uri: edit/rev2026/docs-stable/2027/
+docs_dir: docs-stable/2027
 
 theme:
   name: material
@@ -19,7 +20,6 @@ theme:
     - search.suggest
     - search.highlight
     - content.tabs.link
-    - content.code.annotate
     - content.code.copy
     - content.action.edit
   palette:
@@ -43,58 +43,7 @@ extra:
 
 plugins:
   - search:
-      lang: [en, ru]
-  - i18n:
-      docs_structure: folder
-      fallback_to_default: false
-      languages:
-        - locale: en
-          name: English
-          default: true
-        - locale: ru
-          name: Русский
-          nav:
-            - Главная: index.md
-            - Продукт:
-                - Продуктовая модель: product/index.md
-                - Направления решений: product/solution-directions.md
-                - Язык и перевод документации: documentation-language-policy.md
-            - Английская документация:
-                - Home: https://inimatic.github.io/adaos/
-                - Documentation Structure: https://inimatic.github.io/adaos/documentation-structure/
-                - Issue Tracker: https://inimatic.github.io/adaos/issue-tracker/
-                - Quickstart: https://inimatic.github.io/adaos/quickstart/
-                - Deployment: https://inimatic.github.io/adaos/deployment/
-                - Operations: https://inimatic.github.io/adaos/cli/runtime/
-                - Architecture: https://inimatic.github.io/adaos/architecture/
-                - CLI: https://inimatic.github.io/adaos/cli/
-                - SDK: https://inimatic.github.io/adaos/sdk/
-                - IO: https://inimatic.github.io/adaos/interfaces/overview/
-                - Skills: https://inimatic.github.io/adaos/skills/
-                - Scenarios: https://inimatic.github.io/adaos/scenarios/
-                - DevPortal: https://inimatic.github.io/adaos/devportal/
-                - Guides: https://inimatic.github.io/adaos/guides/testing/
-                - Roadmaps: https://inimatic.github.io/adaos/architecture/roadmap-inventory/
-  - git-revision-date-localized:
-      enable_creation_date: true
-      enable_git_follow: false
-      fallback_to_build_date: true
-      # This repository contains paths whose retained Git history does not
-      # produce a revision entry for the plugin's rename-excluding query.
-      # Keep the configured build-date fallback informational so MkDocs strict
-      # mode remains a gate for documentation warnings it can act on.
-      strict: false
-      type: date
-
-watch:
-  - src/adaos
-
-extra_css:
-  - assets/graphviz-fix.css
-
-extra_javascript:
-  - https://cdn.jsdelivr.net/gh/rod2ik/cdn@main/mkjavascripts/mkdocs-graphviz.js
-  - https://unpkg.com/mermaid@11.4.1/dist/mermaid.min.js
+      lang: [en]
 
 markdown_extensions:
   - admonition
@@ -104,164 +53,42 @@ markdown_extensions:
   - def_list
   - pymdownx.details
   - pymdownx.mark
-  - mkdocs_graphviz
   - pymdownx.inlinehilite
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:materialx.emoji.to_svg
-  - pymdownx.arithmatex:
-      generic: true
   - pymdownx.tasklist:
       custom_checkbox: true
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.superfences
 
 nav:
   - Home: index.md
   - Product:
-      - Product Model: product/index.md
+      - Product Tracks: product/index.md
       - Solution Directions: product/solution-directions.md
-      - Advantage Claims And Evidence: product/advantage-claims.md
-      - Documentation Language Policy: documentation-language-policy.md
-      - Documentation Structure and Authority: documentation-structure.md
-  - Issue Tracker: issue-tracker.md
-  - Quickstart: quickstart.md
-  - Deployment: deployment.md
-  - Operations:
-      - Versioning: operations/versioning.md
-      - Common Commands: operations/common-commands.md
-      - Runtime And Operations: cli/runtime.md
-      - Inimatic Hosting: integrations/inimatic.md
-      - Browser and Member Connection: onboarding/browser-and-member.md
+      - Media Center: media-center/index.md
+      - Builder: builder/index.md
+  - Start:
+      - Quickstart: quickstart.md
+      - Deployment: deployment.md
+      - Browser And Member Connection: onboarding/browser-and-member.md
       - Member Node Onboarding: onboarding/member-node-phase1.md
+  - Operations:
+      - Common Commands: operations/common-commands.md
+      - Versioning And Health: operations/versioning.md
+      - Runtime Operations: cli/runtime.md
   - Architecture:
-      - Overview: architecture/index.md
-      - Governed Evolution: architecture/governed-evolution.md
-      - Governed Evolution Roadmap: architecture/governed-evolution-roadmap.md
-      - Governed Data-Driven Workflow Model and Interaction Architecture: architecture/governed-workflow-runtime.md
-      - Governed Data-Driven Workflow Model Roadmap: architecture/governed-workflow-runtime-roadmap.md
-      - Conversational Control Interface: architecture/conversational-interface.md
-      - NLU Runtime: architecture/nlu.md
-      - NLU Target Architecture: architecture/nlu-target-architecture.md
-      - NLU Teacher: architecture/nlu-teacher-llm.md
-      - NLU Service Skills: architecture/nlu-service-skills.md
-      - NLU Teacher Evolution Roadmap: architecture/nlu-evolution-roadmap.md
-      - NLU Roadmap: architecture/nlu-roadmap.md
-      - Artifact Source Package Activation: architecture/artifact-source-package-activation.md
-      - Artifact Source Package Activation Roadmap: architecture/artifact-source-package-activation-roadmap.md
-      - Capability Binding And State Separation: architecture/capability-binding-state-separation.md
-      - Capability Binding And State Separation Roadmap: architecture/capability-binding-state-separation-roadmap.md
-      - CBS0 Capability Binding State Inventory: architecture/capability-binding-state-cbs0-inventory.md
-      - CBS1-CBS5 Implementation And Migration: architecture/capability-binding-state-cbs1-cbs5-implementation.md
-      - Gmail Mail Client Stage-One CBS Beta Proof: architecture/gmail-mail-client-cbs-beta-proof-2026-09-24.md
-      - Application Lifecycle Distribution And Feedback: architecture/application-lifecycle-and-distribution.md
-      - Application Lifecycle Distribution Roadmap: architecture/application-lifecycle-and-distribution-roadmap.md
-      - Application Access Permissions And Roles: architecture/application-access-permissions.md
-      - Application Access Permissions And Roles Roadmap: architecture/application-access-permissions-roadmap.md
-      - Application Preparation Evidence 2026-09-05: architecture/application-preparation-evidence-2026-09-05.md
-      - Applications Builder Dogfood Evidence 2026-09-07: architecture/applications-builder-dogfood-evidence-2026-09-07.md
-      - Project Composition Presentation And Development Context: architecture/project-composition-and-development-context.md
-      - Artifact Pipeline Local Evidence 2026-07-24: architecture/artifact-pipeline-local-evidence-2026-07-24.md
-      - Roadmap Inventory and Authority Map: architecture/roadmap-inventory.md
-      - Developer Surface Map: architecture/developer-surface-map.md
-      - MVP Release Evidence: architecture/mvp-release-evidence.md
-      - Runtime Overview: architecture/overview.md
-      - Android Full Node: architecture/android-full-node.md
-      - Android Full Node Roadmap: architecture/android-full-node-roadmap.md
-      - Product Terminology: architecture/product-terminology.md
-      - Layers: architecture/layers.md
-      - Agent Context: architecture/context.md
-      - Security: architecture/security.md
-      - Infrascope: architecture/infrascope.md
-      - UI Addressing: architecture/ui-addressing.md
-      - Web UI Architecture: architecture/web-ui-architecture.md
-      - Public Site Projection And Addressing: architecture/public-site-projection-and-addressing.md
-      - Public Site Projection Roadmap: architecture/public-site-projection-roadmap.md
-      - Observability Map: monitoring/observability.md
-      - Version Observability: architecture/version-observability.md
-      - Operational Event Model: architecture/operational-event-model.md
-      - Operational Event Model Reference Plan: architecture/operational-event-model-reference-plan.md
-      - Operational Event Model Roadmap: architecture/operational-event-model-roadmap.md
-      - Model Runtime and Registry: architecture/model-runtime-and-registry.md
-      - Model Runtime Roadmap: architecture/model-runtime-roadmap.md
-      - AdaOS Research Fabric: architecture/research-fabric.md
-      - Research Compilation and SOTA Evaluation: architecture/research-compilation-and-sota-program.md
-      - Research Fabric Roadmap: architecture/research-fabric-roadmap.md
-      - Research Fabric Core Readiness: architecture/research-fabric-core-readiness.md
-      - Scenario Guidance and Help Contract: architecture/scenario-guidance.md
-      - Projection Subscription Roadmap: architecture/projection-subscription-roadmap.md
-      - Root MCP Foundation: architecture/root-mcp-foundation.md
-      - Root MCP Roadmap: architecture/root-mcp-roadmap.md
-      - Context Compression: architecture/context-compression.md
-      - Agent And Project Context Capsules: architecture/agent-context-capsules.md
-      - Skill Factory: architecture/skill-factory.md
-      - Builder: architecture/builder.md
-      - Builder Intent-to-Prototype Architecture: architecture/builder-intent-to-prototype.md
-      - Builder E2E Evaluation Pipeline: architecture/builder-evaluation-pipeline.md
-      - Builder Intent-to-Prototype Roadmap: architecture/builder-intent-to-prototype-roadmap.md
-      - Client Component System Roadmap: architecture/client-component-system-roadmap.md
-      - Builder Conversational Development: architecture/builder-conversational-development.md
-      - Executable Prototype Architecture: architecture/executable-prototype-architecture.md
-      - Builder Roadmap: architecture/builder-roadmap.md
-      - Builder SDK Boundary: architecture/builder-sdk-boundary.md
-      - Builder Preview Runtime: architecture/builder-preview-runtime.md
-      - Yjs Runtime Ownership: architecture/yjs-runtime-ownership.md
-      - Infrascope Roadmap: architecture/infrascope-roadmap.md
-      - Registry Marketplace And Operations: architecture/registry-marketplace-operations-roadmap.md
-      - Device Access and Browsers: architecture/device-access-and-browsers.md
-      - Device Access Roadmap: architecture/device-access-roadmap.md
-      - Routing: architecture/routing.md
-      - Service Skills: architecture/service-skills.md
-      - Event Management: architecture/event-management.md
-      - Personalization Identity Access: architecture/personalization-identity-access.md
-      - Personalization Identity Access Roadmap: architecture/personalization-identity-access-roadmap.md
-      - Personalization Phase 0 Contracts: architecture/personalization-identity-access-phase0-contracts.md
-      - Personalization Phase 1 Access Kernel: architecture/personalization-identity-access-phase1-kernel.md
-      - Personalization Phase 2 Profile Preferences: architecture/personalization-identity-access-phase2-profile-preferences.md
-      - Personalization Phase 3 Join Invites: architecture/personalization-identity-access-phase3-join-invites.md
-      - Personalization Phase 4 Current User UI: architecture/personalization-identity-access-phase4-current-user-ui.md
-      - Personalization Phase 5 Connect Join UX: architecture/personalization-identity-access-phase5-connect-join-ux.md
-      - Personalization Phase 6 Device Pairing Recovery: architecture/personalization-identity-access-phase6-device-pairing-recovery.md
-      - Personalization Phase 7 Admin Surface: architecture/personalization-identity-access-phase7-admin-surface.md
-      - Post-Deploy E2E Testing: architecture/post-deploy-e2e-testing.md
-      - Skill Assets and Icons Roadmap: architecture/skill-assets-and-icons-roadmap.md
-  - CLI:
-      - Overview: cli/index.md
-      - API Service: cli/api.md
-      - Codex Test-Hub MCP: cli/codex-test-hub-mcp.md
-  - SDK:
-      - Overview: sdk/index.md
-      - Relational Storage: sdk/relational-storage.md
-      - Durable Execution: sdk/execution.md
-      - Bus: sdk/bus.md
-      - Context: sdk/context.md
-      - Decorators: sdk/decorators.md
-      - Adapters: sdk/adapters.md
-      - Control Plane: sdk_control_plane.md
-  - IO:
-      - Overview: interfaces/overview.md
-      - Telegram: interfaces/telegram.md
-      - WebIO: interfaces/webio.md
-  - Skills: skills.md
-  - Scenarios: scenarios.md
-  - DevPortal: devportal.md
-  - Guides:
-      - Builder Scenario Development: guides/builder-scenario-development.md
-      - Builder Verification: guides/builder-verification.md
-      - NLU Human Verification: guides/nlu-human-verification.md
-      - Testing: guides/testing.md
-  - Roadmap:
-      - Planning Authority: architecture/roadmap-inventory.md
-      - Android Full Node: architecture/android-full-node-roadmap.md
-      - Governed Evolution: architecture/governed-evolution-roadmap.md
-      - Research Fabric: architecture/research-fabric-roadmap.md
-      - MVP Roadmap: mvp_roadmap.md
-      - Historical Roadmap (2025): roadmap.md
-      - Historical LLM Skill Creation: llm-skill-creation-roadmap.md
+      - Overview: architecture/overview.md
+      - Devices And Browsers: architecture/device-access-and-browsers.md
+      - Member-Hub Connectivity: architecture/member-hub-connectivity.md
+      - Privacy And Security: architecture/privacy-and-security.md
+  - Reference:
+      - CLI: reference/cli.md
+  - Documentation:
+      - Structure: documentation-structure.md
+      - Language Policy: documentation-language-policy.md
+
 copyright: |
   &copy; 2026 AdaOS

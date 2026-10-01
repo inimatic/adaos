@@ -46,3 +46,4 @@ build
 .tmp
 .kotlin/
 /internals/
+/docs-development/

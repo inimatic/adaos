@@ -1,4 +1,4 @@
-# AdaOS
+﻿# AdaOS
 
 ![AdaOS CI](https://github.com/inimatic/adaos/actions/workflows/ci.yml/badge.svg)
 
@@ -14,10 +14,10 @@ directions built on that foundation; they are not separate runtimes or codebases
 and currently have different maturity levels.
 
 [Documentation](https://inimatic.github.io/adaos/) |
-[Product model](docs/product/index.md) |
-[Quickstart](docs/quickstart.md) |
-[Deployment](docs/deployment.md) |
-[Versioning](docs/operations/versioning.md)
+[Product model](docs-stable/2027/product/index.md) |
+[Quickstart](docs-stable/2027/quickstart.md) |
+[Deployment](docs-stable/2027/deployment.md) |
+[Versioning](docs-stable/2027/operations/versioning.md)
 
 ## What is in this repository
 
@@ -27,7 +27,7 @@ and currently have different maturity levels.
 - Hub/member node support and join-code onboarding
 - Browser/device access architecture and client integration contracts
 - Bootstrap scripts for Linux, macOS, Windows, Codespaces, and Colab-style labs
-- MkDocs documentation and test suite
+- Versioned MkDocs public documentation and test suite
 - Optional integration trees for the hosted client, backend, and infrastructure
 
 ## Core ideas
@@ -55,8 +55,8 @@ and currently have different maturity levels.
 
 Home, Campus, and Enterprise describe deployment and governance profiles.
 aResearcher is a cross-profile solution agent. reDevice is an endpoint family,
-not a separate application domain. See [AdaOS Product Model](docs/product/index.md)
-and [Solution Directions](docs/product/solution-directions.md) for the normative
+not a separate application domain. See [AdaOS Product Model](docs-stable/2027/product/index.md)
+and [Solution Directions](docs-stable/2027/product/solution-directions.md) for the normative
 boundaries, maturity labels, canonical scenarios, and non-goals.
 
 ## Quick start
@@ -97,7 +97,7 @@ Use port `8777` or `8778` when you want the browser client to auto-discover a
 local runtime. Use a different port, such as `8779`, when the hosted client
 should stay routed through Root.
 
-More setup paths are documented in [Quickstart](docs/quickstart.md).
+More setup paths are documented in [Quickstart](docs-stable/2027/quickstart.md).
 
 ## One-line bootstrap
 
@@ -127,7 +127,7 @@ Useful options:
 Windows uses the corresponding PowerShell names, for example `-JoinCode`,
 `-NodeName`, `-Role`, `-InstallService`, and `-NoCoreUpdate`.
 
-Details: [bootstrap variants and checkout maintenance](docs/operations/common-commands.md#one-line-bootstrap-variants).
+Details: [bootstrap variants and checkout maintenance](docs-stable/2027/operations/common-commands.md#one-line-bootstrap-variants).
 
 ## Deployment modes
 
@@ -138,7 +138,7 @@ Details: [bootstrap variants and checkout maintenance](docs/operations/common-co
 - **Colab/lab**: repository bootstrap in a notebook, usually as a temporary
   member node with `--no-core-update`.
 
-See [Deployment](docs/deployment.md) for production, development, and Colab
+See [Deployment](docs-stable/2027/deployment.md) for production, development, and Colab
 commands.
 
 ## Browser and member connection
@@ -161,8 +161,8 @@ Join from the member:
 bash tools/bootstrap.sh --join-code CODE --zone ru --node-name "Kitchen Member"
 ```
 
-See [Browser and Member Connection](docs/onboarding/browser-and-member.md) and
-[Member node onboarding](docs/onboarding/member-node-phase1.md).
+See [Browser and Member Connection](docs-stable/2027/onboarding/browser-and-member.md) and
+[Member node onboarding](docs-stable/2027/onboarding/member-node-phase1.md).
 
 ## Versions and health
 
@@ -186,7 +186,7 @@ adaos autostart update-status
 adaos node status --json
 ```
 
-Details are in [Versioning and Public Build Checks](docs/operations/versioning.md).
+Details are in [Versioning and Public Build Checks](docs-stable/2027/operations/versioning.md).
 
 ## Common commands
 
@@ -203,9 +203,9 @@ adaos autostart status
 ```
 
 Details:
-[full command cookbook](docs/operations/common-commands.md),
-[runtime operations](docs/cli/runtime.md), and
-[CLI reference](docs/reference/cli.md).
+[full command cookbook](docs-stable/2027/operations/common-commands.md),
+[runtime operations](docs-stable/2027/cli/runtime.md), and
+[CLI reference](docs-stable/2027/reference/cli.md).
 
 When a production CLI command reports `slot_shell_required`, switch into the
 active runtime slot first:
@@ -222,14 +222,14 @@ PowerShell:
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md)
-- [Deployment](docs/deployment.md)
-- [Versioning](docs/operations/versioning.md)
-- [CLI reference](docs/reference/cli.md)
-- [Runtime and operations](docs/cli/runtime.md)
-- [Architecture overview](docs/architecture/overview.md)
-- [Device Access and Browsers](docs/architecture/device-access-and-browsers.md)
-- [Member-Hub Connectivity](docs/architecture/member-hub-connectivity.md)
+- [Quickstart](docs-stable/2027/quickstart.md)
+- [Deployment](docs-stable/2027/deployment.md)
+- [Versioning](docs-stable/2027/operations/versioning.md)
+- [CLI reference](docs-stable/2027/reference/cli.md)
+- [Runtime and operations](docs-stable/2027/cli/runtime.md)
+- [Architecture overview](docs-stable/2027/architecture/overview.md)
+- [Device Access and Browsers](docs-stable/2027/architecture/device-access-and-browsers.md)
+- [Member-Hub Connectivity](docs-stable/2027/architecture/member-hub-connectivity.md)
 - [Client integration README](src/adaos/integrations/adaos-client/README.md)
 
 ## Development
@@ -252,7 +252,7 @@ Project layout:
 ```text
 src/adaos/        Core package, apps, services, SDK, templates
 tests/            Test suite
-docs/             Documentation source
+docs-stable/      Versioned public documentation source
 tools/            Bootstrap and diagnostic scripts
 ```
 
@@ -267,7 +267,7 @@ English documentation is authoritative. Maintained translations cover a
 small, stable public-facing subset; detailed architecture, roadmaps, evidence,
 CLI, and SDK documentation remain English-only and are linked directly from
 translated navigation. See the
-[Documentation Language and Translation Policy](docs/documentation-language-policy.md).
+[Documentation Language and Translation Policy](docs-stable/2027/documentation-language-policy.md).
 
 ## License
 

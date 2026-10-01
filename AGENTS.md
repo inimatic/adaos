@@ -13,3 +13,17 @@
   in the existing private runtime recovery directory, not in source or prompts.
 - Before committing, inspect Git status and ensure no temporary working files
   are included. Do not remove unrelated user files as part of cleanup.
+
+## Documentation Boundaries
+
+- `docs-stable/` is the public, versioned documentation surface. The active
+  public source for GitHub Pages is `docs-stable/2027/`; it should describe
+  implemented, supported, or explicitly beta behavior in user-facing language.
+- `docs-development/` is a private documentation repository. It owns platform
+  development documents, target architecture, roadmaps, evidence, launch
+  planning, and Product Management work. Product folders under
+  `docs-development/products/` are for Product Management trajectories, not
+  platform implementation detail.
+- Do not recreate a root-level `docs/` directory. Legacy public documentation
+  belongs under `docs-development/platform/` while the public site is rebuilt
+  from `docs-stable/<major-version>/`.

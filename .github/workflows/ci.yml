@@ -6,12 +6,12 @@ on:
     # have been migrated to the repository default branch together.
     branches: [rev2026]
     paths-ignore:
-      - "docs/**"
+      - "docs-stable/**"
       - "mkdocs.yml"
       - "requirements-docs.txt"
   pull_request:
     paths-ignore:
-      - "docs/**"
+      - "docs-stable/**"
       - "mkdocs.yml"
       - "requirements-docs.txt"
   workflow_dispatch:
