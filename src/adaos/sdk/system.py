@@ -9,14 +9,22 @@ and reliability snapshots.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
+import shutil
+from pathlib import Path
 import threading
 import time
 from typing import Any
 
 from adaos.sdk import control_plane
+from adaos.sdk.core.decorators import tool
 from adaos.sdk.status import current_update_status
 
-__all__ = ["get_operational_snapshot"]
+__all__ = [
+    "get_operational_snapshot",
+    "rename_current_node",
+    "rename_local_subnet",
+]
 
 _ALL_SECTIONS = frozenset(
     {
@@ -26,12 +34,105 @@ _ALL_SECTIONS = frozenset(
         "quotas",
         "incidents",
         "update",
+        "applications",
+        "resources",
+        "members",
     }
 )
 _RELIABILITY_CACHE_TTL_S = 2.0
 _RELIABILITY_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
 _RELIABILITY_CACHE_LOCK = threading.Lock()
 _RELIABILITY_BUILD_LOCKS: dict[str, threading.Lock] = {}
+
+_RENAME_INPUT = {
+    "type": "object",
+    "properties": {"display_name": {"type": "string", "minLength": 1, "maxLength": 120}},
+    "required": ["display_name"],
+    "additionalProperties": False,
+}
+_RENAME_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "ok": {"type": "boolean"},
+        "target": {"type": "string"},
+        "display_name": {"type": "string"},
+        "current": {"type": "string"},
+        "desired": {"type": "string"},
+        "applied": {"type": "boolean"},
+    },
+    "required": ["ok", "target", "display_name", "current", "desired", "applied"],
+    "additionalProperties": True,
+}
+
+
+def _display_name(value: Any) -> str:
+    token = " ".join(str(value or "").strip().split())
+    if not token:
+        raise ValueError("display_name is required")
+    if len(token) > 120:
+        raise ValueError("display_name must contain at most 120 characters")
+    return token
+
+
+@tool(
+    "system.local_subnet.rename",
+    summary="Rename the local subnet through its durable public identity service.",
+    stability="stable",
+    idempotent=True,
+    input_schema=_RENAME_INPUT,
+    output_schema=_RENAME_OUTPUT,
+)
+def rename_local_subnet(display_name: str) -> dict[str, Any]:
+    """Persist the local subnet display name without changing its identity."""
+
+    from adaos.services.subnet_alias import save_subnet_alias
+
+    name = _display_name(display_name)
+    subject = _mapping(control_plane.get_self_object())
+    subnet_id = str(
+        subject.get("subnet_id")
+        or _mapping(subject.get("identity")).get("subnet_id")
+        or subject.get("id")
+        or ""
+    ).strip()
+    saved = str(save_subnet_alias(name, subnet_id=subnet_id) or name)
+    return {
+        "ok": True,
+        "target": "local_subnet",
+        "subnet_id": subnet_id or None,
+        "display_name": saved,
+        "current": saved,
+        "desired": name,
+        "applied": saved == name,
+    }
+
+
+@tool(
+    "system.current_node.rename",
+    summary="Rename the current AdaOS node through its durable node configuration.",
+    stability="stable",
+    idempotent=True,
+    input_schema=_RENAME_INPUT,
+    output_schema=_RENAME_OUTPUT,
+)
+def rename_current_node(display_name: str) -> dict[str, Any]:
+    """Persist the current node display name without changing node identity."""
+
+    from adaos.services.node_config import set_node_names
+
+    name = _display_name(display_name)
+    config = set_node_names([name])
+    names = list(getattr(getattr(config, "node_settings", None), "node_names", []) or [])
+    current = str(names[0] if names else name)
+    return {
+        "ok": True,
+        "target": "current_node",
+        "node_id": str(getattr(config, "node_id", "") or "") or None,
+        "display_name": current,
+        "current": current,
+        "desired": name,
+        "applied": current == name,
+    }
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -148,6 +249,78 @@ def _incident_items(projection: Mapping[str, Any], *, limit: int) -> list[dict[s
     return incidents[:limit]
 
 
+def _resource_snapshot() -> dict[str, Any]:
+    """Return a cheap host-capacity sample with explicit provenance.
+
+    Percent values are instantaneous UI hints, not billing or scheduling
+    authority. Consumers may retain bounded samples to draw trends.
+    """
+
+    observed_at = datetime.now(timezone.utc).isoformat()
+    result: dict[str, Any] = {
+        "schema": "adaos.sdk.system.resource_snapshot.v1",
+        "observed_at": observed_at,
+        "freshness": "live_sample",
+        "source": "local_host",
+        "available": True,
+    }
+    try:
+        import psutil  # type: ignore
+
+        memory = psutil.virtual_memory()
+        result["cpu"] = {"percent": round(float(psutil.cpu_percent(interval=None)), 1)}
+        result["memory"] = {
+            "percent": round(float(memory.percent), 1),
+            "used_bytes": int(memory.used),
+            "total_bytes": int(memory.total),
+        }
+    except Exception as exc:
+        result["available"] = False
+        result["reason"] = f"{type(exc).__name__}: resource metrics unavailable"
+    try:
+        disk = shutil.disk_usage(Path.cwd())
+        result["disk"] = {
+            "percent": round((float(disk.used) / float(disk.total)) * 100.0, 1) if disk.total else 0.0,
+            "used_bytes": int(disk.used),
+            "total_bytes": int(disk.total),
+        }
+    except OSError:
+        result.setdefault("reason", "disk metrics unavailable")
+    return result
+
+
+def _installed_application_summaries(*, webspace_id: str | None, limit: int) -> list[dict[str, Any]]:
+    from adaos.sdk import applications
+
+    try:
+        models = applications.list_applications(
+            installed_only=True,
+            include_development=False,
+            webspace_id=webspace_id,
+            view="summary",
+            limit=limit,
+        )
+    except Exception:
+        return []
+    items: list[dict[str, Any]] = []
+    for model in models[:limit]:
+        application = _mapping(model.get("application"))
+        display = _mapping(application.get("display"))
+        summary = _mapping(model.get("installation_summary"))
+        items.append(
+            {
+                "id": str(application.get("application_id") or ""),
+                "title": str(display.get("title") or application.get("application_id") or "Application"),
+                "version": summary.get("effective_version") or model.get("effective_version"),
+                "channel": summary.get("effective_channel") or model.get("effective_channel"),
+                "status": summary.get("status") or ("active" if model.get("installed") else "unknown"),
+                "update_state": model.get("update_state") or summary.get("update_state"),
+                "has_update": bool(model.get("has_update") or summary.get("has_update")),
+            }
+        )
+    return items
+
+
 def get_operational_snapshot(
     *,
     sections: Iterable[str] | str | None = None,
@@ -172,6 +345,8 @@ def get_operational_snapshot(
         "sections": sorted(selected),
         "subject": subject,
         "capacity": capacity,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "provenance": {"authority": "local_node", "projection": "read_only"},
     }
 
     reliability: dict[str, Any] = {}
@@ -206,6 +381,31 @@ def get_operational_snapshot(
         }
     if "update" in selected:
         result["update"] = _mapping(current_update_status())
+    if "applications" in selected:
+        result["applications"] = _installed_application_summaries(
+            webspace_id=webspace_id,
+            limit=bounded_limit,
+        )
+        result["application_updates"] = {
+            "available": sum(bool(item.get("has_update")) for item in result["applications"]),
+            "total": len(result["applications"]),
+        }
+    if "resources" in selected:
+        result["resources"] = _resource_snapshot()
+    if "members" in selected:
+        try:
+            members = [dict(item) for item in control_plane.list_device_objects()[:bounded_limit]]
+        except Exception:
+            members = []
+        result["members"] = members
+        result["member_summary"] = {
+            "online": sum(
+                str(item.get("status") or item.get("connection") or "").lower()
+                in {"online", "connected", "heartbeat", "ready"}
+                for item in members
+            ),
+            "total": len(members),
+        }
 
     result["counts"] = {
         key: len(value)

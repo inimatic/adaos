@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,28 @@ from adaos.services.applications.store import ApplicationStore
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
 DIGEST_C = "sha256:" + "c" * 64
+
+
+def test_acceptance_status_delivery_is_deferred_without_rolling_back_local_acceptance() -> None:
+    service = object.__new__(DevelopmentReportService)
+    service._next_event = lambda _report, **_: {"status": "accepted"}
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("directory unavailable")
+
+    service._send_status = unavailable
+
+    result = service._best_effort_acceptance_status(
+        SimpleNamespace(report_id="report.deferred")
+    )
+
+    assert result == {
+        "status_delivery": {
+            "status": "deferred",
+            "retryable": True,
+            "error_type": "RuntimeError",
+        }
+    }
 
 
 def _application() -> Application:

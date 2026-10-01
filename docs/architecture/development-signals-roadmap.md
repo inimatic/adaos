@@ -948,6 +948,15 @@ installation.
   automatic contribution merging, and multi-user publisher work queues.
 - [ ] `[could]` `DS10-11` Add publisher response-time summaries after the
   Applications product establishes a reviewed retention and presentation need.
+- [x] `[should]` `DS10-13` Reuse the Dev Tickets surface as a unified derived
+  publisher inbox: show quarantined external requests beside local tickets,
+  preserve their separate authority, and expose explicit accept, decline, and
+  duplicate decisions. Acceptance creates the publisher-local ticket exactly
+  once and replaces the intake card with that local ticket.
+- [ ] `[deferred]` `DS10-14` Add an optional Kanban projection over the same
+  filtered Dev Tickets read model. It may preserve a publisher-local custom
+  order through drag-and-drop, but it must not create another lifecycle,
+  storage authority, or implicit status transition.
 
 Implementation note, 2026-09-05: accepted external intake now converts through
 the existing `DevelopmentTicketService` with deterministic report relations and
@@ -962,6 +971,15 @@ host mounts, or image pulls; unavailability remains advisory. `DS10-09` uses
 the encrypted report channel for appeals and exposes only a 365-day
 publisher-local factual history with no reputation score. Response-time
 analytics remain `DS10-11` and do not block the Applications preparation gate.
+The 2026-10-01 publisher-inbox checkpoint adds a **Source** filter to the
+existing Dev Tickets surface and derives external intake cards through the
+governed `applications.publisher.read` projection. Decline and duplicate
+require an explicit reason; accept uses the governed idempotent publisher
+mutation and then opens the resulting local ticket. The intake remains in the
+Development Report quarantine store until that decision, and clients without
+publisher authority continue to see their complete local queue. A spatial
+Kanban view is deliberately deferred to `DS10-14`; it will be a projection,
+not a second work queue.
 Application distribution now validates every addressed report against the same
 Application's accepted publisher intake and eligible public state before any
 remote mutation. Successful Trial/prerelease/stable publication emits an

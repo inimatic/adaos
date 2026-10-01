@@ -633,7 +633,11 @@ class DevelopmentReportService:
     def accept(self, report_id: str, *, actor: str, policy_ref: str | None = None) -> dict[str, Any]:
         report, intake = self._publisher_records(report_id)
         if intake.status == "accepted":
-            return {"accepted": True, "duplicate": True, "intake": intake.to_dict(), "ticket_refs": list(intake.internal_ticket_refs)}
+            result = {"accepted": True, "duplicate": True, "intake": intake.to_dict(), "ticket_refs": list(intake.internal_ticket_refs)}
+            current = self.public_status(report_id)
+            if current is None or current.get("status") != "accepted":
+                result.update(self._best_effort_acceptance_status(report))
+            return result
         if intake.status not in {"quarantined", "triaged"}:
             raise DevelopmentReportServiceError("publisher intake cannot be accepted from current state")
         metadata = {
@@ -665,8 +669,35 @@ class DevelopmentReportService:
         refs = (str(ticket_result["ticket"]["ticket_id"]),)
         updated = replace(intake, status="accepted", revision=intake.revision + 1, internal_ticket_refs=refs, updated_at=_iso(self.now()))
         self.store.mutate(lambda state: state["intakes"].__setitem__(report_id, updated.to_dict()))
-        event_result = self._send_status(report, self._next_event(report, status="accepted"))
-        return {"accepted": True, "duplicate": False, "intake": updated.to_dict(), "ticket_refs": list(refs), "public": event_result}
+        public = self._best_effort_acceptance_status(report)
+        return {"accepted": True, "duplicate": False, "intake": updated.to_dict(), "ticket_refs": list(refs), **public}
+
+    def _best_effort_acceptance_status(self, report: DevelopmentReport) -> dict[str, Any]:
+        """Keep publisher acceptance authoritative when reverse delivery is unavailable.
+
+        The local intake and Dev Ticket are committed before the public status is
+        projected. A directory or relay outage must therefore be represented as
+        deferred delivery, not as a failed acceptance that invites a duplicate
+        operator action. Repeating ``accept`` retries the missing public event.
+        """
+
+        try:
+            event_result = self._send_status(
+                report,
+                self._next_event(report, status="accepted"),
+            )
+        except Exception as exc:
+            return {
+                "status_delivery": {
+                    "status": "deferred",
+                    "retryable": True,
+                    "error_type": type(exc).__name__,
+                }
+            }
+        return {
+            "public": event_result,
+            "status_delivery": {"status": "queued", "retryable": False},
+        }
 
     def set_public_status(
         self,
