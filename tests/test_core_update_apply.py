@@ -291,6 +291,7 @@ def test_user_local_uv_prevents_active_environment_clone(monkeypatch, tmp_path: 
     uv.write_text("uv", encoding="utf-8")
     uv.chmod(0o755)
     monkeypatch.setattr(mod.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(mod.sys, "executable", str(tmp_path / "runtime" / "python.exe"))
     monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
     monkeypatch.setattr(mod, "_UV_FALLBACK_PATHS", ())
     monkeypatch.setattr(
