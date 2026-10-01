@@ -280,6 +280,38 @@ def test_uv_executable_discovers_user_local_install(monkeypatch, tmp_path: Path)
     assert mod._uv_executable() == str(executable.resolve())
 
 
+def test_user_local_uv_prevents_active_environment_clone(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "uv.lock").write_text("", encoding="utf-8")
+    uv = tmp_path / ".local" / "bin" / ("uv.exe" if os.name == "nt" else "uv")
+    uv.parent.mkdir(parents=True)
+    uv.write_text("uv", encoding="utf-8")
+    uv.chmod(0o755)
+    monkeypatch.setattr(mod.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(mod, "_UV_FALLBACK_PATHS", ())
+    monkeypatch.setattr(
+        mod,
+        "_copy_seed_venv",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("active environment must not be cloned")
+        ),
+    )
+
+    result = mod._prepare_seed_venv(
+        venv_dir=tmp_path / "slots" / "B" / "venv",
+        slot_dir=tmp_path / "slots" / "B",
+        repo_root_dir=tmp_path / "root",
+        checkout_dir=checkout,
+    )
+
+    assert result["source"] == "locked_uv_fresh_environment"
+    assert result["installer"] == str(uv.resolve())
+
+
 def test_core_update_bulk_io_supports_explicit_best_effort_priority(monkeypatch) -> None:
     import adaos.apps.core_update_apply as mod
 
