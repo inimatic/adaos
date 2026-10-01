@@ -171,7 +171,13 @@ def _write_fixture(root: Path):
             "profile_ref": profile.profile_ref,
             "profile_digest": profile.digest,
         },
-        dependencies=({"ref": "google:gmail-api", "observed_version": "v1"},),
+        dependencies=(
+            {
+                "ref": "google:gmail-api",
+                "observed_version": "v1",
+                "fingerprint": "sha256:" + "9" * 64,
+            },
+        ),
         suite_digest="sha256:" + "1" * 64,
         evidence_digest="sha256:" + "2" * 64,
         provenance={"issuer": "subnet:publisher", "runner": "pytest"},
@@ -306,7 +312,11 @@ def _write_fixture(root: Path):
             "required_claim_kinds": ["capability_conformance"],
             "accepted_results": ["verified"],
             "dependency_observations": [
-                {"ref": "google:gmail-api", "observed_version": "v1"}
+                {
+                    "ref": "google:gmail-api",
+                    "observed_version": "v1",
+                    "fingerprint": "sha256:" + "9" * 64,
+                }
             ],
         },
     }

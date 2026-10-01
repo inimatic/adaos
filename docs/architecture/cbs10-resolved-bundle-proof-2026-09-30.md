@@ -134,12 +134,17 @@ negative digest test are complete. The remaining closure is:
 5. scan the transported real-Application archive again in CI for forbidden
    local or secret material.
 
-Two additional productionization gates follow this proof. `CBS10-15` binds
-default-bundle generation to the governed publication transaction. It must run
-after the semantic registry commit exists, because that commit is part of the
-snapshot identity; generating the archive inside the earlier package-upload
-step would seal an uncommitted or fictitious registry revision. `CBS10-16`
-then makes stable installation consume only the resulting immutable
+`CBS10-15` is now complete. Default-bundle generation runs after the semantic
+registry commit exists, because that commit is part of the snapshot identity;
+the bundle is stored by digest in the existing Root artifact store and its
+immutable descriptor is keyed by exact ProjectRelease. The governed
+`gmail_cbs_cleanroom` `0.1.12` republish produced bundle
+`sha256:0a36276893e38402d799edadac0e68ba9bf0629adc910bb1665dd03a053f31ba`
+at registry revision `255a1655ccb80c3ab1fbce694119b0c37b366220`. Repeated
+descriptor and byte fetches returned an identical 71,869-byte archive whose
+observed SHA-256 matched the descriptor.
+
+`CBS10-16` then makes stable installation consume only the resulting immutable
 ProjectRelease, package, and bundle artifacts. Source checkout and Git remain
 available only to development builds.
 

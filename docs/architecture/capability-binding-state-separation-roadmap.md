@@ -1061,13 +1061,24 @@ its own local account attachment and credential authority.
   trust projection during enrollment or registry sync, repeating online thin
   acquisition from empty caches on `.34`, provisioning its distinct local Gmail
   account attachment, and injecting the production activation failure.
-- [ ] `[must]` `CBS10-15` Make the resolved default distribution a derived
+- [x] `[must]` `CBS10-15` Make the resolved default distribution a derived
   publication output. A governed `adaos project push <name>` must finish CBS
   admission and semantic publication first; after the registry commit fixes the
   snapshot identity, the publisher must generate the sealed bundle, publish its
   digest and immutable download reference through the existing registry/package
   store, and update that reference for every new ProjectRelease. A failed bundle
-  build must leave the preceding stable release and bundle active.
+  build must leave the preceding stable release and bundle active. Implemented
+  in the existing Root artifact store with a separate content-addressed
+  `distributions/sha256` namespace and an immutable descriptor keyed by exact
+  `project_id + ProjectRelease digest`; this is another object class in the one
+  store, not a semantic package manager. Governed Gmail `0.1.12` publication
+  produced bundle
+  `sha256:0a36276893e38402d799edadac0e68ba9bf0629adc910bb1665dd03a053f31ba`
+  from registry revision `255a1655ccb80c3ab1fbce694119b0c37b366220`.
+  Two independent Root reads returned the same 71,869 bytes and descriptor;
+  the observed byte digest matched the published digest. Descriptor and byte
+  writes are immutable and idempotent, while build/upload runs only after the
+  semantic registry commit and never mutates the stable channel.
 - [ ] `[must]` `CBS10-16` Make stable install and update source-free end to end:
   resolve only ProjectRelease/package/bundle identities, verify package and
   publisher attestations, and install exact package bytes. Git checkout,

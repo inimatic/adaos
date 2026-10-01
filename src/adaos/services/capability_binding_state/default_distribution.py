@@ -59,7 +59,11 @@ def build_default_distribution_query(
             ref = str(dependency.get("ref") or "").strip()
             version = str(dependency.get("observed_version") or "").strip()
             if ref and version:
-                observations[ref] = {"ref": ref, "observed_version": version}
+                observation = {"ref": ref, "observed_version": version}
+                fingerprint = str(dependency.get("fingerprint") or "").strip()
+                if fingerprint:
+                    observation["fingerprint"] = fingerprint
+                observations[ref] = observation
     as_of = max(issued_at) if issued_at else datetime.now(timezone.utc).isoformat()
     index = projection.read_index()
     return {
