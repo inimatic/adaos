@@ -75,7 +75,8 @@ def _rasa_service_url(*, start: bool = True) -> str:
     ctx = get_ctx()
     if not is_rasa_nlu_enabled():
         raise RuntimeError("Rasa NLU is disabled (ADAOS_NLU_RASA=0)")
-    if ensure_rasa_service_skill_installed() is None:
+    ensure_rasa_service_skill_installed()
+    if not (Path(ctx.paths.skills_dir()) / "rasa_nlu_service_skill" / "skill.yaml").exists():
         raise RuntimeError("rasa_nlu_service_skill could not be installed")
     base = _rasa_service_base_from_manifest(ctx)
     if not start:

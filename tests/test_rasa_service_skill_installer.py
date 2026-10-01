@@ -260,6 +260,23 @@ def test_interpreter_cli_rasa_service_url_bootstraps_template_without_starting(m
     assert (target / "skill.yaml").exists()
 
 
+def test_interpreter_cli_rasa_service_url_accepts_already_current_template(monkeypatch):
+    import importlib
+    import sys
+    import types
+
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed
+
+    ensure_rasa_service_skill_installed()
+    bootstrap_stub = types.ModuleType("adaos.apps.bootstrap")
+    bootstrap_stub.get_ctx = get_ctx
+    monkeypatch.setitem(sys.modules, "adaos.apps.bootstrap", bootstrap_stub)
+    interpreter_cli = importlib.import_module("adaos.apps.cli.commands.interpreter")
+
+    assert interpreter_cli._rasa_service_url(start=False) == "http://127.0.0.1:18092"
+
+
 def test_interpreter_cli_rasa_service_url_reuses_healthy_service(monkeypatch):
     import importlib
     import sys
