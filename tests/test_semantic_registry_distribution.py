@@ -35,6 +35,10 @@ from adaos.services.capability_binding_state.catalog import (
     PortableContractCatalog,
     portable_record_identity,
 )
+from adaos.services.capability_binding_state.default_distribution import (
+    build_default_distribution_query,
+    default_distribution_descriptor,
+)
 from adaos.services.capability_binding_state.registry_distribution import (
     ThinDistributionError,
     ThinSemanticDistributionResolver,
@@ -382,6 +386,44 @@ def test_thin_distribution_resolves_from_cold_cache_without_local_authority(
     )
     with pytest.raises(KeyError):
         catalog.load_mapping(unrelated.digest)
+
+
+def test_default_distribution_query_and_descriptor_are_derived_from_published_release(
+    tmp_path: Path,
+) -> None:
+    built, plan, query, _requirement, _unrelated = _write_fixture(tmp_path)
+    projection = SemanticRegistryProjection(tmp_path / "registry", tmp_path / "state")
+    generated = build_default_distribution_query(
+        projection=projection,
+        project_id="thin_mail",
+        project_release_digest=str(plan.release.release_digest),
+        registry_revision=REVISION,
+        environment_profile=query["environment_profile"],
+    )
+    assert generated["requirements"] == query["requirements"]
+    assert generated["snapshot"] == query["snapshot"]
+    assert generated["policy_inputs"]["allowed_publisher_refs"] == []
+    assert generated["policy_inputs"]["denied_publisher_refs"] == []
+    assert generated["policy_inputs"]["required_authorities"] == query[
+        "policy_inputs"
+    ]["required_authorities"]
+    assert generated["evidence_inputs"] == query["evidence_inputs"]
+
+    exported = ResolvedSemanticBundleExporter(
+        _resolver(tmp_path, _Remote(plan, built.archive_bytes), _Provenance())
+    ).export(
+        project_id="thin_mail",
+        project_release_digest=str(plan.release.release_digest),
+        query=generated,
+        registry_revision=REVISION,
+    )
+    descriptor = default_distribution_descriptor(
+        exported=exported, registry_revision=REVISION
+    )
+    assert descriptor["bundle_digest"] == exported.bundle_digest
+    assert descriptor["project_release_digest"] == plan.release.release_digest
+    assert descriptor["activation_performed"] is False
+    assert descriptor["local_authority_created"] is False
 
 
 def test_thin_distribution_rejects_provenance_before_cache_mutation(

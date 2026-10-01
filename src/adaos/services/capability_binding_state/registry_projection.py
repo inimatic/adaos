@@ -243,6 +243,11 @@ class SemanticRegistryProjection:
             )
         return _validate_index(value)
 
+    def read_index(self) -> dict[str, Any]:
+        """Return the validated semantic snapshot used by public resolvers."""
+
+        return self._read_index()
+
     def _read_application_catalog(self) -> dict[str, Any]:
         if not self.application_catalog_path.is_file():
             return _empty_application_catalog()
@@ -369,6 +374,39 @@ class SemanticRegistryProjection:
                         + str(record_digest)
                     )
         return result
+
+    def read_portable_record(self, digest: str) -> dict[str, Any]:
+        """Read one digest-addressed portable record from the shared registry."""
+
+        canonical_digest = f"sha256:{_digest_token(digest)}"
+        index = self._read_index()
+        entry = index["records"].get(canonical_digest)
+        if not isinstance(entry, Mapping):
+            raise SemanticRegistryProjectionError(
+                f"semantic registry record is not indexed: {canonical_digest}"
+            )
+        registry_root = Path(self.registry_root).resolve()
+        path = (registry_root / str(entry.get("path") or "")).resolve()
+        if registry_root != path and registry_root not in path.parents:
+            raise SemanticRegistryProjectionError(
+                "semantic registry record path escapes registry root"
+            )
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SemanticRegistryProjectionError(
+                f"cannot read semantic registry record: {canonical_digest}"
+            ) from exc
+        if not isinstance(value, Mapping):
+            raise SemanticRegistryProjectionError(
+                f"semantic registry record is not an object: {canonical_digest}"
+            )
+        record = _canonical_record(value)
+        if record.digest != canonical_digest:
+            raise SemanticRegistryProjectionError(
+                f"semantic registry record digest mismatch: {canonical_digest}"
+            )
+        return record.to_dict()
 
     def _record_path(self, digest: str) -> Path:
         token = _digest_token(digest)

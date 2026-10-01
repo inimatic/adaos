@@ -3348,6 +3348,12 @@ class RootDeveloperService:
                 **application_catalog_publication,
                 "registry_commit": commit,
             }
+        default_distribution = self._publish_default_resolved_distribution(
+            plan=plan,
+            registry_revision=commit,
+            semantic_projection=semantic_projection,
+            package_store=publication.package_store,
+        )
         return {
             "ok": True,
             "status": "published",
@@ -3361,8 +3367,92 @@ class RootDeveloperService:
             "semantic_publication": semantic_publication,
             "application_catalog_publication": application_catalog_publication,
             "registry_projection_commit": commit,
+            "default_distribution": default_distribution,
             "publication": receipt,
         }
+
+    def _publish_default_resolved_distribution(
+        self,
+        *,
+        plan: Any,
+        registry_revision: str,
+        semantic_projection: Any,
+        package_store: Any,
+    ) -> dict[str, Any]:
+        """Seal and publish the default portable closure after registry commit."""
+
+        from adaos.services.applications.cbs_admission import (
+            NativeApplicationCBSAdmissionService,
+        )
+        from adaos.services.applications.runtime import (
+            resolve_application_distribution_service,
+        )
+        from adaos.services.capability_binding_state.default_distribution import (
+            build_default_distribution_query,
+            default_distribution_descriptor,
+        )
+        from adaos.services.capability_binding_state.registry_distribution import (
+            ThinSemanticDistributionResolver,
+        )
+        from adaos.services.capability_binding_state.resolved_bundle import (
+            ResolvedSemanticBundleExporter,
+        )
+
+        project_id = str(plan.release.project_id)
+        release_digest = str(plan.release.release_digest)
+        admission = NativeApplicationCBSAdmissionService(
+            Path(self.ctx.paths.state_dir()).resolve()
+        ).find_by_project_release(
+            release_digest,
+            application_ref=f"application:{project_id}",
+        )
+        if admission is None:
+            admission = NativeApplicationCBSAdmissionService(
+                Path(self.ctx.paths.state_dir()).resolve()
+            ).find_by_project_release(release_digest)
+        if not isinstance(admission, Mapping) or admission.get("status") != "admitted":
+            raise RootServiceError(
+                "default distribution requires an admitted exact ProjectRelease"
+            )
+        environment_profile = admission.get("environment_profile")
+        if not isinstance(environment_profile, Mapping):
+            raise RootServiceError(
+                "default distribution requires the admitted EnvironmentProfile"
+            )
+        query = build_default_distribution_query(
+            projection=semantic_projection,
+            project_id=project_id,
+            project_release_digest=release_digest,
+            registry_revision=registry_revision,
+            environment_profile=environment_profile,
+        )
+        distribution = resolve_application_distribution_service(self.ctx)
+        remote = self.artifact_release_repository(role="hub")
+        exporter = ResolvedSemanticBundleExporter(
+            ThinSemanticDistributionResolver(
+                projection=semantic_projection,
+                package_store=package_store,
+                remote=remote,
+                provenance=distribution.admission,
+            )
+        )
+        exported = exporter.export(
+            project_id=project_id,
+            project_release_digest=release_digest,
+            query=query,
+            registry_revision=registry_revision,
+        )
+        descriptor = default_distribution_descriptor(
+            exported=exported,
+            registry_revision=registry_revision,
+        )
+        remote.put_default_distribution(
+            project_id=project_id,
+            release_digest=release_digest,
+            archive=exported.archive_bytes,
+            descriptor=descriptor,
+        )
+        return descriptor
 
     def check_artifact_subscription(self, project_id: str) -> dict[str, Any]:
         cfg = self._load_config()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,8 @@ class _Client:
         self.channels: dict[tuple[str, str], dict[str, Any]] = {}
         self.attestations: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self.attestation_sets: dict[tuple[str, str], dict[str, Any]] = {}
+        self.distributions: dict[str, bytes] = {}
+        self.default_distributions: dict[tuple[str, str], dict[str, Any]] = {}
 
     def get_artifact_storage_diagnostics(
         self,
@@ -70,6 +73,34 @@ class _Client:
 
     def get_project_release(self, *, project_id: str, release_digest: str, **kwargs: Any) -> dict:
         return {"ok": True, "release_plan": self.releases[(project_id, release_digest)]}
+
+    def put_resolved_distribution_bytes(
+        self, *, digest: str, archive: bytes, **kwargs: Any
+    ) -> dict:
+        self.distributions[digest] = archive
+        return {"ok": True, "digest": digest}
+
+    def get_resolved_distribution_bytes(self, *, digest: str, **kwargs: Any) -> bytes:
+        return self.distributions[digest]
+
+    def put_default_distribution(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        descriptor: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict:
+        self.default_distributions[(project_id, release_digest)] = descriptor
+        return {"ok": True, "descriptor": descriptor}
+
+    def get_default_distribution(
+        self, *, project_id: str, release_digest: str, **kwargs: Any
+    ) -> dict:
+        return {
+            "ok": True,
+            "descriptor": self.default_distributions[(project_id, release_digest)],
+        }
 
     def put_artifact_attestation(self, *, attestation: dict[str, Any], **kwargs: Any) -> dict:
         key = (attestation["subject_kind"], attestation["subject_digest"])
@@ -276,6 +307,40 @@ def test_remote_repository_upload_fetch_release_and_channel(tmp_path: Path) -> N
             {built.ref.digest: built.archive_bytes},
         )
     assert uncertain_client.packages == {}
+
+
+def test_remote_repository_round_trips_default_distribution() -> None:
+    archive = b"sealed resolved distribution"
+    digest = "sha256:" + hashlib.sha256(archive).hexdigest()
+    descriptor = {
+        "schema": "adaos.semantic_registry.default_distribution.v1",
+        "project_id": "mail_reader",
+        "project_release_digest": "sha256:" + "1" * 64,
+        "bundle_digest": digest,
+    }
+    client = _Client()
+    remote = RemoteReleaseRepository(client, verify="ca", cert=("cert", "key"))
+
+    remote.put_default_distribution(
+        project_id="mail_reader",
+        release_digest=descriptor["project_release_digest"],
+        archive=archive,
+        descriptor=descriptor,
+    )
+
+    observed_descriptor, observed_archive = remote.get_default_distribution(
+        "mail_reader", descriptor["project_release_digest"]
+    )
+    assert observed_descriptor == descriptor
+    assert observed_archive == archive
+
+    with pytest.raises(ValueError, match="do not match"):
+        remote.put_default_distribution(
+            project_id="mail_reader",
+            release_digest=descriptor["project_release_digest"],
+            archive=b"changed",
+            descriptor=descriptor,
+        )
 
 
 def test_remote_attestations_are_content_addressed_and_bound_to_exact_release(

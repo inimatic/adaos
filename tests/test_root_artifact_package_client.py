@@ -27,12 +27,19 @@ def test_artifact_package_registry_client_contract() -> None:
     client.put_artifact_package_bytes(digest=digest, archive=b"package")
     client.get_artifact_package(digest=digest)
     client.get_artifact_package_bytes(digest=digest)
+    client.put_resolved_distribution_bytes(digest=digest, archive=b"distribution")
+    client.get_resolved_distribution_bytes(digest=digest)
     client.put_project_release(
         project_id="recipes",
         release_digest=digest,
         release_plan=plan,
     )
     client.get_project_release(project_id="recipes", release_digest=digest)
+    descriptor = {"schema": "adaos.semantic_registry.default_distribution.v1"}
+    client.put_default_distribution(
+        project_id="recipes", release_digest=digest, descriptor=descriptor
+    )
+    client.get_default_distribution(project_id="recipes", release_digest=digest)
     client.set_artifact_channel(
         project_id="recipes",
         channel="stable",
@@ -68,8 +75,18 @@ def test_artifact_package_registry_client_contract() -> None:
         ("PUT", f"/v1/artifacts/packages/sha256%3A{'a' * 64}/content"),
         ("GET", f"/v1/artifacts/packages/sha256%3A{'a' * 64}"),
         ("GET", f"/v1/artifacts/packages/sha256%3A{'a' * 64}/content"),
+        ("PUT", f"/v1/artifacts/distributions/sha256%3A{'a' * 64}/content"),
+        ("GET", f"/v1/artifacts/distributions/sha256%3A{'a' * 64}/content"),
         ("POST", "/v1/artifacts/projects/recipes/releases"),
         ("GET", f"/v1/artifacts/projects/recipes/releases/sha256%3A{'a' * 64}"),
+        (
+            "PUT",
+            f"/v1/artifacts/projects/recipes/releases/sha256%3A{'a' * 64}/default-distribution",
+        ),
+        (
+            "GET",
+            f"/v1/artifacts/projects/recipes/releases/sha256%3A{'a' * 64}/default-distribution",
+        ),
         ("PUT", "/v1/artifacts/projects/recipes/channels/stable"),
         ("GET", "/v1/artifacts/projects/recipes/channels/stable"),
         ("DELETE", "/v1/artifacts/projects/recipes/channels/stable"),
@@ -92,14 +109,15 @@ def test_artifact_package_registry_client_contract() -> None:
     }
     assert client.calls[2][2]["cert"] == ("cert", "key")
     assert client.calls[4][2]["response_bytes"] is True
-    assert client.calls[5][2]["json"] == {
+    assert client.calls[7][2]["json"] == {
         "release_digest": digest,
         "release_plan": plan,
     }
-    assert client.calls[7][2]["json"] == {
+    assert client.calls[9][2]["json"] == {"descriptor": descriptor}
+    assert client.calls[11][2]["json"] == {
         "release_digest": digest,
         "expected_release_digest": None,
     }
-    assert client.calls[9][2]["json"] == {"expected_release_digest": digest}
-    assert client.calls[10][2]["json"] == {"attestation": attestation}
-    assert client.calls[12][2]["json"] == {"attestation_set": attestation_set}
+    assert client.calls[13][2]["json"] == {"expected_release_digest": digest}
+    assert client.calls[14][2]["json"] == {"attestation": attestation}
+    assert client.calls[16][2]["json"] == {"attestation_set": attestation_set}

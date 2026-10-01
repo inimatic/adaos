@@ -1217,6 +1217,51 @@ class RootHttpClient:
             )
         return response
 
+    def put_resolved_distribution_bytes(
+        self,
+        *,
+        digest: str,
+        archive: bytes,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        return dict(
+            self._request(
+                "PUT",
+                f"/v1/artifacts/distributions/{quote(digest, safe='')}/content",
+                data=archive,
+                headers={"Content-Type": "application/vnd.adaos.resolved-distribution+zip"},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
+    def get_resolved_distribution_bytes(
+        self,
+        *,
+        digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> bytes:
+        response = self._request(
+            "GET",
+            f"/v1/artifacts/distributions/{quote(digest, safe='')}/content",
+            headers={"Accept": "application/vnd.adaos.resolved-distribution+zip"},
+            verify=(self.verify if verify is None else verify),
+            cert=(self.cert if cert is None else cert),
+            timeout=120.0,
+            response_bytes=True,
+        )
+        if not isinstance(response, bytes):
+            raise RootHttpError(
+                "resolved distribution endpoint returned a non-binary response",
+                status_code=502,
+                error_code="invalid_resolved_distribution_response",
+                payload=response,
+            )
+        return response
+
     def put_artifact_attestation(
         self,
         *,
@@ -1293,6 +1338,48 @@ class RootHttpClient:
             self._request(
                 "GET",
                 f"/v1/artifacts/projects/{project}/releases/{digest}",
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
+    def put_default_distribution(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        descriptor: Mapping[str, Any],
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        project = quote(project_id, safe="")
+        digest = quote(release_digest, safe="")
+        return dict(
+            self._request(
+                "PUT",
+                f"/v1/artifacts/projects/{project}/releases/{digest}/default-distribution",
+                json={"descriptor": dict(descriptor)},
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=120.0,
+            )
+        )
+
+    def get_default_distribution(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        project = quote(project_id, safe="")
+        digest = quote(release_digest, safe="")
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/artifacts/projects/{project}/releases/{digest}/default-distribution",
                 verify=(self.verify if verify is None else verify),
                 cert=(self.cert if cert is None else cert),
                 timeout=120.0,

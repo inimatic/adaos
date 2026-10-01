@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
@@ -29,6 +30,14 @@ class ArtifactRegistryClient(Protocol):
     def put_project_release(self, **kwargs: Any) -> dict: ...
 
     def get_project_release(self, **kwargs: Any) -> dict: ...
+
+    def put_resolved_distribution_bytes(self, **kwargs: Any) -> dict: ...
+
+    def get_resolved_distribution_bytes(self, **kwargs: Any) -> bytes: ...
+
+    def put_default_distribution(self, **kwargs: Any) -> dict: ...
+
+    def get_default_distribution(self, **kwargs: Any) -> dict: ...
 
     def put_release_attestation_set(self, **kwargs: Any) -> dict: ...
 
@@ -157,6 +166,58 @@ class RemoteReleaseRepository:
         if actual != release_digest:
             raise ValueError("artifact registry release digest mismatch")
         return plan
+
+    def put_default_distribution(
+        self,
+        *,
+        project_id: str,
+        release_digest: str,
+        archive: bytes,
+        descriptor: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if descriptor.get("project_id") != project_id:
+            raise ValueError("default distribution project identity mismatch")
+        if descriptor.get("project_release_digest") != release_digest:
+            raise ValueError("default distribution release identity mismatch")
+        observed = "sha256:" + hashlib.sha256(archive).hexdigest()
+        if observed != descriptor.get("bundle_digest"):
+            raise ValueError("resolved distribution bytes do not match descriptor")
+        self.client.put_resolved_distribution_bytes(
+            digest=observed,
+            archive=archive,
+            **self._transport(),
+        )
+        response = self.client.put_default_distribution(
+            project_id=project_id,
+            release_digest=release_digest,
+            descriptor=dict(descriptor),
+            **self._transport(),
+        )
+        return dict(response)
+
+    def get_default_distribution(
+        self, project_id: str, release_digest: str
+    ) -> tuple[dict[str, Any], bytes]:
+        response = self.client.get_default_distribution(
+            project_id=project_id,
+            release_digest=release_digest,
+            **self._transport(),
+        )
+        descriptor = response.get("descriptor")
+        if not isinstance(descriptor, Mapping):
+            raise ValueError("artifact registry returned no default distribution descriptor")
+        if descriptor.get("project_id") != project_id:
+            raise ValueError("artifact registry returned a changed project identity")
+        if descriptor.get("project_release_digest") != release_digest:
+            raise ValueError("artifact registry returned a changed release identity")
+        archive = self.client.get_resolved_distribution_bytes(
+            digest=str(descriptor.get("bundle_digest") or ""),
+            **self._transport(),
+        )
+        observed = "sha256:" + hashlib.sha256(archive).hexdigest()
+        if observed != descriptor.get("bundle_digest"):
+            raise ValueError("artifact registry returned a changed resolved distribution")
+        return dict(descriptor), archive
 
     def put_release_attestation_set(
         self,

@@ -448,6 +448,16 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         )
 
     monkeypatch.setattr(service, "_semantic_registry_projection", semantic_projection)
+    monkeypatch.setattr(
+        service,
+        "_publish_default_resolved_distribution",
+        lambda **kwargs: {
+            "schema": "adaos.semantic_registry.default_distribution.v1",
+            "project_id": kwargs["plan"].release.project_id,
+            "project_release_digest": kwargs["plan"].release.release_digest,
+            "registry_revision": kwargs["registry_revision"],
+        },
+    )
 
     result = service.publish_project_candidate_source(
         "candidate-media",
@@ -478,6 +488,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     assert git_calls[7] == ("push", {"remote": "registry", "branch": "main"})
     assert receipt_calls[0]["commit"] == "b" * 40
     assert receipt_calls[0]["paths"] == commit["subpath"]
+    assert result["default_distribution"]["registry_revision"] == "b" * 40
 
 
 def test_root_init_reports_zone_aware_handshake_timeout(
