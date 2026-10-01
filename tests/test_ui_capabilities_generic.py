@@ -22,6 +22,15 @@ from adaos.services.ui_capabilities import (
 APPLICATION_PACKS = ("applications.compatibility.v1",)
 
 
+def test_catalog_exposes_deprecated_interfaces_as_migration_only() -> None:
+    catalog = ui_capability_catalog()
+    deprecated = catalog["authoring_lifecycle"]["deprecated_interfaces"]
+
+    assert deprecated[0]["interface"] == "action.type:openModal"
+    assert deprecated[0]["authoring"] == "migration_only"
+    assert deprecated[0]["replacement"] == "action.type:navigate"
+
+
 def test_readonly_comparison_does_not_require_excluded_persistence():
     qualification = qualify_ui_request('Show read-only comparison cards. No editing, live calculations or external services are needed.')
     assert 'update' not in qualification['requirements']['brief_operation_kinds']

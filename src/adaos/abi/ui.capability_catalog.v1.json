@@ -1,7 +1,21 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.3.14",
+  "catalog_version": "3.4.0",
   "webui_schema": "adaos.webui.v1",
+  "authoring_lifecycle": {
+    "deprecated_interfaces": [
+      {
+        "interface": "action.type:openModal",
+        "status": "deprecated",
+        "authoring": "migration_only",
+        "replacement": "action.type:navigate",
+        "migration": "Declare a public view under ui.application.interfaces.<owner>.views, bind the modal implementation through implements and schema.interface.routes, then navigate with params.to and params.modalId.",
+        "detector": {"field": "type", "equals": "openModal"},
+        "migrator": "open_modal_to_public_view",
+        "compatibility": "The runtime may read legacy openModal actions, but Builder and generators must not emit them."
+      }
+    ]
+  },
   "layouts": [
     {
       "id": "layout.document",

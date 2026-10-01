@@ -1282,7 +1282,9 @@ id; direct `folder == id` lookup is not a valid runtime assumption.
   runtime contract is stable
 - [x] `[could]` add a browser diagnostics panel consuming the contract
   diagnostics endpoint
-- [ ] `[deferred]` remove legacy `openModal` compatibility once migrated
+- [ ] `[deferred]` remove legacy `openModal` compatibility after the governed
+  removal gate in [Interface deprecation and Builder authoring](interface-deprecation.md)
+  is satisfied. Builder authoring already treats it as migration-only.
   third-party packages and unfinished drafts have enough coverage; active
   published repository skills/scenarios now use `navigate` or `navigateModal`,
   while the runtime keeps one diagnostic compatibility path for older callers

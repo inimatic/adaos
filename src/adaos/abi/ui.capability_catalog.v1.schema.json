@@ -4,11 +4,44 @@
   "title": "AdaOS declarative UI capability catalog",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "catalog_version", "webui_schema", "layouts", "components", "recipes"],
+  "required": ["schema", "catalog_version", "webui_schema", "authoring_lifecycle", "layouts", "components", "recipes"],
   "properties": {
     "schema": { "const": "adaos.ui.capability_catalog.v1" },
     "catalog_version": { "type": "string", "minLength": 1 },
     "webui_schema": { "const": "adaos.webui.v1" },
+    "authoring_lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deprecated_interfaces"],
+      "properties": {
+        "deprecated_interfaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["interface", "status", "authoring", "replacement", "migration", "detector", "migrator"],
+            "properties": {
+              "interface": { "type": "string", "minLength": 1 },
+              "status": { "const": "deprecated" },
+              "authoring": { "enum": ["migration_only", "forbidden"] },
+              "replacement": { "type": "string", "minLength": 1 },
+              "migration": { "type": "string", "minLength": 1 },
+              "detector": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["field", "equals"],
+                "properties": {
+                  "field": { "type": "string", "minLength": 1 },
+                  "equals": { "type": ["string", "number", "boolean"] }
+                }
+              },
+              "migrator": { "type": "string", "minLength": 1 },
+              "compatibility": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
     "layouts": {
       "type": "array",
       "items": { "$ref": "#/$defs/capability" }

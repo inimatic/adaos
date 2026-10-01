@@ -3,7 +3,49 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from adaos.apps.open_modal_migrate import migrate_paths
+from adaos.apps.open_modal_migrate import migrate_paths, migrate_webui_payload
+
+
+def test_migrates_in_memory_builder_payload_without_persisting_legacy_action() -> None:
+    migrated, report = migrate_webui_payload(
+        {
+            "schema": "adaos.webui.v1",
+            "ui": {
+                "application": {
+                    "desktop": {
+                        "pageSchema": {
+                            "id": "demo",
+                            "layout": {"version": 2, "regions": []},
+                            "widgets": [
+                                {
+                                    "id": "open",
+                                    "type": "ui.actions",
+                                    "actions": [
+                                        {
+                                            "type": "openModal",
+                                            "params": {"modalId": "details"},
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    },
+                    "modals": {"details": {"title": "Details", "schema": {}}},
+                }
+            },
+        },
+        owner="demo",
+    )
+
+    action = migrated["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["actions"][0]
+    assert action["type"] == "navigate"
+    assert action["params"]["to"] == "demo.details"
+    assert report == {
+        "changed": True,
+        "actions": 1,
+        "remaining_open_modal_total": 0,
+        "remaining_open_modal_ids": [],
+    }
 
 
 def _write(path: Path, payload: dict) -> None:

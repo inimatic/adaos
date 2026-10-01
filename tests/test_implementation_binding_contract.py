@@ -47,6 +47,16 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert "rolls" in guide["binding_rules"]["board_move"]
     assert "on=click:<command>" in guide["binding_rules"]["selection"]
     assert "deprecated openModal" in guide["binding_rules"]["modal_navigation"]
+    deprecated = guide["authoring_lifecycle"]["deprecated_interfaces"]
+    assert deprecated == [
+        {
+            "interface": "openModal",
+            "status": "deprecated",
+            "authoring": "migration_only",
+            "replacement": "navigate",
+            "migration_binding": "modal_navigation",
+        }
+    ]
     assert guide["examples"]["modal_navigation"]["action"]["type"] == "navigate"
     assert guide["examples"]["modal_navigation"]["modal_contract"]["implements"] == [
         "sample.record.create"

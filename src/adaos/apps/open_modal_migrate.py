@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 from dataclasses import dataclass
@@ -269,6 +270,59 @@ def migrate_paths(paths: Iterable[Path], *, write: bool = False) -> dict[str, An
         "remaining_open_modal_ids": sorted(remaining_open_modal_ids),
         "ambiguous_modal_ids": sorted(ambiguous),
         "changed_paths": [str(path) for path in changed_paths],
+    }
+
+
+def migrate_webui_payload(
+    payload: Mapping[str, Any], *, owner: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Migrate one in-memory scenario WebUI document without filesystem authority.
+
+    Builder uses this only for compatibility input. Generated output is still
+    validated fail-closed and may not contain ``openModal``.
+    """
+
+    root = copy.deepcopy(dict(payload))
+    referenced = _referenced_modal_ids(root)
+    if not referenced:
+        return root, {
+            "changed": False,
+            "actions": 0,
+            "remaining_open_modal_total": 0,
+            "remaining_open_modal_ids": [],
+        }
+    ui = root.setdefault("ui", {})
+    application = ui.setdefault("application", {}) if isinstance(ui, dict) else {}
+    modals = application.setdefault("modals", {}) if isinstance(application, dict) else {}
+    interfaces = (
+        application.setdefault("interfaces", {}) if isinstance(application, dict) else {}
+    )
+    safe_owner = _safe_token(owner, fallback="ui")
+    interface = interfaces.setdefault(safe_owner, {}) if isinstance(interfaces, dict) else {}
+    if not isinstance(modals, dict) or not isinstance(interface, dict):
+        raise ValueError("unsupported WebUI modal/interface structure")
+    document = MigrationDocument(
+        path=Path(f"{safe_owner}.webui.json"),
+        root=root,
+        owner=safe_owner,
+        modals=modals,
+        interface=interface,
+    )
+    modal_views = {
+        modal_id: document.ensure_modal_view(modal_id)
+        for modal_id in sorted(referenced.intersection(modals))
+    }
+    actions = document.migrate_actions(modal_views, local_modal_views=modal_views)
+    remaining = [
+        _token((item.get("params") or {}).get("modalId")) or "<missing>"
+        for item in _walk(root)
+        if _token(item.get("type")) == "openModal"
+    ]
+    return root, {
+        "changed": document.changed,
+        "actions": actions,
+        "remaining_open_modal_total": len(remaining),
+        "remaining_open_modal_ids": sorted(remaining),
     }
 
 

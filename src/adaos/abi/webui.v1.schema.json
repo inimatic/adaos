@@ -3169,6 +3169,8 @@
 
     "openModalActionParams": {
       "type": "object",
+      "deprecated": true,
+      "description": "Compatibility-only parameters for legacy openModal. Generators must migrate to navigate/navigateModal and must not create new openModal actions.",
       "additionalProperties": true,
       "properties": {
         "modalId": { "$ref": "#/$defs/id" },
