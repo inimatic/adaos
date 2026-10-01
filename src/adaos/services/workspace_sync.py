@@ -82,6 +82,9 @@ def _apply_automatic_application_updates(
         }
     from adaos.services.applications import get_application_service
     from adaos.services.applications.auto_update import ApplicationAutoUpdateService
+    from adaos.services.project_deployment.default_runtime import (
+        configure_default_distributed_runtimes,
+    )
 
     state_dir_resolver = getattr(ctx.paths, "state_dir", None)
     state_dir = (
@@ -104,6 +107,13 @@ def _apply_automatic_application_updates(
             "status": "skipped",
             "reason": "subnet_identity_unavailable",
         }
+    # A CLI registry synchronization runs in a fresh process.  Unlike the API
+    # runtime, that process has not composed the Project deployment executor,
+    # so discovery can find an update but ApplicationService cannot apply it.
+    # Compose the same package/release deployment rail before constructing the
+    # service; this remains package-based and does not turn registry Git
+    # synchronization into an Application source-install path.
+    configure_default_distributed_runtimes(ctx, authoritative=True)
     subnet_ref = subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
     return ApplicationAutoUpdateService(
         state_dir,

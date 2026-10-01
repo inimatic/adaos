@@ -1378,6 +1378,63 @@ def test_workspace_sync_releases_materialization_lock_before_auto_update(
     assert result["post_application_reconcile"] == {"ok": True}
 
 
+def test_application_auto_update_composes_cli_deployment_executor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[tuple[object, bool]] = []
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "adaos.services.project_deployment.default_runtime.configure_default_distributed_runtimes",
+        lambda ctx, *, authoritative: calls.append((ctx, authoritative)),
+    )
+    monkeypatch.setattr(
+        "adaos.services.applications.get_application_service",
+        lambda state_dir: observed.setdefault("service", object()),
+    )
+
+    class _AutoUpdate:
+        def __init__(self, state_dir, application_service):
+            observed["state_dir"] = state_dir
+            observed["application_service"] = application_service
+
+        def run(self, **kwargs):
+            observed["run"] = kwargs
+            return {"status": "completed", "applied_count": 1}
+
+    monkeypatch.setattr(
+        "adaos.services.applications.auto_update.ApplicationAutoUpdateService",
+        _AutoUpdate,
+    )
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(state_dir=lambda: tmp_path / "state"),
+        settings=SimpleNamespace(base_dir=tmp_path),
+        config=SimpleNamespace(subnet_id="sn_test"),
+    )
+    semantic_registry = {
+        "application_catalog": {
+            "status": "imported",
+            "index_digest": "sha256:catalog",
+        }
+    }
+
+    result = workspace_sync_module._apply_automatic_application_updates(
+        ctx,
+        semantic_registry,
+    )
+
+    assert result == {"status": "completed", "applied_count": 1}
+    assert calls == [(ctx, True)]
+    assert observed["state_dir"] == (tmp_path / "state")
+    assert observed["application_service"] is observed["service"]
+    assert observed["run"] == {
+        "subnet_ref": "subnet:sn_test",
+        "trigger": "registry_sync",
+        "registry_index_digest": "sha256:catalog",
+    }
+
+
 def test_selected_runtime_skill_names_requires_valid_selection(tmp_path: Path):
     skills_root = tmp_path / "workspace" / "skills"
     runtime_root = skills_root / ".runtime"

@@ -1116,8 +1116,17 @@ its own local account attachment and credential authority.
   Subscription, NLU Teacher and Weather in `50.00s`, and an immediate rerun
   with Git capability disabled resolved every default Application locally and
   completed in `3.75s` without source synchronization or standalone component
-  mutation. Git remains only a compatibility transport for registry refresh;
-  exact stable installation itself is source-free.
+  mutation. A subsequent Management publication exposed a CLI/runtime wiring
+  gap: registry sync discovered the exact update but the fresh CLI process had
+  no `ApplicationDeploymentExecutor`. The CLI now composes the same governed
+  deployment runtime before auto-update; `.34` then advanced atomically from
+  `web_desktop@0.3.58` to `0.3.60` with `applied_count=1`, after which Git was
+  disabled again. Management `0.3.61` was republished through the native CBS
+  lifecycle so Rasa/log/update controls are Project-owned rather than a direct
+  registry edit; its sealed bundle is
+  `sha256:3e97816aa03c04d8ee3ccee90180193c2341ad084dc6304568e14166e8b3a6cf`.
+  Git remains only a compatibility transport for registry refresh; exact
+  stable installation and update activation are package-based and source-free.
 - [ ] `[should]` `CBS10-12` Add selective synchronization, reverse indexes,
   pagination, and bounded registry/local caches after correctness and
   cold-start costs are measured.
