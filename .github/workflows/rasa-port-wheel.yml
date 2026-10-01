@@ -39,7 +39,7 @@ jobs:
         run: |
           python -m pip install build pytest
           python -m build --wheel --outdir dist rasa-port
-          python -m pytest -q rasa-port/tests_contract
+          (cd rasa-port && python -m pytest -q tests_contract)
           test "$(find dist -maxdepth 1 -name 'adaos_rasa_nlu-*-py3-none-any.whl' | wc -l)" = 1
           sha256sum dist/*.whl | tee dist/SHA256SUMS
 
