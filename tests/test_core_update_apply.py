@@ -249,7 +249,7 @@ def test_copy_seed_venv_auto_uses_single_reflink_fallback_copy(monkeypatch, tmp_
     assert calls == [["/bin/cp", "-a", "--reflink=auto", f"{source}/.", str(target)]]
 
 
-def test_core_update_bulk_io_uses_idle_linux_priority_by_default(monkeypatch) -> None:
+def test_core_update_bulk_io_uses_best_effort_linux_priority_by_default(monkeypatch) -> None:
     import adaos.apps.core_update_apply as mod
 
     monkeypatch.setattr(mod.sys, "platform", "linux")
@@ -257,14 +257,27 @@ def test_core_update_bulk_io_uses_idle_linux_priority_by_default(monkeypatch) ->
 
     assert mod._low_priority_io_command(["cp", "-a", "source", "target"]) == [
         "/usr/bin/ionice",
-        "-c",
-        "3",
-        "--",
+        "-c", "2", "-n", "7", "--",
         "cp",
         "-a",
         "source",
         "target",
     ]
+
+
+def test_uv_executable_discovers_user_local_install(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    executable = tmp_path / ".local" / "bin" / ("uv.exe" if os.name == "nt" else "uv")
+    executable.parent.mkdir(parents=True)
+    executable.write_text("uv", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(mod.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(mod.sys, "executable", str(tmp_path / "python-runtime" / "python.exe"))
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(mod, "_UV_FALLBACK_PATHS", ())
+
+    assert mod._uv_executable() == str(executable.resolve())
 
 
 def test_core_update_bulk_io_supports_explicit_best_effort_priority(monkeypatch) -> None:

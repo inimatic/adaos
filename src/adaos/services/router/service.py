@@ -4720,7 +4720,17 @@ class RouterService:
                     extra_policy={"result_ok": False, "result_status": "non_ok"},
                 )
                 try:
-                    await _append_dialog_tool_unavailable(webspace_id, channel_id, action_meta, target_node_id)
+                    # The runtime was found and executed.  A non-ok provider,
+                    # network, policy, or model result must not be presented as
+                    # a missing skill; that sends both users and operators down
+                    # the wrong recovery path.
+                    await _append_dialog_tool_failed(
+                        webspace_id,
+                        channel_id,
+                        action_meta,
+                        target_node_id,
+                        error_class=str(result.get("error") or result.get("status") or "tool_non_ok"),
+                    )
                 except Exception:
                     logging.getLogger("adaos.router.voice_chat").debug(
                         "dialog non-ok fallback failed webspace=%s channel=%s skill=%s tool=%s",

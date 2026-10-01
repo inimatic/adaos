@@ -139,7 +139,12 @@ def _parse_args() -> argparse.Namespace:
 
 def _low_priority_io_command(cmd: Sequence[str]) -> list[str]:
     command = [str(item) for item in cmd]
-    mode = str(os.getenv("ADAOS_CORE_UPDATE_IO_PRIORITY", "idle") or "idle").strip().lower()
+    # Idle-class I/O can starve indefinitely on an otherwise healthy node.
+    # Core slot preparation is already isolated from the active runtime, so a
+    # low best-effort priority is the safer production default: it protects
+    # foreground traffic without turning a sub-minute install into a
+    # multi-minute environment copy.
+    mode = str(os.getenv("ADAOS_CORE_UPDATE_IO_PRIORITY", "best-effort") or "best-effort").strip().lower()
     if not sys.platform.startswith("linux") or mode in {"", "0", "off", "none", "disabled"}:
         return command
     ionice = shutil.which("ionice")
@@ -804,7 +809,10 @@ def _uv_executable() -> str | None:
         return str(discovered)
 
     executable_name = "uv.exe" if os.name == "nt" else "uv"
-    candidates = [Path(sys.executable).resolve().parent / executable_name]
+    candidates = [
+        Path(sys.executable).resolve().parent / executable_name,
+        Path.home() / ".local" / "bin" / executable_name,
+    ]
     if configured:
         candidates.append(Path(configured).expanduser())
     candidates.extend(_UV_FALLBACK_PATHS)
