@@ -239,7 +239,7 @@ artifact/dependency MVP and the Neural NLU / face vision pilots.
 - [ ] Describe Rasa as an `intent-detection` service-skill provider in the
   model registry.
 - [x] Add a core-compatible Python 3.11 dependency profile for `rasa-port` /
-  Rasa NLU (`0.2.1`, lightweight CountVectors/CRF/LogisticRegression pipeline;
+  Rasa NLU (`0.2.2`, lightweight CountVectors/CRF/LogisticRegression pipeline;
   TensorFlow/JAX excluded)
   service dependencies, keeping upstream Rasa out of the hub root venv.
 - [ ] Track the trained Rasa model as a local model artifact with
@@ -251,6 +251,12 @@ artifact/dependency MVP and the Neural NLU / face vision pilots.
   healthy, model trained, model stale, train failed, parse timeout.
 - [ ] Surface Rasa provider status in model/NLU CLI output together with Neural
   NLU status.
+- [x] Expose bounded operator observability and controls in Management > System:
+  installed/enabled/healthy Rasa state, install/enable/disable actions, runtime
+  log level, core autoupdate, and the default Application autoupdate policy.
+  DIET/TensorFlow remains an explicit later profile; the supported lightweight
+  profile continues to classify intents with logistic regression rather than
+  removing learned intent classification.
 - [ ] Keep Rasa `/parse` and `/train` implementation inside the service skill;
   core only manages provider metadata, dependency profile, artifacts, and
   diagnostics.

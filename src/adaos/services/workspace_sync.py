@@ -794,6 +794,7 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
 
     if av is not None and not av.enabled:
         errors: list[str] = []
+        warnings: list[str] = []
         for name in skills:
             try:
                 ctx.skills_repo.install(name)
@@ -803,7 +804,20 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             try:
                 ctx.scenarios_repo.install(name)
             except Exception as exc:
-                errors.append(f"scenarios/{name}: {exc}")
+                message = f"scenarios/{name}: {exc}"
+                # A stale non-bootstrap Webspace pointer must not prevent the
+                # immutable Application catalog from synchronizing on an
+                # archive-only node. The affected Webspace remains degraded
+                # and observable, while required bootstrap/lock materialization
+                # still fails closed below.
+                if (
+                    name in runtime_scenario_refs
+                    and name not in _BOOTSTRAP_SCENARIOS
+                    and name not in locked_scenarios
+                ):
+                    warnings.append(message)
+                else:
+                    errors.append(message)
         project_materialization = restore_project_owned_materializations(ctx)
         if project_materialization.get("ok") is not True:
             errors.append("project materialization restore failed")
@@ -841,6 +855,7 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             "project_materialization": project_materialization,
             "workspace_lock_materialization": workspace_lock_materialization,
             "errors": errors,
+            "warnings": warnings,
             "reconcile": reconcile_result,
             "semantic_registry": semantic_registry,
             "patterns": desired,

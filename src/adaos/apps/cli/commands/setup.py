@@ -294,6 +294,39 @@ def _install_default_application_lifecycle(
     return results
 
 
+def _default_application_release_gaps(
+    *, application_ids: list[str], webspace_id: str
+) -> list[str]:
+    """Return Applications that cannot yet be installed from immutable releases.
+
+    Production setup uses this as a compatibility boundary: a populated local
+    catalog must not fall back to Project source materialization merely because
+    ``adaos install`` is being repeated.  A registry synchronization is only
+    needed when the exact release is not already discoverable locally.
+    """
+
+    from adaos.sdk import applications as applications_sdk
+
+    gaps: list[str] = []
+    for application_id in application_ids:
+        try:
+            model = applications_sdk.get_application(
+                application_id,
+                webspace_id=webspace_id,
+            )
+        except FileNotFoundError:
+            gaps.append(application_id)
+            continue
+        if bool(model.get("installed")):
+            continue
+        release_digest = str(
+            (model.get("effective_release") or {}).get("release_digest") or ""
+        ).strip()
+        if not release_digest:
+            gaps.append(application_id)
+    return gaps
+
+
 def _notify_live_skill_runtime_activated(skill_name: str, *, webspace_id: str) -> dict:
     """Reload an activated slot in the owning runtime process when it exists."""
 
@@ -437,58 +470,90 @@ def install(
     installed["personalization"] = _initialize_install_language(ctx, language)
 
     project_ids = _project_ids_for_preset(ctx, chosen)
-    required_project_failures: list[str] = []
-    for project_id in project_ids:
-        try:
-            result = install_workspace_project(
-                project_id,
-                ctx=ctx,
-                scenario_mgr=scenario_mgr,
-                skill_mgr=skill_mgr,
-                webspace_id=target_webspace,
-                setup_skills=setup_skills,
-            )
-            installed["projects"].append(
-                {
-                    "id": result["id"],
-                    "version": result.get("version"),
-                    "components": result.get("components") or [],
-                }
-            )
-            installed["scenarios"].extend(result.get("scenarios") or [])
-            installed["skills"].extend(result.get("skills") or [])
-            installed["warnings"].extend(
-                f"project {project_id}: {warning}" for warning in result.get("warnings") or []
-            )
-            if result.get("warnings"):
-                required_project_failures.append(
-                    f"{project_id}: " + "; ".join(str(item) for item in result["warnings"])
+    if _env_type() == "dev":
+        required_project_failures: list[str] = []
+        for project_id in project_ids:
+            try:
+                result = install_workspace_project(
+                    project_id,
+                    ctx=ctx,
+                    scenario_mgr=scenario_mgr,
+                    skill_mgr=skill_mgr,
+                    webspace_id=target_webspace,
+                    setup_skills=setup_skills,
                 )
-        except Exception as exc:
-            installed["warnings"].append(f"project {project_id}: {exc}")
-            required_project_failures.append(f"{project_id}: {exc}")
+                installed["projects"].append(
+                    {
+                        "id": result["id"],
+                        "version": result.get("version"),
+                        "components": result.get("components") or [],
+                    }
+                )
+                installed["scenarios"].extend(result.get("scenarios") or [])
+                installed["skills"].extend(result.get("skills") or [])
+                installed["warnings"].extend(
+                    f"project {project_id}: {warning}" for warning in result.get("warnings") or []
+                )
+                if result.get("warnings"):
+                    required_project_failures.append(
+                        f"{project_id}: " + "; ".join(str(item) for item in result["warnings"])
+                    )
+            except Exception as exc:
+                installed["warnings"].append(f"project {project_id}: {exc}")
+                required_project_failures.append(f"{project_id}: {exc}")
 
-    if required_project_failures:
-        raise RuntimeError(
-            "required default Application installation failed: "
-            + " | ".join(required_project_failures)
-        )
+        if required_project_failures:
+            raise RuntimeError(
+                "required default Application installation failed: "
+                + " | ".join(required_project_failures)
+            )
 
     # Source materialization above is only the compatibility bootstrap.  The
     # semantic index supplies exact immutable releases; installing those via
     # the normal lifecycle creates ApplicationInstallation, RuntimeSelection,
     # CBS authority records, access grants, and the durable Home projection.
     try:
-        sync_result = _sync_workspace_sparse_to_registry(ctx)
-        installed["registry_sync"] = sync_result
-        if not bool(sync_result.get("ok")):
-            raise RuntimeError(
-                str(sync_result.get("error") or "registry sync failed")
-            )
         _configure_application_lifecycle_runtime(ctx)
+        application_ids = _application_ids_for_preset(chosen)
+        release_gaps = _default_application_release_gaps(
+            application_ids=application_ids,
+            webspace_id=target_webspace,
+        )
+        if release_gaps:
+            sync_result = _sync_workspace_sparse_to_registry(ctx)
+            installed["registry_sync"] = sync_result
+            if not bool(sync_result.get("ok")):
+                raise RuntimeError(
+                    str(
+                        sync_result.get("error")
+                        or (
+                            "registry sync failed: "
+                            + json.dumps(
+                                sync_result.get("errors") or sync_result,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            )
+                        )
+                    )
+                )
+            release_gaps = _default_application_release_gaps(
+                application_ids=application_ids,
+                webspace_id=target_webspace,
+            )
+            if release_gaps:
+                raise RuntimeError(
+                    "no exact stable release is available for: "
+                    + ", ".join(release_gaps)
+                )
+        else:
+            installed["registry_sync"] = {
+                "ok": True,
+                "skipped": True,
+                "reason": "exact_releases_already_discoverable",
+            }
         installed["applications"] = _install_default_application_lifecycle(
             ctx,
-            application_ids=_application_ids_for_preset(chosen),
+            application_ids=application_ids,
             webspace_id=target_webspace,
         )
     except Exception as exc:

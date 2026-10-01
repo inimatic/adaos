@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
-Last reviewed: 2026-09-28.
+Last reviewed: 2026-10-01.
 
 Implementation checkpoint: every non-deferred item through `CBS5` and every
 `must`/`should` item in `CBS6` through `CBS9` has validated-local evidence as
@@ -1079,12 +1079,24 @@ its own local account attachment and credential authority.
   the observed byte digest matched the published digest. Descriptor and byte
   writes are immutable and idempotent, while build/upload runs only after the
   semantic registry commit and never mutates the stable channel.
-- [ ] `[must]` `CBS10-16` Make stable install and update source-free end to end:
+- [~] `[must]` `CBS10-16` Make stable install and update source-free end to end:
   resolve only ProjectRelease/package/bundle identities, verify package and
   publisher attestations, and install exact package bytes. Git checkout,
   submodule initialization, and source build remain development-only paths.
   Prove this on a clean node with Git absent, then prove publication of a new
   Application version changes the default bundle and autoupdate consumes it.
+  The `.34` production node now boots and updates the core from archive slots,
+  and its Git capability was explicitly disabled for the Application install
+  proof. Production `adaos install` no longer performs the legacy standalone
+  Project/component materialization pass and skips registry synchronization
+  when all exact releases are already discoverable. The archive-only rerun
+  also proved that a stale non-bootstrap Webspace scenario must degrade that
+  Webspace without blocking immutable catalog synchronization. The remaining
+  fail-closed gap is concrete: newly published `weather` and `nlu_teacher`
+  ProjectReleases do not yet have stable Application/CBS projections, so the
+  default preset rejects them rather than falling back to source. Close this
+  item only after both traverse Trial/beta/stable semantic publication and the
+  archive-only preset installs them from their exact package closures.
 - [ ] `[should]` `CBS10-12` Add selective synchronization, reverse indexes,
   pagination, and bounded registry/local caches after correctness and
   cold-start costs are measured.

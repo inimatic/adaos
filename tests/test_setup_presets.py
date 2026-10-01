@@ -201,6 +201,32 @@ def test_default_application_lifecycle_uses_reviewed_plan_and_apply(
     )
 
 
+def test_default_application_release_gaps_ignore_installed_and_accept_exact_release(
+    monkeypatch,
+) -> None:
+    class Applications:
+        @staticmethod
+        def get_application(application_id, *, webspace_id):
+            assert webspace_id == "desktop"
+            if application_id == "installed":
+                return {"installed": True, "effective_release": None}
+            if application_id == "published":
+                return {
+                    "installed": False,
+                    "effective_release": {"release_digest": "sha256:" + "a" * 64},
+                }
+            return {"installed": False, "effective_release": None}
+
+    import adaos.sdk
+
+    monkeypatch.setattr(adaos.sdk, "applications", Applications)
+
+    assert setup_cmd._default_application_release_gaps(
+        application_ids=["installed", "published", "missing"],
+        webspace_id="desktop",
+    ) == ["missing"]
+
+
 def test_workspace_only_update_skips_runtime_refresh_and_yjs_sync(monkeypatch, capsys) -> None:
     monkeypatch.setattr(setup_cmd, "get_ctx", lambda: SimpleNamespace())
     monkeypatch.setattr(setup_cmd, "_scenario_mgr", lambda: SimpleNamespace())
