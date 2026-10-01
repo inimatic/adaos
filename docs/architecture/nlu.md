@@ -338,9 +338,16 @@ not current Teacher write targets.
 
 Rasa is treated as a **service-type skill** with a managed process lifecycle.
 AdaOS uses the NLU-only `rasa-port` package, not upstream `rasa==3.6.x`.
-Version `0.2.1` was tested against the current core venv and removed the former
+Version `0.2.2` was tested against the current core venv, removed the remaining
+SQLAlchemy/scikit-learn deprecation warnings, and removed the former
 TensorFlow/JAX dependency conflict, so the service now reuses that venv rather
 than maintaining an almost duplicate bucket environment.
+
+The supported `lightweight` profile retains trainable intent classification
+through count-vector features and logistic regression. DIET is not silently
+substituted or partially loaded: it is an explicit deferred profile, to be
+qualified together with TensorFlow wheels, model migration, resource budgets,
+and voice-interface quality gates when voice development resumes.
 
 Install behavior:
 

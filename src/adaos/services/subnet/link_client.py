@@ -2570,6 +2570,22 @@ class MemberLinkClient:
         action = str(msg.get("action") or "").strip().lower()
         if action == "start":
             action = "update"
+        if action == "update":
+            from adaos.services.operator_controls import read_controls
+
+            if not bool(read_controls().get("core_auto_update", True)):
+                await self._send_ws_message(
+                    ws,
+                    {
+                        "t": "core.update.result",
+                        "request_id": str(msg.get("request_id") or "").strip(),
+                        "action": action,
+                        "ok": False,
+                        "accepted": False,
+                        "error": "core_auto_update_disabled_by_operator",
+                    },
+                )
+                return
         request_id = str(msg.get("request_id") or "").strip()
         reason = str(msg.get("reason") or "hub.member_control").strip() or "hub.member_control"
         target_rev = str(msg.get("target_rev") or "").strip()

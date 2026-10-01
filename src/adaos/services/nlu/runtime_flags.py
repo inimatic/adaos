@@ -36,8 +36,11 @@ _FLAG_KEYS = {
 }
 DEFAULT_FLAGS: dict[str, bool] = {
     "regex_enabled": True,
-    "neuro_lite_enabled": True,
-    "neural_enabled": True,
+    # Experimental providers are opt-in.  Keeping them enabled in the YDoc
+    # defaults made a clean installation claim pipelines which are not part of
+    # the supported distribution closure.
+    "neuro_lite_enabled": False,
+    "neural_enabled": False,
     "rasa_enabled": True,
     "nlu_teacher_enabled": True,
 }

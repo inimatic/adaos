@@ -1752,9 +1752,11 @@ class ApplicationService:
             and current_subscription is None
             and application.kind == "application"
         ):
+            from adaos.services.operator_controls import application_update_policy_default
+
             subscription_default = {
                 "update_track": "stable",
-                "update_policy": "auto_compatible",
+                "update_policy": application_update_policy_default(),
                 "observed_release_digest": release_digest,
                 "paused": False,
             }

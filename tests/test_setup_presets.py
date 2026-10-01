@@ -10,13 +10,20 @@ from adaos.services.setup.presets import get_preset
 
 def test_default_preset_installs_default_projects() -> None:
     preset = get_preset("default")
-    assert preset.projects == ("web_desktop", "applications", "users_access")
+    assert preset.projects == (
+        "web_desktop", "applications", "users_access", "subscription_status",
+        "notebook", "nlu_teacher", "weather",
+    )
     assert preset.scenarios == ("web_desktop", "applications", "users_access")
     assert preset.applications == (
         "web_desktop",
         "applications",
         "users_access",
         "voice",
+        "subscription_status",
+        "notebook",
+        "nlu_teacher",
+        "weather",
     )
     assert "prompt_engineer_scenario" not in preset.scenarios
     assert "web_desktop_runtime_skill" in preset.skills
@@ -30,6 +37,10 @@ def test_default_project_order_keeps_management_as_home_candidate() -> None:
         "web_desktop",
         "applications",
         "users_access",
+        "subscription_status",
+        "notebook",
+        "nlu_teacher",
+        "weather",
     ]
 
 
@@ -39,6 +50,10 @@ def test_default_application_order_includes_voice_provider() -> None:
         "applications",
         "users_access",
         "voice",
+        "subscription_status",
+        "notebook",
+        "nlu_teacher",
+        "weather",
     ]
 
 
@@ -54,6 +69,29 @@ def test_default_application_runtime_is_authoritative(monkeypatch) -> None:
     setup_cmd._configure_application_lifecycle_runtime(ctx)
 
     assert calls == [(ctx, True)]
+
+
+def test_default_home_widgets_are_seeded_once(monkeypatch) -> None:
+    observed: list[tuple[list[dict[str, str]], str]] = []
+
+    class Desktop:
+        def get_snapshot(self, _webspace_id):
+            return SimpleNamespace(pinned_widgets=[])
+
+        def set_pinned_widgets_with_live_room(self, widgets, webspace_id):
+            observed.append((widgets, webspace_id))
+
+    monkeypatch.setattr("adaos.services.io_web.desktop.WebDesktopService", Desktop)
+
+    result = setup_cmd._seed_default_home_widgets("desktop")
+
+    assert result["changed"] is True
+    assert [item["id"] for item in result["widgets"]] == [
+        "infrastate_widget",
+        "subscription_status_widget",
+        "notebook_skill_last_note",
+    ]
+    assert observed == [(result["widgets"], "desktop")]
 
 
 def test_install_language_defaults_to_english_without_overwriting_existing(monkeypatch) -> None:

@@ -21,6 +21,13 @@ def test_normalize_flags_accepts_stage_aliases() -> None:
     assert flags["nlu_teacher_enabled"] is False
 
 
+def test_experimental_nlu_stages_are_disabled_by_default() -> None:
+    flags = normalize_flags({})
+
+    assert flags["neuro_lite_enabled"] is False
+    assert flags["neural_enabled"] is False
+
+
 def test_normalize_flag_updates_keeps_partial_updates_partial() -> None:
     assert normalize_flag_updates({"flags": {"regex_enabled": False}}) == {"regex_enabled": False}
 

@@ -26,8 +26,8 @@ _RESOURCE_DIR = "rasa_nlu_service_skill"
 _LEGACY_MANAGED_META = ".adaos-managed.json"
 _SOURCE_FINGERPRINT_KEY = "source_fingerprint"
 _RASA_PORT_SUBMODULE = Path("src/adaos/integrations/rasa-port")
-_RASA_PORT_VERSION = "0.2.1"
-_RASA_PORT_WHEEL_SHA256 = "78463187889f6e3e4f724428e1c3c778eae7d32903ac2bbfb73a0fa62325270e"
+_RASA_PORT_VERSION = "0.2.2"
+_RASA_PORT_WHEEL_SHA256 = "8de0ff8f8eba3c7d8639f60efe72fdf4e3247b509d8f1e14b4e52646d82081c8"
 _DEFAULT_RASA_PORT_REQUIREMENT = (
     f"adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
     f"v{_RASA_PORT_VERSION}/adaos_rasa_nlu-{_RASA_PORT_VERSION}-py3-none-any.whl"

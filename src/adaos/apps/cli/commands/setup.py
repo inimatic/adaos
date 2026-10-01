@@ -164,6 +164,28 @@ def _application_ids_for_preset(chosen) -> list[str]:
     return list(dict.fromkeys(application_ids))
 
 
+_DEFAULT_HOME_WIDGET_IDS = (
+    "infrastate_widget",
+    "subscription_status_widget",
+    "notebook_skill_last_note",
+)
+
+
+def _seed_default_home_widgets(webspace_id: str) -> dict[str, object]:
+    """Pin supported first-install widgets without replacing a user layout."""
+
+    from adaos.services.io_web.desktop import WebDesktopService
+
+    service = WebDesktopService()
+    snapshot = service.get_snapshot(webspace_id)
+    existing = list(getattr(snapshot, "pinned_widgets", ()) or ())
+    if existing:
+        return {"changed": False, "reason": "existing_layout", "widgets": existing}
+    widgets = [{"id": item} for item in _DEFAULT_HOME_WIDGET_IDS]
+    service.set_pinned_widgets_with_live_room(widgets, webspace_id)
+    return {"changed": True, "reason": "first_install_defaults", "widgets": widgets}
+
+
 def _local_subnet_ref(ctx) -> str:
     config = getattr(ctx, "config", None)
     subnet_id = str(
@@ -541,6 +563,10 @@ def install(
         )
     except Exception as exc:
         installed["warnings"].append(f"webspace rebuild: {exc}")
+    try:
+        installed["default_home_widgets"] = _seed_default_home_widgets(target_webspace)
+    except Exception as exc:
+        installed["warnings"].append(f"default Home widgets: {exc}")
 
     _bootstrap_neural_nlu_after_install(installed, enabled=neural_nlu)
     _bootstrap_rasa_nlu_after_install(installed, enabled=rasa_nlu, train=train_nlu and rasa_nlu)

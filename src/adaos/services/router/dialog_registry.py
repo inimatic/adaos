@@ -16,7 +16,7 @@ from adaos.services.subnet_alias import display_subnet_alias, load_subnet_alias
 
 GENERAL_DIALOG_AGENT_ID = "agent:core:general"
 GENERAL_DIALOG_AGENT_CONFIGURED_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "").strip()
-GENERAL_DIALOG_AGENT_DEFAULT_LABEL = "?????????"
+GENERAL_DIALOG_AGENT_DEFAULT_LABEL = "Assistant"
 GENERAL_DIALOG_AGENT_GENDER = os.getenv("ADAOS_GENERAL_ASSISTANT_GENDER", "male").strip().lower() or "male"
 GENERAL_DIALOG_AGENT_VOICE = os.getenv("ADAOS_GENERAL_ASSISTANT_VOICE", "ru-male").strip() or "ru-male"
 GENERAL_DIALOG_AGENT_OWNER = "core:general_assistant"

@@ -5,6 +5,11 @@ AdaOS-maintained, hash-pinned `rasa-port` wheel. The service process remains an
 optional service-skill, but its tested lightweight dependency profile now uses
 the core venv instead of constructing a duplicate bucket venv.
 
+`lightweight` still performs trained intent classification. It uses count-vector
+features plus logistic regression; it does not include DIET/TensorFlow. DIET is
+a deferred, separately selectable future profile rather than a dependency that
+is accidentally missing from the default installation.
+
 ## Install model
 
 `adaos install` first installs the canonical required Application set
@@ -84,7 +89,7 @@ stale indexes, and runs service reindex. `--min-dev-accuracy` and
 If `src/adaos/integrations/rasa-port` exists, AdaOS installs it into the service venv as editable local source. Otherwise the service-skill uses:
 
 ```text
-adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/v0.2.1/adaos_rasa_nlu-0.2.1-py3-none-any.whl#sha256=78463187889f6e3e4f724428e1c3c778eae7d32903ac2bbfb73a0fa62325270e
+adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/v0.2.2/adaos_rasa_nlu-0.2.2-py3-none-any.whl#sha256=8de0ff8f8eba3c7d8639f60efe72fdf4e3247b509d8f1e14b4e52646d82081c8
 ```
 
 Override with:
