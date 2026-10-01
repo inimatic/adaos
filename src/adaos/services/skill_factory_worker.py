@@ -458,6 +458,9 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.resources.definition",
     "adaos.sdk.resources.operate",
     "adaos.sdk.resources.query",
+    "adaos.sdk.system.get_operational_snapshot",
+    "adaos.sdk.system.rename_current_node",
+    "adaos.sdk.system.rename_local_subnet",
 }
 
 
@@ -475,7 +478,8 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
         query=(
             "llm content images resources access caller require automation inventory "
             "external provider fleet skill data root lifecycle ensure database "
-            "generate operate query"
+            "generate operate query system operational snapshot resource member application "
+            "rename subnet node"
         ),
         limit=64,
     )
@@ -544,6 +548,80 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             ),
         },
         "response_contracts": {
+            "system_operational_snapshot": {
+                "methods": ["adaos.sdk.system.get_operational_snapshot"],
+                "authorization": "workspace.read",
+                "signature": "get_operational_snapshot(*, sections: Iterable[str] | str | None = None, webspace_id: str | None = None, limit: int = 100) -> dict[str, Any]",
+                "sections": [
+                    "summary",
+                    "services",
+                    "connections",
+                    "quotas",
+                    "incidents",
+                    "update",
+                    "applications",
+                    "resources",
+                    "members",
+                ],
+                "bounds": {"limit": {"minimum": 1, "maximum": 500}},
+                "result": {
+                    "schema": "adaos.sdk.system.operational_snapshot.v1",
+                    "always": [
+                        "ok",
+                        "schema",
+                        "webspace_id",
+                        "sections",
+                        "subject",
+                        "capacity",
+                        "observed_at",
+                        "provenance",
+                        "counts",
+                    ],
+                    "section_fields": {
+                        "services": ["services"],
+                        "connections": ["connections"],
+                        "quotas": ["quotas"],
+                        "incidents": ["incidents", "reliability"],
+                        "update": ["update"],
+                        "applications": ["applications", "application_updates"],
+                        "resources": ["resources"],
+                        "members": ["members", "member_summary"],
+                    },
+                    "resource_fields": [
+                        "available",
+                        "observed_at",
+                        "freshness",
+                        "source",
+                        "cpu.percent",
+                        "memory.percent",
+                        "memory.used_bytes",
+                        "memory.total_bytes",
+                        "disk.percent",
+                        "disk.used_bytes",
+                        "disk.total_bytes",
+                    ],
+                },
+            },
+            "system_identity_rename": {
+                "methods": [
+                    "adaos.sdk.system.rename_local_subnet",
+                    "adaos.sdk.system.rename_current_node",
+                ],
+                "authorization": "workspace.write",
+                "input": {
+                    "required": ["display_name"],
+                    "display_name": {"type": "string", "minLength": 1, "maxLength": 120},
+                },
+                "result_required": [
+                    "ok",
+                    "target",
+                    "display_name",
+                    "current",
+                    "desired",
+                    "applied",
+                ],
+                "identity_rule": "Renaming changes display metadata only; subnet_id and node_id remain stable.",
+            },
             "content_draft": {
                 "methods": [
                     "adaos.sdk.llm.content.generate",

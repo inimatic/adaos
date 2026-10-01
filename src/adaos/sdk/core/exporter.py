@@ -41,6 +41,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.resources",
     "adaos.sdk.status",
     "adaos.sdk.subscriptions",
+    "adaos.sdk.system",
     "adaos.sdk.web",
     "adaos.sdk.workflow",
 )
@@ -68,6 +69,7 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.resources": "Query and mutate current-skill Resource Workbench records through declared operations.",
     "adaos.sdk.status": "Publish bounded skill and scenario status projections.",
     "adaos.sdk.subscriptions": "Read bounded subscription usage and quota projections.",
+    "adaos.sdk.system": "Read bounded system operations projections and rename the local subnet or current node through stable public identities.",
     "adaos.sdk.web": "Read and update declarative desktop, application, and webspace state.",
     "adaos.sdk.workflow": "Create and invoke declarative workflow interactions.",
 }

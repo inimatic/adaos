@@ -1074,6 +1074,15 @@ def test_dashboard_authoring_refinement_does_not_require_resource_crud() -> None
     assert "recipe.data_entry" not in selection["root_item_ids"]
 
 
+def test_resource_trends_admit_metric_chart_component() -> None:
+    selection = selected_ui_capabilities(
+        "Show bounded CPU, RAM and disk trend graphs in the System summary."
+    )
+
+    assert "visual.metricChart" in selection["root_item_ids"]
+    assert "visual.metricChart" in {item["id"] for item in selection["items"]}
+
+
 def test_composite_revision_board_inventory_does_not_select_kanban_recipe() -> None:
     request = (
         "Исправь только текущую ревизию Automation Manager, не перепроектируя "

@@ -157,6 +157,14 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     contract = bundle["response_contracts"]["automation_inventory"]
 
     assert "adaos.sdk.automation.inventory" in names
+    assert "adaos.sdk.system.get_operational_snapshot" in names
+    assert "adaos.sdk.system.rename_current_node" in names
+    assert "adaos.sdk.system.rename_local_subnet" in names
+    system_contract = bundle["response_contracts"]["system_operational_snapshot"]
+    assert "resources" in system_contract["sections"]
+    assert "members" in system_contract["sections"]
+    assert "applications" in system_contract["sections"]
+    assert bundle["response_contracts"]["system_identity_rename"]["authorization"] == "workspace.write"
     assert contract["authorization"] == "external_provider.use"
     assert contract["bounds"]["task_limit"] == {"minimum": 1, "maximum": 100}
     assert contract["result"]["schema"] == "adaos.automation.builder_inventory.v1"

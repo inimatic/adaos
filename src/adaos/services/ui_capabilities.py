@@ -1009,6 +1009,14 @@ def selected_ui_capabilities(
         flags=re.IGNORECASE,
     ) and "visual.metricTile" not in selected_ids:
         selected_ids.append("visual.metricTile")
+    if re.search(
+        r"\b(?:metric|resource|cpu|ram|memory|disk)[- ]?(?:chart|trend|history|graph)\w*\b|"
+        r"\b(?:chart|trend|graph)\w*\s+(?:for\s+)?(?:metric|resource|cpu|ram|memory|disk)\w*\b|"
+        r"\b(?:график|тренд|истори)\w*\s+(?:метрик|ресурс|cpu|ram|памят|диск)\w*\b",
+        str(request or ""),
+        flags=re.IGNORECASE,
+    ) and "visual.metricChart" not in selected_ids:
+        selected_ids.append("visual.metricChart")
     if brief_operation_kinds & {"search", "filter"}:
         for component_id in ("input.text", "input.selector"):
             if component_id not in selected_ids:
