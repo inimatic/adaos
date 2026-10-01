@@ -21,6 +21,7 @@ CONTROL_PORT="8777"
 ROOT_URL="https://api.inimatic.com"
 REV="rev2026"
 ZONE_ID=""
+LANGUAGE="${ADAOS_LANG:-en}"
 NO_VOICE="0"
 DEV_MODE="0"
 BUILD_VENDORED_Y_PY="0"
@@ -539,6 +540,7 @@ while [[ $# -gt 0 ]]; do
     --root-url) ROOT_URL="${2:-}"; shift 2 ;;
     --rev) REV="${2:-}"; shift 2 ;;
     --zone|--zone-id) ZONE_ID="${2:-}"; shift 2 ;;
+    --language|--lang) LANGUAGE="${2:-}"; shift 2 ;;
     --python) PYTHON_ARG="${2:-}"; shift 2 ;;
     --node-name) NODE_NAME="${2:-}"; shift 2 ;;
     --workspace-registry-repo) WORKSPACE_REGISTRY_REPO="${2:-}"; shift 2 ;;
@@ -558,6 +560,7 @@ Usage: tools/bootstrap.sh [options]
   --root-url URL
   --rev REV
   --zone ZONE_ID
+  --language en|ru    Initial owner UI language (default: en)
   --python /path/to/python3.11
   --node-name NAME
   --workspace-registry-repo URL
@@ -582,6 +585,10 @@ if [[ -n "${ZONE_ID:-}" ]]; then
   if [[ ! "$ZONE_ID" =~ ^[a-z]{2}$ ]]; then
     fail "ZONE_ID must be a two-letter lowercase country/region code (example: ru)"
   fi
+fi
+LANGUAGE="$(printf '%s' "${LANGUAGE:-en}" | tr '[:upper:]' '[:lower:]')"
+if [[ "$LANGUAGE" != "en" && "$LANGUAGE" != "ru" ]]; then
+  die "language must be en or ru"
 fi
 
 if [[ -n "${JOIN_CODE:-}" ]]; then
@@ -692,6 +699,8 @@ fi
 if [[ -n "${ZONE_ID:-}" ]]; then
   write_env_var "ADAOS_ZONE_ID" "$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')" ".env"
 fi
+write_env_var "ADAOS_LANG" "$LANGUAGE" ".env"
+export ADAOS_LANG="$LANGUAGE"
 if [[ "${DEV_MODE:-0}" == "1" ]]; then
   write_env_var "ENV_TYPE" "dev" ".env"
   write_env_var "ADAOS_SUPERVISOR_ENABLED" "0" ".env"
@@ -753,7 +762,7 @@ if [[ "${ROLE:-}" == "hub" ]]; then
 fi
 
 log "Installing default webspace content (adaos install)..."
-install_args=(install)
+install_args=(install --language "$LANGUAGE")
 if [[ "${NO_VOICE:-0}" == "1" ]]; then
   install_args+=(--no-rasa-nlu --no-train-nlu)
 fi

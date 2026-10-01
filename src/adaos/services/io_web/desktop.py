@@ -546,6 +546,7 @@ class WebDesktopService:
         ydoc: Any,
         *,
         installed: WebDesktopInstalled,
+        installed_explicit: bool,
         pinned_widgets: List[Dict[str, Any]],
         pinned_applications: List[str],
         pinned_applications_explicit: bool,
@@ -560,12 +561,24 @@ class WebDesktopService:
         ui_map = ydoc.get_map("ui")
 
         installed_raw = _coerce_dict(data_map.get("installed") or {})
-        installed_next = WebDesktopInstalled(
-            apps=_iter_ids(installed_raw.get("apps")) or list(installed.apps),
-            widgets=_iter_ids(installed_raw.get("widgets")) or list(installed.widgets),
-            removed_apps=list(installed.removed_apps),
-            removed_widgets=list(installed.removed_widgets),
-        )
+        if installed_explicit:
+            # Workspace installation overlays are the durable authority.  A
+            # live YDoc can temporarily lag after package activation or a
+            # scenario rebuild; reading that stale materialization must not
+            # hide an acknowledged Application installation from Home.
+            installed_next = WebDesktopInstalled(
+                apps=list(installed.apps),
+                widgets=list(installed.widgets),
+                removed_apps=list(installed.removed_apps),
+                removed_widgets=list(installed.removed_widgets),
+            )
+        else:
+            installed_next = WebDesktopInstalled(
+                apps=_iter_ids(installed_raw.get("apps")) or list(installed.apps),
+                widgets=_iter_ids(installed_raw.get("widgets")) or list(installed.widgets),
+                removed_apps=list(installed.removed_apps),
+                removed_widgets=list(installed.removed_widgets),
+            )
 
         desktop_raw = _coerce_dict(data_map.get("desktop") or {})
         pinned_next = _clone_pinned_widgets(desktop_raw.get("pinnedWidgets"))
@@ -792,7 +805,7 @@ class WebDesktopService:
 
     def get_snapshot(self, webspace_id: Optional[str] = None) -> WebDesktopSnapshot:
         webspace = self._resolve_webspace(webspace_id)
-        installed = self.get_installed(webspace)
+        installed, installed_explicit = self._read_overlay_installed(webspace)
         pinned_widgets = self.get_pinned_widgets(webspace)
         pinned_applications, pinned_applications_explicit = (
             self._read_overlay_pinned_applications(webspace)
@@ -809,6 +822,7 @@ class WebDesktopService:
                 return self._read_materialized_snapshot_from_doc(
                     ydoc,
                     installed=installed,
+                    installed_explicit=installed_explicit,
                     pinned_widgets=pinned_widgets,
                     pinned_applications=pinned_applications,
                     pinned_applications_explicit=pinned_applications_explicit,
@@ -833,7 +847,7 @@ class WebDesktopService:
 
     async def get_snapshot_async(self, webspace_id: Optional[str] = None) -> WebDesktopSnapshot:
         webspace = self._resolve_webspace(webspace_id)
-        installed = await self.get_installed_async(webspace)
+        installed, installed_explicit = self._read_overlay_installed(webspace)
         pinned_widgets = await self.get_pinned_widgets_async(webspace)
         pinned_applications, pinned_applications_explicit = (
             self._read_overlay_pinned_applications(webspace)
@@ -850,6 +864,7 @@ class WebDesktopService:
                 return self._read_materialized_snapshot_from_doc(
                     ydoc,
                     installed=installed,
+                    installed_explicit=installed_explicit,
                     pinned_widgets=pinned_widgets,
                     pinned_applications=pinned_applications,
                     pinned_applications_explicit=pinned_applications_explicit,

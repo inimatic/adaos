@@ -789,6 +789,65 @@ def test_successful_install_projects_application_to_home(monkeypatch) -> None:
     assert projected == [("reading_list", {"installed": True, "webspace_id": "family"})]
 
 
+def test_home_projection_commits_pin_after_live_installed_sync_failure(monkeypatch) -> None:
+    snapshot = SimpleNamespace(
+        installed=SimpleNamespace(
+            apps=["scenario:applications"],
+            widgets=[],
+            removed_apps=[],
+            removed_widgets=[],
+        ),
+        pinned_applications=["scenario:applications"],
+        icon_order=["scenario:applications"],
+    )
+    writes: list[tuple[str, object]] = []
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            assert webspace_id == "desktop"
+            return snapshot
+
+        def set_installed_with_live_room(self, value, webspace_id):
+            writes.append(("installed", list(value.apps)))
+            raise RuntimeError("live room unavailable after durable overlay write")
+
+        def set_pinned_applications_with_live_room(self, value, webspace_id):
+            writes.append(("pinned", list(value)))
+
+        def get_icon_order(self, webspace_id):
+            return list(snapshot.icon_order)
+
+        def set_icon_order_with_live_room(self, value, webspace_id):
+            writes.append(("order", list(value)))
+
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda *_args, **_kwargs: {
+            "application": {
+                "entrypoints": [
+                    {"entrypoint_id": "main", "presentation_ref": "scenario:notebook"}
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+
+    result = applications._sync_home_installation(
+        "notebook", installed=True, webspace_id="desktop"
+    )
+
+    assert result["status"] == "ready_live_sync_degraded"
+    assert result["warnings"] == [
+        {"projection": "installed", "error": "RuntimeError"}
+    ]
+    assert writes == [
+        ("installed", ["scenario:applications", "scenario:notebook"]),
+        ("pinned", ["scenario:applications", "scenario:notebook"]),
+        ("order", ["scenario:notebook", "scenario:applications"]),
+    ]
+
+
 def test_home_pin_changes_only_presentation_overlay(monkeypatch) -> None:
     snapshot = SimpleNamespace(
         installed=SimpleNamespace(

@@ -13,6 +13,8 @@ param(
   [string]$RootUrl = "https://api.inimatic.com",
   [string]$Rev = "rev2026",
   [string]$ZoneId = "",
+  [ValidateSet("en", "ru")]
+  [string]$Language = $(if ($env:ADAOS_LANG) { $env:ADAOS_LANG } else { "en" }),
   [string]$WorkspaceRegistryRepo = $env:ADAOS_WORKSPACE_REGISTRY_REPO
 )
 
@@ -33,6 +35,7 @@ if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
     throw "ZoneId must be a two-letter lowercase country/region code (example: ru)"
   }
 }
+$Language = $Language.Trim().ToLower()
 
 function Have($cmd) {
   try { Get-Command $cmd -ErrorAction Stop | Out-Null; return $true }
@@ -319,6 +322,8 @@ $env:ADAOS_API_BASE = $effectiveRootUrl
 if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
   $env:ADAOS_ZONE_ID = $ZoneId.Trim().ToLower()
 }
+$env:ADAOS_LANG = $Language
+Write-EnvVar -Key "ADAOS_LANG" -Value $Language -EnvFile ".env"
 $desiredRole = if (-not [string]::IsNullOrWhiteSpace($Role)) {
   $Role.Trim().ToLower()
 } elseif (-not [string]::IsNullOrWhiteSpace($JoinCode)) {
@@ -344,7 +349,7 @@ if ($desiredRole -eq "hub") {
 }
 
 Write-Host "Installing default webspace content (adaos install)..."
-$installArgs = @("install")
+$installArgs = @("install", "--language", $Language)
 if ($NoVoice) {
   $installArgs += "--no-rasa-nlu"
   $installArgs += "--no-train-nlu"

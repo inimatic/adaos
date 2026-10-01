@@ -56,6 +56,45 @@ def test_default_application_runtime_is_authoritative(monkeypatch) -> None:
     assert calls == [(ctx, True)]
 
 
+def test_install_language_defaults_to_english_without_overwriting_existing(monkeypatch) -> None:
+    state = SimpleNamespace(language=None, locale=None)
+
+    class ProfileService:
+        def __init__(self, _ctx):
+            pass
+
+        def get_profile(self):
+            return state
+
+        def update_profile(self, patch, *, emit_event):
+            assert emit_event is False
+            state.language = patch.get("language", state.language)
+            state.locale = patch.get("locale", state.locale)
+            return state
+
+    monkeypatch.setattr(
+        "adaos.services.user.profile.UserProfileService", ProfileService
+    )
+
+    assert setup_cmd._initialize_install_language(object(), "") == {
+        "language": "en",
+        "locale": "en-US",
+        "initialized": True,
+    }
+    state.language = "ru"
+    state.locale = "ru-RU"
+    assert setup_cmd._initialize_install_language(object(), "en") == {
+        "language": "ru",
+        "locale": "ru-RU",
+        "initialized": False,
+    }
+
+
+def test_install_language_rejects_unknown_code() -> None:
+    with pytest.raises(ValueError, match="unsupported install language"):
+        setup_cmd._initialize_install_language(object(), "de")
+
+
 def test_default_application_lifecycle_uses_reviewed_plan_and_apply(
     monkeypatch,
 ) -> None:

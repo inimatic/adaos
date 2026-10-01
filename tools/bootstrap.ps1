@@ -15,6 +15,8 @@ param(
     [string]$RootUrl = "https://api.inimatic.com",
     [string]$Rev = "rev2026",
     [string]$ZoneId = "",
+    [ValidateSet("en", "ru")]
+    [string]$Language = $(if ($env:ADAOS_LANG) { $env:ADAOS_LANG } else { "en" }),
     [string]$WorkspaceRegistryRepo = $env:ADAOS_WORKSPACE_REGISTRY_REPO
 )
 
@@ -246,7 +248,8 @@ if (-not $pyCands -or $pyCands.Count -eq 0) {
             -ControlPort $ControlPort `
             -RootUrl $RootUrl `
             -Rev $Rev `
-            -ZoneId $ZoneId
+            -ZoneId $ZoneId `
+            -Language $Language
         exit $LASTEXITCODE
     }
     Write-Host "No supported Python found. Install Python >=3.11.9,<3.12 and re-run (or run tools\\bootstrap_uv.ps1)." -ForegroundColor Red
@@ -421,6 +424,9 @@ $env:ADAOS_API_BASE = $effectiveRootUrl
 if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
     $env:ADAOS_ZONE_ID = $ZoneId.Trim().ToLower()
 }
+$Language = $Language.Trim().ToLower()
+$env:ADAOS_LANG = $Language
+Write-EnvVar -Key "ADAOS_LANG" -Value $Language -EnvFile ".env"
 $desiredRole = if (-not [string]::IsNullOrWhiteSpace($Role)) {
     $Role.Trim().ToLower()
 } elseif (-not [string]::IsNullOrWhiteSpace($JoinCode)) {
@@ -456,7 +462,7 @@ function Configure-RasaNlu {
 }
 
 Write-Host "Installing default webspace content (adaos install)..."
-$installArgs = @("install")
+$installArgs = @("install", "--language", $Language)
 if ($NoVoice) {
     $installArgs += "--no-rasa-nlu"
     $installArgs += "--no-train-nlu"

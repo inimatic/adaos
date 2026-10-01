@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 import time
-from typing import Any, Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional
 
 from adaos.domain.personalization_access import (
     Preference,
@@ -304,12 +305,18 @@ class UserProfileService:
                 return settings.get(key)
             return default
 
+        default_language = str(
+            getattr(self.ctx.settings, "lang", None)
+            or os.getenv("ADAOS_LANG")
+            or "en"
+        ).strip() or "en"
+        default_locale = "ru-RU" if default_language.lower().startswith("ru") else "en-US"
         return {
             "user_id": uid,
             "display_name": profile.display_name or settings.get("display_name") or uid,
             "preferred_name": profile.preferred_name or settings.get("preferred_name"),
-            "locale": profile.locale or preferences.get("locale") or settings.get("locale"),
-            "language": profile.language or preferences.get("language") or settings.get("language"),
+            "locale": profile.locale or preferences.get("locale") or settings.get("locale") or default_locale,
+            "language": profile.language or preferences.get("language") or settings.get("language") or default_language,
             "timezone": profile.timezone or preferences.get("timezone") or settings.get("timezone"),
             "theme": preferences.get("theme") or settings.get("theme") or "system",
             "memory_privacy": preferences.get("memory_privacy") or settings.get("memory_privacy") or "default",

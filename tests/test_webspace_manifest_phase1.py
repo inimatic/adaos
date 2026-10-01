@@ -1158,7 +1158,7 @@ def test_web_desktop_service_explicit_overlay_wins_over_stale_slot_snapshot(
                     "iconOrder": ["scenario:applications"],
                 },
                 "installed": {
-                    "apps": ["scenario:applications", "subscription_status_app"],
+                    "apps": ["scenario:applications"],
                     "widgets": [],
                 },
             }
@@ -1179,6 +1179,10 @@ def test_web_desktop_service_explicit_overlay_wins_over_stale_slot_snapshot(
     assert snapshot.icon_order == [
         "subscription_status_app",
         "scenario:applications",
+    ]
+    assert snapshot.installed.apps == [
+        "scenario:applications",
+        "subscription_status_app",
     ]
 
 

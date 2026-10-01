@@ -56,6 +56,9 @@ from adaos.services.workspace_sync import sync_workspace_sparse_to_registry as _
 from adaos.services.workspace_sync import workspace_kind_names as _workspace_sync_kind_names
 
 
+_INSTALL_LANGUAGES = {"en": "en-US", "ru": "ru-RU"}
+
+
 def _run_safe(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -79,6 +82,33 @@ def _skill_mgr() -> SkillManager:
     ctx = get_ctx()
     reg = SqliteSkillRegistry(ctx.sql)
     return SkillManager(repo=ctx.skills_repo, registry=reg, git=ctx.git, paths=ctx.paths, bus=ctx.bus, caps=ctx.caps)
+
+
+def _initialize_install_language(ctx: object, language: str) -> dict[str, object]:
+    """Seed an explicit owner language without overwriting an existing profile."""
+
+    normalized = str(language or "en").strip().lower().replace("_", "-").split("-", 1)[0]
+    if normalized not in _INSTALL_LANGUAGES:
+        raise ValueError(
+            f"unsupported install language '{language}'; expected one of: "
+            + ", ".join(sorted(_INSTALL_LANGUAGES))
+        )
+    from adaos.services.user.profile import UserProfileService
+
+    service = UserProfileService(ctx)  # type: ignore[arg-type]
+    current = service.get_profile()
+    patch: dict[str, object] = {}
+    if not str(current.language or "").strip():
+        patch["language"] = normalized
+    if not str(current.locale or "").strip():
+        patch["locale"] = _INSTALL_LANGUAGES[normalized]
+    if patch:
+        current = service.update_profile(patch, emit_event=False)
+    return {
+        "language": str(current.language or normalized),
+        "locale": str(current.locale or _INSTALL_LANGUAGES[normalized]),
+        "initialized": bool(patch),
+    }
 
 def _installed_names(rows: list[object]) -> list[str]:
     return _workspace_sync_installed_names(rows)
@@ -356,6 +386,7 @@ def _bootstrap_rasa_nlu_after_install(installed: dict, *, enabled: bool, train: 
 def install(
     preset: str = typer.Option("default", "--preset", help="default | base"),
     webspace_id: Optional[str] = typer.Option(None, "--webspace", help="target webspace id (default: 'default')"),
+    language: str = typer.Option("en", "--language", "--lang", help="initial owner UI language: en | ru"),
     setup_skills: bool = typer.Option(False, "--setup", help="run skill setup hooks (may prompt / require IO)"),
     autostart: bool = typer.Option(False, "--autostart", help="enable OS autostart after install"),
     retention_policy: bool = typer.Option(
@@ -381,6 +412,7 @@ def install(
     skill_mgr = _skill_mgr()
 
     installed = {"projects": [], "scenarios": [], "skills": [], "warnings": []}
+    installed["personalization"] = _initialize_install_language(ctx, language)
 
     project_ids = _project_ids_for_preset(ctx, chosen)
     required_project_failures: list[str] = []

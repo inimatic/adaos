@@ -3167,7 +3167,23 @@ def _sync_home_installation(
         next_apps = [item for item in current_apps if item not in alias_set]
         next_removed = [item for item in removed_apps if item not in alias_set]
         next_removed.append(application_ref)
-    service.set_installed_with_live_room(
+    projection_warnings: list[dict[str, str]] = []
+
+    def apply_projection(name: str, callback: Any, *args: Any) -> None:
+        try:
+            callback(*args)
+        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+            # Each desktop writer persists its authoritative overlay before it
+            # attempts the best-effort live-room broadcast.  A transient YRoom
+            # failure must not prevent the remaining Home invariants from being
+            # committed (installed, pinned and ordered are one logical result).
+            projection_warnings.append(
+                {"projection": name, "error": type(exc).__name__}
+            )
+
+    apply_projection(
+        "installed",
+        service.set_installed_with_live_room,
         WebDesktopInstalled(
             apps=next_apps,
             widgets=list(snapshot.installed.widgets),
@@ -3181,7 +3197,12 @@ def _sync_home_installation(
     ]
     if installed:
         next_pinned.append(application_ref)
-    service.set_pinned_applications_with_live_room(next_pinned, webspace_id)
+    apply_projection(
+        "pinned_applications",
+        service.set_pinned_applications_with_live_room,
+        next_pinned,
+        webspace_id,
+    )
     if hasattr(service, "set_icon_order_with_live_room"):
         current_order = (
             service.get_icon_order(webspace_id)
@@ -3195,7 +3216,12 @@ def _sync_home_installation(
         ]
         if installed:
             next_order.insert(0, application_ref)
-        service.set_icon_order_with_live_room(next_order, webspace_id)
+        apply_projection(
+            "icon_order",
+            service.set_icon_order_with_live_room,
+            next_order,
+            webspace_id,
+        )
     return {
         "schema": "adaos.application.home_projection.v1",
         "application_id": application_id,
@@ -3204,7 +3230,8 @@ def _sync_home_installation(
         "installed": installed,
         "pinnable": installed,
         "pinned": installed,
-        "status": "ready",
+        "status": "ready" if not projection_warnings else "ready_live_sync_degraded",
+        "warnings": projection_warnings,
     }
 
 
