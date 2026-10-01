@@ -613,6 +613,7 @@ def test_summary_enriches_invites_with_shareable_links(service: _Service) -> Non
 
 def test_current_profile_read_and_update_share_one_authority(service: _Service) -> None:
     read = plane.handlers()["users_access.current_profile"]({}, dry_run=False)
+    assert read["profile"]["id"] == "current"
     assert read["profile"]["display_name"] == "Owner"
     assert read["profile"]["timezone"] == "UTC"
 
@@ -626,6 +627,7 @@ def test_current_profile_read_and_update_share_one_authority(service: _Service) 
         },
         dry_run=False,
     )
+    assert updated["profile"]["id"] == "current"
     assert updated["profile"]["display_name"] == "Dmitry"
     assert updated["profile"]["timezone"] == "Europe/Moscow"
     assert updated["profile"]["show_presence"] is False

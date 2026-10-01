@@ -550,6 +550,10 @@ def _profile_projection() -> dict[str, Any]:
     profile = personalization_runtime.current_user_profile_service(get_ctx()).get_profile()
     preferences = dict(profile.preferences)
     return {
+        # ``ui.form`` hydrates an editable record by matching its selected
+        # identity.  The current-user profile is a singleton, but it still
+        # needs the same stable record identity as other form data sources.
+        "id": "current",
         "user_id": profile.user_id,
         "display_name": profile.display_name or profile.user_id,
         "preferred_name": profile.preferred_name or "",
