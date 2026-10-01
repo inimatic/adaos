@@ -570,6 +570,15 @@ exact platform wheels selected by the source-free lock. Failure to derive that
 lock falls back to the existing locked source path and remains visible in the
 installer attempts.
 
+The production preparer discovers `uv` both beside the active interpreter and
+in the standard per-user `~/.local/bin` location used by the installer. A
+present lock-capable `uv` selects a fresh locked environment backed by the
+package cache; cloning the active virtual environment is an offline fallback,
+not the normal production path. Fallback bulk I/O uses low best-effort priority
+by default. Idle-class I/O is opt-in because a busy node can otherwise starve a
+correct update for minutes. The receipt records `venv_seed_source`, installer,
+copy method, and elapsed phases so this invariant remains measurable.
+
 Inactive-slot preparation owns a renewable worker lease. Progress heartbeats do
 not extend the configured deadline indefinitely: the supervisor revokes the
 lease when `ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC` expires, waits for the owned
