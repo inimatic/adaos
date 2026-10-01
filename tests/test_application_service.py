@@ -1380,7 +1380,7 @@ def test_update_keeps_unknown_when_executor_materializes_different_installation(
     assert applied.recovery_reason == "installation_revision_changed_after_execution"
 
 
-def test_install_materializes_only_declared_grant_on_install_access(
+def test_reviewed_install_materializes_exact_approved_access_for_user(
     tmp_path: Path,
 ) -> None:
     service = ApplicationService(
@@ -1456,13 +1456,13 @@ def test_install_materializes_only_declared_grant_on_install_access(
     access = applied.result["install_access"]
     assert access["status"] == "ready"
     assert access["created"] is True
-    assert access["permissions"] == ["workspace.read"]
+    assert access["permissions"] == ["workspace.read", "workspace.write"]
     assert access["application_roles"] == ["owner"]
     grants = service.store.list_application_access_grants(
         "app_recipes", subject_ref="user:owner"
     )
     assert len(grants) == 1
-    assert grants[0].permission_ceiling == ("workspace.read",)
+    assert grants[0].permission_ceiling == ("workspace.read", "workspace.write")
     assert grants[0].application_roles == ("owner",)
     assert grants[0].reviewed_permission_profile_digest == profile.digest
 
@@ -1491,6 +1491,7 @@ def test_install_materializes_only_declared_grant_on_install_access(
     )
     assert system_result["status"] == "ready"
     assert system_result["grant"]["subject_ref"] == "user:sn_home"
+    assert system_result["grant"]["permission_ceiling"] == ["workspace.read"]
 
 
 def test_install_plans_exact_shared_dependencies_and_reuses_active_reference(

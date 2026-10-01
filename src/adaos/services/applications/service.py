@@ -166,12 +166,16 @@ class ApplicationService:
         release_digest: str,
         subnet_ref: str,
         issuer_ref: str,
+        reviewed_permissions: Iterable[str] = (),
     ) -> dict[str, Any]:
-        """Materialize permissions explicitly declared ``grant_on_install``.
+        """Materialize permissions accepted at the install approval boundary.
 
-        The reviewed install/update operation is the approval boundary for
-        these declarations.  Runtime pending actions remain responsible for
-        every permission using another approval policy.
+        ``grant_on_install`` declarations are safe for unattended/system
+        reconciliation.  An authenticated user applying an exact reviewed
+        plan has also explicitly accepted that plan's permission review, so
+        its bounded permission set is durable for that user and release.
+        Runtime pending actions remain responsible for permissions outside
+        that reviewed set.
         """
 
         release = self.store.get_release(application_id, release_digest)
@@ -179,13 +183,48 @@ class ApplicationService:
             *release.permission_profile.required,
             *release.permission_profile.optional,
         )
+        install_permissions = {
+            item.permission_id
+            for item in declarations
+            if item.approval_policy == "grant_on_install"
+        }
+        reviewed = {
+            str(item or "").strip().lower()
+            for item in reviewed_permissions
+            if str(item or "").strip()
+        }
+        declared = set(release.permission_profile.flat_permissions)
+        if not reviewed.issubset(declared):
+            raise ApplicationServiceError(
+                "reviewed install permissions are not declared by the release"
+            )
+        issuer = str(issuer_ref or "").strip()
+        subnet = str(subnet_ref or "").strip().removeprefix("subnet:")
+        if not subnet:
+            raise ApplicationServiceError(
+                "subnet_ref is required for install-time Application access"
+            )
+        subject_ref = issuer if issuer.startswith("user:") else f"user:{subnet}"
+        # Only a concrete user can turn a reviewed plan into durable personal
+        # authority. System reconciliation remains limited to declarations
+        # that explicitly opt into grant_on_install.
+        if issuer.startswith("user:"):
+            install_permissions.update(reviewed)
+            # Updating an unchanged permission profile must not revoke the
+            # user's already-reviewed authority merely because the update UI
+            # only asks about the delta. Carry the prior ceiling forward, but
+            # never beyond permissions declared by the target release.
+            for prior in self.store.list_application_access_grants(
+                application_id,
+                subject_ref=subject_ref,
+            ):
+                if prior.status == "active":
+                    install_permissions.update(
+                        set(prior.permission_ceiling).intersection(declared)
+                    )
         permissions = tuple(
             sorted(
-                {
-                    item.permission_id
-                    for item in declarations
-                    if item.approval_policy == "grant_on_install"
-                }
+                install_permissions
             )
         )
         if not permissions:
@@ -203,19 +242,12 @@ class ApplicationService:
                 if role.default_for.get("owner") == role.role_id
             )
         )
-        subnet = str(subnet_ref or "").strip().removeprefix("subnet:")
-        if not subnet:
-            raise ApplicationServiceError(
-                "subnet_ref is required for install-time Application access"
-            )
-        issuer = str(issuer_ref or "").strip()
         # A reviewed install performed by an authenticated user must grant the
         # declared install-time permissions to that user.  The old subnet
         # surrogate (user:<subnet-id>) was never the browser subject and left
         # owners facing an unfulfillable approval prompt immediately after a
         # successful install.  System callers retain the surrogate fallback;
         # bootstrap resolves the actual local owner before calling us.
-        subject_ref = issuer if issuer.startswith("user:") else f"user:{subnet}"
         for grant in self.store.list_application_access_grants(
             application_id,
             subject_ref=subject_ref,
@@ -2045,11 +2077,18 @@ class ApplicationService:
             )
         install_access = None
         if operation.kind in {"install", "update"}:
+            permission_review = operation.plan.get("permission_review")
+            reviewed_permissions = (
+                tuple(permission_review.get("approval_permissions") or ())
+                if isinstance(permission_review, Mapping)
+                else ()
+            )
             install_access = self.ensure_install_access(
                 operation.application_id,
                 release_digest=str(operation.plan.get("release_digest") or ""),
                 subnet_ref=operation.subnet_ref,
                 issuer_ref=operation.actor_ref,
+                reviewed_permissions=reviewed_permissions,
             )
         applying = self._transition_operation(operation, "applying")
         try:

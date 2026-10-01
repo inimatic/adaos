@@ -5346,6 +5346,49 @@ class WebspaceScenarioRuntime:
                 )
             )
             project_rows: list[tuple[int, dict[str, Any]]] = []
+            # Stable Applications may be installed from immutable archives and
+            # therefore have no workspace project manifest. Their accepted
+            # ApplicationRelease is the presentation authority; otherwise the
+            # desktop silently falls back to the generic apps icon while the
+            # Applications catalog shows the correct release icon.
+            try:
+                from adaos.services.applications.store import ApplicationStore
+
+                application_store = ApplicationStore(Path(self.ctx.paths.state_dir()))
+                for installation in application_store.list_installations():
+                    if installation.status != "active":
+                        continue
+                    release = application_store.get_release(
+                        installation.application_id,
+                        installation.installed_release_digest,
+                    )
+                    catalog = dict(release.project_release.catalog or {})
+                    for entrypoint in application_store.get_application(
+                        installation.application_id
+                    ).entrypoints:
+                        kind, separator, component_id = str(
+                            entrypoint.get("presentation_ref") or ""
+                        ).partition(":")
+                        if separator and kind == "scenario" and component_id:
+                            project_rows.append(
+                                (
+                                    2,
+                                    {
+                                        "primary_ref": f"scenario:{component_id}",
+                                        "title": str(
+                                            catalog.get("title")
+                                            or release.application_id
+                                        ),
+                                        "icon": str(catalog.get("icon") or ""),
+                                        "visibility": "listed",
+                                    },
+                                )
+                            )
+            except (OSError, RuntimeError, ValueError, FileNotFoundError):
+                _log.debug(
+                    "failed to resolve installed Application desktop metadata",
+                    exc_info=True,
+                )
             try:
                 from adaos.services.application_registry_projection import ApplicationRegistryProjection
 
