@@ -338,6 +338,18 @@ def get_operational_snapshot(
     bounded_limit = _bounded_limit(limit)
     subject = _mapping(control_plane.get_self_object())
     capacity = _mapping(control_plane.get_local_capacity_object())
+    subnet_refs = list(_mapping(subject.get("relations")).get("subnet") or [])
+    subnet_ref = str(subnet_refs[0] if subnet_refs else "").strip()
+    subnet_id = subnet_ref.split(":", 1)[1] if subnet_ref.startswith("subnet:") else subnet_ref
+    try:
+        from adaos.services.subnet_alias import display_subnet_alias, load_subnet_alias
+
+        subnet_name = display_subnet_alias(
+            load_subnet_alias(subnet_id=subnet_id or None),
+            subnet_id or None,
+        )
+    except Exception:
+        subnet_name = subnet_id or None
     result: dict[str, Any] = {
         "ok": True,
         "schema": "adaos.sdk.system.operational_snapshot.v1",
@@ -345,6 +357,18 @@ def get_operational_snapshot(
         "sections": sorted(selected),
         "subject": subject,
         "capacity": capacity,
+        "subnet": {
+            "available": bool(subnet_id),
+            "subnet_id": subnet_id or None,
+            "display_name": subnet_name,
+            "source": "local_node_identity",
+            "freshness": "current" if subnet_id else "unavailable",
+        },
+        "service_summary": {
+            "subscription": {"available": False, "reason": "provider_not_admitted"},
+            "budget": {"available": False, "reason": "provider_not_admitted"},
+            "ai_services": {"available": False, "reason": "provider_not_admitted"},
+        },
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "provenance": {"authority": "local_node", "projection": "read_only"},
     }

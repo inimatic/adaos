@@ -573,10 +573,38 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "sections",
                         "subject",
                         "capacity",
+                        "subnet",
+                        "service_summary",
                         "observed_at",
                         "provenance",
                         "counts",
                     ],
+                    "typed_provider_route": {
+                        "method": "adaos.sdk.system.get_operational_snapshot",
+                        "section": "summary",
+                        "authority": "local_node_identity",
+                        "subnet": {
+                            "required": [
+                                "available",
+                                "subnet_id",
+                                "display_name",
+                                "source",
+                                "freshness",
+                            ],
+                            "nullable": ["subnet_id", "display_name"],
+                            "freshness_values": ["current", "unavailable"],
+                        },
+                        "service_summary": {
+                            "fields": ["subscription", "budget", "ai_services"],
+                            "item_required": ["available"],
+                            "unavailable_reason": "provider_not_admitted",
+                            "rule": (
+                                "Do not synthesize commercial/service data. An item with "
+                                "available=false is the canonical unavailable state until a "
+                                "separate typed provider is admitted."
+                            ),
+                        },
+                    },
                     "section_fields": {
                         "services": ["services"],
                         "connections": ["connections"],

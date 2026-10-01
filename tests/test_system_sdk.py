@@ -40,6 +40,17 @@ def test_operational_snapshot_summary_does_not_load_heavy_sections(monkeypatch) 
     assert result["schema"] == "adaos.sdk.system.operational_snapshot.v1"
     assert result["subject"]["id"] == "node:hub"
     assert result["capacity"]["id"] == "capacity:hub"
+    assert result["subnet"] == {
+        "available": False,
+        "subnet_id": None,
+        "display_name": None,
+        "source": "local_node_identity",
+        "freshness": "unavailable",
+    }
+    assert result["service_summary"]["subscription"] == {
+        "available": False,
+        "reason": "provider_not_admitted",
+    }
     assert "services" not in result
     assert "incidents" not in result
 
@@ -175,6 +186,40 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
     assert result["application_updates"] == {"available": 1, "total": 1}
     assert result["resources"]["cpu"]["percent"] == 12.5
     assert result["provenance"] == {"authority": "local_node", "projection": "read_only"}
+
+
+def test_operational_snapshot_exposes_typed_subnet_identity(monkeypatch) -> None:
+    from adaos.sdk import system
+    from adaos.services import subnet_alias
+
+    monkeypatch.setattr(
+        system.control_plane,
+        "get_self_object",
+        lambda: {
+            **_object("hub:node-1", "hub"),
+            "relations": {"subnet": ["subnet:sn_demo"]},
+        },
+    )
+    monkeypatch.setattr(
+        system.control_plane,
+        "get_local_capacity_object",
+        lambda: _object("capacity:node-1", "capacity"),
+    )
+    monkeypatch.setattr(
+        subnet_alias,
+        "load_subnet_alias",
+        lambda *, subnet_id=None: "Product Lab" if subnet_id == "sn_demo" else None,
+    )
+
+    result = system.get_operational_snapshot(sections="summary")
+
+    assert result["subnet"] == {
+        "available": True,
+        "subnet_id": "sn_demo",
+        "display_name": "Product Lab",
+        "source": "local_node_identity",
+        "freshness": "current",
+    }
 
 
 def test_rename_local_subnet_preserves_identity(monkeypatch) -> None:

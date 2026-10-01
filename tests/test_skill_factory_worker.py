@@ -161,6 +161,17 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "adaos.sdk.system.rename_current_node" in names
     assert "adaos.sdk.system.rename_local_subnet" in names
     system_contract = bundle["response_contracts"]["system_operational_snapshot"]
+    typed_route = system_contract["result"]["typed_provider_route"]
+    assert typed_route["method"] == "adaos.sdk.system.get_operational_snapshot"
+    assert typed_route["subnet"]["required"] == [
+        "available",
+        "subnet_id",
+        "display_name",
+        "source",
+        "freshness",
+    ]
+    assert typed_route["service_summary"]["unavailable_reason"] == "provider_not_admitted"
+    system_contract = bundle["response_contracts"]["system_operational_snapshot"]
     assert "resources" in system_contract["sections"]
     assert "members" in system_contract["sections"]
     assert "applications" in system_contract["sections"]
