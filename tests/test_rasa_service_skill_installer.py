@@ -154,8 +154,8 @@ def test_ensure_rasa_service_skill_installed_refreshes_stale_file_dependency(mon
     manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
     assert manifest["dependencies"] == [
         "adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
-        "v0.2.0/adaos_rasa_nlu-0.2.0-py3-none-any.whl"
-        "#sha256=5155dc68b016f871145c83f4687f52615607517729bf7d4f73f60a6001437e3b",
+        "v0.2.1/adaos_rasa_nlu-0.2.1-py3-none-any.whl"
+        "#sha256=78463187889f6e3e4f724428e1c3c778eae7d32903ac2bbfb73a0fa62325270e",
     ]
     assert "same-version" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
 
@@ -235,8 +235,8 @@ def test_rasa_port_dependency_falls_back_to_hash_pinned_wheel(monkeypatch):
 
     assert deps == [
         "adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
-        "v0.2.0/adaos_rasa_nlu-0.2.0-py3-none-any.whl"
-        "#sha256=5155dc68b016f871145c83f4687f52615607517729bf7d4f73f60a6001437e3b",
+        "v0.2.1/adaos_rasa_nlu-0.2.1-py3-none-any.whl"
+        "#sha256=78463187889f6e3e4f724428e1c3c778eae7d32903ac2bbfb73a0fa62325270e",
     ]
 
 

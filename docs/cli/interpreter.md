@@ -84,7 +84,7 @@ stale indexes, and runs service reindex. `--min-dev-accuracy` and
 If `src/adaos/integrations/rasa-port` exists, AdaOS installs it into the service venv as editable local source. Otherwise the service-skill uses:
 
 ```text
-adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/v0.2.0/adaos_rasa_nlu-0.2.0-py3-none-any.whl#sha256=5155dc68b016f871145c83f4687f52615607517729bf7d4f73f60a6001437e3b
+adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/v0.2.1/adaos_rasa_nlu-0.2.1-py3-none-any.whl#sha256=78463187889f6e3e4f724428e1c3c778eae7d32903ac2bbfb73a0fa62325270e
 ```
 
 Override with:
