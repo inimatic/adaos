@@ -134,6 +134,15 @@ negative digest test are complete. The remaining closure is:
 5. scan the transported real-Application archive again in CI for forbidden
    local or secret material.
 
+Two additional productionization gates follow this proof. `CBS10-15` binds
+default-bundle generation to the governed publication transaction. It must run
+after the semantic registry commit exists, because that commit is part of the
+snapshot identity; generating the archive inside the earlier package-upload
+step would seal an uncommitted or fictitious registry revision. `CBS10-16`
+then makes stable installation consume only the resulting immutable
+ProjectRelease, package, and bundle artifacts. Source checkout and Git remain
+available only to development builds.
+
 The legacy `0.1.11` projection must remain unchanged. Its absence of portable
 evidence is useful negative evidence that the new distribution rail fails
 closed rather than manufacturing conformance.

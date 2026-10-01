@@ -1061,6 +1061,19 @@ its own local account attachment and credential authority.
   trust projection during enrollment or registry sync, repeating online thin
   acquisition from empty caches on `.34`, provisioning its distinct local Gmail
   account attachment, and injecting the production activation failure.
+- [ ] `[must]` `CBS10-15` Make the resolved default distribution a derived
+  publication output. A governed `adaos project push <name>` must finish CBS
+  admission and semantic publication first; after the registry commit fixes the
+  snapshot identity, the publisher must generate the sealed bundle, publish its
+  digest and immutable download reference through the existing registry/package
+  store, and update that reference for every new ProjectRelease. A failed bundle
+  build must leave the preceding stable release and bundle active.
+- [ ] `[must]` `CBS10-16` Make stable install and update source-free end to end:
+  resolve only ProjectRelease/package/bundle identities, verify package and
+  publisher attestations, and install exact package bytes. Git checkout,
+  submodule initialization, and source build remain development-only paths.
+  Prove this on a clean node with Git absent, then prove publication of a new
+  Application version changes the default bundle and autoupdate consumes it.
 - [ ] `[should]` `CBS10-12` Add selective synchronization, reverse indexes,
   pagination, and bounded registry/local caches after correctness and
   cold-start costs are measured.
