@@ -2273,6 +2273,7 @@ class RootDeveloperService:
         *,
         project_id: str,
         release_digest: str,
+        project_release: Any | None = None,
     ) -> tuple[Any, Any] | None:
         """Resolve an exact public Application envelope for source publication."""
 
@@ -2295,7 +2296,132 @@ class RootDeveloperService:
             if release.accepted_candidate_id == candidate_id:
                 matches.append((application, release))
         if not matches:
-            return None
+            if project_release is None:
+                return None
+            # A Project can enter the governed lifecycle directly (rather than
+            # through Builder's Application-first flow).  Listed Projects are
+            # still installable Applications and must therefore publish the
+            # portable Application catalog envelope alongside their semantic
+            # projection.  Materialize that identity here, after promotion has
+            # proved the exact candidate/release, instead of requiring a second
+            # package manager or falling back to source discovery at install.
+            project_path = (
+                Path(self.ctx.paths.workspace_dir())
+                / "projects"
+                / project_id
+                / "project.yaml"
+            )
+            if not project_path.is_file():
+                return None
+            try:
+                project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, yaml.YAMLError) as exc:
+                raise RootServiceError(
+                    f"cannot read public Project definition: {project_id}: {exc}"
+                ) from exc
+            if not isinstance(project, Mapping):
+                raise RootServiceError(
+                    f"public Project definition is invalid: {project_id}"
+                )
+            publication = project.get("publication")
+            visibility = (
+                str(publication.get("visibility") or "").strip().lower()
+                if isinstance(publication, Mapping)
+                else ""
+            )
+            if visibility not in {"listed", "public"}:
+                return None
+
+            from adaos.domain.application import Application, ApplicationRelease, utc_now
+            from adaos.sdk.builder.applications import publisher_context
+
+            publisher = publisher_context()
+            publisher_ref = str(publisher["publisher_ref"])
+            catalog = project.get("catalog")
+            catalog = dict(catalog) if isinstance(catalog, Mapping) else {}
+            composition = getattr(project_release, "composition_lock", None)
+            raw_entrypoints = tuple(getattr(composition, "entrypoints", ()) or ())
+            entrypoints = tuple(
+                {
+                    "entrypoint_id": str(item.get("id") or "").strip(),
+                    "presentation_ref": str(item.get("presentation") or "").strip(),
+                }
+                for item in raw_entrypoints
+                if isinstance(item, Mapping)
+            )
+            if not entrypoints or any(
+                not item["entrypoint_id"] or not item["presentation_ref"]
+                for item in entrypoints
+            ):
+                raise RootServiceError(
+                    f"listed Project has no valid public entrypoints: {project_id}"
+                )
+            try:
+                application = service.store.get_application(project_id)
+            except FileNotFoundError:
+                application = Application(
+                    application_id=project_id,
+                    legacy_project_id=project_id,
+                    publisher_ref=publisher_ref,
+                    slug=project_id,
+                    display={
+                        "title": str(catalog.get("title") or project_id),
+                        "summary": str(catalog.get("description") or "") or None,
+                        "categories": list(catalog.get("categories") or ()),
+                    },
+                    visibility="public",
+                    entrypoints=entrypoints,
+                    publisher={
+                        key: publisher[key]
+                        for key in (
+                            "publisher_ref",
+                            "display_name",
+                            "subnet_short_ref",
+                            "release_key_ref",
+                            "release_key_fingerprint",
+                            "home_zone",
+                            "trust_relation",
+                        )
+                    },
+                )
+                service.register(application, expected_revision=0)
+            if (
+                application.legacy_project_id != project_id
+                or application.publisher_ref != publisher_ref
+                or application.visibility != "public"
+            ):
+                raise RootServiceError(
+                    f"listed Project conflicts with Application identity: {project_id}"
+                )
+            application_release = ApplicationRelease(
+                application_id=application.application_id,
+                publisher_ref=application.publisher_ref,
+                project_release=project_release,
+                accepted_candidate_id=candidate_id,
+                acceptance_evidence=(
+                    {
+                        "status": "passed",
+                        "validator": "adaos.artifact_pipeline.promoted_candidate",
+                    },
+                ),
+                provenance_refs=tuple(
+                    getattr(project_release, "validation_evidence_refs", ())
+                    or (release_digest,)
+                ),
+                lifecycle="stable",
+                published_at=utc_now(),
+            )
+            service.register_release(application_release)
+            channels = service.store.get_channels(application.application_id).get(
+                "channels"
+            ) or {}
+            service.store.set_channel(
+                application.application_id,
+                "stable",
+                application_release.release_digest,
+                expected_release_digest=channels.get("stable"),
+            )
+            matches.append((application, application_release))
         if len(matches) != 1:
             raise RootServiceError(
                 "candidate maps to more than one Application aggregate"
@@ -3214,6 +3340,7 @@ class RootDeveloperService:
             token,
             project_id=plan.release.project_id,
             release_digest=str(plan.release.release_digest),
+            project_release=plan.release,
         )
         application_catalog_publication = None
         if public_application is not None:
@@ -3400,6 +3527,23 @@ class RootDeveloperService:
 
         project_id = str(plan.release.project_id)
         release_digest = str(plan.release.release_digest)
+        remote = self.artifact_release_repository(role="hub")
+        # The default bundle is immutable for one exact ProjectRelease.  A
+        # later idempotent publication may legitimately backfill a derived
+        # catalog projection, but must reuse the already sealed distribution
+        # instead of rebuilding it against a newer registry revision.
+        try:
+            existing_descriptor, _existing_archive = remote.get_default_distribution(
+                project_id, release_digest
+            )
+        except (FileNotFoundError, ArtifactNotFoundError):
+            existing_descriptor = None
+        except RootHttpError as exc:
+            if getattr(exc, "status_code", None) != 404:
+                raise
+            existing_descriptor = None
+        if isinstance(existing_descriptor, Mapping):
+            return {**existing_descriptor, "reused": True}
         admission = NativeApplicationCBSAdmissionService(
             Path(self.ctx.paths.state_dir()).resolve()
         ).find_by_project_release(
@@ -3427,7 +3571,6 @@ class RootDeveloperService:
             environment_profile=environment_profile,
         )
         distribution = resolve_application_distribution_service(self.ctx)
-        remote = self.artifact_release_repository(role="hub")
         exporter = ResolvedSemanticBundleExporter(
             ThinSemanticDistributionResolver(
                 projection=semantic_projection,

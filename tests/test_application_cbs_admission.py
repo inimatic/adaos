@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +10,12 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.domain.application import Application, ApplicationRelease
-from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
+from adaos.domain.artifact_release import (
+    ArtifactSourceRef,
+    ProjectCompositionLock,
+    ProjectMemberLock,
+    canonical_payload_digest,
+)
 from adaos.domain.capability_binding_state import ApplicationRequirement
 from adaos.services.applications.cbs import ApplicationCBSService
 from adaos.services.applications.cbs_admission import (
@@ -36,6 +42,8 @@ from adaos.services.artifact_pipeline import (
     build_project_release,
 )
 from adaos.services.applications.store import ApplicationStore
+from adaos.services.applications.service import ApplicationService
+from adaos.services.root.service import RootDeveloperService
 
 
 FIXED_NOW = datetime(2026, 9, 24, 6, 0, tzinfo=UTC)
@@ -237,6 +245,94 @@ def _release(
         validation_evidence=({"validator": "pytest", "status": "passed"},),
     )
     return plan, store
+
+
+def test_listed_project_publication_materializes_application_catalog_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, _packages = _release(tmp_path)
+    primary = plan.release.components[0]
+    composition = ProjectCompositionLock(
+        project_definition_digest="sha256:" + "1" * 64,
+        profiles=("adaos.default_install.v1",),
+        members=tuple(
+            ProjectMemberLock(
+                ref=component.key,
+                package_digest=component.digest,
+                role="primary" if component.key == primary.key else "implementation",
+                exposure="application" if component.key == primary.key else "project_only",
+                lifecycle="bound",
+                relations=("presents",) if component.kind == "scenario" else ("realizes",),
+            )
+            for component in plan.release.components
+        ),
+        project_dependencies=(),
+        entrypoints=(
+            {"id": "main", "presentation": "mail_client", "default": True},
+        ),
+        compatibility={},
+        lifecycle={},
+    )
+    project_release = replace(
+        plan.release,
+        composition_lock=composition,
+        release_digest=None,
+    ).seal()
+    workspace = tmp_path / "workspace"
+    project_root = workspace / "projects" / "mail_client"
+    project_root.mkdir(parents=True)
+    (project_root / "project.yaml").write_text(
+        """\
+schema: adaos.project.v1
+kind: project
+id: mail_client
+version: 1.0.0
+catalog:
+  title: Mail Client
+  description: Portable mail client
+  categories: [mail]
+publication:
+  visibility: listed
+""",
+        encoding="utf-8",
+    )
+    state = tmp_path / "state"
+    applications = ApplicationService(ApplicationStore(state))
+    monkeypatch.setattr(
+        "adaos.services.applications.get_application_service",
+        lambda _state: applications,
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.applications.publisher_context",
+        lambda: {
+            "publisher_ref": "subnet:publisher",
+            "display_name": "Publisher",
+            "subnet_short_ref": "publisher",
+            "release_key_ref": "key:publisher/releases",
+            "release_key_fingerprint": "sha256:" + "2" * 64,
+            "home_zone": "global",
+            "trust_relation": "local",
+        },
+    )
+    paths = SimpleNamespace(
+        workspace_dir=lambda: workspace,
+        state_dir=lambda: state,
+    )
+    service = RootDeveloperService(ctx=SimpleNamespace(paths=paths))
+
+    application, release = service._public_application_for_candidate(
+        "candidate-mail",
+        project_id="mail_client",
+        release_digest=str(project_release.release_digest),
+        project_release=project_release,
+    )
+
+    assert application.application_id == "mail_client"
+    assert application.visibility == "public"
+    assert release.project_release == project_release
+    assert applications.store.get_channels("mail_client")["channels"] == {
+        "stable": project_release.release_digest
+    }
 
 
 def test_ui_admission_selects_application_entrypoint_from_multiple_scenarios(

@@ -1079,7 +1079,7 @@ its own local account attachment and credential authority.
   the observed byte digest matched the published digest. Descriptor and byte
   writes are immutable and idempotent, while build/upload runs only after the
   semantic registry commit and never mutates the stable channel.
-- [~] `[must]` `CBS10-16` Make stable install and update source-free end to end:
+- [x] `[must]` `CBS10-16` Make stable install and update source-free end to end:
   resolve only ProjectRelease/package/bundle identities, verify package and
   publisher attestations, and install exact package bytes. Git checkout,
   submodule initialization, and source build remain development-only paths.
@@ -1091,18 +1091,33 @@ its own local account attachment and credential authority.
   Project/component materialization pass and skips registry synchronization
   when all exact releases are already discoverable. The archive-only rerun
   also proved that a stale non-bootstrap Webspace scenario must degrade that
-  Webspace without blocking immutable catalog synchronization. The remaining
-  first fail-closed gap found by this run was fixed for `weather`: the WebUI now
+  Webspace without blocking immutable catalog synchronization. The first
+  fail-closed gap found by this run was fixed for `weather`: the WebUI now
   declares exact desktop presentation ownership, native CBS admission resolved
   1/1 requirements, Trial was accepted, package activation passed, stable was
   promoted, and registry publication produced semantic projection plus sealed
   default bundle `sha256:0983921bc1afaa5e32c1fd8263d9f7a864bba2715d62574e4703cda36bb3551f`.
-  `nlu_teacher` remains the concrete default-distribution blocker: its legacy
-  shared `web_desktop_skill` WebUI fails current schema admission and cannot be
-  republished as an independently owned Application closure. The preset rejects
-  it rather than falling back to source. Close this item after NLU Teacher owns
-  a valid package/presentation, traverses Trial/beta/stable semantic
-  publication, and the archive-only preset installs the full default set.
+  `nlu_teacher` was then separated from the shared legacy
+  `web_desktop_skill`: it now owns `nlu_teacher_skill`, whose presentation reads
+  core-owned NLU evidence and invokes core-owned NLU actions without claiming
+  that shared authority. Native admission resolved 1/1 requirements, isolated
+  Trial materialization passed, and candidate
+  `nlu_teacher-0-2-0-2c4abc2f82cd` was accepted, promoted, activated and
+  published as exact release
+  `sha256:3fb802a3d758ea87606a058e9bcf6541926a422ddfbe2004c2592c4abc2f82cd`
+  with sealed bundle
+  `sha256:464be1665a146ca8513fcaa1457131fa157b25e48bf75e76c9351cf10f7119d2`.
+  Publication now also derives a public Application catalog envelope for a
+  listed Project that entered through the Project-first lifecycle; repeated
+  publication reuses the immutable bundle while allowing the derived catalog
+  projection to be backfilled. On `.34`, core updated from the pinned GitHub
+  source archive into slot B (`prepare=138.809s`, package install `10.153s`),
+  the first release-only default Application convergence installed
+  Subscription, NLU Teacher and Weather in `50.00s`, and an immediate rerun
+  with Git capability disabled resolved every default Application locally and
+  completed in `3.75s` without source synchronization or standalone component
+  mutation. Git remains only a compatibility transport for registry refresh;
+  exact stable installation itself is source-free.
 - [ ] `[should]` `CBS10-12` Add selective synchronization, reverse indexes,
   pagination, and bounded registry/local caches after correctness and
   cold-start costs are measured.

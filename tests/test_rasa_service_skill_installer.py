@@ -67,11 +67,11 @@ def test_ensure_rasa_service_skill_installed_refreshes_managed_files():
     assert (target / "custom.txt").read_text(encoding="utf-8").strip() == "keep me"
 
 
-def test_ensure_rasa_service_skill_installed_reports_noop_after_first_ensure():
+def test_ensure_rasa_service_skill_installed_returns_usable_target_after_noop():
     from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed
 
     assert ensure_rasa_service_skill_installed() is not None
-    assert ensure_rasa_service_skill_installed() is None
+    assert ensure_rasa_service_skill_installed() is not None
 
 
 def test_ensure_rasa_service_skill_installed_does_not_downgrade_newer_workspace_skill(monkeypatch):
@@ -154,8 +154,8 @@ def test_ensure_rasa_service_skill_installed_refreshes_stale_file_dependency(mon
     manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
     assert manifest["dependencies"] == [
         "adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
-        "v0.2.1/adaos_rasa_nlu-0.2.1-py3-none-any.whl"
-        "#sha256=78463187889f6e3e4f724428e1c3c778eae7d32903ac2bbfb73a0fa62325270e",
+            "v0.2.2/adaos_rasa_nlu-0.2.2-py3-none-any.whl"
+            "#sha256=8de0ff8f8eba3c7d8639f60efe72fdf4e3247b509d8f1e14b4e52646d82081c8",
     ]
     assert "same-version" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
 
@@ -235,8 +235,8 @@ def test_rasa_port_dependency_falls_back_to_hash_pinned_wheel(monkeypatch):
 
     assert deps == [
         "adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
-        "v0.2.1/adaos_rasa_nlu-0.2.1-py3-none-any.whl"
-        "#sha256=78463187889f6e3e4f724428e1c3c778eae7d32903ac2bbfb73a0fa62325270e",
+            "v0.2.2/adaos_rasa_nlu-0.2.2-py3-none-any.whl"
+            "#sha256=8de0ff8f8eba3c7d8639f60efe72fdf4e3247b509d8f1e14b4e52646d82081c8",
     ]
 
 

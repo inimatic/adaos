@@ -527,7 +527,10 @@ def ensure_rasa_service_skill_installed() -> Path | None:
     """
     Ensure default Rasa NLU service-skill exists and is staged in an active slot.
 
-    Returns workspace target path when created/refreshed, otherwise None.
+    Returns the usable workspace target path, including when the exact active
+    runtime was already current. ``None`` is reserved for disabled or failed
+    installation so repeat setup cannot misreport a healthy Rasa provider as
+    unavailable.
     """
     if not is_rasa_nlu_enabled():
         return None
@@ -562,4 +565,4 @@ def ensure_rasa_service_skill_installed() -> Path | None:
     except Exception:
         _log.warning("failed to install rasa_nlu_service_skill", exc_info=True)
         return None
-    return target if changed else None
+    return target
