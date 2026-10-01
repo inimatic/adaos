@@ -75,7 +75,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.3.14"
+    assert catalog["catalog_version"] == "3.4.1"
     assert {
         "navigation.tabs",
         "navigation.breadcrumbs",
@@ -97,7 +97,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     list_capability = get_ui_capability("ui.list")
     assert "initialsKey" in list_capability["manifest"]["optional_inputs"]
     assert "textual avatar" in list_capability["manifest"]["projection"]
-    assert "separate sibling ui.actions" in list_capability["manifest"]["button_shape"]
+    assert "top-level widget.actions entry" in list_capability["manifest"]["button_shape"]
     details = get_ui_capability("item.details")
     assert "initialsKey" in details["manifest"]["media"]
     assert "technical field id is never a visible heading" in form["manifest"]["static_content"]
@@ -126,6 +126,24 @@ def test_dashboard_status_informers_select_metric_tile_and_dashboard() -> None:
     assert "layout.dashboard" in selected["root_item_ids"]
     metric_tile = get_ui_capability("visual.metricTile")
     assert "without relying on color" in metric_tile["manifest"]["static_data"]
+
+
+def test_progressive_details_and_copyable_identifier_select_authoring_contracts() -> None:
+    from adaos.services.ui_capabilities import (
+        selected_ui_capabilities as select_generic_capabilities,
+    )
+
+    selected = select_generic_capabilities(
+        "Add accordion progressive details and make subnet id copyable to the clipboard."
+    )
+
+    assert "disclosure.accordion" in selected["root_item_ids"]
+    assert "recipe.copyable_identifier" in selected["root_item_ids"]
+    recipe = get_ui_capability("recipe.copyable_identifier")
+    assert recipe["composition"]["action"]["type"] == "copyToClipboard"
+    assert recipe["composition"]["action"]["params"]["successMessage"] == (
+        "Copied to clipboard."
+    )
 
 
 def test_ui_revision_correction_does_not_require_domain_persistence() -> None:

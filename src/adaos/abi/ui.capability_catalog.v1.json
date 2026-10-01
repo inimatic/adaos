@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.4.0",
+  "catalog_version": "3.4.1",
   "webui_schema": "adaos.webui.v1",
   "authoring_lifecycle": {
     "deprecated_interfaces": [
@@ -1576,6 +1576,49 @@
       },
       "postconditions": [
         "Each requested answer has one editable typed field."
+      ]
+    },
+    {
+      "id": "recipe.copyable_identifier",
+      "title": "Copyable identifier",
+      "summary": "Turn a visible identifier into an explicit clipboard action with immediate success or failure feedback.",
+      "aliases": {
+        "en": [
+          "copy identifier",
+          "copy to clipboard",
+          "copyable value"
+        ],
+        "ru": [
+          "копировать идентификатор",
+          "копировать в буфер обмена",
+          "копируемое значение"
+        ]
+      },
+      "requires": {
+        "layouts": [],
+        "components": [
+          "ui.actions"
+        ]
+      },
+      "composition": {
+        "projection": "Keep the full identifier visible or available through an accessible name. The copy affordance is a local UI action and never requires a skill, permission, or approval.",
+        "action": {
+          "on": "click:copy-id",
+          "id": "copy-id",
+          "type": "copyToClipboard",
+          "params": {
+            "text": "$state.selectedIdentifier",
+            "successMessage": "Copied to clipboard.",
+            "errorMessage": "Copy failed."
+          }
+        },
+        "static_value": "For a fixed prototype value, params.text may contain the literal identifier instead of a state reference.",
+        "feedback": "Use a concise localized confirmation such as 'Copied to clipboard.'; do not leave the user to infer that copying succeeded."
+      },
+      "postconditions": [
+        "Activating the identifier or its copy affordance writes the intended full value to the clipboard.",
+        "Success and failure both produce explicit transient feedback.",
+        "Copying an identifier is handled locally without a governed runtime command."
       ]
     },
     {
