@@ -1092,11 +1092,17 @@ its own local account attachment and credential authority.
   when all exact releases are already discoverable. The archive-only rerun
   also proved that a stale non-bootstrap Webspace scenario must degrade that
   Webspace without blocking immutable catalog synchronization. The remaining
-  fail-closed gap is concrete: newly published `weather` and `nlu_teacher`
-  ProjectReleases do not yet have stable Application/CBS projections, so the
-  default preset rejects them rather than falling back to source. Close this
-  item only after both traverse Trial/beta/stable semantic publication and the
-  archive-only preset installs them from their exact package closures.
+  first fail-closed gap found by this run was fixed for `weather`: the WebUI now
+  declares exact desktop presentation ownership, native CBS admission resolved
+  1/1 requirements, Trial was accepted, package activation passed, stable was
+  promoted, and registry publication produced semantic projection plus sealed
+  default bundle `sha256:0983921bc1afaa5e32c1fd8263d9f7a864bba2715d62574e4703cda36bb3551f`.
+  `nlu_teacher` remains the concrete default-distribution blocker: its legacy
+  shared `web_desktop_skill` WebUI fails current schema admission and cannot be
+  republished as an independently owned Application closure. The preset rejects
+  it rather than falling back to source. Close this item after NLU Teacher owns
+  a valid package/presentation, traverses Trial/beta/stable semantic
+  publication, and the archive-only preset installs the full default set.
 - [ ] `[should]` `CBS10-12` Add selective synchronization, reverse indexes,
   pagination, and bounded registry/local caches after correctness and
   cold-start costs are measured.
