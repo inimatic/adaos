@@ -29,7 +29,9 @@ git submodule update --init --recursive \
   src/adaos/integrations/rasa-port
 ```
 
-`rasa-port` is optional but recommended when working on NLU locally. If it is absent, AdaOS installs `adaos-rasa-nlu` for the Rasa service-skill from `https://github.com/inimatic/rasa-port.git`.
+`rasa-port` is optional and useful when working on NLU locally. If it is absent,
+AdaOS installs the hash-pinned published `adaos-rasa-nlu` wheel; stable nodes do
+not clone its Git repository.
 
 ## Bootstrap
 

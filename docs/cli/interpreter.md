@@ -1,6 +1,9 @@
 # CLI: Interpreter and Rasa NLU
 
-AdaOS no longer installs upstream `rasa==3.6.x` into the root environment. Rasa NLU is provided by the AdaOS-maintained `rasa-port` package and runs as an optional service-skill in the normal skill runtime slots.
+AdaOS no longer installs upstream `rasa==3.6.x`. Rasa NLU is provided by the
+AdaOS-maintained, hash-pinned `rasa-port` wheel. The service process remains an
+optional service-skill, but its tested lightweight dependency profile now uses
+the core venv instead of constructing a duplicate bucket venv.
 
 ## Install model
 
@@ -70,7 +73,7 @@ stale indexes, and runs service reindex. `--min-dev-accuracy` and
 
 - Workspace template copy: `.adaos/workspace/skills/rasa_nlu_service_skill`
 - Active slot source: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/v<major>.<minor>/slots/<A|B>/src/skills/rasa_nlu_service_skill`
-- Bucket service venv: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/v<major>.<minor>/venv`
+- Python environment: the active AdaOS core venv (`runtime.env.mode: core`)
 - Generated project: `.adaos/state/interpreter/rasa_project`
 - Neural training bundle: `.adaos/state/interpreter/neural_training`
 - Model artifact: `.adaos/models/interpreter/interpreter_latest.tar.gz`
@@ -81,7 +84,7 @@ stale indexes, and runs service reindex. `--min-dev-accuracy` and
 If `src/adaos/integrations/rasa-port` exists, AdaOS installs it into the service venv as editable local source. Otherwise the service-skill uses:
 
 ```text
-adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/v0.1.0/adaos_rasa_nlu-0.1.0-py3-none-any.whl#sha256=349f3fe8b7234558b138a7770e3a74aa01def6d509c65c579c30027a64b0d4bd
+adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/v0.2.0/adaos_rasa_nlu-0.2.0-py3-none-any.whl#sha256=5155dc68b016f871145c83f4687f52615607517729bf7d4f73f60a6001437e3b
 ```
 
 Override with:

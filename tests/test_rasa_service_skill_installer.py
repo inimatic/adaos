@@ -30,7 +30,9 @@ def test_ensure_rasa_service_skill_installed_creates_skill_tree():
     assert (target / "requirements.in").exists()
     assert (target / "handlers" / "main.py").exists()
     manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
-    assert manifest["dependencies"][0] == "--no-deps"
+    assert manifest["dependencies"][0] == "-e"
+    assert manifest["runtime"]["env"]["mode"] == "core"
+    assert manifest["runtime"]["env"]["dependency_mode"] == "shared"
     assert any("rasa-port" in item or "adaos-rasa-nlu" in item for item in manifest["dependencies"])
 
     env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="rasa_nlu_service_skill")
@@ -127,7 +129,7 @@ def test_ensure_rasa_service_skill_installed_refreshes_stale_file_dependency(mon
         "\n".join(
             [
                 "name: rasa_nlu_service_skill",
-                "version: 0.1.6",
+                "version: 0.2.0",
                 "runtime:",
                 "  kind: service",
                 "  env:",
@@ -151,10 +153,9 @@ def test_ensure_rasa_service_skill_installed_refreshes_stale_file_dependency(mon
     assert installed == target
     manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
     assert manifest["dependencies"] == [
-        "--no-deps",
         "adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
-        "v0.1.0/adaos_rasa_nlu-0.1.0-py3-none-any.whl"
-        "#sha256=349f3fe8b7234558b138a7770e3a74aa01def6d509c65c579c30027a64b0d4bd",
+        "v0.2.0/adaos_rasa_nlu-0.2.0-py3-none-any.whl"
+        "#sha256=5155dc68b016f871145c83f4687f52615607517729bf7d4f73f60a6001437e3b",
     ]
     assert "same-version" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
 
@@ -220,9 +221,9 @@ def test_rasa_port_dependency_initializes_declared_submodule(monkeypatch, tmp_pa
     cmd = next(call[0] for call in calls if "update" in call[0])
     assert cmd[:4] == ["git", "-C", str(repo), "submodule"]
     assert cmd[-1] == "src/adaos/integrations/rasa-port"
-    assert deps[:2] == ["--no-deps", "-e"]
-    assert deps[2].startswith("file:")
-    assert "rasa-port" in deps[2]
+    assert deps[0] == "-e"
+    assert deps[1].startswith("file:")
+    assert "rasa-port" in deps[1]
 
 
 def test_rasa_port_dependency_falls_back_to_hash_pinned_wheel(monkeypatch):
@@ -233,10 +234,9 @@ def test_rasa_port_dependency_falls_back_to_hash_pinned_wheel(monkeypatch):
     deps = installer._rasa_port_dependency_args(get_ctx())
 
     assert deps == [
-        "--no-deps",
         "adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
-        "v0.1.0/adaos_rasa_nlu-0.1.0-py3-none-any.whl"
-        "#sha256=349f3fe8b7234558b138a7770e3a74aa01def6d509c65c579c30027a64b0d4bd",
+        "v0.2.0/adaos_rasa_nlu-0.2.0-py3-none-any.whl"
+        "#sha256=5155dc68b016f871145c83f4687f52615607517729bf7d4f73f60a6001437e3b",
     ]
 
 

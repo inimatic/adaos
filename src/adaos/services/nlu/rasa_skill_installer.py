@@ -26,8 +26,8 @@ _RESOURCE_DIR = "rasa_nlu_service_skill"
 _LEGACY_MANAGED_META = ".adaos-managed.json"
 _SOURCE_FINGERPRINT_KEY = "source_fingerprint"
 _RASA_PORT_SUBMODULE = Path("src/adaos/integrations/rasa-port")
-_RASA_PORT_VERSION = "0.1.0"
-_RASA_PORT_WHEEL_SHA256 = "349f3fe8b7234558b138a7770e3a74aa01def6d509c65c579c30027a64b0d4bd"
+_RASA_PORT_VERSION = "0.2.0"
+_RASA_PORT_WHEEL_SHA256 = "5155dc68b016f871145c83f4687f52615607517729bf7d4f73f60a6001437e3b"
 _DEFAULT_RASA_PORT_REQUIREMENT = (
     f"adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
     f"v{_RASA_PORT_VERSION}/adaos_rasa_nlu-{_RASA_PORT_VERSION}-py3-none-any.whl"
@@ -315,9 +315,9 @@ def _path_requirement(path: Path) -> str:
 def _rasa_port_dependency_args(ctx: Any) -> list[str]:
     local_path = _ensure_rasa_port_submodule_checkout(ctx)
     if local_path:
-        return ["--no-deps", "-e", _path_requirement(local_path)]
+        return ["-e", _path_requirement(local_path)]
     requirement = _env_value("ADAOS_RASA_PORT_REQUIREMENT") or _DEFAULT_RASA_PORT_REQUIREMENT
-    return ["--no-deps", requirement]
+    return [requirement]
 
 
 def _write_rasa_port_dependency(target: Path, ctx: Any) -> list[str]:

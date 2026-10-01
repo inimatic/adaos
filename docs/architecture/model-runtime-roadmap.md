@@ -238,7 +238,9 @@ artifact/dependency MVP and the Neural NLU / face vision pilots.
 
 - [ ] Describe Rasa as an `intent-detection` service-skill provider in the
   model registry.
-- [ ] Add a `rasa-nlu-py311` dependency profile for `rasa-port` / Rasa NLU
+- [x] Add a core-compatible Python 3.11 dependency profile for `rasa-port` /
+  Rasa NLU (`0.2.0`, lightweight CountVectors/CRF/LogisticRegression pipeline;
+  TensorFlow/JAX excluded)
   service dependencies, keeping upstream Rasa out of the hub root venv.
 - [ ] Track the trained Rasa model as a local model artifact with
   `current`/`previous` state, without publishing node-trained models through

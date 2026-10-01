@@ -336,7 +336,11 @@ not current Teacher write targets.
 
 ## Rasa as a service-skill
 
-Rasa is treated as a **service-type skill** (separate Python/venv, managed lifecycle) to avoid dependency conflicts with the hub runtime. AdaOS uses the NLU-only `rasa-port` package, not upstream `rasa==3.6.x` in the root venv.
+Rasa is treated as a **service-type skill** with a managed process lifecycle.
+AdaOS uses the NLU-only `rasa-port` package, not upstream `rasa==3.6.x`.
+Version `0.2.0` was tested against the current core venv and removed the former
+TensorFlow/JAX dependency conflict, so the service now reuses that venv rather
+than maintaining an almost duplicate bucket environment.
 
 Install behavior:
 
