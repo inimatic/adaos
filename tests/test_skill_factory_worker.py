@@ -11184,6 +11184,53 @@ def test_worker_binds_new_external_mcp_contract_named_by_approved_brief(
     assert contracts["contracts"][0]["binding_usage"] == ["brief_reference"]
 
 
+def test_dev_ticket_repair_receives_commit_bound_public_sdk_contracts(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    scenario_root = workspace / "scenarios" / "web_desktop"
+    scenario_root.mkdir(parents=True)
+    (scenario_root / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {}}),
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.system-repair",
+        "target": {"type": "scenario", "id": "web_desktop"},
+        "forge": {"sparse_paths": ["scenarios/web_desktop/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                        "ticket_id": "dticket.system",
+                        "summary": "Repair the Management System projection.",
+                    }
+                )
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+
+    packet = worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    contracts_path = tmp_path / "input" / "public-sdk-contracts.json"
+    contracts = json.loads(contracts_path.read_text(encoding="utf-8"))
+    assert packet["public_sdk_contracts_ref"] == contracts_path.resolve().as_posix()
+    serialized = json.dumps(contracts, sort_keys=True)
+    assert "adaos.sdk.system.get_operational_snapshot" in serialized
+    assert "adaos.sdk.system.rename_current_node" in serialized
+    assert "adaos.sdk.system.rename_local_subnet" in serialized
+    prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
+    assert "Commit-bound public AdaOS SDK contracts" in prompt
+
+
 def test_worker_reuses_pristine_prototype_identity_for_automation_continuation(
     tmp_path: Path,
 ) -> None:

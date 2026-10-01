@@ -9748,6 +9748,12 @@ class LocalSkillFactoryWorker:
             packet["implementation_bindings_ref"] = (
                 (input_dir / "implementation-bindings.json").resolve().as_posix()
             )
+        if target_type == "scenario" and workflow_transition != "return_to_prototype":
+            # Dev Ticket repairs need the same commit-bound SDK closure as initial
+            # implementation. Descriptor search intentionally stays compact and
+            # exposes signatures, but it cannot carry the response, authorization,
+            # revision, invalidation and unavailable-state contracts required to
+            # repair an existing integration without inventing runtime semantics.
             public_sdk_contracts_path = input_dir / "public-sdk-contracts.json"
             _write_compact_json(
                 public_sdk_contracts_path,
@@ -10332,6 +10338,10 @@ change, edit directly and do not rediscover the same structures.
 ## Current repair instruction
 
 {bounded_iteration}
+
+{public_sdk_contracts_section}
+
+{external_mcp_section}
 
 {dev_ticket_repair_requirements}
 
