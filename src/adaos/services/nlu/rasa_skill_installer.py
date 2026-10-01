@@ -26,7 +26,13 @@ _RESOURCE_DIR = "rasa_nlu_service_skill"
 _LEGACY_MANAGED_META = ".adaos-managed.json"
 _SOURCE_FINGERPRINT_KEY = "source_fingerprint"
 _RASA_PORT_SUBMODULE = Path("src/adaos/integrations/rasa-port")
-_DEFAULT_RASA_PORT_REQUIREMENT = "adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main"
+_RASA_PORT_VERSION = "0.1.0"
+_RASA_PORT_WHEEL_SHA256 = "349f3fe8b7234558b138a7770e3a74aa01def6d509c65c579c30027a64b0d4bd"
+_DEFAULT_RASA_PORT_REQUIREMENT = (
+    f"adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
+    f"v{_RASA_PORT_VERSION}/adaos_rasa_nlu-{_RASA_PORT_VERSION}-py3-none-any.whl"
+    f"#sha256={_RASA_PORT_WHEEL_SHA256}"
+)
 _log = logging.getLogger("adaos.nlu.rasa.install")
 
 
@@ -399,7 +405,9 @@ def _dependencies_need_rasa_port_refresh(dependencies: list[str], ctx: Any) -> b
                 or not _is_rasa_port_checkout(path)
             )
         if lowered.startswith(("git+", "adaos-rasa-nlu @ git+")):
-            continue
+            return True
+        if lowered.startswith(("http://", "https://", "adaos-rasa-nlu @ http")):
+            return token != _DEFAULT_RASA_PORT_REQUIREMENT
         if ":/" in token or ":\\" in token:
             return True
     return False

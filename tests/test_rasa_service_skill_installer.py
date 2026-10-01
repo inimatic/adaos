@@ -127,7 +127,7 @@ def test_ensure_rasa_service_skill_installed_refreshes_stale_file_dependency(mon
         "\n".join(
             [
                 "name: rasa_nlu_service_skill",
-                "version: 0.1.5",
+                "version: 0.1.6",
                 "runtime:",
                 "  kind: service",
                 "  env:",
@@ -152,7 +152,9 @@ def test_ensure_rasa_service_skill_installed_refreshes_stale_file_dependency(mon
     manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
     assert manifest["dependencies"] == [
         "--no-deps",
-        "adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main",
+        "adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
+        "v0.1.0/adaos_rasa_nlu-0.1.0-py3-none-any.whl"
+        "#sha256=349f3fe8b7234558b138a7770e3a74aa01def6d509c65c579c30027a64b0d4bd",
     ]
     assert "same-version" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
 
@@ -223,7 +225,7 @@ def test_rasa_port_dependency_initializes_declared_submodule(monkeypatch, tmp_pa
     assert "rasa-port" in deps[2]
 
 
-def test_rasa_port_dependency_falls_back_to_git_requirement(monkeypatch):
+def test_rasa_port_dependency_falls_back_to_hash_pinned_wheel(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import rasa_skill_installer as installer
 
@@ -232,7 +234,9 @@ def test_rasa_port_dependency_falls_back_to_git_requirement(monkeypatch):
 
     assert deps == [
         "--no-deps",
-        "adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main",
+        "adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/"
+        "v0.1.0/adaos_rasa_nlu-0.1.0-py3-none-any.whl"
+        "#sha256=349f3fe8b7234558b138a7770e3a74aa01def6d509c65c579c30027a64b0d4bd",
     ]
 
 

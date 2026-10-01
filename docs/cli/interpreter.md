@@ -81,14 +81,14 @@ stale indexes, and runs service reindex. `--min-dev-accuracy` and
 If `src/adaos/integrations/rasa-port` exists, AdaOS installs it into the service venv as editable local source. Otherwise the service-skill uses:
 
 ```text
-adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main
+adaos-rasa-nlu @ https://github.com/inimatic/rasa-port/releases/download/v0.1.0/adaos_rasa_nlu-0.1.0-py3-none-any.whl#sha256=349f3fe8b7234558b138a7770e3a74aa01def6d509c65c579c30027a64b0d4bd
 ```
 
 Override with:
 
 ```bash
 ADAOS_RASA_PORT_PATH=/path/to/rasa-port
-ADAOS_RASA_PORT_REQUIREMENT="adaos-rasa-nlu @ git+https://github.com/<fork>/rasa-port.git@branch"
+ADAOS_RASA_PORT_REQUIREMENT="adaos-rasa-nlu @ https://example.invalid/releases/adaos_rasa_nlu.whl#sha256=<digest>"
 ```
 
 ## Manual check
