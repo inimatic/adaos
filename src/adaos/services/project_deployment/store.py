@@ -496,6 +496,7 @@ class ProjectDeploymentStore:
                 )
             history_root = self._operation_root(operation.operation_id) / "history"
             sequence = len(list(history_root.glob("*.json"))) + 1
+            state_transition = operation.state != current.state
             atomic_write_json(
                 history_root / f"{sequence:06d}.json", operation.to_dict()
             )
@@ -503,13 +504,19 @@ class ProjectDeploymentStore:
                 self._operation_root(operation.operation_id) / "current.json",
                 operation.to_dict(),
             )
-            self._audit(
-                "deployment.operation.updated",
-                operation_id=operation.operation_id,
-                deployment_id=operation.deployment_id,
-                state=operation.state,
-                uncertain=operation.uncertain,
-            )
+            # Same-state phase checkpoints are already preserved as immutable
+            # operation history.  Duplicating each of them into the fsync-backed
+            # audit stream adds no authority or recovery information and causes
+            # severe write amplification on edge-node storage.  Keep the audit
+            # record for actual lifecycle transitions.
+            if state_transition:
+                self._audit(
+                    "deployment.operation.updated",
+                    operation_id=operation.operation_id,
+                    deployment_id=operation.deployment_id,
+                    state=operation.state,
+                    uncertain=operation.uncertain,
+                )
             return operation
 
     def list_operations(

@@ -407,15 +407,18 @@ class LocalComponentDeploymentAdapter:
 
     def _phase_fetch(self, **kwargs: Any) -> Mapping[str, Any]:
         package = self._require_package(kwargs["package"])
-        if not self.package_store.has(package.digest):
+        cached = self.package_store.has(package.digest)
+        if not cached:
             verified = self.package_store.put(
                 self.fetch_package(package), expected_digest=package.digest
             )
-        else:
-            verified = self.package_store.verify(package.digest)
-        if verified.ref != package:
-            raise ProjectDeploymentExecutionError("fetched package identity mismatch")
-        return {"package_digest": package.digest, "cached": True}
+            if verified.ref != package:
+                raise ProjectDeploymentExecutionError("fetched package identity mismatch")
+        # A cached archive is deliberately verified by the immediately following
+        # verify phase.  Hashing and parsing it here as well doubled package I/O
+        # without adding an admission boundary; no stage/activate phase can run
+        # before verify succeeds.
+        return {"package_digest": package.digest, "cached": cached}
 
     def _phase_observe(self, **kwargs: Any) -> Mapping[str, Any]:
         change: DeploymentPlanChange = kwargs["change"]

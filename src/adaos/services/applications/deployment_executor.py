@@ -563,7 +563,13 @@ class ApplicationDeploymentExecutor:
             subnet_id=str(plan["subnet_ref"]).split(":", 1)[-1],
             revision=revision,
             placements=placements,
-            compatibility=DeploymentCompatibilityPolicy(),
+            # Application releases own a closure of immutable component packages.
+            # Advancing the ApplicationRelease must not reactivate a component
+            # whose exact package digest is already healthy: the release identity
+            # is composition provenance, while the package digest is runtime
+            # materialization identity.  This is also what lets shared native CBS
+            # providers survive consumer-release updates without needless churn.
+            compatibility=DeploymentCompatibilityPolicy(allow_release_skew=True),
             rollout=RolloutPolicy(
                 batch_size=1,
                 max_unavailable=1,

@@ -162,8 +162,10 @@ class Inventory:
 class Adapter:
     def __init__(self) -> None:
         self.fail_health = False
+        self.calls: list[tuple[str, str]] = []
 
     def execute_phase(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.calls.append((kwargs["change"].component_ref, kwargs["phase"]))
         if kwargs["phase"] == "health" and self.fail_health:
             raise ProjectDeploymentExecutionError("health check failed")
         if kwargs["phase"] == "health":
@@ -256,6 +258,53 @@ def test_executor_runs_install_update_remove_through_project_deployment(
         runtime.store.get_deployment("application-deployment:app_test").status
         == "removed"
     )
+
+
+def test_application_release_update_reuses_exact_component_package(
+    tmp_path: Path,
+) -> None:
+    first = _release("1.0.0", "a")
+    reused_package = first.packages[0]
+    second_release = ProjectRelease(
+        project_id="app",
+        version="1.0.1",
+        source_ref=SOURCE,
+        components=(reused_package,),
+        validation_evidence=({"status": "passed", "revision": 2},),
+    ).seal()
+    second = ReleasePlan(
+        release=second_release,
+        packages=(reused_package,),
+        bindings=(),
+        reverse_consumers={},
+    )
+    adapter = Adapter()
+    runtime = ProjectDeploymentRuntime(
+        store=ProjectDeploymentStore(state_dir=tmp_path),
+        releases=Releases(first, second),
+        inventory=Inventory(),
+        adapter=adapter,
+        local_node_id="node-local",
+    )
+    executor = ApplicationDeploymentExecutor(runtime=runtime, state_dir=tmp_path)
+
+    executor(_plan("install", first))
+    adapter.calls.clear()
+    updated = executor(
+        _plan("update", second, source_digest=str(first.release.release_digest))
+    )
+
+    assert updated["status"] == "active"
+    change = updated["deployment_plan"]["changes"][0]
+    assert change["action"] == "noop"
+    assert change["phases"] == ["observe"]
+    assert adapter.calls == [("scenario:app", "observe")]
+    operation_id = updated["deployment_operation"]["operation_id"]
+    history = runtime.store._operation_root(operation_id) / "history"
+    # accepted -> running -> one completed component -> succeeded.  A transient
+    # component/phase-running marker and a separate noop receipt checkpoint must
+    # not rewrite the full aggregate.
+    assert len(list(history.glob("*.json"))) == 4
 
 
 def test_executor_removes_legacy_installation_without_project_deployment(

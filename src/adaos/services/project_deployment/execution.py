@@ -462,7 +462,6 @@ class ProjectDeploymentExecutor:
             phases=tuple(phases),
             activation_ref=change.current_activation_ref,
         )
-        operation = self._persist_component(operation, node.node_id, result)
         for phase in change.phases:
             prior = next((item for item in result.phases if item.phase == phase), None)
             if prior is not None and prior.state == "succeeded":
@@ -477,6 +476,9 @@ class ProjectDeploymentExecutor:
                 release_plan=release_plan,
                 package=package,
                 current_activation=current_activation,
+                checkpoint=(
+                    change.action != "noop" and phase != change.phases[-1]
+                ),
             )
             if result.state in {"failed", "uncertain"}:
                 if (
@@ -545,6 +547,7 @@ class ProjectDeploymentExecutor:
         package: ArtifactPackageRef | None,
         current_activation: ComponentActivation | None,
         preserve_failure: bool = False,
+        checkpoint: bool = True,
     ) -> tuple[DeploymentOperation, DeploymentComponentResult]:
         phase_key = (
             f"{operation.idempotency_key}:{node.node_id}:{change.component_ref}:{phase}"
@@ -559,7 +562,13 @@ class ProjectDeploymentExecutor:
                 started_at=started,
             )
             result = self._replace_phase(result, running)
-            operation = self._persist_component(operation, node.node_id, result)
+            # The accepted operation is already durable, and adapters receive a
+            # stable per-phase idempotency key.  Persisting this transient
+            # in-process marker rewrote the complete growing operation before
+            # every phase, then rewrote it again for the receipt.  On durable but
+            # latency-heavy disks that dominated Application activation time.
+            # A crash here intentionally resumes the phase with the same key;
+            # local/remote adapters recover their independently durable receipt.
             try:
                 raw_receipt = self.adapter.execute_phase(
                     phase=phase,
@@ -586,7 +595,12 @@ class ProjectDeploymentExecutor:
                 result = self._replace_phase(result, completed)
                 if phase == "rollback" and not preserve_failure:
                     result = replace(result, state="rolled_back")
-                operation = self._persist_component(operation, node.node_id, result)
+                operation = self._persist_component(
+                    operation,
+                    node.node_id,
+                    result,
+                    durable=checkpoint,
+                )
                 return operation, result
             except UncertainDeploymentPhaseError as exc:
                 failed = replace(
@@ -749,6 +763,8 @@ class ProjectDeploymentExecutor:
         operation: DeploymentOperation,
         node_id: str,
         result: DeploymentComponentResult,
+        *,
+        durable: bool = True,
     ) -> DeploymentOperation:
         nodes = list(operation.node_results)
         existing_node = next((item for item in nodes if item.node_id == node_id), None)
@@ -774,6 +790,8 @@ class ProjectDeploymentExecutor:
             node_results=tuple(sorted(nodes, key=lambda item: item.node_id)),
             updated_at=utc_now(),
         )
+        if not durable:
+            return updated
         return self.store.update_operation(updated, expected_state=operation.state)
 
 
