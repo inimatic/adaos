@@ -548,6 +548,25 @@ export interface WebUiDetailsInputs {
   [key: string]: unknown
 }
 
+export interface WebUiAccordionLazyDataSource {
+  source: Record<string, unknown>
+  resultPath?: string
+  loadingText?: string
+  unavailableText?: string
+}
+
+export interface WebUiAccordionInputs {
+  multiple?: boolean
+  expandedStateKey?: string
+  density?: 'compact' | 'comfortable'
+  emptyText?: string
+  fields?: readonly Record<string, unknown>[]
+  items?: readonly Record<string, unknown>[]
+  /** Package-owned reads started only when the matching item is expanded. */
+  lazyDataSources?: Readonly<Record<string, WebUiAccordionLazyDataSource>>
+  [key: string]: unknown
+}
+
 export type WebUiLayoutPattern =
   | 'document'
   | 'collection'

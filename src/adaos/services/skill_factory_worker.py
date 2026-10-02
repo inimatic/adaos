@@ -462,10 +462,12 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.resources.query",
     "adaos.sdk.subscriptions.get_codex_usage_snapshot",
     "adaos.sdk.system.get_operational_snapshot",
+    "adaos.sdk.system.get_runtime_controls",
     "adaos.sdk.system.request_core_update",
     "adaos.sdk.system.rename_current_node",
     "adaos.sdk.system.rename_local_subnet",
     "adaos.sdk.system.set_core_autoupdate",
+    "adaos.sdk.system.set_runtime_control",
 }
 
 
@@ -484,7 +486,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "llm content images resources access caller invocation request id require automation inventory "
             "external provider fleet skill data root lifecycle ensure database "
             "generate operate query system operational snapshot resource member application "
-            "rename subnet node core update autoupdate conversation published agents"
+            "rename subnet node core update autoupdate runtime controls rasa log level conversation published agents"
             " subscription codex usage quota rolling 7d 30d"
         ),
         limit=64,
@@ -864,6 +866,61 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "applied",
                 ],
             },
+            "system_runtime_controls": {
+                "methods": [
+                    "adaos.sdk.system.get_runtime_controls",
+                    "adaos.sdk.system.set_runtime_control",
+                ],
+                "authorization": {
+                    "read": "workspace.read",
+                    "mutation": "workspace.write",
+                },
+                "read_result": {
+                    "schema": "adaos.sdk.system.runtime_controls.v1",
+                    "controls": [
+                        "rasa_enabled",
+                        "log_level",
+                        "core_auto_update",
+                        "application_auto_update_default",
+                    ],
+                    "rasa": [
+                        "availability",
+                        "configured",
+                        "installed",
+                        "running",
+                        "health",
+                        "environment",
+                        "version_profile",
+                        "diet_profile",
+                    ],
+                    "rule": (
+                        "Display only this bounded public projection. Never import operator "
+                        "controls, the Rasa installer, or the service supervisor from adaos.services."
+                    ),
+                },
+                "mutation": {
+                    "required": ["request_id", "control"],
+                    "optional": ["value"],
+                    "control_values": [
+                        "rasa_install",
+                        "rasa_enabled",
+                        "log_level",
+                        "core_auto_update",
+                        "application_auto_update_default",
+                    ],
+                    "request_id_source": "adaos.sdk.access.invocation()['request_id']",
+                    "result_required": [
+                        "ok",
+                        "schema",
+                        "request_id",
+                        "target",
+                        "accepted",
+                        "current",
+                        "desired",
+                        "applied",
+                    ],
+                },
+            },
             "selected_member_routing": {
                 "transport": "application_tool_ingress",
                 "reserved_argument": {
@@ -873,9 +930,11 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                 },
                 "scope": [
                     "adaos.sdk.system.get_operational_snapshot",
+                    "adaos.sdk.system.get_runtime_controls",
                     "adaos.sdk.system.request_core_update",
                     "adaos.sdk.system.rename_current_node",
                     "adaos.sdk.system.set_core_autoupdate",
+                    "adaos.sdk.system.set_runtime_control",
                 ],
                 "rules": [
                     (
@@ -1083,6 +1142,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "from adaos.sdk.data.skill_env import skill_data_root",
             "from adaos.sdk.llm import content, images",
             "from adaos.sdk import resources",
+            "from adaos.sdk import system",
         ],
     }
 

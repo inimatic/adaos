@@ -307,6 +307,52 @@ def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_package_owned_lazy_accordion_reads() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "system-progressive",
+                        "layout": _layout(),
+                        "widgets": [
+                            {
+                                "id": "progressive-details",
+                                "type": "disclosure.accordion",
+                                "area": "main",
+                                "inputs": {
+                                    "items": [
+                                        {"id": "activity", "title": "Recent activity"},
+                                        {"id": "technical", "title": "Technical details"},
+                                    ],
+                                    "lazyDataSources": {
+                                        "activity": {
+                                            "source": {
+                                                "kind": "skill",
+                                                "name": "management_skill.get_system_details",
+                                                "params": {"section": "activity"},
+                                                "preserveLastValue": True,
+                                                "maxRequestHz": 0.2,
+                                            },
+                                            "resultPath": "item",
+                                            "loadingText": "Loading activity...",
+                                            "unavailableText": "Activity is unavailable.",
+                                        }
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_safe_state_mutations_and_membership_filter() -> None:
     schema = _load_schema()
     payload = {

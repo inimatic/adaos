@@ -160,10 +160,12 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "adaos.sdk.conversation.list_published_agents" in names
     assert "adaos.sdk.subscriptions.get_codex_usage_snapshot" in names
     assert "adaos.sdk.system.get_operational_snapshot" in names
+    assert "adaos.sdk.system.get_runtime_controls" in names
     assert "adaos.sdk.system.request_core_update" in names
     assert "adaos.sdk.system.rename_current_node" in names
     assert "adaos.sdk.system.rename_local_subnet" in names
     assert "adaos.sdk.system.set_core_autoupdate" in names
+    assert "adaos.sdk.system.set_runtime_control" in names
     published_agents = bundle["response_contracts"]["published_agents"]
     assert published_agents["authorization"] == "workspace.read"
     assert published_agents["result"]["invalidation_tag"] == "conversation.agents"
@@ -206,9 +208,22 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         "url",
         "token",
     ]
+    runtime_controls = bundle["response_contracts"]["system_runtime_controls"]
+    assert runtime_controls["authorization"] == {
+        "read": "workspace.read",
+        "mutation": "workspace.write",
+    }
+    assert runtime_controls["mutation"]["control_values"] == [
+        "rasa_install",
+        "rasa_enabled",
+        "log_level",
+        "core_auto_update",
+        "application_auto_update_default",
+    ]
     member_routing = bundle["response_contracts"]["selected_member_routing"]
     assert member_routing["reserved_argument"]["name"] == "target_node_id"
     assert "adaos.sdk.system.rename_current_node" in member_routing["scope"]
+    assert "adaos.sdk.system.set_runtime_control" in member_routing["scope"]
     assert member_routing["offline_read"]["error"] == "target_member_unavailable"
     assert member_routing["offline_mutation"] == {
         "allowed": False,

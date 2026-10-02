@@ -302,6 +302,7 @@ def implementation_binding_contract(
         "read_collection": "webui.v1.schema.json#/$defs/dataSource",
         "record_editor": "webui.v1.schema.json#/$defs/widgetConfig",
         "dynamic_record_editor": "webui.v1.schema.json#/$defs/widgetConfig",
+        "lazy_disclosure": "webui.v1.schema.json#/$defs/accordionInputs",
         "command": "webui.v1.schema.json#/$defs/action",
         "board_move": "webui.v1.schema.json#/$defs/action",
         "form_inputs": "webui.v1.schema.json#/$defs/formInputs",

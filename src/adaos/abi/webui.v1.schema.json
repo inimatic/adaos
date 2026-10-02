@@ -2108,6 +2108,21 @@
         "density": { "type": "string", "enum": ["compact", "comfortable"] },
         "emptyText": { "type": "string" },
         "fields": { "type": "array", "items": { "type": "object", "additionalProperties": true, "required": ["path"] } },
+        "lazyDataSources": {
+          "type": "object",
+          "description": "Package-owned per-item reads started only when that item is expanded. Runtime items cannot supply executable sources.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source"],
+            "properties": {
+              "source": { "$ref": "#/$defs/dataSource" },
+              "resultPath": { "$ref": "#/$defs/fieldPath" },
+              "loadingText": { "type": "string" },
+              "unavailableText": { "type": "string" }
+            }
+          }
+        },
         "items": {
           "type": "array",
           "items": {

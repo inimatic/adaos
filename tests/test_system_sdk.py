@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -499,3 +500,104 @@ def test_request_core_update_dry_run_does_not_mutate(monkeypatch) -> None:
     assert result["dry_run"] is True
     assert result["current"] == "idle"
     assert result["applied"] is False
+
+
+def test_runtime_controls_public_read_redacts_supervisor_internals(monkeypatch) -> None:
+    from adaos.sdk import system
+    from adaos.services import operator_controls
+    from adaos.services.nlu import rasa_skill_installer
+    from adaos.services.skill import service_supervisor
+
+    required = []
+    discovered = []
+    monkeypatch.setattr(system.access, "require", required.append)
+    monkeypatch.setattr(
+        operator_controls,
+        "read_controls",
+        lambda: {
+            "core_auto_update": True,
+            "application_auto_update_default": False,
+            "log_level": "warning",
+            "rasa_enabled": True,
+        },
+    )
+    monkeypatch.setattr(rasa_skill_installer, "is_rasa_nlu_enabled", lambda: True)
+    monkeypatch.setattr(
+        service_supervisor,
+        "get_service_supervisor",
+        lambda: SimpleNamespace(
+            ensure_discovered=lambda **kwargs: discovered.append(kwargs),
+            status=lambda *_args, **_kwargs: {
+                "running": True,
+                "health_ok": True,
+                "env_mode": "core",
+                "private_path": "must-not-leak",
+            },
+        ),
+    )
+
+    result = system.get_runtime_controls()
+
+    assert required == ["workspace.read"]
+    assert discovered == [{"force": True}]
+    assert result["schema"] == "adaos.sdk.system.runtime_controls.v1"
+    assert result["controls"] == {
+        "core_auto_update": True,
+        "application_auto_update_default": False,
+        "log_level": "WARNING",
+        "rasa_enabled": True,
+    }
+    assert result["rasa"] == {
+        "availability": "ready",
+        "configured": True,
+        "installed": True,
+        "running": True,
+        "health": True,
+        "environment": "core",
+        "version_profile": "lightweight",
+        "diet_profile": "deferred",
+    }
+    assert "private_path" not in str(result)
+
+
+def test_set_runtime_control_updates_log_level_through_public_contract(monkeypatch) -> None:
+    from adaos.sdk import system
+    from adaos.services import operator_controls
+
+    required = []
+    state = {
+        "core_auto_update": True,
+        "application_auto_update_default": True,
+        "log_level": "INFO",
+        "rasa_enabled": True,
+    }
+    monkeypatch.setattr(system.access, "require", required.append)
+    monkeypatch.setattr(operator_controls, "read_controls", lambda: dict(state))
+
+    def _update(patch):
+        state.update(patch)
+        return dict(state)
+
+    monkeypatch.setattr(operator_controls, "update_controls", _update)
+    monkeypatch.setattr(
+        system,
+        "_runtime_controls_snapshot",
+        lambda: {
+            "ok": True,
+            "schema": "adaos.sdk.system.runtime_controls.v1",
+            "controls": dict(state),
+            "rasa": {"installed": True},
+        },
+    )
+
+    result = asyncio.run(
+        system.set_runtime_control("management:log-level:debug", "log_level", "debug")
+    )
+
+    assert required == ["workspace.write"]
+    assert result["request_id"] == "management:log-level:debug"
+    assert result["target"] == "log_level"
+    assert result["previous"] == "INFO"
+    assert result["current"] == "DEBUG"
+    assert result["desired"] == "DEBUG"
+    assert result["applied"] is True

@@ -1050,13 +1050,17 @@
       "manifest": { "widget_type": "disclosure.accordion" },
       "data_shape": { "kind": "items" },
       "events": ["toggle", "toggle:<itemId>"],
+      "bindings": {
+        "lazyDataSources": "Package-owned map from item id to a standard read dataSource. The renderer starts it only while that item is expanded and never executes sources returned by runtime data."
+      },
       "responsive": {
         "desktop": "bounded disclosure list",
         "compact": "full-width disclosure list"
       },
       "postconditions": [
         "Each trigger exposes aria-expanded and owns one labelled region.",
-        "Single-open is the default; multiple=true explicitly enables multiple open sections."
+        "Single-open is the default; multiple=true explicitly enables multiple open sections.",
+        "A lazy item exposes loading and unavailable states and can preserve the last successful value through its standard dataSource policy."
       ]
     },
     {

@@ -8,6 +8,7 @@ and reliability snapshots.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 import shutil
@@ -22,10 +23,12 @@ from adaos.sdk.status import current_update_status
 
 __all__ = [
     "get_operational_snapshot",
+    "get_runtime_controls",
     "request_core_update",
     "rename_current_node",
     "rename_local_subnet",
     "set_core_autoupdate",
+    "set_runtime_control",
 ]
 
 _ALL_SECTIONS = frozenset(
@@ -103,6 +106,178 @@ _CORE_CONTROL_OUTPUT = {
     "required": ["ok", "request_id", "target", "accepted"],
     "additionalProperties": True,
 }
+_RUNTIME_CONTROL_INPUT = {
+    "type": "object",
+    "properties": {
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "control": {
+            "type": "string",
+            "enum": [
+                "rasa_install",
+                "rasa_enabled",
+                "log_level",
+                "core_auto_update",
+                "application_auto_update_default",
+            ],
+        },
+        "value": {},
+    },
+    "required": ["request_id", "control"],
+    "additionalProperties": False,
+}
+_RUNTIME_CONTROL_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "ok": {"type": "boolean"},
+        "schema": {"type": "string"},
+        "request_id": {"type": "string"},
+        "target": {"type": "string"},
+        "accepted": {"type": "boolean"},
+        "current": {},
+        "desired": {},
+        "applied": {"type": "boolean"},
+        "controls": {"type": "object"},
+        "rasa": {"type": "object"},
+    },
+    "required": ["ok", "schema"],
+    "additionalProperties": True,
+}
+
+
+def _runtime_controls_snapshot() -> dict[str, Any]:
+    from adaos.services.nlu.rasa_skill_installer import is_rasa_nlu_enabled
+    from adaos.services.operator_controls import read_controls
+    from adaos.services.skill.service_supervisor import get_service_supervisor
+
+    controls = read_controls()
+    rasa: Mapping[str, Any] | None = None
+    try:
+        supervisor = get_service_supervisor()
+        supervisor.ensure_discovered(force=True)
+        candidate = supervisor.status("rasa_nlu_service_skill", check_health=True)
+        rasa = candidate if isinstance(candidate, Mapping) else None
+        rasa_availability = "ready"
+    except Exception:
+        rasa_availability = "unavailable"
+    return {
+        "ok": True,
+        "schema": "adaos.sdk.system.runtime_controls.v1",
+        "controls": {
+            "core_auto_update": bool(controls.get("core_auto_update", True)),
+            "application_auto_update_default": bool(
+                controls.get("application_auto_update_default", True)
+            ),
+            "log_level": str(controls.get("log_level") or "INFO").upper(),
+            "rasa_enabled": bool(controls.get("rasa_enabled", True)),
+        },
+        "rasa": {
+            "availability": rasa_availability,
+            "configured": bool(is_rasa_nlu_enabled()),
+            "installed": rasa is not None,
+            "running": bool(
+                rasa and (rasa.get("running") or rasa.get("external_ready"))
+            ),
+            "health": rasa.get("health_ok") if rasa else None,
+            "environment": rasa.get("env_mode") if rasa else None,
+            "version_profile": "lightweight",
+            "diet_profile": "deferred",
+        },
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "source": "operator_controls",
+        "freshness": "current",
+    }
+
+
+@tool(
+    "system.runtime_controls.get",
+    summary="Read governed node runtime controls and bounded Rasa state.",
+    stability="stable",
+    idempotent=True,
+    output_schema=_RUNTIME_CONTROL_OUTPUT,
+)
+def get_runtime_controls() -> dict[str, Any]:
+    """Return operator controls without exposing service-supervisor internals."""
+
+    access.require("workspace.read")
+    return _runtime_controls_snapshot()
+
+
+@tool(
+    "system.runtime_control.set",
+    summary="Apply one governed node runtime control.",
+    stability="stable",
+    idempotent=True,
+    input_schema=_RUNTIME_CONTROL_INPUT,
+    output_schema=_RUNTIME_CONTROL_OUTPUT,
+)
+async def set_runtime_control(
+    request_id: str,
+    control: str,
+    value: Any = None,
+) -> dict[str, Any]:
+    """Apply a bounded operator mutation through the public System SDK."""
+
+    access.require("workspace.write")
+    identifier = _request_id(request_id)
+    selected = str(control or "").strip().casefold()
+    allowed = {
+        "rasa_install",
+        "rasa_enabled",
+        "log_level",
+        "core_auto_update",
+        "application_auto_update_default",
+    }
+    if selected not in allowed:
+        raise ValueError("unsupported runtime control")
+
+    from adaos.services.nlu.rasa_skill_installer import (
+        ensure_rasa_service_skill_installed,
+    )
+    from adaos.services.operator_controls import read_controls, update_controls
+    from adaos.services.skill.service_supervisor import get_service_supervisor
+
+    before = read_controls()
+    desired: Any = value
+    if selected == "rasa_install":
+        await asyncio.to_thread(ensure_rasa_service_skill_installed)
+        await get_service_supervisor().refresh_discovered(force=True)
+        desired = True
+    elif selected == "core_auto_update":
+        return set_core_autoupdate(identifier, bool(value))
+    elif selected in {"rasa_enabled", "application_auto_update_default"}:
+        desired = bool(value)
+        update_controls({selected: desired})
+        if selected == "rasa_enabled":
+            supervisor = get_service_supervisor()
+            if desired:
+                await asyncio.to_thread(ensure_rasa_service_skill_installed)
+                await supervisor.refresh_discovered(force=True)
+                await supervisor.start("rasa_nlu_service_skill")
+            else:
+                await supervisor.stop("rasa_nlu_service_skill")
+    elif selected == "log_level":
+        desired = str(value or "").strip().upper()
+        update_controls({"log_level": desired})
+
+    snapshot = _runtime_controls_snapshot()
+    current = (
+        snapshot["rasa"].get("installed")
+        if selected == "rasa_install"
+        else snapshot["controls"].get(selected)
+    )
+    previous = (
+        None if selected == "rasa_install" else before.get(selected)
+    )
+    return {
+        **snapshot,
+        "request_id": identifier,
+        "target": selected,
+        "accepted": True,
+        "previous": previous,
+        "current": current,
+        "desired": desired,
+        "applied": current == desired,
+    }
 
 
 def _request_id(value: Any) -> str:

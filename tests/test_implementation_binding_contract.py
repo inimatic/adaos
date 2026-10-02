@@ -231,6 +231,15 @@ def test_creation_contract_matches_state_hydration_instead_of_dynamic_defaults()
     assert "state_initialized_creation" in form["manifest"]
 
 
+def test_lazy_disclosure_contract_is_package_owned_and_on_demand():
+    guide = implementation_binding_contract()
+    rule = guide["binding_rules"]["lazy_disclosure"]
+    assert "package-owned inputs.lazyDataSources" in rule
+    assert "only when the matching section opens" in rule
+    assert "cannot come from runtime data" in rule
+    assert guide["schema_refs"]["lazy_disclosure"].endswith("accordionInputs")
+
+
 def test_skill_choice_source_is_admitted_but_arbitrary_transports_are_not():
     root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
     schema = json.loads((root / "webui.v1.schema.json").read_text(encoding="utf-8"))
