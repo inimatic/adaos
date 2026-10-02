@@ -70,6 +70,8 @@ class CodexUsageSnapshot:
     resource: str
     period: str
     used_tokens: int | None
+    used_7d_tokens: int | None
+    used_30d_tokens: int | None
     remaining_tokens: int | None
     limit_tokens: int | None
     fresh_plus_output_tokens: int | None
@@ -121,6 +123,8 @@ def get_codex_usage_model(
             resource=CODEX_TOKEN_RESOURCE,
             period="24h",
             used_tokens=None,
+            used_7d_tokens=None,
+            used_30d_tokens=None,
             remaining_tokens=None,
             limit_tokens=None,
             fresh_plus_output_tokens=None,
@@ -156,6 +160,8 @@ def get_codex_usage_model(
         resource=CODEX_TOKEN_RESOURCE,
         period="24h",
         used_tokens=_optional_int(usage.get("used_24h")),
+        used_7d_tokens=_optional_int(usage.get("used_7d")),
+        used_30d_tokens=_optional_int(usage.get("used_30d")),
         remaining_tokens=_optional_int(usage.get("quota_remaining")),
         limit_tokens=_optional_int(usage.get("quota_limit")),
         fresh_plus_output_tokens=_optional_int(window.get("fresh_plus_output_tokens")),

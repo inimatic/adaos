@@ -459,6 +459,7 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.resources.definition",
     "adaos.sdk.resources.operate",
     "adaos.sdk.resources.query",
+    "adaos.sdk.subscriptions.get_codex_usage_snapshot",
     "adaos.sdk.system.get_operational_snapshot",
     "adaos.sdk.system.request_core_update",
     "adaos.sdk.system.rename_current_node",
@@ -483,6 +484,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "external provider fleet skill data root lifecycle ensure database "
             "generate operate query system operational snapshot resource member application "
             "rename subnet node core update autoupdate conversation published agents"
+            " subscription codex usage quota rolling 7d 30d"
         ),
         limit=64,
     )
@@ -562,6 +564,61 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             ),
         },
         "response_contracts": {
+            "subscription_usage": {
+                "methods": [
+                    "adaos.sdk.subscriptions.get_codex_usage_snapshot",
+                ],
+                "authorization": "workspace.read",
+                "input": {
+                    "optional": ["webspace_id", "refresh", "timeout"],
+                    "refresh_rule": (
+                        "Use refresh=false for first paint and refresh=true only for an "
+                        "explicit user refresh; provider failures return stale or unavailable."
+                    ),
+                },
+                "result": {
+                    "schema": "adaos.sdk.subscription.codex_usage.v1",
+                    "required": [
+                        "status",
+                        "resource",
+                        "period",
+                        "used_tokens",
+                        "used_7d_tokens",
+                        "used_30d_tokens",
+                        "remaining_tokens",
+                        "limit_tokens",
+                        "fresh_plus_output_tokens",
+                        "cached_input_tokens",
+                        "output_tokens",
+                        "runs",
+                        "accuracy",
+                        "metering",
+                        "updated_at",
+                        "webspace_id",
+                        "reason",
+                        "last_model",
+                        "by_model",
+                        "cost",
+                    ],
+                    "status_values": ["ready", "stale", "unavailable"],
+                    "windows": {
+                        "24h": "used_tokens",
+                        "7d": "used_7d_tokens",
+                        "30d": "used_30d_tokens",
+                    },
+                    "unknown_rule": (
+                        "A null usage or quota value is unknown, never zero. Do not "
+                        "fabricate percentages, costs, models, services or plan data."
+                    ),
+                },
+                "binding": (
+                    "Expose an owned read-only tool after workspace.read. For the accepted "
+                    "AI usage ArcChart, map the real rolling 24h/7d/30d token fields and "
+                    "derive a bounded percent only when limit_tokens is positive; otherwise "
+                    "render the honest unavailable state. Cost labels may use only the "
+                    "returned cost projection. Preserve stale data and updated_at."
+                ),
+            },
             "published_agents": {
                 "methods": ["adaos.sdk.conversation.list_published_agents"],
                 "authorization": "workspace.read",

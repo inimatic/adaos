@@ -14,6 +14,8 @@ def test_codex_usage_snapshot_projects_bounded_24h_usage(monkeypatch) -> None:
             "usage": {
                 "codex.api.tokens": {
                     "used_24h": 24_092,
+                    "used_7d": 140_000,
+                    "used_30d": 520_000,
                     "quota_remaining": 19_975_908,
                     "quota_limit": 20_000_000,
                     "accuracy": "provider_reported",
@@ -40,6 +42,8 @@ def test_codex_usage_snapshot_projects_bounded_24h_usage(monkeypatch) -> None:
         "resource": "codex.api.tokens",
         "period": "24h",
         "used_tokens": 24_092,
+        "used_7d_tokens": 140_000,
+        "used_30d_tokens": 520_000,
         "remaining_tokens": 19_975_908,
         "limit_tokens": 20_000_000,
         "fresh_plus_output_tokens": 13_212,
@@ -108,6 +112,8 @@ def test_codex_usage_snapshot_is_unavailable_without_metering(monkeypatch) -> No
 
     assert snapshot.status == "unavailable"
     assert snapshot.used_tokens is None
+    assert snapshot.used_7d_tokens is None
+    assert snapshot.used_30d_tokens is None
     assert snapshot.remaining_tokens is None
     assert snapshot.webspace_id == "living-room"
     assert snapshot.reason == "codex_usage_not_metered"
