@@ -186,6 +186,13 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         "url",
         "token",
     ]
+    member_routing = bundle["response_contracts"]["selected_member_routing"]
+    assert member_routing["reserved_argument"]["name"] == "target_node_id"
+    assert member_routing["offline_read"]["error"] == "target_member_unavailable"
+    assert member_routing["offline_mutation"] == {
+        "allowed": False,
+        "local_fallback": False,
+    }
     assert contract["authorization"] == "external_provider.use"
     assert contract["bounds"]["task_limit"] == {"minimum": 1, "maximum": 100}
     assert contract["result"]["schema"] == "adaos.automation.builder_inventory.v1"

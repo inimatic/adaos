@@ -1575,7 +1575,8 @@ def _is_loopback_base_url(base_url: str | None) -> bool:
 
 def _is_readonly_snapshot_tool(tool_name: str) -> bool:
     token = str(tool_name or "").strip()
-    return token == "get_snapshot" or token.endswith(":get_snapshot") or token.endswith(".get_snapshot")
+    public_tool = token.rsplit(":", 1)[-1].rsplit(".", 1)[-1]
+    return _looks_readonly_tool(public_tool)
 
 
 def _target_snapshot_unavailable_response(

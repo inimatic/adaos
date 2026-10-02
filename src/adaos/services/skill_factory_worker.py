@@ -694,6 +694,57 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "applied",
                 ],
             },
+            "selected_member_routing": {
+                "transport": "application_tool_ingress",
+                "reserved_argument": {
+                    "name": "target_node_id",
+                    "type": "string",
+                    "source": "members[].id or the current snapshot subject.id",
+                },
+                "scope": [
+                    "adaos.sdk.system.get_operational_snapshot",
+                    "adaos.sdk.system.request_core_update",
+                    "adaos.sdk.system.set_core_autoupdate",
+                ],
+                "rules": [
+                    (
+                        "Selected-member routing belongs to the outer Application tool "
+                        "call. Pass target_node_id as a reserved top-level tool argument; "
+                        "do not add it to the local SDK operation signature."
+                    ),
+                    (
+                        "The hub normalizes the identity and proxies the complete tool call "
+                        "only through the admitted member link or directory route. The target "
+                        "runtime then executes the same local public SDK operation."
+                    ),
+                    (
+                        "Keep target_node_id in the Application tool input contract and source "
+                        "it only from an authorized members projection. Never accept a URL, "
+                        "token, caller identity or artifact selector from the UI."
+                    ),
+                    (
+                        "Read tools use side_effects=none and a get_/list_/read_ style public "
+                        "name. An unavailable member returns target_member_unavailable; preserve "
+                        "the last successful value as stale with its observed timestamp."
+                    ),
+                    (
+                        "Disable all selected-member mutations while the member is offline or "
+                        "the returned subject does not match the selected target. Mutations never "
+                        "fall back to local execution and remain subject to workspace.write and "
+                        "the cross-node runtime action gate."
+                    ),
+                ],
+                "offline_read": {
+                    "error": "target_member_unavailable",
+                    "degraded": True,
+                    "unavailable": True,
+                    "last_known": "client preserves the last successful projection and marks it stale",
+                },
+                "offline_mutation": {
+                    "allowed": False,
+                    "local_fallback": False,
+                },
+            },
             "content_draft": {
                 "methods": [
                     "adaos.sdk.llm.content.generate",

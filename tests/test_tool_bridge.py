@@ -2985,6 +2985,18 @@ def test_canonical_local_target_does_not_proxy_from_hub() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "web_desktop_runtime_skill:get_system_overview",
+        "web_desktop_runtime_skill.list_devices",
+        "read_status",
+    ],
+)
+def test_selected_member_read_tools_use_degraded_snapshot_semantics(tool_name: str) -> None:
+    assert tool_bridge_module._is_readonly_snapshot_tool(tool_name)
+
+
 @pytest.mark.parametrize("alias", ["local", "self", "current", "current_node", "home"])
 def test_local_target_alias_resolves_to_runtime_node(alias: str) -> None:
     assert tool_bridge_module._resolve_target_node_id(
