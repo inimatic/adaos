@@ -161,7 +161,19 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
     monkeypatch.setattr(
         system.control_plane,
         "list_device_objects",
-        lambda: [{"id": "node:hub", "status": "online"}, {"id": "node:worker", "status": "offline"}],
+        lambda: [
+            {
+                "id": "device:browser-1",
+                "status": "online",
+                "relations": {"connected_to": ["browser:browser-1"]},
+            },
+            {
+                "id": "device:member:worker",
+                "title": "Worker",
+                "status": "offline",
+                "relations": {"connected_to": ["member:worker"]},
+            },
+        ],
     )
     monkeypatch.setattr(
         applications,
@@ -183,6 +195,10 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
     )
 
     assert result["member_summary"] == {"online": 1, "total": 2}
+    assert [item["id"] for item in result["members"]] == [
+        "node:hub",
+        "member:worker",
+    ]
     assert result["applications"][0]["id"] == "notebook"
     assert result["application_updates"] == {"available": 1, "total": 1}
     assert result["resources"]["cpu"]["percent"] == 12.5

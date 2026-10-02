@@ -999,9 +999,44 @@ def get_operational_snapshot(
         result["resources"] = _resource_snapshot()
     if "members" in selected:
         try:
-            members = [dict(item) for item in control_plane.list_device_objects()[:bounded_limit]]
+            member_devices: list[dict[str, Any]] = []
+            seen_member_refs: set[str] = set()
+            for raw_item in control_plane.list_device_objects():
+                item = dict(raw_item)
+                relations = _mapping(item.get("relations"))
+                member_ref = next(
+                    (
+                        str(value).strip()
+                        for value in relations.get("connected_to") or ()
+                        if str(value).strip().startswith("member:")
+                    ),
+                    "",
+                )
+                if not member_ref or member_ref in seen_member_refs:
+                    continue
+                seen_member_refs.add(member_ref)
+                member_devices.append(
+                    {
+                        **item,
+                        "id": member_ref,
+                        "kind": "member",
+                        "role": "member",
+                        "is_hub": False,
+                    }
+                )
+            hub = {
+                **subject,
+                "kind": "member",
+                "role": "hub",
+                "is_hub": True,
+            }
+            # System is a node dashboard. Browser/ReDevice endpoints remain in
+            # Devices and must never consume the member-tab budget here.
+            members = [hub, *member_devices][:bounded_limit]
         except Exception:
-            members = []
+            members = [
+                {**subject, "kind": "member", "role": "hub", "is_hub": True}
+            ]
         result["members"] = members
         result["member_summary"] = {
             "online": sum(
