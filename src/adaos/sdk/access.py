@@ -37,6 +37,22 @@ def actor() -> dict[str, str] | None:
     return caller()
 
 
+def invocation() -> dict[str, Any] | None:
+    """Return Core-bound request identity for the active tool invocation.
+
+    ``request_id`` identifies one user intent. The AdaOS Client keeps it stable
+    across automatic transport retries and creates a new value for a separate
+    activation. ``idempotency_key`` is the Core replay key for that same call.
+    Neither value is accepted from a skill tool argument, so application code
+    must read this accessor instead of generating an identifier for a retry.
+    Outside trusted HTTP or authenticated subnet-RPC ingress this returns None.
+    """
+
+    from adaos.services.policy.invocation import current_invocation
+
+    return current_invocation()
+
+
 def current_user() -> dict[str, str] | None:
     """Return the user subject behind the verified user/session invocation."""
 
@@ -189,6 +205,7 @@ __all__ = [
     "caller",
     "current_user",
     "explain",
+    "invocation",
     "policy",
     "require",
     "require_app_capability",

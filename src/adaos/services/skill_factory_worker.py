@@ -446,6 +446,7 @@ def _write_compact_json(path: Path, payload: Any) -> None:
 
 _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.access.caller",
+    "adaos.sdk.access.invocation",
     "adaos.sdk.access.require",
     "adaos.sdk.automation.inventory",
     "adaos.sdk.conversation.list_published_agents",
@@ -480,7 +481,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
     exported = sdk_export(
         level="std",
         query=(
-            "llm content images resources access caller require automation inventory "
+            "llm content images resources access caller invocation request id require automation inventory "
             "external provider fleet skill data root lifecycle ensure database "
             "generate operate query system operational snapshot resource member application "
             "rename subnet node core update autoupdate conversation published agents"
@@ -537,6 +538,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "authorization": (
                 "Call access.require('workspace.read') before reads and "
                 "access.require('workspace.write') before mutation or generation; "
+                "read transport request identity only through access.invocation(); "
                 "automation.inventory() performs its own "
                 "access.require('external_provider.use') check; never accept caller "
                 "identity, transport URLs, bearer tokens, certificate paths or other "
@@ -598,7 +600,6 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "reason",
                         "last_model",
                         "by_model",
-                        "cost",
                     ],
                     "status_values": ["ready", "stale", "unavailable"],
                     "windows": {
@@ -606,42 +607,9 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "7d": "used_7d_tokens",
                         "30d": "used_30d_tokens",
                     },
-                    "cost": {
-                        "type": "object",
-                        "period": "24h",
-                        "currency": "USD",
-                        "required": [
-                            "status",
-                            "period",
-                            "currency",
-                            "estimated_usd",
-                            "known_estimated_usd",
-                            "priced_runs",
-                            "unpriced_runs",
-                        ],
-                        "status_values": [
-                            "estimated",
-                            "partial",
-                            "unpriced",
-                            "not_applicable",
-                            "unavailable",
-                        ],
-                        "nullable": [
-                            "estimated_usd",
-                            "known_estimated_usd",
-                            "priced_runs",
-                            "unpriced_runs",
-                        ],
-                        "meaning": (
-                            "Provider-price estimate for observed Codex runs in the "
-                            "rolling 24h window; it is not an invoice or subscription charge."
-                        ),
-                    },
                     "usage_semantics": (
-                        "The accepted AI usage widget visualizes native metered token "
-                        "consumption for rolling 7d/30d windows. The word spend means "
-                        "resource consumption, not monetary billing. Do not infer money "
-                        "from tokens or extend the 24h cost estimate to 7d/30d."
+                        "Render native metered token consumption for rolling 7d/30d. "
+                        "Do not render or infer monetary economics in this Beta."
                     ),
                     "unknown_rule": (
                         "A null usage or quota value is unknown, never zero. Do not "
@@ -652,9 +620,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "Expose an owned read-only tool after workspace.read. For the accepted "
                     "AI usage ArcChart, map the real rolling 24h/7d/30d token fields and "
                     "derive a bounded percent only when limit_tokens is positive; otherwise "
-                    "render the honest unavailable state. Label the surface AI usage. A "
-                    "monetary annotation may use only the returned 24h cost projection and "
-                    "must remain absent for null/partial values. Preserve stale data and updated_at."
+                    "render unavailable. Label it AI usage; preserve stale data and updated_at."
                 ),
             },
             "published_agents": {
@@ -804,7 +770,17 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 160,
-                    "rule": "Keep one stable request_id across retries.",
+                    "source": "adaos.sdk.access.invocation()['request_id']",
+                    "rule": (
+                        "Pass the Core-bound value unchanged; never accept or generate it. "
+                        "It is stable for transport retry and new per user activation. "
+                        "Fail closed with invocation_request_id_missing when absent."
+                    ),
+                },
+                "idempotency": {
+                    "source": "adaos.sdk.access.invocation()['idempotency_key']",
+                    "replay_owner": "Core /api/tools/call ingress",
+                    "selected_member_rule": "Trusted subnet RPC forwards identity outside tool arguments.",
                 },
                 "core_update": {
                     "optional": {

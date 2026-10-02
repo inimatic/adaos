@@ -11,6 +11,7 @@ from adaos.sdk import access
 from adaos.services.personalization_access import PersonalizationAccessService, PersonalizationAccessStore
 from adaos.services.policy.caller import current_caller, verified_caller
 from adaos.services.policy.application import bind_application, clear_application
+from adaos.services.policy.invocation import verified_invocation
 
 
 OWNER = SubjectRef("user", "owner")
@@ -147,5 +148,24 @@ def test_context_follows_thread_calls_and_is_restored_after_failure():
                     raise RuntimeError("failed handler")
             assert current_caller() == READER
         assert current_caller() is None
+
+    asyncio.run(run())
+
+
+def test_invocation_identity_is_core_bound_and_restored_across_thread_calls():
+    async def run():
+        assert access.invocation() is None
+        with verified_invocation(request_id="tool-1", idempotency_key="skill:save:tool-1"):
+            assert await asyncio.to_thread(access.invocation) == {
+                "request_id": "tool-1",
+                "idempotency_key": "skill:save:tool-1",
+            }
+            with verified_invocation(request_id="tool-2", idempotency_key=None):
+                assert access.invocation() == {
+                    "request_id": "tool-2",
+                    "idempotency_key": None,
+                }
+            assert access.invocation()["request_id"] == "tool-1"
+        assert access.invocation() is None
 
     asyncio.run(run())

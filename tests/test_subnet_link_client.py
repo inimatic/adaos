@@ -37,6 +37,54 @@ if "ypy_websocket" not in sys.modules:
 mod = importlib.import_module("adaos.services.subnet.link_client")
 
 
+def test_member_tool_rpc_binds_forwarded_caller_and_retry_identity(monkeypatch) -> None:
+    observed: list[dict[str, object]] = []
+
+    class _Manager:
+        def run_tool(self, skill_name, public_tool, arguments, timeout=None):  # noqa: ANN001, ANN202
+            from adaos.sdk import access
+
+            observed.append(
+                {
+                    "caller": access.caller(),
+                    "invocation": access.invocation(),
+                    "skill": skill_name,
+                    "tool": public_tool,
+                    "arguments": arguments,
+                    "timeout": timeout,
+                }
+            )
+            return {"ok": True}
+
+    monkeypatch.setattr(mod.MemberLinkClient, "_skill_manager", staticmethod(lambda: _Manager()))
+    monkeypatch.setattr(mod, "is_accepting_new_work", lambda: True)
+
+    result = mod.MemberLinkClient._run_tool(
+        "web_desktop_runtime_skill:request_core_update",
+        {"target_node_id": "member-1"},
+        30,
+        False,
+        request_id="tool-update-1",
+        idempotency_key="skill:web_desktop:update:tool-update-1",
+        caller={"kind": "user", "id": "owner"},
+    )
+
+    assert result == {"ok": True}
+    assert observed == [
+        {
+            "caller": {"kind": "user", "id": "owner"},
+            "invocation": {
+                "request_id": "tool-update-1",
+                "idempotency_key": "skill:web_desktop:update:tool-update-1",
+            },
+            "skill": "web_desktop_runtime_skill",
+            "tool": "request_core_update",
+            "arguments": {"target_node_id": "member-1"},
+            "timeout": 30,
+        }
+    ]
+
+
 def test_mirrored_yjs_control_tracks_member_projection_demand(monkeypatch) -> None:
     from adaos.sdk.data.projections import clear_projection_demand, has_projection_demand
 

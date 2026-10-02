@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Response
+from adaos.domain.personalization_access import SubjectRef
 
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
@@ -719,13 +720,17 @@ def test_call_tool_allows_trusted_reads_but_rejects_mutations_while_draining(mon
 
 def test_call_tool_replays_idempotent_result_without_reexecuting(monkeypatch) -> None:
     calls: list[str] = []
+    invocation_contexts: list[dict[str, object] | None] = []
 
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
             return None
 
         def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            from adaos.sdk.access import invocation
+
             calls.append(f"{skill_name}:{tool_name}")
+            invocation_contexts.append(invocation())
             return {"count": len(calls), "payload": payload}
 
     async def _allow_action(**_kwargs):
@@ -760,6 +765,9 @@ def test_call_tool_replays_idempotent_result_without_reexecuting(monkeypatch) ->
     assert second_response.headers["x-adaos-idempotency-replay"] == "1"
     assert first["result"]["payload"]["_meta"]["idempotency_key"] == "idem-1"
     assert first["result"]["payload"]["_meta"]["request_id"] == "req-1"
+    assert invocation_contexts == [
+        {"request_id": "req-1", "idempotency_key": "idem-1"}
+    ]
 
 
 def test_call_tool_rejects_reused_idempotency_key_with_different_payload(monkeypatch) -> None:
@@ -3473,6 +3481,7 @@ def test_call_tool_returns_gateway_timeout_when_worker_times_out(monkeypatch) ->
 
 def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
+    forwarded: list[dict[str, object]] = []
 
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
@@ -3491,8 +3500,25 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
             calls.append(("is_connected", node_id))
             return True
 
-        async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object], timeout=None, dev=False, intent=None):
+        async def rpc_tools_call(
+            self,
+            node_id: str,
+            *,
+            tool: str,
+            arguments: dict[str, object],
+            timeout=None,
+            dev=False,
+            intent=None,
+            request_id=None,
+            idempotency_key=None,
+            caller=None,
+        ):
             calls.append(("rpc", node_id))
+            forwarded.append({
+                "request_id": request_id,
+                "idempotency_key": idempotency_key,
+                "caller": caller,
+            })
             return {"node_id": node_id, "tool": tool, "arguments": arguments, "timeout": timeout, "dev": dev, "intent": intent}
 
     ctx = SimpleNamespace(
@@ -3524,8 +3550,16 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
                 tool="subnet_env:get_snapshot",
                 arguments={"webspace_id": "desktop", "target_node_id": "member-1"},
                 intent="read",
+                request_id="tool-member-1",
+                idempotency_key="skill:subnet_env:get_snapshot:tool-member-1",
             ),
-            SimpleNamespace(headers={}),
+            SimpleNamespace(
+                headers={},
+                state=SimpleNamespace(
+                    adaos_verified_caller=SubjectRef("user", "owner"),
+                    adaos_verified_caller_scope=None,
+                ),
+            ),
             Response(),
             ctx=ctx,
         )
@@ -3537,6 +3571,11 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
     assert result["result"]["intent"] == "read"
     assert result["trace_id"] == "trace-123"
     assert ("rpc", "member-1") in calls
+    assert forwarded == [{
+        "request_id": "tool-member-1",
+        "idempotency_key": "skill:subnet_env:get_snapshot:tool-member-1",
+        "caller": {"kind": "user", "id": "owner"},
+    }]
 
 
 @pytest.mark.parametrize(

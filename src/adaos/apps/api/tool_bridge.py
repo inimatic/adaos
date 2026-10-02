@@ -1752,6 +1752,9 @@ async def _proxy_tool_call_to_node(
                 timeout=rpc_timeout,
                 dev=body.dev,
                 intent=body.intent,
+                request_id=body.request_id,
+                idempotency_key=_tool_call_idempotency_key(body, request) or None,
+                caller=(current_caller().to_dict() if current_caller() is not None else None),
             )
             if readonly_snapshot:
                 _snapshot_unavailable_cache_clear(
@@ -2590,6 +2593,7 @@ def _apply_application_runtime_headers(
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
     from adaos.services.policy.caller import verified_caller
     from adaos.services.policy.application import clear_application
+    from adaos.services.policy.invocation import verified_invocation
     from adaos.services.integrations.ingress import (
         PUBLIC_CONNECTED_ENVIRONMENT_REF,
         bind_ingress_materialization,
@@ -2607,7 +2611,10 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         if environment_profile_ref == PUBLIC_CONNECTED_ENVIRONMENT_REF
         else None
     )
-    with verified_caller(actor, scope), bind_ingress_materialization(
+    with verified_caller(actor, scope), verified_invocation(
+        request_id=body.request_id,
+        idempotency_key=_tool_call_idempotency_key(body, request) or None,
+    ), bind_ingress_materialization(
         environment_profile_ref,
         zone_id=zone_id,
     ):
@@ -3547,6 +3554,9 @@ async def _call_tool_impl(
                     timeout=body.timeout,
                     dev=body.dev,
                     intent=body.intent,
+                    request_id=body.request_id,
+                    idempotency_key=_tool_call_idempotency_key(body, request) or None,
+                    caller=(current_caller().to_dict() if current_caller() is not None else None),
                 )
                 return {"ok": True, "result": res, "trace_id": trace}
             except Exception as exc:

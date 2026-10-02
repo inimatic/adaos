@@ -81,6 +81,7 @@ def test_sdk_resource_and_persistent_data_contracts_are_discoverable():
         ("skill_data_root", "adaos.sdk.data.skill_env.skill_data_root"),
         ("adaos.sdk.resources.operate", "adaos.sdk.resources.operate"),
         ("adaos.sdk.access.caller", "adaos.sdk.access.caller"),
+        ("adaos.sdk.access.invocation", "adaos.sdk.access.invocation"),
         ("adaos.sdk.access.require", "adaos.sdk.access.require"),
         ("adaos.sdk.data.lifecycle.ensure_database", "adaos.sdk.data.lifecycle.ensure_database"),
         ("adaos.sdk.data.blob.put_upload", "adaos.sdk.data.blob.put_upload"),

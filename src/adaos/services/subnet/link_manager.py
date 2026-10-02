@@ -1484,6 +1484,9 @@ class HubLinkManager:
         timeout: float | None,
         dev: bool,
         intent: str | None = None,
+        request_id: str | None = None,
+        idempotency_key: str | None = None,
+        caller: dict[str, Any] | None = None,
     ) -> Any:
         return await self.rpc_call(
             node_id,
@@ -1494,6 +1497,9 @@ class HubLinkManager:
                 "timeout": timeout,
                 "dev": bool(dev),
                 "intent": str(intent or "").strip() or None,
+                "request_id": str(request_id or "").strip() or None,
+                "idempotency_key": str(idempotency_key or "").strip() or None,
+                "caller": dict(caller or {}) or None,
             },
             timeout=timeout,
         )

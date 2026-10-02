@@ -11657,6 +11657,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     sdk_contracts = json.loads(sdk_contracts_path.read_text(encoding="utf-8"))
     sdk_names = {item["name"] for item in sdk_contracts["contracts"]}
     assert {
+        "adaos.sdk.access.invocation",
         "adaos.sdk.access.require",
         "adaos.sdk.automation.inventory",
         "adaos.sdk.data.lifecycle.ensure_database",

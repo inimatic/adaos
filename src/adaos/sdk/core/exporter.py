@@ -46,7 +46,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.workflow",
 )
 _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
-    "adaos.sdk.access": "Read verified caller identity and require caller capabilities in the current skill scope.",
+    "adaos.sdk.access": "Read verified caller and invocation identity and require caller capabilities in the current skill scope.",
     "adaos.sdk.applications": "Inspect Applications and execute reviewed install, update, removal, and track operations.",
     "adaos.sdk.automation": "Read the secret-free remote automation fleet inventory through the Core-owned Builder identity and the selected AdaOS Root route. Applications never receive bearer tokens, certificate material, SSH keys, MCP tickets, or arbitrary transport URLs. Requires external_provider.use.",
     "adaos.sdk.builder.applications": "Create, preview, publish, and promote Applications through the governed Builder lifecycle.",

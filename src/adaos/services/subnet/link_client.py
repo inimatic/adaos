@@ -2140,6 +2140,9 @@ class MemberLinkClient:
                 timeout,
                 dev,
                 intent,
+                request_id=str(params.get("request_id") or "").strip() or None,
+                idempotency_key=str(params.get("idempotency_key") or "").strip() or None,
+                caller=(dict(params.get("caller")) if isinstance(params.get("caller"), dict) else None),
             )
         if method == "skills.runtime.status":
             name = str(params.get("name") or "").strip()
@@ -2202,7 +2205,15 @@ class MemberLinkClient:
         timeout: Any,
         dev: bool,
         intent: str = "",
+        *,
+        request_id: str | None = None,
+        idempotency_key: str | None = None,
+        caller: dict[str, Any] | None = None,
     ) -> Any:
+        from adaos.domain.personalization_access import SubjectRef
+        from adaos.services.policy.caller import verified_caller
+        from adaos.services.policy.invocation import verified_invocation
+
         skill_name, public_tool = tool.split(":", 1)
         mgr = MemberLinkClient._skill_manager()
         accepting_new_work = is_accepting_new_work()
@@ -2223,9 +2234,19 @@ class MemberLinkClient:
             )
         if not accepting_new_work and not trusted_read_only:
             raise RuntimeError(f"node_draining:{tool}")
-        if dev:
-            return mgr.run_dev_tool(skill_name, public_tool, arguments or {}, timeout=timeout)
-        return mgr.run_tool(skill_name, public_tool, arguments or {}, timeout=timeout)
+        forwarded_actor = None
+        if isinstance(caller, dict):
+            kind = str(caller.get("kind") or "").strip()
+            identifier = str(caller.get("id") or "").strip()
+            if kind and identifier:
+                forwarded_actor = SubjectRef(kind, identifier)
+        with verified_caller(forwarded_actor), verified_invocation(
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+        ):
+            if dev:
+                return mgr.run_dev_tool(skill_name, public_tool, arguments or {}, timeout=timeout)
+            return mgr.run_tool(skill_name, public_tool, arguments or {}, timeout=timeout)
 
     async def _on_hub_event(self, msg: dict[str, Any]) -> None:
         event = msg.get("event")

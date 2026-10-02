@@ -309,6 +309,57 @@ def test_generic_member_rpc_preserves_method_and_payload() -> None:
     assert result == {"schema": "result.v1"}
 
 
+def test_tool_rpc_carries_retry_identity_outside_application_arguments() -> None:
+    async def _run() -> tuple[dict, dict]:
+        manager = mod.HubLinkManager()
+        websocket = _FakeWebSocket()
+        manager._links["member-1"] = mod.HubMemberLink(
+            node_id="member-1", websocket=websocket
+        )
+        task = asyncio.create_task(
+            manager.rpc_tools_call(
+                "member-1",
+                tool="web_desktop_runtime_skill:request_core_update",
+                arguments={"target_node_id": "member-1"},
+                timeout=30.0,
+                dev=False,
+                intent="mutation",
+                request_id="tool-update-1",
+                idempotency_key="skill:web_desktop:update:tool-update-1",
+                caller={"kind": "user", "id": "owner"},
+            )
+        )
+        for _ in range(20):
+            if websocket.messages:
+                break
+            await asyncio.sleep(0)
+        request = websocket.messages[-1]
+        await manager.handle_rpc_response(
+            "member-1",
+            {
+                "t": "rpc.res",
+                "id": request["id"],
+                "ok": True,
+                "result": {"accepted": True},
+            },
+        )
+        return request, await task
+
+    request, result = asyncio.run(_run())
+
+    assert request["params"] == {
+        "tool": "web_desktop_runtime_skill:request_core_update",
+        "arguments": {"target_node_id": "member-1"},
+        "timeout": 30.0,
+        "dev": False,
+        "intent": "mutation",
+        "request_id": "tool-update-1",
+        "idempotency_key": "skill:web_desktop:update:tool-update-1",
+        "caller": {"kind": "user", "id": "owner"},
+    }
+    assert result == {"accepted": True}
+
+
 def test_generic_member_rpc_restores_structured_remote_error() -> None:
     async def _run() -> RuntimeError:
         manager = mod.HubLinkManager()
