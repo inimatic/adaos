@@ -188,6 +188,7 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     ]
     member_routing = bundle["response_contracts"]["selected_member_routing"]
     assert member_routing["reserved_argument"]["name"] == "target_node_id"
+    assert "adaos.sdk.system.rename_current_node" in member_routing["scope"]
     assert member_routing["offline_read"]["error"] == "target_member_unavailable"
     assert member_routing["offline_mutation"] == {
         "allowed": False,

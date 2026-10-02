@@ -704,6 +704,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                 "scope": [
                     "adaos.sdk.system.get_operational_snapshot",
                     "adaos.sdk.system.request_core_update",
+                    "adaos.sdk.system.rename_current_node",
                     "adaos.sdk.system.set_core_autoupdate",
                 ],
                 "rules": [
@@ -731,7 +732,8 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "Disable all selected-member mutations while the member is offline or "
                         "the returned subject does not match the selected target. Mutations never "
                         "fall back to local execution and remain subject to workspace.write and "
-                        "the cross-node runtime action gate."
+                        "the cross-node runtime action gate. This includes rename_current_node, "
+                        "which changes display metadata only on the verified target runtime."
                     ),
                 ],
                 "offline_read": {
