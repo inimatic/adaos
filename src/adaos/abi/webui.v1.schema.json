@@ -2041,6 +2041,25 @@
       "additionalProperties": true,
       "properties": {
         "buttons": { "$ref": "#/$defs/actionButtonList" },
+        "fixedButtons": {
+          "$ref": "#/$defs/actionButtonList",
+          "description": "Package-owned commands composed before or after buttons projected from dataSource. Runtime data cannot contribute actions."
+        },
+        "fixedPlacement": {
+          "type": "string",
+          "enum": ["start", "end"],
+          "default": "end"
+        },
+        "itemsPath": {
+          "$ref": "#/$defs/fieldPath",
+          "description": "Collection path in the authenticated dataSource result. Defaults to items; arrays are accepted directly."
+        },
+        "itemIdPath": { "$ref": "#/$defs/fieldPath" },
+        "itemLabelPath": { "$ref": "#/$defs/fieldPath" },
+        "itemActivityPath": { "$ref": "#/$defs/fieldPath" },
+        "itemIconPath": { "$ref": "#/$defs/fieldPath" },
+        "itemDisabledPath": { "$ref": "#/$defs/fieldPath" },
+        "maxItems": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 },
         "variant": {
           "type": "string",
           "enum": ["tabs", "tabsWithMore", "segmented", "toolbar", "adaptiveToolbar", "autoOverflow", "stack", "header"]

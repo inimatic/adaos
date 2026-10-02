@@ -1453,9 +1453,17 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     if isinstance(inputs.get("buttons"), list)
                     else []
                 )
+                fixed_buttons = (
+                    inputs.get("fixedButtons")
+                    if isinstance(inputs.get("fixedButtons"), list)
+                    else []
+                )
+                dynamic_collection = bool(data_source) and bool(
+                    str(inputs.get("itemsPath") or "items").strip()
+                )
                 button_ids = {
                     str(button.get("id") or "").strip()
-                    for button in buttons
+                    for button in [*buttons, *fixed_buttons]
                     if isinstance(button, Mapping)
                     and str(button.get("id") or "").strip()
                 }
@@ -1506,7 +1514,11 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     if selected_state_key and not selected_state_key.startswith("$state.")
                     else None
                 )
-                if selected_value not in {None, ""} and str(selected_value) not in button_ids:
+                if (
+                    not dynamic_collection
+                    and selected_value not in {None, ""}
+                    and str(selected_value) not in button_ids
+                ):
                     findings.append(
                         {
                             "code": "ui.tabs.initial_selection_unresolvable",

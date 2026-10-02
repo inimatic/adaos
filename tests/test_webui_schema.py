@@ -180,6 +180,27 @@ def test_remembered_menu_selection_contract(patch, valid):
     assert validator.is_valid(button) is valid
 
 
+def test_actions_inputs_accept_dynamic_tabs_with_a_fixed_command() -> None:
+    schema = _load_schema()
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/actionsInputs", "$defs": schema["$defs"]}
+    )
+
+    validator.validate(
+        {
+            "variant": "tabsWithMore",
+            "selectedStateKey": "selectedSystemNodeId",
+            "itemsPath": "members",
+            "itemIdPath": "node_id",
+            "itemLabelPath": "display_name",
+            "itemActivityPath": "status",
+            "fixedButtons": {"id": "add", "label": "Add"},
+            "fixedPlacement": "end",
+            "maxItems": 100,
+        }
+    )
+
+
 def test_i18n_text_spec_accepts_bounded_inline_translations() -> None:
     schema = _load_schema()["$defs"]["i18nTextSpec"]
 

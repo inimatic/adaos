@@ -471,6 +471,16 @@ export interface WebUiListItemButton extends WebUiActionButton {}
 
 export interface WebUiActionsInputs {
   buttons?: readonly WebUiActionButton[]
+  /** Package-owned commands composed with inert items projected from dataSource. */
+  fixedButtons?: WebUiActionButton | readonly WebUiActionButton[]
+  fixedPlacement?: 'start' | 'end'
+  itemsPath?: string
+  itemIdPath?: string
+  itemLabelPath?: string
+  itemActivityPath?: string
+  itemIconPath?: string
+  itemDisabledPath?: string
+  maxItems?: number
   variant?: 'tabs' | 'tabsWithMore' | 'segmented' | 'toolbar' | 'stack' | 'header' | 'adaptiveToolbar' | 'autoOverflow'
   size?: 'small' | 'default' | 'medium'
   [key: string]: unknown

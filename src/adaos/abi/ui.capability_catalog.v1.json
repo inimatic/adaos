@@ -993,12 +993,21 @@
       "manifest": {
         "widget_type": "navigation.tabs",
         "selection": "Set inputs.selectedStateKey to the page-state key that stores the active button id. Button ids must equal the values written to that state key. Prefer one on=click updateState action with <selectedStateKey>=$event.id. Do not put selectedStateKey on individual tab buttons and do not prefix the key with $state.",
+        "dynamic_collection": "To bind an authenticated collection, declare widget.dataSource plus inputs.itemsPath (defaults to items), itemIdPath, itemLabelPath and optional itemActivityPath/itemIconPath/itemDisabledPath. The renderer maps only inert presentation fields and preserves the source item as $event.record. Provider data cannot define actions, enabledIf, visibleIf or option sources. Set dataSource.preserveLastValue=true when last-known tabs should remain visible during refresh or transport degradation.",
+        "fixed_commands": "Compose package-owned commands such as Add with inputs.fixedButtons and optional fixedPlacement=start|end. A fixed id wins over a colliding projected id. Keep its action in the widget actions list; never obtain actions from collection data.",
+        "dynamic_event": "A generic on=click action receives {id,label,activity?,icon?,disabled?,record,ts}. Use $event.id for selectedStateKey and $event.record only for immutable projected identity or display metadata.",
+        "loading_unavailable": "The widget host exposes loading, refreshing, stale, unavailable and error states with retry. With preserveLastValue the previous collection remains rendered and is marked stale; without a previous value only fixedButtons remain.",
         "overflow": "Use inputs.variant='tabsWithMore' when the tab set is dynamic, can grow, or must stay bounded on compact widths. The client renders visible tabs and moves the remainder into an accessible More menu instead of resetting horizontal scroll. inputs.itemsLimit may impose an optional upper visible-item bound.",
         "activity": "A button with state or activity equal to online or updating receives a Taiga Pulse marker (green for online, warning for updating). Keep the state in visible label or accessible text too: motion and color are supplementary, and reduced-motion users retain the static marker.",
         "open_and_load_order": "When one click opens a surface and also performs a fallible callSkill refresh, dispatch reset/updateState first, navigate second, and the fallible refresh last. Command chains stop after a failed action, so putting refresh before navigate can strand the user without the requested surface. Prefer an on-mount refresh inside the opened surface when available."
       },
-      "data_shape": { "kind": "none" },
-      "events": ["click:<buttonId>"],
+      "data_shape": {
+        "kind": "items",
+        "accepted": ["array", "object path selected by inputs.itemsPath"],
+        "mapping": ["itemIdPath", "itemLabelPath", "itemActivityPath", "itemIconPath", "itemDisabledPath"],
+        "bounded_by": "inputs.maxItems (1..500, default 100)"
+      },
+      "events": ["click", "click:<fixedButtonId>"],
       "responsive": {
         "desktop": "one horizontal tab list",
         "compact": "TabsWithMore overflow menu when inputs.variant is tabsWithMore"

@@ -108,6 +108,10 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     assert "technical field id is never a visible heading" in form["manifest"]["static_content"]
     assert "object keyed by the literal modal id" in form["manifest"]["modal_composition"]
     assert "params:{modalId:'<literal-id>'}" in form["manifest"]["modal_composition"]
+    tabs = get_ui_capability("navigation.tabs")
+    assert tabs["data_shape"]["kind"] == "items"
+    assert "fixedButtons" in tabs["manifest"]["fixed_commands"]
+    assert "$event.record" in tabs["manifest"]["dynamic_event"]
 
 
 def test_catalog_does_not_teach_deprecated_open_modal_to_authors() -> None:
@@ -444,6 +448,51 @@ def test_capability_validation_rejects_navigation_tab_expression_and_unknown_ini
     )
     assert finding["selected_value"] == "inbox"
     assert finding["button_ids"] == ["tab-inbox"]
+
+
+def test_capability_validation_accepts_dynamic_navigation_tabs_with_fixed_add() -> None:
+    from adaos.services.ui_capabilities import (
+        validate_webui_capabilities as validate_generic_capabilities,
+    )
+
+    webui = _board_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page.setdefault("initialState", {})["selectedSystemNodeId"] = "hub-1"
+    page["widgets"].insert(
+        0,
+        {
+            "id": "member-tabs",
+            "type": "navigation.tabs",
+            "dataSource": {
+                "kind": "skill",
+                "name": "runtime.list_members",
+                "preserveLastValue": True,
+            },
+            "inputs": {
+                "variant": "tabsWithMore",
+                "selectedStateKey": "selectedSystemNodeId",
+                "itemsPath": "members",
+                "itemIdPath": "node_id",
+                "itemLabelPath": "display_name",
+                "itemActivityPath": "status",
+                "fixedButtons": [{"id": "add", "label": "Add"}],
+            },
+            "actions": [
+                {
+                    "on": "click",
+                    "type": "updateState",
+                    "params": {"selectedSystemNodeId": "$event.id"},
+                }
+            ],
+        },
+    )
+
+    result = validate_generic_capabilities(webui)
+
+    assert not any(
+        item["code"] == "ui.tabs.initial_selection_unresolvable"
+        for item in result["findings"]
+    )
 
 def test_multilingual_search_selects_kanban_recipe() -> None:
     result = search_ui_capabilities("Покажи задачи канбан-доской в трех колонках")
