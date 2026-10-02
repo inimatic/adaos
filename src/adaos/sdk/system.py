@@ -1001,6 +1001,12 @@ def get_operational_snapshot(
         try:
             member_devices: list[dict[str, Any]] = []
             seen_member_refs: set[str] = set()
+            subject_ref = str(subject.get("id") or "").strip()
+            subject_node_id = (
+                subject_ref.split(":", 1)[1]
+                if ":" in subject_ref
+                else subject_ref
+            )
             for raw_item in control_plane.list_device_objects():
                 item = dict(raw_item)
                 relations = _mapping(item.get("relations"))
@@ -1013,6 +1019,11 @@ def get_operational_snapshot(
                     "",
                 )
                 if not member_ref or member_ref in seen_member_refs:
+                    continue
+                member_node_id = member_ref.split(":", 1)[1]
+                if subject_node_id and member_node_id == subject_node_id:
+                    # The local hub can also be present as its historical
+                    # member identity. It is one node and must have one tab.
                     continue
                 seen_member_refs.add(member_ref)
                 member_devices.append(

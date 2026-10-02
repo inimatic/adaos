@@ -168,6 +168,12 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
                 "relations": {"connected_to": ["browser:browser-1"]},
             },
             {
+                "id": "device:member:local-hub",
+                "title": "Local host duplicate",
+                "status": "online",
+                "relations": {"connected_to": ["member:hub"]},
+            },
+            {
                 "id": "device:member:worker",
                 "title": "Worker",
                 "status": "offline",
