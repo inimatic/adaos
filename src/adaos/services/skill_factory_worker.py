@@ -672,6 +672,10 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "applications",
                     "resources",
                     "members",
+                    "skills",
+                    "development",
+                    "activity",
+                    "technical",
                 ],
                 "bounds": {"limit": {"minimum": 1, "maximum": 500}},
                 "result": {
@@ -724,6 +728,54 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "applications": ["applications", "application_updates"],
                         "resources": ["resources"],
                         "members": ["members", "member_summary"],
+                        "skills": ["skills", "skill_summary"],
+                        "development": ["development_delivery"],
+                        "activity": ["activity"],
+                        "technical": ["technical"],
+                    },
+                    "progressive_system_fields": {
+                        "skill_summary": [
+                            "available",
+                            "total",
+                            "returned",
+                            "truncated",
+                            "source",
+                            "freshness",
+                        ],
+                        "development_delivery": [
+                            "available",
+                            "total",
+                            "delivered",
+                            "accepted",
+                            "pending",
+                            "last_delivery_at",
+                            "source",
+                            "freshness",
+                        ],
+                        "activity": [
+                            "available",
+                            "items",
+                            "count",
+                            "source",
+                            "freshness",
+                        ],
+                        "technical": [
+                            "available",
+                            "observed_at",
+                            "freshness",
+                            "source",
+                            "identifiers",
+                            "runtime",
+                            "connectivity",
+                            "update",
+                        ],
+                        "rules": (
+                            "Use skills for the selected node's installed-skill count; use the "
+                            "aggregate development_delivery only for lightweight report delivery "
+                            "statistics. Recent activity and technical details are bounded, lazy "
+                            "progressive disclosures. Preserve explicit unavailable/freshness state, "
+                            "never replace it with Prototype literals, private Core imports, or logs."
+                        ),
                     },
                     "resource_fields": [
                         "available",

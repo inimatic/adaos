@@ -174,9 +174,8 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         "7d": "used_7d_tokens",
         "30d": "used_30d_tokens",
     }
-    assert subscription_usage["result"]["cost"]["period"] == "24h"
-    assert subscription_usage["result"]["cost"]["currency"] == "USD"
-    assert "not monetary billing" in subscription_usage["result"]["usage_semantics"]
+    assert "cost" not in subscription_usage["result"]
+    assert "Do not render or infer monetary economics" in subscription_usage["result"]["usage_semantics"]
     system_contract = bundle["response_contracts"]["system_operational_snapshot"]
     typed_route = system_contract["result"]["typed_provider_route"]
     assert typed_route["method"] == "adaos.sdk.system.get_operational_snapshot"
@@ -192,6 +191,12 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "resources" in system_contract["sections"]
     assert "members" in system_contract["sections"]
     assert "applications" in system_contract["sections"]
+    assert {"skills", "development", "activity", "technical"}.issubset(
+        system_contract["sections"]
+    )
+    progressive = system_contract["result"]["progressive_system_fields"]
+    assert "last_delivery_at" in progressive["development_delivery"]
+    assert "never replace it with Prototype literals" in progressive["rules"]
     assert bundle["response_contracts"]["system_identity_rename"]["authorization"] == "workspace.write"
     update_contract = bundle["response_contracts"]["system_update_controls"]
     assert update_contract["authorization"] == "workspace.write"

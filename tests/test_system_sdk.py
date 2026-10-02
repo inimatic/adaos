@@ -188,6 +188,137 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
     assert result["provenance"] == {"authority": "local_node", "projection": "read_only"}
 
 
+def test_operational_snapshot_exposes_bounded_progressive_system_sections(monkeypatch) -> None:
+    from adaos.sdk import applications, system
+    from adaos.sdk.data import root_mcp
+
+    monkeypatch.setattr(
+        system.control_plane,
+        "get_self_object",
+        lambda: {
+            **_object("node:hub", "node"),
+            "relations": {"subnet": ["subnet:sn_demo"]},
+            "versioning": {"current": "1.5.0"},
+        },
+    )
+    monkeypatch.setattr(
+        system.control_plane,
+        "get_local_capacity_object",
+        lambda: {**_object("capacity:hub", "capacity"), "resources": {"active_skill_total": 2}},
+    )
+    monkeypatch.setattr(
+        system.control_plane,
+        "list_skill_objects",
+        lambda: [
+            {"id": "skill:notebook", "title": "Notebook", "status": "active"},
+            {"id": "skill:weather", "title": "Weather", "status": "active"},
+        ],
+    )
+    system._RELIABILITY_CACHE.clear()
+    monkeypatch.setattr(
+        system.control_plane,
+        "get_reliability_projection",
+        lambda **_: {
+            "status": "ready",
+            "context": {"state": "ready"},
+            "objects": [_object("connection:root", "connection")],
+        },
+    )
+    monkeypatch.setattr(system, "current_update_status", lambda: {"state": "idle", "phase": "ready"})
+    monkeypatch.setattr(
+        applications,
+        "list_development_reports",
+        lambda: [
+            {"report_id": "report.1", "status": "accepted", "updated_at": "2026-10-01T10:00:00Z"},
+            {"report_id": "report.2", "status": "queued", "updated_at": "2026-10-01T11:00:00Z"},
+        ],
+    )
+    monkeypatch.setattr(
+        root_mcp,
+        "get_local_activity_log",
+        lambda **_: {
+            "ok": True,
+            "response": {
+                "result": {
+                    "events": [
+                        {
+                            "event_id": "evt.1",
+                            "tool_id": "hub.update.reconcile",
+                            "status": "ok",
+                            "finished_at": "2026-10-01T12:00:00Z",
+                        },
+                        {"event_id": "evt.2", "tool_id": "root.tokens.list", "status": "ok"},
+                    ]
+                }
+            },
+        },
+    )
+
+    result = system.get_operational_snapshot(
+        sections={"skills", "development", "activity", "technical"},
+        webspace_id="desktop",
+        limit=20,
+    )
+
+    assert result["skill_summary"] == {
+        "available": True,
+        "total": 2,
+        "returned": 2,
+        "truncated": False,
+        "source": "control_plane",
+        "freshness": "current",
+    }
+    assert [item["id"] for item in result["skills"]] == ["skill:notebook", "skill:weather"]
+    assert result["development_delivery"]["delivered"] == 1
+    assert result["development_delivery"]["accepted"] == 1
+    assert result["development_delivery"]["pending"] == 1
+    assert [item["id"] for item in result["activity"]["items"]] == ["evt.1"]
+    assert result["technical"]["identifiers"] == {
+        "node_id": "node:hub",
+        "subnet_id": "sn_demo",
+        "webspace_id": "desktop",
+    }
+    assert result["technical"]["connectivity"] == {
+        "status": "ready",
+        "observed": 1,
+        "ready": 1,
+    }
+    assert result["technical"]["update"] == {"state": "idle", "phase": "ready"}
+
+
+def test_progressive_system_sections_fail_closed_with_explicit_unavailable(monkeypatch) -> None:
+    from adaos.sdk import applications, system
+    from adaos.sdk.data import root_mcp
+
+    monkeypatch.setattr(
+        system.control_plane,
+        "list_skill_objects",
+        lambda: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    monkeypatch.setattr(
+        applications,
+        "list_development_reports",
+        lambda: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    monkeypatch.setattr(
+        root_mcp,
+        "get_local_activity_log",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    skills, summary = system._installed_skill_projection(limit=10)
+    delivery = system._development_delivery_projection()
+    activity = system._root_activity_events(limit=10)
+
+    assert skills == []
+    assert summary["available"] is False
+    assert summary["freshness"] == "unavailable"
+    assert delivery["available"] is False
+    assert delivery["freshness"] == "unavailable"
+    assert activity["available"] is False
+    assert activity["items"] == []
+
+
 def test_operational_snapshot_exposes_typed_subnet_identity(monkeypatch) -> None:
     from adaos.sdk import system
     from adaos.services import subnet_alias

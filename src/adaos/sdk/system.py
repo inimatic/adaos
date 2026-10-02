@@ -39,6 +39,10 @@ _ALL_SECTIONS = frozenset(
         "applications",
         "resources",
         "members",
+        "skills",
+        "development",
+        "activity",
+        "technical",
     }
 )
 _RELIABILITY_CACHE_TTL_S = 2.0
@@ -476,6 +480,227 @@ def _installed_application_summaries(*, webspace_id: str | None, limit: int) -> 
     return items
 
 
+def _installed_skill_projection(*, limit: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return bounded installed-skill facts from the public control plane."""
+
+    try:
+        raw_items = list(control_plane.list_skill_objects())
+    except Exception as exc:
+        return [], {
+            "available": False,
+            "total": None,
+            "source": "control_plane",
+            "freshness": "unavailable",
+            "reason": type(exc).__name__,
+        }
+    items: list[dict[str, Any]] = []
+    for value in raw_items[:limit]:
+        item = _mapping(value)
+        identity = str(item.get("id") or item.get("name") or "").strip()
+        if not identity:
+            continue
+        items.append(
+            {
+                "id": identity,
+                "name": str(item.get("name") or item.get("title") or identity),
+                "status": str(item.get("status") or "unknown"),
+                "version": _mapping(item.get("versioning")).get("current")
+                or item.get("version"),
+            }
+        )
+    return items, {
+        "available": True,
+        "total": len(raw_items),
+        "returned": len(items),
+        "truncated": len(raw_items) > len(items),
+        "source": "control_plane",
+        "freshness": "current",
+    }
+
+
+def _development_delivery_projection() -> dict[str, Any]:
+    """Aggregate local Development Report delivery without exposing report content."""
+
+    try:
+        from adaos.sdk import applications
+
+        reports = [
+            dict(item)
+            for item in applications.list_development_reports()
+            if isinstance(item, Mapping)
+        ]
+    except Exception as exc:
+        return {
+            "available": False,
+            "source": "development_reports",
+            "freshness": "unavailable",
+            "reason": type(exc).__name__,
+        }
+    delivered_states = {
+        "delivered",
+        "received",
+        "triaged",
+        "accepted",
+        "declined",
+        "duplicate",
+        "planned",
+        "prerelease_available",
+        "released",
+        "awaiting_local_verification",
+        "verified",
+        "still_reproduces",
+    }
+    accepted_states = {
+        "accepted",
+        "planned",
+        "prerelease_available",
+        "released",
+        "awaiting_local_verification",
+        "verified",
+        "still_reproduces",
+    }
+    statuses = [str(item.get("status") or "unknown").strip().lower() for item in reports]
+    delivered = [item for item, status in zip(reports, statuses) if status in delivered_states]
+    timestamps = sorted(
+        str(item.get("updated_at") or item.get("created_at") or "").strip()
+        for item in delivered
+        if str(item.get("updated_at") or item.get("created_at") or "").strip()
+    )
+    return {
+        "available": True,
+        "total": len(reports),
+        "delivered": sum(status in delivered_states for status in statuses),
+        "accepted": sum(status in accepted_states for status in statuses),
+        "pending": sum(status in {"draft", "queued"} for status in statuses),
+        "last_delivery_at": timestamps[-1] if timestamps else None,
+        "source": "development_reports",
+        "freshness": "current",
+    }
+
+
+def _root_activity_events(*, limit: int) -> dict[str, Any]:
+    """Return bounded, user-impacting Root activity for progressive disclosure."""
+
+    try:
+        from adaos.sdk.data import root_mcp
+
+        response = _mapping(root_mcp.get_local_activity_log(limit=min(200, max(20, limit * 6))))
+        envelope = _mapping(response.get("response"))
+        result = _mapping(envelope.get("result") or response.get("result"))
+        raw_events = result.get("events") if result else response.get("events")
+        events = _objects(raw_events, limit=min(200, max(20, limit * 6)))
+    except Exception as exc:
+        return {
+            "available": False,
+            "items": [],
+            "count": 0,
+            "source": "root_audit",
+            "freshness": "unavailable",
+            "reason": type(exc).__name__,
+        }
+    keywords = {
+        "update",
+        "lifecycle",
+        "member",
+        "device",
+        "pair",
+        "unlink",
+        "application",
+        "incident",
+        "health",
+        "threshold",
+        "diagnostic",
+        "subnet",
+        "policy",
+    }
+    items: list[dict[str, Any]] = []
+    for event in events:
+        tool_id = str(event.get("tool_id") or event.get("kind") or "").strip()
+        if not any(token in tool_id.lower() for token in keywords):
+            continue
+        items.append(
+            {
+                "id": str(event.get("event_id") or event.get("trace_id") or "") or None,
+                "kind": str(event.get("kind") or tool_id or "system"),
+                "status": str(event.get("status") or "unknown"),
+                "summary": str(event.get("summary") or tool_id or "System activity")[:300],
+                "recorded_at": event.get("finished_at") or event.get("started_at"),
+            }
+        )
+        if len(items) >= limit:
+            break
+    return {
+        "available": True,
+        "items": items,
+        "count": len(items),
+        "source": "root_audit",
+        "freshness": "current",
+    }
+
+
+def _technical_projection(
+    *,
+    subject: Mapping[str, Any],
+    capacity: Mapping[str, Any],
+    reliability: Mapping[str, Any],
+    update: Mapping[str, Any],
+    subnet_id: str | None,
+    webspace_id: str | None,
+) -> dict[str, Any]:
+    """Build a small troubleshooting projection, never an unbounded log dump."""
+
+    context = _mapping(reliability.get("context"))
+    connections = _projection_objects(reliability, kind="connection", limit=50)
+    connection_states = [
+        str(item.get("status") or item.get("health") or "unknown").strip().lower()
+        for item in connections
+    ]
+    raw_capacity = _mapping(capacity.get("resources"))
+    bounded_capacity = {
+        str(key)[:80]: value
+        for key, value in list(sorted(raw_capacity.items(), key=lambda item: str(item[0])))[:20]
+        if value is None or isinstance(value, (bool, int, float, str))
+    }
+    allowed_update_fields = (
+        "state",
+        "phase",
+        "action",
+        "message",
+        "reason",
+        "planned",
+        "runtime",
+        "transition_id",
+        "started_at",
+        "updated_at",
+    )
+    return {
+        "available": True,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "freshness": "current",
+        "source": "bounded_operational_projection",
+        "identifiers": {
+            "node_id": subject.get("id"),
+            "subnet_id": subnet_id,
+            "webspace_id": str(webspace_id or "").strip() or None,
+        },
+        "runtime": {
+            "status": subject.get("status"),
+            "version": _mapping(subject.get("versioning")).get("current"),
+            "capacity": bounded_capacity,
+        },
+        "connectivity": {
+            "status": context.get("state") or reliability.get("status") or "unknown",
+            "observed": len(connections),
+            "ready": sum(value in {"online", "ready", "connected"} for value in connection_states),
+        },
+        "update": {
+            key: update.get(key)
+            for key in allowed_update_fields
+            if update.get(key) is not None
+        },
+    }
+
+
 def get_operational_snapshot(
     *,
     sections: Iterable[str] | str | None = None,
@@ -529,8 +754,16 @@ def get_operational_snapshot(
     }
 
     reliability: dict[str, Any] = {}
-    if selected.intersection({"services", "connections", "quotas", "incidents"}):
-        reliability = _reliability_projection(webspace_id=webspace_id)
+    if selected.intersection({"services", "connections", "quotas", "incidents", "technical"}):
+        try:
+            reliability = _reliability_projection(webspace_id=webspace_id)
+        except Exception as exc:
+            reliability = {
+                "status": "unavailable",
+                "context": {"state": "unavailable", "reason": type(exc).__name__},
+                "objects": [],
+                "incidents": [],
+            }
     if "services" in selected:
         result["services"] = _projection_objects(
             reliability,
@@ -601,6 +834,29 @@ def get_operational_snapshot(
             ),
             "total": len(members),
         }
+    if "skills" in selected:
+        skills, skill_summary = _installed_skill_projection(limit=bounded_limit)
+        result["skills"] = skills
+        result["skill_summary"] = skill_summary
+    if "development" in selected:
+        result["development_delivery"] = _development_delivery_projection()
+    if "activity" in selected:
+        result["activity"] = _root_activity_events(limit=min(bounded_limit, 50))
+    if "technical" in selected:
+        technical_update = _mapping(result.get("update"))
+        if not technical_update:
+            try:
+                technical_update = _mapping(current_update_status())
+            except Exception as exc:
+                technical_update = {"state": "unavailable", "reason": type(exc).__name__}
+        result["technical"] = _technical_projection(
+            subject=subject,
+            capacity=capacity,
+            reliability=reliability,
+            update=technical_update,
+            subnet_id=subnet_id or None,
+            webspace_id=webspace_id,
+        )
 
     result["counts"] = {
         key: len(value)
