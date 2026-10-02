@@ -307,6 +307,9 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     assert stub.calls[49 + offset][2]["json"]["tool_id"] == "adaos_dev.get_named_entity_registry"
     assert stub.calls[49 + offset][2]["json"]["arguments"]["webspace_id"] == "desktop"
     assert stub.calls[49 + offset][2]["json"]["arguments"]["kind"] == "device.browser"
+    assert stub.calls[49 + offset][2]["json"]["arguments"]["limit"] == 20
+    assert stub.calls[49 + offset][2]["json"]["arguments"]["offset"] == 0
+    assert stub.calls[49 + offset][2]["json"]["arguments"]["include_conflicts"] is False
     assert stub.calls[50 + offset][2]["json"]["tool_id"] == "nlu_authoring.get_context"
     assert stub.calls[50 + offset][2]["json"]["arguments"]["webspace_id"] == "desktop"
     assert stub.calls[50 + offset][2]["json"]["arguments"]["kind"] == "skill"

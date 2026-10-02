@@ -204,6 +204,9 @@ class RootMcpClient:
         *,
         webspace_id: str | None = None,
         kind: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        include_conflicts: bool = False,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
@@ -213,6 +216,9 @@ class RootMcpClient:
             arguments["webspace_id"] = str(webspace_id)
         if kind:
             arguments["kind"] = str(kind)
+        arguments["limit"] = max(1, min(int(limit or 20), 64))
+        arguments["offset"] = max(0, min(int(offset or 0), 1_000_000))
+        arguments["include_conflicts"] = bool(include_conflicts)
         return self.call(
             "adaos_dev.get_named_entity_registry",
             arguments=arguments,

@@ -367,6 +367,8 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                         "enum": [item.value for item in RootMcpSurface],
                     },
                     "plane_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 1000000},
                 },
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
@@ -400,7 +402,12 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="List descriptor sets",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Return the root-curated development descriptor catalog.",
-            input_schema=schema_object(),
+            input_schema=schema_object(
+                properties={
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 1000000},
+                }
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "root", "handler": "list_descriptor_sets"},
@@ -597,6 +604,9 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "target_id": {"type": "string"},
                     "webspace_id": {"type": "string"},
                     "kind": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 1000000},
+                    "include_conflicts": {"type": "boolean", "default": False},
                 },
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
@@ -2647,11 +2657,19 @@ def _handle_list_contracts(
 ) -> dict[str, Any]:
     surface = str(arguments.get("surface") or "").strip().lower() or None
     plane_id = str(arguments.get("plane_id") or "").strip().lower() or None
+    limit = max(1, min(int(arguments.get("limit") or 12), 64))
+    offset = max(0, min(int(arguments.get("offset") or 0), 1_000_000))
+    contracts = list_tool_contracts(surface=surface, plane_id=plane_id)
+    page = contracts[offset : offset + limit]
+    has_more = offset + len(page) < len(contracts)
     return {
-        "contracts": [
-            item.to_dict()
-            for item in list_tool_contracts(surface=surface, plane_id=plane_id)
-        ]
+        "contracts": [item.to_dict() for item in page],
+        "count": len(page),
+        "total_count": len(contracts),
+        "limit": limit,
+        "offset": offset,
+        "has_more": has_more,
+        "next_offset": offset + len(page) if has_more else None,
     }
 
 
@@ -2672,8 +2690,19 @@ def _handle_get_plane(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, 
 def _handle_list_descriptor_sets(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
+    limit = max(1, min(int(arguments.get("limit") or 8), 64))
+    offset = max(0, min(int(arguments.get("offset") or 0), 1_000_000))
+    descriptors = list_descriptor_registry()
+    page = descriptors[offset : offset + limit]
+    has_more = offset + len(page) < len(descriptors)
     return {
-        "descriptors": list_descriptor_registry(),
+        "descriptors": page,
+        "count": len(page),
+        "total_count": len(descriptors),
+        "limit": limit,
+        "offset": offset,
+        "has_more": has_more,
+        "next_offset": offset + len(page) if has_more else None,
         "publication_mode": "root-curated",
     }
 
@@ -2794,6 +2823,9 @@ def _handle_adaos_dev_named_entity_registry(
     payload = named_entities.compact_registry_payload(
         kind=str(arguments.get("kind") or "").strip() or None,
         webspace_id=str(arguments.get("webspace_id") or "").strip() or None,
+        limit=max(1, min(int(arguments.get("limit") or 20), 64)),
+        offset=max(0, min(int(arguments.get("offset") or 0), 1_000_000)),
+        include_conflicts=bool(arguments.get("include_conflicts", False)),
     )
     descriptor["payload"] = payload
     return {"descriptor": descriptor}

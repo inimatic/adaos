@@ -61,6 +61,9 @@ def profile_audit_events(
             "total_chars": 0,
             "max_chars": 0,
             "max_bytes": 0,
+            "latest_chars": None,
+            "latest_bytes": None,
+            "latest_signal": None,
             "signals": {"ok": 0, "review": 0, "optimize": 0},
         }
     )
@@ -82,6 +85,14 @@ def profile_audit_events(
             continue
         measured_event_count += 1
         row["measured_calls"] += 1
+        if row["latest_chars"] is None:
+            # Root MCP audit reads are newest-first. Preserve the most recent
+            # measurement while retaining the historical maximum separately.
+            row["latest_chars"] = chars
+            row["latest_bytes"] = output_bytes if isinstance(output_bytes, int) else None
+            row["latest_signal"] = str(
+                summary.get("optimization_signal") or "ok"
+            ).strip().lower()
         row["total_chars"] += chars
         row["max_chars"] = max(int(row["max_chars"]), chars)
         if isinstance(output_bytes, int):
@@ -101,6 +112,9 @@ def profile_audit_events(
                 "measured_calls": measured,
                 "max_chars": int(raw["max_chars"]),
                 "max_bytes": int(raw["max_bytes"]),
+                "latest_chars": raw["latest_chars"],
+                "latest_bytes": raw["latest_bytes"],
+                "latest_signal": raw["latest_signal"],
                 "average_chars": (
                     round(int(raw["total_chars"]) / measured, 1) if measured else None
                 ),

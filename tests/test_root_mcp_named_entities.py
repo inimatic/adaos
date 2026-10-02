@@ -43,6 +43,44 @@ def test_root_mcp_exposes_named_entity_registry_descriptor(monkeypatch) -> None:
     assert result["descriptor"]["payload"]["items"] == descriptor["payload"]["items"]
 
 
+def test_root_mcp_named_entity_registry_pages_without_losing_total_fingerprint(
+    monkeypatch,
+) -> None:
+    entity_service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref=f"skill:sample-{index}",
+                kind="skill",
+                display_name=f"Sample {index}",
+                source="test",
+                status="confirmed",
+            )
+            for index in range(3)
+        ],
+        device_inventory_service=_EmptyDeviceInventory(),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: entity_service)
+
+    first = root_mcp_service._handle_adaos_dev_named_entity_registry(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", "kind": "skill", "limit": 1},
+        dry_run=False,
+    )["descriptor"]["payload"]
+    second = root_mcp_service._handle_adaos_dev_named_entity_registry(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", "kind": "skill", "limit": 1, "offset": 1},
+        dry_run=False,
+    )["descriptor"]["payload"]
+
+    assert first["summary"]["count"] == 3
+    assert first["summary"]["returned_count"] == 1
+    assert first["summary"]["has_more"] is True
+    assert first["summary"]["next_offset"] == 1
+    assert first["conflicts"] == []
+    assert second["summary"]["offset"] == 1
+    assert second["summary"]["fingerprint"] == first["summary"]["fingerprint"]
+    assert second["items"] != first["items"]
+
+
 def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch) -> None:
     entity_service = named_entities.NamedEntityService(
         static_entities=[

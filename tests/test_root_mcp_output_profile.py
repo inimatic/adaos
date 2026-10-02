@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from adaos.services.root_mcp.model import RootMcpSurface, RootMcpToolContract
 from adaos.services.root_mcp import descriptor_search
+from adaos.services.root_mcp import service as root_mcp_service
 from adaos.services.root_mcp.output_profile import (
     audit_search_contracts,
     measure_output,
@@ -62,6 +63,7 @@ def test_profile_audit_events_returns_largest_tools_first() -> None:
     assert profile["top"][0]["tool_id"] == "large.search"
     assert profile["top"][0]["calls"] == 2
     assert profile["top"][0]["signals"]["review"] == 1
+    assert profile["top"][0]["latest_chars"] == 30_000
 
 
 def test_search_contract_audit_requires_bound_and_pagination() -> None:
@@ -135,3 +137,21 @@ def test_descriptor_search_cursor_returns_the_next_compact_page(monkeypatch) -> 
     assert first["offset"] == 0
     assert second["offset"] == 1
     assert first["items"][0]["item_id"] != second["items"][0]["item_id"]
+
+
+def test_large_root_catalog_lists_are_bounded_and_continuable() -> None:
+    contracts = root_mcp_service._handle_list_contracts(  # type: ignore[attr-defined]
+        {"limit": 1}, dry_run=False
+    )
+    descriptors = root_mcp_service._handle_list_descriptor_sets(  # type: ignore[attr-defined]
+        {"limit": 1}, dry_run=False
+    )
+
+    assert contracts["count"] == 1
+    assert contracts["total_count"] > 1
+    assert contracts["has_more"] is True
+    assert contracts["next_offset"] == 1
+    assert descriptors["count"] == 1
+    assert descriptors["total_count"] > 1
+    assert descriptors["has_more"] is True
+    assert descriptors["next_offset"] == 1

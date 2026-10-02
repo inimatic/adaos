@@ -44,7 +44,7 @@ class _FakeRootMcpClient:
         *,
         level: str = "std",
         query: str | None = None,
-        limit: int = 24,
+        limit: int = 20,
     ) -> dict:
         self.calls.append(
             (
@@ -155,8 +155,27 @@ class _FakeRootMcpClient:
         self.calls.append(("get_adaos_dev_public_scenario_registry", "", {}))
         return {"descriptor": {"payload": {"kind": "scenarios", "item_count": 2}}}
 
-    def get_adaos_dev_named_entity_registry(self, *, webspace_id: str | None = None, kind: str | None = None) -> dict:
-        self.calls.append(("get_adaos_dev_named_entity_registry", webspace_id or "", {"kind": kind}))
+    def get_adaos_dev_named_entity_registry(
+        self,
+        *,
+        webspace_id: str | None = None,
+        kind: str | None = None,
+        limit: int = 24,
+        offset: int = 0,
+        include_conflicts: bool = False,
+    ) -> dict:
+        self.calls.append(
+            (
+                "get_adaos_dev_named_entity_registry",
+                webspace_id or "",
+                {
+                    "kind": kind,
+                    "limit": limit,
+                    "offset": offset,
+                    "include_conflicts": include_conflicts,
+                },
+            )
+        )
         return {
             "descriptor": {
                 "payload": {
@@ -1427,7 +1446,16 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "include_payloads": True,
         },
     ) in fake_client.calls
-    assert ("get_adaos_dev_named_entity_registry", "desktop", {"kind": "device.browser"}) in fake_client.calls
+    assert (
+        "get_adaos_dev_named_entity_registry",
+        "desktop",
+        {
+            "kind": "device.browser",
+            "limit": 20,
+            "offset": 0,
+            "include_conflicts": False,
+        },
+    ) in fake_client.calls
     assert (
         "get_nlu_authoring_context",
         "desktop",

@@ -1913,9 +1913,12 @@ def _compact_registry_payload_from_records(
     records: Iterable[NamedEntityRecord],
     *,
     webspace_id: str,
+    limit: int | None = None,
+    offset: int = 0,
+    include_conflicts: bool = True,
 ) -> dict[str, Any]:
     records = list(records)
-    items = [
+    all_items = [
         {
             "canonical_ref": item.canonical_ref,
             "kind": item.kind,
@@ -1930,19 +1933,32 @@ def _compact_registry_payload_from_records(
     ]
     conflicts = _registry_conflicts(records)
     fingerprint = hashlib.sha256(
-        json.dumps(items, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        json.dumps(all_items, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
     ).hexdigest()
+    bounded_offset = max(0, int(offset or 0))
+    bounded_limit = None if limit is None else max(1, min(int(limit), 256))
+    items = (
+        all_items[bounded_offset:]
+        if bounded_limit is None
+        else all_items[bounded_offset : bounded_offset + bounded_limit]
+    )
+    has_more = bounded_offset + len(items) < len(all_items)
     return {
         "version": 1,
         "webspace_id": webspace_id,
         "items": items,
         "summary": {
-            "count": len(items),
+            "count": len(all_items),
+            "returned_count": len(items),
+            "offset": bounded_offset,
+            "limit": bounded_limit,
+            "has_more": has_more,
+            "next_offset": bounded_offset + len(items) if has_more else None,
             "fingerprint": fingerprint,
             "updated_at": time.time(),
             "conflict_count": len(conflicts),
         },
-        "conflicts": conflicts,
+        "conflicts": conflicts if include_conflicts else [],
     }
 
 
@@ -1950,11 +1966,20 @@ def compact_registry_payload(
     *,
     kind: str | None = None,
     webspace_id: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+    include_conflicts: bool = True,
     service: NamedEntityService | None = None,
 ) -> dict[str, Any]:
     webspace = _text(webspace_id) or "desktop"
     records = (service or get_named_entity_service()).list_entities(kind=kind, webspace_id=webspace)
-    return _compact_registry_payload_from_records(records, webspace_id=webspace)
+    return _compact_registry_payload_from_records(
+        records,
+        webspace_id=webspace,
+        limit=limit,
+        offset=offset,
+        include_conflicts=include_conflicts,
+    )
 
 
 @dataclass(frozen=True)

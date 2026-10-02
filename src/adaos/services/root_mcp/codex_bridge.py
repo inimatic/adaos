@@ -877,6 +877,9 @@ class CodexRootMcpBridge:
                         "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
                         "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
                         "kind": {"type": "string", "description": "Optional entity kind filter, such as device.browser or skill."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 64, "default": 20, "description": "Maximum entities in this page."},
+                        "offset": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 0, "description": "Continue from next_offset returned by the previous page."},
+                        "include_conflicts": {"type": "boolean", "default": False, "description": "Include the conflict diagnostic set; leave false for ordinary lookup."},
                     },
                     "additionalProperties": False,
                 },
@@ -1762,6 +1765,9 @@ class CodexRootMcpBridge:
                 client.get_adaos_dev_named_entity_registry(
                     webspace_id=_normalize_text(args.get("webspace_id")),
                     kind=_normalize_text(args.get("kind")),
+                    limit=max(1, min(int(args.get("limit") or 20), 64)),
+                    offset=max(0, min(int(args.get("offset") or 0), 1_000_000)),
+                    include_conflicts=bool(args.get("include_conflicts", False)),
                 ),
                 model_text_format=model_text_format,
             )
