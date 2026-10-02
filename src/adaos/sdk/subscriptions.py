@@ -31,8 +31,16 @@ def _cost_projection(value: Any) -> dict[str, Any]:
     source = _mapping(value)
     status = source.get("status")
     if status not in {"estimated", "partial", "unpriced", "not_applicable"}:
-        return {"status": "unavailable", "estimated_usd": None}
-    result = {"status": status, "currency": "USD", "estimated_usd": None}
+        status = "unavailable"
+    result = {
+        "status": status,
+        "period": "24h",
+        "currency": "USD",
+        "estimated_usd": None,
+        "known_estimated_usd": None,
+        "priced_runs": None,
+        "unpriced_runs": None,
+    }
     for key in ("estimated_usd", "known_estimated_usd"):
         amount = source.get(key)
         if (source.get("currency") == "USD" and isinstance(amount, (int, float))
@@ -85,7 +93,7 @@ class CodexUsageSnapshot:
     reason: str | None = None
     last_model: str | None = None
     by_model: list[dict[str, Any]] = field(default_factory=list)
-    cost: dict[str, Any] = field(default_factory=lambda: {"status": "unavailable", "estimated_usd": None})
+    cost: dict[str, Any] = field(default_factory=lambda: _cost_projection({}))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

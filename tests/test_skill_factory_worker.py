@@ -174,6 +174,9 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         "7d": "used_7d_tokens",
         "30d": "used_30d_tokens",
     }
+    assert subscription_usage["result"]["cost"]["period"] == "24h"
+    assert subscription_usage["result"]["cost"]["currency"] == "USD"
+    assert "not monetary billing" in subscription_usage["result"]["usage_semantics"]
     system_contract = bundle["response_contracts"]["system_operational_snapshot"]
     typed_route = system_contract["result"]["typed_provider_route"]
     assert typed_route["method"] == "adaos.sdk.system.get_operational_snapshot"

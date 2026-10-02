@@ -57,7 +57,15 @@ def test_codex_usage_snapshot_projects_bounded_24h_usage(monkeypatch) -> None:
         "reason": None,
         "last_model": None,
         "by_model": [],
-        "cost": {"status": "unavailable", "estimated_usd": None},
+        "cost": {
+            "status": "unavailable",
+            "period": "24h",
+            "currency": "USD",
+            "estimated_usd": None,
+            "known_estimated_usd": None,
+            "priced_runs": None,
+            "unpriced_runs": None,
+        },
     }
 
 
@@ -127,9 +135,20 @@ def test_cost_projection_keeps_partial_and_unavailable_cost_unknown():
             "status": "estimated", "currency": "USD", "estimated_usd": float("inf")}}]})
     assert result["cost"]["estimated_usd"] is None
     assert result["cost"]["known_estimated_usd"] == 3.5
+    assert result["cost"]["period"] == "24h"
+    assert result["cost"]["currency"] == "USD"
     assert "private" not in result["cost"]
     assert result["by_model"][0]["cost"]["estimated_usd"] is None
-    assert subscriptions.project_codex_usage_window({})["cost"]["status"] == "unavailable"
+    unavailable = subscriptions.project_codex_usage_window({})["cost"]
+    assert unavailable == {
+        "status": "unavailable",
+        "period": "24h",
+        "currency": "USD",
+        "estimated_usd": None,
+        "known_estimated_usd": None,
+        "priced_runs": None,
+        "unpriced_runs": None,
+    }
 
 
 def test_sdk_export_discovers_subscription_usage_contract() -> None:
