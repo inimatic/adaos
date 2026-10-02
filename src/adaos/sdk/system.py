@@ -425,10 +425,17 @@ def rename_local_subnet(display_name: str) -> dict[str, Any]:
 
     name = _display_name(display_name)
     subject = _mapping(control_plane.get_self_object())
+    subnet_refs = list(_mapping(subject.get("relations")).get("subnet") or [])
+    subnet_ref = str(subnet_refs[0] if subnet_refs else "").strip()
+    related_subnet_id = (
+        subnet_ref.split(":", 1)[1]
+        if subnet_ref.startswith("subnet:")
+        else subnet_ref
+    )
     subnet_id = str(
         subject.get("subnet_id")
         or _mapping(subject.get("identity")).get("subnet_id")
-        or subject.get("id")
+        or related_subnet_id
         or ""
     ).strip()
     saved = str(save_subnet_alias(name, subnet_id=subnet_id) or name)

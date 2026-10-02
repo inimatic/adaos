@@ -412,6 +412,35 @@ def test_rename_local_subnet_preserves_identity(monkeypatch) -> None:
     }
 
 
+def test_rename_local_subnet_resolves_identity_from_subject_relation(monkeypatch) -> None:
+    from adaos.sdk import system
+    from adaos.services import subnet_alias
+
+    observed = {}
+    monkeypatch.setattr(
+        system.control_plane,
+        "get_self_object",
+        lambda: {
+            "id": "hub:8db40740-b3ff-44bf-baf5-9fb013b35b01",
+            "relations": {"subnet": ["subnet:sn_6acf0c01"]},
+        },
+    )
+    monkeypatch.setattr(
+        subnet_alias,
+        "save_subnet_alias",
+        lambda alias, *, subnet_id=None: observed.update(
+            alias=alias,
+            subnet_id=subnet_id,
+        )
+        or alias,
+    )
+
+    result = system.rename_local_subnet("Home assistant")
+
+    assert observed == {"alias": "Home assistant", "subnet_id": "sn_6acf0c01"}
+    assert result["subnet_id"] == "sn_6acf0c01"
+
+
 def test_rename_current_node_uses_durable_node_configuration(monkeypatch) -> None:
     from adaos.sdk import system
     from adaos.services import node_config
