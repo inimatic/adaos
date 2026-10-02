@@ -75,11 +75,12 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.4.1"
+    assert catalog["catalog_version"] == "3.5.0"
     assert {
         "navigation.tabs",
         "navigation.breadcrumbs",
         "disclosure.accordion",
+        "visual.multiMetricArc",
     } <= component_ids
     form = get_ui_capability("ui.form")
     assert {"dateRange", "chips", "checkboxGrid", "staticContent"} <= set(
@@ -128,6 +129,16 @@ def test_dashboard_status_informers_select_metric_tile_and_dashboard() -> None:
     assert "without relying on color" in metric_tile["manifest"]["static_data"]
 
 
+def test_hardware_and_quota_arc_request_selects_grouped_arc_component() -> None:
+    selected = selected_ui_capabilities(
+        "Show CPU, RAM and disk utilization in one ArcChart and subscription quota usage as an arc."
+    )
+
+    assert "visual.multiMetricArc" in selected["root_item_ids"]
+    arc = get_ui_capability("visual.multiMetricArc")
+    assert "normalized" in arc["manifest"]["composition"]
+
+
 def test_progressive_details_and_copyable_identifier_select_authoring_contracts() -> None:
     from adaos.services.ui_capabilities import (
         selected_ui_capabilities as select_generic_capabilities,
@@ -140,10 +151,8 @@ def test_progressive_details_and_copyable_identifier_select_authoring_contracts(
     assert "disclosure.accordion" in selected["root_item_ids"]
     assert "recipe.copyable_identifier" in selected["root_item_ids"]
     recipe = get_ui_capability("recipe.copyable_identifier")
-    assert recipe["composition"]["action"]["type"] == "copyToClipboard"
-    assert recipe["composition"]["action"]["params"]["successMessage"] == (
-        "Copied to clipboard."
-    )
+    assert recipe["composition"]["field"]["copyable"] is True
+    assert "standard copy component" in recipe["composition"]["feedback"]
 
 
 def test_ui_revision_correction_does_not_require_domain_persistence() -> None:

@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.4.1",
+  "catalog_version": "3.5.0",
   "webui_schema": "adaos.webui.v1",
   "authoring_lifecycle": {
     "deprecated_interfaces": [
@@ -991,13 +991,15 @@
       },
       "manifest": {
         "widget_type": "navigation.tabs",
-        "selection": "Set inputs.selectedStateKey to the page-state key that stores the active button id. Button ids must equal the values written to that state key. Prefer one on=click updateState action with <selectedStateKey>=$event.id. Do not put selectedStateKey on individual tab buttons and do not prefix the key with $state."
+        "selection": "Set inputs.selectedStateKey to the page-state key that stores the active button id. Button ids must equal the values written to that state key. Prefer one on=click updateState action with <selectedStateKey>=$event.id. Do not put selectedStateKey on individual tab buttons and do not prefix the key with $state.",
+        "overflow": "Use inputs.variant='tabsWithMore' when the tab set is dynamic, can grow, or must stay bounded on compact widths. The client renders visible tabs and moves the remainder into an accessible More menu instead of resetting horizontal scroll. inputs.itemsLimit may impose an optional upper visible-item bound.",
+        "activity": "A button with state or activity equal to online or updating receives a Taiga Pulse marker (green for online, warning for updating). Keep the state in visible label or accessible text too: motion and color are supplementary, and reduced-motion users retain the static marker."
       },
       "data_shape": { "kind": "none" },
       "events": ["click:<buttonId>"],
       "responsive": {
         "desktop": "one horizontal tab list",
-        "compact": "bounded horizontal tab list"
+        "compact": "TabsWithMore overflow menu when inputs.variant is tabsWithMore"
       },
       "postconditions": [
         "The active tab is exposed through aria-selected.",
@@ -1228,6 +1230,61 @@
       },
       "postconditions": [
         "A non-empty numeric series produces a non-blank chart."
+      ]
+    },
+    {
+      "id": "visual.multiMetricArc",
+      "kind": "component",
+      "title": "Multi-metric arc",
+      "summary": "A compact concentric arc for two to six independent normalized usage or health metrics.",
+      "aliases": {
+        "en": [
+          "arc chart",
+          "concentric usage",
+          "quota gauge",
+          "hardware utilization"
+        ],
+        "ru": [
+          "дуговая диаграмма",
+          "расход квоты",
+          "загрузка ресурсов",
+          "индикатор использования"
+        ]
+      },
+      "manifest": {
+        "widget_type": "visual.multiMetricArc",
+        "static_data": "Use dataSource={kind:'static',value:{metrics:[{id,label,value,display,description?}],value?,label?,subtitle?,description?,buttons?}}. Values are independently normalized against inputs.max (100 by default), not parts of one total.",
+        "inputs": {
+          "metricsPath": "optional payload path for the metric array; defaults to metrics",
+          "metrics": "optional static or prototype fallback metric array used when metricsPath resolves to an empty collection",
+          "centerValuePath": "optional payload path for the center value",
+          "centerLabelPath": "optional payload path for the center label",
+          "subtitlePath": "optional payload path for concise context",
+          "descriptionPath": "optional payload path for a short fallback description",
+          "centerValue": "optional static or prototype fallback center value",
+          "centerLabel": "optional static or prototype fallback center label",
+          "subtitle": "optional static or prototype fallback subtitle",
+          "description": "optional static or prototype fallback description",
+          "buttons": "optional fallback action buttons, dispatched as click:<buttonId>",
+          "max": "shared numeric maximum; defaults to 100",
+          "minLabel": "minimum scale label; defaults to 0%",
+          "maxLabel": "maximum scale label; defaults to 100%"
+        },
+        "composition": "Use one multi-metric arc instead of unrelated peer tiles when CPU/RAM/Disk or a few quota dimensions belong to one conceptual group. Do not use it for values with incompatible scales unless they are normalized first."
+      },
+      "data_shape": {
+        "kind": "normalized_metric_set",
+        "record": "{metrics:[{id,label,value,display?,description?}],value?,label?,subtitle?,description?,buttons?}"
+      },
+      "events": ["click", "click:<actionId>"],
+      "responsive": {
+        "desktop": "arc and concise legend side by side",
+        "compact": "arc above the legend in one card"
+      },
+      "postconditions": [
+        "Every ring has a visible text label and value; color is never the only carrier of meaning.",
+        "Independent metrics share a declared maximum or are normalized before rendering.",
+        "The widget remains one semantic group when the dashboard wraps."
       ]
     }
   ],
@@ -1597,23 +1654,19 @@
       "requires": {
         "layouts": [],
         "components": [
-          "ui.actions"
+          "item.details"
         ]
       },
       "composition": {
-        "projection": "Keep the full identifier visible or available through an accessible name. The copy affordance is a local UI action and never requires a skill, permission, or approval.",
-        "action": {
-          "on": "click:copy-id",
-          "id": "copy-id",
-          "type": "copyToClipboard",
-          "params": {
-            "text": "$state.selectedIdentifier",
-            "successMessage": "Copied to clipboard.",
-            "errorMessage": "Copy failed."
-          }
+        "projection": "Use item.details and set copyable=true on the identifier field. Keep the full identifier visible or available through an accessible name. The Taiga copy affordance is local UI behavior and never requires a skill, permission, or approval.",
+        "field": {
+          "id": "subnet_id",
+          "label": "Subnet ID",
+          "path": "subnet_id",
+          "copyable": true
         },
-        "static_value": "For a fixed prototype value, params.text may contain the literal identifier instead of a state reference.",
-        "feedback": "Use a concise localized confirmation such as 'Copied to clipboard.'; do not leave the user to infer that copying succeeded."
+        "fallback_action": "copyToClipboard remains a supported compatibility fallback when the value is outside item.details, but new detail projections should prefer a copyable field.",
+        "feedback": "The standard copy component supplies immediate localized copied/failed feedback; do not add a second copy button."
       },
       "postconditions": [
         "Activating the identifier or its copy affordance writes the intended full value to the clipboard.",

@@ -1017,6 +1017,14 @@ def selected_ui_capabilities(
         flags=re.IGNORECASE,
     ) and "visual.metricChart" not in selected_ids:
         selected_ids.append("visual.metricChart")
+    if re.search(
+        r"\b(?:arc[- ]?chart|concentric|quota[- ]?(?:gauge|usage)|"
+        r"(?:cpu|ram|memory|disk|hardware)[- ]?(?:utilization|usage|arc))\w*\b|"
+        r"\b(?:дугов\w*\s+диаграмм\w*|расход\w*\s+квот\w*|загрузк\w*\s+ресурс\w*)\b",
+        str(request or ""),
+        flags=re.IGNORECASE,
+    ) and "visual.multiMetricArc" not in selected_ids:
+        selected_ids.append("visual.multiMetricArc")
     if brief_operation_kinds & {"search", "filter"}:
         for component_id in ("input.text", "input.selector"):
             if component_id not in selected_ids:

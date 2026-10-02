@@ -621,6 +621,7 @@
         "visual.image",
         "visual.metricTile",
         "visual.metricChart",
+        "visual.multiMetricArc",
         "visual.timeseriesChart",
         "visual.qrCode",
         "feedback.log",
@@ -2042,7 +2043,7 @@
         "buttons": { "$ref": "#/$defs/actionButtonList" },
         "variant": {
           "type": "string",
-          "enum": ["tabs", "segmented", "toolbar", "adaptiveToolbar", "autoOverflow", "stack", "header"]
+          "enum": ["tabs", "tabsWithMore", "segmented", "toolbar", "adaptiveToolbar", "autoOverflow", "stack", "header"]
         },
         "size": {
           "type": "string",
