@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -330,16 +331,42 @@ def _tool_text(
         "jsonl": _jsonl_text(projected_payload),
         "toon": _toon_text(projected_payload),
     }[output_format]
+    try:
+        configured_output_bytes = int(
+            os.getenv("ADAOS_MCP_MODEL_OUTPUT_MAX_BYTES", "65536") or "65536"
+        )
+    except ValueError:
+        configured_output_bytes = 65536
+    max_output_bytes = max(4096, configured_output_bytes)
+    text_bytes = text.encode("utf-8")
+    canonical_bytes = canonical_text.encode("utf-8")
+    if len(text_bytes) > max_output_bytes:
+        limited = {
+            "schema": "adaos.mcp.output_limited.v1",
+            "status": "output_limited",
+            "output_bytes": len(text_bytes),
+            "limit_bytes": max_output_bytes,
+            "digest": f"sha256:{hashlib.sha256(canonical_bytes).hexdigest()}",
+            "guidance": "Narrow the query, request a smaller top-k page, or continue with the returned cursor.",
+        }
+        projected_payload = limited
+        text = _min_json_text(limited)
+        text_bytes = text.encode("utf-8")
+        output_limited = True
+    else:
+        output_limited = False
     response = {
         "content": [{"type": "text", "text": text}],
-        "structuredContent": payload,
+        "structuredContent": projected_payload if output_limited else payload,
         "_meta": {
             "adaos/modelProjection": {
                 "canonical_format": "json",
                 "model_text_format": output_format,
-                "bytes": len(text.encode("utf-8")),
-                "token_estimate": max(1, (len(text.encode("utf-8")) + 3) // 4),
+                "bytes": len(text_bytes),
+                "token_estimate": max(1, (len(text_bytes) + 3) // 4),
                 "canonical_token_estimate": max(1, (len(canonical_text.encode("utf-8")) + 3) // 4),
+                "output_limited": output_limited,
+                "limit_bytes": max_output_bytes,
             }
         },
     }
@@ -759,6 +786,17 @@ class CodexRootMcpBridge:
                             "minimum": 1,
                             "maximum": 6 if self.profile.task_id else 64,
                             "default": 4 if self.profile.task_id else 12,
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000000,
+                            "default": 0,
+                            "description": "Continue from next_offset returned by the previous page.",
+                        },
+                        "cursor": {
+                            "type": "string",
+                            "description": "Opaque cursor returned by the previous search page.",
                         },
                     },
                     "additionalProperties": False,
@@ -1653,6 +1691,7 @@ class CodexRootMcpBridge:
                         6 if task_scoped else 64,
                     ),
                 ),
+                cursor=_normalize_text(args.get("cursor")),
             )
             return _tool_text(
                 payload,
@@ -1698,6 +1737,7 @@ class CodexRootMcpBridge:
                         6 if task_scoped else 64,
                     ),
                 ),
+                offset=max(0, min(int(args.get("offset") or 0), 1_000_000)),
             )
             return _tool_text(
                 payload,

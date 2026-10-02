@@ -82,12 +82,15 @@ class RootMcpClient:
         descriptor_ids: list[str] | tuple[str, ...] | None = None,
         kinds: list[str] | tuple[str, ...] | None = None,
         limit: int = 12,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {"query": str(query), "limit": max(1, min(int(limit or 12), 64))}
         if descriptor_ids:
             arguments["descriptor_ids"] = [str(item) for item in descriptor_ids]
         if kinds:
             arguments["kinds"] = [str(item) for item in kinds]
+        if cursor:
+            arguments["cursor"] = str(cursor)
         return self.call("development.search_descriptors", arguments=arguments)
 
     def get_descriptor_item(
@@ -114,10 +117,12 @@ class RootMcpClient:
         kind: str | None = None,
         trust_class: str | None = None,
         limit: int = 12,
+        offset: int = 0,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
             "query": str(query),
             "limit": max(1, min(int(limit or 12), 64)),
+            "offset": max(0, min(int(offset or 0), 1_000_000)),
         }
         for key, value in (
             ("subject_ref", subject_ref),

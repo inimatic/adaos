@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -34,6 +36,37 @@ def _fingerprint(value: Mapping[str, Any]) -> str:
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     return f"sha256:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
+
+
+def _encode_cursor(*, offset: int, query_digest: str) -> str:
+    payload = json.dumps(
+        {"offset": max(0, int(offset)), "query_digest": query_digest},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str | None, *, query_digest: str) -> int:
+    token = str(cursor or "").strip()
+    if not token:
+        return 0
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        offset = int(payload["offset"])
+    except (
+        binascii.Error,
+        KeyError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ValueError("invalid descriptor search cursor") from exc
+    if str(payload.get("query_digest") or "") != query_digest or offset < 0:
+        raise ValueError("descriptor search cursor does not match this query")
+    return offset
 
 
 def _header(
@@ -272,6 +305,7 @@ def search_descriptors(
     descriptor_ids: Sequence[str] | None = None,
     kinds: Sequence[str] | None = None,
     limit: int = 12,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     """Search compact authoritative headers without returning descriptor payloads."""
 
@@ -291,6 +325,14 @@ def search_descriptors(
     selected_kinds = {
         str(item).strip().lower() for item in kinds or () if str(item).strip()
     }
+    query_digest = _fingerprint(
+        {
+            "query": text,
+            "descriptor_ids": sorted(selected_ids),
+            "kinds": sorted(selected_kinds),
+        }
+    )
+    offset = _decode_cursor(cursor, query_digest=query_digest)
     ranked: list[tuple[int, int, dict[str, Any]]] = []
     ordinal = 0
     for entry in catalog:
@@ -321,7 +363,10 @@ def search_descriptors(
                 descriptor_id,
                 level="mini",
                 query=text if descriptor_id == "sdk_metadata" else None,
-                limit=bounded_limit,
+                # Search builds one bounded index page and paginates the compact
+                # headers locally.  Fetching only the caller's page size here
+                # would make every page after the first silently incomplete.
+                limit=64,
             )
         except RuntimeError:
             continue
@@ -346,16 +391,25 @@ def search_descriptors(
                 ordinal += 1
     ranked.sort(key=lambda item: (-item[0], item[1], str(item[2].get("item_id") or "")))
     items = []
-    for rank, (_, _, row) in enumerate(ranked[:bounded_limit], start=1):
+    page = ranked[offset : offset + bounded_limit]
+    for rank, (_, _, row) in enumerate(page, start=offset + 1):
         compact = dict(row)
         compact.pop("tags", None)
         compact["rank"] = rank
         items.append(compact)
     return {
         "schema": "adaos.descriptor.search.v1",
-        "query_digest": _fingerprint({"query": text}),
+        "query_digest": query_digest,
         "count": len(items),
+        "total_count": len(ranked),
         "limit": bounded_limit,
+        "offset": offset,
+        "has_more": offset + len(items) < len(ranked),
+        "next_cursor": (
+            _encode_cursor(offset=offset + len(items), query_digest=query_digest)
+            if offset + len(items) < len(ranked)
+            else None
+        ),
         "items": items,
     }
 

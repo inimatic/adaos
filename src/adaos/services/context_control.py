@@ -494,6 +494,7 @@ class ContextControlService:
         search: str | None = None,
         include_revoked: bool = False,
         limit: int = 200,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         clauses = [] if include_revoked else ["c.revoked_at IS NULL"]
         params: list[Any] = []
@@ -516,8 +517,9 @@ class ContextControlService:
         join = " JOIN capsule_search s ON s.capsule_id = c.capsule_id" if search_terms else ""
         query = "SELECT c.* FROM capsules c" + join
         query += " WHERE " + " AND ".join(clauses) if clauses else ""
-        query += " ORDER BY c.recorded_at DESC LIMIT ?"
+        query += " ORDER BY c.recorded_at DESC, c.capsule_id ASC LIMIT ? OFFSET ?"
         params.append(max(1, min(int(limit), 2000)))
+        params.append(max(0, int(offset)))
         with self._connect() as connection:
             items = [self._capsule_row(row) for row in connection.execute(query, params).fetchall()]
         return items

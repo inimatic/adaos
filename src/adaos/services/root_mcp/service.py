@@ -47,6 +47,7 @@ from .model import (
     RootMcpToolContract,
     schema_object,
 )
+from .output_profile import audit_search_contracts, measure_output, profile_audit_events
 from .memory_reports import (
     get_memory_profile_artifact,
     get_memory_profile_report,
@@ -439,12 +440,28 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                         "maxItems": 16,
                     },
                     "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "cursor": {"type": "string"},
                 },
                 required=["query"],
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "root", "handler": "search_descriptors"},
+        ),
+        RootMcpToolContract(
+            id="development.get_mcp_output_profile",
+            title="Get MCP output profile",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return bounded output-size statistics and search pagination contract findings from Root MCP audit evidence.",
+            input_schema=schema_object(
+                properties={
+                    "event_limit": {"type": "integer", "minimum": 1, "maximum": 100000},
+                    "top_n": {"type": "integer", "minimum": 1, "maximum": 100},
+                }
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.contracts",
+            metadata={"published_by": "root", "handler": "get_mcp_output_profile"},
         ),
         RootMcpToolContract(
             id="development.get_descriptor_item",
@@ -1042,6 +1059,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "kind": {"type": "string"},
                     "trust_class": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 1000000},
                 },
                 required=["query"],
             ),
@@ -2545,12 +2563,14 @@ def search_descriptors(
     descriptor_ids: list[str] | tuple[str, ...] | None = None,
     kinds: list[str] | tuple[str, ...] | None = None,
     limit: int = 12,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     return search_descriptor_registry(
         query,
         descriptor_ids=descriptor_ids,
         kinds=kinds,
         limit=limit,
+        cursor=cursor,
     )
 
 
@@ -2695,7 +2715,19 @@ def _handle_search_descriptors(
             descriptor_ids=descriptor_ids,
             kinds=kinds,
             limit=max(1, min(int(arguments.get("limit") or 12), 64)),
+            cursor=_text_or_none(arguments.get("cursor")),
         )
+    }
+
+
+def _handle_get_mcp_output_profile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    event_limit = max(1, min(int(arguments.get("event_limit") or 10_000), 100_000))
+    top_n = max(1, min(int(arguments.get("top_n") or 10), 100))
+    return {
+        "profile": profile_audit_events(list_audit_events(limit=event_limit), top_n=top_n),
+        "contract_audit": audit_search_contracts(list_tool_contracts()),
     }
 
 
@@ -4633,13 +4665,18 @@ def _handle_context_search(
     query = str(arguments.get("query") or "").strip()
     if not query:
         raise ValueError("context search query is required")
+    bounded_limit = max(1, min(int(arguments.get("limit") or 12), 64))
+    offset = max(0, min(int(arguments.get("offset") or 0), 1_000_000))
     items = _context_service().list_capsules(
         search=query,
         subject_ref=_text_or_none(arguments.get("subject_ref")),
         kind=_text_or_none(arguments.get("kind")),
         trust_class=_text_or_none(arguments.get("trust_class")),
-        limit=max(1, min(int(arguments.get("limit") or 12), 64)),
+        limit=bounded_limit + 1,
+        offset=offset,
     )
+    has_more = len(items) > bounded_limit
+    items = items[:bounded_limit]
     compact = [
         {
             "schema": "adaos.context.search_item.v1",
@@ -4663,6 +4700,10 @@ def _handle_context_search(
             "schema": "adaos.context.search.v1",
             "query": query,
             "count": len(compact),
+            "limit": bounded_limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": offset + len(compact) if has_more else None,
             "items": compact,
         }
     }
@@ -5092,6 +5133,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     dry_run=False: _handle_get_descriptor_set(arguments, dry_run=dry_run),
     "development.search_descriptors": lambda arguments,
     dry_run=False: _handle_search_descriptors(arguments, dry_run=dry_run),
+    "development.get_mcp_output_profile": lambda arguments,
+    dry_run=False: _handle_get_mcp_output_profile(arguments, dry_run=dry_run),
     "development.get_descriptor_item": lambda arguments,
     dry_run=False: _handle_get_descriptor_item(arguments, dry_run=dry_run),
     "development.get_system_model_vocabulary": lambda arguments,
@@ -5337,12 +5380,13 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
 
 
 def _result_summary(result: Any) -> dict[str, Any]:
+    measurement = measure_output(result)
     if isinstance(result, dict):
         keys = sorted(str(key) for key in result.keys())[:12]
-        return {"kind": "object", "keys": keys}
+        return {"kind": "object", "keys": keys, **measurement}
     if isinstance(result, list):
-        return {"kind": "list", "length": len(result)}
-    return {"kind": type(result).__name__}
+        return {"kind": "list", "length": len(result), **measurement}
+    return {"kind": type(result).__name__, **measurement}
 
 
 def _descriptive_cache_key(
@@ -5597,6 +5641,7 @@ def _should_audit_tool(tool_id: str) -> bool:
     return token not in {
         "hub.get_activity_log",
         "hub.get_capability_usage_summary",
+        "development.get_mcp_output_profile",
     }
 
 

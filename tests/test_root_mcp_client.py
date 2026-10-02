@@ -49,6 +49,7 @@ def test_root_mcp_client_exposes_descriptor_search_and_exact_item() -> None:
         descriptor_ids=["sdk_metadata"],
         kinds=["sdk_function"],
         limit=8,
+        cursor="next-page",
     )
     client.get_descriptor_item(
         "sdk_metadata",
@@ -62,6 +63,7 @@ def test_root_mcp_client_exposes_descriptor_search_and_exact_item() -> None:
         "descriptor_ids": ["sdk_metadata"],
         "kinds": ["sdk_function"],
         "limit": 8,
+        "cursor": "next-page",
     }
     assert stub.calls[1][2]["json"]["tool_id"] == "development.get_descriptor_item"
     assert stub.calls[1][2]["json"]["arguments"]["item_id"] == (
@@ -82,6 +84,7 @@ def test_root_mcp_client_exposes_context_search_and_exact_capsule() -> None:
         kind="procedural",
         trust_class="validated",
         limit=8,
+        offset=16,
     )
     client.get_context_capsule("ctxcap.rule")
 
@@ -93,6 +96,7 @@ def test_root_mcp_client_exposes_context_search_and_exact_capsule() -> None:
             "kind": "procedural",
             "trust_class": "validated",
             "limit": 8,
+            "offset": 16,
         },
         "dry_run": False,
     }

@@ -62,12 +62,18 @@ class _FakeRootMcpClient:
         descriptor_ids: list[str] | None = None,
         kinds: list[str] | None = None,
         limit: int = 12,
+        cursor: str | None = None,
     ) -> dict:
         self.calls.append(
             (
                 "search_descriptors",
                 query,
-                {"descriptor_ids": descriptor_ids or [], "kinds": kinds or [], "limit": limit},
+                {
+                    "descriptor_ids": descriptor_ids or [],
+                    "kinds": kinds or [],
+                    "limit": limit,
+                    "cursor": cursor,
+                },
             )
         )
         return {
@@ -111,6 +117,7 @@ class _FakeRootMcpClient:
         kind: str | None = None,
         trust_class: str | None = None,
         limit: int = 12,
+        offset: int = 0,
     ) -> dict:
         self.calls.append(
             (
@@ -121,6 +128,7 @@ class _FakeRootMcpClient:
                     "kind": kind,
                     "trust_class": trust_class,
                     "limit": limit,
+                    "offset": offset,
                 },
             )
         )
@@ -954,6 +962,26 @@ def test_model_text_formats_preserve_canonical_structured_content(monkeypatch) -
     assert "base_packet_ref" in compile_definition["inputSchema"]["properties"]
 
 
+def test_model_output_limit_replaces_oversized_text_and_structured_content(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_MCP_MODEL_OUTPUT_MAX_BYTES", "4096")
+    payload = {"items": [{"id": "large", "body": "x" * 10_000}]}
+
+    result = bridge_mod._tool_text(
+        payload,
+        model_text_format="min_json",
+    )
+
+    limited = result["structuredContent"]
+    assert limited["schema"] == "adaos.mcp.output_limited.v1"
+    assert limited["status"] == "output_limited"
+    assert limited["output_bytes"] > limited["limit_bytes"]
+    assert limited["digest"].startswith("sha256:")
+    assert json.loads(result["content"][0]["text"]) == limited
+    assert result["_meta"]["adaos/modelProjection"]["output_limited"] is True
+
+
 def test_codex_bridge_exposes_dev_ticket_workflow(monkeypatch) -> None:
     profile = bridge_mod.CodexBridgeProfile(
         root_url="https://root.example.test",
@@ -1594,7 +1622,7 @@ def test_task_scoped_descriptor_search_defaults_query_and_bounds_drilldown(monke
     assert (
         "search_descriptors",
         "Show token usage and remaining quota",
-        {"descriptor_ids": [], "kinds": [], "limit": 6},
+        {"descriptor_ids": [], "kinds": [], "limit": 6, "cursor": None},
     ) in fake_client.calls
     assert (
         "get_descriptor_item",
@@ -1632,7 +1660,13 @@ def test_task_scoped_context_search_is_explicit_and_bounded(monkeypatch) -> None
     assert (
         "search_context_capsules",
         "manifest contract",
-        {"subject_ref": None, "kind": None, "trust_class": None, "limit": 6},
+        {
+            "subject_ref": None,
+            "kind": None,
+            "trust_class": None,
+            "limit": 6,
+            "offset": 0,
+        },
     ) in fake_client.calls
     assert ("get_context_capsule", "ctxcap.rule", {}) in fake_client.calls
 

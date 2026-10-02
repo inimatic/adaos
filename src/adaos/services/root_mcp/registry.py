@@ -704,7 +704,8 @@ def _public_registry_summary(kind: str) -> dict[str, Any]:
 
 
 def _architecture_catalog() -> dict[str, Any]:
-    path = Path(__file__).resolve().parents[4] / "docs" / "architecture" / "index.md"
+    repository_root = Path(__file__).resolve().parents[4]
+    path = repository_root / "docs" / "architecture" / "index.md"
     pages: list[dict[str, Any]] = []
     try:
         text = path.read_text(encoding="utf-8")
@@ -722,6 +723,42 @@ def _architecture_catalog() -> dict[str, Any]:
                 "summary": match.group("summary").strip(),
             }
         )
+    if not pages:
+        architecture_root = next(
+            (
+                candidate
+                for candidate in (
+                    repository_root / "docs-development" / "platform" / "architecture",
+                    repository_root / "docs-stable" / "platform" / "architecture",
+                )
+                if candidate.is_dir()
+            ),
+            None,
+        )
+        if architecture_root is not None:
+            path = architecture_root
+            for document in sorted(architecture_root.glob("*.md"))[:256]:
+                try:
+                    document_text = document.read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    continue
+                heading = re.search(r"^#\s+(.+)$", document_text, re.MULTILINE)
+                paragraphs = [
+                    " ".join(part.split())
+                    for part in re.split(r"\n\s*\n", document_text)
+                    if part.strip() and not part.lstrip().startswith(("#", "---"))
+                ]
+                pages.append(
+                    {
+                        "title": heading.group(1).strip() if heading else document.stem,
+                        "path": document.relative_to(repository_root).as_posix(),
+                        "summary": (paragraphs[0][:237] + "...")
+                        if paragraphs and len(paragraphs[0]) > 240
+                        else paragraphs[0]
+                        if paragraphs
+                        else "AdaOS architecture document.",
+                    }
+                )
     return {
         "available": True,
         "index_path": str(path),
