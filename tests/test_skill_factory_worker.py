@@ -151,6 +151,17 @@ def test_strict_json_validation_rejects_duplicate_manifest_keys() -> None:
         _loads_strict_json('{"area":"top","area":"bottom"}')
 
 
+def test_newer_explicit_brief_revision_replaces_stale_prompt_copy() -> None:
+    approved = "Implement accepted Management Prototype revision 023. Old requirement."
+    current = "Implement accepted Management Prototype revision 024. Current requirement."
+
+    projected = worker_module._approved_brief_prompt(approved, current)
+
+    assert "Superseded by Current chat iteration revision 24" in projected
+    assert "Old requirement" not in projected
+    assert worker_module._approved_brief_prompt(current, current) == current
+
+
 def test_implementation_sdk_contract_includes_automation_inventory_closure() -> None:
     bundle = worker_module._implementation_sdk_contract_bundle()
     names = {item["name"] for item in bundle["contracts"]}

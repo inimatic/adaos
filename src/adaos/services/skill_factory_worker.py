@@ -3024,6 +3024,37 @@ def _implementation_brief_prompt(value: str) -> str:
     return json.dumps(projected, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+_EXPLICIT_BRIEF_REVISION_RE = re.compile(
+    r"\b(?:prototype\s+)?revision\s+0*(\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def _explicit_brief_revision(value: str) -> int | None:
+    revisions = [
+        int(match.group(1))
+        for match in _EXPLICIT_BRIEF_REVISION_RE.finditer(str(value or ""))
+    ]
+    return max(revisions) if revisions else None
+
+
+def _approved_brief_prompt(approved: str, current: str) -> str:
+    """Avoid injecting an explicitly superseded brief beside its replacement."""
+
+    approved_revision = _explicit_brief_revision(approved)
+    current_revision = _explicit_brief_revision(current)
+    if (
+        approved_revision is not None
+        and current_revision is not None
+        and current_revision > approved_revision
+    ):
+        return (
+            f"Superseded by Current chat iteration revision {current_revision}. "
+            "The immutable prior packet remains available by reference for audit only."
+        )
+    return _implementation_brief_prompt(approved)
+
+
 def _descriptor_working_set_prompt_projection(
     value: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -10745,7 +10776,7 @@ Implement the approved AdaOS change and focused tests in this checkout, or repor
 
 ## Approved implementation brief
 
-{_implementation_brief_prompt(brief)}
+{_approved_brief_prompt(brief, iteration)}
 
 ## Current chat iteration
 
