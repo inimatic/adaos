@@ -471,7 +471,7 @@ export interface WebUiListItemButton extends WebUiActionButton {}
 
 export interface WebUiActionsInputs {
   buttons?: readonly WebUiActionButton[]
-  variant?: 'tabs' | 'segmented' | 'toolbar' | 'stack' | 'header' | 'adaptiveToolbar' | 'autoOverflow'
+  variant?: 'tabs' | 'tabsWithMore' | 'segmented' | 'toolbar' | 'stack' | 'header' | 'adaptiveToolbar' | 'autoOverflow'
   size?: 'small' | 'default' | 'medium'
   [key: string]: unknown
 }

@@ -76,7 +76,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.5.0"
+    assert catalog["catalog_version"] == "3.5.2"
     assert {
         "navigation.tabs",
         "navigation.breadcrumbs",
@@ -95,6 +95,9 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
         "danger",
     ]
     assert actions["manifest"]["button_overflow_values"] == ["auto", "never"]
+    assert "header" in actions["manifest"]["variants"]
+    assert "appearance=quiet" in actions["manifest"]["section_header"]
+    assert "explicit confirmation" in actions["manifest"]["section_header"]
     assert "passive status text" in actions["manifest"]["scope"]
     list_capability = get_ui_capability("ui.list")
     assert "initialsKey" in list_capability["manifest"]["optional_inputs"]
@@ -142,6 +145,9 @@ def test_dashboard_status_informers_select_metric_tile_and_dashboard() -> None:
     assert "layout.dashboard" in selected["root_item_ids"]
     metric_tile = get_ui_capability("visual.metricTile")
     assert "without relying on color" in metric_tile["manifest"]["static_data"]
+    assert "Yjs projection" in metric_tile["manifest"]["authoritative_projection"]
+    assert "color=muted or offline" in metric_tile["manifest"]["static_data"]
+    assert "click:<actionId>" in metric_tile["manifest"]["composition"]
 
 
 def test_hardware_and_quota_arc_request_selects_grouped_arc_component() -> None:

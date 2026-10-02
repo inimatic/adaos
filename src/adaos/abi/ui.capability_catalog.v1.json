@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.5.0",
+  "catalog_version": "3.5.2",
   "webui_schema": "adaos.webui.v1",
   "authoring_lifecycle": {
     "deprecated_interfaces": [
@@ -841,6 +841,7 @@
         ],
         "button_priority": "number; higher values remain visible longer",
         "appearance": "appearance=quiet removes the enclosing toolbar fill while retaining command boundaries and focus feedback.",
+        "section_header": "variant=header with appearance=quiet and icon-bearing buttons renders widget.title as a section heading and those icon commands at its trailing edge. Use it for infrequent contextual actions such as unlink/delete: declare a recognizable icon, a complete label for tooltip and aria-label, kind=danger, an explicit confirmation contract, and visibleIf/enabledIf guards. Do not use it as a primary command bar.",
         "activity_status": "statusActivityPath and statusActivityValues may mark a status projection as actively generating or validating; this is presentation only and does not establish completion.",
         "scope": "commands only; use a details or list component for passive status text. A standalone ui.actions widget has page state and click-event context, not an implicit selected $record; selection-dependent commands must use explicit $state keys populated by the selecting collection."
       },
@@ -1174,7 +1175,8 @@
       },
       "manifest": {
         "widget_type": "visual.metricTile",
-        "static_data": "Use widget.dataSource={kind:'static',value:{value,label,description,color,icon}} for a prototype tile. Text must communicate state without relying on color.",
+        "static_data": "Use widget.dataSource={kind:'static',value:{value,label,description,color,icon,buttons}} for a prototype tile. Text must communicate state without relying on color. Use color=muted or offline for last-known data from an unavailable source.",
+        "authoritative_projection": "When another installed capability already publishes the required state and action eligibility, bind to that Yjs projection and dispatch its existing public action target. Do not duplicate transition rules or invent parallel commands.",
         "inputs": {
           "valuePath": "optional payload path for the primary status or metric",
           "labelPath": "optional payload path for the short supporting label",
@@ -1182,11 +1184,11 @@
           "colorPath": "optional payload path for success, warning, danger, or primary tone",
           "iconPath": "optional payload path for an Ionicon name; inputs.icon is the static fallback"
         },
-        "composition": "For peer dashboard tiles, declare one layout region with role=status per tile and put one visual.metricTile in each region. role=main spans the dashboard width. Several tiles in one region remain one vertical block."
+        "composition": "For peer dashboard tiles, declare one layout region with role=status per tile and put one visual.metricTile in each region. role=main spans the dashboard width. Several tiles in one region remain one vertical block. Dynamic payload buttons use click:<actionId>; preserve the source projection's visibility and action IDs."
       },
       "data_shape": {
         "kind": "single_metric_or_status",
-        "record": "{value,label?,description?,color?,icon?}"
+        "record": "{value,label?,description?,color?,icon?,buttons?:[{id,label?,title?,kind?}]}"
       },
       "events": ["click", "click:<actionId>"],
       "responsive": {
@@ -1195,7 +1197,8 @@
       },
       "postconditions": [
         "The primary status is understandable from text and icon without color.",
-        "Peer tiles use separate layout regions so wide and compact ordering is deterministic."
+        "Peer tiles use separate layout regions so wide and compact ordering is deterministic.",
+        "Offline or stale last-known values use an explicit text label and muted visual tone; their unavailable actions are omitted or disabled."
       ]
     },
     {
