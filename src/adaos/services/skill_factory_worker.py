@@ -606,6 +606,96 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "Render honest inactive, ambiguous, and unavailable states. Do not "
                         "select the first development project as a fallback."
                     ),
+                    "nested_schema": {
+                        "builder": {
+                            "nullable": True,
+                            "required": [
+                                "available",
+                                "intent",
+                                "webspace_id",
+                                "title",
+                                "status",
+                            ],
+                            "types": {
+                                "available": "boolean",
+                                "intent": "string|null",
+                                "webspace_id": "string",
+                                "title": "string",
+                                "status": "string",
+                            },
+                        },
+                        "application": {
+                            "nullable": True,
+                            "required": [
+                                "ref",
+                                "object_type",
+                                "object_id",
+                                "title",
+                                "description",
+                                "phase",
+                                "status",
+                                "revision",
+                                "updated_at",
+                            ],
+                            "types": {
+                                "ref": "string",
+                                "object_type": "string",
+                                "object_id": "string",
+                                "title": "string",
+                                "description": "string",
+                                "phase": "string",
+                                "status": "string",
+                                "revision": "string|integer|null",
+                                "updated_at": "string|null",
+                            },
+                        },
+                        "preview": {
+                            "nullable": False,
+                            "required": ["available", "reason"],
+                            "available_fields": [
+                                "intent",
+                                "source_webspace_id",
+                                "webspace_id",
+                                "object_type",
+                                "object_id",
+                                "stage",
+                                "revision",
+                                "follow_active",
+                            ],
+                        },
+                        "candidates": {
+                            "type": "array",
+                            "item_fields": [
+                                "builder_webspace_id",
+                                "title",
+                                "status",
+                                "selectable",
+                            ],
+                            "max_items": 20,
+                        },
+                        "freshness": {
+                            "type": "string",
+                            "values": ["current", "unavailable"],
+                            "observed_at": "ISO-8601 string",
+                            "rule": (
+                                "The SDK does not emit stale or offline for this local Builder "
+                                "inventory projection. Do not invent them."
+                            ),
+                        },
+                    },
+                    "display_mapping": {
+                        "title": "application.title",
+                        "stage": "application.phase",
+                        "revision": "application.revision",
+                        "updated_at": "application.updated_at",
+                        "freshness": "freshness",
+                        "observed_at": "observed_at",
+                        "rule": (
+                            "When application is null, render the top-level status/reason and "
+                            "an unavailable or ambiguous state; do not fall back to a candidate, "
+                            "object id, static title, or fabricated revision."
+                        ),
+                    },
                 },
                 "webui_binding": {
                     "action_type": "openWorkspace",
@@ -10616,6 +10706,11 @@ operations and do not read `ui_revisions` to reconstruct accepted data.
 Read `implementation-bindings.json` before implementation. It is the
 commit-bound, machine-readable contract for owned tool declarations, WebUI
 bindings, caller authorization, durable persistence and production attachments.
+This JSON is compact and may occupy one physical line: never use `rg`,
+`Select-String`, or raw full-object output on it. Parse it and print only one
+named leaf such as `binding_rules.workspace_navigation` or
+`examples.workspace_navigation` per command, capped to the command-output
+budget.
 The exact production attachment section defines upload/read tool inputs and
 outputs, the one-use binary SDK boundary, browser reference semantics and the
 required permission matrix. Treat it as authoritative over a stale remote
@@ -10658,6 +10753,10 @@ install AdaOS Core, so an import failure there is not evidence that these
 origin-runtime contracts are absent. Author against this file and use bounded
 syntax/unit checks; the origin Builder performs authoritative SDK and package
 validation after applying the verified delta.
+This JSON is compact and may occupy one physical line: never search it with
+`rg`/`Select-String` and never print `response_contracts` as a whole. Parse JSON,
+list keys if needed, then print exactly one selected response contract per
+command within the command-output budget.
 """
             if packet.get("public_sdk_contracts_ref")
             else ""

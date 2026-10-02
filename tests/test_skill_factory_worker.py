@@ -213,6 +213,32 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         "workspaceId": "$state.currentBuilderWebspaceId",
     }
     assert "expectedScenarioId" in current_builder["webui_binding"]["forbidden"]
+    nested = current_builder["result"]["nested_schema"]
+    assert nested["application"]["required"] == [
+        "ref",
+        "object_type",
+        "object_id",
+        "title",
+        "description",
+        "phase",
+        "status",
+        "revision",
+        "updated_at",
+    ]
+    assert nested["freshness"]["values"] == ["current", "unavailable"]
+    assert "Do not invent" in nested["freshness"]["rule"]
+    display_mapping = current_builder["result"]["display_mapping"]
+    assert {key: display_mapping[key] for key in (
+        "title", "stage", "revision", "updated_at", "freshness", "observed_at"
+    )} == {
+        "title": "application.title",
+        "stage": "application.phase",
+        "revision": "application.revision",
+        "updated_at": "application.updated_at",
+        "freshness": "freshness",
+        "observed_at": "observed_at",
+    }
+    assert "fabricated revision" in display_mapping["rule"]
     system_contract = bundle["response_contracts"]["system_operational_snapshot"]
     typed_route = system_contract["result"]["typed_provider_route"]
     assert typed_route["method"] == "adaos.sdk.system.get_operational_snapshot"
@@ -10541,6 +10567,8 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
     assert "Exact Automation binding contract" in prompt
     assert bindings_path.resolve().as_posix() in prompt
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
+    assert "never use `rg`" in prompt
+    assert "never search it with\n`rg`/`Select-String`" in prompt
 
 
 def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
