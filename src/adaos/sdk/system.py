@@ -16,14 +16,16 @@ import threading
 import time
 from typing import Any
 
-from adaos.sdk import control_plane
+from adaos.sdk import access, control_plane
 from adaos.sdk.core.decorators import tool
 from adaos.sdk.status import current_update_status
 
 __all__ = [
     "get_operational_snapshot",
+    "request_core_update",
     "rename_current_node",
     "rename_local_subnet",
+    "set_core_autoupdate",
 ]
 
 _ALL_SECTIONS = frozenset(
@@ -63,6 +65,159 @@ _RENAME_OUTPUT = {
     "required": ["ok", "target", "display_name", "current", "desired", "applied"],
     "additionalProperties": True,
 }
+_CORE_AUTOUPDATE_INPUT = {
+    "type": "object",
+    "properties": {
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "enabled": {"type": "boolean"},
+    },
+    "required": ["request_id", "enabled"],
+    "additionalProperties": False,
+}
+_CORE_UPDATE_INPUT = {
+    "type": "object",
+    "properties": {
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "countdown_sec": {"type": "number", "minimum": 5, "maximum": 3600},
+        "dry_run": {"type": "boolean", "default": False},
+    },
+    "required": ["request_id"],
+    "additionalProperties": False,
+}
+_CORE_CONTROL_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "ok": {"type": "boolean"},
+        "request_id": {"type": "string"},
+        "target": {"type": "string"},
+        "accepted": {"type": "boolean"},
+        "current": {},
+        "desired": {},
+        "applied": {"type": "boolean"},
+        "status": {"type": "object"},
+    },
+    "required": ["ok", "request_id", "target", "accepted"],
+    "additionalProperties": True,
+}
+
+
+def _request_id(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token:
+        raise ValueError("request_id is required")
+    if len(token) > 160:
+        raise ValueError("request_id must contain at most 160 characters")
+    return token
+
+
+def _post_local_admin(path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Call the active local control owner without exposing its credential."""
+
+    import requests
+
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+
+    base_url = resolve_control_base_url(prefer_local=True)
+    token = resolve_control_token(base_url=base_url)
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.post(
+            f"{base_url.rstrip('/')}{path}",
+            headers={"X-AdaOS-Token": token, "Accept": "application/json"},
+            json=dict(payload),
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+    finally:
+        session.close()
+    if not isinstance(result, Mapping):
+        raise RuntimeError("system_control_response_invalid")
+    return dict(result)
+
+
+@tool(
+    "system.core_autoupdate.set",
+    summary="Set the governed Core automatic-update preference for this node.",
+    stability="stable",
+    idempotent=True,
+    input_schema=_CORE_AUTOUPDATE_INPUT,
+    output_schema=_CORE_CONTROL_OUTPUT,
+)
+def set_core_autoupdate(request_id: str, enabled: bool) -> dict[str, Any]:
+    """Persist the desired Core autoupdate state with explicit current/desired output."""
+
+    access.require("workspace.write")
+    identifier = _request_id(request_id)
+    from adaos.services.operator_controls import read_controls, update_controls
+
+    before = bool(read_controls().get("core_auto_update", True))
+    after = bool(update_controls({"core_auto_update": bool(enabled)}).get("core_auto_update"))
+    return {
+        "ok": True,
+        "request_id": identifier,
+        "target": "core_autoupdate",
+        "accepted": True,
+        "current": after,
+        "previous": before,
+        "desired": bool(enabled),
+        "applied": after == bool(enabled),
+    }
+
+
+@tool(
+    "system.core_update.request",
+    summary="Reconcile this node with the governed Core release desired by Root.",
+    stability="stable",
+    idempotent=True,
+    input_schema=_CORE_UPDATE_INPUT,
+    output_schema=_CORE_CONTROL_OUTPUT,
+)
+def request_core_update(
+    request_id: str,
+    *,
+    countdown_sec: float = 60.0,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Request the already-governed desired release; never accept a caller URL or revision."""
+
+    access.require("workspace.write")
+    identifier = _request_id(request_id)
+    countdown = max(5.0, min(3600.0, float(countdown_sec)))
+    if dry_run:
+        status = _mapping(current_update_status())
+        return {
+            "ok": True,
+            "request_id": identifier,
+            "target": "core_update",
+            "accepted": False,
+            "dry_run": True,
+            "current": status.get("state") or "idle",
+            "desired": "root_governed_release",
+            "applied": False,
+            "status": status,
+        }
+    response = _post_local_admin(
+        "/api/admin/update/reconcile",
+        {
+            "reason": f"sdk.system.core_update:{identifier}",
+            "countdown_sec": countdown,
+        },
+    )
+    status = _mapping(response.get("status"))
+    return {
+        "ok": bool(response.get("ok", True)),
+        "request_id": identifier,
+        "target": "core_update",
+        "accepted": bool(response.get("accepted")),
+        "reason": response.get("reason"),
+        "current": status.get("state") or "unknown",
+        "desired": "root_governed_release",
+        "applied": bool(response.get("accepted")),
+        "status": status,
+        "result": _mapping(response.get("result")),
+    }
 
 
 def _display_name(value: Any) -> str:
@@ -405,6 +560,22 @@ def get_operational_snapshot(
         }
     if "update" in selected:
         result["update"] = _mapping(current_update_status())
+        try:
+            from adaos.services.operator_controls import read_controls
+
+            controls = read_controls()
+            result["update_controls"] = {
+                "core_autoupdate": bool(controls.get("core_auto_update", True)),
+                "source": "operator_controls",
+                "mutable": True,
+            }
+        except Exception as exc:
+            result["update_controls"] = {
+                "core_autoupdate": None,
+                "source": "unavailable",
+                "mutable": False,
+                "reason": type(exc).__name__,
+            }
     if "applications" in selected:
         result["applications"] = _installed_application_summaries(
             webspace_id=webspace_id,

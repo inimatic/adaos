@@ -271,3 +271,100 @@ def test_rename_current_node_uses_durable_node_configuration(monkeypatch) -> Non
     assert result["current"] == "Hub node"
     assert result["desired"] == "Hub node"
     assert result["applied"] is True
+
+
+def test_operational_snapshot_exposes_core_autoupdate_control(monkeypatch) -> None:
+    from adaos.sdk import system
+    from adaos.services import operator_controls
+
+    monkeypatch.setattr(system.control_plane, "get_self_object", lambda: _object("node:hub", "node"))
+    monkeypatch.setattr(system.control_plane, "get_local_capacity_object", lambda: _object("capacity:hub", "capacity"))
+    monkeypatch.setattr(system, "current_update_status", lambda: {"state": "idle"})
+    monkeypatch.setattr(operator_controls, "read_controls", lambda: {"core_auto_update": False})
+
+    result = system.get_operational_snapshot(sections={"summary", "update"})
+
+    assert result["update"] == {"state": "idle"}
+    assert result["update_controls"] == {
+        "core_autoupdate": False,
+        "source": "operator_controls",
+        "mutable": True,
+    }
+
+
+def test_set_core_autoupdate_requires_write_and_reports_transition(monkeypatch) -> None:
+    from adaos.sdk import system
+    from adaos.services import operator_controls
+
+    required = []
+    monkeypatch.setattr(system.access, "require", required.append)
+    monkeypatch.setattr(operator_controls, "read_controls", lambda: {"core_auto_update": True})
+    monkeypatch.setattr(
+        operator_controls,
+        "update_controls",
+        lambda patch: {"core_auto_update": patch["core_auto_update"]},
+    )
+
+    result = system.set_core_autoupdate("management:autoupdate:off", False)
+
+    assert required == ["workspace.write"]
+    assert result == {
+        "ok": True,
+        "request_id": "management:autoupdate:off",
+        "target": "core_autoupdate",
+        "accepted": True,
+        "current": False,
+        "previous": True,
+        "desired": False,
+        "applied": True,
+    }
+
+
+def test_request_core_update_uses_governed_reconcile_endpoint(monkeypatch) -> None:
+    from adaos.sdk import system
+
+    required = []
+    requests = []
+    monkeypatch.setattr(system.access, "require", required.append)
+    monkeypatch.setattr(
+        system,
+        "_post_local_admin",
+        lambda path, payload: requests.append((path, payload)) or {
+            "ok": True,
+            "accepted": True,
+            "reason": payload["reason"],
+            "status": {"state": "scheduled"},
+            "result": {"needs_update": True},
+        },
+    )
+
+    result = system.request_core_update("management:update:1", countdown_sec=3)
+
+    assert required == ["workspace.write"]
+    assert requests == [(
+        "/api/admin/update/reconcile",
+        {"reason": "sdk.system.core_update:management:update:1", "countdown_sec": 5.0},
+    )]
+    assert result["accepted"] is True
+    assert result["current"] == "scheduled"
+    assert result["desired"] == "root_governed_release"
+    assert result["applied"] is True
+
+
+def test_request_core_update_dry_run_does_not_mutate(monkeypatch) -> None:
+    from adaos.sdk import system
+
+    monkeypatch.setattr(system.access, "require", lambda capability: None)
+    monkeypatch.setattr(system, "current_update_status", lambda: {"state": "idle"})
+    monkeypatch.setattr(
+        system,
+        "_post_local_admin",
+        lambda *_args, **_kwargs: pytest.fail("dry-run must not mutate"),
+    )
+
+    result = system.request_core_update("management:update:dry", dry_run=True)
+
+    assert result["accepted"] is False
+    assert result["dry_run"] is True
+    assert result["current"] == "idle"
+    assert result["applied"] is False

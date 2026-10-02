@@ -459,8 +459,10 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.resources.operate",
     "adaos.sdk.resources.query",
     "adaos.sdk.system.get_operational_snapshot",
+    "adaos.sdk.system.request_core_update",
     "adaos.sdk.system.rename_current_node",
     "adaos.sdk.system.rename_local_subnet",
+    "adaos.sdk.system.set_core_autoupdate",
 }
 
 
@@ -479,7 +481,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "llm content images resources access caller require automation inventory "
             "external provider fleet skill data root lifecycle ensure database "
             "generate operate query system operational snapshot resource member application "
-            "rename subnet node"
+            "rename subnet node core update autoupdate"
         ),
         limit=64,
     )
@@ -610,7 +612,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "connections": ["connections"],
                         "quotas": ["quotas"],
                         "incidents": ["incidents", "reliability"],
-                        "update": ["update"],
+                        "update": ["update", "update_controls"],
                         "applications": ["applications", "application_updates"],
                         "resources": ["resources"],
                         "members": ["members", "member_summary"],
@@ -649,6 +651,48 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "applied",
                 ],
                 "identity_rule": "Renaming changes display metadata only; subnet_id and node_id remain stable.",
+            },
+            "system_update_controls": {
+                "methods": [
+                    "adaos.sdk.system.request_core_update",
+                    "adaos.sdk.system.set_core_autoupdate",
+                ],
+                "authorization": "workspace.write",
+                "request_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "rule": "Keep one stable request_id across retries.",
+                },
+                "core_update": {
+                    "optional": {
+                        "countdown_sec": {"minimum": 5, "maximum": 3600},
+                        "dry_run": {"type": "boolean"},
+                    },
+                    "forbidden_inputs": [
+                        "target_rev",
+                        "target_version",
+                        "url",
+                        "token",
+                    ],
+                    "rule": (
+                        "The caller requests reconciliation with the Root-governed "
+                        "desired release and must never select an artifact or revision."
+                    ),
+                },
+                "core_autoupdate": {
+                    "required": ["enabled"],
+                    "enabled": {"type": "boolean"},
+                },
+                "result_required": [
+                    "ok",
+                    "request_id",
+                    "target",
+                    "accepted",
+                    "current",
+                    "desired",
+                    "applied",
+                ],
             },
             "content_draft": {
                 "methods": [
