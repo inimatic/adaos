@@ -938,6 +938,32 @@ def rename_browser_device_name(device_ref: str, device_display_name: str) -> dic
     }
 
 
+def assign_browser_parent_device(device_ref: str, parent_device_ref: str | None) -> dict[str, Any]:
+    parsed = _device_inventory.parse_device_ref(_text(device_ref))
+    if parsed is None or parsed[0] != "browser":
+        return {"ok": False, "error": "browser_device_required", "device_ref": _text(device_ref)}
+    browser_id = parsed[1].split("::", 1)[0].strip()
+    parent = _text(parent_device_ref)
+    if parent:
+        parent_device = _device_inventory.get_device(parent)
+        if parent_device is None or str(parent_device.get("kind") or "").strip() == "browser":
+            return {
+                "ok": False,
+                "error": "parent_device_not_found",
+                "device_ref": _text(device_ref),
+                "parent_device_ref": parent,
+            }
+    entry = _access_links.assign_browser_parent_device(browser_id, parent or None)
+    if entry is None:
+        return {"ok": False, "error": "browser_device_not_found", "device_ref": _text(device_ref)}
+    return {
+        "ok": True,
+        "device_ref": f"browser:{browser_id}",
+        "parent_device_ref": parent or None,
+        "entry": entry,
+    }
+
+
 def add_device_alias(
     device_ref: str,
     alias: str,
@@ -1294,6 +1320,7 @@ def set_device_voice_listening(
 
 
 __all__ = [
+    "assign_browser_parent_device",
     "adopt_device",
     "add_device_alias",
     "deprecate_device_alias",

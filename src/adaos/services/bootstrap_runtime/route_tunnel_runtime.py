@@ -2429,6 +2429,13 @@ class NatsRouteTunnelRuntime:
                     ct = headers.get("content-type") or headers.get("Content-Type")
                     if isinstance(ct, str) and ct:
                         h2["Content-Type"] = ct
+                    for trusted_name in (
+                        "x-adaos-route-authenticated",
+                        "x-adaos-development-access",
+                    ):
+                        trusted_value = headers.get(trusted_name)
+                        if str(trusted_value or "").strip() in {"0", "1"}:
+                            h2[trusted_name] = str(trusted_value).strip()
                 if isinstance(content_length, int) and content_length >= 0:
                     h2["Content-Length"] = str(content_length)
 
@@ -3580,6 +3587,14 @@ class NatsRouteTunnelRuntime:
                             else:
                                 # If we don't have a local token, do not forward the root session JWT.
                                 q.pop("token", None)
+                            trusted_headers = (data or {}).get("headers") or {}
+                            if isinstance(trusted_headers, dict):
+                                q["adaos_routed"] = ["1"]
+                                q["adaos_development_access"] = [
+                                    "1"
+                                    if str(trusted_headers.get("x-adaos-development-access") or "").strip() == "1"
+                                    else "0"
+                                ]
                             query = "?" + urlencode(q, doseq=True) if q else ""
                         except Exception:
                             pass
@@ -4973,6 +4988,14 @@ class NatsRouteTunnelRuntime:
                                     ct = headers.get("content-type") or headers.get("Content-Type")
                                     if isinstance(ct, str) and ct:
                                         h2["Content-Type"] = ct
+                                if isinstance(headers, dict):
+                                    for trusted_name in (
+                                        "x-adaos-route-authenticated",
+                                        "x-adaos-development-access",
+                                    ):
+                                        trusted_value = headers.get(trusted_name)
+                                        if str(trusted_value or "").strip() in {"0", "1"}:
+                                            h2[trusted_name] = str(trusted_value).strip()
                                 # Do not inherit HTTP(S)_PROXY environment from the host/container:
                                 # local hub calls must stay local, otherwise they can hang on a proxy.
                                 def _do_http_upstream() -> dict[str, Any]:

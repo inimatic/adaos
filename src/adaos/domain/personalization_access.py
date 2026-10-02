@@ -362,6 +362,7 @@ class UserProfile:
     user_id: str
     display_name: str | None = None
     preferred_name: str | None = None
+    email: str | None = None
     locale: str | None = None
     language: str | None = None
     timezone: str | None = None
@@ -377,7 +378,7 @@ class UserProfile:
             joined = ", ".join(sorted(policy_keys))
             raise PersonalizationAccessContractError(f"profile settings cannot contain access policy keys: {joined}")
         object.__setattr__(self, "settings", settings)
-        for field_name in ("display_name", "preferred_name", "locale", "language", "timezone", "avatar_ref"):
+        for field_name in ("display_name", "preferred_name", "email", "locale", "language", "timezone", "avatar_ref"):
             object.__setattr__(self, field_name, _clean(getattr(self, field_name)) or None)
 
     def to_dict(self) -> dict[str, Any]:

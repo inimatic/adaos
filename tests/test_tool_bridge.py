@@ -3719,3 +3719,45 @@ def test_call_tool_uses_cached_snapshot_unavailable_before_connected_rpc(monkeyp
     assert second["ok"] is True
     assert second["result"]["cached"] is True
     assert rpc_calls == 1
+
+
+def test_dev_role_simulation_is_admitted_only_for_dev_webspaces() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="sample:list",
+        context={
+            "webspace_id": "desktop-dev",
+            "dev_role_simulation": {
+                "schema": "adaos.dev_role_simulation.v1",
+                "role": "guest",
+            },
+        },
+    )
+
+    admitted = tool_bridge_module._admit_dev_role_simulation(body, dev_webspace=True)
+
+    assert admitted.context["dev_role_simulation"] == {
+        "schema": "adaos.dev_role_simulation.v1",
+        "role": "guest",
+        "verified": True,
+    }
+    with pytest.raises(HTTPException) as error:
+        tool_bridge_module._admit_dev_role_simulation(body, dev_webspace=False)
+    assert error.value.status_code == 403
+
+
+def test_dev_role_simulation_applies_role_permission_ceiling() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="sample:save",
+        context={
+            "dev_role_simulation": {
+                "schema": "adaos.dev_role_simulation.v1",
+                "role": "guest",
+                "verified": True,
+            },
+        },
+    )
+
+    tool_bridge_module._enforce_dev_role_simulation_effects(body, read_only=True)
+    with pytest.raises(HTTPException) as error:
+        tool_bridge_module._enforce_dev_role_simulation_effects(body, read_only=False)
+    assert error.value.detail["error"] == "dev_role_simulation_denied"

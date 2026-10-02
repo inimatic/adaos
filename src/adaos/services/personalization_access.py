@@ -319,6 +319,58 @@ class PersonalizationAccessStore:
         return dict(data) if isinstance(data, Mapping) else None
 
     @_access_transaction
+    def delete_user_account(self, user_id: str) -> dict[str, Any]:
+        """Remove one non-owner identity and every local access credential it owns."""
+
+        identifier = str(user_id or "").strip()
+        if not identifier:
+            raise PersonalizationAccessError("user_id is required")
+        subject_ref = f"user:{identifier}"
+        removed_device_ids = {
+            key
+            for key, value in self._data["device_keys"].items()
+            if isinstance(value, Mapping) and str(value.get("user_id") or "").strip() == identifier
+        }
+        removed: dict[str, int] = {}
+
+        def remove_matching(bucket: str, predicate) -> None:
+            values = self._data[bucket]
+            keys = [key for key, value in values.items() if predicate(value)]
+            for key in keys:
+                values.pop(key, None)
+            removed[bucket] = len(keys)
+
+        removed["users"] = int(self._data["users"].pop(identifier, None) is not None)
+        removed["profiles"] = int(self._data["profiles"].pop(identifier, None) is not None)
+        remove_matching(
+            "preferences",
+            lambda value: isinstance(value, Mapping) and _ref_key(value.get("subject")) == subject_ref,
+        )
+        remove_matching(
+            "user_keys",
+            lambda value: isinstance(value, Mapping) and str(value.get("user_id") or "").strip() == identifier,
+        )
+        remove_matching(
+            "device_keys",
+            lambda value: isinstance(value, Mapping) and str(value.get("user_id") or "").strip() == identifier,
+        )
+        remove_matching(
+            "sessions",
+            lambda value: isinstance(value, Mapping)
+            and (
+                _ref_key(value.get("subject")) == subject_ref
+                or str(value.get("device_id") or "").strip() in removed_device_ids
+            ),
+        )
+        for bucket in ("memberships", "grants"):
+            remove_matching(
+                bucket,
+                lambda value: isinstance(value, Mapping) and _ref_key(value.get("subject")) == subject_ref,
+            )
+        self.save()
+        return {"user_id": identifier, "removed": removed}
+
+    @_access_transaction
     def put_preference(self, preference: Preference) -> dict[str, Any]:
         data = preference.to_dict()
         key = self._preference_key(preference.subject, preference.key, preference.scope)
@@ -644,6 +696,22 @@ class PersonalizationAccessService:
             redacted_diff={"profile": "<redacted>"},
         )
         return data
+
+    def delete_current_account(self, *, actor: SubjectRef) -> dict[str, Any]:
+        if actor.kind != "user":
+            raise PersonalizationAccessError("account deletion requires an authenticated user")
+        if actor.ref() == self.owner.ref():
+            raise PersonalizationAccessError(
+                "the subnet owner cannot delete the account before transferring ownership"
+            )
+        result = self.store.delete_user_account(actor.id)
+        self._audit(
+            "account.deleted",
+            actor=actor,
+            subject=actor,
+            metadata={"removed": dict(result.get("removed") or {})},
+        )
+        return result
 
     def put_preference(self, preference: Preference, *, actor: SubjectRef | None = None) -> dict[str, Any]:
         data = self.store.put_preference(preference)

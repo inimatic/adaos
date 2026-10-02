@@ -832,6 +832,13 @@
         },
         "release_selection": "The Versions list writes selectedReleaseDigest and clears reviewedPlan because a receipt is valid only for its original release selection. Install/update plans may leave this state empty to resolve the effective channel.",
         "initial_state_target": "Write the complete initial_state object to ui.application.desktop.pageSchema.initialState. pageSchema.state is not part of this contract and must not be created.",
+        "initial_state_query": {
+          "map": {
+            "selectedApplicationId": "application_id",
+            "catalogSection": "view"
+          },
+          "contract": "Deep links may select one concrete Application and one catalog section. Preserve this mapping in ui.application.desktop.pageSchema.initialStateQuery."
+        },
         "initial_state": {
           "selectedApplicationId": "",
           "catalogSection": "applications",

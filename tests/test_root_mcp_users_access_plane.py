@@ -189,6 +189,8 @@ def service(monkeypatch: pytest.MonkeyPatch) -> _Service:
     profile_values = {
         "display_name": "Owner",
         "preferred_name": "",
+        "email": "owner@example.test",
+        "avatar_ref": None,
         "language": "en",
         "locale": "en-US",
         "timezone": "UTC",
@@ -199,7 +201,6 @@ def service(monkeypatch: pytest.MonkeyPatch) -> _Service:
         def get_profile(self):
             return SimpleNamespace(
                 user_id="owner",
-                avatar_ref=None,
                 preferences=dict(preferences),
                 **profile_values,
             )
@@ -279,8 +280,11 @@ def test_contracts_publish_owner_governed_read_and_write_tools() -> None:
         items["users_access.revoke_device"].required_capability == "users_access.manage"
     )
     assert items["users_access.current_profile"].required_capability == "profile.read.self"
+    assert items["users_access.timezone_options"].required_capability == "profile.read.self"
     assert items["users_access.update_current_profile"].required_capability == "profile.write.self"
     assert items["users_access.update_current_profile"].side_effects == "write"
+    assert items["users_access.delete_current_account"].required_capability == "profile.write.self"
+    assert items["users_access.delete_current_account"].side_effects == "write"
     assert items["users_access.create_device_pairing"].side_effects == "write"
     assert items["users_access.create_admin_recovery"].side_effects == "write"
     assert items["users_access.revoke_device"].side_effects == "write"
@@ -296,6 +300,36 @@ def test_summary_combines_personalization_and_application_access(
     assert result["users_access"]["people"][0]["user_id"] == "owner"
     assert result["administration"]["invites"] == []
     assert service.calls == [("summary", "user:owner", 20)]
+
+
+def test_audit_projection_resolves_skill_to_installed_applications(monkeypatch) -> None:
+    monkeypatch.setattr(
+        plane.applications_sdk,
+        "get_component_application_owners",
+        lambda component_ref: [
+            {"application_id": "mail", "title": "Mail"},
+            {"application_id": "triage", "title": "Inbox Triage"},
+        ]
+        if component_ref == "skill:gmail"
+        else [],
+    )
+
+    projected = plane._audit_projection(
+        {
+            "audit_id": "audit-1",
+            "event_type": "policy.allow",
+            "scope": {"kind": "skill", "id": "gmail"},
+            "decision": {"decision": "allow"},
+            "metadata": {},
+        }
+    )
+
+    assert projected["applications_label"] == "Mail, Inbox Triage"
+    assert projected["primary_application_id"] == "mail"
+    assert projected["applications"] == [
+        {"application_id": "mail", "title": "Mail"},
+        {"application_id": "triage", "title": "Inbox Triage"},
+    ]
 
 
 def test_scope_options_use_authoritative_context_and_workspace_index(
@@ -457,6 +491,9 @@ def test_summary_redacts_and_normalizes_access_audit(
                 "action": "workspace.read",
             },
             "resource": "skill:notes",
+            "applications": [],
+            "applications_label": "",
+            "primary_application_id": "",
             "occurred_at": "2027-01-15T08:00:00+00:00",
             "source": "personalization_access",
         }
@@ -620,6 +657,8 @@ def test_current_profile_read_and_update_share_one_authority(service: _Service) 
     updated = plane.handlers()["users_access.update_current_profile"](
         {
             "display_name": "Dmitry",
+            "email": "dmitry@example.test",
+            "avatar_ref": "resource:profile.avatar",
             "timezone": "Europe/Moscow",
             "show_presence": False,
             "idempotency_key": "profile-dmitry-1",
@@ -630,7 +669,30 @@ def test_current_profile_read_and_update_share_one_authority(service: _Service) 
     assert updated["profile"]["id"] == "current"
     assert updated["profile"]["display_name"] == "Dmitry"
     assert updated["profile"]["timezone"] == "Europe/Moscow"
+    assert updated["profile"]["email"] == "dmitry@example.test"
+    assert updated["profile"]["avatar_ref"] == "resource:profile.avatar"
     assert updated["profile"]["show_presence"] is False
+
+    timezones = plane.handlers()["users_access.timezone_options"]({}, dry_run=False)
+    assert timezones["items"][0] == {"value": "UTC", "label": "UTC"}
+    assert {item["value"] for item in timezones["items"]} >= {"UTC", "Europe/Moscow"}
+
+
+@pytest.mark.parametrize(
+    ("patch", "message"),
+    [
+        ({"timezone": "Mars/Olympus"}, "IANA timezone"),
+        ({"start_destination": "system"}, "home or chat"),
+    ],
+)
+def test_profile_update_rejects_unsupported_preferences(
+    service: _Service, patch: dict, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        plane.handlers()["users_access.update_current_profile"](
+            {**patch, "idempotency_key": "invalid-profile", "_mcp_context": _context()},
+            dry_run=False,
+        )
 
 
 def test_device_and_session_revocation_are_replay_safe(service: _Service) -> None:

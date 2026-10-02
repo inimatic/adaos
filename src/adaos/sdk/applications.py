@@ -1947,6 +1947,38 @@ def list_application_components(
     )
 
 
+def get_component_application_owners(component_ref: str) -> list[dict[str, str]]:
+    """Project one installed component to its owning Applications cheaply."""
+
+    reference = str(component_ref or "").strip()
+    if not reference:
+        return []
+    service = _service()
+    references = service.component_references().get("components") or {}
+    owners: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in references.get(reference) or ():
+        if not isinstance(item, Mapping):
+            continue
+        application_id = str(item.get("application_id") or "").strip()
+        if not application_id or application_id in seen:
+            continue
+        try:
+            application = service.store.get_application(application_id)
+        except FileNotFoundError:
+            continue
+        display = dict(application.display or {})
+        owners.append(
+            {
+                "application_id": application.application_id,
+                "title": str(display.get("title") or application.application_id),
+            }
+        )
+        seen.add(application_id)
+    owners.sort(key=lambda item: (item["title"].casefold(), item["application_id"]))
+    return owners
+
+
 def list_application_placements(
     application_id: str, *, webspace_id: str | None = None
 ) -> list[dict[str, Any]]:
@@ -4893,6 +4925,7 @@ __all__ = [
     "explain_plan",
     "export_application_access_snapshot",
     "get_application",
+    "get_component_application_owners",
     "get_application_access_surface",
     "get_application_setup",
     "get_application_privacy_report",

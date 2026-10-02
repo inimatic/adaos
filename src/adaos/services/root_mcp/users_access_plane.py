@@ -6,6 +6,7 @@ import time
 from typing import Any, Callable, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from uuid import uuid4
+from zoneinfo import available_timezones
 
 from adaos.domain.personalization_access import GrantConstraint, ScopeRef, SubjectRef
 from adaos.sdk import applications as applications_sdk
@@ -155,6 +156,9 @@ _SUMMARY_WEBUI_ITEM_FIELDS = {
         "scope_ref": "string?",
         "decision": "object",
         "resource": "string?",
+        "applications": "array<object>",
+        "applications_label": "string?",
+        "primary_application_id": "string?",
         "occurred_at": "datetime?",
         "source": "string?",
     },
@@ -246,6 +250,16 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**metadata, "handler": "users_access_current_profile"},
         ),
         RootMcpToolContract(
+            id="users_access.timezone_options",
+            title="List timezone options",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="List IANA timezones accepted by the current-user profile.",
+            input_schema=schema_object(),
+            output_schema=deepcopy(response),
+            required_capability="profile.read.self",
+            metadata={**metadata, "handler": "users_access_timezone_options"},
+        ),
+        RootMcpToolContract(
             id="users_access.update_current_profile",
             title="Update current user profile",
             surface=RootMcpSurface.OPERATIONS,
@@ -255,9 +269,11 @@ def contracts() -> list[RootMcpToolContract]:
                     **context,
                     "display_name": {"type": ["string", "null"], "maxLength": 160},
                     "preferred_name": {"type": ["string", "null"], "maxLength": 160},
+                    "email": {"type": ["string", "null"], "format": "email", "maxLength": 320},
                     "language": {"type": ["string", "null"], "maxLength": 32},
                     "locale": {"type": ["string", "null"], "maxLength": 32},
                     "timezone": {"type": ["string", "null"], "maxLength": 80},
+                    "avatar_ref": {"type": ["string", "null"], "maxLength": 1000},
                     "start_destination": {"type": ["string", "null"], "maxLength": 80},
                     "show_presence": {"type": ["boolean", "null"]},
                 },
@@ -267,6 +283,20 @@ def contracts() -> list[RootMcpToolContract]:
             required_capability="profile.write.self",
             side_effects="write",
             metadata={**metadata, "handler": "users_access_update_current_profile"},
+        ),
+        RootMcpToolContract(
+            id="users_access.delete_current_account",
+            title="Delete current account",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Delete the authenticated non-owner account and revoke its local access records.",
+            input_schema=schema_object(
+                properties={**context, "confirmation": {"type": "string", "const": "DELETE"}},
+                required=["idempotency_key", "confirmation"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="profile.write.self",
+            side_effects="write",
+            metadata={**metadata, "handler": "users_access_delete_current_account"},
         ),
         RootMcpToolContract(
             id="users_access.grant_role",
@@ -560,6 +590,7 @@ def _profile_projection() -> dict[str, Any]:
         "language": profile.language or "en",
         "locale": profile.locale or "en-US",
         "timezone": profile.timezone or "UTC",
+        "email": profile.email,
         "avatar_ref": profile.avatar_ref,
         "start_destination": str(preferences.get("start_destination") or "home"),
         "show_presence": bool(preferences.get("show_presence", True)),
@@ -580,7 +611,11 @@ def _typed_ref(value: Any) -> str:
     return f"{kind}:{identifier}" if kind and identifier else ""
 
 
-def _audit_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+def _audit_projection(
+    value: Mapping[str, Any],
+    *,
+    application_cache: dict[str, list[dict[str, str]]] | None = None,
+) -> dict[str, Any]:
     decision = value.get("decision")
     decision = decision if isinstance(decision, Mapping) else {}
     metadata = value.get("metadata")
@@ -593,19 +628,48 @@ def _audit_projection(value: Mapping[str, Any]) -> dict[str, Any]:
         ).isoformat()
     elif timestamp:
         occurred_at = str(timestamp)
+    scope_ref = _typed_ref(value.get("scope"))
+    resource = str(metadata.get("resource") or decision.get("resource") or "")
+    component_ref = next(
+        (
+            candidate
+            for candidate in (resource, scope_ref)
+            if candidate.startswith(("skill:", "scenario:"))
+        ),
+        "",
+    )
+    applications: list[dict[str, str]] = []
+    if component_ref:
+        cache = application_cache if application_cache is not None else {}
+        if component_ref not in cache:
+            try:
+                cache[component_ref] = applications_sdk.get_component_application_owners(
+                    component_ref
+                )
+            except (FileNotFoundError, OSError, RuntimeError, ValueError):
+                cache[component_ref] = []
+        applications = deepcopy(cache[component_ref])
     return {
         "audit_id": str(value.get("audit_id") or ""),
         "event_type": str(value.get("event_type") or ""),
         "actor": deepcopy(value.get("actor") or {}),
         "actor_ref": _typed_ref(value.get("actor")),
         "scope": deepcopy(value.get("scope") or {}),
-        "scope_ref": _typed_ref(value.get("scope")),
+        "scope_ref": scope_ref,
         "decision": {
             key: deepcopy(decision.get(key))
             for key in ("decision", "reason_code", "action")
             if key in decision
         },
-        "resource": str(metadata.get("resource") or decision.get("resource") or ""),
+        "resource": resource,
+        "applications": applications,
+        "applications_label": ", ".join(
+            str(item.get("title") or item.get("application_id") or "")
+            for item in applications
+        ),
+        "primary_application_id": str(
+            (applications[0] if applications else {}).get("application_id") or ""
+        ),
         "occurred_at": occurred_at,
         "source": str(value.get("source") or ""),
     }
@@ -661,12 +725,17 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
         if key in {"schema", "diagnostics"} or key in requested
     }
     administration = {}
+    application_cache: dict[str, list[dict[str, str]]] = {}
     for key in ("memberships", "grants", "invites", "recovery_actions", "audit"):
         if key not in requested:
             continue
         items = directory.get(key) or []
         administration[key] = (
-            [_audit_projection(item) for item in items if isinstance(item, Mapping)]
+            [
+                _audit_projection(item, application_cache=application_cache)
+                for item in items
+                if isinstance(item, Mapping)
+            ]
             if key == "audit"
             else [_invite_projection(item) for item in items if isinstance(item, Mapping)]
             if key == "invites"
@@ -725,15 +794,24 @@ def _handle_current_profile(
     return {"profile": _profile_projection()}
 
 
+def _handle_timezone_options(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    zones = sorted(available_timezones(), key=lambda value: (value != "UTC", value.casefold()))
+    return {"items": [{"value": value, "label": value} for value in zones]}
+
+
 def _handle_update_current_profile(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     profile_fields = (
         "display_name",
         "preferred_name",
+        "email",
         "language",
         "locale",
         "timezone",
+        "avatar_ref",
     )
     preference_fields = ("start_destination", "show_presence")
     profile_patch = {
@@ -746,6 +824,12 @@ def _handle_update_current_profile(
         for key in preference_fields
         if key in arguments and arguments.get(key) is not None
     }
+    timezone = str(profile_patch.get("timezone") or "").strip()
+    if timezone and timezone not in available_timezones():
+        raise ValueError("timezone must be a current IANA timezone")
+    start_destination = str(preference_patch.get("start_destination") or "").strip()
+    if start_destination and start_destination not in {"home", "chat"}:
+        raise ValueError("start_destination must be home or chat")
     if dry_run:
         return {
             "would_update": True,
@@ -760,6 +844,25 @@ def _handle_update_current_profile(
         service.update_preferences(preference_patch, actor=actor)
     personalization_runtime.invalidate_current_user_header_settings(get_ctx())
     return {"profile": _profile_projection()}
+
+
+def _handle_delete_current_account(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    actor = _actor(arguments)
+    if str(arguments.get("confirmation") or "").strip() != "DELETE":
+        raise ValueError("confirmation must equal DELETE")
+    service = _service()
+    if actor.ref() == service.owner.ref():
+        raise ValueError("the subnet owner must transfer ownership before deleting the account")
+    if dry_run:
+        return {"would_delete": True, "subject_ref": actor.ref()}
+    result = service.delete_current_account(actor=actor)
+    profile_service = personalization_runtime.current_user_profile_service(get_ctx())
+    for suffix in ("settings", "profile.v0", "preferences.v0"):
+        profile_service.ctx.kv.delete(f"users/{actor.id}/{suffix}")
+    personalization_runtime.invalidate_current_user_header_settings(get_ctx())
+    return {"deleted": True, **result}
 
 
 def _handle_grant_role(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -986,7 +1089,9 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "users_access.summary": _handle_summary,
         "users_access.scope_options": _handle_scope_options,
         "users_access.current_profile": _handle_current_profile,
+        "users_access.timezone_options": _handle_timezone_options,
         "users_access.update_current_profile": _handle_update_current_profile,
+        "users_access.delete_current_account": _handle_delete_current_account,
         "users_access.grant_role": _handle_grant_role,
         "users_access.create_invite": _handle_create_invite,
         "users_access.create_device_pairing": _handle_create_device_pairing,

@@ -79,6 +79,21 @@ def test_browser_session_metadata_updates_emit_named_entity_invalidation(monkeyp
     assert events[0]["current"]["browser_family"] == "Firefox"
 
 
+def test_browser_endpoint_parent_device_relation_is_durable(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    access_links.touch_browser_session("dev-browser", webspace_id="desktop", online=True)
+
+    saved = access_links.assign_browser_parent_device(
+        "browser:dev-browser::tab-1", "member:workstation-1"
+    )
+
+    assert saved is not None
+    assert saved["id"] == "dev-browser"
+    assert saved["parent_device_ref"] == "member:workstation-1"
+    assert access_links.get_link("browser", "dev-browser")["parent_device_ref"] == "member:workstation-1"
+
+
 def test_browser_snapshot_includes_active_yws_scoped_clients(monkeypatch) -> None:
     _patch_registry_store(monkeypatch)
     monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)

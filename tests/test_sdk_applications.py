@@ -456,6 +456,42 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
     )
 
 
+def test_component_application_owners_use_bounded_reference_index(monkeypatch) -> None:
+    class Store:
+        @staticmethod
+        def get_application(application_id: str):
+            if application_id == "missing":
+                raise FileNotFoundError(application_id)
+            return SimpleNamespace(
+                application_id=application_id,
+                display={"title": {"mail": "Mail", "triage": "Inbox Triage"}[application_id]},
+            )
+
+    class Service:
+        store = Store()
+
+        @staticmethod
+        def component_references():
+            return {
+                "components": {
+                    "skill:gmail": [
+                        {"application_id": "triage"},
+                        {"application_id": "mail"},
+                        {"application_id": "triage"},
+                        {"application_id": "missing"},
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(applications, "_service", lambda: Service())
+
+    assert applications.get_component_application_owners("skill:gmail") == [
+        {"application_id": "triage", "title": "Inbox Triage"},
+        {"application_id": "mail", "title": "Mail"},
+    ]
+    assert applications.get_component_application_owners("skill:unknown") == []
+
+
 def test_sdk_component_placement_plans_forward_exact_cas_context(monkeypatch) -> None:
     stub = _StubService()
     monkeypatch.setattr(applications, "_service", lambda: stub)

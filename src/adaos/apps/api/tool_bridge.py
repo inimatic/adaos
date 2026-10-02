@@ -2010,6 +2010,68 @@ class ToolCall(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+_DEV_ROLE_SIMULATION_SCHEMA = "adaos.dev_role_simulation.v1"
+
+
+def _admit_dev_role_simulation(
+    body: ToolCall,
+    *,
+    dev_webspace: bool,
+) -> ToolCall:
+    """Validate a development-authorized role projection before it reaches a skill.
+
+    The projection is a development test rail, never an identity assertion.
+    It is accepted only on an actual development webspace and only at the
+    trusted browser ingress (purpose-bound scoped credentials are intentionally
+    refused because they cannot prove the interactive developer's authority).
+    """
+
+    context = _mapping(body.context)
+    raw = context.get("dev_role_simulation")
+    if raw is None:
+        return body
+    if not isinstance(raw, Mapping):
+        raise HTTPException(status_code=400, detail="dev_role_simulation_invalid")
+    if current_caller_scope() is not None:
+        raise HTTPException(status_code=403, detail="dev_role_simulation_browser_ingress_required")
+    if not dev_webspace:
+        raise HTTPException(status_code=403, detail="dev_role_simulation_requires_dev_webspace")
+    from adaos.domain.personalization_access import ALLOWED_ROLE_PRESETS
+
+    schema = str(raw.get("schema") or "").strip()
+    role = str(raw.get("role") or "").strip().lower()
+    if schema != _DEV_ROLE_SIMULATION_SCHEMA or role not in ALLOWED_ROLE_PRESETS:
+        raise HTTPException(status_code=400, detail="dev_role_simulation_invalid")
+    updated_context = {
+        **context,
+        "dev_role_simulation": {
+            "schema": _DEV_ROLE_SIMULATION_SCHEMA,
+            "role": role,
+            "verified": True,
+        },
+    }
+    return body.model_copy(update={"context": updated_context})
+
+
+def _enforce_dev_role_simulation_effects(body: ToolCall, *, read_only: bool) -> None:
+    simulation = _mapping(_mapping(body.context).get("dev_role_simulation"))
+    if not simulation or simulation.get("verified") is not True:
+        return
+    from adaos.domain.personalization_access import ROLE_PRESET_CAPABILITIES
+
+    role = str(simulation.get("role") or "").strip().lower()
+    action = "workspace.read" if read_only else "workspace.write"
+    if action not in set(ROLE_PRESET_CAPABILITIES.get(role, ())):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "dev_role_simulation_denied",
+                "role": role,
+                "action": action,
+            },
+        )
+
+
 _TOOL_CONTEXT_META_KEYS = frozenset(
     {
         "webspace_id",
@@ -2035,6 +2097,7 @@ _TOOL_CONTEXT_META_KEYS = frozenset(
         "language",
         "builder_context",
         "builder_topic",
+        "dev_role_simulation",
     }
 )
 _TOOL_ACTION_CONTEXT_KEYS = frozenset(
@@ -2887,6 +2950,19 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
         _webspace_uses_dev_runtime,
         routing,
     )
+    request_state = getattr(request, "state", None)
+    if (
+        (body.dev or implicit_dev_webspace)
+        and bool(getattr(request_state, "adaos_root_routed", False))
+        and not bool(getattr(request_state, "adaos_development_access", False))
+    ):
+        raise HTTPException(status_code=403, detail="development_access_required")
+    if request_context.get("dev_role_simulation") is not None:
+        dev_webspace = implicit_dev_webspace or await asyncio.to_thread(
+            _webspace_uses_dev_runtime,
+            routing,
+        )
+        body = _admit_dev_role_simulation(body, dev_webspace=dev_webspace)
     stage_started = time.perf_counter()
     try:
         # A DEV webspace is authoritative for its preview rail. Selecting a
@@ -3067,6 +3143,20 @@ async def _call_tool_impl(
     ):
         body = body.model_copy(update={"dev": True})
 
+    simulation = _mapping(_mapping(body.context).get("dev_role_simulation"))
+    if simulation.get("verified") is True and not body.dev:
+        # A simulated role must never escape to an installed/stable fallback.
+        # Development webspaces may legitimately call a stable dependency, but
+        # that call runs with the authenticated caller, not an emulated role.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "dev_role_simulation_runtime_unavailable",
+                "tool": body.tool,
+                "message": "The selected skill has no active DEV runtime for role simulation.",
+            },
+        )
+
     if body.dev:
         await asyncio.to_thread(_maybe_sync_dev_runtime, ctx, mgr, skill_name)
 
@@ -3120,6 +3210,7 @@ async def _call_tool_impl(
             time.perf_counter() - phase_started
         ) * 1000.0
     trusted_read_only = _declared_side_effects_are_read_only(declared_side_effects)
+    _enforce_dev_role_simulation_effects(body, read_only=trusted_read_only)
     if body.intent == "read" and not trusted_read_only:
         runtime_contract = await asyncio.to_thread(
             _runtime_contract_diagnostics,

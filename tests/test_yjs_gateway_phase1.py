@@ -6353,6 +6353,30 @@ def test_unknown_preview_url_does_not_recreate_deleted_workspace(monkeypatch) ->
         gateway_module._workspace_bootstrap_snapshot_sync("deleted-preview")
 
 
+def test_routed_development_webspace_requires_root_admission(monkeypatch) -> None:
+    row = SimpleNamespace(is_dev=True, effective_source_mode="dev")
+    monkeypatch.setattr(gateway_module, "get_workspace", lambda _webspace_id: row)
+
+    assert gateway_module._development_webspace_access_denied(
+        "desktop-dev", routed=True, development_access=False
+    ) is True
+    assert gateway_module._development_webspace_access_denied(
+        "desktop-dev", routed=True, development_access=True
+    ) is False
+    assert gateway_module._development_webspace_access_denied(
+        "desktop-dev", routed=False, development_access=False
+    ) is False
+
+    monkeypatch.setattr(
+        gateway_module,
+        "get_workspace",
+        lambda _webspace_id: SimpleNamespace(is_dev=False, effective_source_mode="workspace"),
+    )
+    assert gateway_module._development_webspace_access_denied(
+        "desktop", routed=True, development_access=False
+    ) is False
+
+
 def test_workspace_bootstrap_snapshot_keeps_sqlite_work_off_event_loop(monkeypatch) -> None:
     from adaos.services.yjs import gateway_ws as gateway_module
 

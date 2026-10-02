@@ -312,6 +312,11 @@ def _build_projection(projection: dict[str, Any], *, updated_at: float) -> dict[
         for action_id in order
         if _text(by_id.get(action_id, {}).get("status")) in _ACTIVE_STATUSES
     ]
+    history_ids = [
+        action_id
+        for action_id in reversed(order)
+        if _text(by_id.get(action_id, {}).get("status")) in _TERMINAL_STATUSES
+    ]
     return {
         "schema_version": 1,
         "by_id": _json_clone(by_id),
@@ -319,6 +324,8 @@ def _build_projection(projection: dict[str, Any], *, updated_at: float) -> dict[
         "active": list(active_ids),
         "active_count": len(active_ids),
         "active_items": [_json_clone(by_id[action_id]) for action_id in active_ids],
+        "history_count": len(history_ids),
+        "history_items": [_json_clone(by_id[action_id]) for action_id in history_ids],
         "updated_at": updated_at,
     }
 

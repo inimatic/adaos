@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Dict, Any, Mapping
 if TYPE_CHECKING:
     from typing import Awaitable, Callable
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, Header, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 
 try:
@@ -8999,6 +8999,28 @@ def _workspace_bootstrap_snapshot_sync(webspace_id: str) -> dict[str, Any]:
     }
 
 
+def _development_webspace_access_denied(
+    webspace_id: str,
+    *,
+    routed: bool,
+    development_access: bool,
+) -> bool:
+    """Fail closed for routed DEV workspaces unless Root admitted Development."""
+
+    if not routed:
+        # A direct client already holds the local node owner credential.
+        return False
+    row = get_workspace(webspace_id)
+    is_dev = bool(
+        row is not None
+        and (
+            bool(getattr(row, "is_dev", False))
+            or str(getattr(row, "effective_source_mode", "") or "").strip() == "dev"
+        )
+    )
+    return is_dev and not development_access
+
+
 async def _workspace_bootstrap_snapshot(webspace_id: str) -> dict[str, Any]:
     return await asyncio.to_thread(_workspace_bootstrap_snapshot_sync, webspace_id)
 
@@ -9418,6 +9440,18 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     )
     browser_metadata = _browser_session_metadata(params)
 
+    if _development_webspace_access_denied(
+        webspace_id,
+        routed=str(params.get("adaos_routed") or "").strip() == "1",
+        development_access=str(params.get("adaos_development_access") or "").strip() == "1",
+    ):
+        if await _accept_websocket(websocket, channel="yws.development_access_denied"):
+            try:
+                await websocket.close(code=1008, reason="development_access_required")
+            except Exception:
+                pass
+        return
+
     if _ws_trace_enabled():
         try:
             token_present = "token" in params
@@ -9766,6 +9800,8 @@ async def browser_session_authorize(
     media_route_bluetooth_profile_hint: str | None = None,
     media_route_output_routed: str | None = None,
     media_route_input_applied: str | None = None,
+    x_adaos_route_authenticated: str | None = Header(default=None, alias="X-AdaOS-Route-Authenticated"),
+    x_adaos_development_access: str | None = Header(default=None, alias="X-AdaOS-Development-Access"),
 ):
     """
     Lightweight browser-device preflight for clients before opening /yws.
@@ -9808,6 +9844,17 @@ async def browser_session_authorize(
         if value is not None:
             metadata_params[key] = value
     metadata = _browser_session_metadata(metadata_params)
+    if _development_webspace_access_denied(
+        webspace_id,
+        routed=str(x_adaos_route_authenticated or "").strip() == "1",
+        development_access=str(x_adaos_development_access or "").strip() == "1",
+    ):
+        return _browser_auth_response_payload(
+            dev_id=dev_id,
+            webspace_id=webspace_id,
+            allowed=False,
+            reason="development_access_required",
+        )
     try:
         from adaos.services.access_links import authorize_link, touch_browser_session
 

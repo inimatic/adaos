@@ -22,6 +22,7 @@ class UserProfile:
     settings: Dict[str, object]
     display_name: str | None = None
     preferred_name: str | None = None
+    email: str | None = None
     locale: str | None = None
     language: str | None = None
     timezone: str | None = None
@@ -104,6 +105,7 @@ class UserProfileService:
             user_id=user_id,
             display_name=self._optional_text(settings.get("display_name")),
             preferred_name=self._optional_text(settings.get("preferred_name")),
+            email=self._optional_text(settings.get("email")),
             locale=self._optional_text(settings.get("locale")),
             language=self._optional_text(settings.get("language")),
             timezone=self._optional_text(settings.get("timezone")),
@@ -131,6 +133,7 @@ class UserProfileService:
             settings=dict(raw),
             display_name=contract.display_name,
             preferred_name=contract.preferred_name,
+            email=contract.email,
             locale=contract.locale,
             language=contract.language,
             timezone=contract.timezone,

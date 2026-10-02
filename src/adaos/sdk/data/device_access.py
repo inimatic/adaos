@@ -355,6 +355,10 @@ def rename_browser_device_name(device_ref: str, device_display_name: str) -> dic
     return _service.rename_browser_device_name(str(device_ref or ""), str(device_display_name or ""))
 
 
+def assign_browser_parent_device(device_ref: str, parent_device_ref: str | None) -> dict:
+    return _service.assign_browser_parent_device(str(device_ref or ""), str(parent_device_ref or "") or None)
+
+
 def list_registered_device_names(kind: str | None = None) -> list[dict[str, Any]]:
     return _service.list_registered_device_names(str(kind or "") or None)
 

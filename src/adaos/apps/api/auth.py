@@ -63,6 +63,12 @@ async def require_token(
     from adaos.services.personalization_runtime import current_user_id
 
     request.state.adaos_verified_caller = SubjectRef("user", current_user_id())
+    request.state.adaos_root_routed = (
+        str(request.headers.get("X-AdaOS-Route-Authenticated") or "").strip() == "1"
+    )
+    request.state.adaos_development_access = (
+        str(request.headers.get("X-AdaOS-Development-Access") or "").strip() == "1"
+    )
 
 
 async def require_tool_caller(request: Request) -> None:

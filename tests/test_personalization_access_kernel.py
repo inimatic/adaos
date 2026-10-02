@@ -8,6 +8,7 @@ from adaos.domain.personalization_access import (
     GrantConstraint,
     Invite,
     Membership,
+    Preference,
     RecoveryAction,
     ScopeRef,
     SessionKey,
@@ -244,3 +245,74 @@ def test_phase1_recovery_completion_rejects_replay(tmp_path):
     with pytest.raises(PersonalizationAccessError, match="not pending"):
         service.complete_recovery_action("recovery-masha-phone", actor=OWNER)
     assert store.list_audit(subject=MASHA, event_type="recovery.completed")
+
+
+def test_non_owner_account_deletion_removes_access_credentials_atomically(tmp_path):
+    path = tmp_path / "access.json"
+    store = PersonalizationAccessStore(path)
+    service = PersonalizationAccessService(store, owner=OWNER)
+
+    service.put_user(MASHA, actor=OWNER)
+    service.put_profile(UserProfile(user_id="masha", email="masha@example.test"), actor=OWNER)
+    service.put_preference(Preference(subject=MASHA, key="language", value="en"), actor=MASHA)
+    service.put_user_key(
+        UserKey(user_id="masha", key_id="masha-key", public_key_ref="pk:masha"),
+        actor=OWNER,
+    )
+    service.put_device_key(
+        DeviceKey(user_id="masha", device_id="masha-phone", key_id="phone-key", public_key_ref="pk:phone"),
+        actor=OWNER,
+    )
+    service.put_session(
+        SessionKey(session_id="masha-session", key_id="phone-key", subject=MASHA, device_id="masha-phone")
+    )
+    service.put_membership(
+        Membership(subject=MASHA, scope=FAMILY, role="member", issued_by=OWNER),
+        actor=OWNER,
+    )
+    service.put_grant(
+        Grant(
+            grant_id="masha-profile",
+            subject=MASHA,
+            scope=FAMILY,
+            capabilities=("profile.read.self",),
+            issued_by=OWNER,
+        ),
+        actor=OWNER,
+    )
+
+    deleted = service.delete_current_account(actor=MASHA)
+    snapshot = PersonalizationAccessStore(path).snapshot()
+
+    assert deleted["removed"] == {
+        "users": 1,
+        "profiles": 1,
+        "preferences": 1,
+        "user_keys": 1,
+        "device_keys": 1,
+        "sessions": 1,
+        "memberships": 1,
+        "grants": 1,
+    }
+    for bucket in (
+        "users",
+        "profiles",
+        "preferences",
+        "user_keys",
+        "device_keys",
+        "sessions",
+        "memberships",
+        "grants",
+    ):
+        assert snapshot[bucket] == {}
+    assert any(item["event_type"] == "account.deleted" for item in snapshot["audit"])
+
+
+def test_owner_account_deletion_requires_ownership_transfer(tmp_path):
+    service = PersonalizationAccessService(
+        PersonalizationAccessStore(tmp_path / "access.json"),
+        owner=OWNER,
+    )
+
+    with pytest.raises(PersonalizationAccessError, match="transfer"):
+        service.delete_current_account(actor=OWNER)

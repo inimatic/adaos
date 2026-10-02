@@ -402,6 +402,7 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "form_factor": str(data.get("form_factor") or "").strip() or None,
         "user_agent": str(data.get("user_agent") or "").strip() or None,
         "media_control": _mapping_or_none(data.get("media_control")),
+        "parent_device_ref": str(data.get("parent_device_ref") or "").strip() or None,
     }
     if kind == "redevice":
         endpoint_assignment = _normalize_endpoint_assignment(
@@ -804,6 +805,31 @@ def authorize_link(kind: LinkKind, entry_id: str) -> tuple[bool, str | None]:
     if _is_expired(entry):
         return False, "expired"
     return True, None
+
+
+def assign_browser_parent_device(entry_id: str, parent_device_ref: str | None) -> dict[str, Any] | None:
+    """Persist an explicit physical-device relation for a browser endpoint."""
+
+    token = str(entry_id or "").strip()
+    if token.startswith("browser:"):
+        token = token.split(":", 1)[1].strip()
+    if "::" in token:
+        token = token.split("::", 1)[0].strip()
+    if not token:
+        return None
+    registry = _load_registry()
+    entry = _get_entry(registry, "browser", token)
+    if entry is None:
+        return None
+    previous = dict(entry)
+    entry["parent_device_ref"] = str(parent_device_ref or "").strip() or None
+    entry = _updated(entry)
+    saved = _put_entry(registry, "browser", entry)
+    _save_registry(registry)
+    _emit_entity_registry_changed_if_needed(
+        "browser", previous, saved, reason="browser_parent_device.changed"
+    )
+    return saved
 
 
 def _browser_media_control_patch(

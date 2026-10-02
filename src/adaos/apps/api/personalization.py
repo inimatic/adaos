@@ -25,7 +25,7 @@ router = APIRouter(prefix="/personalization", tags=["personalization"])
 
 _PROFILE_POLICY_KEYS = frozenset(("role", "roles", "membership", "memberships", "grant", "grants"))
 _PROFILE_FIELDS = frozenset(
-    ("display_name", "preferred_name", "locale", "language", "timezone", "avatar_ref")
+    ("display_name", "preferred_name", "email", "locale", "language", "timezone", "avatar_ref")
 )
 _PREFERENCE_FIELDS = frozenset(
     (
@@ -482,6 +482,7 @@ def _profile_view(profile: Any) -> dict[str, Any]:
         "settings": dict(profile.settings),
         "display_name": profile.display_name,
         "preferred_name": profile.preferred_name,
+        "email": profile.email,
         "locale": profile.locale,
         "language": profile.language,
         "timezone": profile.timezone,

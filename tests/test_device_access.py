@@ -37,6 +37,36 @@ def test_command_profile_for_managed_member_enables_device_and_node_actions(monk
     assert profile["open_marketplace"] == {"enabled": True, "node_id": "member-1"}
 
 
+def test_assign_browser_parent_device_rejects_browser_parent(monkeypatch) -> None:
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda ref: ("browser", "browser-1") if ref.startswith("browser:") else ("member", "node-1"),
+    )
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "get_device",
+        lambda ref: {"ref": ref, "kind": "browser"} if ref.startswith("browser:") else {"ref": ref, "kind": "member"},
+    )
+    monkeypatch.setattr(
+        device_access._access_links,
+        "assign_browser_parent_device",
+        lambda browser_id, parent: {"id": browser_id, "parent_device_ref": parent},
+    )
+
+    rejected = device_access.assign_browser_parent_device("browser:browser-1", "browser:browser-2")
+    accepted = device_access.assign_browser_parent_device("browser:browser-1", "member:node-1")
+
+    assert rejected["ok"] is False
+    assert rejected["error"] == "parent_device_not_found"
+    assert accepted == {
+        "ok": True,
+        "device_ref": "browser:browser-1",
+        "parent_device_ref": "member:node-1",
+        "entry": {"id": "browser-1", "parent_device_ref": "member:node-1"},
+    }
+
+
 def test_sdk_device_access_resolves_redevice_by_alias_and_assignment(monkeypatch) -> None:
     from adaos.sdk.data import device_access as sdk_device_access
 
