@@ -4889,6 +4889,19 @@ class SubprocessCodexExecutor:
             fields = client_tree.stdout.strip().split(None, 3)
             if len(fields) >= 3 and fields[0] == "160000" and fields[1] == "commit":
                 client_commit = fields[2]
+        included_core_paths = ["src/adaos"]
+        for runtime_guide in (
+            "docs/skill_runtime.md",
+            "docs-stable/2027/cli/runtime.md",
+        ):
+            tracked = _run(
+                ["git", "cat-file", "-e", f"{commit}:{runtime_guide}"],
+                cwd=self.repo_root,
+                timeout=30,
+            )
+            if tracked.returncode == 0:
+                included_core_paths.append(runtime_guide)
+                break
         archive_path = root / "sdk-reference.tar"
         result = _run(
             [
@@ -4898,8 +4911,7 @@ class SubprocessCodexExecutor:
                 f"--output={archive_path}",
                 commit,
                 "--",
-                "src/adaos",
-                "docs/skill_runtime.md",
+                *included_core_paths,
             ],
             cwd=self.repo_root,
             timeout=120,
@@ -4984,8 +4996,7 @@ class SubprocessCodexExecutor:
                     "core_commit": commit,
                     "client_commit": client_commit or None,
                     "included_roots": [
-                        "src/adaos",
-                        "docs/skill_runtime.md",
+                        *included_core_paths,
                         *(
                             [
                                 "src/adaos/integrations/adaos-client/src/app/renderer",

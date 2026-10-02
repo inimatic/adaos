@@ -5810,10 +5810,11 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
     repo_root = tmp_path / "adaos"
     (repo_root / "src" / "adaos").mkdir(parents=True)
     (repo_root / "docs" / "architecture").mkdir(parents=True)
+    (repo_root / "docs-stable" / "2027" / "cli").mkdir(parents=True)
     (repo_root / "src" / "adaos" / "sdk_marker.py").write_text(
         "SDK = True\n", encoding="utf-8"
     )
-    (repo_root / "docs" / "skill_runtime.md").write_text(
+    (repo_root / "docs-stable" / "2027" / "cli" / "runtime.md").write_text(
         "runtime policy\n", encoding="utf-8"
     )
     (repo_root / "docs" / "architecture" / "domain-reference.md").write_text(
@@ -5872,7 +5873,7 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
 
     assert snapshot is not None
     assert (snapshot / "src" / "adaos" / "sdk_marker.py").is_file()
-    assert (snapshot / "docs" / "skill_runtime.md").is_file()
+    assert (snapshot / "docs-stable" / "2027" / "cli" / "runtime.md").is_file()
     assert not (snapshot / "docs" / "architecture").exists()
     client_reference = snapshot / "src/adaos/integrations/adaos-client"
     assert (
@@ -5889,6 +5890,7 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         text=True,
     ).stdout.strip()
     assert receipt["core_commit"] == expected_commit
+    assert "docs-stable/2027/cli/runtime.md" in receipt["included_roots"]
     assert (
         receipt["client_commit"]
         == subprocess.run(
