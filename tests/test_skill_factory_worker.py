@@ -6712,6 +6712,55 @@ def test_codex_fresh_budget_excludes_cached_input_but_keeps_output() -> None:
     assert _codex_budget_observed_tokens(usage, metric="fresh_plus_output") == 21_880
 
 
+def test_final_provider_usage_replaces_conservative_live_estimate() -> None:
+    provider = {
+        "model_tokens": 280_000,
+        "input_tokens": 277_000,
+        "cached_input_tokens": 239_000,
+        "output_tokens": 3_000,
+    }
+    estimate = {
+        "model_tokens": 615_000,
+        "input_tokens": 615_000,
+        "cached_input_tokens": 552_000,
+        "output_tokens": 0,
+        "accuracy": "estimated",
+    }
+
+    assert _codex_budget_exceeded_receipt(
+        provider_usage=provider,
+        live_estimate=estimate,
+        metric="fresh_plus_output",
+        max_tokens=45_000,
+        max_billable_tokens=300_000,
+        provider_usage_authoritative=True,
+    ) is None
+
+
+def test_final_provider_overage_reports_provider_numbers() -> None:
+    provider = {
+        "model_tokens": 280_000,
+        "input_tokens": 277_000,
+        "cached_input_tokens": 230_000,
+        "output_tokens": 3_000,
+    }
+    estimate = {"model_tokens": 615_000, "input_tokens": 615_000}
+
+    receipt = _codex_budget_exceeded_receipt(
+        provider_usage=provider,
+        live_estimate=estimate,
+        metric="fresh_plus_output",
+        max_tokens=45_000,
+        max_billable_tokens=300_000,
+        provider_usage_authoritative=True,
+    )
+
+    assert receipt is not None
+    assert receipt["observed_tokens"] == 50_000
+    assert receipt["observed_billable_tokens"] == 280_000
+    assert receipt["usage"]["accuracy"] == "provider_reported"
+
+
 def test_context_packet_omits_intent_duplicated_by_implementation_brief() -> None:
     packet = {
         "change": {

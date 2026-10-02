@@ -2332,6 +2332,7 @@ def _codex_budget_exceeded_receipt(
     metric: str,
     max_tokens: int,
     max_billable_tokens: int | None,
+    provider_usage_authoritative: bool = False,
 ) -> dict[str, Any] | None:
     provider_budget_tokens = _codex_budget_observed_tokens(
         provider_usage,
@@ -2341,12 +2342,27 @@ def _codex_budget_exceeded_receipt(
         live_estimate,
         metric=metric,
     )
-    observed_budget_tokens = max(provider_budget_tokens, estimated_budget_tokens)
     provider_billable_tokens = int(provider_usage.get("model_tokens") or 0)
     estimated_billable_tokens = int(live_estimate.get("model_tokens") or 0)
-    observed_billable_tokens = max(
-        provider_billable_tokens,
-        estimated_billable_tokens,
+    provider_reported = bool(
+        set(provider_usage)
+        & {
+            "model_tokens",
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+        }
+    )
+    use_provider = bool(provider_usage_authoritative and provider_reported)
+    observed_budget_tokens = (
+        provider_budget_tokens
+        if use_provider
+        else max(provider_budget_tokens, estimated_budget_tokens)
+    )
+    observed_billable_tokens = (
+        provider_billable_tokens
+        if use_provider
+        else max(provider_billable_tokens, estimated_billable_tokens)
     )
     exceeded_limits: list[str] = []
     if max_tokens > 0 and observed_budget_tokens > max_tokens:
@@ -2361,7 +2377,7 @@ def _codex_budget_exceeded_receipt(
         return None
     usage = (
         {**provider_usage, "accuracy": "provider_reported"}
-        if provider_billable_tokens or provider_budget_tokens
+        if use_provider
         else dict(live_estimate)
     )
     trigger_metric = exceeded_limits[0]
@@ -5138,6 +5154,7 @@ class SubprocessCodexExecutor:
                 metric=token_budget_metric,
                 max_tokens=int(max_model_tokens),
                 max_billable_tokens=max_billable_tokens,
+                provider_usage_authoritative=True,
             )
             safety_cap_receipt = _codex_budget_exceeded_receipt(
                 provider_usage=provider_usage,
@@ -5145,6 +5162,7 @@ class SubprocessCodexExecutor:
                 metric=token_budget_metric,
                 max_tokens=hard_primary_limit,
                 max_billable_tokens=hard_billable_limit,
+                provider_usage_authoritative=True,
             )
         token_budget_receipt: dict[str, Any] | None = None
         if safety_cap_receipt is not None:
