@@ -111,6 +111,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     tabs = get_ui_capability("navigation.tabs")
     assert tabs["data_shape"]["kind"] == "items"
     assert "fixedButtons" in tabs["manifest"]["fixed_commands"]
+    assert "click:dynamic" in tabs["manifest"]["dynamic_event"]
     assert "$event.record" in tabs["manifest"]["dynamic_event"]
 
 

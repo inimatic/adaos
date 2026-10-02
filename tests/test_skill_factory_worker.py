@@ -11693,6 +11693,8 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert sdk_contracts_path.resolve().as_posix() in prompt
     assert "import failure there is not evidence" in prompt
     assert "stateKey" in bindings["binding_rules"]["creation"]
+    assert "click:dynamic" in bindings["binding_rules"]["dynamic_tabs"]
+    assert bindings["examples"]["dynamic_tabs"]["inputs"]["fixedButtons"][0]["id"] == "add"
     assert "independent acceptance owns browser journeys" in prompt
     assert "Explicitly mark checks not executed" in prompt
     assert "These are implementation claims, not passing checks" in prompt
