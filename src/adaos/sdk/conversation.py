@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from adaos.services import conversation_context, conversation_store
@@ -11,6 +12,57 @@ def current(*, webspace_id: str | None = None, channel_id: str = "general") -> d
     """Return the persisted dialog channel pointer for the current node."""
     ws = str(webspace_id or default_webspace_id()).strip() or default_webspace_id()
     return conversation_store.get_dialog_channel(ws, str(channel_id or "general").strip() or "general")
+
+
+def list_published_agents(
+    *, channel_id: str | None = None, limit: int = 100
+) -> dict[str, Any]:
+    """Return a bounded authorized projection of agents published by installed skills."""
+
+    from adaos.sdk import access
+    from adaos.services.router import dialog_registry
+
+    access.require("workspace.read")
+    bounded_limit = max(1, min(int(limit), 200))
+    channel = str(channel_id or "").strip()
+    records = dialog_registry.published_agent_records()
+    if channel:
+        records = [
+            item
+            for item in records
+            if str(item.get("channel_id") or "").strip() == channel
+        ]
+    items: list[dict[str, Any]] = []
+    for record in records[:bounded_limit]:
+        agent_id = str(record.get("id") or "").strip()
+        label = str(record.get("label") or agent_id).strip()
+        if not agent_id or not label:
+            continue
+        items.append(
+            {
+                "id": agent_id,
+                "label": label,
+                "owner": str(record.get("owner") or "").strip() or None,
+                "channel_id": str(record.get("channel_id") or "").strip() or None,
+                "skill": str(record.get("skill") or "").strip() or None,
+                "kind": str(record.get("kind") or "agent").strip() or "agent",
+                "icon": str(record.get("icon") or "").strip() or None,
+                "source": str(record.get("source") or "conversation_agent_registry").strip(),
+            }
+        )
+    observed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return {
+        "ok": True,
+        "schema": "adaos.sdk.conversation.published_agents.v1",
+        "items": items,
+        "count": len(items),
+        "total": len(records),
+        "truncated": len(records) > bounded_limit,
+        "observed_at": observed_at,
+        "freshness": "current",
+        "source": "conversation_agent_registry",
+        "invalidation_tags": ["conversation.agents"],
+    }
 
 
 def open(
@@ -398,6 +450,7 @@ __all__ = [
     "get_development_run",
     "list_development_changes",
     "list_development_runs",
+    "list_published_agents",
     "open",
     "redact",
     "start_thread",

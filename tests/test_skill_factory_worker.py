@@ -157,11 +157,15 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     contract = bundle["response_contracts"]["automation_inventory"]
 
     assert "adaos.sdk.automation.inventory" in names
+    assert "adaos.sdk.conversation.list_published_agents" in names
     assert "adaos.sdk.system.get_operational_snapshot" in names
     assert "adaos.sdk.system.request_core_update" in names
     assert "adaos.sdk.system.rename_current_node" in names
     assert "adaos.sdk.system.rename_local_subnet" in names
     assert "adaos.sdk.system.set_core_autoupdate" in names
+    published_agents = bundle["response_contracts"]["published_agents"]
+    assert published_agents["authorization"] == "workspace.read"
+    assert published_agents["result"]["invalidation_tag"] == "conversation.agents"
     system_contract = bundle["response_contracts"]["system_operational_snapshot"]
     typed_route = system_contract["result"]["typed_provider_route"]
     assert typed_route["method"] == "adaos.sdk.system.get_operational_snapshot"

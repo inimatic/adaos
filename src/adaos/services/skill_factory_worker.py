@@ -448,6 +448,7 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.access.caller",
     "adaos.sdk.access.require",
     "adaos.sdk.automation.inventory",
+    "adaos.sdk.conversation.list_published_agents",
     "adaos.sdk.data.lifecycle.ensure_database",
     "adaos.sdk.data.skill_env.skill_data_root",
     "adaos.sdk.llm.content.generate",
@@ -481,15 +482,26 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "llm content images resources access caller require automation inventory "
             "external provider fleet skill data root lifecycle ensure database "
             "generate operate query system operational snapshot resource member application "
-            "rename subnet node core update autoupdate"
+            "rename subnet node core update autoupdate conversation published agents"
         ),
         limit=64,
     )
+    exported_tools = list(exported.get("tools") or [])
+    exported_names = {str(item.get("name") or "") for item in exported_tools}
+    for symbol in sorted(_IMPLEMENTATION_SDK_SYMBOLS - exported_names):
+        targeted = sdk_export(
+            level="std",
+            query=" ".join(symbol.rsplit(".", 2)[-2:]),
+            limit=64,
+        )
+        exported_tools.extend(targeted.get("tools") or [])
     contracts = []
-    for item in exported.get("tools") or []:
+    seen_contracts: set[str] = set()
+    for item in exported_tools:
         name = str(item.get("name") or "")
-        if name not in _IMPLEMENTATION_SDK_SYMBOLS:
+        if name not in _IMPLEMENTATION_SDK_SYMBOLS or name in seen_contracts:
             continue
+        seen_contracts.add(name)
         module_name = str(item.get("module") or "")
         function = getattr(importlib.import_module(module_name), name.rsplit(".", 1)[-1])
         contracts.append(
@@ -550,6 +562,41 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             ),
         },
         "response_contracts": {
+            "published_agents": {
+                "methods": ["adaos.sdk.conversation.list_published_agents"],
+                "authorization": "workspace.read",
+                "registry": (
+                    "One canonical conversation_agent_registry refreshed from installed "
+                    "skill.yaml conversation.agents declarations; do not create an "
+                    "application-owned agent registry."
+                ),
+                "input": {
+                    "optional": ["channel_id", "limit"],
+                    "limit": {"minimum": 1, "maximum": 200, "default": 100},
+                },
+                "result": {
+                    "schema": "adaos.sdk.conversation.published_agents.v1",
+                    "required": [
+                        "ok",
+                        "items",
+                        "count",
+                        "total",
+                        "truncated",
+                        "observed_at",
+                        "freshness",
+                        "source",
+                        "invalidation_tags",
+                    ],
+                    "item_required": ["id", "label", "owner", "channel_id", "skill", "kind", "icon", "source"],
+                    "invalidation_tag": "conversation.agents",
+                },
+                "binding": (
+                    "Expose an owned read-only tool that calls this SDK method after "
+                    "workspace.read, return the result unchanged, bind navigation.tabs "
+                    "with itemsPath=items and click:dynamic, and refresh on mount, "
+                    "reconnect, explicit refresh and conversation.agents invalidation."
+                ),
+            },
             "system_operational_snapshot": {
                 "methods": ["adaos.sdk.system.get_operational_snapshot"],
                 "authorization": "workspace.read",

@@ -698,6 +698,21 @@ def _agent_registry_records() -> list[dict[str, Any]]:
     return list(merged_by_id.values())
 
 
+def published_agent_records() -> list[dict[str, Any]]:
+    """Refresh and return the canonical installed-agent registry projection."""
+
+    _seed_conversation_registry()
+    records = [dict(item) for item in _agent_registry_records()]
+    records.sort(
+        key=lambda item: (
+            0 if str(item.get("id") or "") == GENERAL_DIALOG_AGENT_ID else 1,
+            str(item.get("label") or item.get("id") or "").casefold(),
+            str(item.get("id") or ""),
+        )
+    )
+    return records
+
+
 def _agent_record_by_id(agent_id: Any) -> dict[str, Any] | None:
     token = str(agent_id or "").strip()
     if not token:
