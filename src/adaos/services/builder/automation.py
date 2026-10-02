@@ -123,6 +123,19 @@ _PRESERVED_VALIDATION_INSTRUCTION = (
 )
 
 
+def _is_codex_budget_boundary(message: str) -> bool:
+    """Recognize advisory and hard Codex token boundaries for candidate recovery."""
+
+    value = str(message or "")
+    return any(
+        marker in value
+        for marker in (
+            "Codex token budget exceeded:",
+            "Codex token safety cap exceeded:",
+        )
+    )
+
+
 def _admitted_execution_budget(
     value: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -5949,7 +5962,7 @@ class BuilderAutomationService:
         source_failure = failure
         reason = "codex_token_budget_exceeded"
         trigger_failure_id: str | None = None
-        if "Codex token budget exceeded:" not in failure_message:
+        if not _is_codex_budget_boundary(failure_message):
             retry_reason = None
             if "large declarative manifest rewrite is not admitted" in failure_message:
                 retry_reason = "manifest_scope_requalified_after_guard"
@@ -6192,8 +6205,8 @@ class BuilderAutomationService:
                 source_failure = source_failures[-1] if source_failures else {}
                 source_failure_message = str(source_failure.get("message") or "")
                 source_reason = str(checkpoint.get("reason") or "").strip()
-                source_is_budget_boundary = (
-                    "Codex token budget exceeded:" in source_failure_message
+                source_is_budget_boundary = _is_codex_budget_boundary(
+                    source_failure_message
                 )
                 source_is_validation_boundary = (
                     source_reason == "deterministic_validation_failure"

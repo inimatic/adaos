@@ -2325,6 +2325,17 @@ def _codex_budget_observed_tokens(
     )
 
 
+def _codex_token_boundary_message(message: str) -> bool:
+    value = str(message or "")
+    return any(
+        marker in value
+        for marker in (
+            "Codex token budget exceeded:",
+            "Codex token safety cap exceeded:",
+        )
+    )
+
+
 def _codex_budget_exceeded_receipt(
     *,
     provider_usage: Mapping[str, Any],
@@ -8777,7 +8788,7 @@ class LocalSkillFactoryWorker:
         failure = failures[-1] if failures else {}
         failure_message = str(failure.get("message") or "")
         continuation_reason = str(checkpoint.get("reason") or "").strip()
-        token_boundary = "Codex token budget exceeded:" in failure_message
+        token_boundary = _codex_token_boundary_message(failure_message)
         deterministic_validation = (
             continuation_reason
             in {

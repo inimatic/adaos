@@ -4330,6 +4330,64 @@ def test_structured_gate_repair_prefers_authoritative_parent_candidate(
     assert selected == gate_checkpoint
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Codex token budget exceeded: observed 50001 of 45000 tokens.",
+        "Codex token safety cap exceeded: observed 2031327 of 2000000 billable_tokens tokens.",
+    ],
+)
+def test_budget_continuation_preserves_changed_candidate_at_every_token_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.changed-budget-candidate"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {"failure_id": "failure.budget", "message": message}
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["scenarios/demo/webui.json"],
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "validate_preserved_candidate"
+    assert checkpoint["source_task_id"] == task_id
+    assert checkpoint["reason"] == "codex_token_budget_exceeded"
+
+
 def test_budget_continuation_skips_unchanged_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

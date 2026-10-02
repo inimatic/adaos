@@ -9293,9 +9293,17 @@ def test_worker_changed_paths_differs_from_root_after_commit(tmp_path: Path) -> 
     assert worker._changed_from_baseline(workspace) == ["tracked.txt"]
 
 
+@pytest.mark.parametrize(
+    "failure_message",
+    [
+        "Codex token budget exceeded: observed 10 of 5 model tokens.",
+        "Codex token safety cap exceeded: observed 2031327 of 2000000 billable_tokens tokens.",
+    ],
+)
 def test_worker_restores_budget_stopped_candidate_for_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_message: str,
 ) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -9344,7 +9352,7 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
             "failure_history": [
                 {
                     "failure_id": failure_id,
-                    "message": "Codex token budget exceeded: observed 10 of 5 model tokens.",
+                    "message": failure_message,
                 }
             ],
         },
