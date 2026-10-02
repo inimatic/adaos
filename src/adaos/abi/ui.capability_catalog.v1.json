@@ -8,8 +8,8 @@
         "interface": "action.type:openModal",
         "status": "deprecated",
         "authoring": "migration_only",
-        "replacement": "action.type:navigate",
-        "migration": "Declare a public view under ui.application.interfaces.<owner>.views, bind the modal implementation through implements and schema.interface.routes, then navigate with params.to and params.modalId.",
+        "replacement": "action.type:navigateModal for a local declared modal; action.type:navigate for a public view",
+        "migration": "For an exact local id under ui.application.modals, use navigateModal with params.modalId. For a public cross-application view, declare it under ui.application.interfaces.<owner>.views, bind the implementation through implements and schema.interface.routes, then use navigate with params.to and params.modalId.",
         "detector": {"field": "type", "equals": "openModal"},
         "migrator": "open_modal_to_public_view",
         "compatibility": "The runtime may read legacy openModal actions, but Builder and generators must not emit them."
@@ -693,7 +693,7 @@
         "record_editor": "A resourceQuery with query.id=$state.<selection> loads the selected record into local fields. Empty selection means create mode, not the first returned record. inputs.buttons[*].id dispatches only matching actions[*].id in declaration order. Post-success steps share that SAME id; on=submit alone does not bind them. False/throw (including cancelled confirmation) stops the sequence. Multiple unrelated submit mutations must never execute together. Declared button enabledIf controls availability. closeOnSuccess dismisses the editor only after a successful command.",
         "dynamic_record_editor": "For trusted provider-projected schemas, inputs.recordsPath selects a record collection from the authenticated dataSource result; fieldsPath selects formField declarations in the chosen record and valuesPath selects their values. selectedStateKey chooses the record. Provider data cannot supply actions, option sources, or upload/read targets; declared package actions use $event.record for immutable identity and expected revision and $event.values for the typed draft. Missing or malformed dynamic fields block submission.",
         "state_initialized_creation": "A form without dataSource hydrates fields from page state using each field's stateKey (alias state_key), defaulting to form.<widget.id>.<field.id>. Before opening a creation modal, updateState initializes draft-specific keys, including a selected parent, and clears old values. defaultValue/default/value are literals, not $state expressions. A dataSource form instead loads the selected record; it does not hydrate page-state fields, and an empty selected id ignores returned records. Use a separate state-initialized create form when parent defaults are needed. Show the parent caption through live choices or an explicitly bound read-only caption.",
-        "modal_composition": "ui.application.modals is an object keyed by the literal modal id, never an array. Each modal value is a wrapper {title, presentation:{kind:'modal'}, schema:{id, layout, widgets:[...]}}. The nested schema is a complete page schema: its layout includes version:2 plus pattern, density, contentWidth, scroll, regions and interaction. Put ui.form and any companion command widgets inside modal.schema.widgets; a widget is not itself a modal definition. Open it with {type:'openModal',params:{modalId:'<literal-id>'}}; target is not the modal id.",
+        "modal_composition": "ui.application.modals is an object keyed by the literal modal id, never an array. Each modal value is a wrapper {title, presentation:{kind:'modal'}, schema:{id, layout, widgets:[...]}}. The nested schema is a complete page schema: its layout includes version:2 plus pattern, density, contentWidth, scroll, regions and interaction. Put ui.form and any companion command widgets inside modal.schema.widgets; a widget is not itself a modal definition. Open a local declared modal with {type:'navigateModal',params:{modalId:'<literal-id>'}}; target is not the modal id. Use navigate with params.to only for a declared public view.",
         "read_only_record": "inputs.readOnlyIf is evaluated against the stored selected record, not the draft or page state. The Prototype resource provider enforces the same declared read_only_when predicate before update/delete.",
         "live_choices": "A choice field may use optionsDataSource.kind=resourceQuery, optionValuePath and optionLabelPaths. Automation also admits kind=skill with name, params and invalidationTags, or kind=mcp with an admitted public Root MCP toolId, arguments, dryRun=true and resultPath; return an array or {items:[...]}. Related record invalidation refreshes options without resetting the draft; unavailable or malformed options block submission and expose retry. Prototype relationships validate current references atomically, including deletion of referenced targets. Collection filter options remain seed-based pending separate live-lookup qualification. Read-only captions in tables, list metadata and details support Resource Workbench sources; absent captions expose the canonical identity.",
         "free_form_string_lists": "tagInput captures an ordered, deduplicated string array from comma or Enter-delimited values. Use it for open vocabularies such as scopes, roles, identifiers, and evidence references; use chips only for a closed predefined option set.",
@@ -993,7 +993,8 @@
         "widget_type": "navigation.tabs",
         "selection": "Set inputs.selectedStateKey to the page-state key that stores the active button id. Button ids must equal the values written to that state key. Prefer one on=click updateState action with <selectedStateKey>=$event.id. Do not put selectedStateKey on individual tab buttons and do not prefix the key with $state.",
         "overflow": "Use inputs.variant='tabsWithMore' when the tab set is dynamic, can grow, or must stay bounded on compact widths. The client renders visible tabs and moves the remainder into an accessible More menu instead of resetting horizontal scroll. inputs.itemsLimit may impose an optional upper visible-item bound.",
-        "activity": "A button with state or activity equal to online or updating receives a Taiga Pulse marker (green for online, warning for updating). Keep the state in visible label or accessible text too: motion and color are supplementary, and reduced-motion users retain the static marker."
+        "activity": "A button with state or activity equal to online or updating receives a Taiga Pulse marker (green for online, warning for updating). Keep the state in visible label or accessible text too: motion and color are supplementary, and reduced-motion users retain the static marker.",
+        "open_and_load_order": "When one click opens a surface and also performs a fallible callSkill refresh, dispatch reset/updateState first, navigate second, and the fallible refresh last. Command chains stop after a failed action, so putting refresh before navigate can strand the user without the requested surface. Prefer an on-mount refresh inside the opened surface when available."
       },
       "data_shape": { "kind": "none" },
       "events": ["click:<buttonId>"],
@@ -1432,7 +1433,7 @@
           },
           "board_create_entry": {
             "on": "add",
-            "type": "openModal",
+            "type": "navigateModal",
             "params": {
               "modalId": "create-item"
             },
@@ -1449,7 +1450,7 @@
             },
             {
               "on": "click:edit",
-              "type": "openModal",
+              "type": "navigateModal",
               "params": {
                 "modalId": "edit-item"
               }
@@ -1495,7 +1496,7 @@
               }
             }
           },
-          "modal_rule": "When openModal is used, declare that exact literal id under ui.application.modals and provide a schema object containing widgets. In a complete JSON document use create-item, never @create-item; @<id> is reserved for JSON Patch pointer paths."
+          "modal_rule": "When navigateModal is used, declare that exact literal id under ui.application.modals and provide a schema object containing widgets. In a complete JSON document use create-item, never @create-item; @<id> is reserved for JSON Patch pointer paths."
         }
       },
       "postconditions": [

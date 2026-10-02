@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 from adaos.services.builder.domain_packs.application_manager_legacy import (
     evaluate_ui_request,
@@ -104,6 +105,20 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     assert "technical field id is never a visible heading" in form["manifest"]["static_content"]
     assert "object keyed by the literal modal id" in form["manifest"]["modal_composition"]
     assert "params:{modalId:'<literal-id>'}" in form["manifest"]["modal_composition"]
+
+
+def test_catalog_does_not_teach_deprecated_open_modal_to_authors() -> None:
+    catalog = ui_capability_catalog()
+    authoring_contracts = json.dumps(
+        {
+            "components": catalog["components"],
+            "recipes": catalog["recipes"],
+        },
+        ensure_ascii=False,
+    )
+
+    assert '"type": "openModal"' not in authoring_contracts
+    assert '"type": "navigateModal"' in authoring_contracts
 
 
 def test_natural_typed_form_request_selects_form_capability() -> None:
