@@ -448,6 +448,8 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.access.caller",
     "adaos.sdk.access.invocation",
     "adaos.sdk.access.require",
+    "adaos.sdk.applications.get_current_builder_application",
+    "adaos.sdk.applications.list_development_projects",
     "adaos.sdk.automation.inventory",
     "adaos.sdk.conversation.list_published_agents",
     "adaos.sdk.data.lifecycle.ensure_database",
@@ -485,7 +487,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
         query=(
             "llm content images resources access caller invocation request id require automation inventory "
             "external provider fleet skill data root lifecycle ensure database "
-            "generate operate query system operational snapshot resource member application "
+            "generate operate query applications development current builder preview system operational snapshot resource member application "
             "rename subnet node core update autoupdate runtime controls rasa log level conversation published agents"
             " subscription codex usage quota rolling 7d 30d"
         ),
@@ -568,6 +570,49 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             ),
         },
         "response_contracts": {
+            "current_builder_application": {
+                "methods": [
+                    "adaos.sdk.applications.get_current_builder_application",
+                    "adaos.sdk.applications.list_development_projects",
+                ],
+                "authorization": "workspace.read",
+                "input": {
+                    "optional": ["builder_webspace_id"],
+                    "selection_rule": (
+                        "Omit builder_webspace_id only when a single active Builder host is "
+                        "expected. Multiple hosts return status=ambiguous and candidates; "
+                        "the application must not guess."
+                    ),
+                },
+                "result": {
+                    "schema": "adaos.sdk.applications.current_builder_application.v1",
+                    "status_values": ["ready", "ambiguous", "unavailable"],
+                    "required": [
+                        "status",
+                        "reason",
+                        "builder",
+                        "application",
+                        "preview",
+                        "candidates",
+                        "observed_at",
+                        "freshness",
+                    ],
+                    "preview_rule": (
+                        "Preview is enabled only when preview.available=true. Navigate only "
+                        "to the returned related webspace_id; never fabricate a route or use "
+                        "a static Prototype target."
+                    ),
+                    "empty_rule": (
+                        "Render honest inactive, ambiguous, and unavailable states. Do not "
+                        "select the first development project as a fallback."
+                    ),
+                },
+                "binding": (
+                    "Expose an owned read-only tool after workspace.read. Bind Current "
+                    "application, Open Builder and Preview to this projection; use "
+                    "list_development_projects only for the aggregate development summary."
+                ),
+            },
             "subscription_usage": {
                 "methods": [
                     "adaos.sdk.subscriptions.get_codex_usage_snapshot",
@@ -5940,6 +5985,7 @@ class LocalSkillFactoryWorker:
         contracts = guide.get("contracts")
         if not isinstance(contracts, dict):
             return
+        rules = guide.get("binding_rules")
         for contract_id, raw_contract in list(contracts.items()):
             if not isinstance(raw_contract, Mapping):
                 continue
@@ -5972,6 +6018,11 @@ class LocalSkillFactoryWorker:
                     "author another provider, copy its package, or call its private SDK."
                 ),
             }
+            if isinstance(rules, dict):
+                # The verified delivery compiler view is authoritative for this
+                # provider. Retaining the generic authoring manual duplicates
+                # context and can lead the model to create a second provider.
+                rules.pop(contract_id, None)
 
     @staticmethod
     def _task_evidence_root(output_dir: Path) -> Path:

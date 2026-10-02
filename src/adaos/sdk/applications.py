@@ -1205,6 +1205,166 @@ def list_development_projects(
     ]
 
 
+def get_current_builder_application(
+    *,
+    builder_webspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Return the bounded current Builder selection and its Preview destination.
+
+    Without an explicit ``builder_webspace_id`` the projection is current only
+    when exactly one active Builder host exists. Multiple active Builder hosts
+    are reported as ambiguous instead of guessing which work is current.
+    Filesystem paths, mutable bindings, credentials and private workflow state
+    are never returned.
+    """
+
+    _admit_active_skill_capability("workspace.read")
+    requested = str(builder_webspace_id or "").strip()
+    service = BuilderWorkbenchService(state_dir=_state_dir())
+    try:
+        hosts = [
+            dict(item)
+            for item in service.list_builder_hosts()
+            if isinstance(item, Mapping)
+            and str(item.get("builder_webspace_id") or "").strip()
+        ]
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "schema": "adaos.sdk.applications.current_builder_application.v1",
+            "status": "unavailable",
+            "reason": "builder_inventory_unavailable",
+            "builder": None,
+            "application": None,
+            "preview": {"available": False, "reason": "builder_inventory_unavailable"},
+            "candidates": [],
+            "observed_at": utc_now(),
+            "freshness": "unavailable",
+        }
+
+    candidates = [
+        {
+            "builder_webspace_id": str(item.get("builder_webspace_id") or ""),
+            "title": str(item.get("builder_title") or ""),
+            "status": str(item.get("status") or "unavailable"),
+            "selectable": bool(item.get("selectable")),
+        }
+        for item in hosts[:20]
+    ]
+    selected = next(
+        (
+            item
+            for item in hosts
+            if requested
+            and str(item.get("builder_webspace_id") or "") == requested
+        ),
+        None,
+    )
+    reason = ""
+    if requested and selected is None:
+        reason = "builder_host_not_found"
+    elif not requested and len(hosts) == 1:
+        selected = hosts[0]
+    elif not requested and not hosts:
+        reason = "builder_not_active"
+    elif not requested:
+        reason = "multiple_builder_hosts"
+
+    if selected is None:
+        return {
+            "schema": "adaos.sdk.applications.current_builder_application.v1",
+            "status": "ambiguous" if reason == "multiple_builder_hosts" else "unavailable",
+            "reason": reason,
+            "builder": None,
+            "application": None,
+            "preview": {"available": False, "reason": reason},
+            "candidates": candidates,
+            "observed_at": utc_now(),
+            "freshness": "current",
+        }
+
+    source_id = str(selected.get("builder_webspace_id") or "").strip()
+    try:
+        binding = service.get_workspace_binding(source_id)
+    except (OSError, RuntimeError, ValueError):
+        binding = {}
+    selection = (
+        dict(binding.get("selection"))
+        if isinstance(binding.get("selection"), Mapping)
+        else {}
+    )
+    object_type = str(selection.get("object_type") or "").strip().lower()
+    object_id = str(selection.get("object_id") or "").strip()
+    workflow = (
+        _development_workflow_summary(object_type, object_id)
+        if object_type and object_id
+        else None
+    )
+    workflow = dict(workflow) if isinstance(workflow, Mapping) else {}
+    application = None
+    if object_type and object_id:
+        application = {
+            "ref": str(selection.get("ref") or f"{object_type}:{object_id}"),
+            "object_type": object_type,
+            "object_id": object_id,
+            "title": str(selection.get("title") or object_id),
+            "description": str(selection.get("description") or ""),
+            "phase": str(workflow.get("phase") or "unknown"),
+            "status": str(workflow.get("status") or "unknown"),
+            "revision": workflow.get("revision"),
+            "updated_at": workflow.get("updated_at") or binding.get("updated_at"),
+        }
+
+    target = (
+        dict(binding.get("preview_target"))
+        if isinstance(binding.get("preview_target"), Mapping)
+        else {}
+    )
+    preview_webspace_id = str(
+        selected.get("preview_webspace_id")
+        or binding.get("preview_webspace_id")
+        or binding.get("dev_webspace_id")
+        or ""
+    ).strip()
+    preview_available = bool(
+        selected.get("selectable")
+        and preview_webspace_id
+        and target.get("object_type")
+        and target.get("object_id")
+    )
+    preview = {
+        "available": preview_available,
+        "reason": None if preview_available else "preview_not_selected",
+        "intent": "webspace.open" if preview_available else None,
+        "source_webspace_id": source_id,
+        "webspace_id": preview_webspace_id or None,
+        "object_type": str(target.get("object_type") or "") or None,
+        "object_id": str(target.get("object_id") or "") or None,
+        "stage": str(target.get("stage") or "") or None,
+        "revision": target.get("revision"),
+        "follow_active": bool(target.get("follow_active")),
+    }
+    builder_ready = bool(selected.get("selectable"))
+    return {
+        "schema": "adaos.sdk.applications.current_builder_application.v1",
+        "status": "ready" if application and builder_ready else "unavailable",
+        "reason": None
+        if application and builder_ready
+        else str(selected.get("reason") or "builder_selection_unavailable"),
+        "builder": {
+            "available": builder_ready,
+            "intent": "webspace.open" if builder_ready else None,
+            "webspace_id": source_id,
+            "title": str(selected.get("builder_title") or source_id),
+            "status": str(selected.get("status") or "unavailable"),
+        },
+        "application": application,
+        "preview": preview,
+        "candidates": candidates,
+        "observed_at": utc_now(),
+        "freshness": "current",
+    }
+
+
 def _local_development_index() -> dict[str, dict[str, Any]]:
     operations = ApplicationDevelopmentCoordinator(_state_dir()).list()
     local_subnet = _local_subnet_ref().lower()
@@ -4925,6 +5085,7 @@ __all__ = [
     "explain_plan",
     "export_application_access_snapshot",
     "get_application",
+    "get_current_builder_application",
     "get_component_application_owners",
     "get_application_access_surface",
     "get_application_setup",

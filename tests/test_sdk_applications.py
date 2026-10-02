@@ -402,6 +402,128 @@ def test_development_projects_use_authority_projection_and_hide_paths(
     ]
 
 
+def test_current_builder_application_returns_selected_work_and_preview(
+    monkeypatch, tmp_path: Path
+) -> None:
+    required = []
+
+    class Workbench:
+        def __init__(self, state_dir: Path) -> None:
+            assert state_dir == tmp_path
+
+        def list_builder_hosts(self):
+            return [
+                {
+                    "builder_webspace_id": "desktop-builder",
+                    "builder_title": "Builder",
+                    "preview_webspace_id": "desktop-builder-preview",
+                    "status": "ready",
+                    "selectable": True,
+                }
+            ]
+
+        def get_workspace_binding(self, source_webspace_id: str):
+            assert source_webspace_id == "desktop-builder"
+            return {
+                "updated_at": "2026-10-02T12:00:00Z",
+                "selection": {
+                    "object_type": "scenario",
+                    "object_id": "notebook",
+                    "ref": "scenario:notebook",
+                    "title": "Notebook",
+                    "description": "Notes",
+                },
+                "preview_webspace_id": "desktop-builder-preview",
+                "preview_target": {
+                    "object_type": "scenario",
+                    "object_id": "notebook",
+                    "stage": "automation",
+                    "revision": "017",
+                    "follow_active": True,
+                },
+            }
+
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", required.append
+    )
+    monkeypatch.setattr(applications, "BuilderWorkbenchService", Workbench)
+    monkeypatch.setattr(
+        applications,
+        "_development_workflow_summary",
+        lambda object_type, object_id: {
+            "phase": "automation",
+            "status": "in_progress",
+            "revision": "017",
+            "updated_at": "2026-10-02T12:01:00Z",
+        },
+    )
+
+    result = applications.get_current_builder_application()
+
+    assert required == ["workspace.read"]
+    assert result["status"] == "ready"
+    assert result["application"] == {
+        "ref": "scenario:notebook",
+        "object_type": "scenario",
+        "object_id": "notebook",
+        "title": "Notebook",
+        "description": "Notes",
+        "phase": "automation",
+        "status": "in_progress",
+        "revision": "017",
+        "updated_at": "2026-10-02T12:01:00Z",
+    }
+    assert result["builder"]["webspace_id"] == "desktop-builder"
+    assert result["preview"] == {
+        "available": True,
+        "reason": None,
+        "intent": "webspace.open",
+        "source_webspace_id": "desktop-builder",
+        "webspace_id": "desktop-builder-preview",
+        "object_type": "scenario",
+        "object_id": "notebook",
+        "stage": "automation",
+        "revision": "017",
+        "follow_active": True,
+    }
+
+
+def test_current_builder_application_refuses_to_guess_between_hosts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class Workbench:
+        def __init__(self, state_dir: Path) -> None:
+            assert state_dir == tmp_path
+
+        def list_builder_hosts(self):
+            return [
+                {
+                    "builder_webspace_id": identifier,
+                    "builder_title": identifier,
+                    "status": "ready",
+                    "selectable": True,
+                }
+                for identifier in ("builder-a", "builder-b")
+            ]
+
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
+    monkeypatch.setattr(applications, "BuilderWorkbenchService", Workbench)
+
+    result = applications.get_current_builder_application()
+
+    assert result["status"] == "ambiguous"
+    assert result["reason"] == "multiple_builder_hosts"
+    assert result["application"] is None
+    assert [item["builder_webspace_id"] for item in result["candidates"]] == [
+        "builder-a",
+        "builder-b",
+    ]
+
+
 def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) -> None:
     stub = _StubService()
     monkeypatch.setattr(applications, "_service", lambda: stub)

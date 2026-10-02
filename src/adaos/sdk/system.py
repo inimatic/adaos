@@ -242,9 +242,11 @@ async def set_runtime_control(
         await asyncio.to_thread(ensure_rasa_service_skill_installed)
         await get_service_supervisor().refresh_discovered(force=True)
         desired = True
-    elif selected == "core_auto_update":
-        return set_core_autoupdate(identifier, bool(value))
-    elif selected in {"rasa_enabled", "application_auto_update_default"}:
+    elif selected in {
+        "rasa_enabled",
+        "core_auto_update",
+        "application_auto_update_default",
+    }:
         desired = bool(value)
         update_controls({selected: desired})
         if selected == "rasa_enabled":

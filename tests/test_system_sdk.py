@@ -601,3 +601,48 @@ def test_set_runtime_control_updates_log_level_through_public_contract(monkeypat
     assert result["current"] == "DEBUG"
     assert result["desired"] == "DEBUG"
     assert result["applied"] is True
+
+
+def test_set_runtime_control_updates_core_autoupdate_with_runtime_schema(monkeypatch) -> None:
+    from adaos.sdk import system
+    from adaos.services import operator_controls
+
+    required = []
+    state = {
+        "core_auto_update": True,
+        "application_auto_update_default": True,
+        "log_level": "INFO",
+        "rasa_enabled": True,
+    }
+    monkeypatch.setattr(system.access, "require", required.append)
+    monkeypatch.setattr(operator_controls, "read_controls", lambda: dict(state))
+
+    def _update(patch):
+        state.update(patch)
+        return dict(state)
+
+    monkeypatch.setattr(operator_controls, "update_controls", _update)
+    monkeypatch.setattr(
+        system,
+        "_runtime_controls_snapshot",
+        lambda: {
+            "ok": True,
+            "schema": "adaos.sdk.system.runtime_controls.v1",
+            "controls": dict(state),
+            "rasa": {"installed": True},
+        },
+    )
+
+    result = asyncio.run(
+        system.set_runtime_control(
+            "management:core-autoupdate:off", "core_auto_update", False
+        )
+    )
+
+    assert required == ["workspace.write"]
+    assert result["schema"] == "adaos.sdk.system.runtime_controls.v1"
+    assert result["target"] == "core_auto_update"
+    assert result["previous"] is True
+    assert result["current"] is False
+    assert result["desired"] is False
+    assert result["applied"] is True

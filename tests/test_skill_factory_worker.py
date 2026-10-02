@@ -168,6 +168,8 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     contract = bundle["response_contracts"]["automation_inventory"]
 
     assert "adaos.sdk.automation.inventory" in names
+    assert "adaos.sdk.applications.get_current_builder_application" in names
+    assert "adaos.sdk.applications.list_development_projects" in names
     assert "adaos.sdk.conversation.list_published_agents" in names
     assert "adaos.sdk.subscriptions.get_codex_usage_snapshot" in names
     assert "adaos.sdk.system.get_operational_snapshot" in names
@@ -189,6 +191,10 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     }
     assert "cost" not in subscription_usage["result"]
     assert "Do not render or infer monetary economics" in subscription_usage["result"]["usage_semantics"]
+    current_builder = bundle["response_contracts"]["current_builder_application"]
+    assert current_builder["authorization"] == "workspace.read"
+    assert "must not guess" in current_builder["input"]["selection_rule"]
+    assert "static Prototype target" in current_builder["result"]["preview_rule"]
     system_contract = bundle["response_contracts"]["system_operational_snapshot"]
     typed_route = system_contract["result"]["typed_provider_route"]
     assert typed_route["method"] == "adaos.sdk.system.get_operational_snapshot"
@@ -10902,6 +10908,7 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     gmail_view = bindings["contracts"]["google_gmail"]
     assert gmail_view["implementation_mode"] == "reuse_shared_delivery"
     assert gmail_view["registry_contract_ref"] == selected["registry_ref"]
+    assert "google_gmail" not in bindings["binding_rules"]
     assert "skill_manifest" not in gmail_view
     assert "sdk" not in gmail_view
     assert len(bindings_path.read_bytes()) < 24_000
