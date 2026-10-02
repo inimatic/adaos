@@ -200,7 +200,13 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
         limit=20,
     )
 
-    assert result["member_summary"] == {"online": 1, "total": 2}
+    assert result["member_summary"] == {
+        "available": True,
+        "online": 1,
+        "total": 2,
+        "source": "device_inventory",
+        "freshness": "current",
+    }
     assert [item["id"] for item in result["members"]] == [
         "node:hub",
         "member:worker",

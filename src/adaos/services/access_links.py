@@ -396,6 +396,8 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "aliases": _normalize_text_list(data.get("aliases")),
         "labels": _normalize_label_list(data.get("labels")),
         "browser_family": str(data.get("browser_family") or "").strip() or None,
+        "browser_origin": str(data.get("browser_origin") or "").strip() or None,
+        "browser_zone": str(data.get("browser_zone") or "").strip() or None,
         "client_build_id": str(data.get("client_build_id") or "").strip() or None,
         "client_build_version": str(data.get("client_build_version") or "").strip() or None,
         "os_name": str(data.get("os_name") or "").strip() or None,
@@ -544,6 +546,8 @@ _ENTITY_LIFECYCLE_FIELDS = {
     "access_class",
     "aliases",
     "browser_family",
+    "browser_origin",
+    "browser_zone",
     "client_build_id",
     "client_build_version",
     "display_name",
@@ -567,6 +571,8 @@ _ENTITY_LIFECYCLE_FIELDS = {
 _ENTITY_REGISTRY_FIELDS = {
     "aliases",
     "browser_family",
+    "browser_origin",
+    "browser_zone",
     "display_name",
     "device_display_name",
     "form_factor",
@@ -926,6 +932,8 @@ def touch_browser_session(
     connection_state: str | None = None,
     online: bool | None = None,
     browser_family: str | None = None,
+    browser_origin: str | None = None,
+    browser_zone: str | None = None,
     device_display_name: str | None = None,
     endpoint_display_name: str | None = None,
     os_name: str | None = None,
@@ -972,6 +980,10 @@ def touch_browser_session(
         entry["online"] = bool(online)
     if browser_family is not None:
         entry["browser_family"] = str(browser_family or "").strip() or None
+    if browser_origin is not None:
+        entry["browser_origin"] = str(browser_origin or "").strip() or None
+    if browser_zone is not None:
+        entry["browser_zone"] = str(browser_zone or "").strip() or None
     if device_display_name is not None:
         entry["device_display_name"] = str(device_display_name or "").strip() or None
     if endpoint_display_name is not None:

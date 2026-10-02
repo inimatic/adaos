@@ -637,6 +637,7 @@ def test_identify_browser_device_publishes_parent_target(monkeypatch) -> None:
     assert published[0][0] == "browser.identify.requested"
     assert published[0][1]["request_id"] == "identify-test"
     assert published[0][1]["target_browser_device_id"] == "dev-phone"
+    assert published[0][1]["target_endpoint_ref"] == "browser:dev-phone::webrtc"
     assert published[0][1]["requested_ref"] == "browser:dev-phone::webrtc"
 
 

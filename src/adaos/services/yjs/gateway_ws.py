@@ -234,6 +234,8 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
         "endpoint_display_name": _browser_metadata_param(params, "endpoint_display_name", "endpointDisplayName", "endpoint_name", "endpointName"),
         "client_build_id": _browser_metadata_param(params, "client_build_id", "clientBuildId", "build_id", "buildId"),
         "client_build_version": _browser_metadata_param(params, "client_build_version", "clientBuildVersion", "build_version", "buildVersion"),
+        "browser_origin": _browser_metadata_param(params, "browser_origin", "browserOrigin", "origin"),
+        "browser_zone": _browser_metadata_param(params, "browser_zone", "browserZone", "zone"),
         "os_name": _browser_metadata_param(params, "os_name", "osName", "os", "platform"),
         "form_factor": _browser_metadata_param(params, "form_factor", "formFactor", "form"),
         "user_agent": _browser_metadata_param(params, "user_agent", "userAgent", "ua"),
@@ -266,7 +268,7 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     for key, (value, present) in raw.items():
         cleaned = _clean_browser_metadata_value(
             value,
-            max_len=512 if key == "user_agent" else (256 if key in {"media_audio_input_device_id", "media_audio_output_device_id"} else (160 if key == "media_route_status_detail" else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name", "media_audio_input_label", "media_audio_output_label"} else 96))),
+            max_len=512 if key == "user_agent" else (256 if key in {"media_audio_input_device_id", "media_audio_output_device_id", "browser_origin"} else (160 if key == "media_route_status_detail" else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name", "media_audio_input_label", "media_audio_output_label"} else 96))),
         )
         if cleaned:
             out[key] = cleaned

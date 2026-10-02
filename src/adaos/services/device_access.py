@@ -1121,6 +1121,11 @@ def identify_device(
         "request_id": rid,
         "device_ref": parent_ref,
         "target_device_ref": parent_ref,
+        # The parent browser identity remains available for compatibility and
+        # physical-device grouping, but an endpoint command must retain the
+        # selected page/session identity.  Otherwise a BroadcastChannel shared
+        # by tabs on the same origin makes every tab identify itself.
+        "target_endpoint_ref": token,
         "target_browser_device_id": parent_id,
         "browser_device_id": parent_id,
         "requested_ref": token,

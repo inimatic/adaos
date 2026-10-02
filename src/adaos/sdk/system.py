@@ -604,7 +604,11 @@ def _resource_snapshot() -> dict[str, Any]:
         import psutil  # type: ignore
 
         memory = psutil.virtual_memory()
-        result["cpu"] = {"percent": round(float(psutil.cpu_percent(interval=None)), 1)}
+        # ``interval=None`` returns the delta since a process-local baseline;
+        # on a cold Trial worker that baseline does not exist and commonly
+        # projects a misleading 0%.  A short bounded sample is still cheap for
+        # an on-demand dashboard and represents actual current load.
+        result["cpu"] = {"percent": round(float(psutil.cpu_percent(interval=0.1)), 1)}
         result["memory"] = {
             "percent": round(float(memory.percent), 1),
             "used_bytes": int(memory.used),
@@ -1050,12 +1054,15 @@ def get_operational_snapshot(
             ]
         result["members"] = members
         result["member_summary"] = {
+            "available": True,
             "online": sum(
                 str(item.get("status") or item.get("connection") or "").lower()
                 in {"online", "connected", "heartbeat", "ready"}
                 for item in members
             ),
             "total": len(members),
+            "source": "device_inventory",
+            "freshness": "current",
         }
     if "skills" in selected:
         skills, skill_summary = _installed_skill_projection(limit=bounded_limit)

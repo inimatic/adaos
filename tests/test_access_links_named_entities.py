@@ -259,11 +259,15 @@ def test_touch_browser_session_splits_device_and_endpoint_names(monkeypatch) -> 
         browser_family="Chrome",
         device_display_name="Мой телефон",
         endpoint_display_name="Chrome",
+        browser_origin="https://inimatic.com",
+        browser_zone="ru",
     )
 
     assert saved is not None
     assert saved["device_display_name"] == "Мой телефон"
     assert saved["display_name"] == "Chrome"
+    assert saved["browser_origin"] == "https://inimatic.com"
+    assert saved["browser_zone"] == "ru"
 
 
 def test_detach_and_deny_have_distinct_admission_policy(monkeypatch) -> None:
@@ -426,6 +430,20 @@ def test_yws_browser_session_metadata_preserves_empty_media_selection_fields() -
     assert metadata["media_audio_output_label"] == ""
     assert metadata["media_muted"] == "false"
     assert "media_audio_input_device_id" not in metadata
+
+
+def test_yws_browser_session_metadata_keeps_origin_and_zone_boundaries() -> None:
+    metadata = gateway_ws._browser_session_metadata(
+        {
+            "browser_origin": "http://127.0.0.1:8100",
+            "browser_zone": "lo",
+        }
+    )
+
+    assert metadata == {
+        "browser_origin": "http://127.0.0.1:8100",
+        "browser_zone": "lo",
+    }
 
 
 def test_access_links_emits_specific_lifecycle_events_before_registry_invalidation(monkeypatch) -> None:
