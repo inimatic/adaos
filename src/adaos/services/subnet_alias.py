@@ -28,14 +28,7 @@ def display_subnet_alias(alias: str | None, subnet_id: str | None) -> str | None
 
 
 def _clear_legacy_alias_from_node_yaml() -> None:
-    try:
-        from adaos.services.capacity import _load_node_yaml, _save_node_yaml
-    except Exception:
-        return
-    try:
-        payload = _load_node_yaml()
-    except Exception:
-        payload = {}
+    payload = _load_node_yaml_payload()
     if not isinstance(payload, dict):
         return
     nats = payload.get("nats")
@@ -48,10 +41,22 @@ def _clear_legacy_alias_from_node_yaml() -> None:
         next_payload["nats"] = next_nats
     else:
         next_payload.pop("nats", None)
-    _save_node_yaml(next_payload)
+    _write_node_yaml_payload(next_payload)
 
 
 def _node_yaml_path() -> Path:
+    # Trial runtimes rebind ctx.paths to an isolated candidate root, while
+    # node/subnet identity remains bootstrap-owned.  authority_state_dir is
+    # deliberately kept on the owner context; its parent is the authoritative
+    # AdaOS base directory.  Falling back preserves standalone/test behavior.
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        authority_state = getattr(get_ctx(), "authority_state_dir", None)
+        if authority_state:
+            return Path(authority_state).expanduser().absolute().parent / "node.yaml"
+    except Exception:
+        pass
     return current_base_dir() / "node.yaml"
 
 

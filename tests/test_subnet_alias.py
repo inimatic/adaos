@@ -48,6 +48,32 @@ def test_save_subnet_alias_persists_to_node_yaml() -> None:
     assert load_subnet_alias(subnet_id="sn_123") == "office"
 
 
+def test_trial_context_uses_bootstrap_owned_node_identity(tmp_path: Path) -> None:
+    ctx = get_ctx()
+    original_authority_state = ctx.authority_state_dir
+    authority_base = tmp_path / "owner"
+    authority_state = authority_base / "state"
+    authority_state.mkdir(parents=True)
+    node_path = authority_base / "node.yaml"
+    node_path.write_text(
+        yaml.safe_dump(
+            {"subnet_id": "sn_123", "subnet": {"id": "sn_123"}},
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    try:
+        ctx.authority_state_dir = authority_state
+        save_subnet_alias("Home assistant", subnet_id="sn_123")
+        assert load_subnet_alias(subnet_id="sn_123") == "Home assistant"
+    finally:
+        ctx.authority_state_dir = original_authority_state
+
+    saved = yaml.safe_load(node_path.read_text(encoding="utf-8")) or {}
+    assert saved["subnet"]["names"] == ["Home assistant"]
+
+
 def test_node_yaml_subnet_name_overrides_stale_durable_alias() -> None:
     ctx = get_ctx()
     node_path = Path(ctx.paths.base_dir()) / "node.yaml"
