@@ -166,6 +166,35 @@ def test_browser_snapshot_marks_parent_online_from_active_yws_peer(monkeypatch) 
     assert by_id["dev-browser"]["last_seen_at"] == 2000.0
 
 
+def test_browser_snapshot_merges_policy_name_written_before_runtime_heartbeat(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(access_links, "_now_ts", lambda: 2000.0)
+    monkeypatch.setattr(
+        gateway_ws,
+        "active_browser_session_snapshot",
+        lambda: {
+            "peers": [
+                {
+                    "device_id": "dev-browser",
+                    "client_limit_id": "page-current",
+                    "webspace_id": "desktop",
+                    "connection_state": "connected",
+                    "session_count": 1,
+                }
+            ]
+        },
+    )
+
+    renamed = access_links.rename_link("browser", "dev-browser", "Current browser 1")
+    assert renamed["last_seen_at"] is None
+
+    by_id = {item["id"]: item for item in access_links.browser_snapshot()}
+
+    assert by_id["dev-browser"]["display_name"] == "Current browser 1"
+    assert by_id["dev-browser::page-current"]["display_name"] == "Current browser 1"
+
+
 def test_browser_snapshot_does_not_trust_stale_persisted_browser_online(monkeypatch) -> None:
     _patch_registry_store(monkeypatch)
     monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)

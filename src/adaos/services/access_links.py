@@ -1762,7 +1762,16 @@ def _active_browser_runtime_peers() -> list[dict[str, Any]]:
 
 def browser_snapshot() -> list[dict[str, Any]]:
     now = _now_ts()
-    entries = [entry for entry in list_links("browser") if entry.get("last_seen_at")]
+    stored_entries = list_links("browser")
+    # Policy may be written before the first post-rename heartbeat.  Keep it
+    # available as merge input even though policy-only rows should not appear
+    # in the snapshot unless a live runtime peer exists.
+    stored_by_id = {
+        str(entry.get("id") or "").strip(): dict(entry)
+        for entry in stored_entries
+        if str(entry.get("id") or "").strip()
+    }
+    entries = [entry for entry in stored_entries if entry.get("last_seen_at")]
     by_id = {
         str(entry.get("id") or "").strip(): _normalize_browser_session_freshness(entry, now=now)
         for entry in entries
@@ -1780,6 +1789,8 @@ def browser_snapshot() -> list[dict[str, Any]]:
         if online and connection_state not in {"connected", "open", "ready", "online"}:
             connection_state = "connected"
         parent = by_id.get(device_id)
+        if parent is None and device_id in stored_by_id:
+            parent = dict(stored_by_id[device_id])
         if parent is None:
             parent = _normalize_entry(
                 "browser",
