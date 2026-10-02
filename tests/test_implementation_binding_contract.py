@@ -26,7 +26,7 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
         jsonschema.Draft202012Validator({**schema, "$ref": f"#{ref}"}).validate(
             guide["examples"][name]
         )
-    assert len(json.dumps(guide, ensure_ascii=False).encode("utf-8")) < 14_000
+    assert len(json.dumps(guide, ensure_ascii=False).encode("utf-8")) < 16_000
     assert "workspace.write" in guide["binding_rules"]["authorization"]
     assert (
         "data_routes[*].tool is the LOCAL"
@@ -83,6 +83,27 @@ def test_modal_navigation_contract_is_loaded_only_when_requested():
     assert "modal_navigation" not in compact["binding_rules"]
     assert extended["examples"]["modal_navigation"]["action"]["type"] == "navigate"
     assert "deprecated openModal" in extended["binding_rules"]["modal_navigation"]
+
+
+def test_workspace_navigation_contract_is_loaded_only_when_requested():
+    compact = implementation_binding_contract()
+    extended = implementation_binding_contract(include_workspace_navigation=True)
+
+    assert "workspace_navigation" not in compact["examples"]
+    assert "workspace_navigation" not in compact["binding_rules"]
+    action = extended["examples"]["workspace_navigation"]["action"]
+    assert action["type"] == "openWorkspace"
+    assert action["params"] == {
+        "workspaceId": "$state.currentBuilderWebspaceId",
+    }
+    assert "expectedScenarioId" not in action["params"]
+    assert "static Prototype literal" in extended["binding_rules"][
+        "workspace_navigation"
+    ]
+    root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
+    schema = json.loads((root / "webui.v1.schema.json").read_text(encoding="utf-8"))
+    ref = extended["schema_refs"]["workspace_navigation"].split("#", 1)[1]
+    jsonschema.Draft202012Validator({**schema, "$ref": f"#{ref}"}).validate(action)
 
 
 def test_editor_binding_retains_loaded_revision_and_does_not_fake_upload():

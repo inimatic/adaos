@@ -250,6 +250,7 @@ def implementation_binding_contract(
     include_google_gmail: bool = False,
     include_owned_records_cbs: bool = False,
     include_modal_navigation: bool = False,
+    include_workspace_navigation: bool = False,
 ) -> dict[str, Any]:
     """Return the bounded Automation UI/owned-tool binding guide and ABI receipts.
 
@@ -297,6 +298,13 @@ def implementation_binding_contract(
         rules = guide.get("binding_rules")
         if isinstance(rules, dict):
             rules.pop("modal_navigation", None)
+    if not include_workspace_navigation:
+        examples = guide.get("examples")
+        if isinstance(examples, dict):
+            examples.pop("workspace_navigation", None)
+        rules = guide.get("binding_rules")
+        if isinstance(rules, dict):
+            rules.pop("workspace_navigation", None)
     guide["sources"] = sources
     guide["schema_refs"] = {
         "read_collection": "webui.v1.schema.json#/$defs/dataSource",
@@ -307,6 +315,10 @@ def implementation_binding_contract(
         "board_move": "webui.v1.schema.json#/$defs/action",
         "form_inputs": "webui.v1.schema.json#/$defs/formInputs",
     }
+    if include_workspace_navigation:
+        guide["schema_refs"]["workspace_navigation"] = (
+            "webui.v1.schema.json#/$defs/action"
+        )
     return guide
 
 

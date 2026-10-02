@@ -162,6 +162,19 @@ def test_newer_explicit_brief_revision_replaces_stale_prompt_copy() -> None:
     assert worker_module._approved_brief_prompt(current, current) == current
 
 
+def test_workspace_navigation_contract_is_selected_only_for_related_requests() -> None:
+    assert worker_module._needs_workspace_navigation_contract(
+        "Bind Current application in Builder with Open Builder and Open Preview."
+        .lower()
+    )
+    assert worker_module._needs_workspace_navigation_contract(
+        "Repair webspace.open without changing the selected scenario."
+    )
+    assert not worker_module._needs_workspace_navigation_contract(
+        "Implement the accepted Gmail connection status."
+    )
+
+
 def test_implementation_sdk_contract_includes_automation_inventory_closure() -> None:
     bundle = worker_module._implementation_sdk_contract_bundle()
     names = {item["name"] for item in bundle["contracts"]}
@@ -195,6 +208,11 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert current_builder["authorization"] == "workspace.read"
     assert "must not guess" in current_builder["input"]["selection_rule"]
     assert "static Prototype target" in current_builder["result"]["preview_rule"]
+    assert current_builder["webui_binding"]["action_type"] == "openWorkspace"
+    assert current_builder["webui_binding"]["builder_params"] == {
+        "workspaceId": "$state.currentBuilderWebspaceId",
+    }
+    assert "expectedScenarioId" in current_builder["webui_binding"]["forbidden"]
     system_contract = bundle["response_contracts"]["system_operational_snapshot"]
     typed_route = system_contract["result"]["typed_provider_route"]
     assert typed_route["method"] == "adaos.sdk.system.get_operational_snapshot"

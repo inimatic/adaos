@@ -14,8 +14,8 @@
     ]
   },
   "binding_rules": {
-    "tool_declarations": "Expose each callable with @tool (a thin wrapper is allowed) and list it in exports.tools and tools with entry plus input/output schemas. Reads use side_effects=none; mutations declare exact effects. Tool data_routes require route=tool, local tool, first_paint, recovery, guard_visibility, budget.max_payload_bytes and object read_policy with mode, triggers, max_request_hz, preserve_last_value and nested invalidation_tags. No live polling. Manifest route tools are local names; WebUI dataSource/callSkill targets are qualified names.",
-    "package_tests": "Skill tests run without sibling scenarios/projects; cross-component UI/manifest checks belong to scenario tests in the admitted closure. Tests cannot require ADAOS_REPO_ROOT or a checkout. Subprocesses use sys.executable and inherited SDK PYTHONPATH. Move checks to their owner, not skips. Use temporary owned data and close SQLite connections. Scenario tests assert owned semantics. If scenario.json embeds ui.application/version, verify equivalence with webui.json rather than a minimal mapping.",
+    "tool_declarations": "Expose each callable with @tool (a thin wrapper is allowed) and list it in exports.tools and tools with entry plus input/output schemas. Reads use side_effects=none; mutations declare exact effects. Tool data_routes require route=tool, first_paint, recovery, guard_visibility, budget.max_payload_bytes and object read_policy with mode, triggers, max_request_hz, preserve_last_value and nested invalidation_tags. No live polling. Manifest data_routes[*].tool is the LOCAL tool name; WebUI dataSource.name and callSkill.target are QUALIFIED names.",
+    "package_tests": "Skill tests run without sibling scenarios/projects: a scenario test is not an installed-skill contract. Cross-component checks belong to admitted scenario tests. No ADAOS_REPO_ROOT or checkout. Subprocesses use sys.executable and inherited SDK PYTHONPATH. Move checks to their owner, not skips. Use temporary owned data; close SQLite; do not assert checkpoint/materializer fields. If scenario.json embeds ui.application/version, verify equivalence with webui.json rather than a minimal mapping.",
     "source_edits": "Use Unicode-safe edits: apply_patch or UTF-8 scripts. Never pipe localized source through a shell's default encoding. Preserve localization and the current user language.",
     "related_choices": "A form choice field may declare optionsDataSource with kind=skill, name=<owned_skill>.<read_tool>, params and invalidationTags, or kind=mcp with an admitted public Root MCP toolId, arguments, dryRun=true and resultPath. Add optionValuePath=id and optionLabelPaths=[name]. Return an array or {items:[...]}. The loader shares the normal causal read/cache/retry path; it never submits writes. Unavailable or malformed choices block writable submission without clearing the draft. Do not copy authoritative installation, identity, role, or permission records into static options.",
     "dynamic_editor": "A trusted dataSource may project typed form fields inside selected records. Declare inputs.recordsPath, fieldsPath and valuesPath plus selectedStateKey. Only inert field declarations and values come from data; actions remain package-owned, and provider-supplied option sources or upload/read targets are stripped. Preserve the complete selected record as $event.record and take identity, release digest, component and expected revision from it. A missing/malformed fieldsPath blocks submission. See examples.dynamic_record_editor.",
@@ -24,6 +24,7 @@
     "read": "Use dataSource.kind=skill and name=<owned_skill>.<exported_tool>. params accepts $state references. Return a collection as {items:[...]} and one record directly or as {item:{...}}. ui.form requires records with id and an explicit inputs.selectedStateKey for skill sources. Empty selection is create mode, not the first returned record. A get tool should return an empty item for empty id.",
     "selection": "Keep accepted selection/navigation. Set the selected id before opening the editor; use it in inputs.selectedStateKey and dataSource.params.id. item.details actions sharing a named on=click:<command> run in order, stopping on false/throw. Label one step for one button. Generic on=click buttons stay independent.",
     "modal_navigation": "Replace deprecated openModal with navigate; bind its public view through implements and schema.interface.routes. See examples.modal_navigation.",
+    "workspace_navigation": "Open an existing related Builder or Preview with package-owned type=openWorkspace. Bind a trusted read projection into page state through item.details inputs.stateBindings, then pass only workspaceId=$state.<boundWebspaceId>. Require an explicit availability state before enabling the command. Do not pass expectedScenarioId for an already-related webspace: it can replace the authoritative scenario selection. Never accept the destination from user input or a static Prototype literal. See examples.workspace_navigation.",
     "board_move": "collection.board on=move spreads displayed item fields at event top level. Include revision in reads and bind $event.revision, not $event.record.revision. See examples.board_move. Added fields: fromLaneId, toLaneId, previousIndex, currentIndex, interaction, laneKey, patch. Lane is already optimistic; fromLaneId is its prior value. Revision is unchanged. Awaited callSkill false/denied result or throw rolls back the move. The lane selector uses the same event. Never fetch a fresh revision during a move to bypass stale-view conflict detection.",
     "creation": "For state-initialized creation, use a separate ui.form without dataSource. Before navigate, updateState with draft-specific field keys, clearing old draft values and setting the chosen parent. Fields bind via stateKey (alias state_key); without it the key is form.<widget.id>.<field.id>, not field.id. defaultValue/default/value are literal values, not $state expressions. A dataSource form does not hydrate fields from page state; an empty selected id ignores its returned record. Do not use a get tool's empty-id response to initialize a child. Use a dropdown with related_choices for a visible parent caption, or explicitly bind a known read-only caption alongside the parent id. No selection must offer a parent choice or disable creation, not show an unexplained empty read-only field.",
     "mutation": "callSkill.target=<owned_skill>.<exported_tool>. $event.values=draft; $event.record=loaded id/revision. Never bind revision to editable fields or invent caller identity. inputs.buttons[*].id runs actions with the SAME id in order; on=submit alone does not bind steps. Post-success updateState shares that id. False/throw/cancel stops later steps. interaction.submit.defaultAction selects Enter's button. Keep unrelated mutations on distinct buttons.",
@@ -566,6 +567,18 @@
           "modalId": "record-create-modal",
           "route": "record.create"
         }
+      }
+    },
+    "workspace_navigation": {
+      "stateBindings": {
+        "currentBuilderAvailable": {"path": "builder.available", "default": false},
+        "currentBuilderWebspaceId": {"path": "builder.webspace_id", "default": ""}
+      },
+      "action": {
+        "on": "click:open_builder",
+        "type": "openWorkspace",
+        "enabledIf": "$state.currentBuilderAvailable === true && $state.currentBuilderWebspaceId",
+        "params": {"workspaceId": "$state.currentBuilderWebspaceId"}
       }
     },
     "board_move": {

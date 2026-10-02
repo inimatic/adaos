@@ -607,6 +607,31 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "select the first development project as a fallback."
                     ),
                 },
+                "webui_binding": {
+                    "action_type": "openWorkspace",
+                    "projection_binding": (
+                        "Use item.details inputs.stateBindings to copy builder.available, "
+                        "builder.webspace_id, preview.available and preview.webspace_id into "
+                        "dedicated page-state keys."
+                    ),
+                    "builder_params": {
+                        "workspaceId": "$state.currentBuilderWebspaceId",
+                    },
+                    "preview_params": {
+                        "workspaceId": "$state.currentPreviewWebspaceId",
+                    },
+                    "guard_rule": (
+                        "Enable each package-owned command only when its bound available flag "
+                        "is true and its bound webspace id is non-empty."
+                    ),
+                    "forbidden": [
+                        "expectedScenarioId",
+                        "expected_scenario_id",
+                        "scenario_id",
+                        "static Prototype webspace ids",
+                        "user-supplied destinations",
+                    ],
+                },
                 "binding": (
                     "Expose an owned read-only tool after workspace.read. Bind Current "
                     "application, Open Builder and Preview to this projection; use "
@@ -1190,6 +1215,19 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             "from adaos.sdk import system",
         ],
     }
+
+
+def _needs_workspace_navigation_contract(binding_request: str) -> bool:
+    return any(
+        token in binding_request
+        for token in (
+            "open builder",
+            "open preview",
+            "current application in builder",
+            "openworkspace",
+            "webspace.open",
+        )
+    )
 
 
 def _write_json_preserving_style(path: Path, payload: Any, original: str) -> None:
@@ -10172,11 +10210,15 @@ class LocalSkillFactoryWorker:
                     '"surface": "modal"',
                 )
             )
+            include_workspace_navigation = _needs_workspace_navigation_contract(
+                binding_request
+            )
             implementation_bindings = implementation_binding_contract(
                 include_attachments=include_attachments,
                 include_google_gmail=include_google_gmail,
                 include_owned_records_cbs=include_owned_records_cbs,
                 include_modal_navigation=include_modal_navigation,
+                include_workspace_navigation=include_workspace_navigation,
             )
             if target_webui_value is not None:
                 portable_reuse = self._portable_contract_reuse_bundle(
