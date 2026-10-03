@@ -506,13 +506,27 @@ def require_native_tools(manifest: Mapping[str, Any]) -> None:
     lifecycle = manifest.get("lifecycle")
     lifecycle = lifecycle if isinstance(lifecycle, Mapping) else {}
     subscriptions = (manifest.get("events") or {}).get("subscribe")
+    # Demand-control events only register a lazy request handler. They do not
+    # constitute autonomous background execution and therefore have nothing
+    # to drain during an Application data cutover.
+    ui_control_topics = {
+        "webio.stream.snapshot.requested",
+        "webio.stream.subscription.changed",
+        "webio.yjs.snapshot.requested",
+        "webio.yjs.subscription.changed",
+    }
+    background_subscriptions = [
+        str(topic).strip()
+        for topic in subscriptions or []
+        if str(topic).strip() and str(topic).strip() not in ui_control_topics
+    ] if isinstance(subscriptions, (list, tuple, set, frozenset)) else subscriptions
     background = bool(
         manifest.get("service")
         or manifest.get("services")
         or lifecycle
         or manifest.get("workflow")
         or manifest.get("conversational")
-        or subscriptions
+        or background_subscriptions
         or any(
             runtime.get(key)
             for key in (

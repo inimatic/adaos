@@ -300,6 +300,37 @@ def test_background_workers_are_rejected_without_false_drain_receipts(tmp_path, 
         coordinator(tmp_path, 1, extra)
 
 
+def test_demand_control_subscriptions_do_not_require_a_drain_adapter(tmp_path):
+    seed(tmp_path)
+    lifecycle = coordinator(tmp_path, 1, {
+        "events": {
+            "subscribe": [
+                "webio.stream.snapshot.requested",
+                "webio.stream.subscription.changed",
+            ]
+        },
+        "runtime": {
+            "activation": {
+                "mode": "lazy",
+                "startup_allowed": False,
+                "background_refresh": False,
+            }
+        },
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+        },
+    })
+
+    result = lifecycle.prepare_beta(
+        webspace_id="desktop",
+        activate=lambda _key: {"ok": True},
+    )
+
+    assert result["completed"] is True
+
+
 def test_stateless_event_subscriber_with_declared_drain_is_admitted(tmp_path):
     seed(tmp_path)
     target = {
