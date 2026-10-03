@@ -906,7 +906,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["selectionFilter"]["required"].append("source_field_ref")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
-        contract["$defs"]["view"]["required"].extend(["compact_presentation", "presentation_options", "field_display", "section", "scope_filters", "selection", "selection_filter", "activation_source_view_ref"])
+        contract["$defs"]["view"]["required"].extend(["compact_presentation", "presentation_options", "field_display", "section", "scope_filters", "selection", "initial_selection_id", "selection_filter", "activation_source_view_ref"])
         contract["$defs"]["command"]["required"].append("exposure")
         if _view_variants:
             # Record projections cannot use collection presentations or query links.
@@ -919,7 +919,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             )
             record = copy.deepcopy(contract["$defs"]["view"])
             record["properties"]["role"] = {"type": "string", "enum": ["details", "editor"]}
-            for name in ("presentation", "compact_presentation", "presentation_options", "selection", "selection_filter", "filter", "empty_state"):
+            for name in ("presentation", "compact_presentation", "presentation_options", "selection", "initial_selection_id", "selection_filter", "filter", "empty_state"):
                 record["properties"][name] = {"type": "null"}
             contract["$defs"]["view"] = {"anyOf": [collection, record]}
         if brief is not None:
@@ -1032,7 +1032,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "text": "Text wraps by default in list/card metadata and table cells. field_display can explicitly request wrap or truncate and start/center/end alignment per visible field on list/table/cards/accordion collections ONLY; other presentations, details and editors use field_display=[]. Keep essential values readable; use truncation only for compact summaries with details available.",
             "query_scope": "scope_filters define permanent equality constraints for a collection, not user filter defaults. They survive reset. Use them when a tab must always show only a subset. Query controls narrow that scope on other fields; never reuse its field for a resettable filter. Representative states count records inside the permanent scope. A section title alone does not filter records.",
             "editor_inputs": "Only fields consumed by this editor's command input_field_refs are writable here. Other listed fields are read-only context; fixed_values are not editable inputs. A field may be writable in one editor and read-only in another.",
-            "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. A related-collections workspace may use stacked table collections in one region: their selection_filter expresses filter or emphasis independently of geometry. region_role is actual placement. Prefer one primary collection and contextual supporting work; reserve flow for genuinely linear work.",
+            "layout": "A legacy layout string remains valid for simple flow/split/grid/focus-detail screens. For a workspace, use the explicit layout object and name each region. Sizes are usable inline pixels after the application shell: choose min/preferred/max from the content that must fit, keep one main region flexible with grow>0, and ensure fixed preferred widths leave that main region at least 480px at the target wide viewport. region_role references the exact region id. Use compact drawer/sheet/route for secondary panes that cannot remain alongside main content.",
             "editor_surface": "Use surface=modal for a short focused create/edit task, side_sheet for an overlay while surrounding context remains visible, and inline for a persistent work area. An explicit wide supporting pane or in-place selected detail requires surface=inline: side_sheet/modal is an overlay and does not satisfy that request. Collections and details stay inline. The compiler owns openers, selection, form hydration, save/error and dismissal. No surface is mandatory unless the requested interaction names or entails it.",
             "progressive_disclosure": "Keep the main screen focused on the user's primary job. Put secondary fields in details and consider an on-demand editor instead of showing every form at once. Do not add hypothetical features or multiply views only to look complete.",
         },
@@ -1745,15 +1745,32 @@ def _normalize_semantic_prototype_candidate_v1(
     )
 
 
+_LEGACY_REGION_ROLES = frozenset({"primary", "supporting", "actions"})
+
+
+def _legacy_layout_pattern(layout: Any) -> str:
+    pattern = str(layout.get("pattern") if isinstance(layout, Mapping) else layout)
+    return "split" if pattern == "workbench" else pattern
+
+
+def _provider_legacy_view(view: Mapping[str, Any]) -> dict[str, Any]:
+    result = legacy_view(view)
+    if str(result.get("region_role") or "") not in _LEGACY_REGION_ROLES:
+        result["region_role"] = "primary"
+    return result
+
+
 def _runtime_layout_v2(
     document: Mapping[str, Any], *, region_roles: set[str]
 ) -> dict[str, Any]:
-    semantic_pattern = str(document["layout"]["pattern"])
+    semantic_layout = document["layout"]
+    semantic_pattern = str(semantic_layout["pattern"])
     runtime_pattern = {
         "flow": "document",
         "split": "workbench",
         "grid": "dashboard",
         "focus_detail": "collection-detail",
+        "workbench": "workbench",
     }[semantic_pattern]
     views = [view for view in document.get("views") or [] if isinstance(view, Mapping)]
     primary_is_collection = any(
@@ -1771,7 +1788,66 @@ def _runtime_layout_v2(
         and bool(view.get("activation_source_view_ref"))
         for view in views
     )
+    explicit_regions = semantic_layout.get("regions") or []
     has_primary = "primary" in region_roles
+    if explicit_regions:
+        runtime_regions = []
+        for region in explicit_regions:
+            size = {
+                runtime_key: region[source_key]
+                for source_key, runtime_key in (
+                    ("min_px", "minPx"),
+                    ("preferred_px", "preferredPx"),
+                    ("max_px", "maxPx"),
+                    ("grow", "grow"),
+                )
+                if region.get(source_key) is not None
+            }
+            runtime_regions.append(
+                {
+                    "id": str(region["id"]),
+                    "role": str(region["role"]),
+                    "priority": int(region["priority"]),
+                    "scroll": str(region["scroll"]),
+                    "presentation": {
+                        "wide": str(region["wide"]),
+                        "compact": str(region["compact"]),
+                    },
+                    **({"size": size} if size else {}),
+                }
+            )
+        primary_is_collection = any(
+            region["role"] == "collection"
+            and any(str(view.get("region_role") or "") == region["id"] for view in views)
+            for region in runtime_regions
+        )
+        has_open_detail = any(
+            str(view.get("role") or "") == "collection"
+            and str((view.get("selection") or {}).get("row_activation") or "") == "open_details"
+            for view in views
+        ) and any(
+            str(view.get("role") or "") == "details"
+            and bool(view.get("activation_source_view_ref"))
+            for view in views
+        )
+        has_context = any(region["role"] in {"detail", "inspector", "utility"} for region in runtime_regions)
+        return {
+            "version": 2,
+            "pattern": runtime_pattern,
+            "density": str(semantic_layout.get("density") or "comfortable"),
+            "contentWidth": {
+                "wide": "bounded",
+            }.get(str(semantic_layout.get("content_width") or "fluid"), str(semantic_layout.get("content_width") or "fluid")),
+            "scroll": str(semantic_layout.get("scroll") or "page"),
+            "regions": runtime_regions,
+            "interaction": {
+                "selection": "single" if primary_is_collection else "none",
+                "rowActivation": "open-detail" if has_open_detail else "select" if primary_is_collection else "none",
+                "detail": "inline" if has_context else "modal",
+                "filters": "disclosure",
+                "actions": "adaptive",
+            },
+        }
     if runtime_pattern == "workbench" and primary_is_collection and "supporting" in region_roles:
         runtime_pattern = "collection-detail"
     elif not has_primary:
@@ -2779,6 +2855,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 )
             else:
                 view.setdefault("selection", None)
+            view.setdefault("initial_selection_id", None)
             view.setdefault("selection_filter", None)
             view.setdefault("activation_source_view_ref", None)
             view.setdefault("media", None)
@@ -2854,12 +2931,9 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "schema": SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA,
             "document_id": candidate["document_id"],
             "title": copy.deepcopy(candidate["title"]),
-            "layout": candidate["layout"],
+            "layout": _legacy_layout_pattern(candidate["layout"]),
             "resource": copy.deepcopy(resource),
-            "views": [
-                    legacy_view(item)
-                for item in resource_views
-            ],
+            "views": [_provider_legacy_view(item) for item in resource_views],
             "commands": [
                 {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "exposure"}
                 for item in resource_commands
@@ -2940,6 +3014,16 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 for entry in raw_view.get("scope_filters") or []
             ]
             normalized_view["selection"] = copy.deepcopy(raw_view.get("selection"))
+            raw_initial_selection = raw_view.get("initial_selection_id")
+            normalized_view["initial_selection_id"] = (
+                record_ids_by_resource[normalized_resource_id].get(
+                    str(raw_initial_selection),
+                    str(raw_initial_selection),
+                )
+                if raw_initial_selection
+                else None
+            )
+            normalized_view["region_role"] = str(raw_view["region_role"])
             normalized_view["activation_source_view_ref"] = (
                 _canonical_candidate_identifier(
                     raw_view["activation_source_view_ref"], namespace="view"
@@ -3335,12 +3419,9 @@ def _lower_semantic_prototype_candidate_v2(
                 "schema": SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA,
                 "document_id": candidate["document_id"],
                 "title": copy.deepcopy(candidate["title"]),
-                "layout": candidate["layout"],
+                "layout": _legacy_layout_pattern(candidate["layout"]),
                 "resource": copy.deepcopy(resource),
-                "views": [
-                    legacy_view(item)
-                    for item in views
-                ],
+                "views": [_provider_legacy_view(item) for item in views],
                 "commands": [
                     {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "exposure"}
                     for item in commands
@@ -3356,7 +3437,12 @@ def _lower_semantic_prototype_candidate_v2(
         )
         lowered_resources.append(dict(lowered["resource"]))
         for original, view in zip(views, lowered["views"], strict=True):
-            lowered_views.append({**dict(view), "resource_ref": resource_id, **view_extras(original)})
+            lowered_views.append({
+                **dict(view),
+                "resource_ref": resource_id,
+                "region_role": str(original["region_role"]),
+                **view_extras(original),
+            })
         for original, command in zip(commands, lowered["commands"], strict=True):
             lowered_commands.append(
                 {**dict(command), "exposure": copy.deepcopy(original["exposure"])}
@@ -3371,7 +3457,11 @@ def _lower_semantic_prototype_candidate_v2(
         "brief_ref": str(brief.get("brief_id") or ""),
         "brief_digest": str(brief.get("digest") or ""),
         "title": copy.deepcopy(candidate["title"]),
-        "layout": {"pattern": candidate["layout"]},
+        "layout": (
+            copy.deepcopy(candidate["layout"])
+            if isinstance(candidate["layout"], Mapping)
+            else {"pattern": candidate["layout"]}
+        ),
         "resources": lowered_resources,
         "relationships": copy.deepcopy(candidate["relationships"]),
         "views": lowered_views,
@@ -3824,7 +3914,39 @@ def _validate_semantic_prototype_v2(
             if field_id in all_fields and field_id != "id":
                 _fail(f"duplicate field id {field_id!r} across resources")
             all_fields[field_id] = dict(field)
-    if not any(str(view["region_role"]) == "primary" for view in views.values()):
+    declared_regions = document["layout"].get("regions") or []
+    if declared_regions:
+        regions = _unique(declared_regions, "layout region")
+        unknown_region_refs = sorted(
+            {
+                str(view["region_role"])
+                for view in views.values()
+                if str(view["region_role"]) not in regions
+            }
+        )
+        if unknown_region_refs:
+            _fail(f"views reference unknown layout regions: {unknown_region_refs}")
+        occupied_primary_regions = {
+            region_id
+            for region_id, region in regions.items()
+            if region["role"] in {"main", "collection"}
+            and any(str(view["region_role"]) == region_id for view in views.values())
+        }
+        if not occupied_primary_regions:
+            _fail("explicit semantic layout requires a populated main or collection region")
+        for region_id, region in regions.items():
+            sizes = [
+                region.get("min_px"),
+                region.get("preferred_px"),
+                region.get("max_px"),
+            ]
+            bounded = [int(value) for value in sizes if value is not None]
+            if bounded != sorted(bounded):
+                _fail(
+                    f"layout region {region_id!r} requires min_px <= "
+                    "preferred_px <= max_px"
+                )
+    elif not any(str(view["region_role"]) == "primary" for view in views.values()):
         _fail("semantic Prototype requires at least one view in the primary region")
 
     views_by_resource: dict[str, list[dict[str, Any]]] = {
@@ -3843,6 +3965,18 @@ def _validate_semantic_prototype_v2(
                 f"{resource_id!r}: {unknown_fields}"
             )
         views_by_resource[resource_id].append(view)
+        initial_selection_id = view.get("initial_selection_id")
+        if initial_selection_id is not None:
+            if view["role"] != "collection":
+                _fail(
+                    f"view {view['id']!r} initial_selection_id requires collection role"
+                )
+            record_ids = {str(record["id"]) for record in resource["records"]}
+            if str(initial_selection_id) not in record_ids:
+                _fail(
+                    f"view {view['id']!r} initial_selection_id references unknown "
+                    f"record {initial_selection_id!r}"
+                )
     lookup_only = _lookup_only_resource_ids(document)
     for resource_id, resource_views in views_by_resource.items():
         if resource_id in lookup_only:
@@ -3936,12 +4070,9 @@ def _validate_semantic_prototype_v2(
             "brief_ref": document["brief_ref"],
             "brief_digest": document["brief_digest"],
             "title": copy.deepcopy(document["title"]),
-            "layout": copy.deepcopy(document["layout"]),
+            "layout": {"pattern": _legacy_layout_pattern(document["layout"])},
             "resource": copy.deepcopy(resource),
-            "views": [
-                    legacy_view(item)
-                for item in resource_views
-            ],
+            "views": [_provider_legacy_view(item) for item in resource_views],
             "commands": [
                 {
                     key: copy.deepcopy(value)
@@ -4503,12 +4634,9 @@ def _compile_semantic_prototype_v2(
             "brief_ref": document["brief_ref"],
             "brief_digest": document["brief_digest"],
             "title": copy.deepcopy(document["title"]),
-            "layout": copy.deepcopy(document["layout"]),
+            "layout": {"pattern": _legacy_layout_pattern(document["layout"])},
             "resource": copy.deepcopy(resource),
-            "views": [
-                    legacy_view(item)
-                for item in resource_views
-            ],
+            "views": [_provider_legacy_view(item) for item in resource_views],
             "commands": [
                 {
                     key: copy.deepcopy(value)
@@ -4566,6 +4694,22 @@ def _compile_semantic_prototype_v2(
             primary_locale=primary_locale,
         )
         page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+        region_by_widget = {
+            str(view["id"]): str(view["region_role"])
+            for view in resource_views
+        }
+        region_by_query = {
+            f"query-{control['id']}": str(view["region_role"])
+            for view in resource_views
+            for control in view.get("query_controls") or []
+        }
+        for widget in page["widgets"]:
+            widget_id = str(widget.get("id") or "")
+            target_region = region_by_widget.get(widget_id) or region_by_query.get(widget_id)
+            if target_region is None and widget_id.startswith("open-"):
+                target_region = region_by_widget.get(widget_id.removeprefix("open-"))
+            if target_region is not None:
+                widget["area"] = target_region
         if lookups:
             properties = page["meta"]["builder"]["prototype_record_schemas"][runtime_type]["properties"]
             for field in resource["fields"]:
@@ -4629,6 +4773,32 @@ def _compile_semantic_prototype_v2(
                 ]
             )
         )
+
+    initial_selections: dict[str, str] = {}
+    for view in document["views"]:
+        record_id = view.get("initial_selection_id")
+        if record_id is None:
+            continue
+        resource = resources[str(view["resource_ref"])]
+        runtime_record = next(
+            record
+            for record in resource["records"]
+            if str(record["id"]) == str(record_id)
+        )
+        runtime_id = "::".join(
+            str(runtime_record[field_id]).strip()
+            for field_id in resource["identity_field_refs"]
+        )
+        selection_ref = "selected_" + _runtime_state_identifier(
+            resource["id"], fallback="resource"
+        ) + "_id"
+        previous = initial_selections.setdefault(selection_ref, runtime_id)
+        if previous != runtime_id:
+            _fail(
+                f"collections of resource {resource['id']!r} declare conflicting "
+                "initial selections"
+            )
+    initial_state.update(initial_selections)
 
     region_roles = {str(view["region_role"]) for view in document["views"]}
     page_schema = {

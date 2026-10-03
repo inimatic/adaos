@@ -1035,6 +1035,7 @@ def _multi_resource_candidate(semantic: dict) -> dict:
         view.setdefault("filter", None)
         view.setdefault("query_controls", [])
         view.setdefault("empty_state", None)
+        view.setdefault("initial_selection_id", None)
         view.setdefault("activation_source_view_ref", None)
         if view["empty_state"] is not None:
             view["empty_state"].setdefault("detail", None)
@@ -2410,6 +2411,90 @@ def test_semantic_layout_maps_to_runtime_abi(
     assert [region["id"] for region in layout["regions"]] == ["primary", "supporting"]
     assert layout["regions"][0]["role"] == primary_role
     assert layout["regions"][1]["role"] == "detail"
+
+
+def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    candidate["layout"] = {
+        "pattern": "workbench",
+        "density": "compact",
+        "content_width": "fluid",
+        "scroll": "regions",
+        "regions": [
+            {
+                "id": "structure", "role": "navigation", "priority": 80,
+                "scroll": "region", "wide": "pane", "compact": "drawer",
+                "min_px": 220, "preferred_px": 280, "max_px": 360, "grow": 0,
+            },
+            {
+                "id": "canvas", "role": "main", "priority": 100,
+                "scroll": "region", "wide": "pane", "compact": "stack",
+                "min_px": 480, "preferred_px": None, "max_px": None, "grow": 1,
+            },
+            {
+                "id": "inspector", "role": "inspector", "priority": 70,
+                "scroll": "region", "wide": "pane", "compact": "sheet",
+                "min_px": 300, "preferred_px": 360, "max_px": 480, "grow": 0,
+            },
+        ],
+    }
+    work_views = [
+        view for view in candidate["views"] if view["resource_ref"] == "work_items"
+    ]
+    work_views[0]["region_role"] = "structure"
+    work_views[0]["initial_selection_id"] = "work-1"
+    work_views[1]["region_role"] = "canvas"
+    work_views[2]["region_role"] = "inspector"
+    next(
+        view for view in candidate["views"] if view["resource_ref"] == "people"
+    )["region_role"] = "inspector"
+
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    semantic_layout = compiled["semantic_document"]["layout"]
+    assert semantic_layout == candidate["layout"]
+    page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    assert page["layout"]["pattern"] == "workbench"
+    assert page["layout"]["scroll"] == "regions"
+    assert page["layout"]["regions"][0]["size"] == {
+        "minPx": 220, "preferredPx": 280, "maxPx": 360, "grow": 0,
+    }
+    assert {
+        widget["id"]: widget["area"]
+        for widget in page["widgets"]
+        if widget["id"] in {"work-list", "work-details", "work-editor"}
+    } == {
+        "work-list": "structure",
+        "work-details": "canvas",
+        "work-editor": "inspector",
+    }
+    assert page["initialState"]["selected_work_items_id"] == "work-1"
+
+
+def test_explicit_workspace_layout_rejects_unknown_regions_and_inverted_sizes() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["layout"] = {
+        "pattern": "workbench",
+        "density": "comfortable",
+        "content_width": "fluid",
+        "scroll": "regions",
+        "regions": [{
+            "id": "canvas", "role": "main", "priority": 100,
+            "scroll": "region", "wide": "pane", "compact": "stack",
+            "min_px": 640, "preferred_px": 480, "max_px": 800, "grow": 1,
+        }],
+    }
+    for view in semantic["views"]:
+        view["region_role"] = "missing"
+
+    with pytest.raises(BuilderWorkflowError, match="unknown layout regions"):
+        compile_semantic_prototype(semantic, brief=brief)
+
+    for view in semantic["views"]:
+        view["region_role"] = "canvas"
+    with pytest.raises(BuilderWorkflowError, match="min_px <="):
+        compile_semantic_prototype(semantic, brief=brief)
 
 
 def test_semantic_prototype_requires_a_primary_view_region() -> None:

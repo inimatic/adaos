@@ -13,7 +13,12 @@
     "schema": { "type": "string", "const": "adaos.builder.semantic_prototype_candidate.v2" },
     "document_id": { "$ref": "#/$defs/id" },
     "title": { "$ref": "#/$defs/localizedText" },
-    "layout": { "type": "string", "enum": ["flow", "split", "grid", "focus_detail"] },
+    "layout": {
+      "anyOf": [
+        { "type": "string", "enum": ["flow", "split", "grid", "focus_detail"] },
+        { "$ref": "#/$defs/layout" }
+      ]
+    },
     "resources": {
       "type": "array", "minItems": 1, "maxItems": 8,
       "items": { "$ref": "#/$defs/resource" }
@@ -50,6 +55,39 @@
   },
   "$defs": {
     "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern", "density", "content_width", "scroll", "regions"],
+      "properties": {
+        "pattern": { "enum": ["flow", "split", "grid", "focus_detail", "workbench"] },
+        "density": { "enum": ["compact", "comfortable"] },
+        "content_width": { "enum": ["fluid", "reading", "wide"] },
+        "scroll": { "enum": ["page", "regions"] },
+        "regions": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": { "$ref": "#/$defs/layoutRegion" }
+        }
+      },
+      "description": "Explicit workspace geometry. Region sizes are the usable inline pixel budget after the application shell, not viewport percentages."
+    },
+    "layoutRegion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "priority", "scroll", "wide", "compact", "min_px", "preferred_px", "max_px", "grow"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "role": { "enum": ["navigation", "toolbar", "collection", "main", "detail", "inspector", "utility", "status", "commands"] },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "scroll": { "enum": ["page", "region", "none"] },
+        "wide": { "enum": ["pane", "stack"] },
+        "compact": { "enum": ["stack", "drawer", "sheet", "hidden", "overflow", "route"] },
+        "min_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 1600 },
+        "preferred_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 1600 },
+        "max_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 2400 },
+        "grow": { "type": "number", "minimum": 0, "maximum": 10 }
+      }
+    },
     "scalar": {
       "type": ["string", "number", "boolean", "null"]
     },
@@ -228,7 +266,7 @@
         "id": { "$ref": "#/$defs/id" },
         "resource_ref": { "$ref": "#/$defs/id" },
         "role": { "type": "string", "enum": ["collection", "details", "editor"] },
-        "region_role": { "type": "string", "enum": ["primary", "supporting", "actions"] },
+        "region_role": { "$ref": "#/$defs/id", "description": "A declared layout region id, or primary/supporting/actions for a legacy string layout." },
         "surface": {
           "type": "string", "enum": ["inline", "modal", "side_sheet"],
           "description": "Editor surface. Collections and details use inline. Choose modal for a short focused edit, side_sheet for contextual editing, inline for persistent work; this is a design choice, not a quality gate."
@@ -254,6 +292,7 @@
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" }, "description": "Permanent equality predicates defining this collection, independent of user search/filter controls. Reset never removes these. Empty for an unrestricted view. Do not also offer a query control for the same field." },
         "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }], "description": "Explicit collection interaction contract. Keep row activation separate from record commands: select changes selection, while edit/delete use declared command exposure." },
+        "initial_selection_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }], "description": "Collection record selected on first render. It must name one fixture record of this view's resource; null starts unselected." },
         "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }], "description": "Selection-driven relationship projection. Match this collection's field_ref to source_field_ref (null means id) of the selected source record. effect=filter narrows the target; effect=emphasize keeps the global collection visible and marks related rows. Requires an exact declared singular relationship. Do not duplicate this field in other filters." },
         "activation_source_view_ref": {
           "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }],

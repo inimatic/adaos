@@ -25,14 +25,7 @@
     "brief_ref": { "type": "string", "pattern": "^brief:[a-f0-9]{24}$" },
     "brief_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "title": { "$ref": "#/$defs/localizedText" },
-    "layout": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["pattern"],
-      "properties": {
-        "pattern": { "enum": ["flow", "split", "grid", "focus_detail"] }
-      }
-    },
+    "layout": { "$ref": "#/$defs/layout" },
     "resources": {
       "type": "array",
       "minItems": 1,
@@ -133,6 +126,38 @@
       }
     },
     "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern"],
+      "properties": {
+        "pattern": { "enum": ["flow", "split", "grid", "focus_detail", "workbench"] },
+        "density": { "enum": ["compact", "comfortable"] },
+        "content_width": { "enum": ["fluid", "reading", "wide"] },
+        "scroll": { "enum": ["page", "regions"] },
+        "regions": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": { "$ref": "#/$defs/layoutRegion" }
+        }
+      }
+    },
+    "layoutRegion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "priority", "scroll", "wide", "compact", "min_px", "preferred_px", "max_px", "grow"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "role": { "enum": ["navigation", "toolbar", "collection", "main", "detail", "inspector", "utility", "status", "commands"] },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "scroll": { "enum": ["page", "region", "none"] },
+        "wide": { "enum": ["pane", "stack"] },
+        "compact": { "enum": ["stack", "drawer", "sheet", "hidden", "overflow", "route"] },
+        "min_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 1600 },
+        "preferred_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 1600 },
+        "max_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 2400 },
+        "grow": { "type": "number", "minimum": 0, "maximum": 10 }
+      }
+    },
     "localizedText": {
       "type": "object",
       "additionalProperties": false,
@@ -275,7 +300,7 @@
         "resource_ref": { "$ref": "#/$defs/id" },
         "role": { "enum": ["collection", "details", "editor"] },
         "media": { "anyOf": [{ "$ref": "#/$defs/media" }, { "type": "null" }] },
-        "region_role": { "enum": ["primary", "supporting", "actions"] },
+        "region_role": { "$ref": "#/$defs/id" },
         "surface": { "enum": ["inline", "modal", "side_sheet"] },
         "presentation": { "enum": ["list", "table", "cards", "board", "tree", "chart", "accordion"] },
         "compact_presentation": {
@@ -287,6 +312,7 @@
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" } },
         "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }] },
+        "initial_selection_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
         "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }] },
         "activation_source_view_ref": {
           "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }],
