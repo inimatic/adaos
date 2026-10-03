@@ -64,3 +64,13 @@ jobs:
           MONOREPO_URL: https://github.com/inimatic/adaoskills.git
         run: |
           uv run adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
+
+      - name: Build canonical SDK metadata
+        run: uv run python tools/build_sdk_metadata.py
+
+      - name: Upload SDK metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaos-sdk-metadata-${{ runner.os }}-py${{ matrix.python-version }}
+          path: build/sdk-metadata/adaos-sdk-metadata.json
+          retention-days: 7

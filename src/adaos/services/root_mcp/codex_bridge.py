@@ -729,8 +729,20 @@ class CodexRootMcpBridge:
             },
             {
                 "name": "get_architecture_catalog",
-                "description": "Read the AdaOS architecture catalog through the AdaOSDevPlane descriptive surface.",
-                "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                "description": "Read a bounded typed neighborhood from the AdaOS architecture graph. Prefer a query or root component instead of enumerating the catalog.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "roots": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+                        "depth": {"type": "integer", "minimum": 0, "maximum": 3, "default": 1},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 24, "default": 12},
+                        "cursor": {"type": "string"},
+                        "if_none_match": {"type": "string"},
+                        "since_digest": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
             },
             {
                 "name": "get_sdk_metadata",
@@ -755,8 +767,17 @@ class CodexRootMcpBridge:
                             "type": "integer",
                             "minimum": 1,
                             "maximum": 24 if self.profile.task_id else 64,
-                            "default": 24,
+                            "default": 12,
                         },
+                        "cursor": {"type": "string"},
+                        "purpose": {
+                            "type": "string",
+                            "enum": ["authoring", "migration"],
+                            "default": "authoring",
+                            "description": "Deprecated SDK members are visible only to an explicit migration request.",
+                        },
+                        "if_none_match": {"type": "string"},
+                        "since_digest": {"type": "string"},
                     },
                     "additionalProperties": False,
                 },
@@ -815,6 +836,7 @@ class CodexRootMcpBridge:
                             "enum": ["std"] if self.profile.task_id else ["mini", "std", "rich"],
                             "default": "std",
                         },
+                        "purpose": {"type": "string", "enum": ["authoring", "migration"], "default": "authoring"},
                     },
                     "required": ["descriptor_id", "item_id"],
                     "additionalProperties": False,
@@ -860,13 +882,33 @@ class CodexRootMcpBridge:
             },
             {
                 "name": "get_public_skill_registry",
-                "description": "Read the published workspace skill registry summary through AdaOSDevPlane.",
-                "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                "description": "Read one bounded page of the compact public skill index. Use get_descriptor_item for schemas, examples, and documentation.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 24, "default": 12},
+                        "cursor": {"type": "string"},
+                        "if_none_match": {"type": "string"},
+                        "since_digest": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
             },
             {
                 "name": "get_public_scenario_registry",
-                "description": "Read the published workspace scenario registry summary through AdaOSDevPlane.",
-                "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                "description": "Read one bounded page of the compact public scenario index.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 24, "default": 12},
+                        "cursor": {"type": "string"},
+                        "if_none_match": {"type": "string"},
+                        "since_digest": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
             },
             {
                 "name": "get_named_entity_registry",
@@ -1648,7 +1690,15 @@ class CodexRootMcpBridge:
             return _tool_text(client.propose_context_memory(args))
         if tool == "get_architecture_catalog":
             return _tool_text(
-                client.get_adaos_dev_architecture_catalog(),
+                client.get_adaos_dev_architecture_catalog(
+                    query=_normalize_text(args.get("query")) or _normalize_text(self.profile.context_query),
+                    roots=_normalize_unique(args.get("roots") if isinstance(args.get("roots"), list) else None),
+                    depth=max(0, min(int(args.get("depth") or 1), 3)),
+                    limit=max(1, min(int(args.get("limit") or 12), 24)),
+                    cursor=_normalize_text(args.get("cursor")),
+                    if_none_match=_normalize_text(args.get("if_none_match")),
+                    since_digest=_normalize_text(args.get("since_digest")),
+                ),
                 model_text_format=model_text_format,
             )
         if tool == "get_sdk_metadata":
@@ -1667,10 +1717,18 @@ class CodexRootMcpBridge:
                     limit=max(
                         1,
                         min(
-                            int(args.get("limit") or 24),
+                            int(args.get("limit") or 12),
                             24 if task_scoped else 64,
                         ),
                     ),
+                    cursor=_normalize_text(args.get("cursor")),
+                    purpose=(
+                        "authoring"
+                        if task_scoped
+                        else str(args.get("purpose") or "authoring")
+                    ),
+                    if_none_match=_normalize_text(args.get("if_none_match")),
+                    since_digest=_normalize_text(args.get("since_digest")),
                 ),
                 model_text_format="min_json" if task_scoped else model_text_format,
             )
@@ -1711,6 +1769,11 @@ class CodexRootMcpBridge:
                 str(args.get("descriptor_id") or ""),
                 str(args.get("item_id") or ""),
                 level="std" if task_scoped else str(args.get("level") or "std"),
+                purpose=(
+                    "authoring"
+                    if task_scoped
+                    else str(args.get("purpose") or "authoring")
+                ),
             )
             return _tool_text(
                 payload,
@@ -1757,9 +1820,25 @@ class CodexRootMcpBridge:
         if tool == "get_template_catalog":
             return _tool_text(client.get_adaos_dev_template_catalog())
         if tool == "get_public_skill_registry":
-            return _tool_text(client.get_adaos_dev_public_skill_registry())
+            return _tool_text(
+                client.get_adaos_dev_public_skill_registry(
+                    query=_normalize_text(args.get("query")) or _normalize_text(self.profile.context_query),
+                    limit=max(1, min(int(args.get("limit") or 12), 24)),
+                    cursor=_normalize_text(args.get("cursor")),
+                    if_none_match=_normalize_text(args.get("if_none_match")),
+                    since_digest=_normalize_text(args.get("since_digest")),
+                )
+            )
         if tool == "get_public_scenario_registry":
-            return _tool_text(client.get_adaos_dev_public_scenario_registry())
+            return _tool_text(
+                client.get_adaos_dev_public_scenario_registry(
+                    query=_normalize_text(args.get("query")) or _normalize_text(self.profile.context_query),
+                    limit=max(1, min(int(args.get("limit") or 12), 24)),
+                    cursor=_normalize_text(args.get("cursor")),
+                    if_none_match=_normalize_text(args.get("if_none_match")),
+                    since_digest=_normalize_text(args.get("since_digest")),
+                )
+            )
         if tool == "get_named_entity_registry":
             return _tool_text(
                 client.get_adaos_dev_named_entity_registry(

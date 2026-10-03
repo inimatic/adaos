@@ -1,7 +1,20 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.5.2",
+  "catalog_version": "3.5.3",
   "webui_schema": "adaos.webui.v1",
+  "navigation_contracts": {
+    "browser_history": {
+      "schema_field": "pageSchema.navigationState.bindings",
+      "summary": "Project semantic page state into Back/Forward-safe, non-secret query values.",
+      "binding": {
+        "required": ["stateKey", "queryKey"],
+        "history": ["push", "replace", "ephemeral"],
+        "optional": ["hydrate", "clearValue", "maxLength"]
+      },
+      "authoring": "Use push for user-visible semantic destinations such as a section or selected record; use replace for transient filters; use ephemeral for state that must never enter browser history. Bind only scalar state. Back/Forward reprojects state and never replays callSkill, workflow, approval, publication, pairing, or other effects.",
+      "security": "Secret query keys are rejected. Intent and one-use codes are not page state and must not be bound."
+    }
+  },
   "authoring_lifecycle": {
     "deprecated_interfaces": [
       {

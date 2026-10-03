@@ -3,7 +3,7 @@ name: docs
 
 on:
   push:
-    branches: [rev2026]
+    branches: [main]
     paths:
       - "docs-stable/**"
       - "mkdocs.yml"
@@ -14,7 +14,7 @@ on:
       ref:
         description: "Git ref to publish"
         required: true
-        default: "rev2026"
+        default: "main"
         type: string
 
 permissions:

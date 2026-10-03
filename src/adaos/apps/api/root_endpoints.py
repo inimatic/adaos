@@ -2499,9 +2499,16 @@ async def root_mcp_descriptors(
 @root_router.get("/mcp/descriptors/{descriptor_id}")
 async def root_mcp_descriptor(
     descriptor_id: str,
+    response: Response,
     level: str = "std",
     query: str | None = None,
     limit: int = 24,
+    cursor: str | None = None,
+    roots: list[str] | None = None,
+    depth: int = 1,
+    purpose: str = "authoring",
+    if_none_match: str | None = None,
+    since_digest: str | None = None,
     authorization: str | None = Header(default=None),
     owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
     subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
@@ -2516,9 +2523,19 @@ async def root_mcp_descriptor(
             level=level,
             query=query,
             limit=max(1, min(int(limit or 24), 64)),
+            cursor=cursor,
+            roots=[str(item).strip() for item in roots or [] if str(item).strip()],
+            depth=max(0, min(int(depth or 0), 3)),
+            purpose=purpose,
+            if_none_match=if_none_match,
+            since_digest=since_digest,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": f"Descriptor '{descriptor_id}' was not found."}) from None
+    etag = str(descriptor.get("etag") or "").strip()
+    if etag:
+        response.headers["ETag"] = f'"{etag}"'
+        response.headers["Cache-Control"] = "private, must-revalidate"
     return {
         "ok": True,
         "auth": {"method": auth.get("method")},

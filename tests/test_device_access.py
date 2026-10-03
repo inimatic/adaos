@@ -610,7 +610,12 @@ def test_identify_browser_device_publishes_parent_target(monkeypatch) -> None:
             "display_name": "Chrome",
             "device_display_name": "My phone",
         },
-        "observation": {"online": True, "last_webspace_id": "desktop"},
+        "observation": {
+            "online": True,
+            "last_webspace_id": "desktop",
+            "browser_zone": "ru",
+            "browser_origin": "https://inimatic.com",
+        },
     }
     published: list[tuple[str, dict, str]] = []
 
@@ -638,6 +643,9 @@ def test_identify_browser_device_publishes_parent_target(monkeypatch) -> None:
     assert published[0][1]["request_id"] == "identify-test"
     assert published[0][1]["target_browser_device_id"] == "dev-phone"
     assert published[0][1]["target_endpoint_ref"] == "browser:dev-phone::webrtc"
+    assert published[0][1]["target_scope"] == "browser_representation"
+    assert published[0][1]["browser_zone"] == "ru"
+    assert published[0][1]["browser_origin"] == "https://inimatic.com"
     assert published[0][1]["requested_ref"] == "browser:dev-phone::webrtc"
 
 

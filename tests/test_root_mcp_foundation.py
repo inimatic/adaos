@@ -185,17 +185,38 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert sdk_rows[0]["fingerprint"].startswith("sha256:")
     assert sdk_rows[0]["drill_down"]["descriptor_id"] == "sdk_metadata"
 
+    cached_sdk = client.get(
+        "/v1/root/mcp/descriptors/sdk_metadata",
+        headers=scoped_headers,
+        params={"level": "mini", "if_none_match": sdk_descriptor["etag"]},
+    )
+    assert cached_sdk.status_code == 200
+    assert cached_sdk.headers["etag"] == f'"{sdk_descriptor["etag"]}"'
+    assert cached_sdk.json()["descriptor"]["delivery"]["mode"] == "not_modified"
+    assert cached_sdk.json()["descriptor"]["payload"] is None
+
     architecture = client.get("/v1/root/mcp/descriptors/architecture_catalog", headers=scoped_headers)
     assert architecture.status_code == 200
     architecture_payload = architecture.json()["descriptor"]["payload"]
     assert architecture_payload["available"] is True
     assert architecture_payload["page_count"] >= 1
+    assert architecture_payload["schema"] == "adaos.architecture.graph.v1"
+    assert len(architecture_payload["nodes"]) <= architecture_payload["limit"]
+    page_ids = {item["id"] for item in architecture_payload["nodes"]}
+    assert all(
+        edge["source"] in page_ids and edge["target"] in page_ids
+        for edge in architecture_payload["edges"]
+    )
 
     skills_registry = client.get("/v1/root/mcp/descriptors/public_skill_registry_summary", headers=scoped_headers)
     assert skills_registry.status_code == 200
     skills_payload = skills_registry.json()["descriptor"]["payload"]
     assert skills_payload["available"] is True
     assert skills_payload["kind"] == "skills"
+    assert all(
+        set(item) == {"id", "version", "stability", "capabilities", "digest"}
+        for item in skills_payload["items"]
+    )
 
     scenarios_registry = client.get("/v1/root/mcp/descriptors/public_scenario_registry_summary", headers=scoped_headers)
     assert scenarios_registry.status_code == 200

@@ -2,9 +2,7 @@ name: AdaOS CI
 
 on:
   push:
-    # Keep the rollout branch until installers, backend webhooks, and active slots
-    # have been migrated to the repository default branch together.
-    branches: [rev2026]
+    branches: [main]
     paths-ignore:
       - "docs-stable/**"
       - "mkdocs.yml"
@@ -76,9 +74,17 @@ jobs:
             tests/test_ci_core_version_bump.py \
             tests/test_tests_cli.py \
             tests/test_realtime_sidecar.py \
+            tests/test_root_mcp_output_profile.py \
             tests/test_supervisor.py \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread
+
+      - name: Enforce bounded MCP collections and output budgets
+        run: |
+          uv run python tools/mcp_output_profiler.py \
+            --sample \
+            --ci \
+            --output .tmp/ci-mcp-output-profile.json
 
       - name: Upload test reports
         if: always()
@@ -157,7 +163,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'push' &&
-        github.ref == 'refs/heads/rev2026' &&
+        github.ref == 'refs/heads/main' &&
         !startsWith(github.event.head_commit.message, 'chore: bump adaos version')
       }}
     runs-on: ubuntu-latest
@@ -165,10 +171,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout rev2026
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
-          ref: rev2026
+          ref: main
           fetch-depth: 0
 
       - name: Check branch head
@@ -228,4 +234,4 @@ jobs:
           git config user.email "ci-bot@example.com"
           git add pyproject.toml uv.lock
           git commit -m "chore: bump adaos version to ${{ steps.bump.outputs.new_version }} [skip ci]"
-          git push origin HEAD:rev2026
+          git push origin HEAD:main

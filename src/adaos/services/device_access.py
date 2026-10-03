@@ -582,7 +582,6 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
     assert device is not None
     policy = _mapping(device.get("policy"))
     identity = _mapping(device.get("identity"))
-    runtime = _mapping(device.get("runtime"))
     kind = _text(device.get("kind"))
     managed_state = _text(policy.get("managed_state")) or "observed_only"
     policy_present = bool(policy.get("present"))
@@ -1121,15 +1120,17 @@ def identify_device(
         "request_id": rid,
         "device_ref": parent_ref,
         "target_device_ref": parent_ref,
-        # The parent browser identity remains available for compatibility and
-        # physical-device grouping, but an endpoint command must retain the
-        # selected page/session identity.  Otherwise a BroadcastChannel shared
-        # by tabs on the same origin makes every tab identify itself.
+        # Browser representations are addressed by parent + zone/origin +
+        # webspace. Every tab showing the same representation identifies
+        # itself, while desktop/desktop-dev and RU/LO remain isolated.
         "target_endpoint_ref": token,
+        "target_scope": "browser_representation",
         "target_browser_device_id": parent_id,
         "browser_device_id": parent_id,
         "requested_ref": token,
         "webspace_id": _text(webspace_id) or _text(observation.get("last_webspace_id")) or None,
+        "browser_zone": _text(observation.get("browser_zone")) or None,
+        "browser_origin": _text(observation.get("browser_origin")) or None,
         "title": _text(policy.get("effective_name")) or parent_id,
         "device_display_name": _text(identity.get("device_display_name")) or _text(policy.get("device_display_name")) or None,
         "endpoint_display_name": _text(identity.get("endpoint_display_name")) or _text(policy.get("endpoint_display_name")) or _text(policy.get("display_name")) or None,

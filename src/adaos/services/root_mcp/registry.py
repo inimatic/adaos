@@ -3,9 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import base64
+import binascii
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from adaos.build_info import BUILD_INFO
 from adaos.sdk.core.exporter import export as sdk_export
@@ -219,6 +223,55 @@ def _json_hash(payload: Any) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _stable_content(value: Any) -> Any:
+    """Remove delivery timestamps before deriving a reusable content identity."""
+
+    if isinstance(value, dict):
+        return {
+            str(key): _stable_content(item)
+            for key, item in value.items()
+            if str(key) not in {"generated_at", "fresh_until", "issued_at"}
+        }
+    if isinstance(value, list):
+        return [_stable_content(item) for item in value]
+    return value
+
+
+def _content_digest(value: Any) -> str:
+    return f"sha256:{_json_hash(_stable_content(value))}"
+
+
+def _encode_catalog_cursor(*, offset: int, scope_digest: str) -> str:
+    payload = json.dumps(
+        {"offset": max(0, int(offset)), "scope_digest": scope_digest},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_catalog_cursor(cursor: str | None, *, scope_digest: str) -> int:
+    token = str(cursor or "").strip()
+    if not token:
+        return 0
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        offset = int(payload["offset"])
+    except (
+        binascii.Error,
+        KeyError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ValueError("invalid catalog cursor") from exc
+    if str(payload.get("scope_digest") or "") != scope_digest or offset < 0:
+        raise ValueError("catalog cursor does not match this query")
+    return offset
+
+
 def _overview_row(
     *,
     row_id: str,
@@ -272,15 +325,44 @@ def _sdk_metadata(
     *,
     query: str | None = None,
     limit: int = 24,
+    cursor: str | None = None,
+    purpose: str = "authoring",
 ) -> dict[str, Any]:
-    payload = dict(sdk_export(level=level, query=query, limit=limit))
+    effective_purpose = "migration" if str(purpose or "").strip().lower() == "migration" else "authoring"
+    payload = dict(
+        sdk_export(
+            level=level,
+            query=query,
+            # Selection is bounded before the requested page is projected.
+            # The exporter remains the single complete build-time source.
+            limit=64 if query else limit,
+            include_deprecated=effective_purpose == "migration",
+        )
+    )
     raw_items = (
         payload.get("items")
         if isinstance(payload.get("items"), list)
         else payload.get("tools")
     )
+    all_items = [item for item in raw_items or [] if isinstance(item, dict)]
+    bounded_limit = max(1, min(int(limit or 24), 64))
+    scope_digest = _content_digest(
+        {
+            "descriptor": "sdk_metadata",
+            "level": level,
+            "query": str(query or "").strip().casefold(),
+            "purpose": effective_purpose,
+        }
+    )
+    offset = _decode_catalog_cursor(cursor, scope_digest=scope_digest)
+    selected_items = all_items[offset : offset + bounded_limit]
+    has_more = offset + len(selected_items) < len(all_items)
+    if isinstance(payload.get("items"), list):
+        payload["items"] = selected_items
+    elif isinstance(payload.get("tools"), list):
+        payload["tools"] = selected_items
     rows: list[dict[str, Any]] = []
-    for item in raw_items or []:
+    for item in selected_items:
         if not isinstance(item, dict):
             continue
         name = str(item.get("n") or item.get("name") or "").strip()
@@ -289,6 +371,7 @@ def _sdk_metadata(
         meta = (
             dict(item.get("meta") or {}) if isinstance(item.get("meta"), dict) else {}
         )
+        contract = dict(item.get("contract") or {}) if isinstance(item.get("contract"), dict) else {}
         input_schema = (
             dict(item.get("input_schema") or {})
             if isinstance(item.get("input_schema"), dict)
@@ -309,11 +392,16 @@ def _sdk_metadata(
             capabilities={
                 "approval_scope": meta.get("approval_scope"),
                 "idempotent": meta.get("idempotent"),
+                "permissions": contract.get("permissions") or [],
+                "effects": contract.get("effects") or [],
+                "boundedness": contract.get("boundedness") or item.get("boundedness"),
+                "pagination": contract.get("pagination") or item.get("pagination"),
             },
             metadata={
                 "module": item.get("m") or item.get("module"),
                 "qualname": item.get("qualname"),
                 "args": list(item.get("a") or []),
+                "contract": contract,
             },
         )
         if level == "mini":
@@ -341,6 +429,20 @@ def _sdk_metadata(
         rows.append(row)
     payload["overview_schema"] = "adaos.descriptor.overview_row.v1"
     payload["overview_rows"] = rows
+    payload["count"] = len(selected_items)
+    payload["total_count"] = len(all_items)
+    payload["limit"] = bounded_limit
+    payload["offset"] = offset
+    payload["has_more"] = has_more
+    payload["next_cursor"] = (
+        _encode_catalog_cursor(
+            offset=offset + len(selected_items), scope_digest=scope_digest
+        )
+        if has_more
+        else None
+    )
+    payload["purpose"] = effective_purpose
+    payload["deprecated_included"] = effective_purpose == "migration"
     if level == "mini":
         # Mini is the authoritative model discovery projection. Avoid sending
         # the same rows twice as exporter items and descriptor overview rows.
@@ -660,50 +762,175 @@ def _registry_entries(kind: str) -> list[dict[str, Any]]:
     return [dict(item) for item in items if isinstance(item, dict)]
 
 
-def _public_registry_summary(kind: str) -> dict[str, Any]:
-    token = str(kind or "").strip().lower()
-    items = _registry_entries(token)
-    normalized: list[dict[str, Any]] = []
-    for item in items[:50]:
-        value = {
-            "id": str(item.get("id") or item.get("name") or "").strip(),
-            "name": str(item.get("name") or item.get("id") or "").strip(),
-            "version": str(item.get("version") or "").strip() or None,
-            "updated_at": str(item.get("updated_at") or "").strip() or None,
-            "description": str(item.get("description") or "").strip() or None,
-            "manifest": str(item.get("manifest") or "").strip() or None,
+def _registry_manifest(item: dict[str, Any]) -> dict[str, Any]:
+    manifest_ref = str(item.get("manifest") or "").strip()
+    if not manifest_ref:
+        return {}
+    path = Path(manifest_ref)
+    if not path.is_absolute():
+        path = _workspace_registry_path().parent / path
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return dict(loaded) if isinstance(loaded, dict) else {}
+
+
+def _registry_capabilities(item: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for source in (item.get("capabilities"), manifest.get("capabilities")):
+        if isinstance(source, list):
+            values.extend(str(value).strip() for value in source if str(value).strip())
+    if item.get("tools_count") or manifest.get("tools"):
+        values.append("tools")
+    if manifest.get("subscriptions") or manifest.get("emits"):
+        values.append("events")
+    if manifest.get("nlu") or item.get("nlu") or item.get("hints"):
+        values.append("nlu")
+    return sorted(set(values))
+
+
+def _public_registry_index_entry(kind: str, item: dict[str, Any]) -> dict[str, Any]:
+    manifest = _registry_manifest(item)
+    item_id = str(item.get("id") or item.get("name") or "").strip()
+    version = str(item.get("version") or manifest.get("version") or "").strip() or None
+    stability = str(
+        item.get("stability")
+        or manifest.get("stability")
+        or manifest.get("stage")
+        or "published"
+    ).strip()
+    capabilities = _registry_capabilities(item, manifest)
+    digest = _content_digest(
+        {
+            "id": item_id,
+            "version": version,
+            "stability": stability,
+            "capabilities": capabilities,
+            "manifest": manifest,
         }
-        value["overview"] = _overview_row(
-            row_id=value["id"],
-            kind="skill" if token == "skills" else "scenario",
-            title=value["name"] or value["id"],
-            summary=value["description"],
-            version=value["version"],
-            stability="published",
-            descriptor_id=f"public_{token[:-1]}_registry_summary",
-            owner=str(item.get("owner") or "workspace").strip(),
-            schema_id="skill_manifest_schema"
-            if token == "skills"
-            else "scenario_manifest_schema",
-            capabilities={
-                "tools": item.get("tools") or [],
-                "events": item.get("events") or [],
-                "nlu": item.get("nlu") or item.get("hints") or {},
-            },
-        )
-        normalized.append(value)
-    registry_payload = _workspace_registry()
+    )
     return {
-        "kind": token,
-        "available": True,
-        "registry_path": str(_workspace_registry_path()),
-        "updated_at": str(registry_payload.get("updated_at") or "").strip() or None,
-        "item_count": len(items),
-        "items": normalized,
+        "id": item_id,
+        "version": version,
+        "stability": stability,
+        "capabilities": capabilities,
+        "digest": digest,
     }
 
 
-def _architecture_catalog() -> dict[str, Any]:
+def public_registry_item(kind: str, item_id: str) -> dict[str, Any]:
+    token = str(kind or "").strip().lower()
+    selected = next(
+        (
+            item
+            for item in _registry_entries(token)
+            if str(item.get("id") or item.get("name") or "").strip() == str(item_id or "").strip()
+        ),
+        None,
+    )
+    if selected is None:
+        raise KeyError(item_id)
+    manifest = _registry_manifest(selected)
+    index = _public_registry_index_entry(token, selected)
+    tools = [dict(item) for item in manifest.get("tools") or [] if isinstance(item, dict)]
+    schemas = {
+        str(tool.get("name") or ""): {
+            "input": tool.get("input_schema") or {},
+            "output": tool.get("output_schema") or {},
+        }
+        for tool in tools
+        if str(tool.get("name") or "").strip()
+    }
+    examples = {
+        str(tool.get("name") or ""): list(tool.get("examples") or [])
+        for tool in tools
+        if str(tool.get("name") or "").strip() and tool.get("examples")
+    }
+    manifest_ref = str(selected.get("manifest") or "").strip() or None
+    source_ref = str(selected.get("path") or "").strip()
+    readme_ref = f"{source_ref.rstrip('/')}/README.md" if source_ref else None
+    return {
+        **index,
+        "schema": "adaos.public_registry.item.v1",
+        "kind": token[:-1],
+        "name": str(selected.get("name") or index["id"]),
+        "schemas": schemas,
+        "examples": examples,
+        "documentation": {
+            "summary": str(selected.get("description") or manifest.get("description") or "").strip() or None,
+            "manifest_ref": manifest_ref,
+            "readme_ref": readme_ref,
+        },
+    }
+
+
+def _public_registry_summary(
+    kind: str,
+    *,
+    query: str | None = None,
+    limit: int = 24,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    token = str(kind or "").strip().lower()
+    source_items = _registry_entries(token)
+    indexed = [_public_registry_index_entry(token, item) for item in source_items]
+    terms = [part.casefold() for part in re.findall(r"\w+", str(query or "")) if len(part) >= 2]
+    if terms:
+        by_id = {
+            str(item.get("id") or item.get("name") or "").strip(): item
+            for item in source_items
+        }
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for entry in indexed:
+            source = by_id.get(str(entry.get("id") or ""), {})
+            haystack = " ".join(
+                (
+                    str(entry.get("id") or ""),
+                    str(source.get("description") or ""),
+                    " ".join(entry.get("capabilities") or []),
+                )
+            ).casefold()
+            score = sum(40 if term == str(entry.get("id") or "").casefold() else 5 for term in terms if term in haystack)
+            if score:
+                scored.append((score, entry))
+        indexed = [entry for _score, entry in sorted(scored, key=lambda row: (-row[0], str(row[1]["id"])))]
+    else:
+        indexed.sort(key=lambda item: str(item.get("id") or ""))
+    bounded_limit = max(1, min(int(limit or 24), 64))
+    scope_digest = _content_digest({"kind": token, "query": str(query or "").strip().casefold()})
+    offset = _decode_catalog_cursor(cursor, scope_digest=scope_digest)
+    page = indexed[offset : offset + bounded_limit]
+    has_more = offset + len(page) < len(indexed)
+    payload_digest = _content_digest(indexed)
+    return {
+        "schema": "adaos.public_registry.index.v1",
+        "kind": token,
+        "available": True,
+        "item_count": len(indexed),
+        "count": len(page),
+        "limit": bounded_limit,
+        "offset": offset,
+        "has_more": has_more,
+        "next_cursor": _encode_catalog_cursor(offset=offset + len(page), scope_digest=scope_digest) if has_more else None,
+        "digest": payload_digest,
+        "etag": payload_digest,
+        "detail_request": {
+            "tool": "development.get_descriptor_item",
+            "descriptor_id": f"public_{token[:-1]}_registry_summary",
+        },
+        "items": page,
+    }
+
+
+def _architecture_catalog(
+    *,
+    query: str | None = None,
+    limit: int = 24,
+    cursor: str | None = None,
+    roots: list[str] | None = None,
+    depth: int = 1,
+) -> dict[str, Any]:
     repository_root = Path(__file__).resolve().parents[4]
     path = repository_root / "docs" / "architecture" / "index.md"
     pages: list[dict[str, Any]] = []
@@ -759,11 +986,101 @@ def _architecture_catalog() -> dict[str, Any]:
                         else "AdaOS architecture document.",
                     }
                 )
+    nodes = [
+        {
+            "id": str(page.get("path") or page.get("title") or "").strip(),
+            "type": "architecture.document",
+            "title": str(page.get("title") or "").strip(),
+            "summary": str(page.get("summary") or "").strip(),
+        }
+        for page in pages
+        if str(page.get("path") or page.get("title") or "").strip()
+    ]
+    by_id = {node["id"]: node for node in nodes}
+    for node in nodes:
+        node["digest"] = _content_digest(node)
+    edges: list[dict[str, Any]] = []
+    repository_root = Path(__file__).resolve().parents[4]
+    for node in nodes:
+        document = repository_root / node["id"]
+        try:
+            document_text = document.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        for raw_target in re.findall(r"\[[^\]]+\]\(([^\)#]+\.md)(?:#[^\)]*)?\)", document_text):
+            candidate = (document.parent / raw_target).resolve()
+            try:
+                target_id = candidate.relative_to(repository_root.resolve()).as_posix()
+            except ValueError:
+                continue
+            if target_id not in by_id:
+                continue
+            edge = {"source": node["id"], "target": target_id, "type": "references"}
+            edge["digest"] = _content_digest(edge)
+            edges.append(edge)
+    selected_ids = {str(value).strip() for value in roots or [] if str(value).strip() in by_id}
+    terms = [part.casefold() for part in re.findall(r"\w+", str(query or "")) if len(part) >= 2]
+    if terms and not selected_ids:
+        ranked = sorted(
+            (
+                (
+                    sum(
+                        40 if term == node["id"].casefold() else 8 if term in node["title"].casefold() else 2
+                        for term in terms
+                        if term in f"{node['id']} {node['title']} {node['summary']}".casefold()
+                    ),
+                    node["id"],
+                )
+                for node in nodes
+            ),
+            key=lambda row: (-row[0], row[1]),
+        )
+        selected_ids = {node_id for score, node_id in ranked if score > 0}
+    if selected_ids:
+        frontier = set(selected_ids)
+        allowed = set(selected_ids)
+        for _ in range(max(0, min(int(depth or 0), 3))):
+            neighbors = {
+                endpoint
+                for edge in edges
+                if edge["source"] in frontier or edge["target"] in frontier
+                for endpoint in (edge["source"], edge["target"])
+            }
+            frontier = neighbors - allowed
+            allowed.update(neighbors)
+        nodes = [node for node in nodes if node["id"] in allowed]
+        edges = [edge for edge in edges if edge["source"] in allowed and edge["target"] in allowed]
+    nodes.sort(key=lambda node: node["id"])
+    bounded_limit = max(1, min(int(limit or 24), 64))
+    scope_digest = _content_digest({"query": query or "", "roots": sorted(selected_ids), "depth": depth})
+    offset = _decode_catalog_cursor(cursor, scope_digest=scope_digest)
+    page_nodes = nodes[offset : offset + bounded_limit]
+    page_ids = {node["id"] for node in page_nodes}
+    # Never let a page pull the full graph back in through high-degree boundary
+    # edges. A caller asks for the next node page or a rooted neighborhood.
+    page_edges = [
+        edge
+        for edge in edges
+        if edge["source"] in page_ids and edge["target"] in page_ids
+    ]
+    has_more = offset + len(page_nodes) < len(nodes)
+    graph_digest = _content_digest({"nodes": nodes, "edges": edges})
     return {
+        "schema": "adaos.architecture.graph.v1",
         "available": True,
         "index_path": str(path),
-        "page_count": len(pages),
-        "pages": pages,
+        "page_count": len(nodes),
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "count": len(page_nodes),
+        "limit": bounded_limit,
+        "offset": offset,
+        "has_more": has_more,
+        "next_cursor": _encode_catalog_cursor(offset=offset + len(page_nodes), scope_digest=scope_digest) if has_more else None,
+        "digest": graph_digest,
+        "etag": graph_digest,
+        "nodes": page_nodes,
+        "edges": page_edges,
     }
 
 
@@ -921,6 +1238,7 @@ def _descriptor_bundle_metadata(
     issued_at = _iso_now()
     cache = dict(entry.get("cache") or {})
     ttl_seconds = int(cache.get("ttl_seconds") or 600)
+    content_digest = _content_digest(payload)
     return {
         "descriptor_id": entry["descriptor_id"],
         "level": level,
@@ -937,8 +1255,94 @@ def _descriptor_bundle_metadata(
             "published_by": entry["source"]["published_by"],
             "build_version": BUILD_INFO.version,
             "build_date": BUILD_INFO.build_date,
-            "content_hash": _json_hash(payload),
+            "content_hash": content_digest,
         },
+        "etag": content_digest,
+    }
+
+
+_DESCRIPTOR_SNAPSHOT_MEMORY: dict[tuple[str, str], Any] = {}
+
+
+def _descriptor_snapshot_path(descriptor_id: str, digest: str) -> Path | None:
+    try:
+        root = Path(get_ctx().paths.root_mcp_state_dir()) / "descriptor_snapshots" / descriptor_id
+        root.mkdir(parents=True, exist_ok=True)
+        return root / f"{digest.removeprefix('sha256:')}.json"
+    except Exception:
+        return None
+
+
+def _store_descriptor_snapshot(descriptor_id: str, digest: str, payload: Any) -> None:
+    _DESCRIPTOR_SNAPSHOT_MEMORY[(descriptor_id, digest)] = payload
+    path = _descriptor_snapshot_path(descriptor_id, digest)
+    if path is None or path.exists():
+        return
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _load_descriptor_snapshot(descriptor_id: str, digest: str) -> Any:
+    cached = _DESCRIPTOR_SNAPSHOT_MEMORY.get((descriptor_id, digest))
+    if cached is not None:
+        return cached
+    path = _descriptor_snapshot_path(descriptor_id, digest)
+    if path is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    _DESCRIPTOR_SNAPSHOT_MEMORY[(descriptor_id, digest)] = payload
+    return payload
+
+
+def _delta_fragments(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"payload": payload}
+    for key, id_keys in (
+        ("items", ("id", "row_id", "name")),
+        ("nodes", ("id",)),
+        ("overview_rows", ("row_id", "id", "name")),
+        ("tools", ("name", "id")),
+        ("pages", ("path", "id", "title")),
+    ):
+        rows = payload.get(key)
+        if not isinstance(rows, list):
+            continue
+        result: dict[str, Any] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_id = next((str(row.get(name) or "").strip() for name in id_keys if str(row.get(name) or "").strip()), "")
+            if row_id:
+                result[f"{key}:{row_id}"] = row
+        if key == "nodes" and isinstance(payload.get("edges"), list):
+            for edge in payload["edges"]:
+                if not isinstance(edge, dict):
+                    continue
+                edge_id = f"edges:{edge.get('source')}:{edge.get('type')}:{edge.get('target')}"
+                result[edge_id] = edge
+        return result
+    return {f"field:{key}": value for key, value in payload.items()}
+
+
+def _descriptor_delta(previous: Any, current: Any, *, base_etag: str, etag: str) -> dict[str, Any]:
+    before = _delta_fragments(previous)
+    after = _delta_fragments(current)
+    changed = [
+        {"fragment_id": key, "digest": _content_digest(value), "value": value}
+        for key, value in sorted(after.items())
+        if key not in before or _content_digest(before[key]) != _content_digest(value)
+    ]
+    return {
+        "schema": "adaos.descriptor.delta.v1",
+        "base_etag": base_etag,
+        "etag": etag,
+        "changed": changed,
+        "removed": sorted(set(before) - set(after)),
     }
 
 
@@ -948,13 +1352,23 @@ def _descriptor_payload(
     level: str = "std",
     query: str | None = None,
     limit: int = 24,
+    cursor: str | None = None,
+    roots: list[str] | None = None,
+    depth: int = 1,
+    purpose: str = "authoring",
 ) -> Any:
     token = str(descriptor_id or "").strip().lower()
     if token == "sdk_metadata":
         effective_level = str(level or "std").strip().lower() or "std"
         if effective_level not in {"mini", "std", "rich"}:
             effective_level = "std"
-        return _sdk_metadata(effective_level, query=query, limit=limit)
+        return _sdk_metadata(
+            effective_level,
+            query=query,
+            limit=limit,
+            cursor=cursor,
+            purpose=purpose,
+        )
     if token == "application_contracts":
         return _application_contracts()
     if token == "ui_capability_catalog":
@@ -1033,11 +1447,17 @@ def _descriptor_payload(
             },
         }
     if token == "architecture_catalog":
-        return _architecture_catalog()
+        return _architecture_catalog(
+            query=query,
+            limit=limit,
+            cursor=cursor,
+            roots=roots,
+            depth=depth,
+        )
     if token == "public_skill_registry_summary":
-        return _public_registry_summary("skills")
+        return _public_registry_summary("skills", query=query, limit=limit, cursor=cursor)
     if token == "public_scenario_registry_summary":
-        return _public_registry_summary("scenarios")
+        return _public_registry_summary("scenarios", query=query, limit=limit, cursor=cursor)
     if token == "named_entity_registry":
         from adaos.services import named_entities
 
@@ -1397,6 +1817,12 @@ def get_descriptor_set(
     level: str = "std",
     query: str | None = None,
     limit: int = 24,
+    cursor: str | None = None,
+    roots: list[str] | None = None,
+    depth: int = 1,
+    if_none_match: str | None = None,
+    since_digest: str | None = None,
+    purpose: str = "authoring",
 ) -> dict[str, Any]:
     token = str(descriptor_id or "").strip().lower()
     effective_level = str(level or "std").strip().lower() or "std"
@@ -1413,13 +1839,35 @@ def get_descriptor_set(
         level=effective_level,
         query=query,
         limit=max(1, min(int(limit or 24), 64)),
+        cursor=cursor,
+        roots=roots,
+        depth=max(0, min(int(depth or 0), 3)),
+        purpose=purpose,
     )
-    return {
+    metadata = _descriptor_bundle_metadata(entry, payload, level=effective_level)
+    etag = str(metadata.get("etag") or "")
+    _store_descriptor_snapshot(token, etag, payload)
+    result = {
         **entry,
         "level": effective_level,
-        "metadata": _descriptor_bundle_metadata(entry, payload, level=effective_level),
+        "metadata": metadata,
+        "etag": etag,
         "payload": payload,
+        "delivery": {"mode": "full", "etag": etag, "cache": "content-addressed"},
     }
+    if str(if_none_match or "").strip() == etag:
+        result["payload"] = None
+        result["delivery"] = {"mode": "not_modified", "etag": etag, "cache": "content-addressed"}
+        return result
+    base = str(since_digest or "").strip()
+    if base and base != etag:
+        previous = _load_descriptor_snapshot(token, base)
+        if previous is None:
+            result["delivery"]["reset_required"] = True
+        else:
+            result["payload"] = _descriptor_delta(previous, payload, base_etag=base, etag=etag)
+            result["delivery"] = {"mode": "delta", "etag": etag, "base_etag": base, "cache": "content-addressed"}
+    return result
 
 
 __all__ = [
@@ -1427,5 +1875,6 @@ __all__ = [
     "descriptor_registry_summary",
     "get_descriptor_set",
     "list_descriptor_sets",
+    "public_registry_item",
     "record_descriptor_refresh",
 ]

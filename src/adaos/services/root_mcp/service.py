@@ -421,6 +421,12 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                 properties={
                     "descriptor_id": {"type": "string"},
                     "level": {"type": "string", "enum": ["mini", "std", "rich"]},
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "cursor": {"type": "string"},
+                    "purpose": {"type": "string", "enum": ["authoring", "migration"]},
+                    "if_none_match": {"type": "string"},
+                    "since_digest": {"type": "string"},
                 },
                 required=["descriptor_id"],
             ),
@@ -480,6 +486,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "descriptor_id": {"type": "string"},
                     "item_id": {"type": "string"},
                     "level": {"type": "string", "enum": ["mini", "std", "rich"]},
+                    "purpose": {"type": "string", "enum": ["authoring", "migration"]},
                 },
                 required=["descriptor_id", "item_id"],
             ),
@@ -525,7 +532,17 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Get AdaOS architecture catalog",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Return the root-curated AdaOS architecture catalog for Builder and authoring workflows.",
-            input_schema=schema_object(),
+            input_schema=schema_object(
+                properties={
+                    "query": {"type": "string"},
+                    "roots": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+                    "depth": {"type": "integer", "minimum": 0, "maximum": 3},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8},
+                    "cursor": {"type": "string"},
+                    "if_none_match": {"type": "string"},
+                    "since_digest": {"type": "string"},
+                }
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={
@@ -545,7 +562,11 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                         "type": "string",
                         "description": "Task language used to select relevant public SDK symbols.",
                     },
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64, "default": 12},
+                    "cursor": {"type": "string"},
+                    "purpose": {"type": "string", "enum": ["authoring", "migration"]},
+                    "if_none_match": {"type": "string"},
+                    "since_digest": {"type": "string"},
                 }
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
@@ -573,7 +594,15 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Get public skill registry summary",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Return the published workspace skill registry summary through AdaOSDevPlane.",
-            input_schema=schema_object(),
+            input_schema=schema_object(
+                properties={
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "cursor": {"type": "string"},
+                    "if_none_match": {"type": "string"},
+                    "since_digest": {"type": "string"},
+                }
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={
@@ -586,7 +615,15 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Get public scenario registry summary",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Return the published workspace scenario registry summary through AdaOSDevPlane.",
-            input_schema=schema_object(),
+            input_schema=schema_object(
+                properties={
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "cursor": {"type": "string"},
+                    "if_none_match": {"type": "string"},
+                    "since_digest": {"type": "string"},
+                }
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={
@@ -2558,12 +2595,24 @@ def get_descriptor(
     level: str = "std",
     query: str | None = None,
     limit: int = 24,
+    cursor: str | None = None,
+    roots: list[str] | None = None,
+    depth: int = 1,
+    if_none_match: str | None = None,
+    since_digest: str | None = None,
+    purpose: str = "authoring",
 ) -> dict[str, Any]:
     return get_descriptor_set(
         descriptor_id,
         level=level,
         query=query,
         limit=limit,
+        cursor=cursor,
+        roots=roots,
+        depth=depth,
+        if_none_match=if_none_match,
+        since_digest=since_digest,
+        purpose=purpose,
     )
 
 
@@ -2589,8 +2638,14 @@ def get_descriptor_item(
     item_id: str,
     *,
     level: str = "std",
+    purpose: str = "authoring",
 ) -> dict[str, Any]:
-    return get_registry_descriptor_item(descriptor_id, item_id, level=level)
+    return get_registry_descriptor_item(
+        descriptor_id,
+        item_id,
+        level=level,
+        purpose=purpose,
+    )
 
 
 def list_managed_targets(
@@ -2720,6 +2775,10 @@ def _handle_get_descriptor_set(
             level=level,
             query=_text_or_none(arguments.get("query")),
             limit=max(1, min(int(arguments.get("limit") or 24), 64)),
+            cursor=_text_or_none(arguments.get("cursor")),
+            if_none_match=_text_or_none(arguments.get("if_none_match")),
+            since_digest=_text_or_none(arguments.get("since_digest")),
+            purpose=_text_or_none(arguments.get("purpose")) or "authoring",
         )
     }
 
@@ -2774,6 +2833,7 @@ def _handle_get_descriptor_item(
             descriptor_id,
             item_id,
             level=str(arguments.get("level") or "std"),
+            purpose=_text_or_none(arguments.get("purpose")) or "authoring",
         )
     }
 
@@ -2799,17 +2859,25 @@ def _handle_scenario_manifest_schema(
 def _handle_adaos_dev_descriptor(
     arguments: dict[str, Any], *, descriptor_id: str
 ) -> dict[str, Any]:
-    level = str(arguments.get("level") or "std").strip().lower() or "std"
+    level = str(arguments.get("level") or "mini").strip().lower() or "mini"
+    default_limit = 8 if descriptor_id == "architecture_catalog" else 12 if descriptor_id == "sdk_metadata" else 24
+    roots = [
+        str(item).strip()
+        for item in arguments.get("roots") or []
+        if str(item).strip()
+    ]
     return {
         "descriptor": get_descriptor(
             descriptor_id,
             level=level,
-            query=(
-                _text_or_none(arguments.get("query"))
-                if descriptor_id == "sdk_metadata"
-                else None
-            ),
-            limit=max(1, min(int(arguments.get("limit") or 24), 64)),
+            query=_text_or_none(arguments.get("query")),
+            limit=max(1, min(int(arguments.get("limit") or default_limit), 64)),
+            cursor=_text_or_none(arguments.get("cursor")),
+            roots=roots,
+            depth=max(0, min(int(arguments.get("depth") or 1), 3)),
+            if_none_match=_text_or_none(arguments.get("if_none_match")),
+            since_digest=_text_or_none(arguments.get("since_digest")),
+            purpose=_text_or_none(arguments.get("purpose")) or "authoring",
         )
     }
 
@@ -2869,8 +2937,20 @@ def _builder_descriptor_summary(
     ):
         if key in payload:
             summary[key] = payload.get(key)
-    if include_payload:
+    heavy_indexes = {
+        "architecture_catalog",
+        "sdk_metadata",
+        "public_skill_registry_summary",
+        "public_scenario_registry_summary",
+    }
+    if include_payload and str(descriptor.get("descriptor_id") or "") not in heavy_indexes:
         summary["payload"] = payload
+    elif str(descriptor.get("descriptor_id") or "") in heavy_indexes:
+        summary["detail_included"] = False
+        summary["discovery"] = {
+            "search": "development.search_descriptors",
+            "detail": "development.get_descriptor_item",
+        }
     return summary
 
 

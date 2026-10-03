@@ -943,6 +943,8 @@ class DeviceInventoryService:
                         "last_seen_at": _float_or_none(entry.get("last_seen_at")),
                         "source": "browser_session",
                         "last_webspace_id": _text_or_none(entry.get("last_webspace_id")),
+                        "browser_origin": _text_or_none(entry.get("browser_origin")),
+                        "browser_zone": _text_or_none(entry.get("browser_zone")),
                     },
                     "runtime": {
                         "snapshot_ready": None,

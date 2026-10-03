@@ -12,6 +12,37 @@ from .model import RootMcpToolContract
 DEFAULT_REVIEW_CHARS = 16_000
 DEFAULT_OPTIMIZE_CHARS = 64_000
 
+# These predate the bounded collection contract. They stay visible in every
+# audit but do not make the new-API gate unusable while they are migrated.
+_LEGACY_COLLECTION_DEBT = frozenset(
+    {
+        "development.list_planes",
+        "development_feedback.list",
+        "dev_ticket.list",
+        "nlu_authoring.list_templates",
+        "nlu_authoring.list_training_targets",
+        "operations.list_contracts",
+        "operations.list_managed_targets",
+        "operations.list_360log_snapshots",
+        "hub.list_access_tokens",
+        "hub.list_mcp_sessions",
+        "hub.memory.list_sessions",
+        "hub.memory.list_incidents",
+        "hub.memory.list_artifacts",
+        "applications.list_components",
+        "applications.list_placements",
+        "applications.list_home_targets",
+        "applications.list_releases",
+        "applications.list_operations",
+        "applications.list_trial_access",
+        "applications.list_development_reports",
+        "applications.list_development_report_intakes",
+        "applications.list_development_report_appeals",
+        "applications.list_publisher_development_report_appeals",
+        "applications.development.list_operations",
+    }
+)
+
 
 def measure_output(
     value: Any,
@@ -135,12 +166,16 @@ def profile_audit_events(
 def audit_search_contracts(
     contracts: Sequence[RootMcpToolContract],
 ) -> dict[str, Any]:
-    """Find search-like MCP contracts that cannot bound and continue results."""
+    """Find collection MCP contracts that cannot bound and continue results.
+
+    Existing list debt is reported but only newly introduced debt blocks CI.
+    Search/query contracts have never been grandfathered.
+    """
 
     rows: list[dict[str, Any]] = []
     for contract in contracts:
         operation = contract.id.rsplit(".", 1)[-1].lower()
-        if not operation.startswith(("search", "query")):
+        if not operation.startswith(("list", "search", "query")):
             continue
         schema = contract.input_schema if isinstance(contract.input_schema, Mapping) else {}
         properties = schema.get("properties")
@@ -168,12 +203,15 @@ def audit_search_contracts(
                 signals.append("unbounded_top_k")
         if cursor_name is None:
             signals.append("missing_pagination")
+        legacy_debt = bool(signals and contract.id in _LEGACY_COLLECTION_DEBT)
         rows.append(
             {
                 "tool_id": contract.id,
                 "bound_argument": bound_name,
                 "pagination_argument": cursor_name,
                 "signals": signals,
+                "legacy_debt": legacy_debt,
+                "blocking": bool(signals and not legacy_debt),
                 "status": "review" if signals else "ok",
             }
         )
@@ -182,6 +220,8 @@ def audit_search_contracts(
         "schema": "adaos.mcp.search_contract_audit.v1",
         "search_tool_count": len(rows),
         "review_count": sum(1 for item in rows if item["signals"]),
+        "blocking_count": sum(1 for item in rows if item["blocking"]),
+        "legacy_debt_count": sum(1 for item in rows if item["legacy_debt"]),
         "items": rows,
     }
 

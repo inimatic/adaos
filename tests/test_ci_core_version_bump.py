@@ -19,7 +19,7 @@ def test_ci_embeds_patch_bump_after_fast_tests() -> None:
     assert "tests/test_supervisor.py" in workflow
     assert "test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker" in workflow
     assert "github.event_name == 'push'" in workflow
-    assert "github.ref == 'refs/heads/rev2026'" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
     assert "chore: bump adaos version" in workflow
     assert "python tools/bump_adaos_patch_version.py" in workflow
 

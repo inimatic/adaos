@@ -66,6 +66,12 @@ class RootMcpClient:
         level: str = "std",
         query: str | None = None,
         limit: int = 24,
+        cursor: str | None = None,
+        roots: list[str] | tuple[str, ...] | None = None,
+        depth: int | None = None,
+        purpose: str = "authoring",
+        if_none_match: str | None = None,
+        since_digest: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if level:
@@ -73,6 +79,18 @@ class RootMcpClient:
         if query:
             params["query"] = str(query)
         params["limit"] = max(1, min(int(limit or 24), 64))
+        if cursor:
+            params["cursor"] = str(cursor)
+        if roots:
+            params["roots"] = [str(item) for item in roots if str(item).strip()]
+        if depth is not None:
+            params["depth"] = max(0, min(int(depth), 3))
+        if str(purpose or "authoring") == "migration":
+            params["purpose"] = "migration"
+        if if_none_match:
+            params["if_none_match"] = str(if_none_match)
+        if since_digest:
+            params["since_digest"] = str(since_digest)
         return dict(self._request("GET", f"/v1/root/mcp/descriptors/{descriptor_id}", params=params))
 
     def search_descriptors(
@@ -99,14 +117,18 @@ class RootMcpClient:
         item_id: str,
         *,
         level: str = "std",
+        purpose: str = "authoring",
     ) -> dict[str, Any]:
+        arguments = {
+            "descriptor_id": str(descriptor_id),
+            "item_id": str(item_id),
+            "level": str(level or "std"),
+        }
+        if str(purpose or "authoring") == "migration":
+            arguments["purpose"] = "migration"
         return self.call(
             "development.get_descriptor_item",
-            arguments={
-                "descriptor_id": str(descriptor_id),
-                "item_id": str(item_id),
-                "level": str(level or "std"),
-            },
+            arguments=arguments,
         )
 
     def search_context_capsules(
@@ -142,28 +164,62 @@ class RootMcpClient:
     def get_adaos_dev_architecture_catalog(
         self,
         *,
+        query: str | None = None,
+        roots: list[str] | tuple[str, ...] | None = None,
+        depth: int | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        if_none_match: str | None = None,
+        since_digest: str | None = None,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        return self.call("adaos_dev.get_architecture_catalog", request_id=request_id, trace_id=trace_id, dry_run=dry_run)
+        arguments: dict[str, Any] = {}
+        if query:
+            arguments["query"] = str(query)
+        if roots:
+            arguments["roots"] = [str(item) for item in roots if str(item).strip()]
+        if depth is not None:
+            arguments["depth"] = max(0, min(int(depth), 3))
+        if limit is not None:
+            arguments["limit"] = max(1, min(int(limit), 64))
+        if cursor:
+            arguments["cursor"] = str(cursor)
+        if if_none_match:
+            arguments["if_none_match"] = str(if_none_match)
+        if since_digest:
+            arguments["since_digest"] = str(since_digest)
+        return self.call("adaos_dev.get_architecture_catalog", arguments=arguments, request_id=request_id, trace_id=trace_id, dry_run=dry_run)
 
     def get_adaos_dev_sdk_metadata(
         self,
         *,
         level: str = "std",
         query: str | None = None,
-        limit: int = 24,
+        limit: int = 12,
+        cursor: str | None = None,
+        purpose: str = "authoring",
+        if_none_match: str | None = None,
+        since_digest: str | None = None,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
             "level": str(level),
-            "limit": max(1, min(int(limit or 24), 64)),
+            "limit": max(1, min(int(limit or 12), 64)),
         }
         if query:
             arguments["query"] = str(query)
+        if cursor:
+            arguments["cursor"] = str(cursor)
+        if str(purpose or "authoring") == "migration":
+            arguments["purpose"] = "migration"
+        if if_none_match:
+            arguments["if_none_match"] = str(if_none_match)
+        if since_digest:
+            arguments["since_digest"] = str(since_digest)
         return self.call(
             "adaos_dev.get_sdk_metadata",
             arguments=arguments,
@@ -184,20 +240,42 @@ class RootMcpClient:
     def get_adaos_dev_public_skill_registry(
         self,
         *,
+        query: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        if_none_match: str | None = None,
+        since_digest: str | None = None,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        return self.call("adaos_dev.get_public_skill_registry", request_id=request_id, trace_id=trace_id, dry_run=dry_run)
+        arguments: dict[str, Any] = {}
+        for key, value in (("query", query), ("cursor", cursor), ("if_none_match", if_none_match), ("since_digest", since_digest)):
+            if value:
+                arguments[key] = str(value)
+        if limit is not None:
+            arguments["limit"] = max(1, min(int(limit), 64))
+        return self.call("adaos_dev.get_public_skill_registry", arguments=arguments, request_id=request_id, trace_id=trace_id, dry_run=dry_run)
 
     def get_adaos_dev_public_scenario_registry(
         self,
         *,
+        query: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        if_none_match: str | None = None,
+        since_digest: str | None = None,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        return self.call("adaos_dev.get_public_scenario_registry", request_id=request_id, trace_id=trace_id, dry_run=dry_run)
+        arguments: dict[str, Any] = {}
+        for key, value in (("query", query), ("cursor", cursor), ("if_none_match", if_none_match), ("since_digest", since_digest)):
+            if value:
+                arguments[key] = str(value)
+        if limit is not None:
+            arguments["limit"] = max(1, min(int(limit), 64))
+        return self.call("adaos_dev.get_public_scenario_registry", arguments=arguments, request_id=request_id, trace_id=trace_id, dry_run=dry_run)
 
     def get_adaos_dev_named_entity_registry(
         self,

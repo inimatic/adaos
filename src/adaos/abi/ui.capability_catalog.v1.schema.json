@@ -9,6 +9,21 @@
     "schema": { "const": "adaos.ui.capability_catalog.v1" },
     "catalog_version": { "type": "string", "minLength": 1 },
     "webui_schema": { "const": "adaos.webui.v1" },
+    "navigation_contracts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["schema_field", "summary", "binding", "authoring", "security"],
+        "properties": {
+          "schema_field": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 },
+          "binding": { "type": "object", "minProperties": 1 },
+          "authoring": { "type": "string", "minLength": 1 },
+          "security": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "authoring_lifecycle": {
       "type": "object",
       "additionalProperties": false,

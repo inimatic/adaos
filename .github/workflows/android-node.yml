@@ -2,7 +2,7 @@ name: Android node APK
 
 on:
   push:
-    branches: [rev2026]
+    branches: [main]
     paths:
       - ".github/workflows/android-node.yml"
       - "src/adaos/integrations/android-node/**"

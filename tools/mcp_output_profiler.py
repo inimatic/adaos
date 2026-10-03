@@ -44,7 +44,9 @@ from adaos.services.project_deployment.default_runtime import (  # noqa: E402
 )
 from adaos.services.root_mcp.audit import list_audit_events  # noqa: E402
 from adaos.services.root_mcp.output_profile import (  # noqa: E402
+    DEFAULT_REVIEW_CHARS,
     audit_search_contracts,
+    measure_output,
     profile_audit_events,
 )
 from adaos.services.root_mcp.service import (  # noqa: E402
@@ -84,6 +86,7 @@ def _sample_safe_tools() -> list[dict[str, Any]]:
                     "ok": response.ok,
                     "status": response.status,
                     "error_code": response.error.code if response.error else None,
+                    "measurement": measure_output(response.result),
                 }
             )
         except Exception as exc:  # a profiler must report one broken source and continue
@@ -104,6 +107,17 @@ def main() -> int:
     parser.add_argument("--event-limit", type=int, default=100_000)
     parser.add_argument("--top", type=int, default=5)
     parser.add_argument(
+        "--ci",
+        action="store_true",
+        help="fail on new unbounded collection contracts, sampling failures, or output-budget violations",
+    )
+    parser.add_argument(
+        "--budget-chars",
+        type=int,
+        default=DEFAULT_REVIEW_CHARS,
+        help="maximum serialized characters for each sampled model-facing result",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=REPOSITORY_ROOT / ".tmp" / "mcp-output-profile.json",
@@ -118,14 +132,27 @@ def main() -> int:
         list_audit_events(limit=max(1, args.event_limit)),
         top_n=max(1, args.top),
     )
+    contract_audit = audit_search_contracts(contracts)
+    budget = max(1, int(args.budget_chars))
+    budget_violations = [
+        {
+            "tool_id": item["tool_id"],
+            "serialized_chars": int((item.get("measurement") or {}).get("serialized_chars") or 0),
+            "budget_chars": budget,
+        }
+        for item in sampled
+        if int((item.get("measurement") or {}).get("serialized_chars") or 0) > budget
+    ]
     report = {
         "schema": "adaos.mcp.output_profiler_report.v1",
         "profile": profile,
-        "contract_audit": audit_search_contracts(contracts),
+        "contract_audit": contract_audit,
         "sampling": {
             "requested": bool(args.sample),
             "count": len(sampled),
             "failures": [item for item in sampled if not item["ok"]],
+            "budget_chars": budget,
+            "budget_violations": budget_violations,
         },
     }
     output_path = args.output.resolve()
@@ -142,13 +169,21 @@ def main() -> int:
                 "report": str(output_path),
                 "top": profile["top"],
                 "search_contract_review_count": report["contract_audit"]["review_count"],
+                "collection_contract_blocking_count": report["contract_audit"]["blocking_count"],
                 "sampling_count": len(sampled),
                 "sampling_failure_count": len(report["sampling"]["failures"]),
+                "sampling_budget_violation_count": len(budget_violations),
             },
             ensure_ascii=False,
             indent=2,
         )
     )
+    if args.ci and (
+        contract_audit["blocking_count"]
+        or report["sampling"]["failures"]
+        or budget_violations
+    ):
+        return 1
     return 0
 
 

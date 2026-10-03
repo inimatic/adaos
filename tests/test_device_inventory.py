@@ -65,6 +65,8 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
                 "online": True,
                 "connection_state": "connected",
                 "last_webspace_id": "desktop",
+                "browser_origin": "https://inimatic.com",
+                "browser_zone": "ru",
                 "browser_family": "Edge",
                 "os_name": "Windows",
                 "form_factor": "Desktop",
@@ -89,6 +91,8 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
         "last_seen_at": 995.0,
         "source": "browser_session",
         "last_webspace_id": "desktop",
+        "browser_origin": "https://inimatic.com",
+        "browser_zone": "ru",
     }
     assert item["identity"]["browser_family"] == "Edge"
     assert item["identity"]["os_name"] == "Windows"

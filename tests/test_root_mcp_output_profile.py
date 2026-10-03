@@ -8,6 +8,7 @@ from adaos.services.root_mcp.output_profile import (
     measure_output,
     profile_audit_events,
 )
+from adaos.services.root_mcp import registry as descriptor_registry
 
 
 def _contract(tool_id: str, properties: dict) -> RootMcpToolContract:
@@ -91,6 +92,16 @@ def test_search_contract_audit_requires_bound_and_pagination() -> None:
     assert "detail.get_query_result" not in by_id
 
 
+def test_collection_contract_audit_blocks_a_new_unbounded_list() -> None:
+    audit = audit_search_contracts([_contract("new_surface.list_records", {})])
+
+    assert audit["blocking_count"] == 1
+    assert audit["items"][0]["signals"] == [
+        "missing_top_k",
+        "missing_pagination",
+    ]
+
+
 def test_descriptor_search_cursor_returns_the_next_compact_page(monkeypatch) -> None:
     monkeypatch.setattr(
         descriptor_search,
@@ -155,3 +166,65 @@ def test_large_root_catalog_lists_are_bounded_and_continuable() -> None:
     assert descriptors["total_count"] > 1
     assert descriptors["has_more"] is True
     assert descriptors["next_offset"] == 1
+
+
+def test_public_registry_is_a_compact_cursor_index_with_separate_detail(monkeypatch) -> None:
+    source = [
+        {
+            "id": "alpha_skill",
+            "version": "1.2.3",
+            "stability": "stable",
+            "description": "Alpha tools",
+            "manifest_payload": {
+                "capabilities": ["workspace.read"],
+                "tools": [
+                    {
+                        "name": "read_alpha",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                        "examples": [{"value": "alpha"}],
+                    }
+                ],
+            },
+        },
+        {"id": "beta_skill", "version": "2.0.0", "stability": "beta"},
+    ]
+    monkeypatch.setattr(descriptor_registry, "_registry_entries", lambda _kind: source)
+    monkeypatch.setattr(
+        descriptor_registry,
+        "_registry_manifest",
+        lambda item: dict(item.get("manifest_payload") or {}),
+    )
+
+    first = descriptor_registry._public_registry_summary("skills", limit=1)
+    second = descriptor_registry._public_registry_summary(
+        "skills", limit=1, cursor=first["next_cursor"]
+    )
+    detail = descriptor_registry.public_registry_item("skills", "alpha_skill")
+
+    assert set(first["items"][0]) == {
+        "id",
+        "version",
+        "stability",
+        "capabilities",
+        "digest",
+    }
+    assert first["has_more"] is True
+    assert second["offset"] == 1
+    assert detail["schemas"]["read_alpha"]["input"] == {"type": "object"}
+    assert detail["examples"]["read_alpha"] == [{"value": "alpha"}]
+
+
+def test_descriptor_delta_returns_only_changed_and_removed_fragments() -> None:
+    delta = descriptor_registry._descriptor_delta(
+        {"items": [{"id": "same", "value": 1}, {"id": "removed", "value": 2}]},
+        {"items": [{"id": "same", "value": 3}, {"id": "added", "value": 4}]},
+        base_etag="sha256:old",
+        etag="sha256:new",
+    )
+
+    assert {item["fragment_id"] for item in delta["changed"]} == {
+        "items:added",
+        "items:same",
+    }
+    assert delta["removed"] == ["items:removed"]

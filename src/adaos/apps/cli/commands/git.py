@@ -17,7 +17,7 @@ remote_app = typer.Typer(help="Inspect and rewrite git remotes for the core chec
 app.add_typer(remote_app, name="remote")
 
 DEFAULT_CORE_REPO_URL = "https://github.com/inimatic/adaos.git"
-DEFAULT_CORE_REV = "rev2026"
+DEFAULT_CORE_REV = "main"
 REQUIRED_SUBMODULES = {"src/adaos/integrations/rasa-port": "pyproject.toml"}
 _GITHUB_HTTPS_RE = re.compile(r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/#?]+?)(?:\.git)?/?$")
 _GITHUB_SSH_RE = re.compile(r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/#?]+?)(?:\.git)?$")

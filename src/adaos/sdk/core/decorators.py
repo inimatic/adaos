@@ -1048,6 +1048,15 @@ def tool(
     version: Optional[str] = None,
     input_schema: Optional[dict] = None,
     output_schema: Optional[dict] = None,
+    permissions: Optional[list[str]] = None,
+    effects: Optional[list[str]] = None,
+    errors: Optional[list[str]] = None,
+    boundedness: Optional[dict] = None,
+    pagination: Optional[dict] = None,
+    deprecated: bool = False,
+    removed_in: Optional[str] = None,
+    replacement: Optional[str] = None,
+    migration_recipe: Optional[str] = None,
 ):
     """Маркер инструмента с публичным именем и метаданными."""
 
@@ -1068,6 +1077,15 @@ def tool(
             "version": version,
             "input_schema": input_schema,
             "output_schema": output_schema,
+            "permissions": list(permissions or []),
+            "effects": list(effects or ([side_effects] if side_effects else [])),
+            "errors": list(errors or []),
+            "boundedness": dict(boundedness or {}),
+            "pagination": dict(pagination or {}),
+            "deprecated": bool(deprecated),
+            "removed_in": removed_in,
+            "replacement": replacement,
+            "migration_recipe": migration_recipe,
         }
         return fn
 

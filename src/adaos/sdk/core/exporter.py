@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import hashlib
 import inspect
+import json
 import os
 import pkgutil
 import re
@@ -195,6 +196,65 @@ def _signature_args(fn: Any, *, compact: bool) -> list[Any]:
     return args
 
 
+def _schema_digest(value: Any) -> str | None:
+    if not isinstance(value, dict) or not value:
+        return None
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _sdk_contract(public_name: str, fn: Any, meta: dict[str, Any]) -> dict[str, Any]:
+    try:
+        parameter_names = list(inspect.signature(fn).parameters)
+    except (TypeError, ValueError):
+        parameter_names = []
+    input_schema = meta.get("input_schema") if isinstance(meta.get("input_schema"), dict) else {}
+    properties = input_schema.get("properties") if isinstance(input_schema.get("properties"), dict) else {}
+    names = list(dict.fromkeys([*parameter_names, *[str(name) for name in properties]]))
+    bound_args = [name for name in ("limit", "top_k", "page_size") if name in names]
+    cursor_args = [name for name in ("cursor", "page_token", "pagination_token", "offset") if name in names]
+    operation = str(public_name or "").rsplit(".", 1)[-1].lower()
+    supplied_boundedness = meta.get("boundedness") if isinstance(meta.get("boundedness"), dict) else {}
+    boundedness = dict(supplied_boundedness)
+    if not boundedness:
+        boundedness = {
+            "kind": (
+                "bounded_page"
+                if bound_args
+                else "unbounded"
+                if operation.startswith(("list", "search", "query"))
+                else "single_result"
+            ),
+            "arguments": bound_args,
+        }
+    pagination = dict(meta.get("pagination") or {}) if isinstance(meta.get("pagination"), dict) else {}
+    if not pagination:
+        pagination = {"supported": bool(cursor_args), "arguments": cursor_args}
+    deprecated = bool(meta.get("deprecated")) or str(meta.get("stability") or "").lower() == "deprecated"
+    contract = {
+        "permissions": sorted({str(value).strip() for value in meta.get("permissions") or [] if str(value).strip()}),
+        "effects": sorted({str(value).strip() for value in meta.get("effects") or ([meta.get("side_effects")] if meta.get("side_effects") else []) if str(value).strip()}),
+        "errors": sorted({str(value).strip() for value in meta.get("errors") or [] if str(value).strip()}),
+        "boundedness": boundedness,
+        "pagination": pagination,
+        "stability": str(meta.get("stability") or "experimental"),
+        "since": meta.get("since"),
+        "deprecated": deprecated,
+        "removedIn": meta.get("removed_in"),
+        "replacement": meta.get("replacement"),
+        "migration_recipe": meta.get("migration_recipe"),
+        "authoring_visibility": "migration_only" if deprecated else "default",
+        "schema_refs": {
+            "input": _schema_digest(input_schema),
+            "output": _schema_digest(meta.get("output_schema")),
+        },
+    }
+    contract["digest"] = "sha256:" + hashlib.sha256(
+        json.dumps(contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return contract
+
+
 def _public_facade_symbols(level: str) -> list[dict[str, Any]]:
     symbols: list[dict[str, Any]] = []
     for module_name in _PUBLIC_FACADE_MODULES:
@@ -219,6 +279,7 @@ def _public_facade_symbols(level: str) -> list[dict[str, Any]]:
                     "side_effects": "public_sdk_contract",
                 },
             }
+            item["contract"] = _sdk_contract(public_name, value, item["meta"])
             if level in {"std", "rich"}:
                 item["description"] = inspect.getdoc(value) or summary
                 try:
@@ -291,6 +352,7 @@ def export(
     *,
     query: str | None = None,
     limit: int = 24,
+    include_deprecated: bool = False,
 ) -> Dict[str, Any]:
     """Return metadata about all exported tools and events."""
 
@@ -320,6 +382,9 @@ def export(
             },
             "examples": meta.get("examples", []),
         }
+        item["contract"] = _sdk_contract(public_name, fn, meta)
+        if item["contract"]["deprecated"] and not include_deprecated:
+            continue
         if level in ("std", "rich"):
             sig = inspect.signature(fn)
             args = []
@@ -339,7 +404,11 @@ def export(
             item["emits"] = topics
         tools.append(item)
 
-    facade_symbols = _public_facade_symbols(level)
+    facade_symbols = [
+        item
+        for item in _public_facade_symbols(level)
+        if include_deprecated or not bool((item.get("contract") or {}).get("deprecated"))
+    ]
     terms = _query_terms(query)
     bounded_limit = max(1, min(int(limit or 24), 64))
     if terms:
@@ -382,12 +451,19 @@ def export(
     if level == "mini":
         items = []
         for tool in tools:
+            contract = dict(tool.get("contract") or {})
             items.append(
                 {
                     "k": tool.get("kind") or "tool",
                     "n": tool["name"],
                     "s": (tool.get("summary") or "")[:140],
                     "st": tool["meta"].get("stability"),
+                    "contract": {
+                        key: value
+                        for key, value in contract.items()
+                        if value not in (None, "", [], {}, False)
+                        or key in {"deprecated", "pagination"}
+                    },
                     **(
                         {
                             "m": tool.get("module"),

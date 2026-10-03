@@ -1261,7 +1261,7 @@ def join_code_create(
                             "Root rejected ROOT_TOKEN for join-code create "
                             f"(HTTP {exc.status_code}). "
                             "This Root build likely hasn't been updated to accept X-Root-Token on "
-                            f"{path} yet. Deploy the Root backend changes for rev2026, or use `--local` "
+                            f"{path} yet. Deploy the Root backend changes from main, or use `--local` "
                             "on the hub for offline/LAN-only mode. "
                             f"url={url}; body={exc.payload}"
                         ) from exc

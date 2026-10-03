@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
-from .registry import get_descriptor_set, list_descriptor_sets
+from .registry import get_descriptor_set, list_descriptor_sets, public_registry_item
 
 
 _CHILD_INDEX_DESCRIPTORS = {
@@ -216,14 +216,15 @@ def _payload_headers(
         return [
             _header(
                 descriptor_id=descriptor_id,
-                item_id=str(item.get("path") or item.get("title") or ""),
-                kind="architecture.page",
-                title=str(item.get("title") or item.get("path") or ""),
+                item_id=str(item.get("id") or item.get("path") or item.get("title") or ""),
+                kind=str(item.get("type") or "architecture.document"),
+                title=str(item.get("title") or item.get("id") or item.get("path") or ""),
                 summary=str(item.get("summary") or ""),
+                fingerprint=str(item.get("digest") or "") or None,
             )
-            for item in payload.get("pages") or []
+            for item in (payload.get("nodes") or payload.get("pages") or [])
             if isinstance(item, Mapping)
-            and str(item.get("path") or item.get("title") or "").strip()
+            and str(item.get("id") or item.get("path") or item.get("title") or "").strip()
         ]
     if descriptor_id in {
         "public_skill_registry_summary",
@@ -249,12 +250,11 @@ def _payload_headers(
                         overview.get("kind") or payload.get("kind") or "registry.item"
                     ),
                     title=str(item.get("name") or overview.get("title") or item_id),
-                    summary=str(
-                        item.get("description") or overview.get("summary") or ""
-                    ),
+                    summary=str(overview.get("summary") or ""),
                     owner=str(overview.get("owner") or "workspace"),
-                    stability=str(overview.get("stability") or "published"),
-                    fingerprint=str(overview.get("fingerprint") or "") or None,
+                    stability=str(item.get("stability") or overview.get("stability") or "published"),
+                    fingerprint=str(item.get("digest") or overview.get("fingerprint") or "") or None,
+                    tags=item.get("capabilities") or (),
                 )
             )
         return rows
@@ -362,7 +362,17 @@ def search_descriptors(
             descriptor = get_descriptor_set(
                 descriptor_id,
                 level="mini",
-                query=text if descriptor_id == "sdk_metadata" else None,
+                query=(
+                    text
+                    if descriptor_id
+                    in {
+                        "sdk_metadata",
+                        "architecture_catalog",
+                        "public_skill_registry_summary",
+                        "public_scenario_registry_summary",
+                    }
+                    else None
+                ),
                 # Search builds one bounded index page and paginates the compact
                 # headers locally.  Fetching only the caller's page size here
                 # would make every page after the first silently incomplete.
@@ -419,6 +429,7 @@ def get_descriptor_item(
     item_id: str,
     *,
     level: str = "std",
+    purpose: str = "authoring",
 ) -> dict[str, Any]:
     """Return one exact descriptor item selected from a search result."""
 
@@ -452,8 +463,10 @@ def get_descriptor_item(
     descriptor = get_descriptor_set(
         token,
         level=effective_level,
-        query=selected_item_id if token == "sdk_metadata" else None,
-        limit=8,
+        query=selected_item_id if token in {"sdk_metadata", "architecture_catalog"} else None,
+        roots=[selected_item_id] if token == "architecture_catalog" else None,
+        limit=64 if token == "architecture_catalog" else 8,
+        purpose=purpose,
     )
     if selected_item_id == token:
         item: Any = descriptor
@@ -475,15 +488,26 @@ def get_descriptor_item(
                 None,
             )
         elif token == "architecture_catalog":
-            item = next(
+            selected_node = next(
                 (
                     dict(candidate)
-                    for candidate in payload.get("pages") or []
+                    for candidate in payload.get("nodes") or []
                     if isinstance(candidate, Mapping)
-                    and str(candidate.get("path") or candidate.get("title") or "")
+                    and str(candidate.get("id") or candidate.get("path") or "")
                     == selected_item_id
                 ),
                 None,
+            )
+            item = (
+                {
+                    **selected_node,
+                    "neighborhood": {
+                        "nodes": list(payload.get("nodes") or []),
+                        "edges": list(payload.get("edges") or []),
+                    },
+                }
+                if selected_node is not None
+                else None
             )
         elif token == "ui_capability_catalog":
             item = next(
@@ -510,14 +534,9 @@ def get_descriptor_item(
             "public_skill_registry_summary",
             "public_scenario_registry_summary",
         }:
-            item = next(
-                (
-                    dict(candidate)
-                    for candidate in payload.get("items") or []
-                    if isinstance(candidate, Mapping)
-                    and str(candidate.get("id") or "") == selected_item_id
-                ),
-                None,
+            item = public_registry_item(
+                "skills" if token == "public_skill_registry_summary" else "scenarios",
+                selected_item_id,
             )
         elif token == "template_catalog" and ":" in selected_item_id:
             kind, name = selected_item_id.split(":", 1)

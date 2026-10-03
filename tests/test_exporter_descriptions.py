@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from adaos.sdk.core.exporter import export as sdk_export
+from adaos.sdk.core import exporter as sdk_exporter
 from adaos.services.root_mcp.registry import get_descriptor_set
 from adaos.services.root_mcp.descriptor_search import get_descriptor_item, search_descriptors
 
@@ -34,6 +35,59 @@ def test_sdk_export_mini_selects_public_quota_sdk_from_task_language():
     names = {str(item.get("n") or "") for item in data["items"]}
     assert "adaos.sdk.control_plane.list_quota_objects" in names
     assert len(data["items"]) <= 24
+
+
+def test_sdk_contract_is_generated_from_one_metadata_source() -> None:
+    def sample(limit: int = 10, cursor: str | None = None):
+        return None
+
+    contract = sdk_exporter._sdk_contract(
+        "manage.sample.list",
+        sample,
+        {
+            "permissions": ["workspace.read"],
+            "effects": ["read_only"],
+            "errors": ["not_found"],
+            "stability": "beta",
+            "since": "1.4.0",
+            "deprecated": True,
+            "removed_in": "2.0.0",
+            "replacement": "manage.sample.search",
+            "migration_recipe": "Replace list with bounded search.",
+        },
+    )
+
+    assert contract["permissions"] == ["workspace.read"]
+    assert contract["boundedness"]["kind"] == "bounded_page"
+    assert contract["pagination"]["supported"] is True
+    assert contract["removedIn"] == "2.0.0"
+    assert contract["authoring_visibility"] == "migration_only"
+    assert contract["digest"].startswith("sha256:")
+
+
+def test_deprecated_sdk_members_are_hidden_from_authoring_but_visible_to_migration(monkeypatch) -> None:
+    item = {
+        "kind": "sdk_function",
+        "name": "adaos.sdk.example.legacy",
+        "module": "adaos.sdk.example",
+        "summary": "Legacy API.",
+        "meta": {"stability": "deprecated"},
+        "contract": {"deprecated": True, "authoring_visibility": "migration_only"},
+    }
+    monkeypatch.setattr(sdk_exporter, "_filter_tools", lambda: [])
+    monkeypatch.setattr(sdk_exporter, "_public_facade_symbols", lambda _level: [item])
+
+    authoring = sdk_exporter.export(
+        level="std", query="legacy", include_deprecated=False
+    )
+    migration = sdk_exporter.export(
+        level="std", query="legacy", include_deprecated=True
+    )
+
+    assert authoring["tools"] == []
+    assert [entry["name"] for entry in migration["tools"]] == [
+        "adaos.sdk.example.legacy"
+    ]
 
 
 def test_sdk_metadata_mini_is_a_bounded_nonduplicated_mcp_projection():
