@@ -5,6 +5,38 @@ import copy
 from .workflow import BuilderWorkflowError
 
 
+def _navigation_area(page, member_areas):
+    regions = page.get('layout', {}).get('regions') or []
+    region_by_id = {str(region.get('id')): region for region in regions}
+    used = list(dict.fromkeys(str(area) for area in member_areas if area))
+    declared_used = [area for area in used if area in region_by_id]
+    if len(declared_used) == 1:
+        return declared_used[0]
+    for role in ('toolbar', 'main', 'collection', 'inspector', 'navigation', 'utility'):
+        match = next(
+            (
+                area
+                for area in declared_used
+                if str(region_by_id[area].get('role')) == role
+            ),
+            None,
+        )
+        if match:
+            return match
+    if declared_used:
+        return declared_used[0]
+    if 'primary' in region_by_id or not region_by_id:
+        return 'primary'
+    for role in ('toolbar', 'main', 'collection', 'inspector', 'navigation', 'utility'):
+        match = next(
+            (str(region['id']) for region in regions if str(region.get('role')) == role),
+            None,
+        )
+        if match:
+            return match
+    return str(regions[0]['id'])
+
+
 def compile_sections(document, webui, source_map, dictionaries, *, localize):
     application = webui['ui']['application']
     page = application['desktop']['pageSchema']
@@ -30,6 +62,8 @@ def compile_sections(document, webui, source_map, dictionaries, *, localize):
         raise BuilderWorkflowError('Authored view id collides with section navigation')
     tabs = []
     settings = []
+    tab_member_areas = []
+    settings_member_areas = []
     for identifier, section in sections.items():
         label, label_i18n = localize(section['title'], dictionaries)
         button = {'id': identifier, 'label': label, 'label_i18n': label_i18n}
@@ -38,6 +72,7 @@ def compile_sections(document, webui, source_map, dictionaries, *, localize):
             raise BuilderWorkflowError(f'Section {identifier} has no reachable content')
         if section['kind'] == 'tab':
             tabs.append(button)
+            tab_member_areas.extend(widget['area'] for widget in members)
             condition = f"$state.prototype_section === '{identifier}'"
             for widget in members:
                 previous = widget.get('visibleIf')
@@ -47,6 +82,7 @@ def compile_sections(document, webui, source_map, dictionaries, *, localize):
             if modal_id in application.get('modals', {}):
                 raise BuilderWorkflowError(f'Settings modal collision: {modal_id}')
             settings.append({**button, 'icon': 'settings-outline', 'modal_id': modal_id})
+            settings_member_areas.extend(widget['area'] for widget in members)
             regions = [copy.deepcopy(region) for region in page['layout']['regions'] if any(widget['area'] == region['id'] for widget in members)]
             for index, region in enumerate(regions):
                 if index == 0:
@@ -72,11 +108,11 @@ def compile_sections(document, webui, source_map, dictionaries, *, localize):
                 for refs in source_map.values():
                     refs[:] = [ref.replace(old, new, 1) if ref == old or ref.startswith(old + '.') else ref for ref in refs]
     if settings:
-        widgets.insert(0, {'id': 'prototype-settings', 'type': 'ui.actions', 'area': 'primary',
+        widgets.insert(0, {'id': 'prototype-settings', 'type': 'ui.actions', 'area': _navigation_area(page, settings_member_areas),
                           'inputs': {'variant': 'adaptiveToolbar', 'buttons': [{key: value for key, value in item.items() if key != 'modal_id'} for item in settings]},
                           'actions': [{'on': f"click:{item['id']}", 'type': 'openModal', 'params': {'modalId': item['modal_id']}} for item in settings]})
     if tabs:
         page['initialState']['prototype_section'] = tabs[0]['id']
-        widgets.insert(0, {'id': 'prototype-sections', 'type': 'ui.actions', 'area': 'primary',
+        widgets.insert(0, {'id': 'prototype-sections', 'type': 'ui.actions', 'area': _navigation_area(page, tab_member_areas),
                           'inputs': {'variant': 'tabs', 'selectedStateKey': 'prototype_section', 'buttons': tabs},
                           'actions': [{'on': f"click:{item['id']}", 'type': 'updateState', 'params': {'prototype_section': item['id']}} for item in tabs]})

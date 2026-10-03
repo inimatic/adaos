@@ -2446,9 +2446,25 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
     work_views[0]["initial_selection_id"] = "work-1"
     work_views[1]["region_role"] = "canvas"
     work_views[2]["region_role"] = "inspector"
-    next(
+    work_views[2]["section"] = {
+        "id": "content", "kind": "tab", "title": {"en": "Content", "ru": "Content"},
+    }
+    people_view = next(
         view for view in candidate["views"] if view["resource_ref"] == "people"
-    )["region_role"] = "inspector"
+    )
+    people_view["region_role"] = "inspector"
+    people_view["section"] = {
+        "id": "theme", "kind": "tab", "title": {"en": "Theme", "ru": "Theme"},
+    }
+    candidate["capability_surfaces"] = [{
+        "id": "site-preview",
+        "capability_ref": "visual.sitePreview",
+        "region_role": "canvas",
+        "title": {"en": "AdaOS preview", "ru": "AdaOS preview"},
+        "site_id": "adaos",
+        "route": "/",
+        "min_height_px": 720,
+    }]
     brief = compile_prototype_brief(
         "Show a repeatable list of work items, record a result for each item, "
         "upload an attachment, update the selected item and complete it.",
@@ -2467,7 +2483,7 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
             "initial_selection": {
                 "resource_ref": "work_items", "record_id": "work-1",
             },
-            "capability_refs": ["layout.workbench"],
+            "capability_refs": ["layout.workbench", "visual.sitePreview"],
             "acceptance": [],
         },
     )
@@ -2492,6 +2508,20 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
         "work-editor": "inspector",
     }
     assert page["initialState"]["selected_work_items_id"] == "work-1"
+    preview = next(widget for widget in page["widgets"] if widget["id"] == "site-preview")
+    assert preview == {
+        "id": "site-preview",
+        "type": "visual.sitePreview",
+        "area": "canvas",
+        "title": "AdaOS preview",
+        "title_i18n": {"key": "surface.site-preview.title", "fallback": "AdaOS preview"},
+        "inputs": {"siteId": "adaos", "route": "/", "minHeight": 720},
+    }
+    tabs = next(widget for widget in page["widgets"] if widget["id"] == "prototype-sections")
+    assert tabs["area"] == "inspector"
+    assert compiled["source_map"]["surface:site-preview"] == [
+        "ui.application.desktop.pageSchema.widgets.@site-preview"
+    ]
 
     candidate["layout"]["regions"][0]["preferred_px"] = 300
     with pytest.raises(BuilderWorkflowError, match="accepted Prototype interface"):

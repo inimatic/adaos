@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.5.3",
+  "catalog_version": "3.6.0",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "browser_history": {
@@ -1074,6 +1074,39 @@
         "Each trigger exposes aria-expanded and owns one labelled region.",
         "Single-open is the default; multiple=true explicitly enables multiple open sections.",
         "A lazy item exposes loading and unavailable states and can preserve the last successful value through its standard dataSource policy."
+      ]
+    },
+    {
+      "id": "visual.sitePreview",
+      "kind": "component",
+      "title": "Governed public-site preview",
+      "summary": "An inspectable same-origin preview of a retained public-site projection.",
+      "aliases": {
+        "en": ["site preview", "website canvas", "public site preview"],
+        "ru": ["предпросмотр сайта", "холст сайта", "публичный сайт"]
+      },
+      "manifest": {
+        "widget_type": "visual.sitePreview",
+        "semantic_surface": "Use capability_surfaces with capability_ref=visual.sitePreview. Declare site_id and a relative route; the semantic compiler owns the runtime widget mapping.",
+        "inputs": {
+          "siteId": "lowercase governed public-site identity",
+          "route": "safe site-relative route beginning with /",
+          "minHeight": "bounded preview height from 320 to 1200 pixels"
+        },
+        "security": "The Client derives /site-development/<siteId>/ and rejects arbitrary origins, URLs, HTML, CSS and script input."
+      },
+      "data_shape": {
+        "kind": "retained_site_projection"
+      },
+      "events": ["viewport mode", "reload", "open governed preview"],
+      "responsive": {
+        "desktop": "desktop, tablet and mobile viewport inspection inside the main work region",
+        "compact": "mobile-width preview with the same governed route"
+      },
+      "postconditions": [
+        "Preview identity is a site id plus relative route, never an authored iframe URL.",
+        "Viewport controls change only the inspection frame and do not mutate site content.",
+        "The rendered site remains isolated in a sandboxed frame."
       ]
     },
     {

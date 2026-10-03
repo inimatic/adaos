@@ -2829,6 +2829,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
     candidate.setdefault("automation_requirements", [])
+    candidate.setdefault("capability_surfaces", [])
     for relationship in candidate.get("relationships") or []:
         relationship.setdefault("label_field_refs", [])
     for resource in candidate.get("resources") or []:
@@ -2895,10 +2896,12 @@ def _canonicalize_semantic_prototype_candidate_v2(
         for owner, mapping in field_ids_by_resource.items()
     }
     raw_views = [dict(item) for item in candidate.get("views") or []]
+    raw_surfaces = [dict(item) for item in candidate.get("capability_surfaces") or []]
     raw_commands = [dict(item) for item in candidate.get("commands") or []]
     raw_states = [dict(item) for item in candidate.get("representative_states") or []]
     normalized_resources: list[dict[str, Any]] = []
     normalized_views: list[dict[str, Any]] = []
+    normalized_surfaces: list[dict[str, Any]] = []
     normalized_commands: list[dict[str, Any]] = []
     normalized_states: list[dict[str, Any]] = []
     resource_ids: dict[str, str] = {}
@@ -2907,6 +2910,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
     query_ids: dict[str, str] = {}
     command_ids: dict[str, str] = {}
     state_ids: dict[str, str] = {}
+    surface_ids: dict[str, str] = {}
     record_ids_by_resource: dict[str, dict[str, str]] = {}
 
     for resource_index, resource in enumerate(resources):
@@ -3099,6 +3103,22 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 )
             ]
 
+    for surface in raw_surfaces:
+        raw_surface_id = str(surface["id"])
+        surface_id = _canonical_candidate_identifier(raw_surface_id, namespace="surface")
+        if surface_id in surface_ids.values():
+            _fail(f"duplicate capability surface id {surface_id!r}")
+        surface_ids[raw_surface_id] = surface_id
+        normalized_surfaces.append(
+            {
+                **copy.deepcopy(surface),
+                "id": surface_id,
+                "title": _candidate_localized_text(
+                    surface["title"], key=f"surface.{surface_id}.title"
+                ),
+            }
+        )
+
     assigned_view_ids = {
         str(item.get("id") or "")
         for resource in resources
@@ -3290,6 +3310,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
         "field": field_ids,
         "view": view_ids,
         "query": query_ids,
+        "surface": surface_ids,
         "command": command_ids,
         "state": state_ids,
     }
@@ -3380,6 +3401,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "resources": normalized_resources,
             "relationships": normalized_relationships,
             "views": normalized_views,
+            "capability_surfaces": normalized_surfaces,
             "commands": normalized_commands,
             "representative_states": normalized_states,
             "requirement_bindings": retained_bindings,
@@ -3465,6 +3487,7 @@ def _lower_semantic_prototype_candidate_v2(
         "resources": lowered_resources,
         "relationships": copy.deepcopy(candidate["relationships"]),
         "views": lowered_views,
+        "capability_surfaces": copy.deepcopy(candidate["capability_surfaces"]),
         "commands": lowered_commands,
         "representative_states": lowered_states,
         "requirement_bindings": copy.deepcopy(candidate["requirement_bindings"]),
@@ -3592,6 +3615,10 @@ def _semantic_v2_model_findings(
     known_refs = {
         *(f"resource:{key}" for key in resources),
         *(f"view:{key}" for key in views),
+        *(
+            f"surface:{item['id']}"
+            for item in document.get("capability_surfaces") or []
+        ),
         *(f"field:{field['id']}" for resource in resources.values() for field in resource["fields"]),
         *(f"query:{control['id']}" for view in views.values() for control in view.get("query_controls") or []),
         *(f"{kind}:{item['id']}" for kind, key in (("relationship", "relationships"), ("command", "commands"), ("state", "representative_states"))
@@ -3893,6 +3920,7 @@ def _validate_semantic_prototype_v2(
     value: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
     document = copy.deepcopy(dict(value))
+    document.setdefault("capability_surfaces", [])
     try:
         _validator("webui.semantic.v2.schema.json").validate(document)
     except ValidationError as exc:
@@ -3928,12 +3956,31 @@ def _validate_semantic_prototype_v2(
                     "semantic initial selection must match the accepted Prototype "
                     f"interface context ({resource_ref}:{record_id})"
                 )
+        accepted_capabilities = {
+            str(item) for item in interface_context.get("capability_refs") or []
+        }
+        declared_capabilities = {
+            str(item["capability_ref"])
+            for item in document["capability_surfaces"]
+        }
+        undeclared = sorted(declared_capabilities - accepted_capabilities)
+        if accepted_capabilities and undeclared:
+            _fail(
+                "semantic capability surfaces are outside the accepted Prototype "
+                f"interface context: {undeclared}"
+            )
+        if "visual.sitePreview" in accepted_capabilities and "visual.sitePreview" not in declared_capabilities:
+            _fail(
+                "semantic capability surfaces must include visual.sitePreview from the "
+                "accepted Prototype interface context"
+            )
 
     _normalize_v2_ownership(document, brief=brief)
 
     resources = _unique(document["resources"], "resource")
     relationships = _unique(document["relationships"], "relationship")
     views = _unique(document["views"], "view")
+    surfaces = _unique(document["capability_surfaces"], "capability surface")
     commands = _unique(document["commands"], "command")
     states = _unique(document["representative_states"], "state")
     all_fields: dict[str, dict[str, Any]] = {}
@@ -3948,9 +3995,9 @@ def _validate_semantic_prototype_v2(
         regions = _unique(declared_regions, "layout region")
         unknown_region_refs = sorted(
             {
-                str(view["region_role"])
-                for view in views.values()
-                if str(view["region_role"]) not in regions
+                str(item["region_role"])
+                for item in [*views.values(), *surfaces.values()]
+                if str(item["region_role"]) not in regions
             }
         )
         if unknown_region_refs:
@@ -3959,7 +4006,10 @@ def _validate_semantic_prototype_v2(
             region_id
             for region_id, region in regions.items()
             if region["role"] in {"main", "collection"}
-            and any(str(view["region_role"]) == region_id for view in views.values())
+            and any(
+                str(item["region_role"]) == region_id
+                for item in [*views.values(), *surfaces.values()]
+            )
         }
         if not occupied_primary_regions:
             _fail("explicit semantic layout requires a populated main or collection region")
@@ -3975,7 +4025,10 @@ def _validate_semantic_prototype_v2(
                     f"layout region {region_id!r} requires min_px <= "
                     "preferred_px <= max_px"
                 )
-    elif not any(str(view["region_role"]) == "primary" for view in views.values()):
+    elif not any(
+        str(item["region_role"]) == "primary"
+        for item in [*views.values(), *surfaces.values()]
+    ):
         _fail("semantic Prototype requires at least one view in the primary region")
 
     views_by_resource: dict[str, list[dict[str, Any]]] = {
@@ -4829,7 +4882,13 @@ def _compile_semantic_prototype_v2(
             )
     initial_state.update(initial_selections)
 
-    region_roles = {str(view["region_role"]) for view in document["views"]}
+    region_roles = {
+        str(item["region_role"])
+        for item in [
+            *document["views"],
+            *(document.get("capability_surfaces") or []),
+        ]
+    }
     page_schema = {
         "id": str(document["document_id"]),
         "title": title,
@@ -4865,6 +4924,10 @@ def _compile_semantic_prototype_v2(
     from .semantic_media import compile_media
     compile_media(document, webui, prototype_resources, source_map)
     compile_presentations(document, webui, source_map)
+    from .semantic_surfaces import compile_capability_surfaces
+    compile_capability_surfaces(
+        document, webui, source_map, dictionaries, localize=_localized
+    )
     from .semantic_sections import compile_sections
     compile_sections(document, webui, source_map, dictionaries, localize=_localized)
     for check in state_checks:

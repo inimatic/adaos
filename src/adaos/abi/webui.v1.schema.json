@@ -618,6 +618,7 @@
         "visual.taigaTree",
         "visual.frameViewer",
         "visual.serviceFrame",
+        "visual.sitePreview",
         "visual.image",
         "visual.metricTile",
         "visual.metricChart",
@@ -880,6 +881,14 @@
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/serviceFrameInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "visual.sitePreview" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/sitePreviewInputs" }
             }
           }
         },
@@ -1347,6 +1356,14 @@
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/serviceFrameInputs" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "visual.sitePreview" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/sitePreviewInputs" }
             }
           }
         },
@@ -2617,6 +2634,25 @@
         },
         "title": { "type": "string", "minLength": 1 },
         "minHeight": { "type": "integer", "minimum": 240, "maximum": 1200 }
+      }
+    },
+
+    "sitePreviewInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Inputs for a governed public-site preview. The Client derives a same-origin site route from siteId; arbitrary iframe URLs are not accepted.",
+      "required": ["siteId", "route", "minHeight"],
+      "properties": {
+        "siteId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/(?:[A-Za-z0-9._~-]+/?)*$",
+          "maxLength": 256
+        },
+        "minHeight": { "type": "integer", "minimum": 320, "maximum": 1200 }
       }
     },
 
