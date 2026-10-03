@@ -388,6 +388,7 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "connection_state": str(data.get("connection_state") or "").strip().lower() or None,
         "hostname": str(data.get("hostname") or "").strip() or None,
         "device_display_name": str(data.get("device_display_name") or "").strip() or None,
+        "endpoint_display_name": str(data.get("endpoint_display_name") or "").strip() or None,
         "node_names": [
             str(item or "").strip()
             for item in list(data.get("node_names") or [])
@@ -398,6 +399,8 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "browser_family": str(data.get("browser_family") or "").strip() or None,
         "browser_origin": str(data.get("browser_origin") or "").strip() or None,
         "browser_zone": str(data.get("browser_zone") or "").strip() or None,
+        "browser_page_id": str(data.get("browser_page_id") or "").strip() or None,
+        "browser_session_id": str(data.get("browser_session_id") or "").strip() or None,
         "client_build_id": str(data.get("client_build_id") or "").strip() or None,
         "client_build_version": str(data.get("client_build_version") or "").strip() or None,
         "os_name": str(data.get("os_name") or "").strip() or None,
@@ -1858,6 +1861,24 @@ def browser_snapshot() -> list[dict[str, Any]]:
                 "runtime_source": source,
                 "events_channel_state": str(peer.get("events_channel_state") or "").strip() or None,
                 "yjs_channel_state": str(peer.get("yjs_channel_state") or "").strip() or None,
+                **{
+                    key: peer.get(key)
+                    for key in (
+                        "browser_family",
+                        "browser_origin",
+                        "browser_zone",
+                        "browser_page_id",
+                        "browser_session_id",
+                        "device_display_name",
+                        "endpoint_display_name",
+                        "os_name",
+                        "form_factor",
+                        "user_agent",
+                        "client_build_id",
+                        "client_build_version",
+                    )
+                    if peer.get(key) is not None
+                },
             },
         )
     return list(by_id.values())

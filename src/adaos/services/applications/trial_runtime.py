@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from io import BytesIO
@@ -17,6 +18,37 @@ from adaos.services.artifact_pipeline.packages import ContentAddressedPackageSto
 from adaos.services.artifact_pipeline.trial_activation import (
     TrialActivationStore, load_workspace_lock, trial_workspace_root,
 )
+
+
+_READY_MANAGER_CACHE_LOCK = threading.Lock()
+_READY_MANAGER_BUILD_LOCK = threading.Lock()
+_READY_MANAGER_CACHE: dict[
+    tuple[str, str, str, str],
+    tuple[tuple[tuple[str, int, int, int], ...], object],
+] = {}
+_READY_MANAGER_CACHE_MAX = 64
+
+
+def _runtime_tree_signature(source: Path, manifest_path: Path) -> tuple[tuple[str, int, int, int], ...]:
+    rows: list[tuple[str, int, int, int]] = []
+    paths = [manifest_path, *source.rglob("*")]
+    for path in paths:
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        rows.append(
+            (
+                str(path.relative_to(source)) if path.is_relative_to(source) else str(path),
+                int(stat.st_size),
+                int(stat.st_mtime_ns),
+                int(stat.st_ctime_ns),
+            )
+        )
+    rows.sort(key=lambda item: item[0])
+    return tuple(rows)
 
 
 class TrialRuntimeUnavailable(ValueError):
@@ -131,6 +163,7 @@ class NativeTrialRuntime:
         ctx = replace(self.owner, paths=paths, sql=sql, kv=SQLiteKV(sql),
                       settings=self.owner.settings.with_overrides(base_dir=paths.base_dir()),
                       authority_state_dir=self.owner.paths.state_dir(),
+                      authority_context=self.owner,
                       relational_storage=None, blob_storage=None, execution_provider=None)
         ctx.config = self.owner.config
         paths.ctx = ctx
@@ -155,16 +188,45 @@ class NativeTrialRuntime:
 
     def ready_manager(self, skill: str):
         package = self.component("skill", skill)
-        manager = self.manager()
-        status = manager.runtime_status(skill)
-        if not status.get("ready") or status.get("version") != package.version:
-            raise TrialRuntimeUnavailable("Trial native runtime is not prepared")
-        manifest = json.loads(Path(status["resolved_manifest"]).read_text(encoding="utf-8"))
-        source = Path(manifest.get("source") or "").resolve()
-        if not source.is_relative_to(self.root / "skills/.runtime"):
-            raise TrialRuntimeUnavailable("Trial executable source escaped its runtime")
-        self.verified_source(package, root=source)
-        return manager
+        cache_key = (str(self.root), self.release_digest, skill, package.digest)
+        with _READY_MANAGER_CACHE_LOCK:
+            cached = _READY_MANAGER_CACHE.get(cache_key)
+            if cached is not None:
+                manager = cached[1]
+                status = manager.runtime_status(skill)
+                manifest_path = Path(status.get("resolved_manifest") or "")
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    source = Path(manifest.get("source") or "").resolve()
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    source = Path()
+                if (
+                    status.get("ready")
+                    and status.get("version") == package.version
+                    and source.is_relative_to(self.root / "skills/.runtime")
+                    and cached[0] == _runtime_tree_signature(source, manifest_path)
+                ):
+                    return manager
+        with _READY_MANAGER_BUILD_LOCK:
+            with _READY_MANAGER_CACHE_LOCK:
+                cache_filled = cache_key in _READY_MANAGER_CACHE
+            if cache_filled:
+                return self.ready_manager(skill)
+            manager = self.manager()
+            status = manager.runtime_status(skill)
+            if not status.get("ready") or status.get("version") != package.version:
+                raise TrialRuntimeUnavailable("Trial native runtime is not prepared")
+            manifest = json.loads(Path(status["resolved_manifest"]).read_text(encoding="utf-8"))
+            source = Path(manifest.get("source") or "").resolve()
+            if not source.is_relative_to(self.root / "skills/.runtime"):
+                raise TrialRuntimeUnavailable("Trial executable source escaped its runtime")
+            self.verified_source(package, root=source)
+            signature = _runtime_tree_signature(source, Path(status["resolved_manifest"]))
+            with _READY_MANAGER_CACHE_LOCK:
+                if len(_READY_MANAGER_CACHE) >= _READY_MANAGER_CACHE_MAX:
+                    _READY_MANAGER_CACHE.pop(next(iter(_READY_MANAGER_CACHE)))
+                _READY_MANAGER_CACHE[cache_key] = (signature, manager)
+            return manager
 
     def identity(self, skill: str) -> dict[str, str]:
         package = self.component("skill", skill)

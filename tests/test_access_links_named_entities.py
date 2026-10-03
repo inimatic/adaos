@@ -131,6 +131,37 @@ def test_browser_snapshot_includes_active_yws_scoped_clients(monkeypatch) -> Non
     assert by_id["dev-browser::tab-1"]["browser_client_id"] == "tab-1"
 
 
+def test_browser_snapshot_keeps_per_page_zone_metadata(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        gateway_ws,
+        "active_browser_session_snapshot",
+        lambda: {
+            "peers": [
+                {
+                    "device_id": "dev-browser",
+                    "client_limit_id": "page-lo",
+                    "browser_page_id": "page-lo",
+                    "browser_zone": "lo",
+                    "browser_origin": "http://127.0.0.1:8100",
+                    "endpoint_display_name": "Local desktop",
+                    "webspace_id": "desktop",
+                    "connection_state": "connected",
+                    "session_count": 1,
+                }
+            ]
+        },
+    )
+
+    by_id = {item["id"]: item for item in access_links.browser_snapshot()}
+    endpoint = by_id["dev-browser::page-lo"]
+    assert endpoint["browser_zone"] == "lo"
+    assert endpoint["browser_origin"] == "http://127.0.0.1:8100"
+    assert endpoint["browser_page_id"] == "page-lo"
+    assert endpoint["endpoint_display_name"] == "Local desktop"
+
+
 def test_browser_snapshot_marks_parent_online_from_active_yws_peer(monkeypatch) -> None:
     _patch_registry_store(monkeypatch)
     monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)

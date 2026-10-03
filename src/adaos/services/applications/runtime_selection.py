@@ -3,10 +3,43 @@
 from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+import threading
 
 from adaos.services.agent_context import AgentContext
 from adaos.services.applications.store import ApplicationStore
 from adaos.services.applications.trial_runtime import NativeTrialRuntime, TrialRuntimeUnavailable
+
+
+_SELECTED_TRIAL_CACHE_LOCK = threading.Lock()
+_SELECTED_TRIAL_CACHE: dict[
+    tuple[int, int, str, str, str, str],
+    tuple[tuple[tuple[str, int, int], ...], NativeTrialRuntime | None],
+] = {}
+_SELECTED_TRIAL_CACHE_MAX = 128
+
+
+def _trial_selection_fingerprint(state_dir: Path) -> tuple[tuple[str, int, int], ...]:
+    """Return a cheap invalidation token for the mutable runtime authority.
+
+    Releases and Trial packages are immutable. Runtime-channel SQLite files and
+    legacy RuntimeSelection JSON records are the only mutable inputs needed to
+    resolve which Trial owns a component. Statting them avoids repeatedly
+    deserializing the complete Application catalog on every WebUI read.
+    """
+
+    root = Path(state_dir) / "applications"
+    paths = [
+        *root.glob("runtime_channels/*.sqlite3"),
+        *root.glob("runtime_selections/*/current.json"),
+    ]
+    rows: list[tuple[str, int, int]] = []
+    for path in sorted(paths, key=lambda item: str(item)):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        rows.append((str(path), int(stat.st_mtime_ns), int(stat.st_size)))
+    return tuple(rows)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +123,7 @@ def selected_application(
     return installed[0] if installed else None
 
 
-def selected_trial(ctx: AgentContext, webspace_id: str, kind: str, component_id: str):
+def _selected_trial_uncached(ctx: AgentContext, webspace_id: str, kind: str, component_id: str):
     store = ApplicationStore(Path(ctx.paths.state_dir()))
     matches = []
     seen = set()
@@ -115,6 +148,32 @@ def selected_trial(ctx: AgentContext, webspace_id: str, kind: str, component_id:
         if workspace is not None and workspace.is_dev:
             return None
     return NativeTrialRuntime.resolve(ctx, *matches[0]) if matches else None
+
+
+def selected_trial(ctx: AgentContext, webspace_id: str, kind: str, component_id: str):
+    state_dir = Path(ctx.paths.state_dir()).resolve()
+    cache_key = (
+        id(ctx),
+        id(ApplicationStore),
+        str(state_dir),
+        str(webspace_id or "").strip(),
+        str(kind or "").strip(),
+        str(component_id or "").strip(),
+    )
+    fingerprint = _trial_selection_fingerprint(state_dir)
+    # Keep the lock through the cold resolution. Page startup asks for several
+    # projections concurrently; single-flight here turns N identical catalog
+    # scans into one without blocking the asyncio owner thread (callers invoke
+    # this function through asyncio.to_thread).
+    with _SELECTED_TRIAL_CACHE_LOCK:
+        cached = _SELECTED_TRIAL_CACHE.get(cache_key)
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+        resolved = _selected_trial_uncached(ctx, webspace_id, kind, component_id)
+        if len(_SELECTED_TRIAL_CACHE) >= _SELECTED_TRIAL_CACHE_MAX:
+            _SELECTED_TRIAL_CACHE.pop(next(iter(_SELECTED_TRIAL_CACHE)))
+        _SELECTED_TRIAL_CACHE[cache_key] = (fingerprint, resolved)
+        return resolved
 
 
 @contextmanager

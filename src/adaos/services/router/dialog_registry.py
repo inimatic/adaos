@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,10 @@ BUILDER_SKILL_ID = "builder_skill"
 CONVERSATION_COMPANIONS_SKILL_ID = "conversation_companions"
 DIALOG_USER_MESSAGE_EVENT = "dialog.user_message"
 VOICE_CHAT_USER_EVENT = "voice.chat.user"
+
+
+_SKILL_MANIFEST_CACHE_LOCK = threading.Lock()
+_SKILL_MANIFEST_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 
 
 def _dialog_ingress_route_id(meta: Mapping[str, Any] | None, event_kind: str) -> str:
@@ -439,12 +444,26 @@ def _skill_manifest_dirs() -> list[Path]:
 def _read_skill_manifest(skill_dir: Path) -> dict[str, Any]:
     manifest_path = skill_dir / "skill.yaml"
     try:
+        stat = manifest_path.stat()
+        cache_key = str(manifest_path.resolve())
+        signature = (int(stat.st_mtime_ns), int(stat.st_size))
+        with _SKILL_MANIFEST_CACHE_LOCK:
+            cached = _SKILL_MANIFEST_CACHE.get(cache_key)
+        if cached is not None and cached[:2] == signature:
+            return cached[2]
+    except Exception:
+        cache_key = str(manifest_path)
+        signature = (-1, -1)
+    try:
         import yaml  # type: ignore
 
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     except Exception:
         manifest = {}
-    return manifest if isinstance(manifest, dict) else {}
+    parsed = manifest if isinstance(manifest, dict) else {}
+    with _SKILL_MANIFEST_CACHE_LOCK:
+        _SKILL_MANIFEST_CACHE[cache_key] = (signature[0], signature[1], parsed)
+    return parsed
 
 
 def _conversation_manifest_agent_records() -> list[dict[str, Any]]:

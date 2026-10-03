@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 from adaos.services import economic_policy
+from adaos.services.agent_context import get_ctx
 from adaos.services.root import control_lifecycle_sync
 
 
@@ -76,6 +78,32 @@ def test_economic_status_reads_root_entitlement_snapshot(monkeypatch, tmp_path) 
     assert status["disabled_resource_count"] == 1
     assert compact["usage"]["llm.requests"]["used_24h"] == 3
     assert compact["usage"]["codex.api.tokens"]["quota_remaining"] == 9000
+
+
+def test_trial_context_reads_node_authority_entitlement(monkeypatch, tmp_path) -> None:
+    authority_base = tmp_path / "authority"
+    trial_base = tmp_path / "trial"
+    snapshot_path = authority_base / "state" / "economic_policy" / "entitlement_snapshot.json"
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_text(
+        json.dumps({
+            "mode": "observe",
+            "subscription": {"state": "active", "plan_id": "builder"},
+            "entitlement": {"state": "enabled", "disabled_resources": []},
+            "usage": {"codex.api.tokens": {"used_24h": 42, "used_7d": 84, "used_30d": 126}},
+        }),
+        encoding="utf-8",
+    )
+    ctx = get_ctx()
+    monkeypatch.setattr(ctx, "authority_state_dir", authority_base / "state")
+    monkeypatch.setattr(economic_policy, "current_base_dir", lambda: trial_base)
+    monkeypatch.setattr(economic_policy, "load_config", lambda: _config())
+    monkeypatch.delenv("ADAOS_ECONOMIC_ENTITLEMENT_SNAPSHOT", raising=False)
+
+    status = economic_policy.current_subnet_economic_status()
+
+    assert status["usage"]["codex.api.tokens"]["used_24h"] == 42
+    assert economic_policy._economic_authority_base_dir() == Path(authority_base)
 
 
 def test_economic_status_accepts_root_entitlement_api_wrapper(monkeypatch, tmp_path) -> None:

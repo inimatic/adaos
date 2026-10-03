@@ -2163,6 +2163,16 @@ class RouterService:
                     return conversation_id, channel_id, topic_id
             return "", "", ""
 
+        def _voice_chat_projection_agent_id(messages: list[dict[str, Any]]) -> str:
+            for raw in reversed(messages):
+                if not isinstance(raw, dict):
+                    continue
+                meta = raw.get("_meta") if isinstance(raw.get("_meta"), dict) else {}
+                agent_id = str(raw.get("active_agent_id") or meta.get("active_agent_id") or "").strip()
+                if agent_id:
+                    return agent_id
+            return ""
+
         def _voice_chat_persist_key(webspace_id: str, target_node_id: str | None) -> tuple[str, str]:
             return (
                 str(webspace_id or "default").strip() or "default",
@@ -2294,6 +2304,7 @@ class RouterService:
             has_more_before: bool = False,
             total_message_count: int | None = None,
             suppress_unchanged: bool = False,
+            active_agent_id: Any = None,
         ) -> str:
             # Keep the browser stream as a compact tail. Voice must never wait
             # on heavier YJS history writes before dispatching NLU.
@@ -2312,16 +2323,18 @@ class RouterService:
             elif not effective_before_cursor and effective_has_more_before:
                 effective_before_cursor = str(max(0, total_count - len(cached_messages)))
             conversation_id, dialog_channel_id, topic_id = _voice_chat_projection_identity(cached_messages)
+            resolved_active_agent_id = str(active_agent_id or _voice_chat_projection_agent_id(cached_messages)).strip()
             signature = _voice_chat_persist_signature(
                 cached_messages,
                 before_cursor=effective_before_cursor,
                 has_more_before=effective_has_more_before,
                 total_message_count=total_count,
             )
+            projection_signature = f"{signature}:agent:{resolved_active_agent_id}"
             cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
             current_cache = _voice_chat_stream_cache.get(cache_key) or {}
-            if suppress_unchanged and str(current_cache.get("stream_signature") or "") == signature:
-                return signature
+            if suppress_unchanged and str(current_cache.get("stream_signature") or "") == projection_signature:
+                return projection_signature
             stream_params = {
                 key: value
                 for key, value in {
@@ -2329,6 +2342,7 @@ class RouterService:
                     "dialog_channel_id": dialog_channel_id,
                     "conversation_topic_id": topic_id,
                     "thread_id": topic_id,
+                    "active_agent_id": resolved_active_agent_id,
                 }.items()
                 if str(value or "").strip()
             }
@@ -2344,7 +2358,8 @@ class RouterService:
                 "dialog_channel_id": dialog_channel_id,
                 "conversation_topic_id": topic_id,
                 "thread_id": topic_id,
-                "stream_signature": signature,
+                "active_agent_id": resolved_active_agent_id or None,
+                "stream_signature": projection_signature,
             }
             payload: dict[str, Any] = {
                 "receiver": "voice_chat.messages",
@@ -2362,6 +2377,7 @@ class RouterService:
                     "dialog_channel_id": dialog_channel_id,
                     "conversation_topic_id": topic_id,
                     "thread_id": topic_id,
+                    "active_agent_id": resolved_active_agent_id or None,
                 },
                 "_meta": {
                     "webspace_id": webspace_id,
@@ -2370,6 +2386,7 @@ class RouterService:
                     "dialog_channel_id": dialog_channel_id,
                     "conversation_topic_id": topic_id,
                     "thread_id": topic_id,
+                    "active_agent_id": resolved_active_agent_id or None,
                 },
             }
             if stream_params:
@@ -2392,7 +2409,7 @@ class RouterService:
                 )
             except Exception:
                 pass
-            return signature
+            return projection_signature
 
         def _schedule_voice_chat_persist(
             webspace_id: str,
@@ -2576,6 +2593,7 @@ class RouterService:
             conversation_id: Any = None,
             dialog_channel_id: Any = None,
             thread_id: Any = None,
+            active_agent_id: Any = None,
             persist: bool = False,
             suppress_unchanged: bool = False,
         ) -> None:
@@ -2655,6 +2673,7 @@ class RouterService:
                     before_cursor=str(ledger_projection.get("before_cursor") or ""),
                     has_more_before=bool(ledger_projection.get("has_more_before")),
                     total_message_count=int(ledger_projection.get("total_message_count") or len(ledger_messages)),
+                    active_agent_id=active_agent_id,
                 )
                 if suppress_unchanged:
                     _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
@@ -2718,6 +2737,7 @@ class RouterService:
                         before_cursor=before_cursor,
                         has_more_before=has_more_before,
                         total_message_count=total_message_count,
+                        active_agent_id=active_agent_id,
                     )
                     if suppress_unchanged:
                         _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
@@ -2757,6 +2777,7 @@ class RouterService:
                     before_cursor=str(projection.get("before_cursor") or ""),
                     has_more_before=bool(projection.get("has_more_before")),
                     total_message_count=int(projection.get("total_message_count") or len(stream_messages)),
+                    active_agent_id=active_agent_id,
                 )
                 if suppress_unchanged:
                     _voice_chat_snapshot_published[cache_key] = (
@@ -3879,6 +3900,12 @@ class RouterService:
                 or stream_params.get("channel_id")
                 or stream_params.get("channelId")
             )
+            active_agent_id = (
+                payload.get("active_agent_id")
+                or meta.get("active_agent_id")
+                or stream_params.get("active_agent_id")
+                or stream_params.get("activeAgentId")
+            )
             thread_id = _voice_chat_topic_id_from_sources(payload, meta, stream_params)
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
@@ -3886,6 +3913,7 @@ class RouterService:
                     "conversation_id": conversation_id,
                     "dialog_channel_id": dialog_channel_id,
                     "thread_id": thread_id,
+                    "active_agent_id": active_agent_id,
                     "persist": _voice_chat_persist_stream_snapshots_enabled(),
                     "suppress_unchanged": ev.type == "webio.stream.snapshot.requested",
                 }
@@ -3901,6 +3929,7 @@ class RouterService:
                         conversation_id,
                         dialog_channel_id,
                         thread_id,
+                        active_agent_id,
                     )
                 )
                 existing = self._voice_chat_snapshot_deferred_tasks.get(key)
@@ -5103,10 +5132,11 @@ class RouterService:
             if not cid or cid == GENERAL_DIALOG_CHANNEL_ID:
                 return False
             try:
+                manifest_channels = await asyncio.to_thread(_conversation_manifest_channel_records, ws)
                 channel = next(
                     (
                         item
-                        for item in _conversation_manifest_channel_records(ws)
+                        for item in manifest_channels
                         if str(item.get("id") or item.get("channel_id") or "").strip().lower() == cid
                     ),
                     None,
@@ -5184,6 +5214,10 @@ class RouterService:
                 and str(active.owner or "").strip() == owner
                 and str(active.default_skill or "").strip() == default_skill
                 and str(active.default_tool or "").strip() == default_tool
+                and (
+                    not str(meta.get("active_agent_id") or "").strip()
+                    or str(active.active_agent_id or "").strip() == str(meta.get("active_agent_id") or "").strip()
+                )
             ):
                 return True
             try:

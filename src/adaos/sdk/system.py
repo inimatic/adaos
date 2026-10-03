@@ -932,6 +932,22 @@ def get_operational_snapshot(
     use their dedicated control-plane projections.
     """
 
+    # Published applications execute with isolated Trial paths and SQL, while
+    # the requested system projection belongs to the node.  Admission is
+    # already enforced by the bridge; this hop only selects the authoritative
+    # read context instead of returning an empty Trial-local model.
+    from adaos.services.agent_context import get_ctx, use_ctx
+
+    active_ctx = get_ctx()
+    authority_ctx = getattr(active_ctx, "authority_context", None)
+    if authority_ctx is not None and authority_ctx is not active_ctx:
+        with use_ctx(authority_ctx):
+            return get_operational_snapshot(
+                sections=sections,
+                webspace_id=webspace_id,
+                limit=limit,
+            )
+
     selected = _requested_sections(sections)
     bounded_limit = _bounded_limit(limit)
     subject = _mapping(control_plane.get_self_object())

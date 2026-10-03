@@ -1977,6 +1977,7 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
     bus = LocalEventBus()
     calls: list[tuple[str, str, dict, dict]] = []
     seen_nlu: list[Event] = []
+    seen_stream: list[Event] = []
     webspace_id = "active-dialog-voice-ws"
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
     monkeypatch.setattr(
@@ -2036,6 +2037,7 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
 
     bus.publish(
         Event(
@@ -2076,6 +2078,9 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
         "active_agent_id": "agent:conversation_companions:arseni",
     }
     assert doc.get_map("data")["voice_chat"]["messages"][0]["text"] == "free form companion turn"
+    assert seen_stream
+    assert seen_stream[-1].payload["params"]["active_agent_id"] == "agent:conversation_companions:arseni"
+    assert seen_stream[-1].payload["data"]["active_agent_id"] == "agent:conversation_companions:arseni"
     dialog_runtime.reset_all()
 
 

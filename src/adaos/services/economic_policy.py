@@ -118,6 +118,20 @@ def _load_config_best_effort(base_dir: Path) -> Any:
     )
 
 
+def _economic_authority_base_dir() -> Path:
+    """Resolve the node-owned economic store from isolated Trial contexts."""
+
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        authority_state = getattr(get_ctx(), "authority_state_dir", None)
+        if authority_state:
+            return Path(authority_state).expanduser().absolute().parent
+    except Exception:
+        pass
+    return current_base_dir()
+
+
 def entitlement_snapshot_path(*, base_dir: Path | None = None) -> Path:
     configured = _text(os.getenv("ADAOS_ECONOMIC_ENTITLEMENT_SNAPSHOT"))
     if configured:
@@ -310,7 +324,7 @@ def refresh_entitlement_snapshot_from_root(
     *,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
-    base_dir = current_base_dir()
+    base_dir = _economic_authority_base_dir()
     conf = _load_config_best_effort(base_dir)
     client = _economic_root_http_client(conf, base_dir=base_dir, root_base_url=root_base_url)
     payload = client.request("GET", "/v1/hub/economic/entitlement", timeout=timeout)
@@ -394,7 +408,7 @@ def report_codex_usage_to_root(
     *,
     timeout: float = 4.0,
 ) -> dict[str, Any]:
-    base_dir = current_base_dir()
+    base_dir = _economic_authority_base_dir()
     conf = _load_config_best_effort(base_dir)
     client = _economic_root_http_client(conf, base_dir=base_dir, root_base_url=root_base_url)
     payload = dict(event)
@@ -410,6 +424,14 @@ def report_codex_usage_to_root(
 
 
 def _state_dir_for_usage(base_dir: Path) -> Path:
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        authority_state = getattr(get_ctx(), "authority_state_dir", None)
+        if authority_state:
+            return Path(authority_state).expanduser().absolute()
+    except Exception:
+        pass
     try:
         return current_state_dir()
     except Exception:
@@ -542,7 +564,7 @@ def _merge_llm_request_usage(usage_payload: dict[str, Any], observed: Mapping[st
 
 
 def current_subnet_economic_status() -> dict[str, Any]:
-    base_dir = current_base_dir()
+    base_dir = _economic_authority_base_dir()
     conf = _load_config_best_effort(base_dir)
     zone_id = _configured_zone_id(conf)
     configured_root_base = _root_base_url(conf)

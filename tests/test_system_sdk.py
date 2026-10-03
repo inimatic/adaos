@@ -1,9 +1,36 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+
+
+def test_operational_snapshot_uses_node_authority_from_trial(monkeypatch) -> None:
+    from adaos.sdk import system
+    from adaos.services.agent_context import get_ctx, use_ctx
+
+    owner = get_ctx()
+    observed_contexts = []
+
+    def _subject():
+        observed_contexts.append(get_ctx())
+        return _object("node:authority", "node")
+
+    monkeypatch.setattr(system.control_plane, "get_self_object", _subject)
+    monkeypatch.setattr(
+        system.control_plane,
+        "get_local_capacity_object",
+        lambda: _object("capacity:authority", "capacity"),
+    )
+    trial = replace(owner, authority_context=owner)
+
+    with use_ctx(trial):
+        result = system.get_operational_snapshot(sections="summary")
+
+    assert result["subject"]["id"] == "node:authority"
+    assert observed_contexts == [owner]
 
 
 def _object(object_id: str, kind: str, *, incidents=None) -> dict:

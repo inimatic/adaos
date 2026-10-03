@@ -87,6 +87,9 @@ class AgentContext:
     execution_provider: Optional["ExecutorProvider"] = field(default=None, repr=False)
     # Isolated runtimes share verified node authority, never a copy of its grants.
     authority_state_dir: Optional[Any] = field(default=None, repr=False)
+    # Node-level read models still need the bootstrap repositories and SQL;
+    # isolated Trial paths alone cannot reconstruct that authority.
+    authority_context: Optional["AgentContext"] = field(default=None, repr=False)
     # Bootstrap-owned vault; unlike legacy ctx.secrets it is never rebound per skill.
     credential_vault: Optional[Secrets] = field(default=None, repr=False)
     # Node configuration (loaded once during bootstrap and reused to avoid expensive reloads)

@@ -5960,6 +5960,10 @@ def active_browser_session_snapshot(*, now_ts: float | None = None) -> dict[str,
             for webspace_id, device_counts in _ACTIVE_YWS_CLIENTS.items()
             if isinstance(device_counts, dict)
         }
+        sockets = {
+            webspace_id: list(items or [])
+            for webspace_id, items in _ACTIVE_YWS_CONNECTIONS.items()
+        }
     peers: list[dict[str, Any]] = []
     for webspace_id, device_counts in clients.items():
         for client_key, session_count in sorted(device_counts.items()):
@@ -5977,6 +5981,35 @@ def active_browser_session_snapshot(*, now_ts: float | None = None) -> dict[str,
             }
             if scoped_client_id:
                 peer["client_limit_id"] = scoped_client_id
+            matching_socket = next(
+                (
+                    websocket
+                    for websocket in sockets.get(webspace_id, [])
+                    if _websocket_yws_client_limit_key(websocket) == client_key
+                ),
+                None,
+            )
+            if matching_socket is not None:
+                try:
+                    params = dict(getattr(matching_socket, "query_params", {}) or {})
+                except Exception:
+                    params = {}
+                peer.update(_browser_session_metadata(params))
+                browser_page_id = _clean_browser_metadata_value(
+                    params.get("browser_page_id") or params.get("browserPageId"),
+                    max_len=128,
+                )
+                browser_session_id = _clean_browser_metadata_value(
+                    params.get("browser_session_id")
+                    or params.get("browserSessionId")
+                    or params.get("client_session_id")
+                    or params.get("clientSessionId"),
+                    max_len=128,
+                )
+                if browser_page_id:
+                    peer["browser_page_id"] = browser_page_id
+                if browser_session_id:
+                    peer["browser_session_id"] = browser_session_id
             peers.append(peer)
     return {
         "peer_total": len(peers),

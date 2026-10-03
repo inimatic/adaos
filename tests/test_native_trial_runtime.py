@@ -29,6 +29,7 @@ def test_trial_context_separates_data_and_keeps_node_authority(tmp_path):
     assert ctx.paths.skills_dir() == root / "skills"
     assert ctx.paths.state_dir().is_relative_to(root)
     assert ctx.authority_state_dir == owner.paths.state_dir()
+    assert ctx.authority_context is owner
     assert _profile_path(ctx) == _profile_path(owner)
     assert ctx.kv is not owner.kv and ctx.sql is not owner.sql
     assert ctx.projections is not owner.projections

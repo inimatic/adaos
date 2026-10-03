@@ -4824,10 +4824,40 @@ def test_close_browser_yws_connections_by_device_or_session() -> None:
             "session_count": 1,
             "source": "yws_gateway",
             "client_limit_id": "session-active",
+            "browser_session_id": "session-active",
         }
     ]
 
     gateway_module._untrack_yws_connection("ops", active_ws)
+
+
+def test_active_browser_session_snapshot_preserves_page_zone_and_origin() -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+
+    ws = SimpleNamespace(
+        query_params={
+            "dev": "dev-local",
+            "browser_page_id": "page-lo-1",
+            "browser_session_id": "session-lo-1",
+            "browser_zone": "lo",
+            "browser_origin": "http://127.0.0.1:8100",
+            "endpoint_display_name": "Local browser",
+        }
+    )
+    gateway_module._track_yws_connection("desktop", ws, device_id="dev-local")
+
+    peer = gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"][0]
+
+    assert peer["device_id"] == "dev-local"
+    assert peer["client_limit_id"] == "page-lo-1"
+    assert peer["browser_page_id"] == "page-lo-1"
+    assert peer["browser_session_id"] == "session-lo-1"
+    assert peer["browser_zone"] == "lo"
+    assert peer["browser_origin"] == "http://127.0.0.1:8100"
+    assert peer["endpoint_display_name"] == "Local browser"
+
+    gateway_module._untrack_yws_connection("desktop", ws)
 
 
 def test_yjs_balancer_snapshot_reports_limits_usage_and_guard(monkeypatch) -> None:
