@@ -25,6 +25,159 @@ def _digest(candidate: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(candidate, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def prepare_record_repair(
+    candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]
+) -> dict[str, Any] | None:
+    """Build a bounded patch for positional records with invalid arity."""
+
+    import re
+
+    if not findings or any(
+        item.get("code") != "semantic.record_arity" for item in findings
+    ):
+        return None
+    resources = candidate.get("resources") or []
+    targets: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for finding in findings:
+        match = re.fullmatch(
+            r"\$\.resources\[(\d+)\]\.records\[(\d+)\]\.values",
+            str(finding.get("path") or ""),
+        )
+        if not match:
+            return None
+        resource_index, record_index = map(int, match.groups())
+        if resource_index >= len(resources):
+            return None
+        resource = resources[resource_index]
+        records = resource.get("records") or []
+        if record_index >= len(records):
+            return None
+        record = records[record_index]
+        field_refs = [str(field.get("id") or "") for field in resource.get("fields") or []]
+        expected = [str(item) for item in finding.get("expected_field_refs") or []]
+        if expected and expected != field_refs:
+            return None
+        identity = (str(resource.get("id") or ""), str(record.get("id") or ""))
+        if not all(identity) or identity in seen:
+            return None
+        seen.add(identity)
+        targets.append(
+            {
+                "resource_ref": identity[0],
+                "record_id": identity[1],
+                "field_refs": field_refs,
+                "current_values": copy.deepcopy(list(record.get("values") or [])),
+            }
+        )
+    if not targets:
+        return None
+
+    provider = semantic_prototype_provider_contract(
+        version="v2",
+        locales=tuple(
+            locale for locale in ("en", "ru") if locale in candidate.get("title", {})
+        ),
+    )
+    available = provider["$defs"]
+    definitions = {
+        name: copy.deepcopy(available[name])
+        for name in ("scalar", "fieldValue")
+    }
+    variants = [
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["resource_ref", "record_id", "values"],
+            "properties": {
+                "resource_ref": {
+                    "type": "string",
+                    "enum": [target["resource_ref"]],
+                },
+                "record_id": {"type": "string", "enum": [target["record_id"]]},
+                "values": {
+                    "type": "array",
+                    "minItems": len(target["field_refs"]),
+                    "maxItems": len(target["field_refs"]),
+                    "items": {"$ref": "#/$defs/fieldValue"},
+                },
+            },
+        }
+        for target in targets
+    ]
+    digest = _digest(candidate)
+    return {
+        "base_sha256": digest,
+        "record_contexts": targets,
+        "task": (
+            "Correct only the listed positional record values. Return one correction "
+            "for every record_context, with values in the exact field_refs order and "
+            "with exactly the same number of values as field_refs. Preserve each "
+            "record's intended content; remove or restore only the misplaced, missing, "
+            "or duplicated value that caused the reported arity failure. Resource "
+            "schemas, all unlisted records, relationships, views, commands, states, "
+            "bindings, capability gaps and Automation obligations are immutable. "
+            "Return only this bounded patch, not a complete candidate."
+        ),
+        "output_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["schema", "base_sha256", "corrections"],
+            "properties": {
+                "schema": {
+                    "type": "string",
+                    "enum": ["adaos.builder.record_repair.v1"],
+                },
+                "base_sha256": {"type": "string", "enum": [digest]},
+                "corrections": {
+                    "type": "array",
+                    "minItems": len(targets),
+                    "maxItems": len(targets),
+                    "items": {"anyOf": variants},
+                },
+            },
+            "$defs": definitions,
+        },
+    }
+
+
+def apply_record_repair(
+    candidate: Mapping[str, Any],
+    repair: Mapping[str, Any],
+    findings: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    plan = prepare_record_repair(candidate, findings)
+    if plan is None:
+        raise BuilderWorkflowError("record repair is not applicable to these findings")
+    Draft202012Validator(plan["output_schema"]).validate(repair)
+    if repair.get("base_sha256") != plan["base_sha256"]:
+        raise BuilderWorkflowError("record repair base digest does not match")
+
+    expected = {
+        (item["resource_ref"], item["record_id"])
+        for item in plan["record_contexts"]
+    }
+    corrections: dict[tuple[str, str], list[Any]] = {}
+    for item in repair["corrections"]:
+        identity = (item["resource_ref"], item["record_id"])
+        if identity not in expected:
+            raise BuilderWorkflowError("record repair targets an unreported record")
+        if identity in corrections:
+            raise BuilderWorkflowError("record repair contains duplicate corrections")
+        corrections[identity] = copy.deepcopy(list(item["values"]))
+    if set(corrections) != expected:
+        raise BuilderWorkflowError("record repair must correct every reported record")
+
+    result = copy.deepcopy(dict(candidate))
+    for resource in result.get("resources") or []:
+        resource_ref = str(resource.get("id") or "")
+        for record in resource.get("records") or []:
+            identity = (resource_ref, str(record.get("id") or ""))
+            if identity in corrections:
+                record["values"] = corrections[identity]
+    return result
+
+
 def prepare_reference_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
     import re
 
