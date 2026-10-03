@@ -131,6 +131,8 @@
 	"python.pylanceLspNotebooksEnabled": false,
 	"jupyter.pylanceHandlesNotebooks": false,
 	"scm.experimental.showHistoryGraph": false,
+	"git.scanRepositories": ["docs-development"],
+	"git.ignoredRepositories": ["internals"],
 	"workbench.iconTheme": "vscode-icons",
 	"[python]": {
 		"editor.formatOnType": true
