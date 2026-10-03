@@ -66,3 +66,25 @@ jobs:
           name: adaos-sdk-metadata-${{ runner.os }}-py${{ matrix.python-version }}
           path: build/sdk-metadata/adaos-sdk-metadata.json
           retention-days: 7
+
+  verify-reproducible:
+    needs: sdk-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Linux metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: adaos-sdk-metadata-Linux-py3.11
+          path: build/verify/linux
+
+      - name: Download Windows metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: adaos-sdk-metadata-Windows-py3.11
+          path: build/verify/windows
+
+      - name: Require byte-identical canonical metadata
+        shell: bash
+        run: |
+          cmp build/verify/linux/adaos-sdk-metadata.json build/verify/windows/adaos-sdk-metadata.json
+          sha256sum build/verify/linux/adaos-sdk-metadata.json

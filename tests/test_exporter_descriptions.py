@@ -7,6 +7,7 @@ from adaos.sdk.core.exporter import export as sdk_export
 from adaos.sdk.core import exporter as sdk_exporter
 from adaos.services.root_mcp.registry import get_descriptor_set
 from adaos.services.root_mcp.descriptor_search import get_descriptor_item, search_descriptors
+from tools import build_sdk_metadata
 
 
 def test_sdk_export_std():
@@ -88,6 +89,30 @@ def test_deprecated_sdk_members_are_hidden_from_authoring_but_visible_to_migrati
     assert [entry["name"] for entry in migration["tools"]] == [
         "adaos.sdk.example.legacy"
     ]
+
+
+def test_canonical_sdk_bundle_excludes_wall_clock_metadata(monkeypatch) -> None:
+    generated = iter(("2026-10-03T05:00:00+00:00", "2026-10-03T05:00:01+00:00"))
+
+    monkeypatch.setattr(
+        build_sdk_metadata,
+        "export",
+        lambda **_kwargs: {
+            "meta": {
+                "generated_at": next(generated),
+                "git_sha": "revision-1",
+                "py": "3.11",
+            },
+            "tools": [],
+        },
+    )
+
+    bundle = build_sdk_metadata.build_bundle()
+
+    assert bundle["source_revision"] == "revision-1"
+    assert "generated_at" not in bundle["authoring"]["meta"]
+    assert "generated_at" not in bundle["migration"]["meta"]
+    assert str(bundle["digest"]).startswith("sha256:")
 
 
 def test_sdk_metadata_mini_is_a_bounded_nonduplicated_mcp_projection():

@@ -17,6 +17,34 @@ if str(SOURCE_ROOT) not in sys.path:
 from adaos.sdk.core.exporter import export  # noqa: E402
 
 
+def build_bundle() -> dict[str, object]:
+    """Build reproducible metadata from the SDK's canonical exporter."""
+
+    authoring = export(level="rich", include_deprecated=False)
+    migration = export(level="rich", include_deprecated=True)
+    for projection in (authoring, migration):
+        meta = projection.get("meta")
+        if isinstance(meta, dict):
+            # Wall-clock provenance belongs to a delivery receipt, not to the
+            # content-addressed SDK artifact.  Keeping it here made identical
+            # Linux and Windows builds produce different digests.
+            meta.pop("generated_at", None)
+    payload: dict[str, object] = {
+        "schema": "adaos.sdk.metadata.bundle.v1",
+        "source_revision": str((authoring.get("meta") or {}).get("git_sha") or "unknown"),
+        "authoring": authoring,
+        "migration": migration,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    payload["digest"] = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    return payload
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -29,15 +57,13 @@ def main() -> int:
     build_root = (REPOSITORY_ROOT / "build").resolve()
     if not output.is_relative_to(build_root):
         parser.error("--output must stay under the repository build directory")
-    payload = {
-        "schema": "adaos.sdk.metadata.bundle.v1",
-        "authoring": export(level="rich", include_deprecated=False),
-        "migration": export(level="rich", include_deprecated=True),
-    }
-    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    payload["digest"] = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    payload = build_bundle()
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     print(json.dumps({"output": str(output), "digest": payload["digest"]}))
     return 0
 
