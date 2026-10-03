@@ -1930,7 +1930,9 @@ async def test_realtime_sidecar_probe_does_not_supersede_active_local_client(
         reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
         writer.write(b"PING\r\n")
         await writer.drain()
-        await asyncio.sleep(0.05)
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not fake_ws.sent and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
         assert fake_ws.sent == [b"PING\r\n"]
 
         assert await realtime_sidecar_mod.probe_realtime_sidecar_ready(
