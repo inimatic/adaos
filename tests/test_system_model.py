@@ -161,6 +161,35 @@ def test_canonical_object_from_skill_status_tracks_slot_and_version_drift() -> N
     assert obj["versioning"]["drift"] is True
 
 
+def test_installed_skill_catalog_uses_registry_rows_without_n_plus_one(monkeypatch) -> None:
+    from adaos.services.system_model import catalog
+
+    rows = [
+        SimpleNamespace(name="weather_skill", installed=True, active_version="1.2.3"),
+        SimpleNamespace(name="removed_skill", installed=False, active_version="9.9.9"),
+    ]
+    monkeypatch.setattr(
+        catalog,
+        "_installed_skill_records",
+        lambda _ctx=None: rows,
+    )
+    monkeypatch.setattr(catalog, "_governance_refs", lambda: ("subnet:test", "profile:owner"))
+    monkeypatch.setattr(
+        catalog,
+        "skill_object",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("installed inventory must not perform per-skill reads")
+        ),
+    )
+
+    items = catalog.installed_skill_objects()
+
+    assert len(items) == 1
+    payload = items[0].to_dict()
+    assert payload["id"] == "skill:weather_skill"
+    assert payload["versioning"]["actual"] == "1.2.3"
+
+
 def test_canonical_object_from_workspace_manifest_uses_effective_properties() -> None:
     manifest = SimpleNamespace(
         workspace_id="desk",
@@ -470,6 +499,45 @@ def test_canonical_object_from_device_endpoint_merges_workspace_and_session_link
     assert obj["relations"]["workspace"] == ["workspace:kitchen"]
     assert obj["relations"]["connected_to"] == ["browser:tablet-kitchen"]
     assert obj["health"]["connectivity"] == "reachable"
+
+
+def test_device_objects_filters_before_mapping_and_bounds_inventory(monkeypatch) -> None:
+    from adaos.services.system_model import catalog
+
+    observed: dict[str, object] = {}
+
+    def _devices(*, kind=None, include_detached=False):
+        observed.update(kind=kind, include_detached=include_detached)
+        return [
+            {
+                "ref": "browser:live",
+                "kind": "browser",
+                "identity": {"browser_device_id": "live"},
+                "observation": {"online": True, "connection_state": "connected"},
+            },
+            {
+                "ref": "browser:old",
+                "kind": "browser",
+                "identity": {"browser_device_id": "old"},
+                "observation": {"online": False, "connection_state": "offline"},
+            },
+        ]
+
+    monkeypatch.setattr(catalog, "list_device_inventory_records", _devices)
+    monkeypatch.setattr(catalog.workspace_index, "list_workspaces", lambda: [])
+
+    objects = [
+        item.to_dict()
+        for item in catalog.device_objects(
+            kind="browser",
+            status="active",
+            include_detached=True,
+            limit=1,
+        )
+    ]
+
+    assert observed == {"kind": "browser", "include_detached": True}
+    assert [item["id"] for item in objects] == ["device:live"]
 
 
 def test_canonical_object_from_device_endpoint_accepts_device_record_shape() -> None:

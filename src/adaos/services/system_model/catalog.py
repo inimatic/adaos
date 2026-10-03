@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.services.bootstrap import load_config
@@ -30,7 +30,10 @@ def _ctx(ctx: AgentContext | None = None) -> AgentContext:
 
 
 def _governance_refs() -> tuple[str | None, str | None]:
-    conf = load_config()
+    # Bootstrap already loaded and validated node configuration. Re-reading it
+    # for every canonical object caused repeated YAML/env parsing on the API
+    # event loop (especially visible in device and skill collections).
+    conf = getattr(get_ctx(), "config", None) or load_config()
     subnet_value = str(getattr(conf, "subnet_id", "") or "").strip()
     owner_value = str(getattr(conf, "owner_id", "") or "").strip()
     tenant_id = f"subnet:{subnet_value}" if subnet_value else None
@@ -68,6 +71,13 @@ def _scenario_manager(ctx: AgentContext | None = None) -> ScenarioManager:
     )
 
 
+def _installed_skill_records(ctx: AgentContext | None = None) -> list[Any]:
+    """Read the installed-skill authority without scanning source manifests."""
+
+    runtime = _ctx(ctx)
+    return list(SqliteSkillRegistry(runtime.sql).list() or [])
+
+
 def skill_object(name: str, *, ctx: AgentContext | None = None):
     mgr = _skill_manager(ctx)
     meta = mgr.get(name)
@@ -89,15 +99,35 @@ def skill_object(name: str, *, ctx: AgentContext | None = None):
 
 
 def installed_skill_objects(*, ctx: AgentContext | None = None) -> list[Any]:
-    mgr = _skill_manager(ctx)
+    # The SQLite registry already contains the authoritative installed rows.
+    # The previous implementation rebuilt a SkillManager, reparsed metadata and
+    # read runtime state once per skill (59 N+1 reads on the current node),
+    # turning a simple installed-count card into a 25 second request.
+    tenant_id, owner_id = _governance_refs()
     objects: list[Any] = []
-    for row in list(mgr.list_installed() or []):
+    for row in _installed_skill_records(ctx):
         if not bool(getattr(row, "installed", True)):
             continue
         name = str(getattr(row, "name", "") or "").strip()
         if not name:
             continue
-        objects.append(skill_object(name, ctx=ctx))
+        objects.append(
+            apply_governance_defaults(
+                canonical_object_from_skill_status(
+                    {
+                        "name": name,
+                        "version": str(
+                            getattr(row, "active_version", None) or ""
+                        ).strip()
+                        or None,
+                        "slot": None,
+                        "update_available": False,
+                    }
+                ),
+                tenant_id=tenant_id,
+                owner_id=owner_id,
+            )
+        )
     return objects
 
 
@@ -198,15 +228,73 @@ def browser_session_objects() -> list[Any]:
     return [_governed(canonical_object_from_browser_session(item)) for item in _browser_session_payloads()]
 
 
-def device_objects() -> list[Any]:
-    records: dict[str, dict[str, Any]] = {}
+def _device_record_is_active(item: dict[str, Any]) -> bool:
+    observation = (
+        item.get("observation")
+        if isinstance(item.get("observation"), dict)
+        else {}
+    )
+    if observation.get("online") is True:
+        return True
+    state = str(
+        observation.get("connection_state")
+        or item.get("connection_state")
+        or item.get("status")
+        or ""
+    ).strip().casefold()
+    return state in {"online", "connected", "heartbeat", "ready", "active"}
 
-    for item in list_device_inventory_records():
+
+def device_objects(
+    *,
+    kind: str | None = None,
+    status: Literal["active", "offline"] | None = None,
+    include_detached: bool = False,
+    limit: int | None = None,
+) -> list[Any]:
+    """Return a bounded device projection, filtering before canonicalization.
+
+    Device history is intentionally durable and can contain thousands of old
+    browser representations.  UI readers must not pay to map that entire
+    history when they need only live endpoints or member nodes.
+    """
+
+    records: dict[str, dict[str, Any]] = {}
+    selected_kind = str(kind or "").strip().casefold() or None
+    selected_status = str(status or "").strip().casefold() or None
+    if selected_status not in {None, "active", "offline"}:
+        raise ValueError("unsupported device status")
+    if limit is None:
+        bounded_limit = None
+    else:
+        bounded_limit = max(1, min(500, int(limit)))
+
+    inventory_kind = (
+        selected_kind
+        if selected_kind in {"browser", "member", "redevice"}
+        else None
+    )
+    inventory = (
+        list_device_inventory_records()
+        if inventory_kind is None and not include_detached
+        else list_device_inventory_records(
+            kind=inventory_kind,
+            include_detached=include_detached,
+        )
+    )
+    for item in inventory:
         if not isinstance(item, dict):
             continue
         identity = item.get("identity") if isinstance(item.get("identity"), dict) else {}
         observation = item.get("observation") if isinstance(item.get("observation"), dict) else {}
         device_kind = str(item.get("kind") or "device").strip().lower() or "device"
+        if selected_kind and device_kind != selected_kind:
+            continue
+        active = _device_record_is_active(item)
+        if selected_status == "active" and not active:
+            continue
+        if selected_status == "offline" and active:
+            continue
         browser_device_id = str(identity.get("browser_device_id") or identity.get("link_id") or "").strip()
         member_node_id = str(identity.get("node_id") or identity.get("link_id") or "").strip()
         redevice_endpoint_id = str(identity.get("endpoint_id") or identity.get("link_id") or "").strip()
@@ -232,8 +320,15 @@ def device_objects() -> list[Any]:
             "last_seen": observation.get("last_seen_at"),
             "source": "device_inventory",
         }
+        if bounded_limit is not None and len(records) >= bounded_limit:
+            break
 
-    for row in list(workspace_index.list_workspaces() or []):
+    for row in (
+        list(workspace_index.list_workspaces() or [])
+        if selected_kind in {None, "browser", "workspace_binding"}
+        and selected_status is None
+        else []
+    ):
         device_id = str(getattr(row, "device_binding", "") or "").strip()
         if not device_id:
             continue
@@ -253,10 +348,11 @@ def device_objects() -> list[Any]:
         if workspace_id and workspace_id not in workspace_ids:
             workspace_ids.append(workspace_id)
 
-    return [
+    objects = [
         _governed(canonical_object_from_device_endpoint(item))
         for item in sorted(records.values(), key=lambda entry: str(entry.get("device_id") or ""))
     ]
+    return objects if bounded_limit is None else objects[:bounded_limit]
 
 
 def local_capacity_object(*, node_id: str | None = None):

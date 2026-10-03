@@ -105,15 +105,44 @@ def list_browser_session_objects() -> list[Mapping[str, Any]]:
     return [item.to_dict() for item in list_browser_session_models()]
 
 
-def list_device_models():
+def list_device_models(
+    *,
+    kind: str | None = None,
+    status: str | None = None,
+    include_detached: bool = False,
+    limit: int | None = None,
+):
     require_ctx("sdk.data.control_plane")
     from adaos.services.system_model.catalog import device_objects
 
-    return device_objects()
+    if kind is None and status is None and not include_detached and limit is None:
+        return device_objects()
+    return device_objects(
+        kind=kind,
+        status=status,
+        include_detached=include_detached,
+        limit=limit,
+    )
 
 
-def list_device_objects() -> list[Mapping[str, Any]]:
-    return [item.to_dict() for item in list_device_models()]
+def list_device_objects(
+    *,
+    kind: str | None = None,
+    status: str | None = None,
+    include_detached: bool = False,
+    limit: int | None = None,
+) -> list[Mapping[str, Any]]:
+    if kind is None and status is None and not include_detached and limit is None:
+        return [item.to_dict() for item in list_device_models()]
+    return [
+        item.to_dict()
+        for item in list_device_models(
+            kind=kind,
+            status=status,
+            include_detached=include_detached,
+            limit=limit,
+        )
+    ]
 
 
 def get_local_capacity_model():

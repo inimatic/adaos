@@ -1135,6 +1135,33 @@ def test_sdk_control_plane_device_helpers(monkeypatch) -> None:
     assert devices[0]["kind"] == "device"
 
 
+def test_sdk_control_plane_device_helpers_forward_bounded_filters(monkeypatch) -> None:
+    from adaos.sdk import control_plane
+
+    observed: dict[str, object] = {}
+
+    def _list_device_models(**filters):
+        observed.update(filters)
+        return [CanonicalObject(id="member:alpha", kind="member", title="Alpha")]
+
+    monkeypatch.setattr(control_plane, "list_device_models", _list_device_models)
+
+    devices = control_plane.list_device_objects(
+        kind="member",
+        status="online",
+        include_detached=True,
+        limit=32,
+    )
+
+    assert devices[0]["id"] == "member:alpha"
+    assert observed == {
+        "kind": "member",
+        "status": "online",
+        "include_detached": True,
+        "limit": 32,
+    }
+
+
 def test_sdk_control_plane_quota_helpers(monkeypatch) -> None:
     from adaos.sdk import control_plane
 

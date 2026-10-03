@@ -723,6 +723,7 @@ def _installed_skill_projection(*, limit: int) -> tuple[list[dict[str, Any]], di
                 "name": str(item.get("name") or item.get("title") or identity),
                 "status": str(item.get("status") or "unknown"),
                 "version": _mapping(item.get("versioning")).get("current")
+                or _mapping(item.get("versioning")).get("actual")
                 or item.get("version"),
             }
         )
@@ -1067,7 +1068,11 @@ def get_operational_snapshot(
                 if ":" in subject_ref
                 else subject_ref
             )
-            for raw_item in control_plane.list_device_objects():
+            for raw_item in control_plane.list_device_objects(
+                kind="member",
+                include_detached=True,
+                limit=min(500, max(20, bounded_limit * 2)),
+            ):
                 item = dict(raw_item)
                 relations = _mapping(item.get("relations"))
                 member_ref = next(

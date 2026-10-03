@@ -4973,6 +4973,57 @@ class BuilderAutomationService:
             result["model_policy"] = "forbid"
             return result
 
+    def _refresh_followup_cbs_compilation(
+        self,
+        session: dict[str, Any],
+        *,
+        prototype: Mapping[str, Any],
+    ) -> None:
+        """Keep a reused Automation session bound to the current acceptance.
+
+        Automation sessions outlive individual Prototype revisions.  A
+        follow-up used to retain the CBS compilation captured when the session
+        was first created, so Trial admission compared the current immutable
+        acceptance with stale semantic evidence and failed after packaging.
+        Refreshing the package-neutral compilation here preserves the
+        optimistic registry boundary while keeping Trial admission exact.
+        """
+
+        if str(session.get("object_type") or "").strip().lower().rstrip("s") != (
+            "scenario"
+        ):
+            return
+        acceptance = (
+            prototype.get("acceptance")
+            if isinstance(prototype.get("acceptance"), Mapping)
+            else None
+        )
+        if not isinstance(acceptance, Mapping) or acceptance.get("schema") != (
+            "adaos.builder.prototype_acceptance.v1"
+        ):
+            return
+
+        from adaos.services.applications.cbs import ApplicationCBSService
+        from adaos.services.builder.cbs import compile_prototype_cbs
+
+        compiled = compile_prototype_cbs(acceptance)
+        service = ApplicationCBSService(self.state_dir)
+        previous = service.inspect(str(compiled.get("application_ref") or ""))
+        previous_digest = (
+            str(previous.get("compilation_digest") or "")
+            if isinstance(previous, Mapping)
+            else None
+        )
+        if previous_digest == str(compiled.get("compilation_digest") or ""):
+            registered = compiled
+        else:
+            registered = service.register(
+                compiled,
+                expected_previous_digest=previous_digest,
+            )
+        session["cbs_compilation"] = copy.deepcopy(registered)
+        session["prototype_acceptance"] = copy.deepcopy(dict(acceptance))
+
     def submit_turn(
         self,
         *,
@@ -5290,6 +5341,10 @@ class BuilderAutomationService:
                     workflow_before.get("prototype")
                     if isinstance(workflow_before.get("prototype"), Mapping)
                     else {}
+                )
+                self._refresh_followup_cbs_compilation(
+                    session,
+                    prototype=prototype_before,
                 )
                 if starts_automation and bool(
                     prototype_before.get("acceptance_required")

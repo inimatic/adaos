@@ -188,7 +188,7 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
     monkeypatch.setattr(
         system.control_plane,
         "list_device_objects",
-        lambda: [
+        lambda **_: [
             {
                 "id": "device:browser-1",
                 "status": "online",

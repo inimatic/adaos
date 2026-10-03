@@ -3511,6 +3511,65 @@ def test_followup_retains_trusted_prototype_identity(
     assert retained == identity
 
 
+def test_followup_refreshes_cbs_for_current_prototype_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.services.applications.cbs import ApplicationCBSService
+    from adaos.services.builder import cbs as builder_cbs
+
+    service = _service(tmp_path)
+    acceptance = {
+        "schema": "adaos.builder.prototype_acceptance.v1",
+        "digest": "sha256:current-acceptance",
+    }
+    compiled = {
+        "application_ref": "scenario:web_desktop",
+        "compilation_digest": "sha256:current-compilation",
+        "source_acceptance_digest": "sha256:current-acceptance",
+    }
+    registered = {**compiled, "registered": True}
+    observed: dict[str, object] = {}
+
+    def compile_acceptance(value):
+        observed["acceptance"] = dict(value)
+        return compiled
+
+    monkeypatch.setattr(builder_cbs, "compile_prototype_cbs", compile_acceptance)
+    monkeypatch.setattr(
+        ApplicationCBSService,
+        "inspect",
+        lambda self, application_ref: {
+            "application_ref": application_ref,
+            "compilation_digest": "sha256:stale-compilation",
+        },
+    )
+
+    def register(self, value, *, expected_previous_digest=None):
+        observed["registered"] = dict(value)
+        observed["expected_previous_digest"] = expected_previous_digest
+        return registered
+
+    monkeypatch.setattr(ApplicationCBSService, "register", register)
+    session = {
+        "object_type": "scenario",
+        "cbs_compilation": {
+            "compilation_digest": "sha256:stale-compilation",
+        },
+    }
+
+    service._refresh_followup_cbs_compilation(
+        session,
+        prototype={"acceptance": acceptance},
+    )
+
+    assert observed["acceptance"] == acceptance
+    assert observed["registered"] == compiled
+    assert observed["expected_previous_digest"] == "sha256:stale-compilation"
+    assert session["cbs_compilation"] == registered
+    assert session["prototype_acceptance"] == acceptance
+
+
 def test_new_automation_after_trial_rejection_retains_snapshot_prototype_identity(
     tmp_path: Path,
 ) -> None:
