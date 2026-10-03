@@ -2626,6 +2626,69 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
 
 
 @pytest.mark.asyncio
+async def test_realtime_sidecar_subprocess_can_launch_go_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    popen_args: list[str] = []
+    popen_env: dict[str, str] = {}
+    binary = tmp_path / ("adaosd.exe" if realtime_sidecar_mod.os.name == "nt" else "adaosd")
+    binary.write_bytes(b"fixture")
+
+    class _FakeProc:
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+    async def _fake_is_port_open(_host: str, _port: int) -> bool:
+        return False
+
+    async def _fake_wait_bound(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
+        return True
+
+    def _fake_popen(*args, **kwargs):
+        nonlocal popen_args, popen_env
+        popen_args = list(args[0])
+        popen_env = dict(kwargs["env"])
+        return _FakeProc()
+
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_IMPLEMENTATION", "go")
+    monkeypatch.setenv("ADAOS_REALTIME_GO_BINARY", str(binary))
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://ru.api.inimatic.com/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_ALLOW_API_FALLBACK", "0")
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path / "base"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    monkeypatch.setattr(realtime_sidecar_mod, "_is_port_open", _fake_is_port_open)
+    monkeypatch.setattr(realtime_sidecar_mod, "wait_realtime_sidecar_bound", _fake_wait_bound)
+    monkeypatch.setattr(realtime_sidecar_mod.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(realtime_sidecar_mod, "current_base_dir", lambda: tmp_path / "base")
+
+    proc = await realtime_sidecar_mod.start_realtime_sidecar_subprocess(role="hub")
+
+    assert proc is not None
+    assert popen_args == [str(binary.resolve()), "realtime-sidecar", "--host", "127.0.0.1", "--port", "7422"]
+    assert popen_env["ADAOS_REALTIME_REMOTE_WS_URL"] == "wss://ru.api.inimatic.com/nats"
+
+
+def test_realtime_sidecar_go_selection_requires_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_IMPLEMENTATION", "go")
+    monkeypatch.setenv("ADAOS_REALTIME_GO_BINARY", str(tmp_path / "missing-adaosd"))
+    monkeypatch.setattr(realtime_sidecar_mod, "current_base_dir", lambda: tmp_path / "base")
+    monkeypatch.setattr(realtime_sidecar_mod.shutil, "which", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match="adaosd binary was not found"):
+        realtime_sidecar_mod._realtime_sidecar_launch_command(
+            host="127.0.0.1",
+            port=7422,
+            repo_root=tmp_path / "repo",
+        )
+
+
+@pytest.mark.asyncio
 async def test_realtime_sidecar_subprocess_requests_graceful_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

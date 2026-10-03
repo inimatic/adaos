@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import signal
 import socket
 import ssl
@@ -1502,6 +1503,8 @@ def _process_looks_like_adaos_realtime(proc: Any) -> bool:
     joined = " ".join(cmdline)
     if "adaos.services.realtime_sidecar" in joined:
         return True
+    if "adaosd" in joined and "realtime-sidecar" in joined:
+        return True
     return "adaos" in joined and "realtime" in joined and "serve" in joined
 
 
@@ -2144,6 +2147,77 @@ async def wait_realtime_sidecar_bound(*, host: str, port: int, timeout_s: float 
     return False
 
 
+def realtime_sidecar_implementation() -> str:
+    value = str(os.getenv("ADAOS_REALTIME_IMPLEMENTATION") or "python").strip().lower()
+    if value not in {"python", "go"}:
+        raise RuntimeError("ADAOS_REALTIME_IMPLEMENTATION must be 'python' or 'go'")
+    return value
+
+
+def _realtime_sidecar_go_binary(*, repo_root: Path | None = None) -> Path:
+    suffix = ".exe" if os.name == "nt" else ""
+    explicit = str(os.getenv("ADAOS_REALTIME_GO_BINARY") or "").strip()
+    candidates: list[Path] = []
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_absolute() and repo_root is not None:
+            path = repo_root / path
+        candidates.append(path)
+    candidates.append(current_base_dir() / "tools" / f"adaosd{suffix}")
+    if repo_root is not None:
+        candidates.append(repo_root / "src" / "adaos" / "integrations" / "adaosd" / "bin" / f"adaosd{suffix}")
+    discovered = shutil.which("adaosd")
+    if discovered:
+        candidates.append(Path(discovered))
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+            if resolved.is_file():
+                return resolved
+        except Exception:
+            continue
+    checked = ", ".join(str(path) for path in candidates)
+    raise RuntimeError(f"Go realtime sidecar selected but adaosd binary was not found; checked: {checked}")
+
+
+def _realtime_sidecar_launch_command(*, host: str, port: int, repo_root: Path | None) -> list[str]:
+    if realtime_sidecar_implementation() == "python":
+        return [
+            sys.executable,
+            "-m",
+            "adaos.services.realtime_sidecar",
+            "--host",
+            host,
+            "--port",
+            str(port),
+        ]
+    binary = _realtime_sidecar_go_binary(repo_root=repo_root)
+    return [str(binary), "realtime-sidecar", "--host", host, "--port", str(port)]
+
+
+def _configure_go_sidecar_lifecycle_env(env: dict[str, str], *, role: str | None) -> None:
+    if realtime_sidecar_implementation() != "go" or str(role or "").strip().lower() != "hub":
+        return
+    try:
+        from adaos.services.node_config import load_config
+
+        conf = load_config()
+        base_url = str(getattr(getattr(conf, "root_settings", None), "base_url", "") or "").strip().rstrip("/")
+        cert_path = Path(conf.hub_cert_path()).expanduser().resolve()
+        key_path = Path(conf.hub_key_path()).expanduser().resolve()
+        ca_path = Path(conf.ca_cert_path()).expanduser().resolve()
+    except Exception:
+        return
+    if base_url:
+        env["ADAOS_SIDECAR_LIFECYCLE_URL"] = base_url + "/v1/hub/lifecycle/report"
+    if cert_path.is_file():
+        env["ADAOS_SIDECAR_LIFECYCLE_CERT"] = str(cert_path)
+    if key_path.is_file():
+        env["ADAOS_SIDECAR_LIFECYCLE_KEY"] = str(key_path)
+    if ca_path.is_file():
+        env["ADAOS_SIDECAR_LIFECYCLE_CA"] = str(ca_path)
+
+
 async def start_realtime_sidecar_subprocess(
     *,
     role: str | None = None,
@@ -2151,7 +2225,8 @@ async def start_realtime_sidecar_subprocess(
 ) -> subprocess.Popen[Any] | None:
     if not realtime_sidecar_enabled(role=role):
         return None
-    if not resolve_realtime_remote_candidates():
+    remote_candidates = resolve_realtime_remote_candidates()
+    if not remote_candidates:
         return None
     host = realtime_sidecar_host()
     port = realtime_sidecar_port()
@@ -2181,18 +2256,18 @@ async def start_realtime_sidecar_subprocess(
     )
     if resolved_repo_root is not None:
         env["ADAOS_ROOT_REPO_ROOT"] = str(resolved_repo_root)
+    env["ADAOS_REALTIME_REMOTE_WS_URL"] = remote_candidates[0]
+    if len(remote_candidates) > 1:
+        env["ADAOS_REALTIME_REMOTE_WS_ALT"] = ",".join(remote_candidates[1:])
+    _configure_go_sidecar_lifecycle_env(env, role=role)
     log_path = realtime_sidecar_log_path()
     _rotate_realtime_sidecar_log_if_needed(log_path)
     stdout_handle = log_path.open("ab")
-    args = [
-        sys.executable,
-        "-m",
-        "adaos.services.realtime_sidecar",
-        "--host",
-        host,
-        "--port",
-        str(port),
-    ]
+    args = _realtime_sidecar_launch_command(
+        host=host,
+        port=port,
+        repo_root=resolved_repo_root,
+    )
     creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
     if os.name == "nt":
         # A dedicated process group lets the runtime request a graceful
