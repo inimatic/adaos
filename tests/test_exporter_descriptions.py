@@ -1,13 +1,24 @@
 # tests/test_exporter_descriptions.py
 from __future__ import annotations
 
+import importlib.util
 import json
+from pathlib import Path
 
 from adaos.sdk.core.exporter import export as sdk_export
 from adaos.sdk.core import exporter as sdk_exporter
 from adaos.services.root_mcp.registry import get_descriptor_set
 from adaos.services.root_mcp.descriptor_search import get_descriptor_item, search_descriptors
-from tools import build_sdk_metadata
+
+
+_BUILD_METADATA_PATH = Path(__file__).resolve().parents[1] / "tools/build_sdk_metadata.py"
+_BUILD_METADATA_SPEC = importlib.util.spec_from_file_location(
+    "adaos_build_sdk_metadata_test",
+    _BUILD_METADATA_PATH,
+)
+assert _BUILD_METADATA_SPEC is not None and _BUILD_METADATA_SPEC.loader is not None
+build_sdk_metadata = importlib.util.module_from_spec(_BUILD_METADATA_SPEC)
+_BUILD_METADATA_SPEC.loader.exec_module(build_sdk_metadata)
 
 
 def test_sdk_export_std():
