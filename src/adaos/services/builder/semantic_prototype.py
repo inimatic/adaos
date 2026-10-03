@@ -3900,6 +3900,35 @@ def _validate_semantic_prototype_v2(
         suffix = f" at {path}" if path else ""
         _fail(f"{exc.message}{suffix}")
 
+    interface_context = (
+        brief.get("interface_context")
+        if isinstance(brief, Mapping)
+        and isinstance(brief.get("interface_context"), Mapping)
+        else None
+    )
+    if interface_context is not None:
+        expected_layout = interface_context.get("layout")
+        if isinstance(expected_layout, Mapping) and document["layout"] != expected_layout:
+            _fail(
+                "semantic layout must match the accepted Prototype interface context"
+            )
+        expected_selection = interface_context.get("initial_selection")
+        if isinstance(expected_selection, Mapping):
+            resource_ref = str(expected_selection["resource_ref"])
+            record_id = str(expected_selection["record_id"])
+            matching_views = [
+                view
+                for view in document["views"]
+                if str(view.get("resource_ref") or "") == resource_ref
+                and str(view.get("role") or "") == "collection"
+                and str(view.get("initial_selection_id") or "") == record_id
+            ]
+            if not matching_views:
+                _fail(
+                    "semantic initial selection must match the accepted Prototype "
+                    f"interface context ({resource_ref}:{record_id})"
+                )
+
     _normalize_v2_ownership(document, brief=brief)
 
     resources = _unique(document["resources"], "resource")

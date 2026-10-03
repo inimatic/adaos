@@ -34,6 +34,7 @@ def submit_request(
     webspace_id: str,
     locale: str,
     conversation_context: Mapping[str, Any] | None = None,
+    interface_context: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     source_kind: Literal["chat", "api", "e2e", "unknown"] = "api",
     auto_apply: bool = True,
@@ -58,7 +59,10 @@ def submit_request(
             "message_id": str(meta.get("message_id") or "").strip() or None,
         },
     )
-    brief = compile_prototype_brief(intent)
+    brief = compile_prototype_brief(
+        intent,
+        interface_context=interface_context,
+    )
     payload = {
         "text": text,
         "webspace_id": target_webspace,

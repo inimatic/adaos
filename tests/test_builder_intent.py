@@ -11,6 +11,83 @@ from adaos.services.builder_intent import (
 from adaos.services.ui_capabilities import selected_ui_capabilities
 
 
+def _workspace_interface_context() -> dict:
+    return {
+        "schema": "adaos.builder.interface_context.v1",
+        "authority": "accepted_design_contract",
+        "surface": "workspace",
+        "viewports": [
+            {
+                "id": "wide", "viewport_width_px": 1440,
+                "shell_reserved_px": 96, "page_gutter_px": 16,
+                "usable_width_px": 1312, "region_gap_px": 16,
+            },
+            {
+                "id": "compact", "viewport_width_px": 390,
+                "shell_reserved_px": 0, "page_gutter_px": 16,
+                "usable_width_px": 358, "region_gap_px": 12,
+            },
+        ],
+        "layout": {
+            "pattern": "workbench", "density": "compact",
+            "content_width": "fluid", "scroll": "regions",
+            "regions": [
+                {
+                    "id": "structure", "role": "navigation", "priority": 80,
+                    "scroll": "region", "wide": "pane", "compact": "drawer",
+                    "min_px": 220, "preferred_px": 280, "max_px": 360, "grow": 0,
+                },
+                {
+                    "id": "canvas", "role": "main", "priority": 100,
+                    "scroll": "region", "wide": "pane", "compact": "stack",
+                    "min_px": 480, "preferred_px": None, "max_px": None, "grow": 1,
+                },
+                {
+                    "id": "inspector", "role": "inspector", "priority": 70,
+                    "scroll": "region", "wide": "pane", "compact": "sheet",
+                    "min_px": 300, "preferred_px": 360, "max_px": 480, "grow": 0,
+                },
+            ],
+        },
+        "initial_selection": {"resource_ref": "sections", "record_id": "hero"},
+        "capability_refs": ["layout.workbench", "navigation.tabs", "ui.chat"],
+        "acceptance": [
+            {
+                "id": "wide-three-pane", "kind": "geometry",
+                "statement": "All three panes remain visible at the wide viewport.",
+            }
+        ],
+    }
+
+
+def test_interface_context_is_content_addressed_bounded_and_model_visible() -> None:
+    from adaos.services.builder.prototype_context import compile_prototype_model_context
+
+    plain = compile_prototype_brief("Show and edit site sections.")
+    interface = _workspace_interface_context()
+    brief = compile_prototype_brief(
+        "Show and edit site sections.", interface_context=interface
+    )
+
+    assert brief["digest"] != plain["digest"]
+    assert brief["interface_context"] == interface
+    assert compile_prototype_model_context(brief, compact=True)[
+        "interface_context"
+    ] == interface
+    merged = merge_prototype_briefs(plain, brief)
+    assert merged["interface_context"] == interface
+
+    invalid = _workspace_interface_context()
+    invalid["viewports"][0]["usable_width_px"] = 800
+    with pytest.raises(ValueError, match="must equal viewport width"):
+        compile_prototype_brief("Show sections.", interface_context=invalid)
+
+    invalid = _workspace_interface_context()
+    invalid["layout"]["regions"][1]["min_px"] = 900
+    with pytest.raises(ValueError, match="region budget exceeds"):
+        compile_prototype_brief("Show sections.", interface_context=invalid)
+
+
 @pytest.mark.parametrize("statement", [
     "Reference: https://example.test/api/search?sort=title&filter=open. Search items by title.",
     "Документация: https://example.test/api/search. Поиск по названию.",

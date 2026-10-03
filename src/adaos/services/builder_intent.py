@@ -855,7 +855,72 @@ def capture_intent(
     return result
 
 
-def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
+def _validated_interface_context(value: Mapping[str, Any]) -> dict[str, Any]:
+    context = copy.deepcopy(dict(value))
+    schema = _validator("builder.prototype_brief.v1.schema.json").schema
+    Draft202012Validator(
+        {"$ref": "#/$defs/interfaceContext", "$defs": schema["$defs"]}
+    ).validate(context)
+
+    viewports = {str(item["id"]): item for item in context["viewports"]}
+    if len(viewports) != len(context["viewports"]):
+        raise ValueError("Prototype interface context viewport ids must be unique")
+    for viewport_id, viewport in viewports.items():
+        calculated = (
+            int(viewport["viewport_width_px"])
+            - int(viewport["shell_reserved_px"])
+            - 2 * int(viewport["page_gutter_px"])
+        )
+        if calculated != int(viewport["usable_width_px"]):
+            raise ValueError(
+                f"Prototype interface viewport {viewport_id!r} usable_width_px "
+                f"must equal viewport width minus shell and both gutters ({calculated})"
+            )
+
+    regions = context["layout"]["regions"]
+    region_ids = [str(region["id"]) for region in regions]
+    if len(region_ids) != len(set(region_ids)):
+        raise ValueError("Prototype interface context region ids must be unique")
+    for region in regions:
+        bounded = [
+            int(value)
+            for value in (
+                region.get("min_px"),
+                region.get("preferred_px"),
+                region.get("max_px"),
+            )
+            if value is not None
+        ]
+        if bounded != sorted(bounded):
+            raise ValueError(
+                f"Prototype interface region {region['id']!r} requires "
+                "min_px <= preferred_px <= max_px"
+            )
+
+    wide = viewports.get("wide")
+    if wide is not None:
+        pane_regions = [region for region in regions if region["wide"] == "pane"]
+        required_width = sum(
+            int(
+                region.get("min_px")
+                if float(region.get("grow") or 0) > 0
+                else region.get("preferred_px") or region.get("min_px") or 0
+            )
+            for region in pane_regions
+        ) + max(0, len(pane_regions) - 1) * int(wide["region_gap_px"])
+        if required_width > int(wide["usable_width_px"]):
+            raise ValueError(
+                "Prototype interface region budget exceeds the wide viewport: "
+                f"required {required_width}px, available {wide['usable_width_px']}px"
+            )
+    return context
+
+
+def compile_prototype_brief(
+    intent: Mapping[str, Any] | str,
+    *,
+    interface_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Compile only explicit, deterministic facts and preserve unknown fields."""
 
     captured = (
@@ -951,6 +1016,10 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
             "unresolved_fields": sorted(set(unresolved)),
         },
     }
+    if interface_context is not None:
+        unsigned["interface_context"] = _validated_interface_context(
+            interface_context
+        )
     digest = _digest(unsigned)
     result = {
         **unsigned,
@@ -1135,6 +1204,18 @@ def merge_prototype_briefs(*values: Mapping[str, Any]) -> dict[str, Any]:
             ),
         },
     }
+    interface_context = next(
+        (
+            brief["interface_context"]
+            for brief in reversed(briefs)
+            if isinstance(brief.get("interface_context"), Mapping)
+        ),
+        None,
+    )
+    if interface_context is not None:
+        unsigned["interface_context"] = _validated_interface_context(
+            interface_context
+        )
     if operations:
         unsigned["interpretation"]["unresolved_fields"] = [
             field

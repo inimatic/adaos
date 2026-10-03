@@ -378,6 +378,10 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
             }
         ),
     }
+    if isinstance(value.get("interface_context"), Mapping):
+        context["interface_context"] = copy.deepcopy(
+            dict(value["interface_context"])
+        )
     if not compact:
         return context
     # Statements appear once; typed annotations reference the same exact IDs.

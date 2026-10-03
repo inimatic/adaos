@@ -60,6 +60,44 @@ def test_submit_request_admits_intent_and_brief_before_execution() -> None:
     ]
 
 
+def test_submit_request_carries_an_accepted_interface_context() -> None:
+    port = FakePrototypeExecution()
+    interface_context = {
+        "schema": "adaos.builder.interface_context.v1",
+        "authority": "accepted_design_contract",
+        "surface": "workspace",
+        "viewports": [{
+            "id": "wide", "viewport_width_px": 1280,
+            "shell_reserved_px": 80, "page_gutter_px": 16,
+            "usable_width_px": 1168, "region_gap_px": 16,
+        }],
+        "layout": {
+            "pattern": "workbench", "density": "compact",
+            "content_width": "fluid", "scroll": "regions",
+            "regions": [{
+                "id": "main", "role": "main", "priority": 100,
+                "scroll": "region", "wide": "pane", "compact": "stack",
+                "min_px": 480, "preferred_px": None, "max_px": None, "grow": 1,
+            }],
+        },
+        "initial_selection": None,
+        "capability_refs": ["layout.workbench"],
+        "acceptance": [],
+    }
+
+    result = submit_request(
+        port,
+        "Show the editing workspace.",
+        webspace_id="site-studio",
+        locale="en",
+        interface_context=interface_context,
+    )
+
+    payload, _timeout = port.turns[0]
+    assert payload["_meta"]["prototype_brief"]["interface_context"] == interface_context
+    assert result["sdk"]["brief"]["interface_context"] == interface_context
+
+
 def test_candidate_status_keeps_backend_addressing_below_service() -> None:
     port = FakePrototypeExecution()
 

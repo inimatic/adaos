@@ -101,6 +101,7 @@
     "assumptions": { "type": "array", "items": { "$ref": "#/$defs/evidencedStatement" } },
     "open_questions": { "type": "array", "items": { "$ref": "#/$defs/evidencedStatement" } },
     "capability_gaps": { "type": "array", "items": { "$ref": "#/$defs/evidencedStatement" } },
+    "interface_context": { "$ref": "#/$defs/interfaceContext" },
     "interpretation": {
       "type": "object",
       "additionalProperties": false,
@@ -159,6 +160,96 @@
         "statement": { "type": "string", "minLength": 1 },
         "evidence": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "interfaceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "authority", "surface", "viewports", "layout", "initial_selection", "capability_refs", "acceptance"],
+      "properties": {
+        "schema": { "const": "adaos.builder.interface_context.v1" },
+        "authority": { "const": "accepted_design_contract" },
+        "surface": { "enum": ["document", "workspace", "public_site", "tool"] },
+        "viewports": {
+          "type": "array", "minItems": 1, "maxItems": 3,
+          "items": { "$ref": "#/$defs/interfaceViewport" }
+        },
+        "layout": { "$ref": "#/$defs/interfaceLayout" },
+        "initial_selection": {
+          "anyOf": [
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["resource_ref", "record_id"],
+              "properties": {
+                "resource_ref": { "$ref": "#/$defs/interfaceId" },
+                "record_id": { "$ref": "#/$defs/interfaceId" }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "capability_refs": {
+          "type": "array", "maxItems": 24, "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+        },
+        "acceptance": {
+          "type": "array", "maxItems": 24,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "kind", "statement"],
+            "properties": {
+              "id": { "$ref": "#/$defs/interfaceId" },
+              "kind": { "enum": ["geometry", "interaction", "responsive", "content"] },
+              "statement": { "type": "string", "minLength": 1, "maxLength": 500 }
+            }
+          }
+        }
+      }
+    },
+    "interfaceId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+    "interfaceViewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "viewport_width_px", "shell_reserved_px", "page_gutter_px", "usable_width_px", "region_gap_px"],
+      "properties": {
+        "id": { "enum": ["compact", "medium", "wide"] },
+        "viewport_width_px": { "type": "integer", "minimum": 320, "maximum": 3840 },
+        "shell_reserved_px": { "type": "integer", "minimum": 0, "maximum": 640 },
+        "page_gutter_px": { "type": "integer", "minimum": 0, "maximum": 128 },
+        "usable_width_px": { "type": "integer", "minimum": 280, "maximum": 3840 },
+        "region_gap_px": { "type": "integer", "minimum": 0, "maximum": 64 }
+      }
+    },
+    "interfaceLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern", "density", "content_width", "scroll", "regions"],
+      "properties": {
+        "pattern": { "enum": ["flow", "split", "grid", "focus_detail", "workbench"] },
+        "density": { "enum": ["compact", "comfortable"] },
+        "content_width": { "enum": ["fluid", "reading", "wide"] },
+        "scroll": { "enum": ["page", "regions"] },
+        "regions": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": { "$ref": "#/$defs/interfaceRegion" }
+        }
+      }
+    },
+    "interfaceRegion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "priority", "scroll", "wide", "compact", "min_px", "preferred_px", "max_px", "grow"],
+      "properties": {
+        "id": { "$ref": "#/$defs/interfaceId" },
+        "role": { "enum": ["navigation", "toolbar", "collection", "main", "detail", "inspector", "utility", "status", "commands"] },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "scroll": { "enum": ["page", "region", "none"] },
+        "wide": { "enum": ["pane", "stack"] },
+        "compact": { "enum": ["stack", "drawer", "sheet", "hidden", "overflow", "route"] },
+        "min_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 1600 },
+        "preferred_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 1600 },
+        "max_px": { "type": ["integer", "null"], "minimum": 160, "maximum": 2400 },
+        "grow": { "type": "number", "minimum": 0, "maximum": 10 }
       }
     }
   }

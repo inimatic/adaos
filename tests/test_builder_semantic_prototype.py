@@ -2414,7 +2414,7 @@ def test_semantic_layout_maps_to_runtime_abi(
 
 
 def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() -> None:
-    brief, semantic = _multi_resource_fixture()
+    _brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)
     candidate["layout"] = {
         "pattern": "workbench",
@@ -2449,6 +2449,28 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
     next(
         view for view in candidate["views"] if view["resource_ref"] == "people"
     )["region_role"] = "inspector"
+    brief = compile_prototype_brief(
+        "Show a repeatable list of work items, record a result for each item, "
+        "upload an attachment, update the selected item and complete it.",
+        interface_context={
+            "schema": "adaos.builder.interface_context.v1",
+            "authority": "accepted_design_contract",
+            "surface": "workspace",
+            "viewports": [
+                {
+                    "id": "wide", "viewport_width_px": 1440,
+                    "shell_reserved_px": 96, "page_gutter_px": 16,
+                    "usable_width_px": 1312, "region_gap_px": 16,
+                }
+            ],
+            "layout": copy.deepcopy(candidate["layout"]),
+            "initial_selection": {
+                "resource_ref": "work_items", "record_id": "work-1",
+            },
+            "capability_refs": ["layout.workbench"],
+            "acceptance": [],
+        },
+    )
 
     compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
 
@@ -2470,6 +2492,10 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
         "work-editor": "inspector",
     }
     assert page["initialState"]["selected_work_items_id"] == "work-1"
+
+    candidate["layout"]["regions"][0]["preferred_px"] = 300
+    with pytest.raises(BuilderWorkflowError, match="accepted Prototype interface"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
 
 
 def test_explicit_workspace_layout_rejects_unknown_regions_and_inverted_sizes() -> None:
