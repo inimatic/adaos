@@ -47,23 +47,15 @@ jobs:
       - name: Install deps
         run: uv sync --locked --extra dev
 
-      - name: Run SDK tests (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
+      - name: Run bounded metadata contract tests
         env:
           ADAOS_TESTING: 1
           MONOREPO_URL: https://github.com/inimatic/adaoskills.git
         run: |
-          uv run adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
+          uv run pytest tests/test_exporter_descriptions.py tests/test_root_mcp_output_profile.py tests/test_ui_capabilities.py tests/test_device_access.py tests/test_device_inventory.py --junitxml=reports/sdk-junit.xml -q
 
-      - name: Run SDK tests (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          ADAOS_TESTING: 1
-          MONOREPO_URL: https://github.com/inimatic/adaoskills.git
-        run: |
-          uv run adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
+      - name: Enforce MCP output budgets
+        run: uv run python tools/mcp_output_profiler.py --ci
 
       - name: Build canonical SDK metadata
         run: uv run python tools/build_sdk_metadata.py

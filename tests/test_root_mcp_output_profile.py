@@ -228,3 +228,15 @@ def test_descriptor_delta_returns_only_changed_and_removed_fragments() -> None:
         "items:same",
     }
     assert delta["removed"] == ["items:removed"]
+
+
+def test_architecture_catalog_is_a_bounded_typed_graph() -> None:
+    graph = descriptor_registry._architecture_catalog(limit=1)
+
+    assert graph["schema"] == "adaos.architecture.graph.v1"
+    assert len(graph["nodes"]) <= 1
+    page_ids = {item["id"] for item in graph["nodes"]}
+    assert all(
+        edge["source"] in page_ids and edge["target"] in page_ids
+        for edge in graph["edges"]
+    )

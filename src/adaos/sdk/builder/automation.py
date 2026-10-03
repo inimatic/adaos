@@ -747,12 +747,18 @@ def recover_validated_result(
 ) -> dict[str, Any]:
     """Activate a preserved validated result without assigning Codex again."""
 
+    arguments: dict[str, Any] = {
+        "object_type": object_type,
+        "object_id": object_id,
+    }
+    # Keep the facade compatible with services and test doubles that predate
+    # the explicit Trial permission decision.  Absence and ``None`` have the
+    # same meaning here, while forwarding ``None`` needlessly widens the
+    # service call contract.
+    if permission_decision is not None:
+        arguments["permission_decision"] = permission_decision
     return dict(
-        _service().recover_validated_result(
-            object_type=object_type,
-            object_id=object_id,
-            permission_decision=permission_decision,
-        )
+        _service().recover_validated_result(**arguments)
         or {}
     )
 

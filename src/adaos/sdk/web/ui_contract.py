@@ -266,7 +266,7 @@ def implementation_binding_contract(
         "ui.capability_catalog.v1.json",
     ):
         raw = (abi_root / name).read_bytes()
-        sources[name] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+        sources[name] = {"sha256": hashlib.sha256(raw).hexdigest()}
     guide = json.loads(
         (abi_root / "implementation.bindings.v1.json").read_text(encoding="utf-8")
     )
