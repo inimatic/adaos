@@ -164,9 +164,7 @@
       }
     },
     "capabilitySurface": {
-      "oneOf": [
-        { "$ref": "#/$defs/sitePreviewSurface" }
-      ]
+      "$ref": "#/$defs/sitePreviewSurface"
     },
     "sitePreviewSurface": {
       "type": "object",
