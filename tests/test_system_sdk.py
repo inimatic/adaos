@@ -384,9 +384,10 @@ def test_operational_snapshot_exposes_typed_subnet_identity(monkeypatch) -> None
 
 def test_rename_local_subnet_preserves_identity(monkeypatch) -> None:
     from adaos.sdk import system
-    from adaos.services import subnet_alias
+    from adaos.services import agent_context, eventbus, subnet_alias
 
     observed = {}
+    published = {}
     monkeypatch.setattr(
         system.control_plane,
         "get_self_object",
@@ -397,10 +398,25 @@ def test_rename_local_subnet_preserves_identity(monkeypatch) -> None:
         "save_subnet_alias",
         lambda alias, *, subnet_id=None: observed.update(alias=alias, subnet_id=subnet_id) or alias,
     )
+    bus = object()
+    monkeypatch.setattr(agent_context, "get_ctx", lambda: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(
+        eventbus,
+        "emit",
+        lambda target_bus, topic, payload, source: published.update(
+            bus=target_bus, topic=topic, payload=payload, source=source,
+        ),
+    )
 
     result = system.rename_local_subnet("  Product   Lab  ")
 
     assert observed == {"alias": "Product Lab", "subnet_id": "sn_test"}
+    assert published == {
+        "bus": bus,
+        "topic": "subnet.alias.changed",
+        "payload": {"alias": "Product Lab", "subnet_id": "sn_test"},
+        "source": "sdk.system",
+    }
     assert result == {
         "ok": True,
         "target": "local_subnet",
@@ -473,7 +489,12 @@ def test_operational_snapshot_exposes_core_autoupdate_control(monkeypatch) -> No
 
     result = system.get_operational_snapshot(sections={"summary", "update"})
 
-    assert result["update"] == {"state": "idle"}
+    assert result["update"] == {
+        "state": "idle",
+        "runtime_channel": "dev",
+        "runtime_version": system._runtime_release_metadata()["runtime_version"],
+        "development": True,
+    }
     assert result["update_controls"] == {
         "core_autoupdate": False,
         "source": "operator_controls",

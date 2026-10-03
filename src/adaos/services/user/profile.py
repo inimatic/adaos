@@ -321,6 +321,7 @@ class UserProfileService:
             "locale": profile.locale or preferences.get("locale") or settings.get("locale") or default_locale,
             "language": profile.language or preferences.get("language") or settings.get("language") or default_language,
             "timezone": profile.timezone or preferences.get("timezone") or settings.get("timezone"),
+            "avatar_ref": profile.avatar_ref or settings.get("avatar_ref"),
             "theme": preferences.get("theme") or settings.get("theme") or "system",
             "memory_privacy": preferences.get("memory_privacy") or settings.get("memory_privacy") or "default",
             "media_audio_input_device_id": preference_or_setting("media_audio_input_device_id"),

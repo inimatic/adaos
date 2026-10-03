@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
+import os
 import shutil
 from pathlib import Path
 import threading
@@ -52,6 +53,19 @@ _RELIABILITY_CACHE_TTL_S = 2.0
 _RELIABILITY_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
 _RELIABILITY_CACHE_LOCK = threading.Lock()
 _RELIABILITY_BUILD_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _runtime_release_metadata() -> dict[str, Any]:
+    from adaos.build_info import BUILD_INFO, base_version
+
+    active_slot = str(os.getenv("ADAOS_ACTIVE_CORE_SLOT") or "").strip().upper()
+    development = active_slot not in {"A", "B"}
+    version = str(base_version() or BUILD_INFO.version or "").split("+", 1)[0]
+    return {
+        "runtime_channel": "dev" if development else "stable",
+        "runtime_version": version,
+        "development": development,
+    }
 
 _RENAME_INPUT = {
     "type": "object",
@@ -421,6 +435,8 @@ def _display_name(value: Any) -> str:
 def rename_local_subnet(display_name: str) -> dict[str, Any]:
     """Persist the local subnet display name without changing its identity."""
 
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.eventbus import emit
     from adaos.services.subnet_alias import save_subnet_alias
 
     name = _display_name(display_name)
@@ -439,6 +455,20 @@ def rename_local_subnet(display_name: str) -> dict[str, Any]:
         or ""
     ).strip()
     saved = str(save_subnet_alias(name, subnet_id=subnet_id) or name)
+    # The SDK is a first-class mutation ingress, just like the REST endpoint.
+    # Publish the same durable identity event so root projection, connected
+    # browsers and their scoped storage cannot retain the old alias.
+    try:
+        emit(
+            get_ctx().bus,
+            "subnet.alias.changed",
+            {"alias": saved, "subnet_id": subnet_id},
+            "sdk.system",
+        )
+    except Exception:
+        # Persistence is authoritative. Event delivery is recoverable from the
+        # next identity read and must not turn a successful rename into failure.
+        pass
     return {
         "ok": True,
         "target": "local_subnet",
@@ -980,7 +1010,10 @@ def get_operational_snapshot(
             "context": _mapping(reliability.get("context")),
         }
     if "update" in selected:
-        result["update"] = _mapping(current_update_status())
+        result["update"] = {
+            **_mapping(current_update_status()),
+            **_runtime_release_metadata(),
+        }
         try:
             from adaos.services.operator_controls import read_controls
 
@@ -1051,6 +1084,7 @@ def get_operational_snapshot(
                 "kind": "member",
                 "role": "hub",
                 "is_hub": True,
+                **_runtime_release_metadata(),
             }
             # System is a node dashboard. Browser/ReDevice endpoints remain in
             # Devices and must never consume the member-tab budget here.
