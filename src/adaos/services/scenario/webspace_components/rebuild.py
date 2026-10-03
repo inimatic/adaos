@@ -121,7 +121,11 @@ class WebspaceRebuildService:
         startup_materialization_hydration = requested_action == "startup_materialization_hydration"
         if (
             effective_materialization_identity is None
-            and requested_action in {"scenario_switch_rebuild", "startup_materialization_hydration"}
+            and requested_action in {
+                "runtime_selection_refresh",
+                "scenario_switch_rebuild",
+                "startup_materialization_hydration",
+            }
             and target_scenario
         ):
             stage_started = time.perf_counter()

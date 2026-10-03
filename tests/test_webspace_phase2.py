@@ -6883,6 +6883,57 @@ def test_selection_refresh_updates_live_room_without_reseed_policy():
     assert webspace_runtime_module._publish_live_room_for_rebuild("runtime_selection_refresh")
 
 
+def test_selection_refresh_carries_selected_application_identity(monkeypatch) -> None:
+    rebuild_kwargs: dict[str, object] = {}
+    expected_identity = {
+        "application_id": "web_desktop",
+        "application_release_digest": "sha256:" + ("a" * 64),
+        "scenario_id": "web_desktop",
+        "key_hash": "selection-v2",
+    }
+
+    async def _fake_refresh(*_args, **_kwargs):
+        return {"attempted": True}
+
+    async def _fake_rebuild(self, _webspace_id: str, **kwargs):
+        rebuild_kwargs.update(kwargs)
+        self._last_rebuild_timings_ms = {"total": 1.0}
+        self._last_rebuild_ydoc_timings_ms = {"total": 1.0}
+        self._last_apply_summary = {"changed_branches": 1}
+        return SimpleNamespace(scenario_id="web_desktop", apps=[], widgets=[])
+
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_scenario_switch_materialization_identity",
+        lambda **_kwargs: dict(expected_identity),
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_refresh_projection_rules_for_rebuild",
+        _fake_refresh,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "rebuild_webspace_async",
+        _fake_rebuild,
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.rebuild_webspace_from_sources(
+            "selection-refresh-identity",
+            action="runtime_selection_refresh",
+            scenario_id="web_desktop",
+            scenario_resolution="current_scenario",
+            source_of_truth="runtime_selection",
+            reseed_from_scenario=False,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["materialization_identity"] == expected_identity
+    assert rebuild_kwargs["materialization_identity"] == expected_identity
+
+
 def test_resolver_reuses_scenario_core_across_webspaces_without_overlay_leakage() -> None:
     webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
