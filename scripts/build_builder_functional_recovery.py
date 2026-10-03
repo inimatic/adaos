@@ -32,7 +32,7 @@ WEBUI = SCENARIO / "webui.json"
 SCENARIO_JSON = SCENARIO / "scenario.json"
 SCENARIO_YAML = SCENARIO / "scenario.yaml"
 CURRENT = SCENARIO / "ui_revisions" / "current.txt"
-PARITY_CONTRACT = ROOT / "docs" / "architecture" / "builder-functional-parity.json"
+PARITY_CONTRACT = ROOT / "src" / "adaos" / "abi" / "builder.functional_parity.v1.json"
 REVISION = "054"
 BASE_REVISION = "042"
 

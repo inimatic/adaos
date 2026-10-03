@@ -9,7 +9,7 @@ from typing import Any, Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONTRACT = ROOT / "docs" / "architecture" / "builder-functional-parity.json"
+DEFAULT_CONTRACT = ROOT / "src" / "adaos" / "abi" / "builder.functional_parity.v1.json"
 
 
 def _read(path: Path) -> dict[str, Any]:

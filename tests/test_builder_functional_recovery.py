@@ -11,7 +11,7 @@ from scripts.restore_builder_functional_baseline import rebind_reference
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = json.loads(
-    (ROOT / "docs" / "architecture" / "builder-functional-parity.json").read_text(
+    (ROOT / "src" / "adaos" / "abi" / "builder.functional_parity.v1.json").read_text(
         encoding="utf-8"
     )
 )

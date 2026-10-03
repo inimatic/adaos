@@ -434,7 +434,7 @@ def main():
     design.write(output, result)
     if args.apply:
         design.write(SCENARIO / "assets/builder_functional_parity.json",
-                     read(ROOT / "docs/architecture/builder-functional-parity.json"))
+                     read(ROOT / "src/adaos/abi/builder.functional_parity.v1.json"))
         for locale, translations in design.LOCALES.items():
             path = SCENARIO / f"assets/i18n/workbench-live-{locale}.json"
             design.write(path, translations)

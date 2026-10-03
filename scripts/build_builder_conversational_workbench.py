@@ -24,7 +24,7 @@ SCENARIO_JSON = SCENARIO / "scenario.json"
 SCENARIO_YAML = SCENARIO / "scenario.yaml"
 REVISIONS = SCENARIO / "ui_revisions"
 CURRENT = REVISIONS / "current.txt"
-PARITY = ROOT / "docs" / "architecture" / "builder-functional-parity.json"
+PARITY = ROOT / "src" / "adaos" / "abi" / "builder.functional_parity.v1.json"
 BASE_REVISION = "054"
 REVISION = "055"
 
