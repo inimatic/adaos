@@ -2465,6 +2465,9 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
         "route": "/",
         "min_height_px": 720,
     }]
+    candidate["requirement_bindings"][0]["semantic_refs"].append(
+        {"kind": "surface", "id": "site-preview"}
+    )
     brief = compile_prototype_brief(
         "Show a repeatable list of work items, record a result for each item, "
         "upload an attachment, update the selected item and complete it.",
@@ -2522,6 +2525,9 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
     assert compiled["source_map"]["surface:site-preview"] == [
         "ui.application.desktop.pageSchema.widgets.@site-preview"
     ]
+    assert "surface:site-preview" in compiled["semantic_document"][
+        "requirement_bindings"
+    ][0]["semantic_refs"]
 
     candidate["layout"]["regions"][0]["preferred_px"] = 300
     with pytest.raises(BuilderWorkflowError, match="accepted Prototype interface"):

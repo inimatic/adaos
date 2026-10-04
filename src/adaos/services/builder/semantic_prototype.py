@@ -4213,6 +4213,7 @@ def _validate_semantic_prototype_v2(
         *(f"field:{identifier}" for identifier in all_fields),
         *(f"view:{identifier}" for identifier in views),
         *(f"query:{identifier}" for identifier in query_controls),
+        *(f"surface:{identifier}" for identifier in surfaces),
         *(f"command:{identifier}" for identifier in commands),
         *(f"state:{identifier}" for identifier in states),
     }
