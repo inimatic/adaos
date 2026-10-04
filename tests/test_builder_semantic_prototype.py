@@ -2449,6 +2449,7 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
     work_views[2]["section"] = {
         "id": "content", "kind": "tab", "title": {"en": "Content", "ru": "Content"},
     }
+    work_views[2]["surface"] = "side_sheet"
     people_view = next(
         view for view in candidate["views"] if view["resource_ref"] == "people"
     )
@@ -2511,6 +2512,16 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
         "work-editor": "inspector",
     }
     assert page["initialState"]["selected_work_items_id"] == "work-1"
+    semantic_editor = next(
+        view
+        for view in compiled["semantic_document"]["views"]
+        if view["id"] == work_views[2]["id"]
+    )
+    assert semantic_editor["surface"] == "inline"
+    assert any(
+        item["kind"] == "tabbed_pane_editor_surface"
+        for item in compiled["normalizations"]
+    )
     preview = next(widget for widget in page["widgets"] if widget["id"] == "site-preview")
     assert preview == {
         "id": "site-preview",

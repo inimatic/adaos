@@ -2831,6 +2831,15 @@ def _canonicalize_semantic_prototype_candidate_v2(
     normalizations: list[dict[str, str]] = []
     candidate.setdefault("automation_requirements", [])
     candidate.setdefault("capability_surfaces", [])
+    layout_regions = {
+        str(region.get("id") or ""): region
+        for region in (
+            candidate.get("layout", {}).get("regions") or []
+            if isinstance(candidate.get("layout"), Mapping)
+            else []
+        )
+        if isinstance(region, Mapping)
+    }
     for relationship in candidate.get("relationships") or []:
         relationship.setdefault("label_field_refs", [])
     for resource in candidate.get("resources") or []:
@@ -2846,6 +2855,26 @@ def _canonicalize_semantic_prototype_candidate_v2(
             view.setdefault("field_display", [])
             view.setdefault("section", None)
             view.setdefault("scope_filters", [])
+            section = view.get("section")
+            region = layout_regions.get(str(view.get("region_role") or ""), {})
+            if (
+                view.get("role") == "editor"
+                and view.get("surface") in {"modal", "side_sheet"}
+                and isinstance(section, Mapping)
+                and section.get("kind") == "tab"
+                and region.get("wide") == "pane"
+                and region.get("role") in {"detail", "inspector"}
+            ):
+                original_surface = str(view["surface"])
+                view["surface"] = "inline"
+                normalizations.append(
+                    {
+                        "kind": "tabbed_pane_editor_surface",
+                        "from": original_surface,
+                        "to": "inline",
+                        "target": f"$.views[{view_index}].surface",
+                    }
+                )
             if view.get("role") == "collection":
                 view.setdefault(
                     "selection",
