@@ -2743,6 +2743,16 @@ def test_collection_repair_adds_only_the_reported_projection() -> None:
 
     assert plan is not None
     assert plan["collection_contexts"][0]["resource_ref"] == "people"
+    selection_schema = plan["output_schema"]["$defs"]["selectionPolicy"]
+    assert selection_schema["properties"]["mode"]["enum"] == ["single"]
+    assert selection_schema["properties"]["indicator"]["enum"] == ["radio"]
+    assert selection_schema["properties"]["row_activation"]["enum"] == [
+        "select"
+    ]
+    collection_schema = plan["output_schema"]["properties"]["collections"][
+        "items"
+    ]
+    assert "chart" not in collection_schema["properties"]["presentation"]["enum"]
     patch = {
         "schema": "adaos.builder.collection_repair.v1",
         "base_sha256": plan["base_sha256"],

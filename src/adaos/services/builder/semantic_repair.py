@@ -125,6 +125,11 @@ def prepare_collection_repair(
         view_schema["properties"]["presentation"] = copy.deepcopy(
             view_schema["properties"]["presentation"]["anyOf"][0]
         )
+        view_schema["properties"]["presentation"]["enum"] = [
+            value
+            for value in view_schema["properties"]["presentation"]["enum"]
+            if value != "chart"
+        ]
         view_schema["properties"]["selection"] = {
             "$ref": "#/$defs/selectionPolicy"
         }
@@ -181,6 +186,19 @@ def prepare_collection_repair(
         },
     }
     output_schema["$defs"] = _reachable_definitions(item_schema, available)
+    selection_policy = output_schema["$defs"]["selectionPolicy"]
+    selection_policy["properties"]["mode"] = {
+        "type": "string",
+        "enum": ["single"],
+    }
+    selection_policy["properties"]["indicator"] = {
+        "type": "string",
+        "enum": ["radio"],
+    }
+    selection_policy["properties"]["row_activation"] = {
+        "type": "string",
+        "enum": ["select"],
+    }
     return {
         "base_sha256": digest,
         "existing_view_ids": sorted(existing_view_ids),
