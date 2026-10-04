@@ -2443,6 +2443,8 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
         view for view in candidate["views"] if view["resource_ref"] == "work_items"
     ]
     work_views[0]["region_role"] = "structure"
+    work_views[0]["presentation"] = "table"
+    work_views[0]["compact_presentation"] = "cards"
     work_views[0]["initial_selection_id"] = "work-1"
     work_views[1]["region_role"] = "canvas"
     work_views[2]["region_role"] = "inspector"
@@ -2488,6 +2490,13 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
                 "resource_ref": "work_items", "record_id": "work-1",
             },
             "capability_refs": ["layout.workbench", "visual.sitePreview"],
+            "region_content_budgets": [{
+                "region_ref": "structure",
+                "wide_inner_width_px": 246,
+                "max_table_columns": 2,
+                "collection_presentations": ["cards", "list", "table"],
+                "form_columns": 1,
+            }],
             "acceptance": [],
         },
     )
@@ -2512,6 +2521,14 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
         "work-editor": "inspector",
     }
     assert page["initialState"]["selected_work_items_id"] == "work-1"
+    work_list = next(widget for widget in page["widgets"] if widget["id"] == "work-list")
+    assert work_list["type"] == "ui.list"
+    assert work_list["inputs"]["variant"] == "cards"
+    assert any(
+        item["kind"] == "region_content_budget_presentation"
+        and item["target"].endswith(".presentation")
+        for item in compiled["normalizations"]
+    )
     semantic_editor = next(
         view
         for view in compiled["semantic_document"]["views"]

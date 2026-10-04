@@ -1026,7 +1026,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable selection_filter when the workflow requires inspecting one selected item's linked records: use effect=filter to narrow a contextual child collection, or effect=emphasize to retain a global pool and mark related rows. A raw list of foreign IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
-            "collection_presentations": "Use board for lanes of a choice field; presentation_options.draggable enables persisted moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. For a dense CRUD collection that should stay tabular on wide screens and become labeled cards only on narrow screens, use presentation=table with compact_presentation=cards. These are capabilities, not a mandatory checklist.",
+            "collection_presentations": "Use board for lanes of a choice field; presentation_options.draggable enables persisted moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. For a dense CRUD collection that should stay tabular on wide screens and become labeled cards only on narrow screens, use presentation=table with compact_presentation=cards. These are capabilities, not a mandatory checklist. When interface_context.region_content_budgets is present, treat wide_inner_width_px as the real content box, keep tables within max_table_columns, choose only collection_presentations listed for that region, and keep forms within form_columns.",
             "sections": "Plan the requested content partitions before filling views. view.section is a visibility partition, NOT a resource or application category. If the user requests separate views of the same records, give each requested tab its own section.id and title while reusing resource_ref. Views with the SAME section.id are visible TOGETHER; null is visible across ALL tabs. Put contextual details and editor openers in the appropriate section unless intentionally shared. Settings contain real local resources/commands, not automatically implemented external effects; even a single settings record currently needs a collection for selection plus its editor. Do not invent additional sections just to fill the screen.",
             "query_toolbar": "Each collection's query_controls compile into one compact responsive search/filter toolbar with disclosure, active values and reset. Do not create separate resources or views for filter widgets.",
             "text": "Text wraps by default in list/card metadata and table cells. field_display can explicitly request wrap or truncate and start/center/end alignment per visible field on list/table/cards/accordion collections ONLY; other presentations, details and editors use field_display=[]. Keep essential values readable; use truncation only for compact summaries with details available.",
@@ -3459,6 +3459,51 @@ def _canonicalize_semantic_prototype_candidate_v2(
     )
 
 
+def _apply_interface_region_content_budgets(
+    candidate: dict[str, Any], *, brief: Mapping[str, Any]
+) -> list[dict[str, str]]:
+    interface_context = brief.get("interface_context")
+    if not isinstance(interface_context, Mapping):
+        return []
+    budgets = {
+        str(item["region_ref"]): item
+        for item in interface_context.get("region_content_budgets") or []
+        if isinstance(item, Mapping)
+    }
+    normalizations: list[dict[str, str]] = []
+    for view_index, view in enumerate(candidate.get("views") or []):
+        if view.get("role") != "collection":
+            continue
+        budget = budgets.get(str(view.get("region_role") or ""))
+        if budget is None:
+            continue
+        presentation = str(view.get("presentation") or "list")
+        accepted = [str(item) for item in budget["collection_presentations"]]
+        table_overflow = (
+            presentation == "table"
+            and len(view.get("field_refs") or []) > int(budget["max_table_columns"])
+        )
+        if presentation in accepted and not table_overflow:
+            continue
+        fallback = next(
+            (item for item in accepted if item in {"cards", "list"}), None
+        )
+        if fallback is None:
+            continue
+        view["presentation"] = fallback
+        if view.get("compact_presentation") is not None:
+            view["compact_presentation"] = None
+        normalizations.append(
+            {
+                "kind": "region_content_budget_presentation",
+                "from": presentation,
+                "to": fallback,
+                "target": f"$.views[{view_index}].presentation",
+            }
+        )
+    return normalizations
+
+
 def _lower_semantic_prototype_candidate_v2(
     value: Mapping[str, Any], *, brief: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -5102,6 +5147,9 @@ def compile_semantic_prototype_candidate(
             value, brief=brief, project_ref=project_ref
         )
     candidate, normalizations = _canonicalize_semantic_prototype_candidate_v2(value)
+    normalizations.extend(
+        _apply_interface_region_content_budgets(candidate, brief=brief)
+    )
     requirement_findings = _requirement_contract_findings(candidate, brief=brief)
     try:
         semantic_document = _lower_semantic_prototype_candidate_v2(

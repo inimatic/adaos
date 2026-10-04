@@ -897,6 +897,39 @@ def _validated_interface_context(value: Mapping[str, Any]) -> dict[str, Any]:
                 "min_px <= preferred_px <= max_px"
             )
 
+    region_by_id = {str(region["id"]): region for region in regions}
+    budgets = context.get("region_content_budgets") or []
+    budget_refs = [str(item["region_ref"]) for item in budgets]
+    if len(budget_refs) != len(set(budget_refs)):
+        raise ValueError(
+            "Prototype interface context region content budget refs must be unique"
+        )
+    unknown_budget_refs = sorted(set(budget_refs) - set(region_by_id))
+    if unknown_budget_refs:
+        raise ValueError(
+            "Prototype interface context content budgets reference unknown regions: "
+            f"{unknown_budget_refs}"
+        )
+    for budget in budgets:
+        region = region_by_id[str(budget["region_ref"])]
+        outer_width = next(
+            (
+                int(value)
+                for value in (
+                    region.get("preferred_px"),
+                    region.get("max_px"),
+                    region.get("min_px"),
+                )
+                if value is not None
+            ),
+            None,
+        )
+        if outer_width is not None and int(budget["wide_inner_width_px"]) > outer_width:
+            raise ValueError(
+                "Prototype interface content budget inner width exceeds region "
+                f"{budget['region_ref']!r} outer width"
+            )
+
     wide = viewports.get("wide")
     if wide is not None:
         pane_regions = [region for region in regions if region["wide"] == "pane"]

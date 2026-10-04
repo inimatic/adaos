@@ -51,6 +51,22 @@ def _workspace_interface_context() -> dict:
         },
         "initial_selection": {"resource_ref": "sections", "record_id": "hero"},
         "capability_refs": ["layout.workbench", "navigation.tabs", "ui.chat"],
+        "region_content_budgets": [
+            {
+                "region_ref": "structure",
+                "wide_inner_width_px": 246,
+                "max_table_columns": 1,
+                "collection_presentations": ["list", "cards"],
+                "form_columns": 1,
+            },
+            {
+                "region_ref": "inspector",
+                "wide_inner_width_px": 326,
+                "max_table_columns": 2,
+                "collection_presentations": ["cards", "list", "table"],
+                "form_columns": 1,
+            },
+        ],
         "acceptance": [
             {
                 "id": "wide-three-pane", "kind": "geometry",
@@ -85,6 +101,16 @@ def test_interface_context_is_content_addressed_bounded_and_model_visible() -> N
     invalid = _workspace_interface_context()
     invalid["layout"]["regions"][1]["min_px"] = 900
     with pytest.raises(ValueError, match="region budget exceeds"):
+        compile_prototype_brief("Show sections.", interface_context=invalid)
+
+    invalid = _workspace_interface_context()
+    invalid["region_content_budgets"][0]["wide_inner_width_px"] = 400
+    with pytest.raises(ValueError, match="inner width exceeds"):
+        compile_prototype_brief("Show sections.", interface_context=invalid)
+
+    invalid = _workspace_interface_context()
+    invalid["region_content_budgets"][0]["region_ref"] = "missing"
+    with pytest.raises(ValueError, match="unknown regions"):
         compile_prototype_brief("Show sections.", interface_context=invalid)
 
 
