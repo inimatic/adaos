@@ -2697,6 +2697,106 @@ def test_record_repair_changes_only_reported_positional_values() -> None:
     ) is None
 
 
+def test_single_selection_without_activation_normalizes_to_select() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    view = next(item for item in candidate["views"] if item["role"] == "collection")
+    view["selection"] = {
+        "mode": "single",
+        "indicator": "radio",
+        "row_activation": "none",
+    }
+
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    normalized = next(
+        item
+        for item in compiled["semantic_document"]["views"]
+        if item["id"] == view["id"]
+    )
+
+    assert normalized["selection"]["row_activation"] == "select"
+    assert any(
+        item["kind"] == "selection_policy_consistency"
+        and item["target"].endswith(".selection.row_activation")
+        for item in compiled["normalizations"]
+    )
+
+
+def test_collection_repair_adds_only_the_reported_projection() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    people_view = next(
+        item for item in candidate["views"] if item["resource_ref"] == "people"
+    )
+    people_view.update(
+        role="details",
+        presentation=None,
+        selection=None,
+        initial_selection_id=None,
+    )
+    original = copy.deepcopy(candidate)
+
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    findings = caught.value.findings
+    plan = prototype_sdk.prepare_collection_repair(candidate, findings)
+
+    assert plan is not None
+    assert plan["collection_contexts"][0]["resource_ref"] == "people"
+    patch = {
+        "schema": "adaos.builder.collection_repair.v1",
+        "base_sha256": plan["base_sha256"],
+        "collections": [
+            {
+                "id": "people-collection",
+                "resource_ref": "people",
+                "role": "collection",
+                "region_role": people_view["region_role"],
+                "surface": "inline",
+                "media": None,
+                "presentation": "table",
+                "compact_presentation": "cards",
+                "title": people_view["title"],
+                "field_refs": ["person_name", "person_phone"],
+                "presentation_options": None,
+                "section": None,
+                "field_display": [],
+                "scope_filters": [],
+                "selection": {
+                    "mode": "single",
+                    "indicator": "radio",
+                    "row_activation": "select",
+                },
+                "initial_selection_id": "person-1",
+                "selection_filter": None,
+                "activation_source_view_ref": None,
+                "filter": None,
+                "query_controls": [],
+                "empty_state": None,
+            }
+        ],
+    }
+
+    repaired = prototype_sdk.apply_collection_repair(candidate, patch, findings)
+
+    assert candidate == original
+    assert repaired["views"][:-1] == original["views"]
+    assert repaired["views"][-1] == patch["collections"][0]
+    compile_semantic_prototype_candidate(repaired, brief=brief)
+
+    duplicate = copy.deepcopy(patch)
+    duplicate["collections"][0]["id"] = people_view["id"]
+    with pytest.raises(BuilderWorkflowError, match="existing view id"):
+        prototype_sdk.apply_collection_repair(candidate, duplicate, findings)
+    with pytest.raises(BuilderWorkflowError, match="every reported resource"):
+        prototype_sdk.apply_collection_repair(
+            candidate, {**patch, "collections": []}, findings
+        )
+    assert prototype_sdk.prepare_collection_repair(
+        candidate, [*findings, {"code": "semantic.state_proof_invalid"}]
+    ) is None
+
+
 def test_reference_repair_preserves_fixtures_and_all_unreported_decisions() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)

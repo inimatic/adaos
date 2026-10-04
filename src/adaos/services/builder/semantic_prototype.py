@@ -2828,6 +2828,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
     value: Mapping[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
+    normalizations: list[dict[str, str]] = []
     candidate.setdefault("automation_requirements", [])
     candidate.setdefault("capability_surfaces", [])
     for relationship in candidate.get("relationships") or []:
@@ -2837,7 +2838,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
         for field in resource.get("fields") or []:
             field.setdefault("help_text", None)
             field.setdefault("placeholder", None)
-    for view in candidate.get("views") or []:
+    for view_index, view in enumerate(candidate.get("views") or []):
         if isinstance(view, dict):
             view.setdefault("surface", "inline")
             view.setdefault("compact_presentation", None)
@@ -2854,6 +2855,23 @@ def _canonicalize_semantic_prototype_candidate_v2(
                         "row_activation": "none" if view.get("presentation") == "chart" else "select",
                     },
                 )
+                selection = view.get("selection")
+                if (
+                    isinstance(selection, dict)
+                    and selection.get("mode") == "single"
+                    and selection.get("row_activation") == "none"
+                ):
+                    selection["row_activation"] = "select"
+                    normalizations.append(
+                        {
+                            "kind": "selection_policy_consistency",
+                            "from": "none",
+                            "to": "select",
+                            "target": (
+                                f"$.views[{view_index}].selection.row_activation"
+                            ),
+                        }
+                    )
             else:
                 view.setdefault("selection", None)
             view.setdefault("initial_selection_id", None)
@@ -2884,7 +2902,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
         suffix = f" at {path}" if path else ""
         _fail(f"{exc.message}{suffix}")
 
-    normalizations = _merge_candidate_automation_requirements(candidate)
+    normalizations.extend(_merge_candidate_automation_requirements(candidate))
     resources = [dict(item) for item in candidate.get("resources") or []]
     _validate_candidate_bounds(candidate)
     if not resources:

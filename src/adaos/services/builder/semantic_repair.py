@@ -25,6 +25,226 @@ def _digest(candidate: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(candidate, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _reachable_definitions(
+    schema: Mapping[str, Any], available: Mapping[str, Any]
+) -> dict[str, Any]:
+    definitions: dict[str, Any] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            reference = value.get("$ref")
+            if isinstance(reference, str) and reference.startswith("#/$defs/"):
+                name = reference.removeprefix("#/$defs/")
+                if name not in definitions:
+                    definitions[name] = copy.deepcopy(available[name])
+                    visit(definitions[name])
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for child in value:
+                visit(child)
+
+    visit(schema)
+    return definitions
+
+
+def prepare_collection_repair(
+    candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]
+) -> dict[str, Any] | None:
+    """Build a bounded patch that adds only missing collection projections."""
+
+    if not findings or any(
+        item.get("code") != "semantic.resource_collection_missing"
+        for item in findings
+    ):
+        return None
+    resources = {
+        str(item.get("id") or ""): item
+        for item in candidate.get("resources") or []
+        if isinstance(item, Mapping)
+    }
+    existing_views = [
+        item
+        for item in candidate.get("views") or []
+        if isinstance(item, Mapping)
+    ]
+    existing_view_ids = {str(item.get("id") or "") for item in existing_views}
+    target_ids: list[str] = []
+    for finding in findings:
+        refs = [
+            str(ref).removeprefix("resource:")
+            for ref in finding.get("semantic_refs") or []
+            if str(ref).startswith("resource:")
+        ]
+        if len(refs) != 1 or refs[0] not in resources or refs[0] in target_ids:
+            return None
+        resource_ref = refs[0]
+        resource_views = [
+            view
+            for view in existing_views
+            if str(view.get("resource_ref") or "") == resource_ref
+        ]
+        if not resource_views or any(
+            view.get("role") == "collection" for view in resource_views
+        ):
+            return None
+        target_ids.append(resource_ref)
+
+    provider = semantic_prototype_provider_contract(
+        version="v2",
+        locales=tuple(
+            locale for locale in ("en", "ru") if locale in candidate.get("title", {})
+        ),
+        _view_variants=False,
+    )
+    available = provider["$defs"]
+    variants: list[dict[str, Any]] = []
+    contexts: list[dict[str, Any]] = []
+    for resource_ref in target_ids:
+        resource = resources[resource_ref]
+        related_views = [
+            view
+            for view in existing_views
+            if str(view.get("resource_ref") or "") == resource_ref
+        ]
+        view_schema = copy.deepcopy(available["view"])
+        view_schema["properties"]["resource_ref"] = {
+            "type": "string",
+            "enum": [resource_ref],
+        }
+        view_schema["properties"]["role"] = {
+            "type": "string",
+            "enum": ["collection"],
+        }
+        view_schema["properties"]["surface"] = {
+            "type": "string",
+            "enum": ["inline"],
+        }
+        view_schema["properties"]["presentation"] = copy.deepcopy(
+            view_schema["properties"]["presentation"]["anyOf"][0]
+        )
+        view_schema["properties"]["selection"] = {
+            "$ref": "#/$defs/selectionPolicy"
+        }
+        view_schema["properties"]["activation_source_view_ref"] = {
+            "type": "null"
+        }
+        variants.append(view_schema)
+        contexts.append(
+            {
+                "resource_ref": resource_ref,
+                "fields": [
+                    {
+                        "id": str(field.get("id") or ""),
+                        "value_type": str(field.get("value_type") or ""),
+                        "editable": bool(field.get("editable")),
+                    }
+                    for field in resource.get("fields") or []
+                    if isinstance(field, Mapping)
+                ],
+                "record_ids": [
+                    str(record.get("id") or "")
+                    for record in resource.get("records") or []
+                    if isinstance(record, Mapping)
+                ],
+                "existing_views": [
+                    {
+                        "id": str(view.get("id") or ""),
+                        "role": str(view.get("role") or ""),
+                        "region_role": str(view.get("region_role") or ""),
+                        "section": copy.deepcopy(view.get("section")),
+                        "field_refs": copy.deepcopy(view.get("field_refs") or []),
+                    }
+                    for view in related_views
+                ],
+            }
+        )
+
+    item_schema = variants[0] if len(variants) == 1 else {"anyOf": variants}
+    digest = _digest(candidate)
+    output_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["schema", "base_sha256", "collections"],
+        "properties": {
+            "schema": {
+                "type": "string",
+                "enum": ["adaos.builder.collection_repair.v1"],
+            },
+            "base_sha256": {"type": "string", "enum": [digest]},
+            "collections": {
+                "type": "array",
+                "items": item_schema,
+            },
+        },
+    }
+    output_schema["$defs"] = _reachable_definitions(item_schema, available)
+    return {
+        "base_sha256": digest,
+        "existing_view_ids": sorted(existing_view_ids),
+        "collection_contexts": contexts,
+        "task": (
+            "Add exactly one collection view for each collection_context resource. "
+            "The collection makes existing records selectable and must use the same "
+            "region and section as the resource's related editor or details view unless "
+            "the supplied interface contract clearly requires another existing region. "
+            "Choose a concise set of fields that identifies each record, use an existing "
+            "record id as initial_selection_id when records exist, and use a consistent "
+            "selection policy. View ids must be new and must not collide with "
+            "existing_view_ids. All resources, records, existing views, layout, commands, "
+            "states, bindings, capability surfaces and Automation obligations are "
+            "immutable. Return only this bounded patch, not a complete candidate."
+        ),
+        "output_schema": output_schema,
+    }
+
+
+def apply_collection_repair(
+    candidate: Mapping[str, Any],
+    repair: Mapping[str, Any],
+    findings: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    plan = prepare_collection_repair(candidate, findings)
+    if plan is None:
+        raise BuilderWorkflowError("collection repair is not applicable to these findings")
+    Draft202012Validator(plan["output_schema"]).validate(repair)
+    if repair.get("base_sha256") != plan["base_sha256"]:
+        raise BuilderWorkflowError("collection repair base digest does not match")
+
+    expected = {
+        item["resource_ref"] for item in plan["collection_contexts"]
+    }
+    additions: dict[str, dict[str, Any]] = {}
+    existing_ids = set(plan["existing_view_ids"])
+    for view in repair["collections"]:
+        resource_ref = str(view.get("resource_ref") or "")
+        view_id = str(view.get("id") or "")
+        if resource_ref not in expected:
+            raise BuilderWorkflowError(
+                "collection repair targets an unreported resource"
+            )
+        if resource_ref in additions:
+            raise BuilderWorkflowError(
+                "collection repair contains duplicate resource projections"
+            )
+        if view_id in existing_ids:
+            raise BuilderWorkflowError("collection repair reuses an existing view id")
+        additions[resource_ref] = copy.deepcopy(dict(view))
+        existing_ids.add(view_id)
+    if set(additions) != expected:
+        raise BuilderWorkflowError(
+            "collection repair must project every reported resource"
+        )
+
+    result = copy.deepcopy(dict(candidate))
+    result.setdefault("views", []).extend(
+        additions[resource_ref] for resource_ref in sorted(additions)
+    )
+    return result
+
+
 def prepare_record_repair(
     candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any] | None:

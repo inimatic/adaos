@@ -196,6 +196,16 @@ def apply_record_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any],
     return apply(candidate, repair, findings)
 
 
+def prepare_collection_repair(candidate: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any] | None:
+    from adaos.services.builder.semantic_repair import prepare_collection_repair as prepare
+    return prepare(candidate, findings)
+
+
+def apply_collection_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any]:
+    from adaos.services.builder.semantic_repair import apply_collection_repair as apply
+    return apply(candidate, repair, findings)
+
+
 def prepare_state_repair(candidate: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Select a bounded repair contract without changing candidate data."""
     from adaos.services.builder.semantic_repair import prepare_state_repair as prepare
@@ -318,6 +328,8 @@ def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, An
 
 
 __all__ = [
+    "prepare_collection_repair",
+    "apply_collection_repair",
     "prepare_record_repair",
     "apply_record_repair",
     "prepare_reference_repair",
