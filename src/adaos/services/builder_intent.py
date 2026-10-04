@@ -912,17 +912,12 @@ def _validated_interface_context(value: Mapping[str, Any]) -> dict[str, Any]:
         )
     for budget in budgets:
         region = region_by_id[str(budget["region_ref"])]
-        outer_width = next(
-            (
-                int(value)
-                for value in (
-                    region.get("preferred_px"),
-                    region.get("max_px"),
-                    region.get("min_px"),
-                )
-                if value is not None
-            ),
-            None,
+        outer_width = (
+            int(region["max_px"])
+            if region.get("max_px") is not None
+            else int(region.get("preferred_px") or region.get("min_px") or 0)
+            if float(region.get("grow") or 0) == 0
+            else None
         )
         if outer_width is not None and int(budget["wide_inner_width_px"]) > outer_width:
             raise ValueError(

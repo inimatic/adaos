@@ -113,6 +113,22 @@ def test_interface_context_is_content_addressed_bounded_and_model_visible() -> N
     with pytest.raises(ValueError, match="unknown regions"):
         compile_prototype_brief("Show sections.", interface_context=invalid)
 
+    growing = _workspace_interface_context()
+    growing["region_content_budgets"].append(
+        {
+            "region_ref": "canvas",
+            "wide_inner_width_px": 650,
+            "max_table_columns": 4,
+            "collection_presentations": ["cards", "list", "table"],
+            "form_columns": 2,
+        }
+    )
+    assert compile_prototype_brief(
+        "Show sections.", interface_context=growing
+    )["interface_context"]["region_content_budgets"][-1][
+        "wide_inner_width_px"
+    ] == 650
+
 
 @pytest.mark.parametrize("statement", [
     "Reference: https://example.test/api/search?sort=title&filter=open. Search items by title.",
