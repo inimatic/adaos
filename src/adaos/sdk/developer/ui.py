@@ -9,6 +9,10 @@ from adaos.services.builder_domain_packs import (
     domain_pack_ids_for_recipes as _domain_pack_ids_for_recipes,
     domain_pack_receipts as _domain_pack_receipts,
 )
+from adaos.services.interface_deprecations import (
+    migrate_deprecated_interfaces as _migrate_deprecated_interfaces,
+    validate_authoring_interfaces as _validate_authoring_interfaces,
+)
 from adaos.services.ui_capabilities import (
     evaluate_ui_request as _evaluate_ui_request,
     get_ui_capability as _get_ui_capability,
@@ -74,6 +78,20 @@ def validate_contract(webui: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def migrate_deprecated_interfaces(
+    webui: Mapping[str, Any], *, owner: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Migrate legacy authoring interfaces through the canonical SDK boundary."""
+
+    return _migrate_deprecated_interfaces(webui, owner=owner)
+
+
+def validate_authoring_interfaces(webui: Mapping[str, Any]) -> dict[str, Any]:
+    """Reject interfaces that are admitted only for legacy migration."""
+
+    return _validate_authoring_interfaces(webui)
+
+
 def evaluate(
     request: str,
     webui: Mapping[str, Any],
@@ -98,9 +116,11 @@ __all__ = [
     "domain_packs_for_recipes",
     "evaluate",
     "get",
+    "migrate_deprecated_interfaces",
     "qualify",
     "search",
     "select",
     "validate",
+    "validate_authoring_interfaces",
     "validate_contract",
 ]
