@@ -9,6 +9,7 @@ from .workflow import BuilderWorkflowError
 
 
 EXTENDED_PRESENTATIONS = frozenset({"board", "tree", "chart", "accordion"})
+OPTION_PRESENTATIONS = EXTENDED_PRESENTATIONS | {"list"}
 VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "compact_presentation", "field_display", "section", "scope_filters", "selection", "initial_selection_id", "selection_filter", "activation_source_view_ref"})
 
 
@@ -47,13 +48,30 @@ def presentation_findings(document: Mapping) -> list[dict]:
             reject("compact_presentation=cards requires a table collection")
         if options and view['role'] != 'collection':
             reject("Record details/editor views require presentation_options=null; use a collection for grouped records")
-        elif options and presentation not in EXTENDED_PRESENTATIONS:
-            reject("presentation_options require board, tree, chart or accordion")
+        elif options and presentation not in OPTION_PRESENTATIONS:
+            reject("presentation_options require list, board, tree, chart or accordion")
         if view.get("field_display") and (view["role"] != "collection" or presentation not in {"list", "table", "cards", "accordion"}):
             reject("field_display requires a list, table, cards or accordion collection")
         display_refs = [entry["field_ref"] for entry in view.get("field_display") or []]
         if len(display_refs) != len(set(display_refs)) or any(ref not in visible for ref in display_refs):
             reject("field_display must reference unique visible fields")
+        if presentation == "list" and options:
+            order = options.get("order_field_ref")
+            if not options.get("draggable") or not order or order not in fields:
+                reject("Reorderable lists require draggable=true and a declared order_field_ref")
+            elif order not in visible:
+                reject("A reorderable list must include order_field_ref in field_refs")
+            elif fields[order]["value_type"] != "number" or not fields[order].get("editable"):
+                reject("A reorderable list requires an editable numeric order field")
+            elif any(options.get(key) for key in ("group_field_ref", "parent_field_ref", "value_field_ref")):
+                reject("A reorderable list uses only order_field_ref")
+            elif (
+                view.get("query_controls")
+                or view.get("scope_filters")
+                or view.get("filter")
+                or view.get("selection_filter")
+            ):
+                reject("A reorderable list cannot be filtered because hidden records make rank movement ambiguous")
         if presentation not in EXTENDED_PRESENTATIONS:
             continue
         if presentation in {'tree', 'chart'} and view.get('media'):
@@ -113,6 +131,21 @@ def compile_presentations(document: Mapping, webui: dict, source_map: dict) -> N
         presentation = view.get("presentation")
         compact_presentation = view.get("compact_presentation")
         options = view.get("presentation_options") or {}
+        if presentation == "list" and options.get("draggable"):
+            order = options["order_field_ref"]
+            inputs.update(
+                reorder={"enabled": True, "orderKey": order, "axis": "vertical"},
+                sort={"key": order, "direction": "asc", "numeric": True},
+            )
+            widget["actions"].append({
+                "on": "move", "type": "resourceOperation",
+                "target": widget["dataSource"]["resourceType"],
+                "params": {
+                    "operation_id": "update",
+                    "record_id": "$event.id",
+                    "payload": "$event.patch",
+                },
+            })
         if presentation == "table" and compact_presentation == "cards":
             inputs["compactPresentation"] = "cards"
         group, parent, value = (options.get(key) for key in ("group_field_ref", "parent_field_ref", "value_field_ref"))

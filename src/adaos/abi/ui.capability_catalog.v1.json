@@ -519,6 +519,7 @@
           "search",
           "filters",
           "sort",
+          "reorder",
           "pagination",
           "pageSize",
           "pageSizeOptions"
@@ -536,7 +537,8 @@
           "meta[*].valueI18nPrefix"
         ],
         "static_data": "For synthetic rows use widget.dataSource={kind:'static',value:[...]}. The renderer does not read inputs.rows or inputs.items.",
-        "value_labels": "meta entries support valueLabels as authored choice fallbacks, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions. Unknown identities remain visible as canonical values; display never changes stored IDs."
+        "value_labels": "meta entries support valueLabels as authored choice fallbacks, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions. Unknown identities remain visible as canonical values; display never changes stored IDs.",
+        "reorder_contract": "inputs.reorder={enabled:true,orderKey:<numeric rank field>,axis:'vertical'} enables persisted ordering only for one flat, unfiltered, unpaginated list. Bind on=move to a resourceOperation update with record_id=$event.id and payload=$event.patch. The event also exposes source_id, target_id, previous_id, from_index, to_index, placement, input and a stable move_before/move_after operation. The Client supplies pointer/touch drag, move-up/down buttons and Alt+Arrow keyboard movement; it optimistically updates and rolls back when persistence rejects the move."
       },
       "data_shape": {
         "kind": "collection"
@@ -545,6 +547,7 @@
         "select",
         "click",
         "add",
+        "move",
         "click:<buttonId>"
       ],
       "responsive": {
@@ -552,11 +555,13 @@
         "compact": "rows or narrower card tracks"
       },
       "limitations": [
-        "Separate list widgets do not form a semantic Kanban board."
+        "Separate list widgets do not form a semantic Kanban board.",
+        "Reordering is disabled while list search, filters, grouping or pagination make the visible order incomplete."
       ],
       "postconditions": [
         "Every visible collection item has a stable focus identity.",
-        "inputs.pagination=true enables bounded local paging after declared search, filters and sorting; pageSize and pageSizeOptions control the visible slice."
+        "inputs.pagination=true enables bounded local paging after declared search, filters and sorting; pageSize and pageSizeOptions control the visible slice.",
+        "A reorderable list exposes drag and single-step alternatives, announces the resulting position, persists one rank update and rolls the optimistic projection back on rejection."
       ]
     },
     {

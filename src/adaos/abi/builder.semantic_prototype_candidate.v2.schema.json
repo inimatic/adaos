@@ -367,9 +367,10 @@
         "group_field_ref": { "type": ["string", "null"] },
         "parent_field_ref": { "type": ["string", "null"] },
         "value_field_ref": { "type": ["string", "null"] },
+        "order_field_ref": { "type": ["string", "null"] },
         "draggable": { "type": "boolean" }
       },
-      "description": "Board: group_field_ref is a writable string choice for lanes; draggable persists lane changes (not rank within a lane). Accordion: group_field_ref groups expandable records. Tree: parent_field_ref links nullable parent record ids. Chart: group_field_ref is the x label, value_field_ref is a number; one point per record, no invented aggregation. Otherwise null."
+      "description": "List: draggable=true plus order_field_ref enables persisted rank ordering when the numeric order field is editable. Board: group_field_ref is a writable string choice for lanes; draggable persists lane changes (not rank within a lane). Accordion: group_field_ref groups expandable records. Tree: parent_field_ref links nullable parent record ids. Chart: group_field_ref is the x label, value_field_ref is a number; one point per record, no invented aggregation. Otherwise null."
     },
     "fieldDisplay": {
       "type": "object", "additionalProperties": false, "required": ["field_ref", "overflow", "align"],

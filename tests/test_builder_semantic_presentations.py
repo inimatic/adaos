@@ -15,7 +15,13 @@ def test_extended_collection_preserves_resource_query_and_field_provenance(prese
     resource = semantic['resources'][0]
     extra = copy.deepcopy(semantic['views'][0])
     extra.update(id='extra-view', presentation=presentation)
-    options = dict(group_field_ref=None, parent_field_ref=None, value_field_ref=None, draggable=False)
+    options = dict(
+        group_field_ref=None,
+        parent_field_ref=None,
+        value_field_ref=None,
+        order_field_ref=None,
+        draggable=False,
+    )
     if presentation in {'board', 'accordion'}:
         options.update(group_field_ref='result', draggable=presentation == 'board')
     elif presentation == 'tree':
@@ -94,6 +100,87 @@ def test_table_can_render_cards_only_on_compact_screens():
     assert widget['inputs']['compactPresentation'] == 'cards'
 
 
+def test_flat_list_can_compile_persisted_rank_reordering():
+    brief, semantic = _multi_resource_fixture()
+    resource = semantic['resources'][0]
+    resource['fields'].append(dict(
+        id='order', value_type='number', label=_text('order', 'Order', 'Order'),
+        required=True, editable=True,
+    ))
+    for index, record in enumerate(resource['records']):
+        record['order'] = index
+    view = semantic['views'][0]
+    view.update(
+        presentation='list', field_refs=['title', 'order'], query_controls=[],
+        filter=None, scope_filters=[], selection_filter=None,
+        presentation_options={
+            'group_field_ref': None,
+            'parent_field_ref': None,
+            'value_field_ref': None,
+            'order_field_ref': 'order',
+            'draggable': True,
+        },
+    )
+
+    result = compile_semantic_prototype_candidate(
+        _multi_resource_candidate(semantic), brief=brief
+    )
+
+    widget = next(
+        item for item in result['webui']['ui']['application']['desktop']['pageSchema']['widgets']
+        if item['id'] == view['id']
+    )
+    assert widget['type'] == 'ui.list'
+    assert widget['inputs']['reorder'] == {
+        'enabled': True, 'orderKey': 'order', 'axis': 'vertical',
+    }
+    assert widget['inputs']['sort'] == {
+        'key': 'order', 'direction': 'asc', 'numeric': True,
+    }
+    assert next(action for action in widget['actions'] if action['on'] == 'move') == {
+        'on': 'move',
+        'type': 'resourceOperation',
+        'target': widget['dataSource']['resourceType'],
+        'params': {
+            'operation_id': 'update',
+            'record_id': '$event.id',
+            'payload': '$event.patch',
+        },
+    }
+
+
+@pytest.mark.parametrize('field_patch,error', [
+    ({'editable': False}, 'editable numeric'),
+    ({'value_type': 'short_text'}, 'editable numeric'),
+])
+def test_reorderable_list_rejects_non_persistable_rank(field_patch, error):
+    from adaos.services.builder.semantic_presentations import presentation_findings
+
+    _, semantic = _multi_resource_fixture()
+    resource = semantic['resources'][0]
+    field = dict(
+        id='order', value_type='number', label=_text('order', 'Order', 'Order'),
+        required=True, editable=True,
+    )
+    field.update(field_patch)
+    resource['fields'].append(field)
+    for index, record in enumerate(resource['records']):
+        record['order'] = index
+    semantic['views'][0].update(
+        presentation='list', field_refs=['title', 'order'], query_controls=[],
+        filter=None, scope_filters=[], selection_filter=None,
+        presentation_options={
+            'group_field_ref': None,
+            'parent_field_ref': None,
+            'value_field_ref': None,
+            'order_field_ref': 'order',
+            'draggable': True,
+        },
+    )
+
+    assert any(error in item['detail'] for item in presentation_findings(semantic))
+
+
 def test_compact_card_override_rejects_non_table_collection():
     from adaos.services.builder.semantic_presentations import presentation_findings
 
@@ -114,7 +201,8 @@ def test_non_numeric_chart_is_rejected_not_coerced():
     brief, semantic = _multi_resource_fixture()
     view = semantic['views'][0]
     view.update(presentation='chart', field_refs=['title', 'status'], presentation_options={
-        'group_field_ref': 'title', 'parent_field_ref': None, 'value_field_ref': 'status', 'draggable': False,
+        'group_field_ref': 'title', 'parent_field_ref': None, 'value_field_ref': 'status',
+        'order_field_ref': None, 'draggable': False,
     })
     with pytest.raises(BuilderWorkflowError, match='numeric'):
         compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
@@ -133,7 +221,8 @@ def test_tree_parent_reference_survives_relationship_selector_lowering():
     })
     view = copy.deepcopy(semantic['views'][0])
     view.update(id='hierarchy', presentation='tree', field_refs=['title'], presentation_options={
-        'group_field_ref': None, 'parent_field_ref': 'parent', 'value_field_ref': None, 'draggable': False,
+        'group_field_ref': None, 'parent_field_ref': 'parent', 'value_field_ref': None,
+        'order_field_ref': None, 'draggable': False,
     })
     semantic['views'].append(view)
     result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)

@@ -334,8 +334,16 @@ class PrototypeResourceService:
                 field = _text(spec).lstrip("-")
                 descending = _text(spec).startswith("-")
             if field:
+                def sort_value(item: Mapping[str, Any]) -> tuple[int, Any, str]:
+                    value = _read_path(item, field)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        return 0, float(value), _record_id(item)
+                    if value is None:
+                        return 2, "", _record_id(item)
+                    return 1, str(value).lower(), _record_id(item)
+
                 result.sort(
-                    key=lambda item: (str(_read_path(item, field) or "").lower(), _record_id(item)),
+                    key=sort_value,
                     reverse=descending,
                 )
         return _clone(result[:limit] if limit is not None else result)

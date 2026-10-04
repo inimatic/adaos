@@ -1093,6 +1093,9 @@ def test_provider_references_have_no_sibling_keywords(version) -> None:
     visit(semantic_prototype_provider_contract(version=version))
     if version == "v2":
         assert semantic_prototype_generation_guidance()["relationships"]
+        assert "order_field_ref" in semantic_prototype_provider_contract(
+            version="v2"
+        )["$defs"]["presentationOptions"]["required"]
 
 
 @pytest.mark.parametrize("role", ["details", "editor"])

@@ -212,6 +212,26 @@ def _operate(service: ResourceWorkbenchService, operation_id: str, **values) -> 
     )
 
 
+def test_prototype_resource_sorts_numeric_rank_as_numbers(tmp_path: Path) -> None:
+    bundle = _bundle()
+    bundle["resource_definition"]["record_schema"]["properties"]["order"] = {
+        "type": "number"
+    }
+    for index, record in enumerate(bundle["data_definition"]["seed"]):
+        record["order"] = [10, 2][index]
+    PrototypeResourceService(state_dir=tmp_path).materialize(bundle)
+
+    rows = PrototypeResourceService(state_dir=tmp_path).query(
+        "prototype.kanban.cards",
+        filters={},
+        search="",
+        sort=[{"field": "order", "direction": "asc"}],
+        limit=None,
+    )
+
+    assert [item["order"] for item in rows] == [2, 10]
+
+
 def test_prototype_resource_runs_generic_query_and_crud_across_service_instances(tmp_path: Path) -> None:
     prototypes = PrototypeResourceService(state_dir=tmp_path)
     first = prototypes.materialize(_bundle())

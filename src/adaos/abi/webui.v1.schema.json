@@ -1885,6 +1885,17 @@
             { "required": ["options"] }
           ]
         },
+        "reorder": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "orderKey", "axis"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "orderKey": { "$ref": "#/$defs/fieldPath" },
+            "axis": { "const": "vertical" }
+          },
+          "description": "Opt-in persisted ordering for one unfiltered flat list. Requires a top-level on=move resourceOperation update action."
+        },
         "buttons": {
           "type": "array",
           "items": { "$ref": "#/$defs/actionButton" }

@@ -439,6 +439,7 @@
         "group_field_ref": { "type": ["string", "null"] },
         "parent_field_ref": { "type": ["string", "null"] },
         "value_field_ref": { "type": ["string", "null"] },
+        "order_field_ref": { "type": ["string", "null"] },
         "draggable": { "type": "boolean" }
       }
     },

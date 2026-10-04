@@ -44,7 +44,9 @@ def _validate(name: str, value: Mapping[str, Any], *, label: str) -> None:
         raise BuilderWorkflowError(f"invalid {label}: {message}") from exc
 
 
-def _required_behavior_ids(evaluation: Mapping[str, Any]) -> set[str]:
+def _required_behavior_ids(
+    evaluation: Mapping[str, Any], webui: Mapping[str, Any]
+) -> set[str]:
     qualification = (
         evaluation.get("qualification")
         if isinstance(evaluation.get("qualification"), Mapping)
@@ -60,6 +62,23 @@ def _required_behavior_ids(evaluation: Mapping[str, Any]) -> set[str]:
         required.update({"board.lanes", "board.select"})
     if requirements.get("drag_drop") is True:
         required.update({"board.move", "board.move.alternative"})
+    application = dict(dict(webui.get("ui") or {}).get("application") or {})
+    page_schemas = [
+        dict(dict(application.get("desktop") or {}).get("pageSchema") or {})
+    ]
+    page_schemas.extend(
+        dict(dict(modal or {}).get("schema") or {})
+        for modal in dict(application.get("modals") or {}).values()
+        if isinstance(modal, Mapping)
+    )
+    if any(
+        str(widget.get("type") or "") == "ui.list"
+        and dict(dict(widget.get("inputs") or {}).get("reorder") or {}).get("enabled") is True
+        for page in page_schemas
+        for widget in page.get("widgets") or []
+        if isinstance(widget, Mapping)
+    ):
+        required.update({"list.move", "list.move.alternative"})
     if requirements.get("resource_query") is True:
         required.update({"resource.query", "resource.filter"})
     required.update(
@@ -159,7 +178,7 @@ def build_prototype_acceptance(
             "prototype does not satisfy its qualified request"
             + (": " + ", ".join(failures) if failures else "")
         )
-    checks = _checks(behavior_checks, required=_required_behavior_ids(evaluation))
+    checks = _checks(behavior_checks, required=_required_behavior_ids(evaluation, webui))
     visuals = _visual_checks(visual_checks)
     cbs_intent = prototype_cbs_intent(webui)
     if cbs_intent is not None:

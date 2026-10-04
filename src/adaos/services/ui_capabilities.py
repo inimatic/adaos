@@ -1737,6 +1737,85 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                             }
                         )
             if widget_type == "ui.list":
+                reorder = (
+                    inputs.get("reorder")
+                    if isinstance(inputs.get("reorder"), Mapping)
+                    else {}
+                )
+                if reorder.get("enabled") is True:
+                    incompatible = [
+                        name
+                        for name, active in (
+                            ("variant", str(inputs.get("variant") or "list") != "list"),
+                            ("groupBy", bool(inputs.get("groupBy"))),
+                            ("search", inputs.get("search") is True or inputs.get("searchEnabled") is True),
+                            ("filters", bool(inputs.get("filters"))),
+                            ("pagination", inputs.get("pagination") is True or inputs.get("paginated") is True),
+                        )
+                        if active
+                    ]
+                    if incompatible:
+                        findings.append(
+                            {
+                                "code": "ui.list.reorder_projection_ambiguous",
+                                "severity": "error",
+                                "path": f"{widget_path}.inputs.reorder",
+                                "message": (
+                                    "A reorderable list must be one complete flat list without cards, "
+                                    "grouping, search, filters or pagination."
+                                ),
+                                "incompatible_inputs": incompatible,
+                            }
+                        )
+                    order_key = str(reorder.get("orderKey") or "").strip()
+                    resource_type = str(data_source.get("resourceType") or "").strip()
+                    move_actions = [
+                        action
+                        for action in actions
+                        if isinstance(action, Mapping) and str(action.get("on") or "") == "move"
+                    ]
+                    if not order_key:
+                        findings.append(
+                            {
+                                "code": "ui.list.reorder_order_key_missing",
+                                "severity": "error",
+                                "path": f"{widget_path}.inputs.reorder.orderKey",
+                                "message": "A reorderable list requires a stable numeric orderKey.",
+                            }
+                        )
+                    if not move_actions:
+                        findings.append(
+                            {
+                                "code": "ui.list.move_action_missing",
+                                "severity": "error",
+                                "path": f"{widget_path}.actions",
+                                "message": "A reorderable list requires an on=move persistence action.",
+                            }
+                        )
+                    for action_index, action in enumerate(actions):
+                        if not isinstance(action, Mapping) or str(action.get("on") or "") != "move":
+                            continue
+                        params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+                        if (
+                            str(data_source.get("kind") or "") != "resourceQuery"
+                            or not resource_type
+                            or str(action.get("type") or "") != "resourceOperation"
+                            or str(action.get("target") or "") != resource_type
+                            or str(params.get("operation_id") or "") != "update"
+                            or str(params.get("record_id") or "") != "$event.id"
+                            or str(params.get("payload") or "") != "$event.patch"
+                        ):
+                            findings.append(
+                                {
+                                    "code": "ui.list.resource_move_invalid",
+                                    "severity": "error",
+                                    "path": f"{widget_path}.actions[{action_index}]",
+                                    "message": (
+                                        "A list move must update its resourceQuery target with "
+                                        "record_id=$event.id and payload=$event.patch."
+                                    ),
+                                }
+                            )
                 action_events = {
                     str(action.get("on") or "").strip()
                     for action in actions

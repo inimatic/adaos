@@ -706,6 +706,57 @@ def test_generic_validation_requires_list_header_actions_to_bind_executable_acti
     assert present["ok"] is True
 
 
+def test_generic_validation_admits_only_persisted_complete_list_reordering() -> None:
+    webui = _empty_webui()
+    widget = {
+        "id": "sections",
+        "type": "ui.list",
+        "area": "main",
+        "inputs": {
+            "variant": "list",
+            "itemIdKey": "id",
+            "titleKey": "title",
+            "reorder": {"enabled": True, "orderKey": "order", "axis": "vertical"},
+            "sort": {"key": "order", "direction": "asc", "numeric": True},
+        },
+        "actions": [
+            {
+                "on": "move",
+                "type": "resourceOperation",
+                "target": "prototype.sections",
+                "params": {
+                    "operation_id": "update",
+                    "record_id": "$event.id",
+                    "payload": "$event.patch",
+                },
+            }
+        ],
+        "dataSource": {
+            "kind": "resourceQuery",
+            "resourceType": "prototype.sections",
+            "query": {},
+        },
+    }
+    webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [widget]
+
+    assert validate_webui_capabilities(webui)["ok"] is True
+
+    widget["inputs"]["filters"] = [
+        {"key": "title", "stateKey": "query", "operator": "contains"}
+    ]
+    ambiguous = validate_webui_capabilities(webui)
+    assert "ui.list.reorder_projection_ambiguous" in {
+        item["code"] for item in ambiguous["findings"]
+    }
+
+    widget["inputs"].pop("filters")
+    widget["actions"] = []
+    missing = validate_webui_capabilities(webui)
+    assert "ui.list.move_action_missing" in {
+        item["code"] for item in missing["findings"]
+    }
+
+
 def test_generic_validation_rejects_product_extension_as_content_container() -> None:
     webui = _empty_webui()
     webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [
