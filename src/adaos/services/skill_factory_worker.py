@@ -10168,7 +10168,17 @@ class LocalSkillFactoryWorker:
             if isinstance(prototype_resource_handoff, Mapping)
             else self._prototype_resource_handoff_from_assignment(assignment, workspace)
         )
-        if prototype_resource_handoff:
+        handoff_completion = (
+            dict(prototype_resource_handoff.get("completion") or {})
+            if isinstance(prototype_resource_handoff, Mapping)
+            else {}
+        )
+        deterministic_resource_handoff = bool(
+            prototype_resource_handoff
+            and prototype_resource_handoff.get("mode") != "implementation_blueprint"
+            and handoff_completion.get("model_required") is not True
+        )
+        if deterministic_resource_handoff:
             trusted_generated_paths = self._prototype_resource_authorized_paths(
                 prototype_resource_handoff
             )
@@ -10249,11 +10259,6 @@ class LocalSkillFactoryWorker:
             "prototype_resource_handoff": prototype_resource_handoff,
             **({"compiler_views": compiler_view_refs} if compiler_view_refs else {}),
         }
-        handoff_completion = (
-            dict(prototype_resource_handoff.get("completion") or {})
-            if isinstance(prototype_resource_handoff, Mapping)
-            else {}
-        )
         portable_contract_reuse_present = False
         implementation_bindings_required = bool(
             target_type == "scenario"
@@ -11721,7 +11726,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             assignment,
             workspace,
         ) if workspace is not None else None
-        if handoff:
+        if handoff and (
+            handoff.get("mode") != "implementation_blueprint"
+            and dict(handoff.get("completion") or {}).get("model_required") is not True
+        ):
             request = dict(assignment.get("realize_request") or {})
             artifacts = dict(request.get("artifacts") or {})
             repair_hints = (

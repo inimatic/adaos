@@ -11638,6 +11638,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         "forge": {
             "sparse_paths": [
                 f"scenarios/{project_id}/",
+                f"projects/{project_id}/",
                 f"skills/{companion}/",
             ]
         },
@@ -11779,6 +11780,18 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     }
     blueprint_packet = worker._build_packet(
         assignment, workspace, tmp_path / "input-blueprint"
+    )
+    assert "exact_changed_paths" not in blueprint_packet["constraints"]
+    assert "trusted_generated_paths" not in blueprint_packet["constraints"]
+    worker._validate_changed_paths(
+        assignment,
+        [
+            f"projects/{project_id}/project.yaml",
+            f"scenarios/{project_id}/scenario.yaml",
+            f"skills/{companion}/handlers/authoring.py",
+            f"skills/{companion}/tests/test_behavior_contract.py",
+        ],
+        workspace=workspace,
     )
     prompt = (tmp_path / "input-blueprint/task.md").read_text(encoding="utf-8")
     bindings_path = tmp_path / "input-blueprint/implementation-bindings.json"
