@@ -741,6 +741,34 @@ def test_generic_validation_admits_only_persisted_complete_list_reordering() -> 
 
     assert validate_webui_capabilities(webui)["ok"] is True
 
+    widget["dataSource"] = {
+        "kind": "skill",
+        "name": "site_authoring.query_records",
+        "params": {"resource": "sections"},
+    }
+    widget["actions"] = [
+        {
+            "on": "move",
+            "type": "callSkill",
+            "target": "site_authoring.mutate_records",
+            "params": {
+                "resource": "sections",
+                "operation": "update",
+                "id": "$event.id",
+                "payload": "$event.patch",
+                "expected_revision": "$event.revision",
+            },
+        }
+    ]
+    assert validate_webui_capabilities(webui)["ok"] is True
+
+    widget["actions"][0]["target"] = "other_provider.mutate_records"
+    mismatched_provider = validate_webui_capabilities(webui)
+    assert "ui.list.resource_move_invalid" in {
+        item["code"] for item in mismatched_provider["findings"]
+    }
+    widget["actions"][0]["target"] = "site_authoring.mutate_records"
+
     widget["inputs"]["filters"] = [
         {"key": "title", "stateKey": "query", "operator": "contains"}
     ]

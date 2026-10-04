@@ -1826,23 +1826,54 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                         if not isinstance(action, Mapping) or str(action.get("on") or "") != "move":
                             continue
                         params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
-                        if (
-                            str(data_source.get("kind") or "") != "resourceQuery"
-                            or not resource_type
-                            or str(action.get("type") or "") != "resourceOperation"
-                            or str(action.get("target") or "") != resource_type
-                            or str(params.get("operation_id") or "") != "update"
-                            or str(params.get("record_id") or "") != "$event.id"
-                            or str(params.get("payload") or "") != "$event.patch"
-                        ):
+                        resource_move = (
+                            str(data_source.get("kind") or "") == "resourceQuery"
+                            and all(
+                                (
+                                    bool(resource_type),
+                                    str(action.get("type") or "")
+                                    == "resourceOperation",
+                                    str(action.get("target") or "") == resource_type,
+                                    str(params.get("operation_id") or "") == "update",
+                                    str(params.get("record_id") or "") == "$event.id",
+                                    str(params.get("payload") or "") == "$event.patch",
+                                )
+                            )
+                        )
+                        source_tool = str(data_source.get("name") or "").strip()
+                        target_tool = str(action.get("target") or "").strip()
+                        source_owner = source_tool.rpartition(".")[0]
+                        target_owner = target_tool.rpartition(".")[0]
+                        source_params = (
+                            data_source.get("params")
+                            if isinstance(data_source.get("params"), Mapping)
+                            else {}
+                        )
+                        skill_move = all(
+                            (
+                                str(data_source.get("kind") or "") == "skill",
+                                bool(source_owner),
+                                source_owner == target_owner,
+                                str(action.get("type") or "") == "callSkill",
+                                str(params.get("operation") or "") == "update",
+                                str(params.get("resource") or "")
+                                == str(source_params.get("resource") or ""),
+                                bool(str(params.get("resource") or "")),
+                                str(params.get("id") or "") == "$event.id",
+                                str(params.get("payload") or "") == "$event.patch",
+                                str(params.get("expected_revision") or "")
+                                == "$event.revision",
+                            )
+                        )
+                        if not (resource_move or skill_move):
                             findings.append(
                                 {
                                     "code": "ui.list.resource_move_invalid",
                                     "severity": "error",
                                     "path": f"{widget_path}.actions[{action_index}]",
                                     "message": (
-                                        "A list move must update its resourceQuery target with "
-                                        "record_id=$event.id and payload=$event.patch."
+                                        "A list move must use the canonical resourceOperation binding "
+                                        "or a same-provider callSkill update with id, patch and revision."
                                     ),
                                 }
                             )
