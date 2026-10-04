@@ -407,6 +407,36 @@ def _is_primary_board_request(
     if not _contains_any_term(text, _BOARD_TERMS):
         return False
     normalized = _normalized_text(text)
+    board_mentions = [
+        match
+        for term in _BOARD_TERMS
+        if _normalized_text(term)
+        for match in re.finditer(
+            rf"(?<!\w){re.escape(_normalized_text(term))}(?!\w)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    ]
+    positive_board_mentions = []
+    for match in board_mentions:
+        clause_start = max(
+            normalized.rfind(separator, 0, match.start())
+            for separator in (".", ";", ":", "\n")
+        )
+        prefix = normalized[max(clause_start + 1, match.start() - 120) : match.start()]
+        negated = bool(
+            re.search(
+                r"(?:\bdo\s+not\b|\bdon't\b|\bmust\s+not\b|\bshould\s+not\b|"
+                r"\bwithout\b|\bavoid\b|\bexclude\b|\bforbid\b|\bno\b)"
+                r"(?!\s+only\b)[^.;:\n]{0,100}$",
+                prefix,
+                flags=re.IGNORECASE,
+            )
+        )
+        if not negated:
+            positive_board_mentions.append(match)
+    if not positive_board_mentions:
+        return False
     composite_revision = bool(
         re.search(
             r"\b(?:current|existing)\s+(?:revision|semantic|application)\b|"

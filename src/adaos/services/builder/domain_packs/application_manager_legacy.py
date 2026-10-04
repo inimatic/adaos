@@ -299,6 +299,35 @@ def _contains_any(text: str, values: Iterable[str]) -> bool:
     return any(value in text for value in values)
 
 
+def _contains_non_negated_term(text: str, values: Iterable[str]) -> bool:
+    """Return true when at least one complete capability term is affirmative."""
+
+    normalized = _normalized_text(text)
+    for value in values:
+        term = _normalized_text(value)
+        if not term:
+            continue
+        for match in re.finditer(
+            rf"(?<!\w){re.escape(term)}(?!\w)", normalized, flags=re.IGNORECASE
+        ):
+            clause_start = max(
+                normalized.rfind(separator, 0, match.start())
+                for separator in (".", ";", ":", "\n")
+            )
+            prefix = normalized[
+                max(clause_start + 1, match.start() - 120) : match.start()
+            ]
+            if not re.search(
+                r"(?:\bdo\s+not\b|\bdon't\b|\bmust\s+not\b|\bshould\s+not\b|"
+                r"\bwithout\b|\bavoid\b|\bexclude\b|\bforbid\b|\bno\b)"
+                r"(?!\s+only\b)[^.;:\n]{0,100}$",
+                prefix,
+                flags=re.IGNORECASE,
+            ):
+                return True
+    return False
+
+
 def _number(value: str) -> int | None:
     token = _normalized_text(value)
     if token.isdigit():
@@ -534,7 +563,7 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
             {"application", "mcp", "market", "installed", "extensions", "lifecycle"},
         )
     )
-    board = _contains_any(text, _BOARD_TERMS) or bool(
+    board = _contains_non_negated_term(text, _BOARD_TERMS) or bool(
         literal_text_change and literal_text_change.get("target_kind") == "column"
     )
     lane_count = (

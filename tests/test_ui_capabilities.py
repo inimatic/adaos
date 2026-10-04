@@ -536,6 +536,15 @@ def test_qualification_selects_supported_board_drag_drop_contract() -> None:
     assert result["capability_gaps"] == []
 
 
+def test_qualification_does_not_invent_board_requirement_from_negation() -> None:
+    result = qualify_ui_request(
+        "Make this flat list reorderable with drag and drop; do not add a Kanban board."
+    )
+
+    assert result["requirements"].get("component_type") != "collection.board"
+    assert "kanban_board" not in result["concepts"]
+
+
 def test_qualification_extracts_exact_russian_column_rename() -> None:
     result = qualify_ui_request(
         "Переименуй колонку Запланировано в Бэклог. Больше ничего не меняй."
