@@ -239,6 +239,18 @@ function commandLocator(page, commandId, marker = null) {
   ].join(', ')).filter({ hasText: marker }).locator(selector).filter({ visible: true }).first()
 }
 
+async function dismissSystemOverlays(page, sample) {
+  const componentUpdates = page.locator('.component-updates-panel').filter({ visible: true }).first()
+  if (!(await componentUpdates.count())) return
+  const close = componentUpdates.locator('.component-updates-panel__tools button').last()
+  await close.click({ timeout: interactionTimeoutMs })
+  await componentUpdates.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
+  sample.checks.push({
+    kind: 'system-overlay-dismissed',
+    overlay: 'component-updates',
+  })
+}
+
 function fallbackFieldValue(fieldId, inputType, marker) {
   const id = String(fieldId || '').toLowerCase()
   if (inputType === 'email') return `${marker}@example.invalid`
@@ -504,6 +516,7 @@ try {
         return [...document.querySelectorAll('[data-webui-widget-id]')]
           .some(element => element.getClientRects().length > 0)
       }, undefined, { timeout: startupTimeoutMs })
+      await dismissSystemOverlays(page, sample)
       console.error(`[builder-browser-feedback] ${layout}:authoritative:initial`)
       let authoritativeDataSettled = await waitForAuthoritativeData(page, sample, 'initial')
       await page.screenshot({ path: path.join(output, `${layout}-initial.png`), fullPage: true })

@@ -13,6 +13,21 @@ from adaos.services.builder.browser_feedback import (
 from adaos.services.skill_factory_worker import _browser_feedback_prompt_projection
 
 
+def test_browser_runner_dismisses_system_overlays_before_candidate_checks() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (
+        root / "e2e/stand/browser/builder-candidate-feedback.mjs"
+    ).read_text(encoding="utf-8")
+
+    helper = script.index("async function dismissSystemOverlays")
+    invocation = script.index("await dismissSystemOverlays(page, sample)")
+    initial_gate = script.index("authoritative:initial")
+
+    assert helper < invocation < initial_gate
+    assert ".component-updates-panel__tools button" in script
+    assert "system-overlay-dismissed" in script
+
+
 def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> None:
     script = (
         Path(__file__).resolve().parents[1]
