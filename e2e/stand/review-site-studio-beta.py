@@ -327,6 +327,7 @@ def main() -> None:
                 """,
                 timeout=10_000,
             )
+            section_rows(page).first.wait_for(timeout=30_000)
             compact_metrics = section_list(page).evaluate(
                 """el => ({
                   left: el.getBoundingClientRect().left,
