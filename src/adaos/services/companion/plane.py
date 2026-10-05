@@ -27,7 +27,7 @@ TOOLS = {
     "companion.context.read": ("Read current scenario/view/modal and a reusable context handle.", obj(), "companion.read"),
     "capabilities.search": ("Search ALL installed declared capabilities. Empty query pages the complete catalog. A miss is not absence; try aliases and inspect catalog pages.", obj(query=TEXT, kind={"type": ["string", "null"]}, offset={"type": "integer", "minimum": 0}, limit={"type": "integer", "minimum": 1, "maximum": 50}), "companion.read"),
     "capabilities.describe": ("Read exact arguments, admission, bindings and effects for a canonical capability ref.", obj(capability_ref=TEXT), "companion.read"),
-    "operations.preview": ("Validate the selected capability and JSON arguments against current context. Returns preview_id for execution; does not execute.", obj(capability_ref=TEXT, params_json=TEXT, context_handle=TEXT), "companion.read"),
+    "operations.preview": ("Validate the selected capability and JSON arguments against current context. params_json must be an object encoded as JSON: use '{}' for no arguments, never an empty string. Returns preview_id; does not execute.", obj(capability_ref=TEXT, params_json=TEXT, context_handle=TEXT), "companion.read"),
     "operations.execute": ("Execute exactly one previously validated preview and return its executor receipt.", obj(preview_id=TEXT), "companion.execute"),
     "operations.status": ("Read the latest authoritative receipt. Dispatched is not completed.", obj(action_id=TEXT), "companion.read"),
     "operations.cancel": ("Cancel only a genuinely cancellable pending operation.", obj(action_id=TEXT, context_handle=TEXT), "companion.execute"),

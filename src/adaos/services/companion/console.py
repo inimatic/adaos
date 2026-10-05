@@ -7,13 +7,22 @@ from .ledger import Ledger
 def owner() -> str:
     from adaos.services.personalization_runtime import current_user_id
 
-    return "user:" + current_user_id()
+    identity = str(current_user_id())
+    return identity if identity.startswith("user:") else "user:" + identity
+
+
+def evidence_webspace(webspace: str) -> str:
+    """A Builder preview reviews its explicitly related source, not a guessed suffix."""
+    from adaos.services.builder.workbench import BuilderWorkbenchService
+
+    return BuilderWorkbenchService().resolve_source_webspace_id(webspace)
 
 
 def snapshot(webspace: str) -> dict:
     ledger = Ledger()
+    webspace = evidence_webspace(webspace)
     sessions = ledger.sessions(scope=webspace+":"+owner())
-    result = {"enabled": True, "mode": "development", "sessions": sessions, "items": [],
+    result = {"enabled": True, "mode": "development", "webspace_id": webspace, "sessions": sessions, "items": [],
               "session_id": None, "turn_id": None, "state": "awaiting_session", "canonical_mutations": 0}
     if not sessions:
         return result
@@ -44,6 +53,7 @@ def act(webspace: str, action: str, *, session_id: str | None = None, turn_id: s
         label: str = "correct", correction: str = "", classification: str | None = None,
         decision: str = "quarantine") -> dict:
     ledger = Ledger()
+    webspace = evidence_webspace(webspace)
     sessions = ledger.sessions(scope=webspace+":"+owner())
     selected = next((s for s in sessions if not session_id or s["session_id"] == session_id), None)
     if not selected:
