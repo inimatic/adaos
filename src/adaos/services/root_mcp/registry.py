@@ -1003,6 +1003,20 @@ def public_registry_item(kind: str, item_id: str) -> dict[str, Any]:
         for tool in tools
         if str(tool.get("name") or "").strip() and tool.get("examples")
     }
+    tool_contracts = {
+        str(tool.get("name") or ""): {
+            "description": str(tool.get("description") or "").strip() or None,
+            "side_effects": str(
+                tool.get("side_effects") or tool.get("side_effect_class") or ""
+            ).strip()
+            or None,
+            "permissions": deepcopy(tool.get("permissions") or []),
+            "application_access": deepcopy(tool.get("application_access") or None),
+            "approval_scope": deepcopy(tool.get("approval_scope") or None),
+        }
+        for tool in tools
+        if str(tool.get("name") or "").strip()
+    }
     manifest_ref = str(selected.get("manifest") or "").strip() or None
     source_ref = str(selected.get("path") or "").strip()
     readme_ref = f"{source_ref.rstrip('/')}/README.md" if source_ref else None
@@ -1013,6 +1027,7 @@ def public_registry_item(kind: str, item_id: str) -> dict[str, Any]:
         "name": str(selected.get("name") or index["id"]),
         "schemas": schemas,
         "examples": examples,
+        "tool_contracts": tool_contracts,
         "documentation": {
             "summary": str(selected.get("description") or manifest.get("description") or "").strip() or None,
             "manifest_ref": manifest_ref,

@@ -199,8 +199,15 @@ def test_public_registry_is_a_compact_cursor_index_with_separate_detail(monkeypa
                 "tools": [
                     {
                         "name": "read_alpha",
+                        "description": "Read the alpha record.",
+                        "side_effects": "read_only",
                         "input_schema": {"type": "object"},
                         "output_schema": {"type": "object"},
+                        "permissions": ["workspace.read"],
+                        "application_access": {
+                            "permission": "workspace.read",
+                            "capability": "alpha.read",
+                        },
                         "examples": [{"value": "alpha"}],
                     }
                 ],
@@ -232,6 +239,16 @@ def test_public_registry_is_a_compact_cursor_index_with_separate_detail(monkeypa
     assert second["offset"] == 1
     assert detail["schemas"]["read_alpha"]["input"] == {"type": "object"}
     assert detail["examples"]["read_alpha"] == [{"value": "alpha"}]
+    assert detail["tool_contracts"]["read_alpha"] == {
+        "description": "Read the alpha record.",
+        "side_effects": "read_only",
+        "permissions": ["workspace.read"],
+        "application_access": {
+            "permission": "workspace.read",
+            "capability": "alpha.read",
+        },
+        "approval_scope": None,
+    }
 
 
 def test_descriptor_delta_returns_only_changed_and_removed_fragments() -> None:
