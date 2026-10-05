@@ -6335,6 +6335,7 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
         "foundation",
         "get_builder_context",
     ]
+    assert private_profile["tool_timeout_sec"] == 60
 
     executor = SubprocessCodexExecutor(repo_root=tmp_path / "repo")
     config_args = executor._root_mcp_config_args(private_profile)
@@ -6355,6 +6356,7 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
         )
         for arg in config_args
     )
+    assert "mcp_servers.adaos_task_root.tool_timeout_sec=60" in config_args
     assert "lease-secret-value" not in " ".join(config_args)
     assert environment["ADAOS_TASK_MCP_AUTH_TASK_LEASE"] == "lease-secret-value"
 

@@ -4414,11 +4414,19 @@ def _root_mcp_profile_from_assignment(
             profile[key] = value
     for key in ("startup_timeout_sec", "tool_timeout_sec"):
         try:
-            value_int = int(root.get(key) or 0)
+            value_int = int(root.get(key) or mcp.get(key) or 0)
         except (TypeError, ValueError):
             value_int = 0
         if value_int > 0:
             profile[key] = value_int
+    if task_scoped:
+        # Descriptor detail and governed diagnostic calls may legitimately queue
+        # behind the local runtime's synchronous projections.  Codex otherwise
+        # applies its short generic MCP timeout and can abandon an authorized,
+        # still-running Root request before it returns.  Keep this bounded to
+        # Builder task leases; ordinary interactive MCP profiles retain their
+        # configured latency budget.
+        profile.setdefault("tool_timeout_sec", 60)
     approval = str(root.get("default_tools_approval_mode") or "").strip()
     if approval in {"auto", "prompt", "writes", "approve"}:
         profile["default_tools_approval_mode"] = approval
