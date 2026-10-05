@@ -2197,11 +2197,73 @@
       }
     },
 
+    "conversationSurface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "agent"],
+      "description": "Shared conversation UX. The owner publishes capabilities, never authority grants. Routing remains in inputs.meta. Application commands are declared in widget.actions, not supplied by untrusted message data.",
+      "properties": {
+        "version": { "const": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "label": { "type": "string" },
+        "agent": {
+          "type": "object", "additionalProperties": false, "required": ["mode"],
+          "properties": {
+            "mode": { "enum": ["fixed", "select"] },
+            "id": { "type": "string", "minLength": 1 },
+            "label": { "type": "string" },
+            "icon": { "type": "string" },
+            "source": { "$ref": "#/$defs/dataSource" }
+          },
+          "allOf": [
+            { "if": { "properties": { "mode": { "const": "fixed" } } }, "then": { "required": ["id", "label"] } },
+            { "if": { "properties": { "mode": { "const": "select" } } }, "then": { "required": ["source"] } }
+          ]
+        },
+        "history": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["auto", "manual"], "default": "auto" },
+            "allAgents": { "type": "boolean", "default": false },
+            "defaultAll": { "type": "boolean", "default": false },
+            "maxMessages": { "type": "integer", "minimum": 24, "maximum": 1000, "default": 200 }
+          }
+        },
+        "voice": { "type": "boolean", "default": false },
+        "attachments": {
+          "type": "object", "additionalProperties": false,
+          "required": ["uploadTarget", "readTarget", "accept", "maxFiles", "maxBytes"],
+          "properties": {
+            "uploadTarget": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$" },
+            "readTarget": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$" },
+            "accept": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string", "minLength": 1 } },
+            "maxFiles": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "maxBytes": { "type": "integer", "minimum": 1, "maximum": 104857600 }
+          }
+        },
+        "model": {
+          "type": "object", "additionalProperties": false,
+          "required": ["source", "valuePath", "optionsPath"],
+          "description": "Read canonical model selection and allowed choices. on=model.change receives value; its declared action performs the owner-authorized mutation. No local settings fork.",
+          "properties": {
+            "source": { "$ref": "#/$defs/dataSource" },
+            "valuePath": { "type": "string", "minLength": 1 },
+            "optionsPath": { "type": "string", "minLength": 1 },
+            "label": { "type": "string" }
+          }
+        },
+        "presentation": {
+          "type": "object", "additionalProperties": false,
+          "properties": { "floating": { "type": "boolean", "default": false } }
+        }
+      }
+    },
     "chatInputs": {
       "type": "object",
       "additionalProperties": true,
       "description": "Inputs for ui.chat. Multiline composers use Shift+Enter for a newline and Enter or Ctrl/Cmd+Enter for submit by default.",
       "properties": {
+        "conversation": { "$ref": "#/$defs/conversationSurface" },
         "multiline": { "type": "boolean", "default": false },
         "composerRows": { "type": "integer", "minimum": 1, "maximum": 12, "default": 4 },
         "composerAutoGrow": { "type": "boolean", "default": true },

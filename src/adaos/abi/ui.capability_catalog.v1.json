@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.6.0",
+  "catalog_version": "3.7.0",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "browser_history": {
@@ -1119,13 +1119,26 @@
       "id": "ui.chat",
       "kind": "component",
       "title": "Conversation surface",
-      "summary": "A message history and optional composer that can fill a dedicated conversation region.",
+      "summary": "Reusable owner-scoped conversation UX: text/voice composer, declared attachments and model control, fixed/selectable agent, independent history filter, bounded scroll pagination and factual run status.",
       "aliases": {
         "en": ["chat", "conversation", "message history", "message composer"],
         "ru": ["чат", "диалог", "история сообщений", "поле сообщения"]
       },
       "manifest": {
         "widget_type": "ui.chat",
+        "conversation_contract": {
+          "abi": "webui.v1.schema.json#/$defs/conversationSurface",
+          "input": "inputs.conversation",
+          "version": 1,
+          "required": ["owner", "agent"],
+          "agent": "fixed requires id/label; select requires a registry source. Current recipient and history.allAgents are independent. A fixed owner never follows the global dialog selector.",
+          "history": "mode=auto loads one bounded older cursor page on upward scroll; maxMessages bounds retained client history. allAgents is opt-in for an authorized aggregate feed, not a broadcast recipient.",
+          "attachments": "Omit unless the owner supports uploaded references through a declared on=send action; the legacy voice.chat.user transport is not an attachment ingestion API. Declare uploadTarget/readTarget, accept, maxFiles/maxBytes. on=send receives attachments:[{ref,name,mime,size_bytes}], text, meta and retry-stable request_id. Never embed bytes in message context.",
+          "model": "Declare one canonical source, valuePath and optionsPath. Bind widget.actions on=model.change with $event.value to the owner's authorized setting mutation. Settings and chat must share the same read-model. Running jobs retain their admitted model.",
+          "voice": "Opt-in shared microphone control; Voice application is not a dependency.",
+          "run": "Source may publish run:{id,status,label?}; accepted/queued/started/running/progress/input_required/resumed/completed/failed/cancelled/unknown are factual events. No fabricated timed stage labels.",
+          "presentation": "floating opts into an in-page panel of the same component. It is not a browser popup or a cross-workspace authority transfer."
+        },
         "inputs": {
           "fillHeight": "true for a first-class full-height conversation destination",
           "multiline": "true for a growing multiline composer",
@@ -1150,7 +1163,7 @@
         "kind": "messages",
         "record": "{id,from,text,ts}; assistant messages may include agent metadata and actions"
       },
-      "events": ["send via declared sendCommand"],
+      "events": ["send via declared sendCommand or on=send", "model.change via declared owner action"],
       "responsive": {
         "desktop": "fills its dedicated region when fillHeight=true",
         "compact": "one bounded conversation column with history and composer"

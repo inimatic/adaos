@@ -632,7 +632,21 @@ export interface WebUiLayout {
   })[]
 }
 
+/** Versioned, capability-driven ui.chat surface; declarations never grant permissions. */
+export interface WebUiConversationSurface {
+  version: 1
+  owner: string
+  label?: string
+  agent: { mode: 'fixed' | 'select'; id?: string; label?: string; icon?: string; source?: Record<string, unknown> }
+  history?: { mode?: 'auto' | 'manual'; allAgents?: boolean; defaultAll?: boolean; maxMessages?: number }
+  voice?: boolean
+  attachments?: { uploadTarget: string; readTarget: string; accept: string[]; maxFiles: number; maxBytes: number }
+  model?: { source: Record<string, unknown>; valuePath: string; optionsPath: string; label?: string }
+  presentation?: { floating?: boolean }
+}
+
 export interface WebUiChatInputs {
+  conversation?: WebUiConversationSurface
   invalidateOnMessages?: string[]
   multiline?: boolean
   composerRows?: number
