@@ -47,3 +47,14 @@ def test_experimental_nlu_cannot_be_invoked():
     for skill in policy.EXPERIMENTAL_NLU:
         with pytest.raises(PermissionError, match="experimental_nlu_removed"):
             policy.guard_skill_call(skill, "parse", {})
+
+
+def test_actual_tool_entry_gates_before_import_and_import_context_still_works(monkeypatch, tmp_path):
+    from adaos.skills.runtime_runner import execute_tool, isolated_skill_import_state
+    monkeypatch.delenv(policy.ENABLE_FLAG, raising=False)
+    skill = tmp_path / "conversation_companions" / "slots" / "a"
+    skill.mkdir(parents=True)
+    with isolated_skill_import_state(skill):
+        pass
+    with pytest.raises(PermissionError, match="companion_disabled"):
+        execute_tool(skill, module=None, attr="talk", payload={"character_id": "sage"})

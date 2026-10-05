@@ -110,7 +110,7 @@ class CapabilityIndex:
 
 
 class ContextHandles:
-    def __init__(self, index: CapabilityIndex, reader: Callable[[], dict[str, Any]], *, ttl: float = 30):
+    def __init__(self, index: CapabilityIndex, reader: Callable[[], dict[str, Any]], *, ttl: float = 180):
         self.index, self.reader, self.ttl = index, reader, ttl
         self.lock = threading.RLock()
         self.handles: dict[str, dict[str, Any]] = {}

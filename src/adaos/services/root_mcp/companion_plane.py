@@ -932,24 +932,34 @@ def contracts() -> list[RootMcpToolContract]:
     ]
 
 
+def _cached_frame(webspace: str) -> dict[str, Any]:
+    from adaos.services.companion.catalog import runtime
+    from adaos.services.companion.plane import execution_frame
+
+    index, handles = runtime(webspace)
+    context = handles.read()
+    frame = execution_frame(index, context)
+    frame.update(schema=CONTEXT_SCHEMA, context_handle=context["context_handle"],
+                 catalog_digest=context["catalog_digest"], generated_at=_iso_now(),
+                 affordances=[{**dict(op), "available": True, "context_guarded": op["effect"] != "read_only"} for op in _OPERATIONS],
+                 boundaries={"raw_dom_access": False, "arbitrary_event_emit": False},
+                 context_duration_ms=context["duration_ms"], cache_hit=context["cache_hit"])
+    return frame
+
+
 def _handle_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return {
-        "context": build_context_frame(
-            webspace_id=_text(arguments.get("webspace_id")) or "desktop",
-            include_live=bool(arguments.get("include_live", True)),
-        )
-    }
+    return {"context": _cached_frame(_text(arguments.get("webspace_id")) or "desktop")}
 
 
 def _handle_preview(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     request = _request(arguments)
-    frame = build_context_frame(webspace_id=request["webspace_id"])
+    frame = _cached_frame(request["webspace_id"])
     return {"preview": validate_action_request(request, frame=frame), "context": frame}
 
 
 def _handle_execute(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     request = _request(arguments)
-    frame = build_context_frame(webspace_id=request["webspace_id"])
+    frame = _cached_frame(request["webspace_id"])
     if dry_run:
         return {"preview": validate_action_request(request, frame=frame), "context": frame}
     return {"receipt": execute_action_request(request, frame=frame)}

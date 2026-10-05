@@ -76,9 +76,6 @@ def isolated_skill_import_state(
     global _PREPARED_IMPORT_CONTEXT
 
     skill_path = Path(skill_dir).resolve()
-    from adaos.services.companion.policy import guard_skill_call
-
-    guard_skill_call(skill_path.name, attr, payload)
     with _MODULE_LOAD_LOCK:
         _PREPARED_IMPORT_CONTEXT = None
         original_sys_path = list(sys.path)
@@ -121,6 +118,11 @@ def execute_tool(
     global _PREPARED_IMPORT_CONTEXT
 
     skill_path = Path(skill_dir).resolve()
+    from adaos.services.companion.policy import guard_skill_call, EXPERIMENTAL_NLU
+
+    guarded_skills = EXPERIMENTAL_NLU | {"conversation_companions", "builder_skill", "nlu_teacher_skill", "rasa_nlu_service_skill"}
+    skill_identity = next((part for part in reversed(skill_path.parts) if part in guarded_skills), skill_path.name)
+    guard_skill_call(skill_identity, attr, payload)
     # Importing a source-backed skill is process-global work: importlib writes
     # the module into ``sys.modules`` before executing its body. Concurrent
     # first calls must therefore not observe that half-initialized module.
