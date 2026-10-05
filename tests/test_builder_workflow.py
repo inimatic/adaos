@@ -2914,6 +2914,9 @@ def test_followup_request_extends_active_change_set_and_invalidates_trial(
     )["workflow"]
 
     assert extended["delivery"]["status"] == "stale"
+    assert extended["active_phase"] == "prototype"
+    assert extended["prototype"]["status"] == "working"
+    assert extended["automation"]["status"] == "not_started"
     assert extended["change_set"]["route"] == "prototype_first"
     assert extended["change_set"]["gate"] == "prototype"
     assert extended["change_set"]["status"] == "changes_requested"

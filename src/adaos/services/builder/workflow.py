@@ -7301,7 +7301,16 @@ class BuilderWorkflowService:
                 if isinstance(item, Mapping)
             )
             if prototype_added or prototype_pending:
-                prototype.update({"stable": False, "acceptance": None})
+                workflow["active_phase"] = "prototype"
+                automation.update(
+                    {
+                        "status": "not_started",
+                        "source_prototype_revision": prototype.get("head_revision"),
+                    }
+                )
+                prototype.update(
+                    {"status": "working", "stable": False, "acceptance": None}
+                )
                 current["route"] = "prototype_first"
                 update_change_set(
                     status="changes_requested" if prototype_added else "in_progress",
