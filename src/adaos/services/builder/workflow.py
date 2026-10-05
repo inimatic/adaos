@@ -7552,6 +7552,24 @@ class BuilderWorkflowService:
             workflow["change"] = current_change
             return
         if action == "prototype_revision_recorded":
+            governed_state = str(
+                _mapping(workflow.get("governed")).get("state") or ""
+            ).strip()
+            current = workflow.get("change_set")
+            if (
+                str(workflow.get("active_phase") or "prototype") == "automation"
+                and governed_state == "prototype_editing"
+                and isinstance(current, Mapping)
+                and str(current.get("gate") or "") == "prototype"
+            ):
+                workflow["active_phase"] = "prototype"
+                automation.update(
+                    {
+                        "status": "not_started",
+                        "source_prototype_revision": prototype.get("head_revision"),
+                    }
+                )
+                prototype.update({"status": "working", "stable": False})
             self._require_active(workflow, "prototype", action)
             revision = str(metadata.get("revision") or "").strip()
             if not revision:

@@ -2393,7 +2393,10 @@ def test_prototype_revision_cannot_be_recorded_during_automation(
 ) -> None:
     service, _root = workflow_project
     service.transition(
-        "scenario", "recipes", "automation_started", metadata={"task_id": "task.1"}
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.1"}),
     )
 
     with pytest.raises(BuilderWorkflowError, match="requires active prototype"):
@@ -2403,6 +2406,69 @@ def test_prototype_revision_cannot_be_recorded_during_automation(
             "prototype_revision_recorded",
             metadata={"object_type": "scenario", "revision": "002"},
         )
+
+
+def test_prototype_revision_reconciles_governed_editable_followup(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-recipes",
+            "request": "Implement recipe persistence.",
+            "issues": [
+                {
+                    "issue_id": "persistence",
+                    "title": "Persist recipes",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Recipes survive restart."],
+                }
+            ],
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.1"}),
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "change_issues_added",
+        metadata={
+            "change_set_id": "CS-recipes",
+            "change_id": "change-layout-followup",
+            "request": "Also expose the editable discussion surface.",
+            "issues": [
+                {
+                    "issue_id": "discussion-layout",
+                    "title": "Expose discussion",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Discussion is visible."],
+                }
+            ],
+        },
+    )
+    state_path = root / "prompt_state.json"
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    persisted["workflow"]["active_phase"] = "automation"
+    persisted["workflow"]["automation"]["status"] = "failed"
+    state_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    recorded = service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={"object_type": "scenario", "revision": "002"},
+    )["workflow"]
+
+    assert recorded["active_phase"] == "prototype"
+    assert recorded["automation"]["status"] == "not_started"
+    assert recorded["prototype"]["head_revision"] == "002"
 
 
 def test_automation_followup_does_not_skip_pending_prototype_gate(
