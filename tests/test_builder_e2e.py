@@ -506,6 +506,26 @@ def test_usage_ignores_historic_receipts_when_current_task_is_only_queued() -> N
     }
 
 
+def test_usage_ledger_separates_applications_jobs_and_repair_calls() -> None:
+    rows: list[dict[str, Any]] = []
+    totals = _collect_usage([
+        {"application_id": "notes", "project_ref": "project:notes", "session_id": "session.notes"},
+        {"job_id": "job.notes.1", "telemetry": {"usage_breakdown": {
+            "primary": {"input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 10},
+            "repair": {"input_tokens": 120, "cached_input_tokens": 80, "output_tokens": 12},
+        }}},
+        {"application_id": "weather", "session_id": "session.weather"},
+        {"job_id": "job.weather.1", "telemetry": {"usage": {"input_tokens": 50, "output_tokens": 5}}},
+    ], attribution_rows=rows)
+    assert totals["model_calls"] == 3
+    assert [row["application_id"] for row in rows] == ["notes", "notes", "weather"]
+    assert [row["phase"] for row in rows] == ["primary", "repair", "generation"]
+    assert [row["iteration_ref"] for row in rows] == ["job.notes.1", "job.notes.1", "job.weather.1"]
+    assert all(row["builder_iteration"] is None for row in rows)
+    assert rows[-1]["project_ref"] is None
+    assert sum(row["fresh_input_tokens"] for row in rows) == totals["fresh_input_tokens"]
+
+
 def test_usage_counts_current_task_receipt_once_across_session_projections() -> None:
     receipt = {
         "task_id": "task.current",
@@ -547,6 +567,17 @@ def test_usage_counts_current_task_receipt_once_across_session_projections() -> 
     before_report["session"]["codex_usage_accounting"].pop("root_event_id")
     before_report["session"]["codex_usage_history"] = []
     assert _collect_usage([before_report, output]) == expected
+    rows: list[dict[str, Any]] = []
+    attributed = copy.deepcopy(output)
+    attributed["session"]["codex_usage_accounting"].update({
+        "application_id": "notes", "builder_iteration": 2,
+        "builder_session_id": "session.notes",
+    })
+    assert _collect_usage([before_report, attributed], attribution_rows=rows) == expected
+    assert len(rows) == 1
+    assert rows[0]["application_id"] == "notes"
+    assert rows[0]["builder_iteration"] == 2
+    assert rows[0]["iteration_ref"] == "task.current"
 
 
 def test_required_failure_stops_case_but_optional_failure_does_not(

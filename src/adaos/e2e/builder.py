@@ -705,7 +705,9 @@ def _expectation_findings(
     return findings
 
 
-def _collect_usage(value: Any) -> dict[str, int]:
+def _collect_usage(
+    value: Any, *, attribution_rows: list[dict[str, Any]] | None = None
+) -> dict[str, int]:
     totals = {
         "fresh_input_tokens": 0,
         "cached_input_tokens": 0,
@@ -714,7 +716,12 @@ def _collect_usage(value: Any) -> dict[str, int]:
         "model_calls": 0,
     }
 
+    binding: dict[str, Any] = {}
+    active_binding: dict[str, Any] = {}
+    phase = "generation"
+
     def add_usage(keys: Mapping[str, Any], *, authoritative: bool = False) -> None:
+        before = dict(totals)
         input_tokens = int(keys.get("input_tokens") or keys.get("prompt_tokens") or 0)
         cached_tokens = int(
             keys.get("cached_input_tokens") or keys.get("cached_tokens") or 0
@@ -743,6 +750,22 @@ def _collect_usage(value: Any) -> dict[str, int]:
             )
         else:
             totals["model_calls"] += 1
+        if attribution_rows is not None:
+            dimensions = {**active_binding}
+            if authoritative:
+                for name in (
+                    "application_id", "project_ref", "builder_session_id",
+                    "builder_iteration", "builder_task_id",
+                ):
+                    if keys.get(name) is not None:
+                        dimensions[name] = keys[name]
+                dimensions["iteration_ref"] = keys.get("task_id") or keys.get("builder_task_id")
+            attribution_rows.append({
+                **dimensions,
+                "source": "codex_receipt" if authoritative else "provider_telemetry",
+                "phase": phase,
+                **{key: totals[key] - before[key] for key in totals},
+            })
 
     def scoped_receipts(item: Any) -> tuple[bool, list[Mapping[str, Any]]]:
         """Find receipts for current task heads, excluding session history copies."""
@@ -761,8 +784,6 @@ def _collect_usage(value: Any) -> dict[str, int]:
                 saw_task_scope = True
                 candidates: list[Mapping[str, Any]] = []
                 current = child.get("codex_usage_accounting")
-                if isinstance(current, Mapping):
-                    candidates.append(current)
                 history = child.get("codex_usage_history")
                 if isinstance(history, list):
                     candidates.extend(
@@ -772,16 +793,13 @@ def _collect_usage(value: Any) -> dict[str, int]:
                         and str(receipt.get("task_id") or "").strip()
                         == current_task_id
                     )
+                if isinstance(current, Mapping):
+                    # The task head is newer than its denormalized history copy.
+                    candidates.append(current)
                 for receipt in candidates:
                     if str(receipt.get("task_id") or current_task_id).strip() != current_task_id:
                         continue
-                    identity = str(
-                        receipt.get("root_event_id")
-                        or receipt.get("idempotency_key")
-                        or receipt.get("task_id")
-                        or current_task_id
-                    ).strip()
-                    receipts[identity] = receipt
+                    receipts[current_task_id] = receipt
                 # A session may carry large historical snapshots.  Once its
                 # task head is known they are projections, not new executions.
                 continue
@@ -792,12 +810,16 @@ def _collect_usage(value: Any) -> dict[str, int]:
         return saw_task_scope, list(receipts.values())
 
     def visit(item: Any) -> None:
+        nonlocal phase
         if isinstance(item, Mapping):
             keys = {str(key): child for key, child in item.items()}
             usage_breakdown = keys.get("usage_breakdown")
             if isinstance(usage_breakdown, Mapping):
-                for child in usage_breakdown.values():
+                previous_phase = phase
+                for phase_name, child in usage_breakdown.items():
+                    phase = str(phase_name)
                     visit(child)
+                phase = previous_phase
                 for key, child in keys.items():
                     if key in {
                         "generation_diagnostic",
@@ -852,7 +874,32 @@ def _collect_usage(value: Any) -> dict[str, int]:
     else:
         items = [value]
     authoritative_receipts: dict[str, Mapping[str, Any]] = {}
+    receipt_bindings: dict[str, dict[str, Any]] = {}
     for item in items:
+        if isinstance(item, Mapping):
+            session = item.get("session") if isinstance(item.get("session"), Mapping) else {}
+            project_ref = item.get("project_ref") or session.get("project_ref")
+            application_id = item.get("application_id") or session.get("application_id")
+            if not application_id and str(project_ref or "").startswith("project:"):
+                application_id = str(project_ref).partition(":")[2]
+            if application_id and application_id != binding.get("application_id"):
+                binding = {}
+            if application_id:
+                binding["application_id"] = application_id
+            if project_ref:
+                binding["project_ref"] = project_ref
+            session_id = item.get("session_id") or session.get("session_id")
+            if session_id:
+                binding["builder_session_id"] = session_id
+            job = item.get("llm_job") if isinstance(item.get("llm_job"), Mapping) else {}
+            iteration_ref = session.get("current_task_id") or item.get("job_id") or job.get("job_id")
+            if iteration_ref:
+                binding["iteration_ref"] = iteration_ref
+        active_binding = {
+            "application_id": None, "project_ref": None,
+            "builder_session_id": None, "builder_iteration": None,
+            "iteration_ref": None, **binding,
+        }
         scoped, receipts = scoped_receipts(item)
         if scoped:
             for receipt in receipts:
@@ -865,13 +912,15 @@ def _collect_usage(value: Any) -> dict[str, int]:
                 if not identity:
                     task_id = str(receipt.get("task_id") or "").strip()
                     identity = (
-                        f"{receipt.get('builder_session_id') or ''}:{task_id}"
+                        f"task:{task_id}"
                         if task_id else str(receipt.get("root_event_id") or "")
                     )
                 authoritative_receipts[identity] = receipt
+                receipt_bindings[identity] = dict(active_binding)
             continue
         visit(item)
-    for receipt in authoritative_receipts.values():
+    for identity, receipt in authoritative_receipts.items():
+        active_binding = receipt_bindings[identity]
         add_usage(receipt, authoritative=True)
     return totals
 
@@ -1907,12 +1956,20 @@ def _aggregate_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     step_retries = 0
     resumed_case_attempts = 0
     stage_duration_ms: dict[str, float] = {}
+    usage_ledger: list[dict[str, Any]] = []
     for result in results:
         metrics = (
             result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
         )
         for key in usage:
             usage[key] += int(metrics.get(key) or 0)
+        for row in metrics.get("usage_ledger") or []:
+            usage_ledger.append({
+                **row, "run_id": result.get("run_id"),
+                "case_id": result.get("case_id"),
+                "repetition": result.get("repetition"),
+                "case_status": result.get("status"),
+            })
         step_attempts += int(metrics.get("step_attempts") or 0)
         step_retries += int(metrics.get("step_retries") or 0)
         resumed_case_attempts += int(bool(metrics.get("resumed")))
@@ -1939,6 +1996,7 @@ def _aggregate_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "step_retries": step_retries,
         "resumed_case_attempts": resumed_case_attempts,
         "stage_duration_ms": stage_duration_ms,
+        "usage_ledger": usage_ledger,
         **usage,
     }
 
@@ -2644,12 +2702,32 @@ class BuilderE2ERunner:
                     "findings": [cleanup],
                 }
 
-        usage = _collect_usage(full_outputs)
+        usage_ledger: list[dict[str, Any]] = []
+        usage = _collect_usage(full_outputs, attribution_rows=usage_ledger)
         usage["model_calls"] = max(
             usage["model_calls"],
             int(input_attribution.get("unique_receipt_count") or 0),
         )
         usage.update(_collect_grader_usage(full_outputs))
+        if usage["grader_calls"]:
+            applications = {row.get("application_id") for row in usage_ledger}
+            # Never distribute an evaluator's cost across several applications
+            # without a receipt that identifies the evaluated application.
+            evaluation_binding = (
+                usage_ledger[-1] if len(applications) == 1 and None not in applications else {}
+            )
+            usage_ledger.append({
+                **{key: evaluation_binding.get(key) for key in (
+                    "application_id", "project_ref", "builder_session_id",
+                    "builder_iteration", "iteration_ref",
+                )},
+                "source": "prototype_grader", "phase": "evaluation",
+                "fresh_input_tokens": usage["grader_fresh_input_tokens"],
+                "cached_input_tokens": usage["grader_cached_input_tokens"],
+                "output_tokens": usage["grader_output_tokens"],
+                "reasoning_tokens": usage["grader_reasoning_tokens"],
+                "model_calls": usage["grader_calls"],
+            })
         stage_duration_ms: dict[str, float] = {}
         for step in steps:
             key = str(step.get("type") or "unknown")
@@ -2676,6 +2754,7 @@ class BuilderE2ERunner:
                 "steps": steps,
                 "metrics": {
                     **usage,
+                    "usage_ledger": usage_ledger,
                     "step_count": len(steps),
                     "step_attempts": step_attempts,
                     "step_retries": max(0, step_attempts - len(steps)),
