@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 from collections.abc import Mapping
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -179,14 +181,25 @@ def _authoring_contract() -> dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=256)
+def _parse_manifest_bytes(raw: bytes) -> dict[str, Any]:
+    value = yaml.safe_load(raw.decode("utf-8-sig")) or {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 def _manifest(path: Path) -> tuple[dict[str, Any], str | None]:
     try:
         raw = path.read_bytes()
-        value = yaml.safe_load(raw.decode("utf-8-sig")) or {}
+        # DEV ownership fallback may examine many Project manifests on every
+        # admitted call. Cache parsing, not authority: always read current bytes
+        # so edits/removals/revocations take effect immediately, even when file
+        # timestamps or sizes are unchanged. Bound retained source bytes to 16MiB.
+        value = (_parse_manifest_bytes(raw) if len(raw) <= 65536
+                 else _parse_manifest_bytes.__wrapped__(raw))
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return {}, None
     return (
-        dict(value) if isinstance(value, Mapping) else {},
+        copy.deepcopy(value),
         f"sha256:{hashlib.sha256(raw).hexdigest()}",
     )
 

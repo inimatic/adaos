@@ -2,6 +2,43 @@ from __future__ import annotations
 
 from pathlib import Path
 
+
+def test_permission_manifest_cache_tracks_content_not_timestamps(tmp_path, monkeypatch):
+    from adaos.services.builder import application_permissions as module
+
+    path = tmp_path / "project.yaml"
+    module._parse_manifest_bytes.cache_clear()
+    original_load = module.yaml.safe_load
+    reads = []
+
+    def parse(value):
+        reads.append(value)
+        return original_load(value)
+
+    monkeypatch.setattr(module.yaml, "safe_load", parse)
+    path.write_text("permissions: [workspace.read]\n", encoding="utf-8")
+    first, first_digest = module._manifest(path)
+    first["permissions"].append("workspace.write")
+    assert module._manifest(path)[0]["permissions"] == ["workspace.read"]
+    assert len(reads) == 1
+    path.write_text("permissions: [workspace.none]\n", encoding="utf-8")
+    second, second_digest = module._manifest(path)
+    assert second["permissions"] == ["workspace.none"]
+    assert second_digest != first_digest
+    assert len(reads) == 2
+    path.unlink()
+    assert module._manifest(path) == ({}, None)
+
+
+def test_large_manifest_does_not_fill_parse_cache(tmp_path):
+    from adaos.services.builder import application_permissions as module
+
+    path = tmp_path / "project.yaml"
+    path.write_text("description: " + "x" * 65536, encoding="utf-8")
+    module._parse_manifest_bytes.cache_clear()
+    assert module._manifest(path)[0]["description"] == "x" * 65536
+    assert module._parse_manifest_bytes.cache_info().currsize == 0
+
 from adaos.services.builder.application_permissions import (
     application_permissions_context,
 )
