@@ -163,7 +163,7 @@ def drag_after(page: Page, item: str, target: str) -> None:
     page.mouse.down()
     page.mouse.move(
         target_box["x"] + target_box["width"] / 2,
-        target_box["y"] + target_box["height"] - 2,
+        target_box["y"] + target_box["height"] / 2,
         steps=18,
     )
     page.wait_for_timeout(250)
