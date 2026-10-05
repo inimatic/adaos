@@ -1169,6 +1169,12 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     assert state.default_skill == "builder_skill"
     assert state.active_agent_id == "agent:builder_skill:builder"
     assert doc.get_map("data")["dialog"]["active_channel_id"] == "builder"
+    builder_messages = doc.get_map("data")["voice_chat"]["messages"]
+    assert builder_messages[0]["active_agent_id"] == "agent:builder_skill:builder"
+    assert any(
+        item.get("from") == "hub" and item.get("text") == "builder draft created"
+        for item in builder_messages
+    )
     dialog_runtime.reset_all()
 
 
@@ -2902,6 +2908,7 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert data["dialog"]["active_agent"]["gender"] == "female"
     assert data["dialog"]["active_agent"]["icon"] == "female-outline"
     assert data["voice_chat"]["messages"][0]["dialog_channel_id"] == "conversational"
+    assert data["voice_chat"]["messages"][0]["active_agent_id"] == "agent:conversation_companions:nika"
     assert data["voice_chat"]["messages"][-1]["dialog_channel_id"] == "conversational"
     turn_trace_id = calls[0][2]["_meta"]["turn_trace_id"]
     trace = conversation_store.get_turn_trace(turn_trace_id)

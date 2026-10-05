@@ -2894,6 +2894,21 @@ class RouterService:
             owner = str(context.get("owner") or GENERAL_DIALOG_AGENT_OWNER)
             route_id = str(context.get("route_id") or "voice_chat")
             agent = context.get("agent") if isinstance(context.get("agent"), dict) else {}
+            # The selected/addressed agent is part of the durable message
+            # address for both sides of a turn. Keeping it only in `_meta`
+            # made user messages invisible to agent-filtered projections even
+            # though the router had already routed the turn to that agent.
+            for message_key, meta_key, agent_key in (
+                ("active_agent_id", "active_agent_id", "id"),
+                ("active_agent_label", "active_agent_label", "label"),
+                ("active_agent_gender", "active_agent_gender", "gender"),
+                ("active_agent_voice", "active_agent_voice", "voice"),
+                ("active_agent_icon", "active_agent_icon", "icon"),
+                ("active_agent_avatar_ref", "active_agent_avatar_ref", "avatar_ref"),
+            ):
+                value = str(meta.get(meta_key) or agent.get(agent_key) or "").strip()
+                if value:
+                    clean_msg.setdefault(message_key, value)
             if str(clean_msg.get("from") or "").strip() == "hub":
                 clean_msg.setdefault("active_agent_id", str(agent.get("id") or ""))
                 clean_msg.setdefault("active_agent_label", str(agent.get("label") or ""))
