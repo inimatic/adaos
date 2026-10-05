@@ -558,11 +558,23 @@ def dependency_skill_effect_checks(
         ref = str(item.get("ref") or "").strip()
         if not ref.startswith("skill:"):
             continue
-        skill_id = ref.split(":", 1)[1].strip()
+        raw_skill_ref = ref.split(":", 1)[1].strip()
+        skill_id, embedded_separator, embedded_version = raw_skill_ref.partition("==")
+        skill_id = skill_id.strip()
+        embedded_version = embedded_version.strip()
         version_spec = str(item.get("version") or "").strip()
+        if embedded_separator:
+            embedded_spec = f"=={embedded_version}" if embedded_version else ""
+            if version_spec and version_spec != embedded_spec:
+                errors.append(
+                    f"projects dependency {ref}: embedded version conflicts with "
+                    f"version {version_spec!r}"
+                )
+                continue
+            version_spec = embedded_spec
         if skill_id in (covered_skill_ids or set()):
             continue
-        if (
+        if (not skill_id or
             not version_spec.startswith("==")
             or not version_spec.removeprefix("==").strip()
         ):

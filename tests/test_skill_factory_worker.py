@@ -11231,7 +11231,7 @@ def test_dependency_skill_effect_checks_cover_only_bound_exact_provider_tools() 
             "components": {
                 "dependencies": [
                     {
-                        "ref": "skill:conversation_companions",
+                        "ref": "skill:conversation_companions==0.3.0-beta.3",
                         "version": "==0.3.0-beta.3",
                     }
                 ]
@@ -11290,7 +11290,7 @@ def test_dependency_skill_effect_checks_cover_only_bound_exact_provider_tools() 
     assert len(checks) == 1
     check = checks[0]
     assert check["kind"] == "dependency.public_tool_effects.strict"
-    assert check["component_ref"] == "skill:conversation_companions"
+    assert check["component_ref"] == "skill:conversation_companions==0.3.0-beta.3"
     assert check["tool_names"] == [
         "execute_companion_action",
         "get_companion_context",

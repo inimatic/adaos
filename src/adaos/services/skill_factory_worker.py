@@ -13662,7 +13662,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             else []
         )
         dependency_ids = {
-            str(item.get("ref") or "").split(":", 1)[1].strip()
+            str(item.get("ref") or "")
+            .split(":", 1)[1]
+            .partition("==")[0]
+            .strip()
             for item in dependencies or ()
             if isinstance(item, Mapping)
             and str(item.get("ref") or "").startswith("skill:")
