@@ -572,6 +572,7 @@ def test_usage_counts_current_task_receipt_once_across_session_projections() -> 
     attributed["session"]["codex_usage_accounting"].update({
         "application_id": "notes", "builder_iteration": 2,
         "builder_session_id": "session.notes",
+        "idempotency_key": "late-reporting-key",
     })
     assert _collect_usage([before_report, attributed], attribution_rows=rows) == expected
     assert len(rows) == 1

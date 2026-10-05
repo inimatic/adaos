@@ -908,13 +908,12 @@ def _collect_usage(
                 # Status reads in different steps are still the same execution.
                 # Prefer the stable task identity to a Root event ID which may
                 # only appear after a later successful reporting attempt.
-                identity = str(receipt.get("idempotency_key") or "").strip()
-                if not identity:
-                    task_id = str(receipt.get("task_id") or "").strip()
-                    identity = (
-                        f"task:{task_id}"
-                        if task_id else str(receipt.get("root_event_id") or "")
-                    )
+                task_id = str(receipt.get("task_id") or "").strip()
+                identity = (
+                    f"task:{task_id}" if task_id else str(
+                        receipt.get("idempotency_key") or receipt.get("root_event_id") or ""
+                    ).strip()
+                )
                 authoritative_receipts[identity] = receipt
                 receipt_bindings[identity] = dict(active_binding)
             continue
