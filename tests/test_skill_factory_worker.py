@@ -11273,7 +11273,7 @@ def test_dependency_skill_effect_checks_cover_only_bound_exact_provider_tools() 
                     },
                     {
                         "name": "execute_companion_action",
-                        "side_effects": "external_write",
+                        "side_effects": "external_io",
                         "permissions": ["workspace.write"],
                         "application_access": {
                             "permission": "workspace.write",

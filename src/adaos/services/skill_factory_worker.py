@@ -13567,6 +13567,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             "ui_navigation",
             "local_write",
             "runtime_write",
+            "external_io",
             "external_write",
             "device_control",
         }

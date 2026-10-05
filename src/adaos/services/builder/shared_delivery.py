@@ -25,6 +25,7 @@ _STRICT_TOOL_EFFECTS = {
     "ui_navigation",
     "local_write",
     "runtime_write",
+    "external_io",
     "external_write",
     "device_control",
 }
