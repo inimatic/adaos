@@ -13625,6 +13625,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         """Admit provider-owned effects from exact reusable package archives."""
 
         from adaos.services.builder.shared_delivery import (
+            dependency_skill_effect_checks,
             shared_delivery_effect_checks,
         )
 
@@ -13653,6 +13654,39 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         )
         checks.extend(admitted)
         errors.extend(violations)
+        components = project.get("components")
+        dependencies = (
+            components.get("dependencies")
+            if isinstance(components, Mapping)
+            else []
+        )
+        dependency_ids = {
+            str(item.get("ref") or "").split(":", 1)[1].strip()
+            for item in dependencies or ()
+            if isinstance(item, Mapping)
+            and str(item.get("ref") or "").startswith("skill:")
+        }
+        manifests: dict[str, Mapping[str, Any]] = {}
+        for skill_id in sorted(dependency_ids):
+            path = self.repo_root / ".adaos" / "workspace" / "skills" / skill_id / "skill.yaml"
+            try:
+                manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except (OSError, UnicodeError, yaml.YAMLError):
+                continue
+            if isinstance(manifest, Mapping):
+                manifests[skill_id] = manifest
+        dependency_checks, dependency_errors = dependency_skill_effect_checks(
+            project=project,
+            webui=webui,
+            manifests=manifests,
+            covered_skill_ids={
+                str(dict(item.get("package") or {}).get("id") or "").strip()
+                for item in admitted
+                if isinstance(item.get("package"), Mapping)
+            },
+        )
+        checks.extend(dependency_checks)
+        errors.extend(dependency_errors)
 
     @staticmethod
     def _validate_changed_skill_activation(

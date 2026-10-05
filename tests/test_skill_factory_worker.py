@@ -11223,6 +11223,84 @@ def test_owned_skill_effect_checks_cover_exact_project_skills() -> None:
     ]
 
 
+def test_dependency_skill_effect_checks_cover_only_bound_exact_provider_tools() -> None:
+    from adaos.services.builder.shared_delivery import dependency_skill_effect_checks
+
+    checks, errors = dependency_skill_effect_checks(
+        project={
+            "components": {
+                "dependencies": [
+                    {
+                        "ref": "skill:conversation_companions",
+                        "version": "==0.3.0-beta.3",
+                    }
+                ]
+            }
+        },
+        webui={
+            "ui": {
+                "widgets": [
+                    {
+                        "dataSource": {
+                            "kind": "skill",
+                            "name": "conversation_companions.get_companion_context",
+                        }
+                    },
+                    {
+                        "actions": [
+                            {
+                                "type": "callSkill",
+                                "target": "conversation_companions.execute_companion_action",
+                            }
+                        ]
+                    },
+                ]
+            }
+        },
+        manifests={
+            "conversation_companions": {
+                "name": "conversation_companions",
+                "version": "0.3.0-beta.3",
+                "tools": [
+                    {
+                        "name": "get_companion_context",
+                        "side_effects": "read_only",
+                        "permissions": ["workspace.read"],
+                        "application_access": {
+                            "permission": "workspace.read",
+                            "capability": "companion.context.read",
+                        },
+                    },
+                    {
+                        "name": "execute_companion_action",
+                        "side_effects": "external_write",
+                        "permissions": ["workspace.write"],
+                        "application_access": {
+                            "permission": "workspace.write",
+                            "capability": "companion.action.execute",
+                        },
+                    },
+                    {"name": "unconsumed_legacy_tool"},
+                ],
+            }
+        },
+    )
+
+    assert errors == []
+    assert len(checks) == 1
+    check = checks[0]
+    assert check["kind"] == "dependency.public_tool_effects.strict"
+    assert check["component_ref"] == "skill:conversation_companions"
+    assert check["tool_names"] == [
+        "execute_companion_action",
+        "get_companion_context",
+    ]
+    assert check["tools"] == 2
+    assert check["path"].startswith(
+        "dependency:skill/conversation_companions@0.3.0-beta.3#sha256:"
+    )
+
+
 def test_worker_does_not_admit_attachment_bindings_from_system_context(
     tmp_path: Path,
 ) -> None:

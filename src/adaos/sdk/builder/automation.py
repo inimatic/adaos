@@ -517,6 +517,7 @@ def _sealed_trial_verification_evidence_for_task(
         for item in passed_checks
         if item.get("kind")
         in {
+            "dependency.public_tool_effects.strict",
             "skill.public_tool_effects.strict",
             "shared_delivery.public_tool_effects.strict",
         }

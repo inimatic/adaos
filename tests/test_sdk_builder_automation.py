@@ -128,6 +128,11 @@ def test_trial_verification_evidence_uses_sealed_automation_artifacts(
                         "ok": True,
                     },
                     {
+                        "kind": "dependency.public_tool_effects.strict",
+                        "path": "dependency:skill/roster_provider@1.0.0#sha256:exact",
+                        "ok": True,
+                    },
+                    {
                         "kind": "shared_delivery.public_tool_effects.strict",
                         "path": "package:skill/roster_provider@1.0.0#sha256:exact",
                         "ok": True,
@@ -167,7 +172,7 @@ def test_trial_verification_evidence_uses_sealed_automation_artifacts(
         "suite:pending-action:skills/roster_skill/tests/test_behavior.py"
     ]
     assert evidence["disclosure_evidence"] == [
-        "suite:external-effects:package:skill/roster_provider@1.0.0#sha256:exact"
+        "suite:external-effects:dependency:skill/roster_provider@1.0.0#sha256:exact"
     ]
     assert evidence["redaction_evidence"] == [
         "suite:redaction:skills/roster_skill/tests/test_behavior.py"

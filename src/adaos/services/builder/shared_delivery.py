@@ -529,7 +529,147 @@ def owned_skill_effect_checks(
     return checks, errors
 
 
+def dependency_skill_effect_checks(
+    *,
+    project: Mapping[str, Any],
+    webui: Mapping[str, Any],
+    manifests: Mapping[str, Mapping[str, Any]],
+    covered_skill_ids: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Verify the exact public tools consumed from registered skill dependencies.
+
+    A normal shared skill dependency is not Project-owned and need not have a CBS
+    delivery archive.  Trial still needs immutable disclosure evidence for every
+    provider operation that the Application actually binds.  Require an exact
+    version and validate only the referenced public tools against the trusted
+    workspace registry manifest supplied by the worker.
+    """
+
+    components = project.get("components")
+    dependencies = (
+        components.get("dependencies") if isinstance(components, Mapping) else []
+    )
+    declared: dict[str, tuple[str, str]] = {}
+    errors: list[str] = []
+    for item in dependencies or ():
+        if not isinstance(item, Mapping):
+            continue
+        ref = str(item.get("ref") or "").strip()
+        if not ref.startswith("skill:"):
+            continue
+        skill_id = ref.split(":", 1)[1].strip()
+        version_spec = str(item.get("version") or "").strip()
+        if skill_id in (covered_skill_ids or set()):
+            continue
+        if (
+            not version_spec.startswith("==")
+            or not version_spec.removeprefix("==").strip()
+        ):
+            errors.append(
+                f"projects dependency {ref}: Trial provider disclosure requires an exact ==version"
+            )
+            continue
+        declared[skill_id] = (ref, version_spec.removeprefix("==").strip())
+
+    referenced: dict[str, set[str]] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            if value.get("kind") == "skill":
+                target = str(value.get("name") or "").strip()
+                if "." in target:
+                    skill_id, tool_name = target.split(".", 1)
+                    referenced.setdefault(skill_id, set()).add(tool_name)
+            if value.get("type") == "callSkill":
+                target = str(value.get("target") or "").strip()
+                if "." in target:
+                    skill_id, tool_name = target.split(".", 1)
+                    referenced.setdefault(skill_id, set()).add(tool_name)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(webui)
+    checks: list[dict[str, Any]] = []
+    for skill_id, tool_names in sorted(referenced.items()):
+        declaration = declared.get(skill_id)
+        if declaration is None:
+            continue
+        ref, expected_version = declaration
+        manifest = manifests.get(skill_id)
+        relative = f"registry:skills/{skill_id}/skill.yaml"
+        if not isinstance(manifest, Mapping):
+            errors.append(f"{relative}: registered dependency manifest is unavailable")
+            continue
+        actual_name = str(manifest.get("name") or "").strip()
+        actual_version = str(manifest.get("version") or "").strip()
+        if actual_name != skill_id or actual_version != expected_version:
+            errors.append(
+                f"{relative}: expected {skill_id}@{expected_version}, observed "
+                f"{actual_name or '<missing>'}@{actual_version or '<missing>'}"
+            )
+            continue
+        tools = {
+            str(item.get("name") or "").strip(): item
+            for item in manifest.get("tools") or ()
+            if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+        }
+        violations: list[str] = []
+        for tool_name in sorted(tool_names):
+            tool = tools.get(tool_name)
+            if tool is None:
+                violations.append(f"{tool_name}: public tool is not declared")
+                continue
+            side_effects = (
+                str(tool.get("side_effects") or "")
+                .strip()
+                .lower()
+                .replace("-", "_")
+            )
+            if not side_effects:
+                violations.append(f"{tool_name}: missing side_effects")
+            elif side_effects not in _STRICT_TOOL_EFFECTS:
+                violations.append(
+                    f"{tool_name}: unsupported side_effects {side_effects!r}"
+                )
+            if not tool.get("permissions"):
+                violations.append(f"{tool_name}: missing permissions")
+            if not isinstance(tool.get("application_access"), Mapping):
+                violations.append(f"{tool_name}: missing application_access")
+        if violations:
+            errors.append(
+                f"{relative}: consumed public tool effect contract is incomplete: "
+                + "; ".join(violations)
+            )
+            continue
+        manifest_digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        checks.append(
+            {
+                "kind": "dependency.public_tool_effects.strict",
+                "path": (
+                    f"dependency:skill/{skill_id}@{expected_version}#{manifest_digest}"
+                ),
+                "component_ref": ref,
+                "ok": True,
+                "tools": len(tool_names),
+                "tool_names": sorted(tool_names),
+                "skill_manifest_digest": manifest_digest,
+            }
+        )
+    return checks, errors
+
+
 __all__ = [
+    "dependency_skill_effect_checks",
     "owned_skill_effect_checks",
     "portable_contract_reuse_bundle",
     "shared_delivery_effect_checks",
