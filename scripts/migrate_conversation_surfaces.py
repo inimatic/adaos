@@ -43,7 +43,7 @@ def migrate(document: dict, application: str) -> dict:
             'history': {'mode': 'auto', 'allAgents': True, 'defaultAll': True, 'maxMessages': 200},
             'voice': True, 'presentation': {'floating': True},
         }
-        chat['inputs'].update(syncDialogSelection=False, autoSpeak=True, autoSpeakFrom='hub')
+        chat['inputs'].update(syncDialogSelection=False, autoSpeak=True, autoSpeakFrom='hub', openCommand='voice.chat.open')
         remove = {'chat-channel-selector', 'chat-agent-selector', 'chat-voice-input'}
         for node in nodes:
             for key, value in list(node.items()):

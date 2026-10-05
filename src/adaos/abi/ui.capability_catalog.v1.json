@@ -1132,7 +1132,7 @@
           "version": 1,
           "required": ["owner", "agent"],
           "agent": "fixed requires id/label; select requires a registry source. Current recipient and history.allAgents are independent. A fixed owner never follows the global dialog selector.",
-          "history": "mode=auto loads one bounded older cursor page on upward scroll; maxMessages bounds retained client history. allAgents is opt-in for an authorized aggregate feed, not a broadcast recipient.",
+          "history": "mode=auto loads one bounded older cursor page on upward scroll; maxMessages bounds retained client history. Platform streams use conversation.history.more; application feeds declare on=history.more using $event.cursor and return messages/has_more_before/before_cursor through the same source with owner invalidation. Without either provider there is no fabricated pager. allAgents is opt-in for an authorized aggregate feed, not a broadcast recipient.",
           "attachments": "Omit unless the owner supports uploaded references through a declared on=send action; the legacy voice.chat.user transport is not an attachment ingestion API. Declare uploadTarget/readTarget, accept, maxFiles/maxBytes. on=send receives attachments:[{ref,name,mime,size_bytes}], text, meta and retry-stable request_id. Never embed bytes in message context.",
           "model": "Declare one canonical source, valuePath and optionsPath. Bind widget.actions on=model.change with $event.value to the owner's authorized setting mutation. Settings and chat must share the same read-model. Running jobs retain their admitted model.",
           "voice": "Opt-in shared microphone control; Voice application is not a dependency.",
@@ -1163,7 +1163,7 @@
         "kind": "messages",
         "record": "{id,from,text,ts}; assistant messages may include agent metadata and actions"
       },
-      "events": ["send via declared sendCommand or on=send", "model.change via declared owner action"],
+      "events": ["send via declared sendCommand or on=send", "model.change via declared owner action", "history.more via declared bounded owner action"],
       "responsive": {
         "desktop": "fills its dedicated region when fillHeight=true",
         "compact": "one bounded conversation column with history and composer"

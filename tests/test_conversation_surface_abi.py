@@ -47,6 +47,7 @@ def test_consumer_migration_is_idempotent_and_leaves_voice_alone():
     assert [w['id'] for w in result['widgets']] == ['desktop-chat']
     assert result == migrate(result, 'web_desktop')
     assert validate_surfaces(result) == 1
+    assert result['widgets'][0]['inputs']['openCommand'] == 'voice.chat.open'
     assert len(doc['widgets']) == 4
     with pytest.raises(ValueError):
         migrate(doc, 'voice')
@@ -74,3 +75,19 @@ def test_builder_capability_discovery_preserves_shared_chat_contract():
     capability = get_ui_capability('ui.chat')
     assert 'conversation_contract' in capability['manifest']
     assert any('model.change' in event for event in capability['events'])
+
+
+@pytest.mark.parametrize('capability,event', [('attachments', 'send'), ('model', 'model.change')])
+def test_widget_requires_an_owner_action_for_advertised_mutation(capability, event):
+    schema = json.loads((Path(__file__).parents[1] / 'src/adaos/abi/webui.v1.schema.json').read_text(encoding='utf-8'))
+    validator = Draft202012Validator({'$ref': '#/$defs/widgetCatalogEntry', '$defs': schema['$defs']})
+    profile = {'version': 1, 'owner': 'application:example',
+               'agent': {'mode': 'fixed', 'id': 'agent:example', 'label': 'Example'}}
+    profile[capability] = ({'uploadTarget': 'app.upload', 'readTarget': 'app.read',
+                            'accept': ['text/plain'], 'maxFiles': 2, 'maxBytes': 1024}
+                           if capability == 'attachments' else
+                           {'source': {'kind': 'static', 'value': {}}, 'valuePath': 'value', 'optionsPath': 'options'})
+    widget = {'id': 'chat', 'type': 'ui.chat', 'area': 'main', 'inputs': {'conversation': profile}}
+    assert not validator.is_valid(widget)
+    widget['actions'] = [{'on': event, 'type': 'callSkill', 'target': 'app.change'}]
+    validator.validate(widget)

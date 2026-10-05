@@ -112,6 +112,10 @@ for (const viewport of viewports) {
       if (await page.locator('ada-chat-widget .history-bar').count()) throw new Error('Manual history row remains')
       const recipient = page.locator('ada-chat-widget select[aria-label="Current agent"]')
       await recipient.waitFor({ state: 'visible' })
+      await page.waitForFunction(() => {
+        const select = document.querySelector('ada-chat-widget select[aria-label="Current agent"]')
+        return select && !select.disabled && select.options.length > 1 && !!select.selectedOptions[0]?.textContent?.trim()
+      }, undefined, { timeout: 30000 })
       await page.locator('ada-chat-widget button[aria-label="Float conversation"]').click()
       const floating = page.locator('ada-chat-widget .chat--floating')
       await floating.waitFor({ state: 'visible' })

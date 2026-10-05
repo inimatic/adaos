@@ -935,6 +935,38 @@
         {
           "if": { "properties": { "type": { "const": "ui.chat" } } },
           "then": {
+            "allOf": [
+              {
+                "if": {
+                  "required": ["inputs"],
+                  "properties": { "inputs": {
+                    "required": ["conversation"],
+                    "properties": { "conversation": { "required": ["attachments"] } }
+                  } }
+                },
+                "then": {
+                  "required": ["actions"],
+                  "properties": { "actions": { "contains": {
+                    "required": ["on"], "properties": { "on": { "const": "send" } }
+                  } } }
+                }
+              },
+              {
+                "if": {
+                  "required": ["inputs"],
+                  "properties": { "inputs": {
+                    "required": ["conversation"],
+                    "properties": { "conversation": { "required": ["model"] } }
+                  } }
+                },
+                "then": {
+                  "required": ["actions"],
+                  "properties": { "actions": { "contains": {
+                    "required": ["on"], "properties": { "on": { "const": "model.change" } }
+                  } } }
+                }
+              }
+            ],
             "properties": {
               "inputs": { "$ref": "#/$defs/chatInputs" }
             }
