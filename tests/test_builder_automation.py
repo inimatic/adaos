@@ -13761,3 +13761,50 @@ def test_automation_checkpoints_primary_scenario_when_only_companion_skill_chang
         ("skill", "recipes_skill"),
         ("scenario", "recipes"),
     ]
+
+
+def test_automation_checkpoints_primary_scenario_when_project_manifest_changed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+
+    class _Workspace:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def checkpoint_artifact(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"]}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Workspace)
+
+    checkpoints = service._checkpoint_completed_artifacts(
+        {
+            "object_type": "scenario",
+            "object_id": "companion_console",
+            "links": {"project_ref": "project:companion_console"},
+            "last_result": {
+                "summary": "Pinned the consumed provider dependency.",
+                "changed_paths": [
+                    "projects/companion_console/project.yaml",
+                    "projects/companion_console/tests/test_application_contract.py",
+                ],
+            },
+        }
+    )
+
+    assert calls == [
+        {
+            "kind": "scenario",
+            "artifact_id": "companion_console",
+            "message": "Pinned the consumed provider dependency.",
+        }
+    ]
+    assert checkpoints == [
+        {"ok": True, "kind": "scenario", "name": "companion_console"}
+    ]

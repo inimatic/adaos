@@ -13271,13 +13271,36 @@ class BuilderAutomationService:
                 )
             }
             artifact_content_changed = changed_artifacts | created_artifacts
+            links = (
+                session.get("links")
+                if isinstance(session.get("links"), Mapping)
+                else {}
+            )
+            project_ref = str(
+                links.get("development_ticket_project_ref")
+                or links.get("project_ref")
+                or ""
+            ).strip()
+            project_id = (
+                project_ref.split(":", 1)[1].strip()
+                if project_ref.startswith("project:")
+                else ""
+            )
+            project_content_changed = bool(
+                project_id
+                and any(
+                    path == f"projects/{project_id}"
+                    or path.startswith(f"projects/{project_id}/")
+                    for path in changed_paths
+                )
+            )
             artifacts = [
                 (kind, artifact_id)
                 for kind, artifact_id in artifacts
                 if (kind, artifact_id) in artifact_content_changed
                 or (
                     (kind, artifact_id) == primary_artifact
-                    and bool(artifact_content_changed)
+                    and bool(artifact_content_changed or project_content_changed)
                 )
             ]
 
