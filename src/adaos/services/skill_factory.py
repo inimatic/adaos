@@ -685,9 +685,38 @@ class SkillFactoryService:
         has_projection = isinstance(artifacts.get("context_projection"), Mapping)
         if has_projection:
             # The exact canonical packet remains content-addressed. The worker
-            # receives its bounded projection and refs, avoiding a second full
-            # packet copy in every assignment and local-run checkpoint.
+            # receives its bounded projection instead of a second complete
+            # packet copy. Large compiler-owned facets are the exception: the
+            # projection contains their immutable refs, but an isolated worker
+            # also needs the corresponding payloads to materialize those refs
+            # as admitted read-only files. Keep only that bounded slice.
             artifacts.pop("context_packet", None)
+            packet = self._load_context_artifact(
+                artifacts.get("context_packet_ref"),
+                artifact_digest=artifacts.get("context_packet_artifact_digest"),
+                label="context_packet",
+            )
+            projection = _mapping(artifacts.get("context_projection"))
+            projected_facets = _mapping(projection.get("facets"))
+            facet_names = {
+                _text(item.get("facet"))
+                for item in projection.get("compiler_views") or []
+                if isinstance(item, Mapping) and _text(item.get("facet"))
+            }
+            facet_names.update(
+                str(name)
+                for name, value in projected_facets.items()
+                if isinstance(value, Mapping)
+                and isinstance(value.get("compiler_view"), Mapping)
+            )
+            packet_facets = _mapping(packet.get("facets"))
+            compiler_facets = {
+                name: _json_clone(packet_facets[name])
+                for name in sorted(facet_names)
+                if isinstance(packet_facets.get(name), Mapping)
+            }
+            if compiler_facets:
+                artifacts["context_compiler_facets"] = compiler_facets
         elif not isinstance(artifacts.get("context_packet"), Mapping):
             packet = self._load_context_artifact(
                 artifacts.get("context_packet_ref"),

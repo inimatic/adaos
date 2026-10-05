@@ -52,6 +52,7 @@ from adaos.services.skill_factory_worker import (
     _enforce_continuation_model_policy,
     _loads_strict_json,
     _materialize_digest_addressed_compiler_views,
+    _rehydrate_context_compiler_facets,
     _implementation_brief_prompt,
     _model_root_mcp_profile,
     _persisted_descriptor_working_set_evidence,
@@ -550,14 +551,17 @@ permission_profile:
         "target": {"type": "scenario", "id": "chores"},
         "realize_request": {
             "artifacts": {
-                "context_packet": {
+                "context_projection": {
                     "facets": {
-                        "application_permissions": {
-                            "project_ref": "project:chores",
-                            "manifest_ref": "projects/chores/project.yaml",
-                        }
+                        "application_permissions": {"status": "present"}
                     }
-                }
+                },
+                "context_compiler_facets": {
+                    "application_permissions": {
+                        "project_ref": "project:chores",
+                        "manifest_ref": "projects/chores/project.yaml",
+                    }
+                },
             }
         },
     }
@@ -6863,6 +6867,59 @@ def test_large_compiler_facets_are_digest_addressed_and_compact(tmp_path: Path) 
     envelope = json.loads(Path(reference["path"]).read_text(encoding="utf-8"))
     assert envelope["payload_digest"] == reference["digest"]
     assert len(envelope["payload"]["roles"]) == 12
+
+
+def test_assignment_compiler_facet_is_digest_verified_and_restored() -> None:
+    payload = {
+        "schema": "adaos.builder.application_permissions.v1",
+        "status": "present",
+        "project_ref": "project:sample",
+        "manifest_ref": "projects/sample/project.yaml",
+        "repair_required": True,
+        "authoring_contract": {
+            "schema": "adaos.builder.application_permission_authoring.v1",
+            "project_manifest_contract": {
+                "top_level_fields": ["permission_profile", "application_roles"],
+                "forbidden_top_level_fields": ["application_permissions"],
+            },
+        },
+    }
+    normalized = _context_packet_prompt_projection(
+        {"facets": {"application_permissions": payload}}
+    )["facets"]["application_permissions"]
+    canonical = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = "sha256:" + hashlib.sha256(canonical).hexdigest()
+    projection = {
+        "facets": {
+            "application_permissions": {
+                "status": "present",
+                "repair_required": True,
+                "compiler_view": {"digest": digest},
+            }
+        },
+        "compiler_views": [
+            {"facet": "application_permissions", "digest": digest}
+        ],
+    }
+
+    restored = _rehydrate_context_compiler_facets(
+        projection,
+        {"application_permissions": payload},
+    )
+
+    assert restored["facets"]["application_permissions"] == normalized
+    tampered = copy.deepcopy(payload)
+    tampered["project_ref"] = "project:other"
+    with pytest.raises(ValueError, match="digest mismatch"):
+        _rehydrate_context_compiler_facets(
+            projection,
+            {"application_permissions": tampered},
+        )
 
 
 def test_media_ui_contract_survives_prompt_projection_as_compiler_view(

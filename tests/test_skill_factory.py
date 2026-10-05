@@ -135,15 +135,41 @@ def test_skill_factory_queue_assigns_and_accepts_valid_result(tmp_path: Path) ->
 
 
 def test_queue_persists_request_by_ref_and_assigns_bounded_context(tmp_path: Path) -> None:
+    permission_facet = {
+        "schema": "adaos.builder.application_permissions.v1",
+        "status": "present",
+        "project_ref": "project:ref_only_context",
+        "repair_required": True,
+        "authoring_contract": {
+            "schema": "adaos.builder.application_permission_authoring.v1",
+            "project_manifest_contract": {"top_level_fields": ["permission_profile"]},
+        },
+    }
     service = SkillFactoryService(state_dir=tmp_path)
     full_packet = {
         "schema": "adaos.builder.context_packet.v1",
         "digest": "sha256:" + "a" * 64,
         "requirements": {"detail": "large-context-marker-" + "x" * 20_000},
+        "facets": {"application_permissions": permission_facet},
     }
     projection = {
         "schema": "adaos.builder.context_projection.v1",
         "requirements": {"summary": "bounded-context-marker"},
+        "facets": {
+            "application_permissions": {
+                "status": "present",
+                "repair_required": True,
+                "compiler_view": {
+                    "digest": "sha256:" + "f" * 64,
+                },
+            }
+        },
+        "compiler_views": [
+            {
+                "facet": "application_permissions",
+                "digest": "sha256:" + "f" * 64,
+            }
+        ],
     }
     development_context = {
         "schema": "adaos.builder.development_context_receipt.v1",
@@ -204,6 +230,9 @@ def test_queue_persists_request_by_ref_and_assigns_bounded_context(tmp_path: Pat
     assigned_artifacts = assignment["realize_request"]["artifacts"]
     assert "context_packet" not in assigned_artifacts
     assert assigned_artifacts["context_projection"] == projection
+    assert assigned_artifacts["context_compiler_facets"] == {
+        "application_permissions": permission_facet
+    }
     assert assigned_artifacts["context_packet_ref"].startswith(
         "artifact://context/sha256/"
     )

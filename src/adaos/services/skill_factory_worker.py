@@ -2934,6 +2934,82 @@ def _materialize_digest_addressed_compiler_views(
     return projected, references
 
 
+def _rehydrate_context_compiler_facets(
+    projection: Mapping[str, Any],
+    compiler_facets: Mapping[str, Any] | None,
+    *,
+    implementation_brief: str = "",
+) -> dict[str, Any]:
+    """Restore trusted lazy-facet payloads before local materialization.
+
+    Skill Factory assignments intentionally carry the bounded Context Control
+    projection rather than a second copy of the complete packet. A projection
+    alone cannot resolve its digest-addressed compiler views. The queue therefore
+    supplies only the referenced canonical facet payloads; this boundary
+    reprojects them and verifies each digest before they enter the model's
+    admitted read-only inputs.
+    """
+
+    projected = copy.deepcopy(dict(projection))
+    if not isinstance(compiler_facets, Mapping) or not compiler_facets:
+        return projected
+    facets = (
+        dict(projected.get("facets") or {})
+        if isinstance(projected.get("facets"), Mapping)
+        else {}
+    )
+    references = {
+        str(item.get("facet") or "").strip(): dict(item)
+        for item in projected.get("compiler_views") or []
+        if isinstance(item, Mapping) and str(item.get("facet") or "").strip()
+    }
+    for facet_name, raw_payload in compiler_facets.items():
+        name = str(facet_name or "").strip()
+        if not name or not isinstance(raw_payload, Mapping):
+            continue
+        summary = facets.get(name)
+        if not isinstance(summary, Mapping):
+            raise ValueError(f"context compiler facet {name} is not referenced")
+        reference = (
+            dict(summary.get("compiler_view") or {})
+            if isinstance(summary.get("compiler_view"), Mapping)
+            else references.get(name, {})
+        )
+        expected_digest = str(reference.get("digest") or "").strip()
+        if not expected_digest:
+            raise ValueError(f"context compiler facet {name} has no digest")
+        normalized_packet = context_packet_prompt_projection(
+            {
+                "schema": projected.get("schema"),
+                "digest": projected.get("digest"),
+                "change": projected.get("change") or {},
+                "coverage": projected.get("coverage") or {},
+                "facets": {name: dict(raw_payload)},
+            },
+            implementation_brief=implementation_brief,
+        )
+        normalized_facets = (
+            dict(normalized_packet.get("facets") or {})
+            if isinstance(normalized_packet.get("facets"), Mapping)
+            else {}
+        )
+        normalized = normalized_facets.get(name)
+        if not isinstance(normalized, Mapping):
+            raise ValueError(f"context compiler facet {name} cannot be projected")
+        canonical = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        actual_digest = "sha256:" + hashlib.sha256(canonical).hexdigest()
+        if actual_digest != expected_digest:
+            raise ValueError(f"context compiler facet {name} digest mismatch")
+        facets[name] = copy.deepcopy(dict(normalized))
+    projected["facets"] = facets
+    return projected
+
+
 def _browser_feedback_prompt_projection(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
@@ -10087,6 +10163,13 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("context_projection"), Mapping)
             else {}
         )
+        context_packet = _rehydrate_context_compiler_facets(
+            context_packet,
+            artifacts.get("context_compiler_facets")
+            if isinstance(artifacts.get("context_compiler_facets"), Mapping)
+            else None,
+            implementation_brief=brief,
+        )
         context_projection = _context_packet_prompt_projection(
             context_packet,
             implementation_brief=brief,
@@ -11843,6 +11926,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             if isinstance(facets, Mapping)
             else None
         )
+        if not isinstance(supplied, Mapping) and isinstance(artifacts, Mapping):
+            compiler_facets = artifacts.get("context_compiler_facets")
+            if isinstance(compiler_facets, Mapping):
+                supplied = compiler_facets.get("application_permissions")
         if not isinstance(supplied, Mapping):
             return
         project_ref = str(supplied.get("project_ref") or "").strip()
