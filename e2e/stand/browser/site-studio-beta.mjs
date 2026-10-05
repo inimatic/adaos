@@ -65,6 +65,10 @@ const pages = new Set()
 const instrument = page => {
   pages.add(page)
   page.setDefaultTimeout(30_000)
+  page.addLocatorHandler(page.locator('.component-updates-backdrop'), async () => {
+    const close = page.locator('.component-updates-panel__tools button').last()
+    if (await close.isVisible().catch(() => false)) await close.click()
+  })
   page.on('pageerror', error => report.errors.push({ kind: 'page', message: error.message }))
   page.on('console', message => {
     if (message.type() !== 'error') return
@@ -134,6 +138,20 @@ const callTool = async (name, args, requestSuffix) => {
       idempotency_key: `skill:${toolName(name)}:${requestId}`,
     },
   })
+  const runtimeSource = response.headers()['x-adaos-runtime-source'] || null
+  report.network.push({
+    tool: toolName(name),
+    status: response.status(),
+    runtimeSource,
+    releaseDigest: response.headers()['x-adaos-release-digest'] || null,
+  })
+  if (expectedRuntimeSource && response.ok() && runtimeSource !== expectedRuntimeSource) {
+    report.errors.push({
+      kind: 'runtime-source',
+      message: `Expected ${expectedRuntimeSource}, received ${runtimeSource || 'none'}`,
+      tool: toolName(name),
+    })
+  }
   const body = await response.json()
   return { http: response.status(), body, result: body.result ?? body }
 }
@@ -310,11 +328,43 @@ try {
   await expect(chat.locator('ion-textarea textarea')).toBeVisible()
   await host(page, 'discussion_scope').locator('[data-command-id="site"]').click()
   if (requireHistory) {
-    await expect(chat.locator('.msg').first()).toBeVisible({ timeout: 30_000 })
-    expect(await chat.locator('.msg').count()).toBeGreaterThanOrEqual(2)
-    const assistantText = (await chat.locator('.msg .bubble-text').last().innerText()).trim()
+    let discussion = await callTool('query_discussion', {}, 'collaboration-history-before')
+    let proposals = await callTool('query_proposals', {}, 'collaboration-proposals-before')
+    let assistant = discussion.result.messages.find(message => message.from === 'assistant' && message.text?.trim())
+    let rejectedProposal = proposals.result.items.find(item => item.status === 'rejected')
+    if (!assistant || !rejectedProposal) {
+      const messageCount = await chat.locator('.msg').count()
+      await chat.locator('ion-textarea textarea').fill(
+        'Prepare a concrete revised target description for this AdaOS static site. Keep it static-only and return it as a proposal for human review; do not apply it.',
+      )
+      let generated = await toolResponse(page, 'discuss', async () => {
+        await chat.getByRole('button', { name: 'Send message', exact: true }).click()
+      }, 140_000)
+      for (let attempt = 0; generated.result.status !== 'completed' && attempt < 12; attempt += 1) {
+        const resume = chat.getByRole('button', { name: 'Check response', exact: true }).last()
+        await expect(resume).toBeVisible({ timeout: 30_000 })
+        generated = await toolResponse(page, 'resume_discussion', () => resume.click(), 140_000)
+      }
+      expect(generated.result.status).toBe('completed')
+      await expect.poll(() => chat.locator('.msg').count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(messageCount + 2)
+
+      await host(page, 'authoring_tabs').locator('[data-command-id="target"]').click()
+      const ready = host(page, 'description_proposals').locator('.collection-focus-item').filter({ hasText: /ready/i }).first()
+      await expect(ready).toBeVisible({ timeout: 30_000 })
+      const rejected = await toolResponse(page, 'decide_proposal', () => ready.locator('[data-command-id="reject"]').click())
+      expect(rejected.result).toMatchObject({ ok: true, status: 'rejected' })
+
+      discussion = await callTool('query_discussion', {}, 'collaboration-history-after')
+      proposals = await callTool('query_proposals', {}, 'collaboration-proposals-after')
+      assistant = discussion.result.messages.find(message => message.from === 'assistant' && message.text?.trim())
+      rejectedProposal = proposals.result.items.find(item => item.status === 'rejected')
+    } else {
+      await host(page, 'authoring_tabs').locator('[data-command-id="target"]').click()
+    }
+    expect(assistant).toBeTruthy()
+    expect(rejectedProposal).toBeTruthy()
+    const assistantText = assistant.text.trim()
     expect(assistantText.length).toBeGreaterThan(20)
-    await host(page, 'authoring_tabs').locator('[data-command-id="target"]').click()
     const rejected = host(page, 'description_proposals').locator('.collection-focus-item').filter({ hasText: /rejected/i }).first()
     await expect(rejected).toBeVisible({ timeout: 30_000 })
     await expect(rejected.locator('[data-command-id="apply"]')).toHaveCount(0)
