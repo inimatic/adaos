@@ -526,7 +526,7 @@
         ],
         "projection": "Rows default to id/title/subtitle/icon and may render imageKey as a thumbnail or imageShape=avatar. When avatar imagery is absent, initialsKey renders a bounded textual avatar. Cards additionally render previewKey, imageKey with imageAltKey, badgeKey and inputs.meta. Configure these input keys when source fields use different names; arbitrary source fields are not visible unless projected or consumed by an action.",
         "meta_shape": "inputs.meta entries require key and may declare label, kind=text|badge|boolean|icon, overflow=wrap|truncate and align=start|center|end. Icon metadata may bind titleKey and colorKey for accessible text and semantic Ionic color. inputs.accentKey may bind a semantic Ionic color to a compact row/card border; arbitrary CSS values are rejected by the Client.",
-        "button_shape": "inputs.buttons entries require id and may declare label, itemLabelKey, icon, whenKey and whenEquals. Every such button is repeated for each visible row or card. inputs.headerActions holds one or two compact collection commands beside the heading, including the primary create action; legacy primaryAction/secondaryAction inputs are normalized into headerActions. Bind every visible row or header command with a top-level widget.actions entry on=click:<buttonId>. itemLabelKey reads a per-record visible label and falls back to label.",
+        "button_shape": "inputs.buttons entries require id and may declare label, itemLabelKey, icon, whenKey and whenEquals. Every such button is repeated for each visible row or card. inputs.headerActions holds compact collection commands beside the heading; an entry may have items:[{id,label,icon}] for a dropdown menu. Opening the parent menu does not dispatch an action; choosing a leaf dispatches click:<leaf-id>. Legacy primaryAction/secondaryAction inputs normalize into headerActions. Bind commands with top-level widget.actions on=click:<buttonId>. itemLabelKey reads a per-record label and falls back to label.",
         "query_binding": "inputs.search is boolean, never an object. To share a ui.queryToolbar value with this static collection, use inputs.filters entries shaped {key,stateKey,operator}; stateKey is the bare page-state key without a $state. prefix. Use operator=contains for text search and equals for exact filters. For equals, each non-All select option value must equal the corresponding record field value; keep user-facing meaning in the option label. Filter definitions do not contain options or equalsField; options belong to ui.queryToolbar controls.",
         "row_state": "For flat list rows, inputs.disabledKey names a boolean field that disables activation; inputs.currentKey names a separate boolean field that bolds the title and marks aria-current=step. Current work is independent of selected detail. Selection and row-button events expose row fields directly as $event.<field>, not $event.item.<field>. updateState params accept direct references or structured expressions such as {kind:'expression',op:'equals',args:['$event.status','ready']}; binary expressions use args and never left/right. A string such as $event.status === 'ready' is not evaluated. Prefer exposing the required boolean on the row and binding $event.<booleanField>.",
         "canonical_value_i18n": [
@@ -1098,7 +1098,8 @@
           "route": "safe site-relative route beginning with /",
           "minHeight": "bounded preview height from 320 to 1200 pixels"
         },
-        "security": "The Client derives /site-development/<siteId>/ and rejects arbitrary origins, URLs, HTML, CSS and script input."
+        "security": "The Client derives /site-development/<siteId>/ and rejects arbitrary origins, URLs, HTML, CSS and script input.",
+        "draft_preview": "An optional widget.dataSource loads adaos.site_preview.v1 {source,projection,route,page}. The isolated static shell verifies site/route identity and the complete canonical SHA256 digest chain before atomic apply and acknowledges that exact digest. Use explicit read policy and mutation invalidation tags. Tagged saves show progress until render acknowledgement; failed reads, writes, validation or timeout retain the prior preview. Uploaded images must be owned validated inert image bytes or admitted public assets, never credential-bearing URLs."
       },
       "data_shape": {
         "kind": "retained_site_projection"
@@ -1131,10 +1132,11 @@
           "composerRows": "initial row count from 1 to 12",
           "placeholder": "localized composer hint",
           "historyButtonLabel": "localized history command",
-          "sendCommand": "voice.chat.user for the platform conversation channel",
+          "sendCommand": "voice.chat.user for the platform conversation channel; omit for an application-owned declarative send action",
           "openCommand": "optional voice.chat.open initialization command",
           "meta": "optional conversation_id, conversation_topic_id, dialog_channel_id and thread_id routing metadata"
         },
+        "declarative_send": "Bind widget.actions on=send to normal callSkill/updateState actions for an application-owned chat. The event includes text, meta and retry-stable request_id. The composer awaits successful completion, disables duplicate sends, and retains a failed draft. Read {messages:[{id,from,text,ts,actions?}]} through a skill dataSource with explicit cache/invalidation policy. The application enforces authority, persists discussion and validates all LLM proposals; the renderer does not route this through the platform NLU.",
         "live_data_source": {
           "kind": "stream",
           "receiver": "voice_chat.messages",
@@ -1154,7 +1156,7 @@
         "compact": "one bounded conversation column with history and composer"
       },
       "postconditions": [
-        "A first-class conversation destination uses a dedicated region and fillHeight=true.",
+        "A first-class conversation destination declares layout.scroll=regions and one main region containing only ui.chat with fillHeight=true. Optional toolbar and navigation regions stay visible at all widths; only the message feed scrolls. Application, variant and region IDs do not select this capability.",
         "A visible composer has an explicit sendCommand; a static read-only transcript has no decorative composer.",
         "Conversation routing metadata is explicit when the stream is scoped to a channel or thread."
       ]
