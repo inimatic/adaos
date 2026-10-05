@@ -2286,7 +2286,7 @@
         },
         "presentation": {
           "type": "object", "additionalProperties": false,
-          "description": "floating=true allows the Client shell to detach this resolved conversation into its single persistent drag/resize/minimize session. It preserves the declared authority and scope; it is not a popup or a permission grant.",
+          "description": "floating=true allows the Client shell to detach this resolved conversation into its single persistent drag/resize/minimize session. Window and minimized-button positions are independent. It preserves the declared authority and scope; it is not a popup or a permission grant.",
           "properties": { "floating": { "type": "boolean", "default": false } }
         }
       }

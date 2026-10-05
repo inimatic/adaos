@@ -1137,7 +1137,7 @@
           "model": "Declare one canonical source, valuePath and optionsPath. Bind widget.actions on=model.change with $event.value to the owner's authorized setting mutation. Settings and chat must share the same read-model. Running jobs retain their admitted model.",
           "voice": "Opt-in shared microphone control; Voice application is not a dependency.",
           "run": "Source may publish run:{id,status,label?}; accepted/queued/started/running/progress/input_required/resumed/completed/failed/cancelled/unknown are factual events. No fabricated timed stage labels.",
-          "presentation": "floating opts into the Client shell's single persistent drag/resize/minimize session. The resolved owner, routing scope and current addressee are snapshotted at detach; unrelated scenario state does not transfer authority. It is not a browser popup or a permission grant."
+          "presentation": "floating opts into the Client shell's single persistent drag/resize/minimize session. Window geometry and minimized-button position are independent. The resolved owner, routing scope, current addressee and visible bounded tail are snapshotted at detach; unrelated scenario state does not transfer authority. It is not a browser popup or a permission grant."
         },
         "inputs": {
           "fillHeight": "true for a first-class full-height conversation destination",

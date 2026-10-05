@@ -2343,6 +2343,7 @@ class RouterService:
                     "conversation_topic_id": topic_id,
                     "thread_id": topic_id,
                     "active_agent_id": resolved_active_agent_id,
+                    "feed_scope": "agent" if resolved_active_agent_id else None,
                 }.items()
                 if str(value or "").strip()
             }

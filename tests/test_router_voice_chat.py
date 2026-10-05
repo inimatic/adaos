@@ -1072,6 +1072,7 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     doc = _Doc()
     calls: list[tuple[str, str, dict, dict]] = []
     seen_nlu: list[Event] = []
+    seen_stream: list[Event] = []
     webspace_id = "builder-addressed-ws"
 
     monkeypatch.setattr(
@@ -1130,6 +1131,7 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
 
     original_to_thread = router_service_module.asyncio.to_thread
     builder_ran_in_thread = False
@@ -1174,6 +1176,17 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     assert any(
         item.get("from") == "hub" and item.get("text") == "builder draft created"
         for item in builder_messages
+    )
+    addressed_streams = [
+        event.payload
+        for event in seen_stream
+        if (event.payload.get("params") or {}).get("feed_scope") == "agent"
+        and (event.payload.get("params") or {}).get("dialog_channel_id") == "builder"
+        and (event.payload.get("params") or {}).get("active_agent_id") == "agent:builder_skill:builder"
+    ]
+    assert any(
+        any(item.get("from") == "hub" and item.get("text") == "builder draft created" for item in payload["data"]["messages"])
+        for payload in addressed_streams
     )
     dialog_runtime.reset_all()
 
