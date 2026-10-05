@@ -15,7 +15,7 @@ def test_normalize_flags_accepts_stage_aliases() -> None:
     )
 
     assert flags["regex_enabled"] is False
-    assert flags["neuro_lite_enabled"] is True
+    assert flags["neuro_lite_enabled"] is False
     assert flags["neural_enabled"] is False
     assert flags["rasa_enabled"] is True
     assert flags["nlu_teacher_enabled"] is False
@@ -32,7 +32,7 @@ def test_normalize_flag_updates_keeps_partial_updates_partial() -> None:
     assert normalize_flag_updates({"flags": {"regex_enabled": False}}) == {"regex_enabled": False}
 
 
-def test_normalize_flag_updates_accepts_neuro_lite_aliases() -> None:
+def test_legacy_neuro_lite_aliases_cannot_reenable_removed_provider() -> None:
     assert normalize_flag_updates({"flags": {"neuro": "off", "neuro_light": "on"}}) == {
-        "neuro_lite_enabled": True
+        "neuro_lite_enabled": False
     }

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/companion.action_receipt.v1.schema.json",
+  "title": "AdaOS Companion Action Receipt v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "action_id", "operation", "webspace_id", "status", "cancellable", "validation"],
+  "properties": {
+    "schema": {"const": "adaos.companion.action_receipt.v1"},
+    "action_id": {"type": "string", "minLength": 1},
+    "request_id": {"type": ["string", "null"]},
+    "operation": {"type": "string"},
+    "webspace_id": {"type": "string"},
+    "status": {"enum": ["accepted", "dispatched", "completed", "rejected", "failed", "cancelled"]},
+    "cancellable": {"type": "boolean"},
+    "accepted_at": {"type": ["string", "null"], "format": "date-time"},
+    "completed_at": {"type": ["string", "null"], "format": "date-time"},
+    "context_digest": {"type": ["string", "null"]},
+    "validation": {"type": "object"},
+    "result": {},
+    "error": {"type": ["object", "null"]}
+  }
+}

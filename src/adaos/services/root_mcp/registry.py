@@ -15,6 +15,7 @@ import yaml
 from adaos.build_info import BUILD_INFO
 from adaos.sdk.core.exporter import export as sdk_export
 from adaos.services.agent_context import get_ctx
+from adaos.services.companion.policy import enabled as companion_enabled
 from adaos.services.applications.trusted_metadata import MetadataSigner
 from adaos.services.system_model import (
     CANONICAL_KIND_REGISTRY,
@@ -66,6 +67,24 @@ def _plane_registry_payload() -> dict[str, Any]:
         "available": True,
         "kind": "mcp_plane_registry",
         "planes": [
+            {
+                "plane_id": "companion_control",
+                "title": "CompanionDevelopmentLearningLab",
+                "enabled": companion_enabled(),
+                "surface": "operations",
+                "mode": "context_guarded_semantic_control",
+                "published_by": "root",
+                "preferred_for": [
+                    "companion",
+                    "conversational_control",
+                    "semantic_ui_actions",
+                    "grounded_status",
+                ],
+                "descriptor_ids": ["mcp_plane_registry", "nlu_teacher_schema"],
+                "tool_prefixes": ["companion."],
+                "capability_profiles": ["CompanionOperator"],
+                "backing_store": "webspace contextual action surface + Root MCP receipt ledger + Dev Tickets",
+            },
             {
                 "plane_id": "applications",
                 "title": "ApplicationsPlane",

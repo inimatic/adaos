@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/companion.capability_request.v1.schema.json",
+  "title": "AdaOS Companion Capability Request v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": {"const": "adaos.companion.capability_request.v1"},
+    "status": {"enum": ["recorded", "rejected"]},
+    "duplicate": {"type": "boolean"},
+    "ticket": {"type": "object"},
+    "signal": {"type": "object"}
+  }
+}

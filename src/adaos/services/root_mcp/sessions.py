@@ -17,6 +17,12 @@ DEFAULT_SESSION_TTL_SECONDS = 4 * 60 * 60
 MAX_SESSION_TTL_SECONDS = 24 * 60 * 60
 
 DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
+    "CompanionOperator": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "companion.read",
+        "companion.execute",
+        "companion.request",
+    ],
     "ApplicationsOperator": [
         *DEFAULT_BEARER_CAPABILITIES,
         "applications.read",
@@ -264,6 +270,12 @@ def issue_mcp_session_lease(
     note: str | None = None,
 ) -> dict[str, Any]:
     audience_token = str(audience or "").strip()
+    if capability_profile == "CompanionOperator" or any(
+        str(cap).startswith("companion.") for cap in (capabilities or [])
+    ):
+        from adaos.services.companion.policy import require_enabled
+
+        require_enabled()
     target_token = str(target_id or "").strip()
     if not audience_token:
         raise ValueError("audience is required")

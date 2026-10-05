@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/companion.affordance.v1.schema.json",
+  "title": "AdaOS Companion Affordance v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "id", "title", "effect", "available", "context_guarded"],
+  "properties": {
+    "schema": {"const": "adaos.companion.affordance.v1"},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]+$"},
+    "title": {"type": "string", "minLength": 1},
+    "effect": {"enum": ["read_only", "ui_navigation", "ui_action", "ui_state", "control"]},
+    "required": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "available": {"type": "boolean"},
+    "reason": {"type": ["string", "null"]},
+    "context_guarded": {"type": "boolean"},
+    "cancellable": {"type": "boolean"}
+  }
+}

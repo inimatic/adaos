@@ -714,7 +714,9 @@ def _agent_registry_records() -> list[dict[str, Any]]:
         **merged_by_id.get(GENERAL_DIALOG_AGENT_ID, {}),
         **_general_agent_record(),
     }
-    return list(merged_by_id.values())
+    from adaos.services.companion.policy import agent_available
+
+    return [record for record in merged_by_id.values() if agent_available(record)]
 
 
 def published_agent_records() -> list[dict[str, Any]]:

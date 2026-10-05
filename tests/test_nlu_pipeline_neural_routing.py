@@ -53,7 +53,7 @@ async def test_pipeline_consumes_voice_confirmation_answer_before_nlu(monkeypatc
 
 
 @pytest.mark.anyio
-async def test_pipeline_routes_to_neural_when_flag_enabled(monkeypatch):
+async def test_legacy_neural_flag_cannot_restore_experimental_route(monkeypatch):
     monkeypatch.setenv("ADAOS_NLU_NEURO_LITE", "0")
     monkeypatch.setenv("ADAOS_NLU_NEURAL", "1")
     from adaos.services.nlu import pipeline
@@ -74,17 +74,17 @@ async def test_pipeline_routes_to_neural_when_flag_enabled(monkeypatch):
 
     assert emitted
     event_type, payload, source = emitted[-1]
-    assert event_type == "nlp.intent.detect.neural"
+    assert event_type == "nlp.intent.detect.rasa"
     assert payload["text"] == "непонятный запрос"
     assert payload["webspace_id"] == "ws1"
     assert payload["request_id"] == "rid1"
-    assert payload["_meta"]["nlu_pipeline"]["delegate_via"] == "neural"
-    assert payload["_meta"]["nlu_pipeline"]["active_stages"]["neural"] is True
+    assert payload["_meta"]["nlu_pipeline"]["delegate_via"] == "rasa"
+    assert payload["_meta"]["nlu_pipeline"]["active_stages"]["neural"] is False
     assert source == "nlu.pipeline"
 
 
 @pytest.mark.anyio
-async def test_pipeline_routes_to_neuro_lite_when_flag_enabled(monkeypatch):
+async def test_legacy_neuro_lite_flag_cannot_restore_experimental_route(monkeypatch):
     monkeypatch.setenv("ADAOS_NLU_NEURO_LITE", "1")
     monkeypatch.setenv("ADAOS_NLU_NEURAL", "1")
     from adaos.services.nlu import pipeline
@@ -104,14 +104,14 @@ async def test_pipeline_routes_to_neuro_lite_when_flag_enabled(monkeypatch):
     await module._on_detect_request({"text": "lite route", "webspace_id": "ws-lite", "request_id": "rid-lite"})
 
     event_type, payload, source = emitted[-1]
-    assert event_type == "nlp.intent.detect.neuro_lite"
+    assert event_type == "nlp.intent.detect.rasa"
     assert payload["webspace_id"] == "ws-lite"
     assert payload["request_id"] == "rid-lite"
     assert source == "nlu.pipeline"
 
     delegate = [payload for event_type, payload, _ in emitted if event_type == "nlu.trace.stage" and payload["stage"] == "pipeline"][0]
-    assert delegate["raw"]["active_stages"]["neuro_lite"] is True
-    assert delegate["raw"]["active_stages"]["neural"] is True
+    assert delegate["raw"]["active_stages"]["neuro_lite"] is False
+    assert delegate["raw"]["active_stages"]["neural"] is False
 
 
 @pytest.mark.anyio

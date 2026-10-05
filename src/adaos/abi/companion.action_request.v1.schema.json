@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/companion.action_request.v1.schema.json",
+  "title": "AdaOS Companion Action Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "request_id", "operation", "params", "webspace_id"],
+  "properties": {
+    "schema": {"const": "adaos.companion.action_request.v1"},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    "operation": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]+$"},
+    "params": {"type": "object"},
+    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "context_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "utterance": {"type": "string", "maxLength": 4000},
+    "trace_id": {"type": "string", "maxLength": 200}
+  }
+}

@@ -83,6 +83,8 @@ from .tokens import (
 from .applications_plane import contracts as application_tool_contracts
 from .applications_plane import handlers as application_tool_handlers
 from .opaque_cursor import decode_opaque_cursor, encode_opaque_cursor
+from .companion_plane import contracts as companion_tool_contracts
+from .companion_plane import handlers as companion_tool_handlers
 from .users_access_plane import contracts as users_access_tool_contracts
 from .users_access_plane import handlers as users_access_tool_handlers
 
@@ -2655,6 +2657,7 @@ def list_tool_contracts(
     items = [
         *_implemented_tool_contracts(),
         *application_tool_contracts(),
+        *companion_tool_contracts(),
         *users_access_tool_contracts(),
         *_placeholder_operational_contracts(),
     ]
@@ -5335,6 +5338,7 @@ def _handle_context_propose_memory(
 
 _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     **application_tool_handlers(),
+    **companion_tool_handlers(),
     **users_access_tool_handlers(),
     "development.describe_foundation": lambda arguments,
     dry_run=False: _handle_describe_foundation(arguments, dry_run=dry_run),
@@ -5902,6 +5906,8 @@ def _redactions_for_tool(tool_id: str) -> list[str]:
 
 def _execution_adapter_for_tool(tool_id: str) -> str:
     token = str(tool_id or "").strip()
+    if token.startswith("companion."):
+        return "companion_control.semantic_adapter"
     if token in {
         "hub.get_status",
         "hub.get_runtime_summary",

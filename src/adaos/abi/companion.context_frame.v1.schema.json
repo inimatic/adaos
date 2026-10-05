@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/companion.context_frame.v1.schema.json",
+  "title": "AdaOS Companion Context Frame v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "context_id", "context_digest", "webspace_id", "affordances", "boundaries"],
+  "properties": {
+    "schema": {"const": "adaos.companion.context_frame.v1"},
+    "context_id": {"type": "string", "minLength": 1},
+    "context_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "webspace_id": {"type": "string", "minLength": 1},
+    "current_scenario": {"type": ["string", "null"]},
+    "available_modal_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 150},
+    "published_voice_capabilities": {"type": "array", "maxItems": 120},
+    "published_voice_affordances": {"type": "array", "maxItems": 120},
+    "affordances": {
+      "type": "array",
+      "items": {"$ref": "companion.affordance.v1.schema.json"},
+      "maxItems": 100
+    },
+    "source_refs": {"type": "array", "maxItems": 20},
+    "boundaries": {"type": "object"}
+  }
+}

@@ -11,6 +11,7 @@ from .targets import get_managed_target
 DEFAULT_BEARER_CAPABILITIES: list[str] = [
     "applications.read",
     "applications.trial.redeem",
+    "companion.read",
     "profile.read.self",
     "profile.write.self",
     "development.read.foundation",
@@ -93,6 +94,27 @@ def _capability_entry(
 
 def list_capability_classes() -> list[dict[str, Any]]:
     return [
+        _capability_entry(
+            "companion.read",
+            surface="operations",
+            risk="low",
+            summary="Read a bounded Companion context frame, affordances, status evidence, and redacted action receipts.",
+            default_grants=["owner_token", "bearer"],
+        ),
+        _capability_entry(
+            "companion.execute",
+            surface="operations",
+            risk="high",
+            summary="Execute context-guarded semantic Companion actions and receive durable receipts.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
+            "companion.request",
+            surface="operations",
+            risk="medium",
+            summary="Capture an unmet Companion request as a deduplicated local AdaOS Dev Ticket.",
+            default_grants=["owner_token"],
+        ),
         _capability_entry(
             "profile.read.self",
             surface="operations",

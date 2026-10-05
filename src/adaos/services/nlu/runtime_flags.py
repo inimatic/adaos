@@ -73,6 +73,8 @@ def _coerce_bool(value: Any) -> bool | None:
 
 
 def _env_default(stage: str, fallback: bool) -> bool:
+    if stage in {"neuro_lite_enabled", "neural_enabled"}:
+        return False
     env_name = {
         "regex_enabled": "ADAOS_NLU_REGEX",
         "neuro_lite_enabled": "ADAOS_NLU_NEURO_LITE_RUNTIME",
@@ -103,6 +105,9 @@ def normalize_flags(value: Any) -> dict[str, bool]:
         key = _FLAG_KEYS.get(str(raw_key or "").strip().lower())
         if not key:
             continue
+        if key in {"neuro_lite_enabled", "neural_enabled"}:
+            flags[key] = False
+            continue
         coerced = _coerce_bool(raw_value)
         if coerced is None:
             continue
@@ -118,6 +123,9 @@ def normalize_flag_updates(value: Any) -> dict[str, bool]:
     for raw_key, raw_value in raw_flags.items():
         key = _FLAG_KEYS.get(str(raw_key or "").strip().lower())
         if not key:
+            continue
+        if key in {"neuro_lite_enabled", "neural_enabled"}:
+            updates[key] = False
             continue
         coerced = _coerce_bool(raw_value)
         if coerced is None:
