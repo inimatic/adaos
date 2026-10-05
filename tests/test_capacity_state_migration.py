@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -37,6 +38,32 @@ def test_local_capacity_seeds_registry_and_prunes_legacy_node_yaml() -> None:
     assert any(item.get("io_type") == "git" for item in repo.io_for_node(cfg.node_id))
     assert any(item.get("name") == "watchdog_skill" for item in repo.skills_for_node(cfg.node_id))
     assert any(item.get("name") == "ops" for item in repo.scenarios_for_node(cfg.node_id))
+
+
+def test_local_skill_capacity_uses_bounded_registry_projection(monkeypatch) -> None:
+    calls = {"skills": 0}
+
+    class Repo:
+        def skills_for_node(self, node_id):
+            calls["skills"] += 1
+            assert node_id
+            return [{"name": "web_desktop_skill", "active": True}]
+
+        def io_for_node(self, _node_id):
+            raise AssertionError("bounded skill read must not load IO capacity")
+
+        def scenarios_for_node(self, _node_id):
+            raise AssertionError("bounded skill read must not load scenario capacity")
+
+    monkeypatch.setattr(
+        "adaos.services.registry.subnet_directory.get_directory",
+        lambda: SimpleNamespace(repo=Repo()),
+    )
+
+    skills = capacity_mod.get_local_skill_capacity()
+
+    assert skills == [{"name": "web_desktop_skill", "active": True}]
+    assert calls["skills"] == 1
 
 
 def test_capacity_updates_registry_without_restoring_node_yaml_capacity() -> None:

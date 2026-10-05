@@ -26,7 +26,7 @@ from adaos.domain.project_events import (
     legacy_project_event_topic,
 )
 from adaos.services.agent_context import AgentContext, get_ctx
-from adaos.services.capacity import get_local_capacity
+from adaos.services.capacity import get_local_capacity, get_local_skill_capacity
 from adaos.services.node_config import load_config
 from adaos.services.node_display import node_display_from_config, node_display_from_directory_node
 from adaos.services.yjs.doc import (
@@ -2773,6 +2773,14 @@ def _resolver_core_fingerprint(inputs: WebspaceResolverInputs) -> str:
         "roles_hash": str(identity.get("roles_hash") or ""),
         "policy_fingerprint": str(identity.get("policy_fingerprint") or ""),
         "revision": str(identity.get("revision") or ""),
+        # The Application release is part of the execution authority, not
+        # incidental metadata.  Omitting it let an older resolver payload
+        # (created before exact Application identity was materialized) survive
+        # a restart and silently strip the authority from runtime.environment.
+        "application_id": str(identity.get("application_id") or ""),
+        "application_release_digest": str(
+            identity.get("application_release_digest") or ""
+        ),
     }
     return _fingerprint_json_like(
         {
@@ -3675,9 +3683,21 @@ def _load_scenario_switch_content(scenario_id: str, *, space: str) -> Dict[str, 
 
 def _scenario_exists_in_webspace(scenario_id: str, *, space: str, webspace_id: str | None = None) -> bool:
     if webspace_id:
-        from adaos.services.applications.runtime_selection import selected_trial
+        from adaos.services.applications.runtime_selection import (
+            selected_application,
+            selected_trial,
+        )
 
-        selected = selected_trial(get_ctx(), webspace_id, "scenario", scenario_id)
+        ctx = get_ctx()
+        application = selected_application(
+            ctx, webspace_id, "scenario", scenario_id
+        )
+        runtime_root_ref = str(
+            getattr(application, "runtime_root_ref", "") or ""
+        ).strip()
+        if application is not None and runtime_root_ref == "workspace":
+            return True
+        selected = selected_trial(ctx, webspace_id, "scenario", scenario_id)
         if selected is not None:
             selected.verified_source(selected.component("scenario", scenario_id))
             return True
@@ -3854,8 +3874,7 @@ def _skill_sources_fingerprint_for_materialization(source_mode: str) -> str:
     except Exception:
         return ""
     try:
-        capacity = get_local_capacity()
-        skills = capacity.get("skills") if isinstance(capacity, Mapping) else []
+        skills = get_local_skill_capacity()
     except Exception:
         skills = []
     if not isinstance(skills, list):
@@ -3932,45 +3951,101 @@ def _scenario_switch_materialization_identity(
     scenario_id: str,
     source_mode: str,
 ) -> dict[str, Any] | None:
+    started = time.perf_counter()
+    phases_ms: dict[str, float] = {}
     target_webspace = str(webspace_id or "").strip()
     target_scenario = str(scenario_id or "").strip()
     if not target_webspace or not target_scenario:
         return None
+    phase_started = time.perf_counter()
     source_fingerprint = _scenario_source_fingerprint_for_materialization(
         target_scenario,
         source_mode=source_mode,
     )
+    phases_ms["scenario_source"] = _elapsed_ms(phase_started)
+    phase_started = time.perf_counter()
     skill_fingerprint = _skill_sources_fingerprint_for_materialization(source_mode)
+    phases_ms["skill_sources"] = _elapsed_ms(phase_started)
     from adaos.services.applications.runtime_selection import (
         selected_application,
         selected_trial,
-        selection_snapshot,
     )
 
+    phase_started = time.perf_counter()
     ctx = get_ctx()
-    selections = selection_snapshot(ctx, target_webspace)
-    selected = selected_trial(ctx, target_webspace, "scenario", target_scenario)
-    application = selected_application(
-        ctx,
-        target_webspace,
-        "scenario",
-        target_scenario,
-    )
+    phases_ms["context"] = _elapsed_ms(phase_started)
+    # A development Webspace is owned by the mutable DEV sources selected by
+    # ``source_mode``. Production RuntimeSelection records are neither an
+    # authority nor an invalidation input there. Walking them was semantically
+    # wrong (a selected Trial could leak into DEV admission) and made the first
+    # scenario switch scan the complete Application catalog before a cached
+    # materialization could be addressed.
+    is_dev_source = _scenario_loader_space(source_mode) == "dev"
+    if is_dev_source:
+        selected = None
+        application = None
+    else:
+        phase_started = time.perf_counter()
+        application = selected_application(
+            ctx,
+            target_webspace,
+            "scenario",
+            target_scenario,
+        )
+        phases_ms["selected_application"] = _elapsed_ms(phase_started)
+        runtime_root_ref = str(
+            getattr(application, "runtime_root_ref", "") or ""
+        ).strip()
+        if application is None or runtime_root_ref != "workspace":
+            phase_started = time.perf_counter()
+            selected = selected_trial(
+                ctx,
+                target_webspace,
+                "scenario",
+                target_scenario,
+            )
+            phases_ms["selected_trial"] = _elapsed_ms(phase_started)
+        else:
+            selected = None
     if selected is not None:
         source_fingerprint = f"trial:{selected.release_digest}"
-    if selections:
-        skill_fingerprint += f":selections:{_fingerprint_json_like(selections)}"
-    return canonical_materialization_identity(
+        # The selected immutable Trial is itself the exact page authority.  A
+        # RuntimeSelection created before per-Webspace binding may not be found
+        # by ``selected_application`` even though ``selected_trial`` admitted
+        # this package.  Omitting the project id here forces every page data
+        # read to rediscover all installed Applications and makes first paint
+        # both slow and ambiguous.
+        application_id = selected.project_id
+        application_release_digest = selected.release_digest
+    else:
+        application_id = application.application_id if application is not None else None
+        application_release_digest = (
+            application.release_digest if application is not None else None
+        )
+    phase_started = time.perf_counter()
+    identity = canonical_materialization_identity(
         webspace_id=target_webspace,
         scenario_id=target_scenario,
         source_fingerprint=source_fingerprint,
         policy_fingerprint=f"skills:{skill_fingerprint}" if skill_fingerprint else None,
         revision=selected.candidate_id if selected is not None else None,
-        application_id=application.application_id if application is not None else None,
-        application_release_digest=(
-            application.release_digest if application is not None else None
-        ),
+        application_id=application_id,
+        application_release_digest=application_release_digest,
     )
+    phases_ms["canonical_identity"] = _elapsed_ms(phase_started)
+    total_ms = _elapsed_ms(started)
+    if total_ms >= 250.0:
+        _log.warning(
+            "scenario materialization identity slow webspace=%s scenario=%s source_mode=%s "
+            "dev_source=%s total_ms=%.3f phases_ms=%s",
+            target_webspace,
+            target_scenario,
+            source_mode,
+            is_dev_source,
+            total_ms,
+            phases_ms,
+        )
+    return identity
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -6654,6 +6729,47 @@ async def describe_webspace_operational_state(webspace_id: str) -> WebspaceOpera
     )
 
 
+def _describe_webspace_switch_state_sync(
+    target_webspace_id: str,
+) -> WebspaceOperationalState:
+    """Read only state required to decide a navigation transaction.
+
+    The full operational-state read validates home and current scenarios and is
+    appropriate for diagnostics.  A switch validates its target separately;
+    repeating three catalog/application lookups before accepting the command
+    made every desktop launch pay a multi-second diagnostic tax.
+    """
+
+    row = workspace_index.get_workspace(target_webspace_id) or workspace_index.ensure_workspace(
+        target_webspace_id
+    )
+    return WebspaceOperationalState(
+        webspace_id=target_webspace_id,
+        title=row.title,
+        kind=row.effective_kind,
+        source_mode=row.effective_source_mode,
+        is_dev=row.is_dev,
+        stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
+        effective_home_scenario=row.effective_home_scenario,
+        home_scenario_ref=getattr(row, "home_scenario_ref_overlay", {}) or None,
+        current_scenario=_workspace_manifest_current_scenario(row),
+        stored_home_scenario_exists=None,
+        home_scenario_exists=True,
+        current_scenario_exists=None,
+        degraded=False,
+        validation_reason=None,
+        recommended_action=None,
+    )
+
+
+async def _describe_webspace_switch_state(webspace_id: str) -> WebspaceOperationalState:
+    target_webspace_id = str(webspace_id or "").strip() or default_webspace_id()
+    return await asyncio.to_thread(
+        _describe_webspace_switch_state_sync,
+        target_webspace_id,
+    )
+
+
 async def describe_webspace_validation_state(webspace_id: str) -> dict[str, Any]:
     state = await describe_webspace_operational_state(webspace_id)
     return {
@@ -8338,7 +8454,7 @@ def _scenario_switch_operations(webspace_id: str | None = None) -> ScenarioSwitc
         task_state=_RUNTIME.tasks,
         log=_log,
         workspace_index=workspace_index,
-        describe_operational_state=describe_webspace_operational_state,
+        describe_operational_state=_describe_webspace_switch_state,
         describe_rebuild_state=describe_webspace_rebuild_state,
         record_timing=_record_timing,
         materialization_scenario_from_rebuild_state=_materialization_scenario_from_rebuild_state,

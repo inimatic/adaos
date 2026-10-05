@@ -1168,6 +1168,98 @@ def test_conversation_store_persists_active_dialog_channel() -> None:
     assert active["meta"]["event"] == "agent_addressed"
 
 
+def test_unchanged_conversation_and_channel_upserts_do_not_advance_write_clock() -> None:
+    suffix = uuid4().hex
+    conversation_id = f"conv.noop.{suffix}"
+    channel_id = f"noop-{suffix}"
+    common = {
+        "webspace_id": "desktop",
+        "owner": "skill:test",
+        "active_agent_id": "agent:test:one",
+        "meta": {"route_id": "voice_chat", "channel_id": channel_id},
+    }
+    assert conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        kind="dialog",
+        title="No-op",
+        ts=100.0,
+        **common,
+    )
+    assert conversation_store.upsert_dialog_channel(
+        webspace_id="desktop",
+        channel_id=channel_id,
+        label="No-op",
+        owner="skill:test",
+        conversation_id=conversation_id,
+        active_agent_id="agent:test:one",
+        default_skill="test",
+        default_tool="talk",
+        route_id="voice_chat",
+        meta={},
+        ts=100.0,
+    )
+    assert conversation_store.set_active_dialog_channel(
+        webspace_id="desktop",
+        channel_id=channel_id,
+        conversation_id=conversation_id,
+        active_agent_id="agent:test:one",
+        meta={"event": "startup", "route_id": "voice_chat"},
+        ts=100.0,
+    )
+
+    assert conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        kind="dialog",
+        title="No-op",
+        ts=200.0,
+        **common,
+    )
+    assert conversation_store.upsert_dialog_channel(
+        webspace_id="desktop",
+        channel_id=channel_id,
+        label="No-op",
+        owner="skill:test",
+        conversation_id=conversation_id,
+        active_agent_id="agent:test:one",
+        default_skill="test",
+        default_tool="talk",
+        route_id="voice_chat",
+        meta={},
+        ts=200.0,
+    )
+    assert conversation_store.set_active_dialog_channel(
+        webspace_id="desktop",
+        channel_id=channel_id,
+        conversation_id=conversation_id,
+        active_agent_id="agent:test:one",
+        meta={"event": "snapshot", "route_id": "voice_chat"},
+        ts=200.0,
+    )
+
+    with get_ctx().sql.connect() as con:
+        conversation_updated_at = con.execute(
+            "SELECT updated_at FROM conversation_conversations WHERE conversation_id=?",
+            (conversation_id,),
+        ).fetchone()[0]
+        channel_updated_at = con.execute(
+            """
+            SELECT updated_at FROM conversation_dialog_channels
+            WHERE webspace_id=? AND channel_id=?
+            """,
+            ("desktop", channel_id),
+        ).fetchone()[0]
+        active_updated_at = con.execute(
+            """
+            SELECT updated_at FROM conversation_active_dialog_channels
+            WHERE webspace_id=?
+            """,
+            ("desktop",),
+        ).fetchone()[0]
+    assert conversation_updated_at == 100.0
+    assert channel_updated_at == 100.0
+    assert active_updated_at == 100.0
+
+
 def test_conversation_store_returns_latest_dialog_channel_from_messages() -> None:
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(

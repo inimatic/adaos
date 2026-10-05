@@ -1481,7 +1481,40 @@ def upsert_conversation(
     if not ensure_schema():
         return False
     now = float(ts or time.time())
+    initiator_json = _json_dump(dict(initiator or {}))
+    policy_json = _json_dump(dict(policy or {}))
+    meta_json = _json_dump(dict(meta or {}))
     with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        current = con.execute(
+            """
+            SELECT webspace_id, kind, owner, title, active_agent_id, status,
+                   initiator_json, policy_json, meta_json
+            FROM conversation_conversations
+            WHERE conversation_id=?
+            """,
+            (conversation_id,),
+        ).fetchone()
+        if current is not None:
+            effective_title = title if title is not None else current["title"]
+            effective_agent = (
+                active_agent_id
+                if active_agent_id is not None
+                else current["active_agent_id"]
+            )
+            unchanged = (
+                str(current["webspace_id"] or "") == str(webspace_id or "")
+                and str(current["kind"] or "") == str(kind or "")
+                and str(current["owner"] or "") == str(owner or "")
+                and current["title"] == effective_title
+                and current["active_agent_id"] == effective_agent
+                and str(current["status"] or "") == str(status or "")
+                and str(current["initiator_json"] or "") == initiator_json
+                and str(current["policy_json"] or "") == policy_json
+                and str(current["meta_json"] or "") == meta_json
+            )
+            if unchanged:
+                return True
         con.execute(
             """
             INSERT INTO conversation_conversations(
@@ -1510,9 +1543,9 @@ def upsert_conversation(
                 status,
                 now,
                 now,
-                _json_dump(dict(initiator or {})),
-                _json_dump(dict(policy or {})),
-                _json_dump(dict(meta or {})),
+                initiator_json,
+                policy_json,
+                meta_json,
             ),
         )
         con.commit()
@@ -2612,7 +2645,40 @@ def upsert_dialog_channel(
     if not ensure_schema():
         return False
     now = float(ts or time.time())
+    policy_json = _json_dump(dict(policy or {}))
+    meta_json = _json_dump(dict(meta or {}))
     with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        current = con.execute(
+            """
+            SELECT label, owner, conversation_id, active_agent_id,
+                   default_skill, default_tool, route_id, status,
+                   policy_json, meta_json
+            FROM conversation_dialog_channels
+            WHERE webspace_id=? AND channel_id=?
+            """,
+            (webspace_id, channel_id),
+        ).fetchone()
+        if current is not None:
+            incoming = {
+                "label": label,
+                "owner": owner,
+                "conversation_id": conversation_id,
+                "active_agent_id": active_agent_id,
+                "default_skill": default_skill,
+                "default_tool": default_tool,
+                "route_id": route_id,
+            }
+            unchanged = all(
+                current[name] == (value if value is not None else current[name])
+                for name, value in incoming.items()
+            ) and (
+                str(current["status"] or "") == str(status or "")
+                and str(current["policy_json"] or "") == policy_json
+                and str(current["meta_json"] or "") == meta_json
+            )
+            if unchanged:
+                return True
         con.execute(
             """
             INSERT INTO conversation_dialog_channels(
@@ -2644,8 +2710,8 @@ def upsert_dialog_channel(
                 route_id,
                 status,
                 now,
-                _json_dump(dict(policy or {})),
-                _json_dump(dict(meta or {})),
+                policy_json,
+                meta_json,
             ),
         )
         con.commit()
@@ -2839,7 +2905,50 @@ def set_active_dialog_channel(
     ws = str(webspace_id or "").strip() or "default"
     cid = str(channel_id or "").strip() or "general"
     now = float(ts or time.time())
+    normalized_conversation_id = str(conversation_id or "").strip() or None
+    normalized_agent_id = str(active_agent_id or "").strip() or None
+    normalized_status = str(status or "active").strip() or "active"
+    meta_payload = dict(meta or {})
+    meta_json = _json_dump(meta_payload)
     with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        current = con.execute(
+            """
+            SELECT channel_id, conversation_id, active_agent_id, status, meta_json
+            FROM conversation_active_dialog_channels
+            WHERE webspace_id=?
+            """,
+            (ws,),
+        ).fetchone()
+        if current is not None:
+            current_meta = _json_load(current["meta_json"], {})
+            comparable_current_meta = (
+                dict(current_meta) if isinstance(current_meta, Mapping) else {}
+            )
+            comparable_next_meta = dict(meta_payload)
+            # ``event`` describes why a projection was emitted, not a change
+            # in active dialog identity. Snapshot/replay events must not turn
+            # an unchanged selection into another ledger write.
+            comparable_current_meta.pop("event", None)
+            comparable_next_meta.pop("event", None)
+            if (
+                str(current["channel_id"] or "") == cid
+                and current["conversation_id"]
+                == (
+                    normalized_conversation_id
+                    if normalized_conversation_id is not None
+                    else current["conversation_id"]
+                )
+                and current["active_agent_id"]
+                == (
+                    normalized_agent_id
+                    if normalized_agent_id is not None
+                    else current["active_agent_id"]
+                )
+                and str(current["status"] or "") == normalized_status
+                and comparable_current_meta == comparable_next_meta
+            ):
+                return True
         con.execute(
             """
             INSERT INTO conversation_active_dialog_channels(
@@ -2857,11 +2966,11 @@ def set_active_dialog_channel(
             (
                 ws,
                 cid,
-                str(conversation_id or "").strip() or None,
-                str(active_agent_id or "").strip() or None,
-                str(status or "active").strip() or "active",
+                normalized_conversation_id,
+                normalized_agent_id,
+                normalized_status,
                 now,
-                _json_dump(dict(meta or {})),
+                meta_json,
             ),
         )
         con.commit()

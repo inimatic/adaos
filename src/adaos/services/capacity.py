@@ -202,6 +202,38 @@ def get_local_capacity() -> Dict[str, Any]:
     return _normalize_capacity_snapshot(load_capacity_from_node_yaml())
 
 
+def get_local_skill_capacity() -> List[Dict[str, Any]]:
+    """Read only the local skill projection used by first-paint admission.
+
+    A scenario materialization fingerprint does not consume IO or scenario
+    capacity.  Loading the complete projection made the first navigation wait
+    for three independent SQLite reads, often behind unrelated chat and
+    durable-state writes.  Keep the legacy migration fallback, but use the
+    bounded skill projection on the normal registry-backed path.
+    """
+
+    try:
+        from adaos.services.node_config import load_config
+        from adaos.services.registry.subnet_directory import get_directory
+
+        conf = load_config()
+        node_id = str(getattr(conf, "node_id", "") or "").strip()
+        if node_id:
+            skills = get_directory().repo.skills_for_node(node_id)
+            if skills:
+                return [dict(item) for item in skills if isinstance(item, dict)]
+    except Exception:
+        pass
+
+    legacy = load_capacity_from_node_yaml()
+    legacy_skills = list(legacy.get("skills") or []) if isinstance(legacy, dict) else []
+    if legacy_skills:
+        # Preserve the one-time registry migration semantics when an older
+        # node still carries its capacity in node.yaml.
+        return list(get_local_capacity().get("skills") or [])
+    return []
+
+
 def invalidate_local_capacity_cache(*, node_id: str | None = None) -> None:
     """
     Invalidate in-process capacity caches for the local node.
