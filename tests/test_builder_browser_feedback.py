@@ -28,6 +28,21 @@ def test_browser_runner_dismisses_system_overlays_before_candidate_checks() -> N
     assert "system-overlay-dismissed" in script
 
 
+def test_browser_runner_pins_the_authoritative_runtime_origin() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (
+        root / "e2e/stand/browser/builder-candidate-feedback.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert "const authoritativeRuntimeOrigin = new URL(hub).origin" in script
+    assert "adaos_hub_base: hub" in script
+    assert "try_local_hub: '0'" in script
+    assert "adaos_try_local_hub: '0'" in script
+    assert "foreign_api_origins: []" in script
+    assert "target.origin !== authoritativeRuntimeOrigin" in script
+    assert "Unexpected API authority" in script
+
+
 def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> None:
     script = (
         Path(__file__).resolve().parents[1]

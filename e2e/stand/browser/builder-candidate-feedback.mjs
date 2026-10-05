@@ -17,6 +17,7 @@ const client = String(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100
 const sourceDigest = String(process.env.ADAOS_E2E_SOURCE_DIGEST || '').trim()
 const spaceKind = String(process.env.ADAOS_E2E_SPACE_KIND || 'development').trim()
 const timeoutMs = Number(process.env.ADAOS_E2E_TIMEOUT_MS || 90_000)
+const authoritativeRuntimeOrigin = new URL(hub).origin
 const startupTimeoutMs = Math.min(timeoutMs, 90_000)
 const interactionTimeoutMs = Math.min(timeoutMs, 10_000)
 const commandSequence = String(process.env.ADAOS_E2E_COMMAND_SEQUENCE || '').split(',')
@@ -51,7 +52,8 @@ for (const [key, value] of Object.entries({
   webspace_id: webspace,
   space_kind: spaceKind,
   expected_scenario_id: scenario,
-  try_local_hub: '1',
+  adaos_hub_base: hub,
+  try_local_hub: '0',
   runtime_debug: '1',
 })) url.searchParams.set(key, value)
 
@@ -419,7 +421,7 @@ try {
         adaos_webspace_id: webspace,
         adaos_hub_base: hub,
         adaos_local_hub_base: hub,
-        adaos_try_local_hub: '1',
+        adaos_try_local_hub: '0',
         adaos_hub_token: token,
         adaos_local_subnet_id: subnet,
         adaos_selected_zone: 'lo',
@@ -438,6 +440,7 @@ try {
       page_errors: [],
       console_errors: [],
       request_failures: [],
+      foreign_api_origins: [],
       tool_calls: [],
       hard_failures: [],
       warnings: [],
@@ -447,7 +450,13 @@ try {
     const toolRequestStartedAt = new WeakMap()
     page.on('request', request => {
       try {
-        if (new URL(request.url()).pathname === '/api/tools/call') {
+        const target = new URL(request.url())
+        if ((target.pathname.startsWith('/api/') || target.pathname.startsWith('/v1/'))
+          && target.origin !== authoritativeRuntimeOrigin
+          && !sample.foreign_api_origins.includes(target.origin)) {
+          sample.foreign_api_origins.push(target.origin)
+        }
+        if (target.pathname === '/api/tools/call') {
           toolRequestStartedAt.set(request, Date.now())
         }
       } catch {}
@@ -1085,6 +1094,11 @@ function isOptionalLoopbackDiscoveryProbe(failure) {
 }
 
 for (const sample of report.samples) {
+  for (const origin of sample.foreign_api_origins) {
+    sample.hard_failures.push(
+      `Unexpected API authority ${origin}; expected ${authoritativeRuntimeOrigin}`,
+    )
+  }
   for (const error of sample.page_errors) sample.hard_failures.push(`Page error: ${error}`)
   let expectedRefusedConsoleErrors = sample.request_failures.filter(failure => (
     isOptionalLoopbackDiscoveryProbe(failure)
