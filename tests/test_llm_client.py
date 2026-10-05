@@ -21,7 +21,8 @@ def _clear_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_send_response_uses_root_proxy_with_node_identity(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+@pytest.mark.parametrize("prefer_global", [False, True])
+def test_send_response_uses_root_proxy_with_node_identity(monkeypatch: pytest.MonkeyPatch, tmp_path, prefer_global) -> None:
     from adaos.sdk.llm import llm_client as llm
 
     _clear_llm_env(monkeypatch)
@@ -80,6 +81,7 @@ def test_send_response_uses_root_proxy_with_node_identity(monkeypatch: pytest.Mo
         max_tokens=40,
         reasoning={"effort": "minimal"},
         request_id="req.test",
+        prefer_global=prefer_global,
     )
 
     assert result["output_text"] == "Paris is in France."
@@ -89,6 +91,8 @@ def test_send_response_uses_root_proxy_with_node_identity(monkeypatch: pytest.Mo
         "cert": (str(cert_path), str(key_path)),
     }
     assert requests[0]["path"] == "/v1/llm/response"
+    expected_base = "https://api.inimatic.com" if prefer_global else "https://ru.api.inimatic.com"
+    assert requests[0]["base_url"] == expected_base
     kwargs = requests[0]["kwargs"]  # type: ignore[index]
     assert kwargs["headers"] == {"X-AdaOS-Subnet-Id": "sn_test", "X-AdaOS-Node-Id": "node_test"}
     body = kwargs["json"]  # type: ignore[index]
@@ -107,7 +111,7 @@ def test_send_response_uses_root_proxy_with_node_identity(monkeypatch: pytest.Mo
     assert body["reasoning"] == {"effort": "minimal"}
     assert "max_tokens" not in body
     assert result["_protocol"]["llm_proxy"] == {
-        "base_url": "https://ru.api.inimatic.com",
+        "base_url": expected_base,
         "fallback": False,
         "attempts": [],
     }

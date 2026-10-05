@@ -667,6 +667,7 @@ def send_response(
     patch_stream: Mapping[str, Any] | str | bool | None = None,
     profile_scope: str | None = None,
     timeout: float | None = None,
+    prefer_global: bool = False,
 ) -> Dict[str, Any]:
     """
     Send a message batch to the Root LLM proxy (Responses API wrapper).
@@ -704,7 +705,7 @@ def send_response(
     ctx = _current_ctx()
     primary, cfg = _root_http_client(ctx)
     headers = _identity_headers(ctx, cfg)
-    base_urls = _root_llm_base_urls(primary)
+    base_urls = _root_llm_base_urls(primary, prefer_global=prefer_global)
     last_exc: Exception | None = None
     primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
     attempts: list[dict[str, Any]] = []

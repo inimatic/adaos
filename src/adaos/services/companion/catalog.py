@@ -148,17 +148,33 @@ class ContextHandles:
         return value
 
 
+def runtime_snapshot(webspace: str) -> dict[str, Any]:
+    """Consume owner-thread JSON only; never replay a native YStore in MCP workers."""
+    from adaos.services.yjs.doc import read_live_maps_snapshot_sync
+    from adaos.services.scenario.webspace_runtime import get_webspace_rebuild_materialized_payload
+
+    live, maps = read_live_maps_snapshot_sync(webspace, ("ui", "data", "registry"))
+    if live:
+        return {"webspace_id": webspace, **maps, "ui_live": True}
+    payload = get_webspace_rebuild_materialized_payload(webspace)
+    if payload:
+        return {"webspace_id": webspace, "ui_live": False,
+                "ui": {"current_scenario": payload.get("scenario_id"), "application": payload.get("application") or {}},
+                "data": {"catalog": payload.get("catalog") or {}, "installed": payload.get("installed") or {}},
+                "registry": payload.get("registry") or {}}
+    return {"webspace_id": webspace, "ui_live": False, "ui": {}, "data": {}, "registry": {}}
+
+
 def runtime_delta(webspace: str) -> dict[str, Any]:
-    from adaos.services.nlu.teacher_read_model import _read_yjs_context_snapshot
     from .observation import live_ui
 
-    snapshot = _read_yjs_context_snapshot(webspace)
+    snapshot = runtime_snapshot(webspace)
     ui, data = snapshot.get("ui") or {}, snapshot.get("data") or {}
     return {"webspace_id": webspace, "current_scenario": ui.get("current_scenario"),
             "active_view": ui.get("active_view"), "active_modal": ui.get("active_modal") or ui.get("modal"),
             "selected_target": ui.get("selected_target"), "pending_interaction": ui.get("pending_interaction"),
             "pinned_apps": (data.get("installed") or {}).get("apps", []),
-            "read_error": snapshot.get("read_error"), **live_ui(webspace)}
+            "ui_live": snapshot["ui_live"], "read_error": snapshot.get("read_error"), **live_ui(webspace)}
 
 
 def runtime_catalog(webspace: str) -> list[dict[str, Any]]:
@@ -167,7 +183,7 @@ def runtime_catalog(webspace: str) -> list[dict[str, Any]]:
     from adaos.services.root_mcp.companion_plane import _OPERATIONS
 
     ctx = get_ctx()
-    snapshot = source._read_yjs_context_snapshot(webspace)
+    snapshot = runtime_snapshot(webspace)
     if snapshot.get("read_error"):
         raise RuntimeError(str(snapshot["read_error"]))
     rows = [{"ref": f"operation:{op['id']}", "kind": "ui" if op["id"].startswith("ui.") else "observation",

@@ -139,7 +139,9 @@ def run_turn(text: str, *, webspace: str, history: list[dict] | None = None,
         request_id = new_id("model")
         try:
             raw = model_call(messages, model=model, tools=model_tools(), parallel_tool_calls=False,
-                             max_tokens=1200, request_id=request_id, timeout=max(1, max_seconds-(time.perf_counter()-started)))
+                             max_tokens=1200, request_id=request_id,
+                             prefer_global=os.getenv("ADAOS_COMPANION_LLM_PREFER_GLOBAL", "true").strip().lower() in {"true", "1", "yes"},
+                             timeout=max(1, max_seconds-(time.perf_counter()-started)))
             response = _provider_response(raw)
             used_llm = True
         except Exception as exc:
@@ -151,7 +153,8 @@ def run_turn(text: str, *, webspace: str, history: list[dict] | None = None,
         usage["reasoning_tokens"] = (usage.get("output_tokens_details") or {}).get("reasoning_tokens")
         ledger.append(session_id, "model_call", {"request_id": request_id, "provider_request_id": response.get("id"),
                       "model": response.get("model") or model, "usage": usage, "usage_status": "reported" if response.get("usage") or raw.get("usage") else "unavailable",
-                      "input": list(messages), "output": output,
+                      "input": list(messages), "output": output, "proxy_protocol": raw.get("_protocol"),
+                      "provider": raw.get("provider"), "retry": raw.get("retry"),
                       "duration_ms": (time.perf_counter()-model_started)*1000, "ttft_ms": response.get("ttft_ms"),
                       "ttft_status": "not_reported" if response.get("ttft_ms") is None else "measured"}, turn=turn_id)
         messages.extend(output)

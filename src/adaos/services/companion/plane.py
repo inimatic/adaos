@@ -143,6 +143,8 @@ def dispatch(name: str, arguments: dict[str, Any], *, dry_run: bool = False) -> 
         if not descriptor["admitted"]:
             return {"ok": False, "error": "capability_not_admitted", "reason": descriptor.get("reason")}
         context = handles.resolve(arguments["context_handle"])
+        if context["state"].get("ui_live") is False and descriptor.get("effect") not in {"read_only", "none"}:
+            return {"ok": False, "error": "live_ui_context_unavailable", "hint": "Open the target Webspace before a UI action."}
         params = json.loads(arguments["params_json"])
         if not isinstance(params, dict):
             raise ValueError("params_must_be_object")

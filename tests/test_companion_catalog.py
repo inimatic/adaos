@@ -62,3 +62,16 @@ def test_stale_paging_revision_and_expired_handles_rejected():
         handles.resolve(handle)
     with pytest.raises(ValueError, match="revision_changed"):
         index.search("", catalog_digest="old")
+
+
+def test_companion_never_opens_native_ystore_from_worker(monkeypatch):
+    from adaos.services.companion.catalog import runtime_snapshot
+    from adaos.services.yjs import doc
+    from adaos.services.scenario import webspace_runtime
+    monkeypatch.setattr(doc, "get_ydoc", lambda *a, **kw: pytest.fail("native replay from MCP worker"))
+    monkeypatch.setattr(doc, "read_live_maps_snapshot_sync", lambda *a: (False, {}))
+    monkeypatch.setattr(webspace_runtime, "get_webspace_rebuild_materialized_payload", lambda ws: {"scenario_id": "management", "catalog": {"apps": [{"id": "app"}]}})
+    projection = runtime_snapshot("test")
+    assert not projection["ui_live"] and projection["data"]["catalog"]["apps"][0]["id"] == "app"
+    monkeypatch.setattr(doc, "read_live_maps_snapshot_sync", lambda *a: (True, {"ui": {"current_scenario": "live"}, "data": {}, "registry": {}}))
+    assert runtime_snapshot("test")["ui"]["current_scenario"] == "live"

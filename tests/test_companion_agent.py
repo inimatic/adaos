@@ -26,6 +26,7 @@ def test_loop_preserves_tool_results_and_separates_input_once(ledger):
     def model(messages, **kwargs):
         requests.append(list(messages))
         assert all(item["strict"] for item in kwargs["tools"])
+        assert kwargs["prefer_global"] is True
         if len(requests) == 1:
             return function("capabilities_search", {"query": "слайд-шоу", "kind": "ui", "offset": 0, "limit": 5})
         assert any(item.get("type") == "function_call_output" for item in messages)
