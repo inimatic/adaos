@@ -1501,7 +1501,7 @@ async def test_voice_chat_requested_builder_channel_does_not_fall_back_to_nlu_wh
     dialog_runtime.reset_all()
 
 
-async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) -> None:
+async def test_dialog_channel_select_general_deactivates_companion_without_greeting(monkeypatch) -> None:
     from adaos.services import dialog_runtime
 
     bus = LocalEventBus()
@@ -1552,7 +1552,17 @@ async def test_dialog_channel_select_general_deactivates_companion(monkeypatch) 
     assert data["dialog"]["active_agent"]["label"] == "Домашний ассистент"
     assert data["dialog"]["active_agent"]["voice_profile"]["gender"] == "male"
     assert dialog_runtime.get_active_channel(webspace_id) is None
-    assert "Домашний ассистент" in data["voice_chat"]["messages"][-1]["text"]
+    assert not data.get("voice_chat", {}).get("messages")
+
+    # Leaving and re-entering the same UI tab must remain silent, too.
+    bus.publish(Event(
+        type="dialog.channel.select", source="test", ts=2.0,
+        payload={"channel_id": "general", "webspace_id": webspace_id},
+    ))
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+    assert data["dialog"]["active_agent"]["id"] == "agent:core:general"
+    assert not data.get("voice_chat", {}).get("messages")
     dialog_runtime.reset_all()
 
 

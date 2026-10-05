@@ -104,6 +104,18 @@ for (const viewport of viewports) {
     await grid.waitFor({ state: 'visible', timeout: 15_000 })
     await composer.waitFor({ state: 'visible' })
 
+    // Visibility alone missed the floating Dev Tickets button over Send.
+    // Trial-click performs hit testing without dispatching/sending a message.
+    const draft = composer.locator('textarea, input').first()
+    await draft.fill('E2E pointer check — not sent')
+    await composer.getByRole('button').click({ trial: true, timeout: 5000 })
+    await draft.fill('')
+    const controlsProof = {
+      sendReceivesPointer: true,
+      floatingTicketButtons: await page.locator('.prototype-review-toggle').count(),
+      headerTicketButtons: await page.locator('.dev-tickets-btn').count(),
+    }
+
     const geometry = await page.evaluate(() => {
       const grid = document.querySelector('.desktop-grid.viewport-conversation')
       const composer = document.querySelector('ada-chat-widget .composer')
@@ -163,7 +175,7 @@ for (const viewport of viewports) {
         materialization: window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization || null,
       }
     })
-    report.cases.push({ viewport, composerVisible, feedOwnsScroll, scrollProof, geometry, identity, browserErrors })
+    report.cases.push({ viewport, composerVisible, feedOwnsScroll, scrollProof, controlsProof, geometry, identity, browserErrors })
     await page.screenshot({
       path: path.join(output, `${viewport.id}.png`),
       animations: 'disabled',
@@ -182,13 +194,17 @@ for (const viewport of viewports) {
 
 report.finishedAt = new Date().toISOString()
 await fs.writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n', 'utf8')
-console.log(JSON.stringify(report, null, 2))
+console.log(JSON.stringify({ artifact: path.join(output, 'report.json'), errors: report.errors,
+  cases: report.cases.map(({ viewport, composerVisible, controlsProof, browserErrors }) =>
+    ({ viewport, composerVisible, controlsProof, browserErrors })) }))
 await browser.close()
 
 if (
   report.errors.length
   || report.cases.length !== viewports.length
   || report.cases.some(item => !item.composerVisible || !item.feedOwnsScroll
+    || !item.controlsProof.sendReceivesPointer || item.controlsProof.floatingTicketButtons !== 0
+    || item.controlsProof.headerTicketButtons !== 1
     || !item.scrollProof.feedScrolled || !item.scrollProof.composerPinned || !item.scrollProof.controlsPinned
     || item.browserErrors.length)
 ) process.exitCode = 1

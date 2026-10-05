@@ -4971,7 +4971,6 @@ class RouterService:
                         event="manual_select_general",
                     )
                     if current is not None:
-                        general_meta = _general_agent_metadata()
                         dialog_runtime.deactivate_channel(
                             webspace_id=ws,
                             channel_id=current.channel_id,
@@ -4979,17 +4978,10 @@ class RouterService:
                             source="router.dialog",
                             reason="manual_select_general",
                         )
-                        await _append_voice_chat_message(
-                            ws,
-                            {
-                                "id": _make_id("m"),
-                                "from": "hub",
-                                "text": _general_agent_transition_text("manual_select_general"),
-                                "ts": time.time(),
-                                **general_meta,
-                            },
-                            _resolve_voice_target_node_id(payload, route_meta, default_local=False),
-                        )
+                    # UI selection (including re-entering Chat) is not a
+                    # conversational turn. Update routing without appending a
+                    # synthetic reply or triggering speech. Explicit spoken
+                    # requests to the general agent retain their own response.
                     _schedule_dialog_state_write(ws, event="selected")
                     continue
                 if current_id == channel_id:
