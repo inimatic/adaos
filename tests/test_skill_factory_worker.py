@@ -11231,7 +11231,7 @@ def test_dependency_skill_effect_checks_cover_only_bound_exact_provider_tools() 
             "components": {
                 "dependencies": [
                     {
-                        "ref": "skill:conversation_companions==0.3.0-beta.3",
+                        "ref": "skill:conversation_companions",
                         "version": "==0.3.0-beta.3",
                     }
                 ]
@@ -11290,7 +11290,7 @@ def test_dependency_skill_effect_checks_cover_only_bound_exact_provider_tools() 
     assert len(checks) == 1
     check = checks[0]
     assert check["kind"] == "dependency.public_tool_effects.strict"
-    assert check["component_ref"] == "skill:conversation_companions==0.3.0-beta.3"
+    assert check["component_ref"] == "skill:conversation_companions"
     assert check["tool_names"] == [
         "execute_companion_action",
         "get_companion_context",
@@ -11299,6 +11299,32 @@ def test_dependency_skill_effect_checks_cover_only_bound_exact_provider_tools() 
     assert check["path"].startswith(
         "dependency:skill/conversation_companions@0.3.0-beta.3#sha256:"
     )
+
+
+def test_dependency_skill_effect_checks_reject_version_in_component_ref() -> None:
+    from adaos.services.builder.shared_delivery import dependency_skill_effect_checks
+
+    checks, errors = dependency_skill_effect_checks(
+        project={
+            "components": {
+                "dependencies": [
+                    {
+                        "ref": "skill:conversation_companions==0.3.0-beta.3",
+                        "version": "==0.3.0-beta.3",
+                    }
+                ]
+            }
+        },
+        webui={},
+        manifests={},
+    )
+
+    assert checks == []
+    assert errors == [
+        "projects dependency skill:conversation_companions==0.3.0-beta.3: "
+        "component ref must remain unversioned; declare the exact version in the "
+        "separate version field"
+    ]
 
 
 def test_worker_does_not_admit_attachment_bindings_from_system_context(
