@@ -568,6 +568,9 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
         },
     )
     control = completed["session"]["context_control"]
+    assert control["base_compiled_context_ref"] is None
+    assert control["context_margin"]["schema"] == "adaos.context.margin.v1"
+    assert control["context_compaction"]["must_keep_coverage"]["complete"] is True
     first_inspection = first._contexts().inspect(control["run_ref"])
 
     restored_service = BuilderAutomationService(
@@ -614,6 +617,9 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
     assert continued_session["status"] == "completed"
     assert continued_session["iteration"] == 1
     assert continued_control["project_ref"] == "project:recipe_suite"
+    assert continued_control["base_compiled_context_ref"] == control["compiled_context_ref"]
+    assert continued_control["context_delta"] is not None
+    assert continued_control["context_compaction"]["base_packet_ref"] == control["compiled_context_ref"]
     first_project_capsule = next(
         ref
         for ref in control["capsule_refs"]
@@ -1109,6 +1115,33 @@ def test_builder_execution_budget_defaults_to_fresh_tokens_with_aggregate_guard(
     assert explicit is not None
     assert explicit["token_budget_metric"] == "model_tokens"
     assert explicit["max_billable_tokens"] == 300_000
+
+
+@pytest.mark.parametrize(
+    ("used_tokens", "stage", "admitted"),
+    [
+        (6_999, "normal", True),
+        (7_000, "observe", True),
+        (8_500, "deterministic_trim", True),
+        (9_200, "model_compact", True),
+        (9_700, "reserve", False),
+    ],
+)
+def test_builder_context_margin_uses_release_thresholds(
+    used_tokens: int,
+    stage: str,
+    admitted: bool,
+) -> None:
+    margin = automation_module._context_margin_envelope(
+        used_tokens=used_tokens,
+        capacity_tokens=10_000,
+        model_call_expected=True,
+    )
+
+    assert margin["pressure"]["stage"] == stage
+    assert margin["new_tool_call_admitted"] is admitted
+    assert sum(margin["envelopes"].values()) == 10_000
+    assert margin["reserve_floor_tokens"] == 1_800
 
 
 def test_prototype_execution_budget_has_room_for_full_manifest_revisions() -> None:

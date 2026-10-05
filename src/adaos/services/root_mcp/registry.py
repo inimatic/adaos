@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import base64
-import binascii
+import threading
+from collections import OrderedDict
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ import yaml
 from adaos.build_info import BUILD_INFO
 from adaos.sdk.core.exporter import export as sdk_export
 from adaos.services.agent_context import get_ctx
+from adaos.services.applications.trusted_metadata import MetadataSigner
 from adaos.services.system_model import (
     CANONICAL_KIND_REGISTRY,
     CANONICAL_RELATION_REGISTRY,
@@ -29,6 +31,7 @@ from adaos.services.system_model.model import (
 from adaos.services.ui_capabilities import ui_capability_catalog
 
 from .policy import capability_registry_payload, capability_registry_summary
+from .opaque_cursor import decode_opaque_cursor, encode_opaque_cursor
 from .reports import control_report_registry_summary
 from .sessions import DEFAULT_CAPABILITY_PROFILES, mcp_session_registry_summary
 from .targets import managed_target_registry_summary
@@ -241,35 +244,141 @@ def _content_digest(value: Any) -> str:
     return f"sha256:{_json_hash(_stable_content(value))}"
 
 
-def _encode_catalog_cursor(*, offset: int, scope_digest: str) -> str:
-    payload = json.dumps(
-        {"offset": max(0, int(offset)), "scope_digest": scope_digest},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+_DESCRIPTOR_SIGNERS: dict[str, MetadataSigner] = {}
 
 
-def _decode_catalog_cursor(cursor: str | None, *, scope_digest: str) -> int:
-    token = str(cursor or "").strip()
-    if not token:
-        return 0
+def _descriptor_integrity(
+    *, descriptor_id: str, content_digest: str, source_kind: str
+) -> dict[str, Any]:
+    """Bind descriptor content to stable provenance with the Root metadata key.
+
+    The signed statement deliberately excludes delivery timestamps so ETag and
+    signature verification survive cache hits and delta delivery.
+    """
+
+    provenance = {
+        "schema": "adaos.descriptor.provenance.v1",
+        "descriptor_id": descriptor_id,
+        "source_kind": source_kind,
+        "published_by": "root",
+        "build_version": BUILD_INFO.version,
+        "build_date": BUILD_INFO.build_date,
+    }
+    statement = {
+        "schema": "adaos.descriptor.integrity_statement.v1",
+        "content_digest": content_digest,
+        "provenance": provenance,
+    }
     try:
-        padded = token + "=" * (-len(token) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-        offset = int(payload["offset"])
-    except (
-        binascii.Error,
-        KeyError,
-        TypeError,
-        UnicodeDecodeError,
-        ValueError,
-        json.JSONDecodeError,
-    ) as exc:
-        raise ValueError("invalid catalog cursor") from exc
-    if str(payload.get("scope_digest") or "") != scope_digest or offset < 0:
-        raise ValueError("catalog cursor does not match this query")
-    return offset
+        key_root = Path(get_ctx().paths.root_mcp_state_dir()) / "descriptor-integrity"
+        cache_key = str(key_root.resolve())
+        signer = _DESCRIPTOR_SIGNERS.get(cache_key)
+        if signer is None:
+            signer = MetadataSigner.load_or_create(key_root, "root")
+            _DESCRIPTOR_SIGNERS[cache_key] = signer
+        return {
+            "status": "signed",
+            "statement": statement,
+            "signature": signer.signature(statement),
+            "key": signer.public_record(),
+        }
+    except Exception as exc:
+        # Descriptors remain content-addressed in isolated build/test contexts,
+        # but callers can distinguish that from a Root-signed runtime response.
+        return {
+            "status": "unsigned",
+            "statement": statement,
+            "reason": type(exc).__name__,
+        }
+
+
+_SDK_CONSUMER_CONTRACT_FIELDS: dict[str, frozenset[str]] = {
+    "builder": frozenset(
+        {
+            "permissions",
+            "effects",
+            "errors",
+            "boundedness",
+            "pagination",
+            "stability",
+            "since",
+            "digest",
+        }
+    ),
+    "migration": frozenset(
+        {
+            "permissions",
+            "effects",
+            "errors",
+            "boundedness",
+            "pagination",
+            "stability",
+            "since",
+            "deprecated",
+            "removedIn",
+            "replacement",
+            "migration_recipe",
+            "authoring_visibility",
+            "schema_refs",
+            "digest",
+        }
+    ),
+    "diagnostics": frozenset(
+        {
+            "errors",
+            "boundedness",
+            "pagination",
+            "stability",
+            "deprecated",
+            "schema_refs",
+            "digest",
+        }
+    ),
+}
+
+
+def _sdk_consumer(value: str | None, *, purpose: str) -> str:
+    token = str(value or "").strip().lower()
+    if token in _SDK_CONSUMER_CONTRACT_FIELDS:
+        return token
+    return "migration" if str(purpose or "").strip().lower() == "migration" else "builder"
+
+
+def _mask_sdk_contract(contract: dict[str, Any], *, consumer: str) -> dict[str, Any]:
+    allowed = _SDK_CONSUMER_CONTRACT_FIELDS[consumer]
+    return {key: value for key, value in contract.items() if key in allowed}
+
+
+def _encode_catalog_cursor(
+    *,
+    offset: int,
+    scope_digest: str,
+    field_mask: Any,
+    content_digest: str,
+) -> str:
+    return encode_opaque_cursor(
+        namespace="root_mcp.catalog.v1",
+        offset=offset,
+        query=scope_digest,
+        field_mask=field_mask,
+        content_digest=content_digest,
+    )
+
+
+def _decode_catalog_cursor(
+    cursor: str | None,
+    *,
+    scope_digest: str,
+    field_mask: Any,
+    content_digest: str,
+) -> int:
+    return decode_opaque_cursor(
+        cursor,
+        namespace="root_mcp.catalog.v1",
+        query=scope_digest,
+        field_mask=field_mask,
+        content_digest=content_digest,
+    )
 
 
 def _overview_row(
@@ -327,8 +436,15 @@ def _sdk_metadata(
     limit: int = 24,
     cursor: str | None = None,
     purpose: str = "authoring",
+    consumer: str | None = None,
 ) -> dict[str, Any]:
-    effective_purpose = "migration" if str(purpose or "").strip().lower() == "migration" else "authoring"
+    effective_consumer = _sdk_consumer(consumer, purpose=purpose)
+    effective_purpose = (
+        "migration"
+        if effective_consumer == "migration"
+        or str(purpose or "").strip().lower() == "migration"
+        else "authoring"
+    )
     payload = dict(
         sdk_export(
             level=level,
@@ -344,18 +460,31 @@ def _sdk_metadata(
         if isinstance(payload.get("items"), list)
         else payload.get("tools")
     )
-    all_items = [item for item in raw_items or [] if isinstance(item, dict)]
+    all_items = [dict(item) for item in raw_items or [] if isinstance(item, dict)]
     bounded_limit = max(1, min(int(limit or 24), 64))
+    contract_field_mask = sorted(_SDK_CONSUMER_CONTRACT_FIELDS[effective_consumer])
+    for item in all_items:
+        if isinstance(item.get("contract"), dict):
+            item["contract"] = _mask_sdk_contract(
+                dict(item["contract"]), consumer=effective_consumer
+            )
+    content_digest = _content_digest(all_items)
     scope_digest = _content_digest(
         {
             "descriptor": "sdk_metadata",
             "level": level,
             "query": str(query or "").strip().casefold(),
             "purpose": effective_purpose,
+            "consumer": effective_consumer,
         }
     )
-    offset = _decode_catalog_cursor(cursor, scope_digest=scope_digest)
-    selected_items = all_items[offset : offset + bounded_limit]
+    offset = _decode_catalog_cursor(
+        cursor,
+        scope_digest=scope_digest,
+        field_mask={"contract": contract_field_mask},
+        content_digest=content_digest,
+    )
+    selected_items = [dict(item) for item in all_items[offset : offset + bounded_limit]]
     has_more = offset + len(selected_items) < len(all_items)
     if isinstance(payload.get("items"), list):
         payload["items"] = selected_items
@@ -372,6 +501,7 @@ def _sdk_metadata(
             dict(item.get("meta") or {}) if isinstance(item.get("meta"), dict) else {}
         )
         contract = dict(item.get("contract") or {}) if isinstance(item.get("contract"), dict) else {}
+        masked_contract = _mask_sdk_contract(contract, consumer=effective_consumer)
         input_schema = (
             dict(item.get("input_schema") or {})
             if isinstance(item.get("input_schema"), dict)
@@ -392,16 +522,16 @@ def _sdk_metadata(
             capabilities={
                 "approval_scope": meta.get("approval_scope"),
                 "idempotent": meta.get("idempotent"),
-                "permissions": contract.get("permissions") or [],
-                "effects": contract.get("effects") or [],
-                "boundedness": contract.get("boundedness") or item.get("boundedness"),
-                "pagination": contract.get("pagination") or item.get("pagination"),
+                "permissions": masked_contract.get("permissions") or [],
+                "effects": masked_contract.get("effects") or [],
+                "boundedness": masked_contract.get("boundedness") or item.get("boundedness"),
+                "pagination": masked_contract.get("pagination") or item.get("pagination"),
             },
             metadata={
                 "module": item.get("m") or item.get("module"),
                 "qualname": item.get("qualname"),
                 "args": list(item.get("a") or []),
-                "contract": contract,
+                "contract": masked_contract,
             },
         )
         if level == "mini":
@@ -436,12 +566,19 @@ def _sdk_metadata(
     payload["has_more"] = has_more
     payload["next_cursor"] = (
         _encode_catalog_cursor(
-            offset=offset + len(selected_items), scope_digest=scope_digest
+            offset=offset + len(selected_items),
+            scope_digest=scope_digest,
+            field_mask={"contract": contract_field_mask},
+            content_digest=content_digest,
         )
         if has_more
         else None
     )
     payload["purpose"] = effective_purpose
+    payload["consumer"] = effective_consumer
+    payload["field_mask"] = {
+        "contract": contract_field_mask
+    }
     payload["deprecated_included"] = effective_purpose == "migration"
     if level == "mini":
         # Mini is the authoritative model discovery projection. Avoid sending
@@ -881,7 +1018,7 @@ def _public_registry_summary(
             str(item.get("id") or item.get("name") or "").strip(): item
             for item in source_items
         }
-        scored: list[tuple[int, dict[str, Any]]] = []
+        scored: list[tuple[int, int, dict[str, Any]]] = []
         for entry in indexed:
             source = by_id.get(str(entry.get("id") or ""), {})
             haystack = " ".join(
@@ -893,16 +1030,53 @@ def _public_registry_summary(
             ).casefold()
             score = sum(40 if term == str(entry.get("id") or "").casefold() else 5 for term in terms if term in haystack)
             if score:
-                scored.append((score, entry))
-        indexed = [entry for _score, entry in sorted(scored, key=lambda row: (-row[0], str(row[1]["id"])))]
+                frequency = max(
+                    0,
+                    int(
+                        source.get("usage_frequency")
+                        or source.get("invocation_count")
+                        or source.get("install_count")
+                        or 0
+                    ),
+                )
+                scored.append((score, frequency, entry))
+        indexed = [
+            entry
+            for _score, _frequency, entry in sorted(
+                scored, key=lambda row: (-row[0], -row[1], str(row[2]["id"]))
+            )
+        ]
     else:
-        indexed.sort(key=lambda item: str(item.get("id") or ""))
+        by_id = {
+            str(item.get("id") or item.get("name") or "").strip(): item
+            for item in source_items
+        }
+        indexed.sort(
+            key=lambda item: (
+                -max(
+                    0,
+                    int(
+                        by_id.get(str(item.get("id") or ""), {}).get("usage_frequency")
+                        or by_id.get(str(item.get("id") or ""), {}).get("invocation_count")
+                        or by_id.get(str(item.get("id") or ""), {}).get("install_count")
+                        or 0
+                    ),
+                ),
+                str(item.get("id") or ""),
+            )
+        )
     bounded_limit = max(1, min(int(limit or 24), 64))
     scope_digest = _content_digest({"kind": token, "query": str(query or "").strip().casefold()})
-    offset = _decode_catalog_cursor(cursor, scope_digest=scope_digest)
+    field_mask = ["id", "version", "stability", "capabilities", "digest"]
+    payload_digest = _content_digest(indexed)
+    offset = _decode_catalog_cursor(
+        cursor,
+        scope_digest=scope_digest,
+        field_mask=field_mask,
+        content_digest=payload_digest,
+    )
     page = indexed[offset : offset + bounded_limit]
     has_more = offset + len(page) < len(indexed)
-    payload_digest = _content_digest(indexed)
     return {
         "schema": "adaos.public_registry.index.v1",
         "kind": token,
@@ -912,7 +1086,12 @@ def _public_registry_summary(
         "limit": bounded_limit,
         "offset": offset,
         "has_more": has_more,
-        "next_cursor": _encode_catalog_cursor(offset=offset + len(page), scope_digest=scope_digest) if has_more else None,
+        "next_cursor": _encode_catalog_cursor(
+            offset=offset + len(page),
+            scope_digest=scope_digest,
+            field_mask=field_mask,
+            content_digest=payload_digest,
+        ) if has_more else None,
         "digest": payload_digest,
         "etag": payload_digest,
         "detail_request": {
@@ -921,6 +1100,38 @@ def _public_registry_summary(
         },
         "items": page,
     }
+
+
+_ARCHITECTURE_NEIGHBORHOOD_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
+_ARCHITECTURE_NEIGHBORHOOD_CACHE_LOCK = threading.Lock()
+_ARCHITECTURE_NEIGHBORHOOD_CACHE_MAX = 64
+
+
+def _architecture_source_signature(repository_root: Path) -> str:
+    paths: list[Path] = []
+    index = repository_root / "docs" / "architecture" / "index.md"
+    if index.is_file():
+        paths.append(index)
+    for root in (
+        repository_root / "docs-development" / "platform" / "architecture",
+        repository_root / "docs-stable" / "platform" / "architecture",
+    ):
+        if root.is_dir():
+            paths.extend(sorted(root.glob("*.md")))
+    rows: list[tuple[str, int, int]] = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        rows.append(
+            (
+                path.relative_to(repository_root).as_posix(),
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+            )
+        )
+    return _content_digest(rows)
 
 
 def _architecture_catalog(
@@ -932,6 +1143,29 @@ def _architecture_catalog(
     depth: int = 1,
 ) -> dict[str, Any]:
     repository_root = Path(__file__).resolve().parents[4]
+    is_neighborhood = bool(str(query or "").strip() or roots)
+    cache_key = _content_digest(
+        {
+            "source": _architecture_source_signature(repository_root),
+            "query": str(query or "").strip().casefold(),
+            "roots": sorted(str(value).strip() for value in roots or [] if str(value).strip()),
+            "depth": max(0, min(int(depth or 0), 3)),
+            "limit": max(1, min(int(limit or 24), 64)),
+            "cursor": str(cursor or "").strip(),
+        }
+    )
+    if is_neighborhood:
+        with _ARCHITECTURE_NEIGHBORHOOD_CACHE_LOCK:
+            cached = _ARCHITECTURE_NEIGHBORHOOD_CACHE.get(cache_key)
+            if cached is not None:
+                _ARCHITECTURE_NEIGHBORHOOD_CACHE.move_to_end(cache_key)
+                result = deepcopy(cached)
+                result["cache"] = {
+                    "scope": "graph_neighborhood",
+                    "hit": True,
+                    "key_digest": cache_key,
+                }
+                return result
     path = repository_root / "docs" / "architecture" / "index.md"
     pages: list[dict[str, Any]] = []
     try:
@@ -1053,7 +1287,17 @@ def _architecture_catalog(
     nodes.sort(key=lambda node: node["id"])
     bounded_limit = max(1, min(int(limit or 24), 64))
     scope_digest = _content_digest({"query": query or "", "roots": sorted(selected_ids), "depth": depth})
-    offset = _decode_catalog_cursor(cursor, scope_digest=scope_digest)
+    graph_digest = _content_digest({"nodes": nodes, "edges": edges})
+    field_mask = {
+        "nodes": ["id", "type", "title", "summary", "digest"],
+        "edges": ["source", "target", "type", "digest"],
+    }
+    offset = _decode_catalog_cursor(
+        cursor,
+        scope_digest=scope_digest,
+        field_mask=field_mask,
+        content_digest=graph_digest,
+    )
     page_nodes = nodes[offset : offset + bounded_limit]
     page_ids = {node["id"] for node in page_nodes}
     # Never let a page pull the full graph back in through high-degree boundary
@@ -1064,8 +1308,7 @@ def _architecture_catalog(
         if edge["source"] in page_ids and edge["target"] in page_ids
     ]
     has_more = offset + len(page_nodes) < len(nodes)
-    graph_digest = _content_digest({"nodes": nodes, "edges": edges})
-    return {
+    result = {
         "schema": "adaos.architecture.graph.v1",
         "available": True,
         "index_path": str(path),
@@ -1076,12 +1319,29 @@ def _architecture_catalog(
         "limit": bounded_limit,
         "offset": offset,
         "has_more": has_more,
-        "next_cursor": _encode_catalog_cursor(offset=offset + len(page_nodes), scope_digest=scope_digest) if has_more else None,
+        "next_cursor": _encode_catalog_cursor(
+            offset=offset + len(page_nodes),
+            scope_digest=scope_digest,
+            field_mask=field_mask,
+            content_digest=graph_digest,
+        ) if has_more else None,
         "digest": graph_digest,
         "etag": graph_digest,
         "nodes": page_nodes,
         "edges": page_edges,
+        "cache": {
+            "scope": "graph_neighborhood" if is_neighborhood else "none",
+            "hit": False,
+            "key_digest": cache_key if is_neighborhood else None,
+        },
     }
+    if is_neighborhood:
+        with _ARCHITECTURE_NEIGHBORHOOD_CACHE_LOCK:
+            _ARCHITECTURE_NEIGHBORHOOD_CACHE[cache_key] = deepcopy(result)
+            _ARCHITECTURE_NEIGHBORHOOD_CACHE.move_to_end(cache_key)
+            while len(_ARCHITECTURE_NEIGHBORHOOD_CACHE) > _ARCHITECTURE_NEIGHBORHOOD_CACHE_MAX:
+                _ARCHITECTURE_NEIGHBORHOOD_CACHE.popitem(last=False)
+    return result
 
 
 def _descriptor_build_profile() -> dict[str, Any]:
@@ -1239,6 +1499,11 @@ def _descriptor_bundle_metadata(
     cache = dict(entry.get("cache") or {})
     ttl_seconds = int(cache.get("ttl_seconds") or 600)
     content_digest = _content_digest(payload)
+    integrity = _descriptor_integrity(
+        descriptor_id=str(entry["descriptor_id"]),
+        content_digest=content_digest,
+        source_kind=str(entry["source"]["kind"]),
+    )
     return {
         "descriptor_id": entry["descriptor_id"],
         "level": level,
@@ -1257,6 +1522,7 @@ def _descriptor_bundle_metadata(
             "build_date": BUILD_INFO.build_date,
             "content_hash": content_digest,
         },
+        "integrity": integrity,
         "etag": content_digest,
     }
 
@@ -1356,6 +1622,7 @@ def _descriptor_payload(
     roots: list[str] | None = None,
     depth: int = 1,
     purpose: str = "authoring",
+    consumer: str | None = None,
 ) -> Any:
     token = str(descriptor_id or "").strip().lower()
     if token == "sdk_metadata":
@@ -1368,6 +1635,7 @@ def _descriptor_payload(
             limit=limit,
             cursor=cursor,
             purpose=purpose,
+            consumer=consumer,
         )
     if token == "application_contracts":
         return _application_contracts()
@@ -1823,6 +2091,7 @@ def get_descriptor_set(
     if_none_match: str | None = None,
     since_digest: str | None = None,
     purpose: str = "authoring",
+    consumer: str | None = None,
 ) -> dict[str, Any]:
     token = str(descriptor_id or "").strip().lower()
     effective_level = str(level or "std").strip().lower() or "std"
@@ -1843,6 +2112,7 @@ def get_descriptor_set(
         roots=roots,
         depth=max(0, min(int(depth or 0), 3)),
         purpose=purpose,
+        consumer=consumer,
     )
     metadata = _descriptor_bundle_metadata(entry, payload, level=effective_level)
     etag = str(metadata.get("etag") or "")

@@ -1494,6 +1494,8 @@ class ContextControlService:
             "unavailable": _mappings(request.get("unavailable")),
             "context_misses": _mappings(request.get("context_misses")),
             "layer_usage": _mappings(request.get("layer_usage")),
+            "context_margin": _mapping(request.get("context_margin")),
+            "compaction": _mapping(request.get("compaction")),
             "usage": {
                 **usage,
                 "provider_input_tokens": provider_input,

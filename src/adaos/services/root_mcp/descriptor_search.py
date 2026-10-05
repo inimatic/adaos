@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
 import json
 import re
 from typing import Any, Mapping, Sequence
 
 from .registry import get_descriptor_set, list_descriptor_sets, public_registry_item
+from .opaque_cursor import decode_opaque_cursor, encode_opaque_cursor
 
 
 _CHILD_INDEX_DESCRIPTORS = {
@@ -38,35 +37,40 @@ def _fingerprint(value: Mapping[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 
 
-def _encode_cursor(*, offset: int, query_digest: str) -> str:
-    payload = json.dumps(
-        {"offset": max(0, int(offset)), "query_digest": query_digest},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+_SEARCH_FIELD_MASK = [
+    "descriptor_id",
+    "item_id",
+    "kind",
+    "title",
+    "summary",
+    "owner",
+    "stability",
+    "fingerprint",
+    "drill_down",
+    "rank",
+]
 
 
-def _decode_cursor(cursor: str | None, *, query_digest: str) -> int:
-    token = str(cursor or "").strip()
-    if not token:
-        return 0
-    try:
-        padded = token + "=" * (-len(token) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-        offset = int(payload["offset"])
-    except (
-        binascii.Error,
-        KeyError,
-        TypeError,
-        UnicodeDecodeError,
-        ValueError,
-        json.JSONDecodeError,
-    ) as exc:
-        raise ValueError("invalid descriptor search cursor") from exc
-    if str(payload.get("query_digest") or "") != query_digest or offset < 0:
-        raise ValueError("descriptor search cursor does not match this query")
-    return offset
+def _encode_cursor(*, offset: int, query_digest: str, content_digest: str) -> str:
+    return encode_opaque_cursor(
+        namespace="root_mcp.descriptor_search.v1",
+        offset=offset,
+        query=query_digest,
+        field_mask=_SEARCH_FIELD_MASK,
+        content_digest=content_digest,
+    )
+
+
+def _decode_cursor(
+    cursor: str | None, *, query_digest: str, content_digest: str
+) -> int:
+    return decode_opaque_cursor(
+        cursor,
+        namespace="root_mcp.descriptor_search.v1",
+        query=query_digest,
+        field_mask=_SEARCH_FIELD_MASK,
+        content_digest=content_digest,
+    )
 
 
 def _header(
@@ -332,7 +336,6 @@ def search_descriptors(
             "kinds": sorted(selected_kinds),
         }
     )
-    offset = _decode_cursor(cursor, query_digest=query_digest)
     ranked: list[tuple[int, int, dict[str, Any]]] = []
     ordinal = 0
     for entry in catalog:
@@ -400,6 +403,17 @@ def search_descriptors(
                 ranked.append((child_score, ordinal, child))
                 ordinal += 1
     ranked.sort(key=lambda item: (-item[0], item[1], str(item[2].get("item_id") or "")))
+    result_digest = _fingerprint(
+        {
+            "items": [row for _score, _ordinal, row in ranked],
+            "field_mask": _SEARCH_FIELD_MASK,
+        }
+    )
+    offset = _decode_cursor(
+        cursor,
+        query_digest=query_digest,
+        content_digest=result_digest,
+    )
     items = []
     page = ranked[offset : offset + bounded_limit]
     for rank, (_, _, row) in enumerate(page, start=offset + 1):
@@ -416,10 +430,16 @@ def search_descriptors(
         "offset": offset,
         "has_more": offset + len(items) < len(ranked),
         "next_cursor": (
-            _encode_cursor(offset=offset + len(items), query_digest=query_digest)
+            _encode_cursor(
+                offset=offset + len(items),
+                query_digest=query_digest,
+                content_digest=result_digest,
+            )
             if offset + len(items) < len(ranked)
             else None
         ),
+        "digest": result_digest,
+        "field_mask": _SEARCH_FIELD_MASK,
         "items": items,
     }
 
@@ -430,6 +450,7 @@ def get_descriptor_item(
     *,
     level: str = "std",
     purpose: str = "authoring",
+    consumer: str | None = None,
 ) -> dict[str, Any]:
     """Return one exact descriptor item selected from a search result."""
 
@@ -467,6 +488,7 @@ def get_descriptor_item(
         roots=[selected_item_id] if token == "architecture_catalog" else None,
         limit=64 if token == "architecture_catalog" else 8,
         purpose=purpose,
+        consumer=consumer,
     )
     if selected_item_id == token:
         item: Any = descriptor

@@ -11,38 +11,12 @@ from .model import RootMcpToolContract
 
 DEFAULT_REVIEW_CHARS = 16_000
 DEFAULT_OPTIMIZE_CHARS = 64_000
-
-# These predate the bounded collection contract. They stay visible in every
-# audit but do not make the new-API gate unusable while they are migrated.
-_LEGACY_COLLECTION_DEBT = frozenset(
-    {
-        "development.list_planes",
-        "development_feedback.list",
-        "dev_ticket.list",
-        "nlu_authoring.list_templates",
-        "nlu_authoring.list_training_targets",
-        "operations.list_contracts",
-        "operations.list_managed_targets",
-        "operations.list_360log_snapshots",
-        "hub.list_access_tokens",
-        "hub.list_mcp_sessions",
-        "hub.memory.list_sessions",
-        "hub.memory.list_incidents",
-        "hub.memory.list_artifacts",
-        "applications.list_components",
-        "applications.list_placements",
-        "applications.list_home_targets",
-        "applications.list_releases",
-        "applications.list_operations",
-        "applications.list_trial_access",
-        "applications.list_development_reports",
-        "applications.list_development_report_intakes",
-        "applications.list_development_report_appeals",
-        "applications.list_publisher_development_report_appeals",
-        "applications.development.list_operations",
-    }
-)
-
+CONTEXT_PRESSURE_THRESHOLDS = {
+    "observe": 0.70,
+    "deterministic_trim": 0.85,
+    "model_compact": 0.92,
+    "reserve": 0.97,
+}
 
 def measure_output(
     value: Any,
@@ -96,6 +70,11 @@ def profile_audit_events(
             "latest_bytes": None,
             "latest_signal": None,
             "signals": {"ok": 0, "review": 0, "optimize": 0},
+            "characters": [],
+            "tokens": [],
+            "latencies_ms": [],
+            "cache_hits": 0,
+            "cache_observations": 0,
         }
     )
     event_count = 0
@@ -125,6 +104,18 @@ def profile_audit_events(
                 summary.get("optimization_signal") or "ok"
             ).strip().lower()
         row["total_chars"] += chars
+        row["characters"].append(chars)
+        tokens = summary.get("estimated_tokens")
+        if isinstance(tokens, int) and tokens >= 0:
+            row["tokens"].append(tokens)
+        latency_ms = summary.get("latency_ms")
+        if isinstance(latency_ms, (int, float)) and float(latency_ms) >= 0:
+            row["latencies_ms"].append(float(latency_ms))
+        cache_hit = summary.get("cache_hit")
+        if isinstance(cache_hit, bool):
+            row["cache_observations"] += 1
+            if cache_hit:
+                row["cache_hits"] += 1
         row["max_chars"] = max(int(row["max_chars"]), chars)
         if isinstance(output_bytes, int):
             row["max_bytes"] = max(int(row["max_bytes"]), output_bytes)
@@ -134,6 +125,15 @@ def profile_audit_events(
         row["signals"][signal] += 1
 
     tools: list[dict[str, Any]] = []
+
+    def percentile(values: Sequence[int | float], fraction: float) -> int | float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1))
+        value = ordered[index]
+        return round(float(value), 1) if isinstance(value, float) else int(value)
+
     for tool_id, raw in groups.items():
         measured = int(raw["measured_calls"])
         tools.append(
@@ -149,6 +149,19 @@ def profile_audit_events(
                 "average_chars": (
                     round(int(raw["total_chars"]) / measured, 1) if measured else None
                 ),
+                "p50_chars": percentile(raw["characters"], 0.50),
+                "p95_chars": percentile(raw["characters"], 0.95),
+                "p50_tokens": percentile(raw["tokens"], 0.50),
+                "p95_tokens": percentile(raw["tokens"], 0.95),
+                "p50_latency_ms": percentile(raw["latencies_ms"], 0.50),
+                "p95_latency_ms": percentile(raw["latencies_ms"], 0.95),
+                "cache_hit_rate": (
+                    round(int(raw["cache_hits"]) / int(raw["cache_observations"]), 4)
+                    if int(raw["cache_observations"])
+                    else None
+                ),
+                "recommended_budget_chars": percentile(raw["characters"], 0.95),
+                "recommended_budget_tokens": percentile(raw["tokens"], 0.95),
                 "signals": dict(raw["signals"]),
             }
         )
@@ -163,13 +176,208 @@ def profile_audit_events(
     }
 
 
+def context_pressure_stage(*, used_tokens: int, capacity_tokens: int) -> dict[str, Any]:
+    """Return the deterministic context-margin stage for one request."""
+
+    capacity = max(1, int(capacity_tokens))
+    used = max(0, int(used_tokens))
+    ratio = used / capacity
+    if ratio >= CONTEXT_PRESSURE_THRESHOLDS["reserve"]:
+        stage = "reserve"
+        actions = ["deny_new_tool_call", "preserve_reasoning_result_recovery_reserve"]
+    elif ratio >= CONTEXT_PRESSURE_THRESHOLDS["model_compact"]:
+        stage = "model_compact"
+        actions = ["prove_algorithmic_trim_exhausted", "admit_evaluated_model_compaction"]
+    elif ratio >= CONTEXT_PRESSURE_THRESHOLDS["deterministic_trim"]:
+        stage = "deterministic_trim"
+        actions = ["paginate", "apply_field_masks", "drop_stale_results", "dedupe_by_digest"]
+    elif ratio >= CONTEXT_PRESSURE_THRESHOLDS["observe"]:
+        stage = "observe"
+        actions = ["measure_source_contribution", "identify_p95_offenders"]
+    else:
+        stage = "normal"
+        actions = []
+    return {
+        "schema": "adaos.context.pressure.v1",
+        "stage": stage,
+        "used_tokens": used,
+        "capacity_tokens": capacity,
+        "utilization": round(ratio, 6),
+        "thresholds": dict(CONTEXT_PRESSURE_THRESHOLDS),
+        "actions": actions,
+    }
+
+
+def evaluate_source_budget_change(
+    *,
+    source_id: str,
+    current_budget: int,
+    observed_p95: int | None,
+    baseline_quality: float,
+    candidate_quality: float,
+    quality_floor: float,
+    minimum_quality_gain: float = 0.005,
+    maximum_quality_regression: float = 0.0,
+) -> dict[str, Any]:
+    """Gate a p95-derived source budget change on independent eval quality.
+
+    Raising a budget needs a measurable quality gain.  Lowering it needs proof
+    that the quality floor is preserved without an unapproved regression.
+    """
+
+    current = max(1, int(current_budget))
+    target = max(1, int(observed_p95)) if observed_p95 is not None else None
+    baseline = float(baseline_quality)
+    candidate = float(candidate_quality)
+    floor = float(quality_floor)
+    if target is None:
+        direction = "unknown"
+        approved = False
+        reason = "p95_measurement_required"
+    elif target == current:
+        direction = "unchanged"
+        approved = candidate >= floor
+        reason = "quality_floor_met" if approved else "quality_floor_failed"
+    elif target > current:
+        direction = "increase"
+        approved = candidate >= floor and candidate - baseline >= float(minimum_quality_gain)
+        reason = "measurable_quality_gain" if approved else "quality_gain_not_proven"
+    else:
+        direction = "decrease"
+        approved = (
+            candidate >= floor
+            and baseline - candidate <= max(0.0, float(maximum_quality_regression))
+        )
+        reason = "quality_floor_preserved" if approved else "quality_regression_not_approved"
+    return {
+        "schema": "adaos.context.source_budget_gate.v1",
+        "source_id": str(source_id or "unknown"),
+        "basis": "observed_p95",
+        "current_budget": current,
+        "candidate_budget": target,
+        "direction": direction,
+        "quality": {
+            "baseline": baseline,
+            "candidate": candidate,
+            "floor": floor,
+            "minimum_gain": float(minimum_quality_gain),
+            "maximum_regression": max(0.0, float(maximum_quality_regression)),
+        },
+        "approved": approved,
+        "effective_budget": target if approved and target is not None else current,
+        "reason": reason,
+    }
+
+
+def evaluate_release_slo(
+    tools: Sequence[Mapping[str, Any]],
+    *,
+    p95_chars_max: int,
+    p95_tokens_max: int,
+    p95_latency_ms_max: float,
+    cache_hit_rate_min: float,
+    must_keep_recall: Mapping[str, float],
+    must_keep_recall_min: float,
+) -> dict[str, Any]:
+    """Evaluate the independent output/latency/cache/recall release gate."""
+
+    rows: list[dict[str, Any]] = []
+    for raw in tools:
+        tool_id = str(raw.get("tool_id") or "unknown")
+        metrics = {
+            "p95_chars": raw.get("p95_chars"),
+            "p95_tokens": raw.get("p95_tokens"),
+            "p95_latency_ms": raw.get("p95_latency_ms"),
+            "cache_hit_rate": raw.get("cache_hit_rate"),
+            "must_keep_recall": must_keep_recall.get(tool_id),
+        }
+        violations: list[str] = []
+        for name in ("p95_chars", "p95_tokens", "p95_latency_ms", "cache_hit_rate", "must_keep_recall"):
+            if (
+                not isinstance(metrics[name], (int, float))
+                or isinstance(metrics[name], bool)
+                or not math.isfinite(metrics[name])
+            ):
+                violations.append(f"{name}_missing")
+        if isinstance(metrics["p95_chars"], (int, float)) and metrics["p95_chars"] > p95_chars_max:
+            violations.append("p95_chars_exceeded")
+        if isinstance(metrics["p95_tokens"], (int, float)) and metrics["p95_tokens"] > p95_tokens_max:
+            violations.append("p95_tokens_exceeded")
+        if isinstance(metrics["p95_latency_ms"], (int, float)) and metrics["p95_latency_ms"] > p95_latency_ms_max:
+            violations.append("p95_latency_exceeded")
+        if isinstance(metrics["cache_hit_rate"], (int, float)) and metrics["cache_hit_rate"] < cache_hit_rate_min:
+            violations.append("cache_hit_rate_below_slo")
+        if isinstance(metrics["must_keep_recall"], (int, float)) and metrics["must_keep_recall"] < must_keep_recall_min:
+            violations.append("must_keep_recall_below_slo")
+        rows.append({"tool_id": tool_id, "metrics": metrics, "violations": violations, "passed": not violations})
+    return {
+        "schema": "adaos.context.release_slo.v1",
+        "passed": bool(rows) and all(row["passed"] for row in rows),
+        "tool_count": len(rows),
+        "targets": {
+            "p95_chars_max": int(p95_chars_max),
+            "p95_tokens_max": int(p95_tokens_max),
+            "p95_latency_ms_max": float(p95_latency_ms_max),
+            "cache_hit_rate_min": float(cache_hit_rate_min),
+            "must_keep_recall_min": float(must_keep_recall_min),
+        },
+        "items": rows,
+    }
+
+
+def context_curator_decision(
+    *,
+    source_id: str,
+    calls_since_last_run: int,
+    expected_saved_tokens: int,
+    estimated_run_cost_tokens: int,
+    algorithmic_recipe: Mapping[str, Any] | None,
+    eval_passed: bool,
+) -> dict[str, Any]:
+    """Admit the Curator as a rare learning/control-plane process.
+
+    It does not compress each prompt.  It diagnoses an offender, evaluates an
+    algorithmic recipe, and only then proposes a durable source-contract patch.
+    """
+
+    calls = max(0, int(calls_since_last_run))
+    saved = max(0, int(expected_saved_tokens))
+    cost = max(1, int(estimated_run_cost_tokens))
+    roi = saved / cost
+    rare_interval_met = calls >= 20
+    exceptional_roi = roi >= 4.0
+    admitted = bool(algorithmic_recipe) and (rare_interval_met or exceptional_roi)
+    adopt = admitted and bool(eval_passed)
+    return {
+        "schema": "adaos.context.curator_decision.v1",
+        "source_id": str(source_id or "unknown"),
+        "mode": "control_plane_learning",
+        "calls_since_last_run": calls,
+        "expected_saved_tokens": saved,
+        "estimated_run_cost_tokens": cost,
+        "expected_roi": round(roi, 4),
+        "admitted": admitted,
+        "eval_passed": bool(eval_passed),
+        "adopt_recipe": adopt,
+        "recipe": dict(algorithmic_recipe or {}),
+        "contract_patch": dict(algorithmic_recipe or {}) if adopt else None,
+        "reason": (
+            "recipe_evaluated_and_ready"
+            if adopt
+            else "eval_gate_failed"
+            if admitted
+            else "rare_trigger_not_met"
+        ),
+    }
+
+
 def audit_search_contracts(
     contracts: Sequence[RootMcpToolContract],
 ) -> dict[str, Any]:
     """Find collection MCP contracts that cannot bound and continue results.
 
-    Existing list debt is reported but only newly introduced debt blocks CI.
-    Search/query contracts have never been grandfathered.
+    Every unbounded collection is blocking. There is deliberately no legacy
+    allowlist: age does not make an output safe for Builder context.
     """
 
     rows: list[dict[str, Any]] = []
@@ -203,15 +411,14 @@ def audit_search_contracts(
                 signals.append("unbounded_top_k")
         if cursor_name is None:
             signals.append("missing_pagination")
-        legacy_debt = bool(signals and contract.id in _LEGACY_COLLECTION_DEBT)
         rows.append(
             {
                 "tool_id": contract.id,
                 "bound_argument": bound_name,
                 "pagination_argument": cursor_name,
                 "signals": signals,
-                "legacy_debt": legacy_debt,
-                "blocking": bool(signals and not legacy_debt),
+                "legacy_debt": False,
+                "blocking": bool(signals),
                 "status": "review" if signals else "ok",
             }
         )
@@ -229,7 +436,12 @@ def audit_search_contracts(
 __all__ = [
     "DEFAULT_OPTIMIZE_CHARS",
     "DEFAULT_REVIEW_CHARS",
+    "CONTEXT_PRESSURE_THRESHOLDS",
     "audit_search_contracts",
+    "context_curator_decision",
+    "context_pressure_stage",
+    "evaluate_release_slo",
+    "evaluate_source_budget_change",
     "measure_output",
     "profile_audit_events",
 ]

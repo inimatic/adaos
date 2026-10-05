@@ -26,6 +26,56 @@ def test_sdk_export_std():
     assert "tools" in data and isinstance(data["tools"], list)
 
 
+def test_sdk_compatibility_report_rejects_removal_and_required_input() -> None:
+    previous = {
+        "tools": [
+            {
+                "name": "adaos.sdk.example.read",
+                "input_schema": {"required": []},
+                "contract": {"permissions": [], "pagination": {"supported": True}},
+            },
+            {"name": "adaos.sdk.example.removed"},
+        ]
+    }
+    current = {
+        "tools": [
+            {
+                "name": "adaos.sdk.example.read",
+                "input_schema": {"required": ["scope"]},
+                "contract": {"permissions": [], "pagination": {"supported": True}},
+            }
+        ]
+    }
+
+    report = sdk_exporter.compatibility_report(previous, current)
+
+    assert report["compatible"] is False
+    assert {item["kind"] for item in report["breaking"]} == {
+        "removed",
+        "required_inputs_added",
+    }
+
+
+def test_sdk_descriptor_applies_consumer_field_masks() -> None:
+    builder = get_descriptor_set(
+        "sdk_metadata",
+        level="std",
+        query="adaos.sdk.control_plane.list_quota_objects",
+        consumer="builder",
+    )["payload"]
+    diagnostics = get_descriptor_set(
+        "sdk_metadata",
+        level="std",
+        query="adaos.sdk.control_plane.list_quota_objects",
+        consumer="diagnostics",
+    )["payload"]
+
+    assert builder["consumer"] == "builder"
+    assert diagnostics["consumer"] == "diagnostics"
+    assert "permissions" in builder["field_mask"]["contract"]
+    assert "permissions" not in diagnostics["field_mask"]["contract"]
+
+
 def test_sdk_export_mini_lines():
     # mini нужен для LLM ранней стадии
     data = sdk_export(level="mini")

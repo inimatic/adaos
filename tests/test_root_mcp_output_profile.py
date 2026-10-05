@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import pytest
+
 from adaos.services.root_mcp.model import RootMcpSurface, RootMcpToolContract
 from adaos.services.root_mcp import descriptor_search
 from adaos.services.root_mcp import service as root_mcp_service
 from adaos.services.root_mcp.output_profile import (
     audit_search_contracts,
+    context_curator_decision,
+    context_pressure_stage,
+    evaluate_release_slo,
+    evaluate_source_budget_change,
     measure_output,
     profile_audit_events,
+)
+from adaos.services.root_mcp.opaque_cursor import (
+    decode_opaque_cursor,
+    encode_opaque_cursor,
 )
 from adaos.services.root_mcp import registry as descriptor_registry
 
@@ -43,6 +53,9 @@ def test_profile_audit_events_returns_largest_tools_first() -> None:
             "result_summary": {
                 "serialized_chars": 10,
                 "serialized_bytes": 10,
+                "estimated_tokens": 3,
+                "latency_ms": 5.0,
+                "cache_hit": True,
                 "optimization_signal": "ok",
             },
         },
@@ -51,6 +64,9 @@ def test_profile_audit_events_returns_largest_tools_first() -> None:
             "result_summary": {
                 "serialized_chars": 30_000,
                 "serialized_bytes": 31_000,
+                "estimated_tokens": 7_750,
+                "latency_ms": 80.0,
+                "cache_hit": False,
                 "optimization_signal": "review",
             },
         },
@@ -65,6 +81,9 @@ def test_profile_audit_events_returns_largest_tools_first() -> None:
     assert profile["top"][0]["calls"] == 2
     assert profile["top"][0]["signals"]["review"] == 1
     assert profile["top"][0]["latest_chars"] == 30_000
+    assert profile["top"][0]["p95_tokens"] == 7_750
+    assert profile["top"][0]["p50_latency_ms"] == 80.0
+    assert profile["top"][0]["cache_hit_rate"] == 0.0
 
 
 def test_search_contract_audit_requires_bound_and_pagination() -> None:
@@ -240,3 +259,179 @@ def test_architecture_catalog_is_a_bounded_typed_graph() -> None:
         edge["source"] in page_ids and edge["target"] in page_ids
         for edge in graph["edges"]
     )
+
+
+def test_opaque_cursor_is_bound_to_query_field_mask_digest_and_signature() -> None:
+    cursor = encode_opaque_cursor(
+        namespace="test",
+        offset=3,
+        query={"q": "router"},
+        field_mask=["id", "title"],
+        content_digest="sha256:generation-1",
+    )
+
+    assert decode_opaque_cursor(
+        cursor,
+        namespace="test",
+        query={"q": "router"},
+        field_mask=["id", "title"],
+        content_digest="sha256:generation-1",
+    ) == 3
+    for overrides in (
+        {"query": {"q": "other"}},
+        {"field_mask": ["id"]},
+        {"content_digest": "sha256:generation-2"},
+    ):
+        arguments = {
+            "namespace": "test",
+            "query": {"q": "router"},
+            "field_mask": ["id", "title"],
+            "content_digest": "sha256:generation-1",
+            **overrides,
+        }
+        with pytest.raises(ValueError):
+            decode_opaque_cursor(cursor, **arguments)
+    replacement = "A" if cursor[-1] != "A" else "B"
+    with pytest.raises(ValueError):
+        decode_opaque_cursor(
+            cursor[:-1] + replacement,
+            namespace="test",
+            query={"q": "router"},
+            field_mask=["id", "title"],
+            content_digest="sha256:generation-1",
+        )
+
+
+def test_architecture_catalog_caches_only_bounded_neighborhoods() -> None:
+    descriptor_registry._ARCHITECTURE_NEIGHBORHOOD_CACHE.clear()
+
+    first = descriptor_registry._architecture_catalog(query="router", limit=2, depth=1)
+    second = descriptor_registry._architecture_catalog(query="router", limit=2, depth=1)
+    unrooted = descriptor_registry._architecture_catalog(limit=1)
+
+    assert len(first["nodes"]) <= 2
+    assert first["cache"]["scope"] == "graph_neighborhood"
+    assert first["cache"]["hit"] is False
+    assert second["cache"]["hit"] is True
+    assert unrooted["cache"]["scope"] == "none"
+
+
+def test_context_margin_stages_preserve_reserve() -> None:
+    assert context_pressure_stage(used_tokens=700, capacity_tokens=1000)["stage"] == "observe"
+    assert context_pressure_stage(used_tokens=850, capacity_tokens=1000)["stage"] == "deterministic_trim"
+    assert context_pressure_stage(used_tokens=920, capacity_tokens=1000)["stage"] == "model_compact"
+    reserve = context_pressure_stage(used_tokens=970, capacity_tokens=1000)
+    assert reserve["stage"] == "reserve"
+    assert "deny_new_tool_call" in reserve["actions"]
+
+
+def test_p95_source_budget_changes_require_independent_quality_gate() -> None:
+    denied_raise = evaluate_source_budget_change(
+        source_id="registry",
+        current_budget=1000,
+        observed_p95=1400,
+        baseline_quality=0.91,
+        candidate_quality=0.911,
+        quality_floor=0.90,
+    )
+    accepted_trim = evaluate_source_budget_change(
+        source_id="registry",
+        current_budget=1000,
+        observed_p95=800,
+        baseline_quality=0.91,
+        candidate_quality=0.91,
+        quality_floor=0.90,
+    )
+
+    assert denied_raise["basis"] == "observed_p95"
+    assert denied_raise["approved"] is False
+    assert denied_raise["effective_budget"] == 1000
+    assert accepted_trim["approved"] is True
+    assert accepted_trim["effective_budget"] == 800
+
+
+def test_release_slo_includes_recall_as_an_independent_gate() -> None:
+    result = evaluate_release_slo(
+        [
+            {
+                "tool_id": "registry.search",
+                "p95_chars": 8000,
+                "p95_tokens": 2000,
+                "p95_latency_ms": 80,
+                "cache_hit_rate": 0.9,
+            }
+        ],
+        p95_chars_max=10_000,
+        p95_tokens_max=2500,
+        p95_latency_ms_max=100,
+        cache_hit_rate_min=0.8,
+        must_keep_recall={"registry.search": 0.94},
+        must_keep_recall_min=0.95,
+    )
+
+    assert result["passed"] is False
+    assert result["items"][0]["violations"] == ["must_keep_recall_below_slo"]
+
+
+def test_context_curator_is_rare_and_adopts_only_evaluated_algorithmic_recipe() -> None:
+    too_early = context_curator_decision(
+        source_id="sdk",
+        calls_since_last_run=5,
+        expected_saved_tokens=100,
+        estimated_run_cost_tokens=100,
+        algorithmic_recipe={"field_mask": ["id"]},
+        eval_passed=True,
+    )
+    learned = context_curator_decision(
+        source_id="sdk",
+        calls_since_last_run=20,
+        expected_saved_tokens=1000,
+        estimated_run_cost_tokens=500,
+        algorithmic_recipe={"field_mask": ["id"]},
+        eval_passed=True,
+    )
+
+    assert too_early["admitted"] is False
+    assert learned["mode"] == "control_plane_learning"
+    assert learned["adopt_recipe"] is True
+    assert learned["contract_patch"] == {"field_mask": ["id"]}
+
+
+def test_legacy_collection_cursor_rejects_changed_query_and_source() -> None:
+    values = [{"id": str(index)} for index in range(6)]
+    arguments = {"search": "notes", "limit": 2}
+    page = root_mcp_service._bounded_collection_result(
+        "dev_ticket.list", arguments, {"tickets": values}, offset=0, limit=2,
+    )
+    continued = {**arguments, "cursor": page["page"]["next_cursor"]}
+    assert root_mcp_service._collection_offset("dev_ticket.list", continued) == 2
+    second = root_mcp_service._bounded_collection_result(
+        "dev_ticket.list", continued, {"tickets": values}, offset=2, limit=2,
+    )
+    assert second["tickets"] == values[2:4]
+    with pytest.raises(ValueError):
+        root_mcp_service._collection_offset("dev_ticket.list", {**continued, "search": "weather"})
+    with pytest.raises(ValueError):
+        root_mcp_service._bounded_collection_result(
+            "dev_ticket.list", continued, {"tickets": [{"id": "changed"}, *values[1:]]}, offset=2, limit=2,
+        )
+
+
+def test_ci_profiler_always_samples_and_rejects_empty_measurements(tmp_path, monkeypatch) -> None:
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "mcp_profiler_under_test", Path(__file__).resolve().parents[1] / "tools/mcp_output_profiler.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "REPOSITORY_ROOT", tmp_path)
+    monkeypatch.setattr(module, "init_ctx", lambda: None)
+    monkeypatch.setattr(module, "configure_default_distributed_runtimes", lambda *a, **kw: None)
+    monkeypatch.setattr(module, "list_tool_contracts", lambda: [])
+    monkeypatch.setattr(module, "list_audit_events", lambda **kw: [])
+    calls = []
+    monkeypatch.setattr(module, "_sample_safe_tools", lambda: calls.append(True) or [])
+    monkeypatch.setattr(module.sys, "argv", ["profiler", "--ci", "--output", str(tmp_path / ".tmp/report.json")])
+    assert module.main() == 1
+    assert calls == [True]

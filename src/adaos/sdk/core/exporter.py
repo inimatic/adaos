@@ -329,6 +329,22 @@ def _selection_score(item: dict[str, Any], terms: list[str]) -> int:
     return score
 
 
+def _usage_frequency(item: dict[str, Any]) -> int:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    try:
+        return max(
+            0,
+            int(
+                meta.get("usage_frequency")
+                or item.get("usage_frequency")
+                or item.get("invocation_count")
+                or 0
+            ),
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
 def _facade_module_cards(symbols: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts: dict[str, int] = {}
     for item in symbols:
@@ -415,15 +431,17 @@ def export(
         candidates = [*tools, *facade_symbols]
         ranked = sorted(
             (
-                (_selection_score(item, terms), item)
+                (_selection_score(item, terms), _usage_frequency(item), item)
                 for item in candidates
             ),
-            key=lambda row: (-row[0], str(row[1].get("name") or "")),
+            key=lambda row: (-row[0], -row[1], str(row[2].get("name") or "")),
         )
         # A single weak summary hit (for example, "typed") is not enough to
         # spend task context on an unrelated SDK function. Exact/name hits or
         # at least two corroborating summary terms remain discoverable.
-        tools = [item for score, item in ranked if score >= 4][:bounded_limit]
+        tools = [item for score, _frequency, item in ranked if score >= 4][:bounded_limit]
+    else:
+        tools.sort(key=lambda item: (-_usage_frequency(item), str(item.get("name") or "")))
 
     events = [
         {
@@ -495,4 +513,91 @@ def export(
     }
 
 
-__all__ = ["export"]
+def _export_items(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = value.get("tools") if isinstance(value.get("tools"), list) else value.get("items")
+    return {
+        str(item.get("name") or item.get("n") or "").strip(): dict(item)
+        for item in rows or []
+        if isinstance(item, dict) and str(item.get("name") or item.get("n") or "").strip()
+    }
+
+
+def compatibility_report(
+    previous: dict[str, Any], current: dict[str, Any]
+) -> dict[str, Any]:
+    """Compare two generated SDK metadata releases using stable contracts.
+
+    Removal, newly required inputs, permission expansion, and loss of bounded
+    pagination are breaking. Additions and deprecations are reported
+    separately so release CI can gate them without feeding both full exports to
+    Builder.
+    """
+
+    before = _export_items(previous)
+    after = _export_items(current)
+    breaking: list[dict[str, Any]] = []
+    additive: list[dict[str, Any]] = []
+    changes: list[dict[str, Any]] = []
+    for name in sorted(set(before) - set(after)):
+        breaking.append({"symbol": name, "kind": "removed"})
+    for name in sorted(set(after) - set(before)):
+        additive.append({"symbol": name, "kind": "added"})
+    for name in sorted(set(before) & set(after)):
+        old = before[name]
+        new = after[name]
+        old_contract = dict(old.get("contract") or {})
+        new_contract = dict(new.get("contract") or {})
+        old_schema = old.get("input_schema") if isinstance(old.get("input_schema"), dict) else {}
+        new_schema = new.get("input_schema") if isinstance(new.get("input_schema"), dict) else {}
+        old_required = {str(item) for item in old_schema.get("required") or []}
+        new_required = {str(item) for item in new_schema.get("required") or []}
+        required_added = sorted(new_required - old_required)
+        if required_added:
+            breaking.append(
+                {"symbol": name, "kind": "required_inputs_added", "fields": required_added}
+            )
+        old_permissions = {str(item) for item in old_contract.get("permissions") or []}
+        new_permissions = {str(item) for item in new_contract.get("permissions") or []}
+        permissions_added = sorted(new_permissions - old_permissions)
+        if old_contract and permissions_added:
+            breaking.append(
+                {"symbol": name, "kind": "permissions_expanded", "permissions": permissions_added}
+            )
+        old_bounded = dict(old_contract.get("boundedness") or {})
+        new_bounded = dict(new_contract.get("boundedness") or {})
+        old_page = dict(old_contract.get("pagination") or {})
+        new_page = dict(new_contract.get("pagination") or {})
+        if old_contract and (
+            new_bounded.get("kind") == "unbounded"
+            or (bool(old_page.get("supported")) and not bool(new_page.get("supported")))
+        ):
+            breaking.append({"symbol": name, "kind": "boundedness_regressed"})
+        if not bool(old_contract.get("deprecated")) and bool(new_contract.get("deprecated")):
+            changes.append(
+                {
+                    "symbol": name,
+                    "kind": "deprecated",
+                    "replacement": new_contract.get("replacement"),
+                    "removedIn": new_contract.get("removedIn"),
+                }
+            )
+        old_digest = str(old_contract.get("digest") or "")
+        new_digest = str(new_contract.get("digest") or "")
+        if old_digest and new_digest and old_digest != new_digest:
+            changes.append({"symbol": name, "kind": "contract_changed"})
+    report = {
+        "schema": "adaos.sdk.compatibility_report.v1",
+        "compatible": not breaking,
+        "previous_digest": _schema_digest(previous),
+        "current_digest": _schema_digest(current),
+        "breaking": breaking,
+        "additive": additive,
+        "changes": changes,
+    }
+    report["digest"] = "sha256:" + hashlib.sha256(
+        json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return report
+
+
+__all__ = ["compatibility_report", "export"]

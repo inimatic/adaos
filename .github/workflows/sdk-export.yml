@@ -55,16 +55,18 @@ jobs:
           uv run pytest tests/test_exporter_descriptions.py tests/test_root_mcp_output_profile.py tests/test_ui_capabilities.py tests/test_device_access.py tests/test_device_inventory.py --junitxml=reports/sdk-junit.xml -q
 
       - name: Enforce MCP output budgets
-        run: uv run python tools/mcp_output_profiler.py --ci
+        run: uv run python tools/mcp_output_profiler.py --ci --sample
 
       - name: Build canonical SDK metadata
-        run: uv run python tools/build_sdk_metadata.py
+        run: uv run python tools/build_sdk_metadata.py --baseline src/adaos/sdk/descriptions/std.json --fail-on-breaking
 
       - name: Upload SDK metadata
         uses: actions/upload-artifact@v4
         with:
           name: adaos-sdk-metadata-${{ runner.os }}-py${{ matrix.python-version }}
-          path: build/sdk-metadata/adaos-sdk-metadata.json
+          path: |
+            build/sdk-metadata/adaos-sdk-metadata.json
+            build/sdk-metadata/compatibility.json
           retention-days: 7
 
   verify-reproducible:

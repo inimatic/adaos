@@ -312,6 +312,61 @@ def _context_plan_failure_message(
     )
 
 
+def _context_margin_envelope(
+    *,
+    used_tokens: int,
+    capacity_tokens: int,
+    model_call_expected: bool,
+) -> dict[str, Any]:
+    """Describe and enforce the Builder prompt margin as separate envelopes.
+
+    The compiler packet is only one consumer of the provider window.  Keeping
+    completion and recovery capacity explicit prevents a successful context
+    compilation from consuming the room needed to act on that context.
+    """
+
+    from adaos.services.root_mcp.output_profile import context_pressure_stage
+
+    capacity = max(1, int(capacity_tokens))
+    used = max(0, int(used_tokens))
+    pressure = context_pressure_stage(
+        used_tokens=used,
+        capacity_tokens=capacity,
+    )
+    fixed = max(256, int(capacity * 0.12))
+    interaction = max(512, int(capacity * 0.13))
+    completion = max(512, int(capacity * 0.08))
+    recovery = max(512, int(capacity * 0.10))
+    evidence = max(
+        0,
+        capacity - fixed - interaction - completion - recovery,
+    )
+    reserve_floor = completion + recovery
+    return {
+        "schema": "adaos.context.margin.v1",
+        "capacity_tokens": capacity,
+        "used_tokens": used,
+        "remaining_tokens": max(0, capacity - used),
+        "envelopes": {
+            "fixed": fixed,
+            "evidence": evidence,
+            "interaction": interaction,
+            "completion": completion,
+            "recovery_margin": recovery,
+        },
+        "reserve_floor_tokens": reserve_floor,
+        "pressure": pressure,
+        "model_call_expected": bool(model_call_expected),
+        "new_tool_call_admitted": pressure["stage"] != "reserve",
+        "model_compaction_admitted": False,
+        "model_compaction_reason": (
+            "evaluated_recipe_required"
+            if pressure["stage"] == "model_compact"
+            else "not_requested"
+        ),
+    }
+
+
 def _safe_token(value: Any, *, fallback: str = "project") -> str:
     token = "".join(
         ch if ch.isalnum() or ch in {"-", "_", "."} else "_"
@@ -2074,18 +2129,92 @@ class BuilderAutomationService:
                     budget_ceiling=context_budget_ceiling,
                 )
             )
-        compilation = service.compile(
-            {
-                "plan": plan,
-                "output_format": "min_json",
-                "role_authority": {
-                    "role": "project_builder",
-                    "write_scope": component_ref,
-                    "core_mutation": "denied",
-                },
-                "output_contract": {"result": "skill_factory.dev_result.v1"},
-            }
+        previous_control = (
+            dict(session.get("context_control"))
+            if isinstance(session.get("context_control"), Mapping)
+            else {}
         )
+        base_packet_ref = None
+        if (
+            str(previous_control.get("project_ref") or "").strip()
+            == project_ref
+        ):
+            base_packet_ref = (
+                str(previous_control.get("compiled_context_ref") or "").strip()
+                or None
+            )
+        compile_request = {
+            "plan": plan,
+            "output_format": "min_json",
+            "role_authority": {
+                "role": "project_builder",
+                "write_scope": component_ref,
+                "core_mutation": "denied",
+            },
+            "output_contract": {"result": "skill_factory.dev_result.v1"},
+            **({"base_packet_ref": base_packet_ref} if base_packet_ref else {}),
+        }
+        try:
+            compilation = service.compile(compile_request)
+        except KeyError:
+            # A retained session may outlive an explicitly pruned disposable
+            # projection.  The canonical capsule graph still permits a clean
+            # full compilation; authority/purpose mismatches remain fail-closed.
+            base_packet_ref = None
+            compile_request.pop("base_packet_ref", None)
+            compilation = service.compile(compile_request)
+        context_margin = _context_margin_envelope(
+            used_tokens=int(compilation.get("token_estimate") or 0),
+            capacity_tokens=int(plan["token_budget"]),
+            model_call_expected=model_call_expected,
+        )
+        if (
+            model_call_expected
+            and not bool(context_margin.get("new_tool_call_admitted"))
+        ):
+            raise ValueError(
+                "Builder context reserve is active: the compiled packet uses "
+                f"{context_margin['used_tokens']} of "
+                f"{context_margin['capacity_tokens']} tokens; free context or "
+                "start a digest-bound continuation before another model/tool boundary."
+            )
+        required_refs = {
+            str(item.get("ref") or "").strip()
+            for item in plan.get("selected") or []
+            if isinstance(item, Mapping) and bool(item.get("required"))
+        }
+        selected_refs = {
+            str(item or "").strip()
+            for item in compilation.get("selected_refs") or []
+            if str(item or "").strip()
+        }
+        compaction_receipt = {
+            "schema": "adaos.context.compaction_receipt.v1",
+            "mode": "deterministic_only",
+            "base_packet_ref": base_packet_ref,
+            "retained_refs": sorted(selected_refs),
+            "omitted": copy.deepcopy(plan.get("omitted") or []),
+            "loss_report": [],
+            "must_keep_coverage": {
+                "required": len(required_refs),
+                "present": len(required_refs & selected_refs),
+                "complete": required_refs.issubset(selected_refs),
+            },
+            "drilldown_refs": [
+                packet_artifact["ref"],
+                compilation["packet_ref"],
+            ],
+            "delta": copy.deepcopy(compilation.get("delta")),
+            "model_curator_invoked": False,
+            "model_curator_reason": (
+                "algorithmic_reductions_applied_first"
+                if context_margin["pressure"]["stage"] in {
+                    "deterministic_trim",
+                    "model_compact",
+                }
+                else "pressure_below_model_compaction_gate"
+            ),
+        }
         return {
             "run_ref": run_ref,
             "project_ref": project_ref,
@@ -2115,9 +2244,13 @@ class BuilderAutomationService:
             "plan_ref": plan["plan_ref"],
             "compiled_context_ref": compilation["packet_ref"],
             "compiled_context_digest": compilation["packet_digest"],
+            "base_compiled_context_ref": base_packet_ref,
             "model_projection_ref": compilation["model_projection_ref"],
             "model_projection_digest": compilation["model_projection_digest"],
             "context_delta_mode": compilation["delta_mode"],
+            "context_delta": compilation.get("delta"),
+            "context_margin": context_margin,
+            "context_compaction": compaction_receipt,
             "layer_usage": compilation["layer_usage"],
             "selected_refs": compilation["selected_refs"],
             "omitted": plan["omitted"],
@@ -8964,6 +9097,8 @@ class BuilderAutomationService:
                     "denied": control.get("denied") or [],
                     "unavailable": control.get("unavailable") or [],
                     "layer_usage": control.get("layer_usage") or [],
+                    "context_margin": control.get("context_margin") or {},
+                    "compaction": control.get("context_compaction") or {},
                     "usage": {
                         "provider_input_tokens": int(
                             usage_value.get("input_tokens") or 0
@@ -10410,9 +10545,13 @@ class BuilderAutomationService:
                     "plan_ref",
                     "compiled_context_ref",
                     "compiled_context_digest",
+                    "base_compiled_context_ref",
                     "model_projection_ref",
                     "model_projection_digest",
                     "context_delta_mode",
+                    "context_delta",
+                    "context_margin",
+                    "context_compaction",
                     "layer_usage",
                     "selected_refs",
                     "omitted",

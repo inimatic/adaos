@@ -118,6 +118,7 @@ class RootMcpClient:
         *,
         level: str = "std",
         purpose: str = "authoring",
+        consumer: str | None = None,
     ) -> dict[str, Any]:
         arguments = {
             "descriptor_id": str(descriptor_id),
@@ -126,6 +127,8 @@ class RootMcpClient:
         }
         if str(purpose or "authoring") == "migration":
             arguments["purpose"] = "migration"
+        if consumer:
+            arguments["consumer"] = str(consumer)
         return self.call(
             "development.get_descriptor_item",
             arguments=arguments,
@@ -200,6 +203,7 @@ class RootMcpClient:
         limit: int = 12,
         cursor: str | None = None,
         purpose: str = "authoring",
+        consumer: str = "builder",
         if_none_match: str | None = None,
         since_digest: str | None = None,
         request_id: str | None = None,
@@ -216,6 +220,9 @@ class RootMcpClient:
             arguments["cursor"] = str(cursor)
         if str(purpose or "authoring") == "migration":
             arguments["purpose"] = "migration"
+        consumer_token = str(consumer or "builder").strip().lower()
+        if consumer_token in {"builder", "migration", "diagnostics"}:
+            arguments["consumer"] = consumer_token
         if if_none_match:
             arguments["if_none_match"] = str(if_none_match)
         if since_digest:

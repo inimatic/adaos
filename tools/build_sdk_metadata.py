@@ -14,7 +14,7 @@ SOURCE_ROOT = REPOSITORY_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from adaos.sdk.core.exporter import export  # noqa: E402
+from adaos.sdk.core.exporter import compatibility_report, export  # noqa: E402
 
 
 def build_bundle() -> dict[str, object]:
@@ -52,6 +52,17 @@ def main() -> int:
         type=Path,
         default=REPOSITORY_ROOT / "build" / "sdk-metadata" / "adaos-sdk-metadata.json",
     )
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        help="Optional previous SDK metadata export or bundle to compare.",
+    )
+    parser.add_argument(
+        "--compatibility-output",
+        type=Path,
+        default=REPOSITORY_ROOT / "build" / "sdk-metadata" / "compatibility.json",
+    )
+    parser.add_argument("--fail-on-breaking", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     build_root = (REPOSITORY_ROOT / "build").resolve()
@@ -64,7 +75,37 @@ def main() -> int:
         encoding="utf-8",
         newline="\n",
     )
-    print(json.dumps({"output": str(output), "digest": payload["digest"]}))
+    summary: dict[str, object] = {"output": str(output), "digest": payload["digest"]}
+    if args.baseline is not None:
+        baseline_path = args.baseline.resolve()
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        if isinstance(baseline, dict):
+            if isinstance(baseline.get("migration"), dict):
+                baseline = baseline["migration"]
+            elif isinstance(baseline.get("authoring"), dict):
+                baseline = baseline["authoring"]
+        # Migration metadata retains deprecated APIs, so a supported migration
+        # path is not misclassified as an immediate removal from authoring.
+        report = compatibility_report(dict(baseline), dict(payload["migration"]))
+        compatibility_output = args.compatibility_output.resolve()
+        if not compatibility_output.is_relative_to(build_root):
+            parser.error("--compatibility-output must stay under the repository build directory")
+        compatibility_output.parent.mkdir(parents=True, exist_ok=True)
+        compatibility_output.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        summary["compatibility"] = {
+            "output": str(compatibility_output),
+            "compatible": report["compatible"],
+            "breaking_count": len(report["breaking"]),
+        }
+        print(json.dumps(summary))
+        if args.fail_on_breaking and not bool(report["compatible"]):
+            return 2
+        return 0
+    print(json.dumps(summary))
     return 0
 
 

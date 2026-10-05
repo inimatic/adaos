@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import threading
@@ -81,6 +82,7 @@ from .tokens import (
 )
 from .applications_plane import contracts as application_tool_contracts
 from .applications_plane import handlers as application_tool_handlers
+from .opaque_cursor import decode_opaque_cursor, encode_opaque_cursor
 from .users_access_plane import contracts as users_access_tool_contracts
 from .users_access_plane import handlers as users_access_tool_handlers
 
@@ -100,6 +102,33 @@ _DESCRIPTIVE_TOOL_IDS = {
     "nlu_authoring.list_templates",
     "sdk.describe_surface",
 }
+
+_COLLECTION_PAGE_LIMIT = 24
+_COLLECTION_PAGE_MAX = 100
+_COLLECTION_KEYS = (
+    "items",
+    "operations",
+    "components",
+    "placements",
+    "home_targets",
+    "releases",
+    "grants",
+    "reports",
+    "intakes",
+    "appeals",
+    "tickets",
+    "feedback",
+    "planes",
+    "tokens",
+    "sessions",
+    "incidents",
+    "artifacts",
+    "templates",
+    "training_targets",
+    "snapshots",
+    "contracts",
+    "targets",
+)
 
 
 def _iso_now() -> str:
@@ -367,7 +396,12 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                         "enum": [item.value for item in RootMcpSurface],
                     },
                     "plane_id": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 64,
+                        "default": 8,
+                    },
                     "offset": {"type": "integer", "minimum": 0, "maximum": 1000000},
                 },
             ),
@@ -425,6 +459,11 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "limit": {"type": "integer", "minimum": 1, "maximum": 64},
                     "cursor": {"type": "string"},
                     "purpose": {"type": "string", "enum": ["authoring", "migration"]},
+                    "consumer": {
+                        "type": "string",
+                        "enum": ["builder", "migration", "diagnostics"],
+                        "default": "builder",
+                    },
                     "if_none_match": {"type": "string"},
                     "since_digest": {"type": "string"},
                 },
@@ -487,6 +526,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "item_id": {"type": "string"},
                     "level": {"type": "string", "enum": ["mini", "std", "rich"]},
                     "purpose": {"type": "string", "enum": ["authoring", "migration"]},
+                    "consumer": {
+                        "type": "string",
+                        "enum": ["builder", "migration", "diagnostics"],
+                    },
                 },
                 required=["descriptor_id", "item_id"],
             ),
@@ -565,6 +608,11 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "limit": {"type": "integer", "minimum": 1, "maximum": 64, "default": 12},
                     "cursor": {"type": "string"},
                     "purpose": {"type": "string", "enum": ["authoring", "migration"]},
+                    "consumer": {
+                        "type": "string",
+                        "enum": ["builder", "migration", "diagnostics"],
+                        "default": "builder",
+                    },
                     "if_none_match": {"type": "string"},
                     "since_digest": {"type": "string"},
                 }
@@ -2553,6 +2601,54 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
     ]
 
 
+def _bounded_collection_contract(contract: RootMcpToolContract) -> RootMcpToolContract:
+    operation = contract.id.rsplit(".", 1)[-1].lower()
+    if not operation.startswith(("list", "search", "query")):
+        return contract
+    schema = contract.input_schema if isinstance(contract.input_schema, dict) else {}
+    properties = schema.setdefault("properties", {})
+    if not isinstance(properties, dict):
+        properties = {}
+        schema["properties"] = properties
+    existing_limit = properties.get("limit")
+    had_bounded_limit = isinstance(existing_limit, dict) and isinstance(
+        existing_limit.get("maximum"), int
+    )
+    had_pagination = any(
+        name in properties for name in ("cursor", "page_token", "pagination_token", "offset")
+    )
+    requires_projection = not had_bounded_limit or not had_pagination
+    limit_schema = properties.setdefault(
+        "limit",
+        {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": _COLLECTION_PAGE_MAX,
+            "default": _COLLECTION_PAGE_LIMIT,
+        },
+    )
+    if isinstance(limit_schema, dict):
+        limit_schema.setdefault("minimum", 1)
+        limit_schema["maximum"] = min(
+            int(limit_schema.get("maximum") or _COLLECTION_PAGE_MAX),
+            _COLLECTION_PAGE_MAX,
+        )
+        limit_schema.setdefault("default", min(_COLLECTION_PAGE_LIMIT, limit_schema["maximum"]))
+    if not any(name in properties for name in ("cursor", "page_token", "pagination_token", "offset")):
+        properties["cursor"] = {
+            "type": "string",
+            "description": "Opaque cursor returned by the previous bounded page.",
+        }
+    contract.input_schema = schema
+    contract.metadata = {
+        **dict(contract.metadata or {}),
+        "boundedness": "bounded_page",
+        "pagination": "opaque_cursor",
+        "central_pagination": requires_projection,
+    }
+    return contract
+
+
 def list_tool_contracts(
     *, surface: str | None = None, plane_id: str | None = None
 ) -> list[RootMcpToolContract]:
@@ -2562,6 +2658,7 @@ def list_tool_contracts(
         *users_access_tool_contracts(),
         *_placeholder_operational_contracts(),
     ]
+    items = [_bounded_collection_contract(item) for item in items]
     if surface:
         token = str(surface or "").strip().lower()
         items = [item for item in items if item.surface.value == token]
@@ -2601,6 +2698,7 @@ def get_descriptor(
     if_none_match: str | None = None,
     since_digest: str | None = None,
     purpose: str = "authoring",
+    consumer: str | None = None,
 ) -> dict[str, Any]:
     return get_descriptor_set(
         descriptor_id,
@@ -2613,6 +2711,7 @@ def get_descriptor(
         if_none_match=if_none_match,
         since_digest=since_digest,
         purpose=purpose,
+        consumer=consumer,
     )
 
 
@@ -2639,12 +2738,14 @@ def get_descriptor_item(
     *,
     level: str = "std",
     purpose: str = "authoring",
+    consumer: str | None = None,
 ) -> dict[str, Any]:
     return get_registry_descriptor_item(
         descriptor_id,
         item_id,
         level=level,
         purpose=purpose,
+        consumer=consumer,
     )
 
 
@@ -2712,7 +2813,10 @@ def _handle_list_contracts(
 ) -> dict[str, Any]:
     surface = str(arguments.get("surface") or "").strip().lower() or None
     plane_id = str(arguments.get("plane_id") or "").strip().lower() or None
-    limit = max(1, min(int(arguments.get("limit") or 12), 64))
+    # Contracts include full JSON Schemas and are therefore comparatively
+    # expensive. Keep the default model-facing page below the MCP output
+    # review budget; callers can explicitly page further when required.
+    limit = max(1, min(int(arguments.get("limit") or 8), 64))
     offset = max(0, min(int(arguments.get("offset") or 0), 1_000_000))
     contracts = list_tool_contracts(surface=surface, plane_id=plane_id)
     page = contracts[offset : offset + limit]
@@ -2779,6 +2883,7 @@ def _handle_get_descriptor_set(
             if_none_match=_text_or_none(arguments.get("if_none_match")),
             since_digest=_text_or_none(arguments.get("since_digest")),
             purpose=_text_or_none(arguments.get("purpose")) or "authoring",
+            consumer=_text_or_none(arguments.get("consumer")),
         )
     }
 
@@ -2834,6 +2939,7 @@ def _handle_get_descriptor_item(
             item_id,
             level=str(arguments.get("level") or "std"),
             purpose=_text_or_none(arguments.get("purpose")) or "authoring",
+            consumer=_text_or_none(arguments.get("consumer")),
         )
     }
 
@@ -2878,6 +2984,7 @@ def _handle_adaos_dev_descriptor(
             if_none_match=_text_or_none(arguments.get("if_none_match")),
             since_digest=_text_or_none(arguments.get("since_digest")),
             purpose=_text_or_none(arguments.get("purpose")) or "authoring",
+            consumer=_text_or_none(arguments.get("consumer")),
         )
     }
 
@@ -5491,6 +5598,136 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
 }
 
 
+def _collection_scope_digest(tool_id: str, arguments: Mapping[str, Any]) -> str:
+    scope = {
+        str(key): value
+        for key, value in arguments.items()
+        if key not in {"cursor", "limit", "offset", "_mcp_context"}
+    }
+    encoded = json.dumps(
+        {"tool_id": tool_id, "scope": scope},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _collection_cursor(
+    *, tool_id: str, arguments: Mapping[str, Any], offset: int, content_digest: str
+) -> str:
+    return encode_opaque_cursor(
+        namespace=f"root_mcp.collection:{tool_id}", offset=offset,
+        query=_collection_scope_digest(tool_id, arguments),
+        field_mask=arguments.get("field_mask"), content_digest=content_digest,
+    )
+
+
+def _collection_offset(
+    tool_id: str, arguments: Mapping[str, Any], *, content_digest: str | None = None
+) -> int:
+    explicit = arguments.get("offset")
+    if explicit not in (None, "") and not arguments.get("cursor"):
+        return max(0, int(explicit))
+    cursor = str(arguments.get("cursor") or "").strip()
+    if not cursor:
+        return 0
+    return decode_opaque_cursor(
+        cursor, namespace=f"root_mcp.collection:{tool_id}",
+        query=_collection_scope_digest(tool_id, arguments),
+        field_mask=arguments.get("field_mask"), content_digest=content_digest,
+    )
+
+
+def _collection_handler_arguments(
+    contract: RootMcpToolContract, arguments: dict[str, Any]
+) -> tuple[dict[str, Any], int, int] | None:
+    operation = contract.id.rsplit(".", 1)[-1].lower()
+    if not operation.startswith(("list", "search", "query")) or not bool(
+        contract.metadata.get("central_pagination")
+    ):
+        return None
+    limit = max(1, min(int(arguments.get("limit") or _COLLECTION_PAGE_LIMIT), _COLLECTION_PAGE_MAX))
+    offset = _collection_offset(contract.id, arguments)
+    expanded = dict(arguments)
+    # Legacy adapters expose one bounded generation. A stable fetch bound is
+    # essential: changing it per page would change the cursor's content digest.
+    if offset >= 1000:
+        raise ValueError("legacy collection snapshot exhausted; use native pagination")
+    expanded["limit"] = 1000
+    expanded.pop("cursor", None)
+    return expanded, offset, limit
+
+
+def _bounded_collection_result(
+    tool_id: str,
+    arguments: Mapping[str, Any],
+    result: Any,
+    *,
+    offset: int,
+    limit: int,
+) -> Any:
+    values_for_digest = result if isinstance(result, list) else (
+        next((result[name] for name in _COLLECTION_KEYS if isinstance(result.get(name), list)), [])
+        if isinstance(result, dict) else []
+    )
+    content_digest = "sha256:" + hashlib.sha256(json.dumps(
+        values_for_digest[:1000], sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")).hexdigest()
+    # Validate against this source generation, not only a client-supplied hash.
+    _collection_offset(tool_id, arguments, content_digest=content_digest)
+    if isinstance(result, list):
+        values = list(result[:1000])
+        page = values[offset : offset + limit]
+        has_more = offset + len(page) < len(values)
+        return {
+            "items": page,
+            "page": {
+                "count": len(page),
+                "limit": limit,
+                "offset": offset,
+                "has_more": has_more,
+                "digest": content_digest,
+                "source_limit_reached": len(values_for_digest) >= 1000,
+                "next_cursor": _collection_cursor(
+                    tool_id=tool_id, arguments=arguments, offset=offset + len(page), content_digest=content_digest
+                )
+                if has_more
+                else None,
+            },
+        }
+    if not isinstance(result, dict):
+        return result
+    key = next(
+        (name for name in _COLLECTION_KEYS if isinstance(result.get(name), list)),
+        None,
+    )
+    if key is None:
+        return result
+    values = list((result.get(key) or [])[:1000])
+    page = values[offset : offset + limit]
+    has_more = offset + len(page) < len(values)
+    return {
+        **result,
+        key: page,
+        "page": {
+            "field": key,
+            "count": len(page),
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "digest": content_digest,
+            "source_limit_reached": len(values_for_digest) >= 1000,
+            "next_cursor": _collection_cursor(
+                tool_id=tool_id, arguments=arguments, offset=offset + len(page), content_digest=content_digest
+            )
+            if has_more
+            else None,
+        },
+    }
+
+
 def _result_summary(result: Any) -> dict[str, Any]:
     measurement = measure_output(result)
     if isinstance(result, dict):
@@ -5820,6 +6057,7 @@ def invoke_tool(
     auth_context: dict[str, Any] | None = None,
 ) -> RootMcpResponseEnvelope:
     started_at = _iso_now()
+    started_monotonic = time.perf_counter()
     effective_request_id = str(request_id or new_id())
     effective_trace_id = str(trace_id or new_id())
     tool_token = str(tool_id or "").strip()
@@ -5950,6 +6188,9 @@ def invoke_tool(
                 try:
                     cache_key = ""
                     cache_hit = False
+                    collection_request = _collection_handler_arguments(
+                        contract, payload_arguments
+                    )
                     if bool(dry_run) and contract.id in _DESCRIPTIVE_TOOL_IDS:
                         cache_key = _descriptive_cache_key(
                             contract.id, payload_arguments, scope_meta, auth_context
@@ -5959,7 +6200,11 @@ def invoke_tool(
                             result = cached_result
                             cache_hit = True
                         else:
-                            handler_arguments = dict(payload_arguments)
+                            handler_arguments = (
+                                dict(collection_request[0])
+                                if collection_request is not None
+                                else dict(payload_arguments)
+                            )
                             handler_arguments["_mcp_context"] = {
                                 "request_id": effective_request_id,
                                 "trace_id": effective_trace_id,
@@ -5969,9 +6214,21 @@ def invoke_tool(
                                 "auth_context": dict(auth_context or {}),
                             }
                             result = handler(handler_arguments, dry_run=bool(dry_run))
+                            if collection_request is not None:
+                                result = _bounded_collection_result(
+                                    contract.id,
+                                    payload_arguments,
+                                    result,
+                                    offset=collection_request[1],
+                                    limit=collection_request[2],
+                                )
                             _write_descriptive_cache(cache_key, result)
                     else:
-                        handler_arguments = dict(payload_arguments)
+                        handler_arguments = (
+                            dict(collection_request[0])
+                            if collection_request is not None
+                            else dict(payload_arguments)
+                        )
                         handler_arguments["_mcp_context"] = {
                             "request_id": effective_request_id,
                             "trace_id": effective_trace_id,
@@ -5981,6 +6238,14 @@ def invoke_tool(
                             "auth_context": dict(auth_context or {}),
                         }
                         result = handler(handler_arguments, dry_run=bool(dry_run))
+                        if collection_request is not None:
+                            result = _bounded_collection_result(
+                                contract.id,
+                                payload_arguments,
+                                result,
+                                offset=collection_request[1],
+                                limit=collection_request[2],
+                            )
                     summary = _result_summary(result)
                     trace = _trace_meta(
                         tool_id=contract.id,
@@ -6120,6 +6385,13 @@ def invoke_tool(
         else {}
     )
     if _should_audit_tool(response.tool_id):
+        audit_summary = _result_summary(response.result) if response.ok else {}
+        audit_summary["latency_ms"] = round(
+            max(0.0, (time.perf_counter() - started_monotonic) * 1000.0), 3
+        )
+        cache_meta = response.meta.get("cache") if isinstance(response.meta, dict) else None
+        if isinstance(cache_meta, dict) and isinstance(cache_meta.get("hit"), bool):
+            audit_summary["cache_hit"] = bool(cache_meta.get("hit"))
         event = RootMcpAuditEvent(
             event_id=new_id(),
             request_id=response.request_id,
@@ -6138,7 +6410,7 @@ def invoke_tool(
             status=response.status,
             started_at=started_at,
             finished_at=_iso_now(),
-            result_summary=_result_summary(response.result) if response.ok else {},
+            result_summary=audit_summary,
             error=(response.error.to_dict() if response.error else {}),
             redactions=_redactions_for_tool(response.tool_id),
             meta={

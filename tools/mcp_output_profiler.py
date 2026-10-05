@@ -109,7 +109,7 @@ def main() -> int:
     parser.add_argument(
         "--ci",
         action="store_true",
-        help="fail on new unbounded collection contracts, sampling failures, or output-budget violations",
+        help="sample safe tools and fail on unbounded collection contracts, sampling failures, or output-budget violations",
     )
     parser.add_argument(
         "--budget-chars",
@@ -126,7 +126,7 @@ def main() -> int:
 
     ctx = init_ctx()
     configure_default_distributed_runtimes(ctx, authoritative=False)
-    sampled = _sample_safe_tools() if args.sample else []
+    sampled = _sample_safe_tools() if args.sample or args.ci else []
     contracts = list_tool_contracts()
     profile = profile_audit_events(
         list_audit_events(limit=max(1, args.event_limit)),
@@ -148,7 +148,7 @@ def main() -> int:
         "profile": profile,
         "contract_audit": contract_audit,
         "sampling": {
-            "requested": bool(args.sample),
+            "requested": bool(args.sample or args.ci),
             "count": len(sampled),
             "failures": [item for item in sampled if not item["ok"]],
             "budget_chars": budget,
@@ -180,6 +180,7 @@ def main() -> int:
     )
     if args.ci and (
         contract_audit["blocking_count"]
+        or not sampled
         or report["sampling"]["failures"]
         or budget_violations
     ):

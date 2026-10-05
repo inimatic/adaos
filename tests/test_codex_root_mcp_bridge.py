@@ -35,8 +35,32 @@ class _FakeRootMcpClient:
         self.calls.append(("foundation", "", {}))
         return {"foundation": {"id": "root-mcp-foundation"}}
 
-    def get_adaos_dev_architecture_catalog(self) -> dict:
-        self.calls.append(("get_adaos_dev_architecture_catalog", "", {}))
+    def get_adaos_dev_architecture_catalog(
+        self,
+        *,
+        query: str | None = None,
+        roots: list[str] | None = None,
+        depth: int = 1,
+        limit: int = 12,
+        cursor: str | None = None,
+        if_none_match: str | None = None,
+        since_digest: str | None = None,
+    ) -> dict:
+        self.calls.append(
+            (
+                "get_adaos_dev_architecture_catalog",
+                "",
+                {
+                    "query": query,
+                    "roots": roots or [],
+                    "depth": depth,
+                    "limit": limit,
+                    "cursor": cursor,
+                    "if_none_match": if_none_match,
+                    "since_digest": since_digest,
+                },
+            )
+        )
         return {"descriptor": {"payload": {"available": True, "page_count": 3}}}
 
     def get_adaos_dev_sdk_metadata(
@@ -45,12 +69,25 @@ class _FakeRootMcpClient:
         level: str = "std",
         query: str | None = None,
         limit: int = 20,
+        cursor: str | None = None,
+        purpose: str = "authoring",
+        consumer: str = "builder",
+        if_none_match: str | None = None,
+        since_digest: str | None = None,
     ) -> dict:
         self.calls.append(
             (
                 "get_adaos_dev_sdk_metadata",
                 level,
-                {"query": query, "limit": limit},
+                {
+                    "query": query,
+                    "limit": limit,
+                    "cursor": cursor,
+                    "purpose": purpose,
+                    "consumer": consumer,
+                    "if_none_match": if_none_match,
+                    "since_digest": since_digest,
+                },
             )
         )
         return {"descriptor": {"payload": {"meta": {"generated_at": "2026-01-01T00:00:00+00:00"}, "level": level}}}
@@ -93,12 +130,19 @@ class _FakeRootMcpClient:
         item_id: str,
         *,
         level: str = "std",
+        purpose: str = "authoring",
+        consumer: str = "builder",
     ) -> dict:
         self.calls.append(
             (
                 "get_descriptor_item",
                 descriptor_id,
-                {"item_id": item_id, "level": level},
+                {
+                    "item_id": item_id,
+                    "level": level,
+                    "purpose": purpose,
+                    "consumer": consumer,
+                },
             )
         )
         return {
@@ -1433,7 +1477,19 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert subnet_info is not None
     assert subnet_info["result"]["structuredContent"]["subnet"]["subnet_id"] == "test-subnet"
     assert ("get_target_status", "hub:test-subnet", {}) in fake_client.calls
-    assert ("get_adaos_dev_architecture_catalog", "", {}) in fake_client.calls
+    assert (
+        "get_adaos_dev_architecture_catalog",
+        "",
+        {
+            "query": None,
+            "roots": [],
+            "depth": 1,
+            "limit": 12,
+            "cursor": None,
+            "if_none_match": None,
+            "since_digest": None,
+        },
+    ) in fake_client.calls
     assert (
         "get_builder_context",
         "desktop",
@@ -1607,7 +1663,15 @@ def test_task_scoped_sdk_metadata_enforces_bounded_mini(monkeypatch) -> None:
     assert (
         "get_adaos_dev_sdk_metadata",
         "mini",
-        {"query": "Show token usage and remaining quota", "limit": 24},
+        {
+            "query": "Show token usage and remaining quota",
+            "limit": 24,
+            "cursor": None,
+            "purpose": "authoring",
+            "consumer": "builder",
+            "if_none_match": None,
+            "since_digest": None,
+        },
     ) in fake_client.calls
 
 
@@ -1655,7 +1719,12 @@ def test_task_scoped_descriptor_search_defaults_query_and_bounds_drilldown(monke
     assert (
         "get_descriptor_item",
         "sdk_metadata",
-        {"item_id": "adaos.sdk.control_plane.list_quota_objects", "level": "std"},
+        {
+            "item_id": "adaos.sdk.control_plane.list_quota_objects",
+            "level": "std",
+            "purpose": "authoring",
+            "consumer": "builder",
+        },
     ) in fake_client.calls
 
 
@@ -1732,7 +1801,15 @@ def test_general_sdk_metadata_preserves_explicit_detail(monkeypatch) -> None:
     assert (
         "get_adaos_dev_sdk_metadata",
         "rich",
-        {"query": None, "limit": 50},
+        {
+            "query": None,
+            "limit": 50,
+            "cursor": None,
+            "purpose": "authoring",
+            "consumer": "builder",
+            "if_none_match": None,
+            "since_digest": None,
+        },
     ) in fake_client.calls
 
 

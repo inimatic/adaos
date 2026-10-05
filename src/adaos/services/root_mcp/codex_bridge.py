@@ -776,6 +776,12 @@ class CodexRootMcpBridge:
                             "default": "authoring",
                             "description": "Deprecated SDK members are visible only to an explicit migration request.",
                         },
+                        "consumer": {
+                            "type": "string",
+                            "enum": ["builder", "migration", "diagnostics"],
+                            "default": "builder",
+                            "description": "Select the bounded field mask for this consumer.",
+                        },
                         "if_none_match": {"type": "string"},
                         "since_digest": {"type": "string"},
                     },
@@ -1727,6 +1733,11 @@ class CodexRootMcpBridge:
                         if task_scoped
                         else str(args.get("purpose") or "authoring")
                     ),
+                    consumer=(
+                        "builder"
+                        if task_scoped
+                        else str(args.get("consumer") or "builder")
+                    ),
                     if_none_match=_normalize_text(args.get("if_none_match")),
                     since_digest=_normalize_text(args.get("since_digest")),
                 ),
@@ -1773,6 +1784,11 @@ class CodexRootMcpBridge:
                     "authoring"
                     if task_scoped
                     else str(args.get("purpose") or "authoring")
+                ),
+                consumer=(
+                    "builder"
+                    if task_scoped
+                    else str(args.get("consumer") or "builder")
                 ),
             )
             return _tool_text(
