@@ -128,9 +128,9 @@ def _aggregate_codex_usage(
     unique: dict[str, dict[str, Any]] = {}
     for index, receipt in enumerate(receipts):
         identity = str(
-            receipt.get("root_event_id")
-            or receipt.get("idempotency_key")
+            receipt.get("idempotency_key")
             or receipt.get("task_id")
+            or receipt.get("root_event_id")
             or f"receipt:{index}"
         ).strip()
         unique[identity] = receipt
@@ -205,6 +205,60 @@ def _aggregate_codex_usage(
             ) + int(output_tokens or 0)
     aggregate["billable_tokens"] = billable_tokens
     aggregate["fresh_plus_output_tokens"] = fresh_plus_output_tokens
+    application_totals: dict[str, dict[str, Any]] = {}
+    iteration_rows: list[dict[str, Any]] = []
+    for receipt in usable:
+        if str(receipt.get("status") or "").strip() == "not_applicable":
+            continue
+        application_id = str(
+            receipt.get("application_id") or session.get("object_id") or ""
+        ).strip()
+        application_type = str(
+            receipt.get("application_type") or session.get("object_type") or ""
+        ).strip()
+        input_tokens = int(receipt.get("input_tokens") or 0)
+        cached_tokens = int(receipt.get("cached_input_tokens") or 0)
+        output_tokens = int(receipt.get("output_tokens") or 0)
+        billable = int(
+            receipt.get("billable_tokens")
+            or receipt.get("model_tokens")
+            or receipt.get("total_tokens")
+            or 0
+        )
+        values = {
+            "calls": max(0, int(receipt.get("attempts") or (1 if billable else 0))),
+            "fresh_input_tokens": max(0, input_tokens - cached_tokens),
+            "cached_input_tokens": max(0, cached_tokens),
+            "output_tokens": max(0, output_tokens),
+            "reasoning_tokens": max(0, int(receipt.get("reasoning_tokens") or 0)),
+            "billable_tokens": max(0, billable),
+        }
+        application_key = f"{application_type}:{application_id}"
+        row = application_totals.setdefault(
+            application_key,
+            {
+                "application_id": application_id or None,
+                "application_type": application_type or None,
+                **{key: 0 for key in values},
+            },
+        )
+        for key, value in values.items():
+            row[key] += value
+        iteration_rows.append(
+            {
+                "application_id": application_id or None,
+                "application_type": application_type or None,
+                "builder_session_id": receipt.get("builder_session_id"),
+                "builder_iteration": receipt.get("builder_iteration"),
+                "task_id": receipt.get("task_id"),
+                **values,
+            }
+        )
+    aggregate["by_application"] = sorted(
+        application_totals.values(),
+        key=lambda row: (-int(row["billable_tokens"]), str(row["application_id"])),
+    )[:50]
+    aggregate["by_iteration"] = iteration_rows[-50:]
     accuracies = {
         str(receipt.get("accuracy") or "").strip()
         for receipt in usable

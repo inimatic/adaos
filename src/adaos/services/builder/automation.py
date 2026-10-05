@@ -1491,6 +1491,11 @@ class BuilderAutomationService:
     background: bool = True
     materialize_on_completion: bool = True
     factory: SkillFactoryService = field(init=False)
+    _codex_usage_receipt_cache: dict[str, dict[str, Any]] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         self.state_dir = Path(self.state_dir)
@@ -8778,6 +8783,58 @@ class BuilderAutomationService:
         session["codex_usage_history"] = history[-50:]
 
     @staticmethod
+    def _codex_usage_attribution(
+        session: Mapping[str, Any],
+        *,
+        task_id: str,
+    ) -> dict[str, Any]:
+        """Return the stable application/iteration identity for one model turn.
+
+        A Builder session is a durable projection and can contain receipts from
+        many earlier iterations.  Provider usage is therefore attributed to
+        the task head that produced it, rather than to whichever session
+        snapshot happens to expose the receipt later.
+        """
+
+        control = (
+            session.get("context_control")
+            if isinstance(session.get("context_control"), Mapping)
+            else {}
+        )
+        object_type = str(session.get("object_type") or "").strip()
+        object_id = str(session.get("object_id") or "").strip()
+        session_id = str(session.get("session_id") or "").strip()
+        project_ref = str(
+            control.get("project_ref")
+            or session.get("project_ref")
+            or ""
+        ).strip()
+        confirmation = session.get("technical_application_identity_confirmation")
+        confirmation = confirmation if isinstance(confirmation, Mapping) else {}
+        application_id = str(
+            confirmation.get("technical_application_id")
+            or session.get("application_id")
+            or (project_ref.partition(":")[2] if project_ref.startswith("project:") else "")
+            or ""
+        ).strip()
+        raw_iteration = session.get("iteration")
+        try:
+            iteration = int(raw_iteration) if raw_iteration is not None else None
+        except (TypeError, ValueError):
+            iteration = None
+        if isinstance(raw_iteration, bool) or (iteration is not None and iteration < 0):
+            iteration = None
+        return {
+            "application_id": application_id or object_id or None,
+            "application_type": "project" if application_id else object_type or None,
+            "project_ref": project_ref or None,
+            "builder_session_id": session_id or None,
+            "builder_task_id": task_id,
+            "builder_iteration": iteration,
+            "context_run_ref": str(control.get("run_ref") or "").strip() or None,
+        }
+
+    @staticmethod
     def _zero_model_execution(
         session: Mapping[str, Any],
         task_id: str,
@@ -8963,6 +9020,7 @@ class BuilderAutomationService:
             current["context_attribution_receipt"] = {
                 "status": "recorded",
                 "task_id": task_id,
+                **self._codex_usage_attribution(current, task_id=task_id),
                 "run_ref": run_ref,
                 "plan_ref": plan_ref,
                 "receipt_id": receipt.get("receipt_id"),
@@ -8991,11 +9049,13 @@ class BuilderAutomationService:
         task_id = str(current.get("current_task_id") or "").strip()
         if not task_id or task_status not in _TERMINAL_STATUSES:
             return current
+        attribution = self._codex_usage_attribution(current, task_id=task_id)
         accounting = (
             current.get("codex_usage_accounting")
             if isinstance(current.get("codex_usage_accounting"), Mapping)
             else {}
         )
+        cache_key = f"{str(current.get('session_id') or '').strip()}:{task_id}"
         if (
             accounting.get("status") == "reported"
             or (
@@ -9003,6 +9063,24 @@ class BuilderAutomationService:
                 and self.codex_usage_reporter is None
             )
         ) and str(accounting.get("task_id") or "") == task_id:
+            retained = dict(accounting)
+            for key, value in attribution.items():
+                retained.setdefault(key, value)
+            current["codex_usage_accounting"] = retained
+            self._retain_codex_usage_receipt(current, retained)
+            self._codex_usage_receipt_cache[cache_key] = dict(retained)
+            return current
+        cached_receipt = self._codex_usage_receipt_cache.get(cache_key)
+        if isinstance(cached_receipt, Mapping):
+            # Finalization stages intentionally persist independent snapshots.
+            # A stale in-process stage must not replay the same idempotent Root
+            # request and entitlement refresh merely because its copy predates
+            # the terminal accounting field.
+            retained = dict(cached_receipt)
+            for key, value in attribution.items():
+                retained.setdefault(key, value)
+            current["codex_usage_accounting"] = retained
+            self._retain_codex_usage_receipt(current, retained)
             return current
         local_run = (
             current.get("local_run")
@@ -9022,6 +9100,7 @@ class BuilderAutomationService:
                 receipt = {
                     "schema": "adaos.builder.codex_usage_receipt.v1",
                     "task_id": task_id,
+                    **attribution,
                     "status": "not_applicable",
                     "accuracy": "exact",
                     "input_tokens": 0,
@@ -9061,6 +9140,7 @@ class BuilderAutomationService:
                             f"builder_status={task_status}; "
                             f"deterministic_strategy={zero_model_execution['strategy']}"
                         ),
+                        **attribution,
                     }
                     object_type = str(current.get("object_type") or "").strip()
                     object_id = str(current.get("object_id") or "").strip()
@@ -9094,6 +9174,7 @@ class BuilderAutomationService:
                 receipt = {
                     "schema": "adaos.builder.codex_usage_receipt.v1",
                     "task_id": task_id,
+                    **attribution,
                     "status": "unavailable",
                     "accuracy": "unavailable",
                     "total_tokens": None,
@@ -9102,6 +9183,8 @@ class BuilderAutomationService:
                 }
             current["codex_usage_accounting"] = receipt
             self._retain_codex_usage_receipt(current, receipt)
+            if receipt.get("status") == "reported":
+                self._codex_usage_receipt_cache[cache_key] = dict(receipt)
             if zero_model_execution or accounting:
                 current["updated_at"] = _now_iso()
             return self._record_context_attribution(
@@ -9115,6 +9198,7 @@ class BuilderAutomationService:
             receipt = {
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
+                **attribution,
                 "status": "reporter_unavailable",
                 "accuracy": usage_accuracy,
                 **usage,
@@ -9156,6 +9240,7 @@ class BuilderAutomationService:
             "occurred_at": str(current.get("updated_at") or _now_iso()),
             "change_id": str(current.get("change_id") or "").strip() or None,
             "note": f"builder_status={task_status}; attempts={int(usage.get('attempts') or 0)}",
+            **attribution,
         }
         if object_type == "scenario" and object_id:
             event["scenario_id"] = object_id
@@ -9171,6 +9256,7 @@ class BuilderAutomationService:
             receipt = {
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
+                **attribution,
                 "status": "reported",
                 "accuracy": usage_accuracy,
                 **usage,
@@ -9185,6 +9271,7 @@ class BuilderAutomationService:
             receipt = {
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
+                **attribution,
                 "status": "report_failed",
                 "accuracy": usage_accuracy,
                 **usage,
@@ -9196,6 +9283,8 @@ class BuilderAutomationService:
             }
         current["codex_usage_accounting"] = receipt
         self._retain_codex_usage_receipt(current, receipt)
+        if receipt.get("status") == "reported":
+            self._codex_usage_receipt_cache[cache_key] = dict(receipt)
         current["updated_at"] = _now_iso()
         return self._record_context_attribution(
             current,

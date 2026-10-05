@@ -568,7 +568,6 @@ def _client_capability_environment(repo_root: Path) -> dict[str, Any]:
             str(item.get("type") or "").strip()
             for item in inventory.get("widgets") or []
             if isinstance(item, Mapping)
-            and item.get("classification") in {"generic", "shell"}
             and str(item.get("type") or "").strip()
         }
     )
@@ -715,6 +714,83 @@ def _collect_usage(value: Any) -> dict[str, int]:
         "model_calls": 0,
     }
 
+    def add_usage(keys: Mapping[str, Any], *, authoritative: bool = False) -> None:
+        input_tokens = int(keys.get("input_tokens") or keys.get("prompt_tokens") or 0)
+        cached_tokens = int(
+            keys.get("cached_input_tokens") or keys.get("cached_tokens") or 0
+        )
+        details = keys.get("input_tokens_details")
+        if isinstance(details, Mapping):
+            cached_tokens = int(details.get("cached_tokens") or cached_tokens)
+        output_tokens = max(
+            0,
+            int(keys.get("output_tokens") or keys.get("completion_tokens") or 0),
+        )
+        output_details = keys.get("output_tokens_details")
+        reasoning = keys.get("reasoning_tokens")
+        if reasoning is None and isinstance(output_details, Mapping):
+            reasoning = output_details.get("reasoning_tokens")
+        totals["cached_input_tokens"] += max(0, cached_tokens)
+        totals["fresh_input_tokens"] += max(0, input_tokens - cached_tokens)
+        totals["output_tokens"] += output_tokens
+        totals["reasoning_tokens"] += max(0, int(reasoning or 0))
+        if authoritative:
+            attempts = keys.get("attempts")
+            totals["model_calls"] += (
+                max(0, int(attempts))
+                if isinstance(attempts, (int, float))
+                else int(input_tokens + output_tokens > 0)
+            )
+        else:
+            totals["model_calls"] += 1
+
+    def scoped_receipts(item: Any) -> tuple[bool, list[Mapping[str, Any]]]:
+        """Find receipts for current task heads, excluding session history copies."""
+
+        saw_task_scope = False
+        receipts: dict[str, Mapping[str, Any]] = {}
+        queue = [item]
+        visited: set[int] = set()
+        while queue:
+            child = queue.pop(0)
+            if not isinstance(child, Mapping) or id(child) in visited:
+                continue
+            visited.add(id(child))
+            current_task_id = str(child.get("current_task_id") or "").strip()
+            if current_task_id:
+                saw_task_scope = True
+                candidates: list[Mapping[str, Any]] = []
+                current = child.get("codex_usage_accounting")
+                if isinstance(current, Mapping):
+                    candidates.append(current)
+                history = child.get("codex_usage_history")
+                if isinstance(history, list):
+                    candidates.extend(
+                        receipt
+                        for receipt in history
+                        if isinstance(receipt, Mapping)
+                        and str(receipt.get("task_id") or "").strip()
+                        == current_task_id
+                    )
+                for receipt in candidates:
+                    if str(receipt.get("task_id") or current_task_id).strip() != current_task_id:
+                        continue
+                    identity = str(
+                        receipt.get("root_event_id")
+                        or receipt.get("idempotency_key")
+                        or receipt.get("task_id")
+                        or current_task_id
+                    ).strip()
+                    receipts[identity] = receipt
+                # A session may carry large historical snapshots.  Once its
+                # task head is known they are projections, not new executions.
+                continue
+            for key in ("session", "automation", "result", "output", "data"):
+                nested = child.get(key)
+                if isinstance(nested, Mapping):
+                    queue.append(nested)
+        return saw_task_scope, list(receipts.values())
+
     def visit(item: Any) -> None:
         if isinstance(item, Mapping):
             keys = {str(key): child for key, child in item.items()}
@@ -744,41 +820,59 @@ def _collect_usage(value: Any) -> dict[str, int]:
                 )
             )
             if usage_like:
-                input_tokens = int(
-                    keys.get("input_tokens") or keys.get("prompt_tokens") or 0
-                )
-                cached_tokens = int(
-                    keys.get("cached_input_tokens") or keys.get("cached_tokens") or 0
-                )
-                details = keys.get("input_tokens_details")
-                if isinstance(details, Mapping):
-                    cached_tokens = int(details.get("cached_tokens") or cached_tokens)
-                totals["cached_input_tokens"] += max(0, cached_tokens)
-                totals["fresh_input_tokens"] += max(0, input_tokens - cached_tokens)
-                totals["output_tokens"] += max(
-                    0,
-                    int(
-                        keys.get("output_tokens") or keys.get("completion_tokens") or 0
-                    ),
-                )
-                output_details = keys.get("output_tokens_details")
-                reasoning = keys.get("reasoning_tokens")
-                if reasoning is None and isinstance(output_details, Mapping):
-                    reasoning = output_details.get("reasoning_tokens")
-                totals["reasoning_tokens"] += max(0, int(reasoning or 0))
-                totals["model_calls"] += 1
+                add_usage(keys)
                 return
             for key, child in keys.items():
                 # This is an evidence copy of the terminal generation result.
                 # Its usage is already present on the public wait result.
-                if key == "generation_diagnostic":
+                if key in {
+                    "generation_diagnostic",
+                    "codex_usage_history",
+                    "codex_usage_accounting",
+                    "context_attribution_receipt",
+                    "budget_usage",
+                }:
                     continue
                 visit(child)
         elif isinstance(item, list):
             for child in item:
                 visit(child)
 
-    visit(value)
+    items: list[Any]
+    if isinstance(value, list):
+        items = list(value)
+    elif isinstance(value, Mapping) and not any(
+        key in value
+        for key in ("session", "task", "usage", "telemetry")
+    ) and value and all(isinstance(child, Mapping) for child in value.values()):
+        # ``context.outputs`` is keyed by E2E step id.  Attribute each step to
+        # its own active task instead of allowing one task scope to suppress a
+        # sibling step's direct generation telemetry.
+        items = list(value.values())
+    else:
+        items = [value]
+    authoritative_receipts: dict[str, Mapping[str, Any]] = {}
+    for item in items:
+        scoped, receipts = scoped_receipts(item)
+        if scoped:
+            for receipt in receipts:
+                if str(receipt.get("status") or "").strip() == "unavailable":
+                    continue
+                # Status reads in different steps are still the same execution.
+                # Prefer the stable task identity to a Root event ID which may
+                # only appear after a later successful reporting attempt.
+                identity = str(receipt.get("idempotency_key") or "").strip()
+                if not identity:
+                    task_id = str(receipt.get("task_id") or "").strip()
+                    identity = (
+                        f"{receipt.get('builder_session_id') or ''}:{task_id}"
+                        if task_id else str(receipt.get("root_event_id") or "")
+                    )
+                authoritative_receipts[identity] = receipt
+            continue
+        visit(item)
+    for receipt in authoritative_receipts.values():
+        add_usage(receipt, authoritative=True)
     return totals
 
 
@@ -852,7 +946,23 @@ class CompatibilityBuilderExecutor:
     def prepare_host(self, requested: str) -> str:
         from adaos.e2e.builder_host import require_builder_host
 
-        return require_builder_host(requested)
+        webspace_id = require_builder_host(requested)
+        # Builder E2E talks to the DEV execution port directly rather than
+        # through the API tool bridge.  Keep its active slot on the same DEV
+        # source revision before collecting any model/cost evidence; otherwise
+        # a stale slot can silently exercise old routing logic.
+        sync = self._manager().runtime_update(
+            "builder_skill",
+            space="dev",
+            notify_unchanged=False,
+        )
+        if not isinstance(sync, Mapping) or sync.get("ok") is not True:
+            reason = sync.get("reason") if isinstance(sync, Mapping) else None
+            raise BuilderE2EError(
+                "Builder DEV runtime could not be synchronized before E2E"
+                + (f": {reason}" if reason else "")
+            )
+        return webspace_id
 
     def _manager(self) -> Any:
         if self._skill_manager is None:
@@ -1620,9 +1730,20 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
         owner = preview.ensure_dev_webspace_via_owner(scenario_id, requested_id=webspace_id)
         if not (owner.get("ok") and owner.get("accepted") and owner.get("source_mode") == "dev" and owner.get("webspace_id") == webspace_id):
             raise BuilderE2EError("retained preview owner did not acknowledge development scope")
-        materialized = preview.materialize_revision_via_owner(webspace_id, scenario_id=scenario_id, revision=revision)
-        if not materialized.get("ok"):
-            raise BuilderE2EError("retained test preview materialization failed")
+        materialized = preview.materialize_revision_via_owner(
+            webspace_id, scenario_id=scenario_id, revision=revision,
+            preview_stage="prototype",
+        )
+        if not materialized.get("ok") or materialized.get("accepted") is False:
+            diagnostic = {
+                key: materialized.get(key)
+                for key in ("error", "reason", "skipped", "scenario_id", "validation")
+                if materialized.get(key) is not None
+            }
+            raise BuilderE2EError(
+                "retained test preview materialization failed: "
+                + json.dumps(diagnostic, ensure_ascii=False, default=str)
+            )
         return {"webspace_id": webspace_id, "scenario_id": scenario_id, "revision": revision,
                 "stage": "prototype", "test": True, "owner": owner, "materialization": materialized}
 

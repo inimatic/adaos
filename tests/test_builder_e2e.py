@@ -18,6 +18,7 @@ from adaos.e2e.builder import (
     BuilderE2EUnavailable,
     SdkBuilderExecutor,
     _evaluation_application_context,
+    _collect_usage,
     compare_builder_e2e_baseline,
     create_builder_e2e_baseline,
     load_builder_e2e_suite,
@@ -362,13 +363,21 @@ def test_retained_preview_requires_created_draft_and_owner_ack(tmp_path, monkeyp
     executor = SdkBuilderExecutor(repo_root=tmp_path)
     result = executor._prepare_review_preview("sample", context)
     assert result["revision"] == "proto-2"
-    assert materializations[0] == (("dev-sample",), {"scenario_id": "sample", "revision": "proto-2"})
+    assert materializations[0] == (("dev-sample",), {
+        "scenario_id": "sample", "revision": "proto-2", "preview_stage": "prototype",
+    })
     ack["source_mode"] = "workspace"
     with pytest.raises(BuilderE2EError, match="acknowledge development scope"):
         executor._prepare_review_preview("sample", context)
     assert len(materializations) == 1
     with pytest.raises(BuilderE2EError, match="this run's created draft"):
         executor._prepare_review_preview("unrelated", context)
+    ack["source_mode"] = "dev"
+    monkeypatch.setattr(preview, "materialize_revision_via_owner", lambda *args, **kwargs: {
+        "ok": True, "accepted": False, "skipped": "superseded_builder_target",
+    })
+    with pytest.raises(BuilderE2EError, match="superseded_builder_target"):
+        executor._prepare_review_preview("sample", context)
 
 
 def test_runner_reports_case_and_step_progress_without_changing_results(
@@ -462,6 +471,82 @@ def test_runner_counts_generation_usage_breakdown_once(tmp_path: Path) -> None:
     assert report["metrics"]["cached_input_tokens"] == 80
     assert report["metrics"]["output_tokens"] == 30
     assert report["metrics"]["reasoning_tokens"] == 11
+
+
+def test_usage_ignores_historic_receipts_when_current_task_is_only_queued() -> None:
+    output = {
+        "status": "automation_queued",
+        "session": {
+            "current_task_id": "task.current",
+            "codex_usage_history": [
+                {
+                    "task_id": "task.previous",
+                    "input_tokens": 1_000,
+                    "cached_input_tokens": 900,
+                    "output_tokens": 50,
+                    "attempts": 1,
+                }
+            ],
+            "context_attribution_receipt": {
+                "task_id": "task.previous",
+                "usage": {"provider_input_tokens": 1_000, "output_tokens": 50},
+            },
+            "budget_usage": {
+                "observed": {"input_tokens": 1_000, "output_tokens": 50}
+            },
+        },
+    }
+
+    assert _collect_usage([output]) == {
+        "fresh_input_tokens": 0,
+        "cached_input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0,
+        "model_calls": 0,
+    }
+
+
+def test_usage_counts_current_task_receipt_once_across_session_projections() -> None:
+    receipt = {
+        "task_id": "task.current",
+        "root_event_id": "usage.current",
+        "status": "reported",
+        "input_tokens": 1_200,
+        "cached_input_tokens": 900,
+        "output_tokens": 100,
+        "reasoning_tokens": 30,
+        "attempts": 2,
+    }
+    output = {
+        "status": "completed",
+        "session": {
+            "current_task_id": "task.current",
+            "codex_usage_accounting": receipt,
+            "codex_usage_history": [receipt, {**receipt}],
+            "context_attribution_receipt": {
+                "task_id": "task.current",
+                "usage": {
+                    "provider_input_tokens": 1_200,
+                    "cached_input_tokens": 900,
+                    "output_tokens": 100,
+                },
+            },
+        },
+    }
+
+    expected = {
+        "fresh_input_tokens": 300,
+        "cached_input_tokens": 900,
+        "output_tokens": 100,
+        "reasoning_tokens": 30,
+        "model_calls": 2,
+    }
+    assert _collect_usage([output]) == expected
+    assert _collect_usage({"wait": output, "status": output}) == expected
+    before_report = copy.deepcopy(output)
+    before_report["session"]["codex_usage_accounting"].pop("root_event_id")
+    before_report["session"]["codex_usage_history"] = []
+    assert _collect_usage([before_report, output]) == expected
 
 
 def test_required_failure_stops_case_but_optional_failure_does_not(
@@ -1105,6 +1190,51 @@ def test_compatibility_executor_validates_actual_generic_request_journal(
     assert mismatch["violations"][0]["code"] == "generation_contract_mismatch"
 
 
+def test_compatibility_executor_syncs_dev_runtime_before_e2e(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.e2e.builder import CompatibilityBuilderExecutor
+
+    class Manager:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, bool]] = []
+
+        def runtime_update(self, name, *, space, notify_unchanged):
+            self.calls.append((name, space, notify_unchanged))
+            return {"ok": True, "status": "updated"}
+
+    manager = Manager()
+    executor = CompatibilityBuilderExecutor(repo_root=tmp_path)
+    executor._skill_manager = manager
+    monkeypatch.setattr(
+        "adaos.e2e.builder_host.require_builder_host",
+        lambda requested: f"{requested}-ready",
+    )
+
+    assert executor.prepare_host("builder-dev") == "builder-dev-ready"
+    assert manager.calls == [("builder_skill", "dev", False)]
+
+
+def test_compatibility_executor_fails_when_dev_runtime_cannot_sync(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.e2e.builder import BuilderE2EError, CompatibilityBuilderExecutor
+
+    class Manager:
+        def runtime_update(self, *_args, **_kwargs):
+            return {"ok": False, "reason": "no_active_runtime"}
+
+    executor = CompatibilityBuilderExecutor(repo_root=tmp_path)
+    executor._skill_manager = Manager()
+    monkeypatch.setattr(
+        "adaos.e2e.builder_host.require_builder_host",
+        lambda requested: requested,
+    )
+
+    with pytest.raises(BuilderE2EError, match="no_active_runtime"):
+        executor.prepare_host("builder-dev")
+
+
 def test_compatibility_executor_waits_for_exact_llm_job(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1469,3 +1599,48 @@ def test_client_profile_evidence_rejects_core_components_missing_at_runtime(
     assert evidence["status"] == "incompatible"
     assert evidence["missing_runtime_types"] == ["ui.table"]
     assert evidence["semantic_unsupported"] == {"action_kinds": ["emit"]}
+
+
+def test_client_profile_accepts_catalog_components_from_product_extensions(
+    tmp_path: Path,
+) -> None:
+    inventory_path = (
+        tmp_path
+        / "src/adaos/integrations/adaos-client/architecture/evidence"
+        / "client-capability-inventory.v1.json"
+    )
+    catalog_path = tmp_path / "src/adaos/abi/ui.capability_catalog.v1.json"
+    inventory_path.parent.mkdir(parents=True)
+    catalog_path.parent.mkdir(parents=True)
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.client.capability_inventory.v1",
+                "digest": "sha256:inventory",
+                "widgets": [
+                    {
+                        "type": "ui.chat",
+                        "classification": "product_extension",
+                        "loading": "common",
+                    }
+                ],
+                "semantics": {"unsupported": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "catalog_version": "test",
+                "components": [{"manifest": {"widget_type": "ui.chat"}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = _client_capability_environment(tmp_path)
+
+    assert evidence["status"] == "compatible"
+    assert evidence["generic_runtime_types"] == ["ui.chat"]
+    assert evidence["missing_runtime_types"] == []

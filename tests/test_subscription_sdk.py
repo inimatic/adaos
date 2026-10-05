@@ -57,6 +57,7 @@ def test_codex_usage_snapshot_projects_bounded_24h_usage(monkeypatch) -> None:
         "reason": None,
         "last_model": None,
         "by_model": [],
+        "by_application": [],
         "cost": {
             "status": "unavailable",
             "period": "24h",
@@ -103,6 +104,36 @@ def test_codex_usage_preserves_bounded_model_breakdown_without_raw_payload(monke
     assert snapshot["last_model"] == "model-a"
     assert snapshot["by_model"][0]["billable_tokens"] == 15
     assert "token" not in snapshot["by_model"][0]
+
+
+def test_codex_usage_projects_bounded_application_and_iteration_breakdown(monkeypatch):
+    monkeypatch.setattr(economic_policy, "current_subnet_economic_status", lambda: {
+        "usage": {"codex.api.tokens": {"used_24h": 110, "usage_breakdown": {"window_24h": {
+            "by_application": [{
+                "application_id": "notes", "application_type": "scenario",
+                "project_ref": "project:notes", "billable_tokens": 110,
+                "fresh_input_tokens": 20, "cached_input_tokens": 80,
+                "output_tokens": 10, "reasoning_tokens": 4, "runs": 1,
+                "last_seen_at": "2026-10-05T09:00:00Z", "secret": "not-public",
+                "iterations": [{
+                    "builder_session_id": "automation.scenario.notes",
+                    "builder_iteration": 0, "billable_tokens": 110,
+                    "fresh_input_tokens": 20, "cached_input_tokens": 80,
+                    "output_tokens": 10, "reasoning_tokens": 4, "runs": 1,
+                    "last_seen_at": "2026-10-05T09:00:00Z", "task_id": "private",
+                }],
+            }],
+        }}}},
+    })
+
+    row = subscriptions.get_codex_usage_snapshot()["by_application"][0]
+
+    assert row["application_id"] == "notes"
+    assert row["billable_tokens"] == 110
+    assert row["iterations"][0]["builder_iteration"] == 0
+    assert row["iterations"][0]["billable_tokens"] == 110
+    assert "secret" not in row
+    assert "task_id" not in row["iterations"][0]
 
 
 def test_codex_usage_snapshot_is_unavailable_without_metering(monkeypatch) -> None:

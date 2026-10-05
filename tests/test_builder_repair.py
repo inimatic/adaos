@@ -389,6 +389,36 @@ def test_builder_work_item_aggregates_usage_across_continuation_tasks(tmp_path: 
     assert usage["root_event_ids"] == ["codex_usage.initial"]
 
 
+def test_usage_groups_iterations_without_recounting_reported_task() -> None:
+    from adaos.services.builder.repair import _aggregate_codex_usage
+
+    receipt = {
+        "task_id": "task.initial", "status": "reporter_unavailable",
+        "application_id": "notes", "application_type": "project",
+        "builder_session_id": "automation.notes", "builder_iteration": 0,
+        "input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 10,
+        "total_tokens": 110, "attempts": 1,
+    }
+    reported = {**receipt, "status": "reported", "root_event_id": "usage.initial"}
+    continuation = {**receipt, "task_id": "task.next", "builder_iteration": 1}
+    session = {
+        "current_task_id": "task.next",
+        "codex_usage_history": [receipt, reported],
+        "codex_usage_accounting": continuation,
+    }
+
+    aggregate = _aggregate_codex_usage(session)
+
+    assert aggregate["receipt_count"] == 2
+    assert aggregate["billable_tokens"] == 220
+    assert aggregate["by_application"] == [{
+        "application_id": "notes", "application_type": "project", "calls": 2,
+        "fresh_input_tokens": 40, "cached_input_tokens": 160,
+        "output_tokens": 20, "reasoning_tokens": 0, "billable_tokens": 220,
+    }]
+    assert [row["builder_iteration"] for row in aggregate["by_iteration"]] == [0, 1]
+
+
 def test_completed_builder_repair_is_not_reopened_by_automation_poll(tmp_path: Path) -> None:
     service = BuilderRepairService(state_dir=tmp_path)
     task = service.report(

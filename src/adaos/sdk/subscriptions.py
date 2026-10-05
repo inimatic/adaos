@@ -56,6 +56,46 @@ def project_codex_usage_window(value: Mapping[str, Any]) -> dict[str, Any]:
     """Sanitize a Root usage window for model/cost UI without another refresh."""
     window = _mapping(value)
     rows = window.get("by_model")
+    application_rows = window.get("by_application")
+    usage_fields = (
+        "runs",
+        "zero_model_tasks",
+        "fresh_input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "billable_tokens",
+    )
+    by_application: list[dict[str, Any]] = []
+    if isinstance(application_rows, list):
+        for row in application_rows[:100]:
+            if not isinstance(row, Mapping):
+                continue
+            iterations = row.get("iterations")
+            by_application.append(
+                {
+                    "application_id": _text(row.get("application_id"))[:200] or None,
+                    "application_type": _text(row.get("application_type"))[:80] or None,
+                    "project_ref": _text(row.get("project_ref"))[:240] or None,
+                    "last_seen_at": _text(row.get("last_seen_at"))[:80] or None,
+                    **{key: _optional_int(row.get(key)) for key in usage_fields},
+                    "iterations": [
+                        {
+                            "builder_session_id": _text(item.get("builder_session_id"))[:240] or None,
+                            "builder_iteration": _optional_int(item.get("builder_iteration")),
+                            "last_seen_at": _text(item.get("last_seen_at"))[:80] or None,
+                            **{
+                                key: _optional_int(item.get(key))
+                                for key in usage_fields
+                            },
+                        }
+                        for item in iterations[:100]
+                        if isinstance(item, Mapping)
+                    ]
+                    if isinstance(iterations, list)
+                    else [],
+                }
+            )
     return {
         "last_model": _text(window.get("last_model"))[:200] or None,
         "by_model": [
@@ -65,6 +105,7 @@ def project_codex_usage_window(value: Mapping[str, Any]) -> dict[str, Any]:
                  "runs", "fresh_input_tokens", "cached_input_tokens", "output_tokens", "billable_tokens")}}
             for row in rows[:100] if isinstance(row, Mapping)
         ] if isinstance(rows, list) else [],
+        "by_application": by_application,
         "cost": _cost_projection(window.get("cost")),
     }
 
@@ -93,6 +134,7 @@ class CodexUsageSnapshot:
     reason: str | None = None
     last_model: str | None = None
     by_model: list[dict[str, Any]] = field(default_factory=list)
+    by_application: list[dict[str, Any]] = field(default_factory=list)
     cost: dict[str, Any] = field(default_factory=lambda: _cost_projection({}))
 
     def to_dict(self) -> dict[str, Any]:

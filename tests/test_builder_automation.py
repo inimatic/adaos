@@ -2121,6 +2121,7 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(
         "object_type": "scenario",
         "object_id": "recipes",
         "current_task_id": "task.1",
+        "iteration": 0,
         "updated_at": "2026-08-29T06:00:00+00:00",
         "local_run": {"path": str(run_root), "events_path": str(journal)},
         "context_control": {
@@ -2133,6 +2134,7 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(
 
     first = service._report_terminal_codex_usage(session, task_status="failed")
     second = service._report_terminal_codex_usage(first, task_status="failed")
+    stale_stage = service._report_terminal_codex_usage(session, task_status="failed")
 
     assert len(calls) == 1
     assert calls[0]["status"] == "failed"
@@ -2140,10 +2142,19 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(
     assert calls[0]["total_tokens"] == 1600
     assert calls[0]["reasoning_tokens"] == 80
     assert calls[0]["idempotency_key"].endswith(":task.1:codex-usage:v1")
+    assert calls[0]["application_id"] == "recipe_suite"
+    assert calls[0]["application_type"] == "project"
+    assert calls[0]["project_ref"] == "project:recipe_suite"
+    assert calls[0]["builder_session_id"] == "automation.scenario.recipes"
+    assert calls[0]["builder_task_id"] == "task.1"
+    assert calls[0]["builder_iteration"] == 0
     assert second["codex_usage_accounting"]["status"] == "reported"
     assert second["codex_usage_accounting"]["total_tokens"] == 1600
     assert second["codex_usage_accounting"]["model_tokens"] == 1600
     assert second["codex_usage_accounting"]["billable_tokens"] == 1600
+    assert second["codex_usage_accounting"]["application_id"] == "recipe_suite"
+    assert second["codex_usage_accounting"]["builder_iteration"] == 0
+    assert stale_stage["codex_usage_accounting"] == second["codex_usage_accounting"]
     attribution = second["context_attribution_receipt"]
     assert attribution["status"] == "recorded"
     assert attribution["usage"]["provider_input_tokens"] == 1200
