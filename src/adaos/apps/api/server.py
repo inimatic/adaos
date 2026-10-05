@@ -2399,6 +2399,8 @@ class AdminRootMcpCallRequest(BaseModel):
     trace_id: str | None = None
     dry_run: bool = True
     scope: dict[str, Any] = Field(default_factory=dict)
+    capability_profile: str | None = Field(default=None, max_length=80)
+    actor: str | None = Field(default=None, max_length=200)
 
 
 class CoreUpdateStartRequest(BaseModel):
@@ -2965,7 +2967,15 @@ async def admin_root_mcp_logs(
 
 @app.post("/api/admin/root_mcp/call", dependencies=[Depends(require_token)])
 async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
+    from adaos.services.companion.plane import TOOLS as companion_lab_tools
+
     allowed_tools = {
+        **{name: contract[2] for name, contract in companion_lab_tools.items()},
+        "companion.context.get": "companion.read",
+        "companion.action.preview": "companion.execute",
+        "companion.action.execute": "companion.execute",
+        "companion.activity.list": "companion.read",
+        "companion.capability_request.capture": "companion.request",
         "development.get_descriptor_item": "development.read.descriptors",
         "development.search_descriptors": "development.read.descriptors",
         "desktop.preview_action": "development.read.descriptors",
@@ -3043,7 +3053,31 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
     # `require_token` authenticates the shared node credential as the local
     # owner. Keep that subject identity through the Root MCP bridge so the
     # access plane can apply and audit its owner policy.
-    actor = f"user:{current_user_id(get_ctx())}"
+    requested_actor = str(body.actor or "").strip()
+    if requested_actor and not requested_actor.startswith("skill:"):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_local_actor", "actor": requested_actor},
+        )
+    actor = requested_actor or f"user:{current_user_id(get_ctx())}"
+    capabilities = [required_capability]
+    grant_source = "local_owner_tool_allowlist"
+    profile = str(body.capability_profile or "").strip()
+    if profile:
+        from adaos.services.root_mcp.sessions import DEFAULT_CAPABILITY_PROFILES
+
+        profile_capabilities = DEFAULT_CAPABILITY_PROFILES.get(profile)
+        if profile_capabilities is None or required_capability not in profile_capabilities:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "capability_profile_forbidden",
+                    "capability_profile": profile,
+                    "required_capability": required_capability,
+                },
+            )
+        capabilities = list(profile_capabilities)
+        grant_source = "local_capability_profile"
     from adaos.services.runtime_executor import run_runtime_interactive
 
     response = await run_runtime_interactive(
@@ -3059,7 +3093,9 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         auth_context={
             "method": "root_token",
             "actor": actor,
-            "capabilities": [required_capability],
+            "capabilities": capabilities,
+            "capability_profile": profile or None,
+            "grant_source": grant_source,
             "allowed_target_ids": [scope.get("target_id")] if scope.get("target_id") else [],
             "subnet_id": scope.get("subnet_id"),
         },

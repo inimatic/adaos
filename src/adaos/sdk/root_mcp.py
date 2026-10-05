@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from adaos.sdk.data.root_mcp import (
+    call_local_root_mcp_tool,
     get_local_activity_log,
     get_local_operational_surface,
     get_local_target_context,
@@ -11,6 +12,7 @@ from adaos.sdk.data.root_mcp import (
 )
 
 __all__ = [
+    "call_local_root_mcp_tool",
     "get_local_activity_log",
     "get_local_operational_surface",
     "get_local_target_context",

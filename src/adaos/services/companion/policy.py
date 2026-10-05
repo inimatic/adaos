@@ -26,12 +26,15 @@ def guard_skill_call(skill: str, tool: str, payload: Mapping[str, Any]) -> None:
     if skill in EXPERIMENTAL_NLU:
         raise PermissionError("experimental_nlu_removed: supported engines are regexp and Rasa")
     meta = payload.get("_meta") or {}
+    if not isinstance(meta, Mapping):
+        meta = {}
     is_sage = skill == "conversation_companions" and (
         payload.get("character_id") == "sage"
         or meta.get("active_agent_id") == AGENT_ID
         or meta.get("agent_id") == AGENT_ID
         or tool in {"get_companion_context", "list_companion_activity", "execute_companion_action",
-                    "capture_capability_request", "learning_session", "learning_feedback", "learning_review"}
+                    "capture_capability_request", "learning_session", "learning_feedback", "learning_review",
+                    "get_learning_lab", "learning_lab_action"}
     )
     if is_sage:
         require_enabled()

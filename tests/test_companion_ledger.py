@@ -80,3 +80,29 @@ def test_bundle_detects_tampering(ledger):
         db.execute("UPDATE sessions SET bundle_digest='tampered'")
     with pytest.raises(ValueError, match="integrity_error"):
         ledger.bundle(session)
+
+
+def test_memory_requires_review_and_revision_binding(ledger):
+    session = start(ledger)
+    evidence = ledger.append(session, "turn", {"text": "показ"}, turn="t")
+    proposal = ledger.hypothesis(session, turn="t", proposal={"kind": "capability_binding", "surface": "показ",
+        "binding": "ui:slideshow", "scope": {"catalog_digest": "v1"}, "evidence_refs": [evidence["id"]]})
+    assert not ledger.hypotheses(session, catalog_digest="v1")[0]["usable_for_shadow"]
+    ledger.review(session, proposal["id"], kind="hypothesis", actor="user:test", payload={"status": "shadow"})
+    assert ledger.hypotheses(session, catalog_digest="v1")[0]["usable_for_shadow"]
+    assert not ledger.hypotheses(session, catalog_digest="v2")[0]["usable_for_shadow"]
+    ledger.review(session, proposal["id"], kind="hypothesis", actor="user:test", payload={"status": "quarantined", "negative_evidence": "wrong target"})
+    memory = ledger.hypotheses(session, catalog_digest="v1")[0]
+    assert memory["contradictions"] == ["wrong target"] and not memory["usable_for_shadow"]
+
+
+def test_review_rejects_foreign_owner_and_unknown_target(ledger):
+    session = start(ledger)
+    ledger.append(session, "turn", {"text": "test"}, turn="t")
+    with pytest.raises(ValueError, match="session_owner_required"):
+        ledger.feedback(session, "t", label="correct", correction="", actor="user:other")
+    with pytest.raises(ValueError, match="review_target_not_found"):
+        ledger.review(session, "unknown", kind="label", actor="user:test", payload={})
+    ledger.feedback(session, "t", label="correct", correction="", actor="user:test")
+    assert ledger.seal(session)["feedback_coverage"] == 1
+    assert ledger.workbench(session)["cases"][0]["review_required"]

@@ -21,6 +21,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         application_report_relay,
         builder,
         component_updates,
+        companion_lab,
         development_feedback,
         development_tickets,
         distributed_topology,
@@ -52,6 +53,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
 
     return (
         RuntimeRouter(tool_bridge.router, "/api"),
+        RuntimeRouter(companion_lab.router, "/api/companion/lab"),
         RuntimeRouter(application_report_relay.router),
         RuntimeRouter(subnet_api.router, "/api"),
         RuntimeRouter(nlu_teacher_api.router, "/api"),

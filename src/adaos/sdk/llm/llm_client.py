@@ -474,7 +474,8 @@ def _extract_job_output_text(payload: Mapping[str, Any]) -> Optional[str]:
 
 
 def _message_list(messages: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    return [{"role": str(msg.get("role", "user") or "user"),
+    return [dict(msg) if msg.get("type") in {"function_call", "function_call_output", "reasoning", "message"}
+            else {"role": str(msg.get("role", "user") or "user"),
              "content": msg["content"] if isinstance(msg.get("content"), list) else str(msg.get("content", "") or "")}
             for msg in messages]
 
@@ -484,6 +485,9 @@ def _responses_payload(base_payload: Mapping[str, Any], messages: list[Mapping[s
     instructions: list[str] = []
     input_items: list[dict[str, Any]] = []
     for msg in messages:
+        if msg.get("type") in {"function_call", "function_call_output", "reasoning", "message"}:
+            input_items.append(dict(msg))
+            continue
         role = str(msg.get("role") or "user").strip().lower()
         if isinstance(msg.get("content"), list):
             if role != "user":

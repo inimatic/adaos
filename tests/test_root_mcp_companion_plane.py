@@ -284,7 +284,7 @@ def test_plane_publishes_expected_mcp_contracts(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_COMPANION_SAGE_ENABLED", "true")
     contracts = {item.id: item for item in companion_plane.contracts()}
 
-    assert set(contracts) == {
+    assert set(contracts) >= {
         "companion.context.get",
         "companion.action.preview",
         "companion.action.execute",

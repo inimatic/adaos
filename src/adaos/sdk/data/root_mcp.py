@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, Mapping
 
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.root.client import RootHttpClient, RootHttpError
@@ -111,6 +111,101 @@ def get_management_client(
         RootMcpClientConfig(root_url=http.base_url, access_token=access_token),
         http=managed_http,
     )
+
+
+def call_local_root_mcp_tool(
+    tool_id: str,
+    *,
+    arguments: Mapping[str, Any] | None = None,
+    capability_profile: str,
+    actor: str,
+    request_id: str | None = None,
+    trace_id: str | None = None,
+    dry_run: bool = False,
+    root_url: str | None = None,
+) -> dict[str, Any]:
+    """Call Root MCP with a named least-privilege local capability profile.
+
+    A skill executing inside its own AdaOS runtime must not round-trip through
+    the zone Root merely to address the local semantic control plane.  This
+    adapter preserves the exact Root MCP contract, policy evaluation, audit
+    envelope, and capability profile while selecting the embedded transport
+    for the local runtime.  Explicit remote roots keep using the HTTP client.
+    """
+
+    tool = str(tool_id or "").strip()
+    profile = str(capability_profile or "").strip()
+    caller = str(actor or "").strip()
+    if not tool or not profile or not caller:
+        raise ValueError("tool_id, capability_profile, and actor are required")
+    context = get_local_target_context(root_url=root_url)
+    if not _should_use_local_embedded(context):
+        return dict(
+            get_management_client(root_url=context["root_url"]).call(
+                tool,
+                arguments=dict(arguments or {}),
+                request_id=request_id,
+                trace_id=trace_id,
+                dry_run=bool(dry_run),
+            )
+        )
+
+    return _call_local_control_tool(
+        tool,
+        arguments=dict(arguments or {}),
+        capability_profile=profile,
+        actor=caller,
+        request_id=request_id,
+        trace_id=trace_id,
+        dry_run=bool(dry_run),
+    )
+
+
+def _call_local_control_tool(
+    tool_id: str,
+    *,
+    arguments: Mapping[str, Any],
+    capability_profile: str,
+    actor: str,
+    request_id: str | None,
+    trace_id: str | None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Execute on the long-lived runtime that owns Yjs and Root MCP state."""
+
+    import requests
+
+    from adaos.apps.cli.active_control import (
+        resolve_control_base_url,
+        resolve_control_token,
+    )
+
+    base_url = resolve_control_base_url(prefer_local=True).rstrip("/")
+    token = resolve_control_token(base_url=base_url)
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.post(
+            f"{base_url}/api/admin/root_mcp/call",
+            headers={"X-AdaOS-Token": token, "Accept": "application/json"},
+            json={
+                "tool_id": tool_id,
+                "arguments": dict(arguments),
+                "request_id": request_id,
+                "trace_id": trace_id,
+                "dry_run": bool(dry_run),
+                "capability_profile": capability_profile,
+                "actor": actor,
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    finally:
+        session.close()
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("local Root MCP control response is not an object")
+    return dict(payload)
 
 
 def _result_response(result: dict[str, Any]) -> dict[str, Any]:
@@ -545,6 +640,7 @@ def issue_local_codex_mcp_session(
 
 
 __all__ = [
+    "call_local_root_mcp_tool",
     "get_local_activity_log",
     "get_local_operational_surface",
     "get_local_target_context",

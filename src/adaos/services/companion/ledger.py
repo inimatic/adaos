@@ -151,6 +151,7 @@ class Ledger:
         self.verify_records(records)
         turns = {r["turn"] for r in records if r["kind"] == "turn"}
         feedback = {r["turn"] for r in records if r["kind"] == "feedback"}
+        feedback.update(r[0] for r in db.execute("SELECT target FROM reviews WHERE session=? AND kind='feedback'", (session,)))
         usage = {key: sum((r["payload"].get("usage") or {}).get(key) or 0 for r in records if r["kind"] == "model_call")
                  for key in ("input_tokens", "output_tokens", "reasoning_tokens", "total_tokens")}
         receipts = {}
@@ -219,8 +220,15 @@ class Ledger:
             raise ValueError("invalid_anomaly_review")
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            if not db.execute("SELECT 1 FROM sessions WHERE id=?", (session,)).fetchone():
+            manifest = db.execute("SELECT manifest FROM sessions WHERE id=?", (session,)).fetchone()
+            if not manifest:
                 raise KeyError("session_not_found")
+            if json.loads(manifest[0])["actor"] != actor:
+                raise ValueError("session_owner_required")
+            if not db.execute("SELECT 1 FROM evidence WHERE session=? AND (id=? OR turn=?)", (session, target, target)).fetchone():
+                raise ValueError("review_target_not_found")
+            if kind == "hypothesis" and not db.execute("SELECT 1 FROM evidence WHERE session=? AND id=? AND kind='hypothesis'", (session, target)).fetchone():
+                raise ValueError("hypothesis_not_found")
             previous = db.execute("SELECT digest FROM reviews WHERE session=? ORDER BY seq DESC LIMIT 1", (session,)).fetchone()
             item = {"id": new_id("review"), "session": session, "target": target, "actor": actor,
                     "kind": kind, "created": time.time(), "payload": dict(payload), "previous_digest": previous[0] if previous else ""}
@@ -261,7 +269,25 @@ class Ledger:
             decisions = [r for r in reviews if r["target"] == turn["turn"]]
             cases.append({"turn_id": turn["turn"], "example_family_id": turn["payload"].get("example_family_id") or turn["turn"],
                           "utterance": turn["payload"].get("text"), "evidence": evidence,
-                          "reviews": decisions, "review_required": not bool(decisions),
+                          "reviews": decisions, "review_required": not any(r["kind"] in {"anomaly", "label"} for r in decisions),
                           "classification": next((r["payload"].get("classification") for r in reversed(decisions) if r["kind"] == "anomaly"), None)})
         return {"session_id": session, "bundle_digest": bundle["digest"], "cases": cases,
                 "anomaly_classes": sorted(ANOMALY_CLASSES), "canonical_mutations": 0}
+
+    def hypotheses(self, session: str, *, catalog_digest: str | None = None) -> list[dict[str, Any]]:
+        """Review-derived memory projection; never silently activates a model proposal."""
+        reviews = self.reviews(session)
+        result = []
+        for record in self.records(session):
+            if record["kind"] != "hypothesis":
+                continue
+            value = {**record["payload"], "id": record["id"]}
+            decisions = [r for r in reviews if r["kind"] == "hypothesis" and r["target"] == record["id"]]
+            if decisions:
+                value["status"] = decisions[-1]["payload"]["status"]
+                value["contradictions"] = [r["payload"]["negative_evidence"] for r in decisions if r["payload"].get("negative_evidence")]
+            pinned = value["scope"].get("catalog_digest")
+            value["stale"] = bool(value["kind"] == "capability_binding" and catalog_digest and pinned != catalog_digest)
+            value["usable_for_shadow"] = value["status"] == "shadow" and not value["stale"] and not value["contradictions"]
+            result.append(value)
+        return result

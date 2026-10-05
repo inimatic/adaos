@@ -262,7 +262,13 @@ def _recent_receipts(*, webspace_id: str | None, limit: int) -> list[dict[str, A
     rows = list(reversed(_read_state()["receipts"]))
     if token:
         rows = [item for item in rows if _text(item.get("webspace_id")) == token]
-    return rows[: max(1, min(int(limit), 100))]
+    seen = set()
+    latest = []
+    for item in rows:
+        if item["action_id"] not in seen:
+            seen.add(item["action_id"])
+            latest.append(item)
+    return latest[: max(1, min(int(limit), 100))]
 
 
 def _action_surface(webspace_id: str, *, include_live: bool = True) -> dict[str, Any]:
@@ -467,17 +473,17 @@ def validate_action_request(
     if operation == "ui.modal.open" and not errors:
         available = {_text(item) for item in frame.get("available_modal_ids") or []}
         modal_id = _text(params.get("modal_id"))
-        if available and modal_id not in available:
+        if modal_id not in available:
             errors.append({"code": "modal_not_in_current_context", "field": "params.modal_id"})
     if operation == "ui.scenario.open" and not errors:
         available = _published_ids(frame, "catalog_apps", "scenario_id")
         scenario_id = _text(params.get("scenario_id"))
-        if available and scenario_id not in available:
+        if scenario_id not in available:
             errors.append({"code": "scenario_not_in_current_context", "field": "params.scenario_id"})
     if operation == "ui.widget.focus" and not errors:
         available = _published_ids(frame, "catalog_widgets", "id")
         widget_id = _text(params.get("widget_id"))
-        if available and widget_id not in available:
+        if widget_id not in available:
             errors.append({"code": "widget_not_in_current_context", "field": "params.widget_id"})
     if operation == "ui.state.set" and not errors:
         key = _text(params.get("key"))
@@ -638,6 +644,8 @@ def execute_action_request(
         "schema": ACTION_RECEIPT_SCHEMA,
         "action_id": action_id,
         "request_id": _text(body.get("request_id")) or None,
+        "session_id": body.get("session_id"),
+        "turn_id": body.get("turn_id"),
         "operation": _text(body.get("operation")),
         "webspace_id": webspace,
         "status": "rejected" if not validation["ok"] else "accepted",
@@ -658,6 +666,8 @@ def execute_action_request(
         return receipt
 
     operation = _text(body.get("operation"))
+    # The browser can acknowledge synchronously; publish the identity before dispatch.
+    _write_receipt(receipt)
     params = body.get("params") if isinstance(body.get("params"), Mapping) else {}
     trace_id = _text(body.get("trace_id")) or None
     try:
@@ -770,6 +780,9 @@ def execute_action_request(
             "code": type(exc).__name__,
             "message": str(exc)[:500],
         }
+    prior = next((r for r in _recent_receipts(webspace_id=webspace, limit=100) if r["action_id"] == action_id), None)
+    if prior and prior["status"] in {"completed", "failed", "cancelled"}:
+        return prior
     _write_receipt(receipt)
     return receipt
 
@@ -839,7 +852,9 @@ def contracts() -> list[RootMcpToolContract]:
         },
         required=["operation"],
     )
-    return [
+    from adaos.services.companion.plane import contracts as lab_contracts
+
+    return [*lab_contracts(),
         RootMcpToolContract(
             id="companion.context.get",
             title="Get Companion context frame",
@@ -960,6 +975,7 @@ def _handle_capability_request(
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     from functools import wraps
     from adaos.services.companion.policy import require_enabled
+    from adaos.services.companion.plane import handlers as lab_handlers
 
     def gated(handler):
         @wraps(handler)
@@ -969,6 +985,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         return invoke
 
     return {name: gated(handler) for name, handler in {
+        **lab_handlers(),
         "companion.context.get": _handle_context,
         "companion.action.preview": _handle_preview,
         "companion.action.execute": _handle_execute,
