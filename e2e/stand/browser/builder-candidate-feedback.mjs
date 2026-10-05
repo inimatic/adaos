@@ -53,7 +53,7 @@ for (const [key, value] of Object.entries({
   space_kind: spaceKind,
   expected_scenario_id: scenario,
   adaos_hub_base: hub,
-  try_local_hub: '0',
+  try_local_hub: '1',
   runtime_debug: '1',
 })) url.searchParams.set(key, value)
 
@@ -426,7 +426,7 @@ try {
         adaos_webspace_id: webspace,
         adaos_hub_base: hub,
         adaos_local_hub_base: hub,
-        adaos_try_local_hub: '0',
+        adaos_try_local_hub: '1',
         adaos_hub_token: token,
         adaos_local_subnet_id: subnet,
         adaos_selected_zone: 'lo',

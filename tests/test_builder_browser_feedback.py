@@ -39,8 +39,8 @@ def test_browser_runner_pins_the_authoritative_runtime_origin() -> None:
 
     assert "const authoritativeRuntimeOrigin = new URL(hub).origin" in script
     assert "adaos_hub_base: hub" in script
-    assert "try_local_hub: '0'" in script
-    assert "adaos_try_local_hub: '0'" in script
+    assert "try_local_hub: '1'" in script
+    assert "adaos_try_local_hub: '1'" in script
     assert "foreign_api_origins: []" in script
     assert "target.origin !== authoritativeRuntimeOrigin" in script
     assert "Unexpected API authority" in script
