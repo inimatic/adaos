@@ -500,6 +500,13 @@
         "persistence": "The Client places ref, not blob_ref, into the file field before the form save action. Persist that string in owned relational data. A single-valued field is a string; multiple=true produces an array of strings.",
         "failure": "A failed upload leaves the previous field value and editor open. A failed record save must also preserve the previous persisted photo reference."
       },
+      "owned_byte_read": {
+        "signature": "adaos.sdk.data.blob.read_bytes(ref: str, name: str = 'attachments', *, max_bytes: int = 10485760) -> bytes",
+        "input": "ref is exactly sha256:<64 lowercase hex>, name is the logical store used by put_upload, max_bytes is an integer in 1..10485760; no paths or URLs",
+        "authorization": "storage.blob required; handler requires workspace.read for reads or workspace.write before validating its just-admitted upload. Lookup is isolated to the current skill and runtime dataset.",
+        "result": "Owned bytes after digest verification. Use this after put_upload to validate file signatures/content before admitting a receipt to records. An invalid unreferenced immutable blob is not an accepted asset.",
+        "errors": "FileNotFoundError for an unavailable owned object; ValueError for invalid digest, invalid limit, oversized content or digest mismatch. Never turn these into a successful read receipt."
+      },
       "read_tool": {
         "invocation": "Core invokes this declared tool before GET serves the content-addressed object.",
         "input_schema": {

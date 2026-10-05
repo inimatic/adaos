@@ -76,6 +76,9 @@ def isolated_skill_import_state(
     global _PREPARED_IMPORT_CONTEXT
 
     skill_path = Path(skill_dir).resolve()
+    from adaos.services.companion.policy import guard_skill_call
+
+    guard_skill_call(skill_path.name, attr, payload)
     with _MODULE_LOAD_LOCK:
         _PREPARED_IMPORT_CONTEXT = None
         original_sys_path = list(sys.path)

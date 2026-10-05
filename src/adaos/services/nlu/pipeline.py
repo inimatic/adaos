@@ -124,21 +124,12 @@ def _neural_service_skill_installed() -> bool:
 
 
 def _use_neuro_lite_stage() -> bool:
-    policy = _neuro_lite_stage_policy()
-    if policy == "enabled":
-        return True
-    if policy == "disabled":
-        return False
-    return _neuro_lite_service_skill_installed()
+    # Historical flags remain readable for migration; experimental execution is removed.
+    return False
 
 
 def _use_neural_stage() -> bool:
-    policy = _neural_stage_policy()
-    if policy == "enabled":
-        return True
-    if policy == "disabled":
-        return False
-    return _neural_service_skill_installed()
+    return False
 
 
 def invalidate_dynamic_regex_cache(*, webspace_id: str | None = None) -> None:

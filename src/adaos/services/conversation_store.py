@@ -3040,6 +3040,10 @@ def latest_dialog_channel_for_webspace(webspace_id: str) -> dict[str, Any] | Non
 
 
 def upsert_agent(record: Mapping[str, Any], *, source: str = "runtime") -> bool:
+    from adaos.services.companion.policy import agent_available
+
+    if not agent_available(record):
+        return False
     if not ensure_schema():
         return False
     agent_id = str(record.get("id") or record.get("agent_id") or "").strip()
@@ -3159,7 +3163,9 @@ def list_agents(*, channel_id: str | None = None, include_inactive: bool = False
             """,
             params,
         ).fetchall()
-    return [_row_to_agent(row) for row in rows]
+    from adaos.services.companion.policy import agent_available
+
+    return [agent for row in rows if agent_available(agent := _row_to_agent(row))]
 
 
 def append_message(
