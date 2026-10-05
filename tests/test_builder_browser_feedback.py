@@ -21,9 +21,12 @@ def test_browser_runner_dismisses_system_overlays_before_candidate_checks() -> N
 
     helper = script.index("async function dismissSystemOverlays")
     invocation = script.index("await dismissSystemOverlays(page, sample)")
+    early_invocation = script.index("await dismissSystemOverlays(page, sample, { waitMs:")
+    materialization_gate = script.index("sync?.materializationReady")
     initial_gate = script.index("authoritative:initial")
 
     assert helper < invocation < initial_gate
+    assert helper < early_invocation < materialization_gate
     assert ".component-updates-panel__tools button" in script
     assert "system-overlay-dismissed" in script
 

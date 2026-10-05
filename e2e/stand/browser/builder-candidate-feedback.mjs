@@ -241,8 +241,13 @@ function commandLocator(page, commandId, marker = null) {
   ].join(', ')).filter({ hasText: marker }).locator(selector).filter({ visible: true }).first()
 }
 
-async function dismissSystemOverlays(page, sample) {
+async function dismissSystemOverlays(page, sample, { waitMs = 0 } = {}) {
   const componentUpdates = page.locator('.component-updates-panel').filter({ visible: true }).first()
+  if (waitMs > 0) {
+    try {
+      await componentUpdates.waitFor({ state: 'visible', timeout: waitMs })
+    } catch {}
+  }
   if (!(await componentUpdates.count())) return
   const close = componentUpdates.locator('.component-updates-panel__tools button').last()
   await close.click({ timeout: interactionTimeoutMs })
@@ -517,6 +522,7 @@ try {
     try {
       console.error(`[builder-browser-feedback] ${layout}:navigation:start`)
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
+      await dismissSystemOverlays(page, sample, { waitMs: Math.min(interactionTimeoutMs, 5_000) })
       await page.waitForFunction(expected => {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
         return sync?.materializationReady && sync.materialization?.currentScenario === expected
