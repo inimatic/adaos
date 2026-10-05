@@ -4355,6 +4355,64 @@ class BuilderAutomationService:
         session["companion_skill_ids"] = companions
         return companions
 
+    @staticmethod
+    def _request_prototype_acceptance_digest(
+        request: Mapping[str, Any] | None,
+    ) -> str:
+        """Read the accepted Prototype identity bound to one realization request."""
+
+        if not isinstance(request, Mapping):
+            return ""
+        links = request.get("links")
+        linked_digest = (
+            str(links.get("prototype_acceptance_digest") or "").strip()
+            if isinstance(links, Mapping)
+            else ""
+        )
+        if linked_digest:
+            return linked_digest
+        artifacts = request.get("artifacts")
+        acceptance = (
+            artifacts.get("prototype_acceptance")
+            if isinstance(artifacts, Mapping)
+            else None
+        )
+        return (
+            str(acceptance.get("digest") or "").strip()
+            if isinstance(acceptance, Mapping)
+            else ""
+        )
+
+    def _request_matches_current_prototype_acceptance(
+        self,
+        session: Mapping[str, Any],
+        request: Mapping[str, Any] | None,
+    ) -> bool:
+        current = session.get("prototype_acceptance")
+        current_digest = (
+            str(current.get("digest") or "").strip()
+            if isinstance(current, Mapping)
+            else ""
+        )
+        if not current_digest:
+            return True
+        return self._request_prototype_acceptance_digest(request) == current_digest
+
+    def _task_matches_current_prototype_acceptance(
+        self,
+        session: Mapping[str, Any],
+        task_id: str,
+    ) -> bool:
+        token = str(task_id or "").strip()
+        if not token:
+            return False
+        try:
+            task = self.factory.read_task(token)
+        except (KeyError, RuntimeError):
+            return False
+        request = task.get("realize_request") if isinstance(task, Mapping) else None
+        return self._request_matches_current_prototype_acceptance(session, request)
+
     def _qualified_continuation_checkpoint(
         self,
         session: Mapping[str, Any],
@@ -5206,6 +5264,10 @@ class BuilderAutomationService:
                 str(session.get("status") or "").strip() == "failed"
                 and str(previous_failure.get("stage") or "").strip()
                 == "development_feedback"
+                and self._task_matches_current_prototype_acceptance(
+                    session,
+                    str(session.get("current_task_id") or ""),
+                )
             ):
                 # A development-feedback turn that produced no admitted
                 # candidate is a continuation of the same implementation
@@ -6464,6 +6526,11 @@ class BuilderAutomationService:
             and isinstance(source_assignment.get("realize_request"), Mapping)
             else {}
         )
+        if not self._request_matches_current_prototype_acceptance(
+            session,
+            source_request,
+        ):
+            return None
         source_artifacts = (
             dict(source_request.get("artifacts"))
             if isinstance(source_request.get("artifacts"), Mapping)

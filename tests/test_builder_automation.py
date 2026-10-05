@@ -3855,6 +3855,9 @@ def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
             json.dumps(
                 {
                     "realize_request": {
+                        "links": {
+                            "prototype_acceptance_digest": "sha256:accepted-v1"
+                        },
                         "artifacts": {"continuation_contract": source_contract}
                     }
                 }
@@ -3895,12 +3898,12 @@ def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
         ),
     )
 
-    checkpoint = service._budget_continuation_checkpoint(
-        {
-            "current_task_id": empty_retry_task_id,
-            "task_history": [candidate_task_id, empty_retry_task_id],
-        }
-    )
+    session = {
+        "current_task_id": empty_retry_task_id,
+        "task_history": [candidate_task_id, empty_retry_task_id],
+        "prototype_acceptance": {"digest": "sha256:accepted-v1"},
+    }
+    checkpoint = service._budget_continuation_checkpoint(session)
 
     assert checkpoint is not None
     assert checkpoint["mode"] == "resume_preserved_candidate"
@@ -3920,16 +3923,14 @@ def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
         "stage": "model_execution",
         "message": "RuntimeError: Codex exited with code 4294967295",
     }
-    checkpoint = service._budget_continuation_checkpoint(
-        {
-            "current_task_id": empty_retry_task_id,
-            "task_history": [candidate_task_id, empty_retry_task_id],
-        }
-    )
+    checkpoint = service._budget_continuation_checkpoint(session)
     assert checkpoint is not None
     assert checkpoint["mode"] == "resume_preserved_candidate"
     assert checkpoint["source_task_id"] == candidate_task_id
     assert checkpoint["trigger_failure_id"] == "failure.transient-model"
+
+    session["prototype_acceptance"] = {"digest": "sha256:accepted-v2"}
+    assert service._budget_continuation_checkpoint(session) is None
 
 
 def test_blocking_feedback_resumes_clean_materialized_snapshot(
@@ -4851,6 +4852,49 @@ def test_development_feedback_retry_preserves_failed_brief_and_acceptance(
     assert "The Project declares external_provider.use." in request[
         "acceptance"
     ]["checks"]
+
+
+def test_development_feedback_retry_discards_brief_from_older_prototype(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    old_brief = "Implement the previously accepted Prototype."
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=old_brief,
+    )
+    session = service.get_session("scenario", "recipes")
+    session["status"] = "failed"
+    session["last_execution_brief"] = old_brief
+    session["prototype_acceptance"] = {"digest": "sha256:new-acceptance"}
+    session["last_failure"] = {
+        "stage": "development_feedback",
+        "failure_class": "capability_blocked",
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda _self, value: dict(value),
+    )
+
+    instruction = "Implement the newly accepted Prototype revision."
+    followed = service.submit_turn(
+        text=instruction,
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
+    request = task["realize_request"]
+    assert request["artifacts"]["implementation_brief"] == instruction
+    assert old_brief not in request["acceptance"]["checks"]
 
 
 def test_session_read_waits_for_the_same_mutation_lock_as_the_writer(tmp_path):
