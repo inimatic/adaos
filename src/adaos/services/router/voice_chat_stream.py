@@ -83,6 +83,36 @@ def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any
         if value is not None and value != "":
             compact[key] = value
     compact["text"] = _truncate_voice_chat_stream_text(item.get("text"))
+    # Presentation references only: never copy file bytes or arbitrary metadata
+    # into the bounded WebIO tail. One message retains one id for all recipients.
+    sender = item.get("sender_id")
+    if isinstance(sender, str) and sender:
+        compact["sender_id"] = sender[:256]
+    recipients = item.get("recipient_ids")
+    if isinstance(recipients, list):
+        compact["recipient_ids"] = list(dict.fromkeys(
+            value[:256] for value in recipients[:32] if isinstance(value, str) and value
+        ))
+    attachments = item.get("attachments")
+    if isinstance(attachments, list):
+        refs = []
+        for attachment in attachments[:20]:
+            if not isinstance(attachment, Mapping):
+                continue
+            ref = attachment.get("ref")
+            if not isinstance(ref, str) or not ref.startswith("/api/tools/") or len(ref) > 1024:
+                continue
+            record = {"ref": ref}
+            for field, limit in (("name", 256), ("mime", 128)):
+                value = attachment.get(field)
+                if isinstance(value, str):
+                    record[field] = value[:limit]
+            size = attachment.get("size_bytes")
+            if isinstance(size, int) and not isinstance(size, bool) and size >= 0:
+                record["size_bytes"] = size
+            refs.append(record)
+        if refs:
+            compact["attachments"] = refs
     meta = item.get("_meta")
     if isinstance(meta, Mapping):
         compact_meta: dict[str, Any] = {}
@@ -155,6 +185,11 @@ def _bound_voice_chat_stream_messages(
         if candidate_bytes > budget - 2:
             candidate["text"] = _truncate_voice_chat_stream_text(candidate.get("text"), max_chars=256)
             candidate_bytes = _voice_chat_stream_json_bytes(candidate)
+        for field in ("attachments", "recipient_ids"):
+            while candidate_bytes > budget - 2 and candidate.get(field):
+                candidate[field] = candidate[field][:-1]
+                candidate["details_omitted"] = True
+                candidate_bytes = _voice_chat_stream_json_bytes(candidate)
         separator_bytes = 1 if selected_reversed else 0
         if selected_reversed and used_bytes + separator_bytes + candidate_bytes > budget:
             break

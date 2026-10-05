@@ -52,7 +52,7 @@ def test_consumer_migration_is_idempotent_and_leaves_voice_alone():
         migrate(doc, 'voice')
 
 
-@pytest.mark.parametrize('app,widget_id', [('builder', 'design-conversation-side-task'), ('research_workbench', 'research-chat')])
+@pytest.mark.parametrize('app,widget_id', [('builder', 'design-conversation-side-task'), ('builder', 'builder-chat'), ('research_workbench', 'research-chat')])
 def test_owner_migration_preserves_routing_and_declares_model_once(app, widget_id):
     from scripts.migrate_conversation_surfaces import migrate, validate_surfaces
 
@@ -66,3 +66,11 @@ def test_owner_migration_preserves_routing_and_declares_model_once(app, widget_i
     assert widget['inputs']['conversation']['agent']['mode'] == 'fixed'
     assert validate_surfaces(result) == 1
     assert result == migrate(result, app)
+
+
+def test_builder_capability_discovery_preserves_shared_chat_contract():
+    from adaos.services.builder.domain_packs.application_manager_legacy import get_ui_capability
+
+    capability = get_ui_capability('ui.chat')
+    assert 'conversation_contract' in capability['manifest']
+    assert any('model.change' in event for event in capability['events'])

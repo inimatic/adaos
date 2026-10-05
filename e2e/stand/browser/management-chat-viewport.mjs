@@ -51,7 +51,7 @@ function desktopUrl() {
     zone: 'lo',
     subnet_id: subnet,
     webspace_id: webspace,
-    space_kind: 'workspace',
+    space_kind: process.env.ADAOS_E2E_SPACE_KIND || 'workspace',
     expected_scenario_id: 'web_desktop',
     try_local_hub: '1',
     runtime_debug: '1',
@@ -81,6 +81,9 @@ for (const viewport of viewports) {
     })) localStorage.setItem(key, value)
   }, { api, token, webspace, subnet })
   const page = await context.newPage()
+  await page.addLocatorHandler(page.locator('.component-updates-backdrop'), async () => {
+    await page.locator('.component-updates-panel__tools button').last().click()
+  })
   page.setDefaultTimeout(90_000)
   const browserErrors = []
   page.on('pageerror', error => browserErrors.push(String(error?.message || error)))
@@ -89,7 +92,7 @@ for (const viewport of viewports) {
     await page.goto(desktopUrl(), { waitUntil: 'domcontentloaded', timeout: 90_000 })
     // A fresh test browser may receive an automatic release-review overlay.
     // Closing it is not accepting/publishing the release or changing user prefs.
-    const closeUpdates = page.locator('.component-updates-panel button[aria-label="Close"]')
+    const closeUpdates = page.locator('.component-updates-panel__tools button').last()
     if (await closeUpdates.isVisible().catch(() => false)) await closeUpdates.click()
     const primaryNavigation = page.locator('[data-webui-widget-id="primary-nav"]')
     await primaryNavigation.waitFor({ state: 'visible', timeout: 90_000 })
@@ -103,12 +106,29 @@ for (const viewport of viewports) {
     const messages = page.locator('ada-chat-widget .messages')
     await grid.waitFor({ state: 'visible', timeout: 15_000 })
     await composer.waitFor({ state: 'visible' })
+    if (process.env.ADAOS_E2E_SHARED_CHAT === '1') {
+      await page.locator('ada-chat-widget .conversation-toolbar').waitFor({ state: 'visible', timeout: 15000 })
+      if (await page.locator('[data-webui-widget-id="chat-channel-selector"]').count()) throw new Error('Obsolete General/Agents selector remains')
+      if (await page.locator('ada-chat-widget .history-bar').count()) throw new Error('Manual history row remains')
+      const recipient = page.locator('ada-chat-widget select[aria-label="Current agent"]')
+      await recipient.waitFor({ state: 'visible' })
+      await page.locator('ada-chat-widget button[aria-label="Float conversation"]').click()
+      const floating = page.locator('ada-chat-widget .chat--floating')
+      await floating.waitFor({ state: 'visible' })
+      const bounds = await floating.boundingBox()
+      if (!bounds || bounds.y < 0 || bounds.y + bounds.height > viewport.height + 1) throw new Error(`Floating conversation overflows viewport: ${JSON.stringify(bounds)}`)
+      const draft = composer.locator('textarea, input').first()
+      await draft.fill('Floating draft is retained — not sent')
+      await page.locator('ada-chat-widget button[aria-label="Dock conversation"]').click()
+      if (await draft.inputValue() !== 'Floating draft is retained — not sent') throw new Error('Dock lost the draft')
+      await draft.fill('')
+    }
 
     // Visibility alone missed the floating Dev Tickets button over Send.
     // Trial-click performs hit testing without dispatching/sending a message.
     const draft = composer.locator('textarea, input').first()
     await draft.fill('E2E pointer check — not sent')
-    await composer.getByRole('button').click({ trial: true, timeout: 5000 })
+    await composer.getByRole('button', { name: 'Send message' }).click({ trial: true, timeout: 5000 })
     await draft.fill('')
     const controlsProof = {
       sendReceivesPointer: true,
@@ -120,7 +140,7 @@ for (const viewport of viewports) {
       const grid = document.querySelector('.desktop-grid.viewport-conversation')
       const composer = document.querySelector('ada-chat-widget .composer')
       const messages = document.querySelector('ada-chat-widget .messages')
-      const navigation = document.querySelector('.desktop-grid.viewport-conversation > .area-role-navigation')
+      const navigation = document.querySelector('ada-chat-widget .conversation-toolbar') || document.querySelector('.desktop-grid.viewport-conversation > .area-role-navigation')
       const rect = element => {
         const value = element?.getBoundingClientRect()
         return value ? { top: value.top, bottom: value.bottom, height: value.height } : null
@@ -144,7 +164,7 @@ for (const viewport of viewports) {
     const scrollProof = await page.evaluate(() => {
       const feed = document.querySelector('ada-chat-widget .messages')
       const composer = document.querySelector('ada-chat-widget .composer')
-      const controls = document.querySelector('.desktop-grid.viewport-conversation > .area-role-navigation')
+      const controls = document.querySelector('ada-chat-widget .conversation-toolbar') || document.querySelector('.desktop-grid.viewport-conversation > .area-role-navigation')
       const before = { composer: composer.getBoundingClientRect().top, controls: controls.getBoundingClientRect().top }
       const stress = document.createElement('div')
       stress.dataset.e2eLayoutStress = 'true'

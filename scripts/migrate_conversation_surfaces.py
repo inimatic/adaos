@@ -64,7 +64,7 @@ def migrate(document: dict, application: str) -> dict:
             if widget.get('type') != 'ui.chat':
                 continue
             # Exclude diagnostic transcript modals; migrate actual conversation surfaces.
-            if builder and not str(widget['id']).startswith('design-conversation-'):
+            if builder and not (str(widget['id']).startswith('design-conversation-') or widget['id'] == 'builder-chat'):
                 continue
             if not builder and widget['id'] != 'research-chat':
                 continue
