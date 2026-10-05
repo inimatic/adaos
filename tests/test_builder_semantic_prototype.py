@@ -2759,6 +2759,36 @@ def test_single_selection_without_activation_normalizes_to_select() -> None:
     )
 
 
+def test_legacy_flow_main_region_alias_is_lossless_and_audited() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    candidate["layout"] = "flow"
+    for view in candidate["views"]:
+        if view["region_role"] == "primary":
+            view["region_role"] = "main"
+    original = copy.deepcopy(candidate)
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    expected = copy.deepcopy(candidate)
+    for view in expected["views"]:
+        if view["region_role"] == "main":
+            view["region_role"] = "primary"
+    canonical = compile_semantic_prototype_candidate(expected, brief=brief)
+    assert compiled["semantic_document"] == canonical["semantic_document"]
+    assert candidate == original
+    assert any(item["kind"] == "legacy_flow_region_alias" for item in compiled["normalizations"])
+
+
+def test_legacy_flow_does_not_guess_arbitrary_region_names() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    candidate["layout"] = "flow"
+    for view in candidate["views"]:
+        if view["region_role"] == "primary":
+            view["region_role"] = "invented_region"
+    with pytest.raises(BuilderWorkflowError, match="primary region"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
 def test_collection_repair_adds_only_the_reported_projection() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)

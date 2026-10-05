@@ -1010,6 +1010,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "record_order": "values follow fields order exactly; include each field once",
         },
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
+        "layout_regions": "A string layout (flow, focus_detail, etc.) uses region_role=primary for its main content, not main; supporting is secondary. With an explicit layout object, region_role references an exact declared region.id, not its role. At least one main/collection region must be populated. Do not change layout or activation links when repairing an unrelated validation error.",
         "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
         "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
@@ -2850,6 +2851,17 @@ def _canonicalize_semantic_prototype_candidate_v2(
             field.setdefault("placeholder", None)
     for view_index, view in enumerate(candidate.get("views") or []):
         if isinstance(view, dict):
+            # Legacy flow has exactly one main region.  The newer explicit
+            # layout vocabulary calls its role "main"; accepting that alias
+            # here is a lossless spelling repair, not a layout redesign.
+            if candidate.get("layout") == "flow" and view.get("region_role") == "main":
+                view["region_role"] = "primary"
+                normalizations.append({
+                    "kind": "legacy_flow_region_alias",
+                    "from": "main",
+                    "to": "primary",
+                    "target": f"$.views[{view_index}].region_role",
+                })
             view.setdefault("surface", "inline")
             view.setdefault("compact_presentation", None)
             view.setdefault("presentation_options", None)
