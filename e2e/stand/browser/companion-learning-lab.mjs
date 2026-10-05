@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { chromium } from './node_modules/playwright/index.mjs'
 
-const api = process.env.ADAOS_E2E_API || 'http://127.0.0.1:8788'
+const api = process.env.ADAOS_E2E_API || 'http://127.0.0.1:8777'
 const client = process.env.ADAOS_E2E_CLIENT || 'http://127.0.0.1:8100'
 const token = process.env.ADAOS_E2E_HUB_TOKEN || 'dev-local-token'
 const sourceWebspace = process.env.ADAOS_E2E_WEBSPACE || 'desktop-codex-learning'
@@ -11,7 +11,7 @@ if (!webspace.startsWith('desktop-codex-')) throw new Error('Use an isolated qua
 const output = path.resolve('e2e/artifacts/companion-learning-lab')
 await fs.mkdir(output, { recursive: true })
 const browser = await chromium.launch({ headless: true })
-const report = { api, webspace, cases: [], mutations: 'scenario switch in isolated qualification Webspace only' }
+const report = { api, webspace, cases: [], behaviors: [], mutations: 'isolated Builder materialization plus explicit human-feedback review record' }
 let currentPage
 try {
   const request = await browser.newContext()
@@ -64,10 +64,50 @@ try {
       const element = document.querySelector('[data-webui-widget-id="learning-session"]')
       return element && element.textContent.trim().length > 0
     }, undefined, { timeout: 45000 })
+    const updatesPanel = page.locator('.component-updates-panel')
+    if (await updatesPanel.isVisible()) {
+      await updatesPanel.locator('.component-updates-panel__tools button').last().click()
+      await updatesPanel.waitFor({ state: 'hidden', timeout: 10000 })
+    }
+    if (viewport.width === 390) {
+      const cpu = page.locator('[data-webui-widget-id="context-actions"] [data-command-id="cpu"]')
+      const cpuResponse = page.waitForResponse(response => response.url().startsWith(api)
+        && new URL(response.url()).pathname === '/api/tools/call'
+        && (response.request().postData() || '').includes('execute_companion_action'), { timeout: 30000 })
+      await cpu.click()
+      const observedCpu = await cpuResponse
+      const cpuBody = await observedCpu.json()
+      const cpuReceipt = cpuBody?.result?.receipt
+      if (!observedCpu.ok() || cpuBody?.result?.ok !== true || cpuReceipt?.operation !== 'status.node_cpu.read'
+        || cpuReceipt?.status !== 'completed') throw new Error(`CPU receipt missing: ${JSON.stringify(cpuBody)}`)
+      report.behaviors.push({ id: 'companion.cpu-receipt', status: 'passed', evidence_ref: cpuReceipt.action_id })
+      await feedback.locator('select').selectOption('correct')
+      await feedback.locator('textarea').fill('Companion Learning Lab beta qualification on the selected 8777 runtime.')
+      const feedbackResponse = page.waitForResponse(response => response.url().startsWith(api)
+        && new URL(response.url()).pathname === '/api/tools/call'
+        && (response.request().postData() || '').includes('learning_lab_action'), { timeout: 30000 })
+      await feedback.getByRole('button', { name: /Сохранить оценку/i }).click()
+      const saved = await feedbackResponse
+      const savedBody = await saved.json()
+      if (!saved.ok() || savedBody?.result?.ok !== true) throw new Error(`Feedback write failed: ${JSON.stringify(savedBody)}`)
+      const feedbackRecord = savedBody?.result?.result
+      if (!feedbackRecord?.id || feedbackRecord?.kind !== 'feedback') throw new Error(`Feedback receipt missing: ${JSON.stringify(savedBody)}`)
+      report.behaviors.push({ id: 'learning.feedback', status: 'passed', evidence_ref: feedbackRecord.id,
+        source_webspace_id: sourceWebspace, preview_webspace_id: webspace })
+      await page.screenshot({ path: path.join(output, '390-feedback.png') })
+    }
     await page.waitForFunction(() => {
       const element = document.querySelector('[data-webui-widget-id="learning-turns"]')
       return element && !element.textContent.includes('Loading data')
     }, undefined, { timeout: 45000 })
+    await page.waitForFunction(() => {
+      const context = document.querySelector('[data-webui-widget-id="context-frame"]')
+      const affordances = document.querySelector('[data-webui-widget-id="affordances"]')
+      return context?.textContent.includes('companion_console')
+        && affordances && !affordances.textContent.includes('Loading data')
+        && affordances.textContent.trim().length > 30
+    }, undefined, { timeout: 45000 })
+    await page.locator('[data-webui-widget-id="companion-console-header"]').scrollIntoViewIfNeeded()
     await page.screenshot({ path: path.join(output, `${viewport.width}.png`), fullPage: true })
     const geometry = await page.evaluate(() => ({ width: innerWidth, content: document.documentElement.scrollWidth }))
     report.cases.push({ viewport, geometry, sessionText: await session.innerText(), feedbackText: await feedback.innerText(), errors, dataErrors,
