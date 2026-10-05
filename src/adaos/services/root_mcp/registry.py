@@ -1028,6 +1028,7 @@ def public_registry_item(kind: str, item_id: str) -> dict[str, Any]:
         "schemas": schemas,
         "examples": examples,
         "tool_contracts": tool_contracts,
+        "testing": deepcopy(manifest.get("testing") or {}),
         "documentation": {
             "summary": str(selected.get("description") or manifest.get("description") or "").strip() or None,
             "manifest_ref": manifest_ref,

@@ -196,6 +196,11 @@ def test_public_registry_is_a_compact_cursor_index_with_separate_detail(monkeypa
             "description": "Alpha tools",
             "manifest_payload": {
                 "capabilities": ["workspace.read"],
+                "testing": {
+                    "consumer_test_seam": {
+                        "mode": "mock_exported_tool_boundary",
+                    }
+                },
                 "tools": [
                     {
                         "name": "read_alpha",
@@ -248,6 +253,9 @@ def test_public_registry_is_a_compact_cursor_index_with_separate_detail(monkeypa
             "capability": "alpha.read",
         },
         "approval_scope": None,
+    }
+    assert detail["testing"] == {
+        "consumer_test_seam": {"mode": "mock_exported_tool_boundary"}
     }
 
 
