@@ -1654,6 +1654,67 @@ class BuilderAutomationService:
             )
         return self.browser_feedback_service
 
+    def prepare_qualified_data_repair(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        ticket_id: str,
+        repair_id: str,
+        qualification: Mapping[str, Any],
+        implementation_brief: str,
+    ) -> None:
+        """Project an admitted data repair into Change before Prototype admission.
+
+        Called by the ticket service after qualification, source checks and its
+        durable handoff. This is not an acceptance override: existing Changes
+        and any pending Prototype continue through their original gates.
+        """
+        hints = qualification
+        if (
+            qualification.get("ready") is not True
+            or not isinstance(hints, Mapping)
+            or hints.get("profile") != "surgical_data"
+            or not hints.get("target_files")
+            or not hints.get("acceptance_checks")
+            or not ticket_id
+            or not repair_id
+        ):
+            return
+        kind, project_id = self._project_ref(object_type, object_id)
+        workflow = self._workflow()
+        current = workflow.describe(kind, project_id)
+        change = current.get("change_set") or current.get("change") or {}
+        prototype = current.get("prototype") or {}
+        if (
+            current.get("archived")
+            or prototype.get("head_revision")
+            or prototype.get("acceptance_required")
+            or (change and change.get("status") not in {"published", "rejected", "superseded"})
+        ):
+            return
+        digest = hashlib.sha256(f"{kind}:{project_id}:{ticket_id}:{repair_id}".encode()).hexdigest()[:20]
+        workflow.transition(
+            kind, project_id, "plan_change_set",
+            actor="builder.dev_ticket",
+            reason="qualified existing-application data repair",
+            expected_generation=current.get("generation"),
+            metadata={
+                "change_set_id": f"CH-repair-{digest}",
+                "run_id": f"RUN-plan-{digest}",
+                "request": _workflow_request_projection(implementation_brief),
+                "issues": [{
+                    "issue_id": ticket_id,
+                    "title": _brief_summary(implementation_brief)[:240],
+                    "lane": "automation", "status": "open",
+                    "acceptance_criteria": list(hints["acceptance_checks"]),
+                    "source_message_ids": [ticket_id],
+                }],
+                "source_message_ids": [ticket_id],
+                "idempotency_key": f"builder-data-repair:{repair_id}",
+            },
+        )
+
     def current_workflow_head(
         self,
         *,

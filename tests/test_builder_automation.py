@@ -32,6 +32,43 @@ from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactor
 from adaos.services.ui_capabilities import evaluate_ui_request
 
 
+@pytest.mark.parametrize("blocked", ["not_ready", "ui", "prototype", "acceptance", "change", "archived"])
+def test_qualified_data_repair_never_bypasses_existing_gates(blocked):
+    calls = []
+    current = {"generation": 3, "prototype": {}}
+    qualification = {"ready": True, "profile": "surgical_data", "target_files": ["handlers/main.py"],
+                     "acceptance_checks": ["Explicit folder consent required."]}
+    if blocked == "not_ready": qualification["ready"] = False
+    if blocked == "ui": qualification["profile"] = "surgical_ui"
+    if blocked == "prototype": current["prototype"]["head_revision"] = "001"
+    if blocked == "acceptance": current["prototype"]["acceptance_required"] = True
+    if blocked == "change": current["change_set"] = {"status": "open", "gate": "prototype"}
+    if blocked == "archived": current["archived"] = True
+    workflow = SimpleNamespace(describe=lambda *args: current, transition=lambda *args, **kwargs: calls.append(kwargs))
+    service = SimpleNamespace(_project_ref=lambda *args: args, _workflow=lambda: workflow)
+    BuilderAutomationService.prepare_qualified_data_repair(service, object_type="scenario", object_id="drive",
+        ticket_id="dticket.1", repair_id="repair.1", qualification=qualification, implementation_brief="Require folder consent.")
+    assert calls == []
+
+
+def test_qualified_data_repair_plans_bounded_change_before_admission():
+    calls = []
+    workflow = SimpleNamespace(describe=lambda *args: {"generation": 7, "prototype": {}},
+        transition=lambda *args, **kwargs: calls.append((args, kwargs)))
+    service = SimpleNamespace(_project_ref=lambda *args: args, _workflow=lambda: workflow)
+    BuilderAutomationService.prepare_qualified_data_repair(service, object_type="scenario", object_id="drive",
+        ticket_id="dticket.1", repair_id="repair.1", implementation_brief="Require folder consent.",
+        qualification={"ready": True, "profile": "surgical_data", "target_files": ["handlers/main.py"],
+                       "acceptance_checks": ["No ambient folder authority."]})
+    args, kwargs = calls[0]
+    assert args == ("scenario", "drive", "plan_change_set")
+    assert kwargs["expected_generation"] == 7
+    issue = kwargs["metadata"]["issues"][0]
+    assert issue["lane"] == "automation"
+    assert issue["acceptance_criteria"] == ["No ambient folder authority."]
+    assert issue["source_message_ids"] == ["dticket.1"]
+
+
 def _write_project_manifest(
     dev_root: Path,
     *,

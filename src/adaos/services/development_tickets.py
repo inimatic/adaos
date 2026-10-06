@@ -3293,6 +3293,16 @@ class DevelopmentTicketService:
             else automation_service.start_from_execute
         )
         try:
+            prepare_data_repair = getattr(automation_service, "prepare_qualified_data_repair", None)
+            if callable(prepare_data_repair) and not (can_resume or can_resume_waiting_for_core or can_followup):
+                prepare_data_repair(
+                    object_type=target["object_type"],
+                    object_id=target["object_id"],
+                    ticket_id=ticket["ticket_id"],
+                    repair_id=repair_id,
+                    qualification=qualification,
+                    implementation_brief=brief,
+                )
             started = start_method(
                 object_type=target["object_type"],
                 object_id=target["object_id"],
