@@ -44,6 +44,7 @@ from adaos.services.hub_root_outbox_store import (
     save_outbox_items,
 )
 from adaos.services.media_core import media_path_source_kind
+from adaos.services.log_redaction import redact_log_text
 from adaos.services.nats_config import (
     nats_url_uses_websocket,
     order_nats_ws_candidates,
@@ -963,7 +964,7 @@ class NatsRouteTunnelRuntime:
                 if not _hub_channel_console_trace_enabled():
                     return
                 try:
-                    print(f"[hub-route:{route_run_id}] {msg}")
+                    print(redact_log_text(f"[hub-route:{route_run_id}] {msg}"))
                 except Exception:
                     pass
 

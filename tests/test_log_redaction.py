@@ -48,3 +48,16 @@ def test_all_diagnostic_sinks_redact_before_persistence(tmp_path):
     path = tmp_path / "ui.jsonl"
     append_rotating_json_lines(path, [{"details": record.extra, "message": record.getMessage()}])
     assert "private-" not in path.read_text()
+
+
+def test_sidecar_diagnostics_and_console_are_redacted(tmp_path, capsys):
+    from adaos.services.realtime_sidecar import RealtimeSidecarServer, _append_realtime_sidecar_diag
+
+    path = tmp_path / "sidecar.jsonl"
+    original = {"last_error": "connect wss://host/ws?token=private-token", "frames": 42}
+    _append_realtime_sidecar_diag(path, original)
+    assert "private-" not in path.read_text()
+    assert json.loads(path.read_text())["frames"] == 42
+    assert "private-token" in original["last_error"]
+    RealtimeSidecarServer._log(None, "failed /yws?token=private-token")
+    assert "private-" not in capsys.readouterr().out

@@ -29,6 +29,7 @@ from urllib.request import urlopen
 
 from adaos.services.bounded_io import env_int, rotate_file_if_needed
 from adaos.services.env_policy import TRUE_VALUES, env_bool, env_int as runtime_env_int
+from adaos.services.log_redaction import redact_log_text, redact_log_value
 from adaos.services.nats_config import (
     normalize_nats_ws_url,
     nats_url_uses_websocket,
@@ -1457,7 +1458,7 @@ def _append_realtime_sidecar_diag(path: Path, snapshot: dict[str, Any]) -> None:
     _rotate_realtime_sidecar_diag_if_needed(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
+        fh.write(json.dumps(redact_log_value(snapshot), ensure_ascii=False) + "\n")
 
 
 def _host_matches_listener(host: str, other: str | None) -> bool:
@@ -3063,7 +3064,7 @@ class RealtimeSidecarServer:
 
     def _log(self, msg: str) -> None:
         try:
-            print(f"[adaos-realtime] {msg}", flush=True)
+            print(redact_log_text(f"[adaos-realtime] {msg}"), flush=True)
         except Exception:
             pass
 
