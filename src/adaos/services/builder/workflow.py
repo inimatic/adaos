@@ -6871,7 +6871,8 @@ class BuilderWorkflowService:
                     "artifact_digest": webui_digest,
                 },
                 "ui_capabilities": selected_ui_capabilities(
-                    scoped_intent or str(change.get("request") or "")
+                    scoped_intent or str(change.get("request") or ""),
+                    source_webui=webui,
                 ),
                 "constraints": constraints,
                 "data_policy": data_policy,

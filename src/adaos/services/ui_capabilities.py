@@ -940,12 +940,13 @@ def selected_ui_capabilities(
     *,
     limit: int = 8,
     domain_packs: Sequence[str] | None = None,
+    source_webui: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     adapter = ui_domain_adapter(domain_packs)
     if adapter is not None:
         result = copy.deepcopy(adapter.selected_ui_capabilities(request, limit=limit))
         result.update(_domain_metadata(domain_packs))
-        return result
+        return _with_source_ui_contracts(result, source_webui)
     qualification = qualify_ui_request(request)
     catalog = ui_capability_catalog()
     index = {
@@ -1153,7 +1154,7 @@ def selected_ui_capabilities(
         else get_ui_capability(item_id)
         for item_id in expanded_ids
     ]
-    return {
+    result = {
         "schema": "adaos.ui.capability_selection.v1",
         "status": "present",
         "catalog_ref": "descriptor:ui_capability_catalog",
@@ -1192,6 +1193,42 @@ def selected_ui_capabilities(
         },
         "input_attribution": {"profile": "generic", "domain_packs": []},
     }
+    return _with_source_ui_contracts(result, source_webui)
+
+
+def _with_source_ui_contracts(selection: dict[str, Any], webui: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Existing source components are must-keep ABI, not keyword-ranked guesses.
+
+    Only type names are read from the scoped source. No application content or
+    source values enter the contract facet, and oversized closures fail before
+    model spend rather than silently dropping an existing component contract.
+    """
+    if not isinstance(webui, Mapping):
+        return selection
+    catalog = ui_capability_catalog()
+    index = {str(item['id']): item for item in catalog.get('components') or []}
+    source_ids: set[str] = set()
+    pending: list[Any] = [webui]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, Mapping):
+            widget_type = value.get('type')
+            if isinstance(widget_type, str) and widget_type in index:
+                source_ids.add(widget_type)
+            pending.extend(item for item in value.values() if isinstance(item, (Mapping, list)))
+        elif isinstance(value, list):
+            pending.extend(value)
+    if not source_ids:
+        return selection
+    existing = {str(item.get('id')) for item in selection.get('items') or []}
+    required = sorted(source_ids - existing)
+    if len(existing | source_ids) > 24:
+        raise ValueError('UI contract closure exceeds 24 components; scope the repair to selected components')
+    selection['source_item_ids'] = sorted(source_ids)
+    selection['root_item_ids'] = list(dict.fromkeys([*sorted(source_ids), *selection.get('root_item_ids', [])]))
+    selection['dependency_closure'] = [item for item in selection.get('dependency_closure', []) if item not in source_ids]
+    selection['items'] = [*selection.get('items', []), *(get_ui_capability(item) for item in required)]
+    return selection
 
 
 def _page_schemas(webui: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:

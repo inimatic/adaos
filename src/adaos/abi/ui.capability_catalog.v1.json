@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.7.0",
+  "catalog_version": "3.7.1",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "browser_history": {
@@ -640,7 +640,8 @@
         "widget_type": "ui.form",
         "layout_property": "inputs.layout is an optional string enum: stack, responsiveGrid, responsive-grid, grid, or auto-grid. It is not a page layout object.",
         "field_type_property": "inputs.fields[*].type",
-        "static_content": "staticContent renders content or markdown as guidance. Its technical field id is never a visible heading; declare label or title only when a user-facing heading is useful.",
+        "static_content": "staticContent renders content or markdown as guidance. A content string equal to $state.<path> reads the current page-state value at that path; missing values render empty, not the expression. Other content strings render literally; arbitrary template interpolation is not supported. Its technical field id is never a visible heading; declare label or title only when a user-facing heading is useful.",
+        "enabled_state": "Fields default to editable. Literal disabled=true, readonly=true or readOnly=true disables a field; these field properties are booleans, not expressions. Controls are also disabled while uploading/submitting, while a selected record is loading, when inputs.readOnlyIf matches that stored record, or while declared choice options are unavailable. Do not remove these guards or fabricate permission/consent to enable a control. Expose a concrete loading/unavailable/read-only reason and fix the underlying datasource or authorization. visibleIf controls visibility, not authorization.",
         "representative_field_types": [
           "shortText",
           "longText",

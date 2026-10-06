@@ -2781,6 +2781,7 @@ def context_packet_prompt_projection(
                 "catalog_digest",
                 "qualification",
                 "root_item_ids",
+                "source_item_ids",
                 "dependency_closure",
                 "required_contracts",
                 "items",
@@ -2912,6 +2913,7 @@ def _materialize_digest_addressed_compiler_views(
                 "catalog_version",
                 "catalog_digest",
                 "root_item_ids",
+                "source_item_ids",
                 "dependency_closure",
                 "required_contracts",
             )

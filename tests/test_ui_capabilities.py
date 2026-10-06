@@ -1,5 +1,23 @@
 from __future__ import annotations
 
+
+def test_existing_component_contracts_survive_unrelated_keyword_ranking():
+    from adaos.services.ui_capabilities import selected_ui_capabilities
+
+    result = selected_ui_capabilities('Preserve chat and media while repairing participation toggles', limit=1,
+        source_webui={'ui': {'application': {'desktop': {'pageSchema': {'widgets': [
+            {'id': 'participation', 'type': 'ui.form', 'inputs': {'fields': [
+                {'id': 'consent', 'type': 'boolean'},
+                {'id': 'delivery', 'type': 'staticContent', 'content': '$state.delivery'},
+            ]}},
+        ]}}}}})
+    assert 'ui.form' in result['source_item_ids']
+    form = next(item for item in result['items'] if item['id'] == 'ui.form')
+    assert '$state.<path>' in form['manifest']['static_content']
+    assert 'disabled=true' in form['manifest']['enabled_state']
+    assert len(result['items']) <= 24
+
+
 import copy
 import json
 
@@ -76,7 +94,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.6.0"
+    assert catalog["catalog_version"] == "3.7.1"
     assert catalog["navigation_contracts"]["browser_history"]["schema_field"] == (
         "pageSchema.navigationState.bindings"
     )
@@ -105,7 +123,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     list_capability = get_ui_capability("ui.list")
     assert "initialsKey" in list_capability["manifest"]["optional_inputs"]
     assert "textual avatar" in list_capability["manifest"]["projection"]
-    assert "top-level widget.actions entry" in list_capability["manifest"]["button_shape"]
+    assert "top-level widget.actions on=click:<buttonId>" in list_capability["manifest"]["button_shape"]
     details = get_ui_capability("item.details")
     assert "initialsKey" in details["manifest"]["media"]
     assert "technical field id is never a visible heading" in form["manifest"]["static_content"]
