@@ -5264,6 +5264,7 @@ class BuilderAutomationService:
                 str(session.get("status") or "").strip() == "failed"
                 and str(previous_failure.get("stage") or "").strip()
                 == "development_feedback"
+                and not _brief_deterministic_strategy(instruction)
                 and self._task_matches_current_prototype_acceptance(
                     session,
                     str(session.get("current_task_id") or ""),
@@ -5356,6 +5357,8 @@ class BuilderAutomationService:
                     raise ValueError(
                         "preserved candidate checkpoint failed internal admission"
                     )
+            elif _brief_deterministic_strategy(instruction):
+                continuation_checkpoint = None
             else:
                 continuation_checkpoint = self._qualified_continuation_checkpoint(
                     session

@@ -4854,6 +4854,81 @@ def test_development_feedback_retry_preserves_failed_brief_and_acceptance(
     ]["checks"]
 
 
+def test_deterministic_repair_supersedes_feedback_brief_and_continuation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    failed_brief = "Implement the previously admitted source with a model."
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=failed_brief,
+    )
+    session = service.get_session("scenario", "recipes")
+    session["status"] = "failed"
+    session["last_execution_brief"] = failed_brief
+    session["last_failure"] = {
+        "stage": "development_feedback",
+        "failure_class": "capability_blocked",
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "refresh_session",
+        lambda _self, value: dict(value),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_qualified_continuation_checkpoint",
+        lambda _self, _session: {
+            "mode": "resume_materialized_candidate",
+            "source_task_id": "task.failed-model-run",
+        },
+    )
+    source = service.dev_scenarios_root / "recipes" / "webui.json"
+    raw = source.read_bytes()
+    relative = "scenarios/recipes/webui.json"
+    instruction = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+            "ticket_id": "dticket.validation-only",
+            "summary": "Validate the source already repaired in DEV.",
+            "repair_hints": {
+                "profile": "surgical_ui",
+                "validation_only": True,
+                "target_files": [relative],
+                "source_preconditions": [
+                    {
+                        "path": relative,
+                        "sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                        "size": len(raw),
+                    }
+                ],
+                "requires_root_mcp": False,
+            },
+        },
+        sort_keys=True,
+    )
+
+    followed = service.submit_turn(
+        text=instruction,
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
+    request = task["realize_request"]
+    assert request["artifacts"]["implementation_brief"] == instruction
+    assert request["artifacts"].get("continuation_checkpoint") is None
+    assert request["artifacts"]["repair_hints"]["validation_only"] is True
+    assert request["constraints"]["mode"] == "dev_ticket_repair"
+
+
 def test_development_feedback_retry_discards_brief_from_older_prototype(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
