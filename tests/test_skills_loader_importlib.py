@@ -46,7 +46,7 @@ def test_loaded_handler_lookup_uses_path_index_without_scanning_unrelated_record
     unrelated.parent.mkdir(parents=True)
     unrelated.write_text("VALUE = 2\n", encoding="utf-8")
     loader = ImportlibSkillsLoader()
-    module_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    module_name = skills_loader_module._handler_module_name(handler)
     before_sources = dict(skills_loader_module._LOADED_HANDLER_SOURCES)
     before_index = dict(skills_loader_module._LOADED_HANDLER_PATH_INDEX)
     before_misses = dict(skills_loader_module._LOADED_HANDLER_MISS_CACHE)
@@ -587,7 +587,7 @@ def test_importlib_loader_skips_failed_workspace_handler_and_continues(tmp_path:
         ]
     finally:
         for handler in (bad_skill / "handlers" / "main.py", good_skill / "handlers" / "main.py"):
-            sys.modules.pop("adaos_skill_" + handler.parent.as_posix().replace("/", "_"), None)
+            sys.modules.pop(skills_loader_module._handler_module_name(handler), None)
         if hasattr(builtins, "_adaos_good_skill_imported"):
             delattr(builtins, "_adaos_good_skill_imported")
 
@@ -609,7 +609,7 @@ def test_importlib_loader_does_not_reexecute_same_handler_module(tmp_path: Path)
     )
 
     loader = ImportlibSkillsLoader()
-    mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    mod_name = skills_loader_module._handler_module_name(handler)
     sys.modules.pop(mod_name, None)
     if hasattr(builtins, "_adaos_repeat_import_counter"):
         delattr(builtins, "_adaos_repeat_import_counter")
@@ -621,6 +621,33 @@ def test_importlib_loader_does_not_reexecute_same_handler_module(tmp_path: Path)
         sys.modules.pop(mod_name, None)
         if hasattr(builtins, "_adaos_repeat_import_counter"):
             delattr(builtins, "_adaos_repeat_import_counter")
+
+
+def test_importlib_loader_supports_relative_modules_from_dotted_absolute_paths(
+    tmp_path: Path,
+) -> None:
+    handlers_dir = tmp_path / ".runtime" / "relative_skill" / "handlers"
+    handlers_dir.mkdir(parents=True)
+    handler = handlers_dir / "main.py"
+    handler.write_text(
+        "from .helper import VALUE\nRESULT = VALUE\n",
+        encoding="utf-8",
+    )
+    (handlers_dir / "helper.py").write_text("VALUE = 42\n", encoding="utf-8")
+
+    loader = ImportlibSkillsLoader()
+    module_name = skills_loader_module._handler_module_name(handler)
+    try:
+        loader._load_handler(handler)
+
+        assert sys.modules[module_name].RESULT == 42
+        assert f"{module_name}.helper" in sys.modules
+        assert ":" not in module_name
+        assert "." not in module_name
+    finally:
+        for loaded_name in tuple(sys.modules):
+            if loaded_name == module_name or loaded_name.startswith(f"{module_name}."):
+                sys.modules.pop(loaded_name, None)
 
 
 def test_importlib_loader_can_force_reload_handler_module(tmp_path: Path) -> None:
@@ -640,7 +667,7 @@ def test_importlib_loader_can_force_reload_handler_module(tmp_path: Path) -> Non
     )
 
     loader = ImportlibSkillsLoader()
-    mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    mod_name = skills_loader_module._handler_module_name(handler)
     sys.modules.pop(mod_name, None)
     if hasattr(builtins, "_adaos_reload_import_counter"):
         delattr(builtins, "_adaos_reload_import_counter")
@@ -661,7 +688,7 @@ def test_handler_source_snapshot_detects_disk_drift_and_reload(tmp_path: Path) -
     handler.write_text("VALUE = 1\n", encoding="utf-8")
 
     loader = ImportlibSkillsLoader()
-    mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    mod_name = skills_loader_module._handler_module_name(handler)
     sys.modules.pop(mod_name, None)
     skills_loader_module._LOADED_HANDLER_SOURCES.pop(mod_name, None)
     try:
@@ -693,7 +720,7 @@ def test_handler_source_snapshot_periodically_rehashes_unchanged_stat(monkeypatc
     handler.write_text("VALUE = 1\n", encoding="utf-8")
 
     loader = ImportlibSkillsLoader()
-    mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    mod_name = skills_loader_module._handler_module_name(handler)
     sys.modules.pop(mod_name, None)
     skills_loader_module._LOADED_HANDLER_SOURCES.pop(mod_name, None)
     monkeypatch.setenv("ADAOS_SKILL_HANDLER_DIGEST_REVERIFY_S", "1")
@@ -744,7 +771,7 @@ def test_loading_selected_slot_retires_superseded_handler_registries(monkeypatch
         handler.parent.mkdir(parents=True)
         handler.write_text(source, encoding="utf-8")
         handlers[slot_name] = handler
-        module_names[slot_name] = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+        module_names[slot_name] = skills_loader_module._handler_module_name(handler)
 
     def _selection(path: Path) -> dict[str, str]:
         loaded_slot = "A" if "slot-a" in path.as_posix() else "B"
@@ -873,7 +900,7 @@ def test_reloading_same_handler_replaces_registry_and_restores_it_on_import_fail
     loader = ImportlibSkillsLoader()
     handler = tmp_path / "same-handler" / "handlers" / "main.py"
     handler.parent.mkdir(parents=True)
-    module_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    module_name = skills_loader_module._handler_module_name(handler)
     selection = {
         "skill": "same_handler_skill",
         "loaded_bucket": "v1.0",

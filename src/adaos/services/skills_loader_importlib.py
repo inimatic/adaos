@@ -32,6 +32,16 @@ _RETIRED_HANDLER_SOURCES_LIMIT = 128
 _RETIRED_HANDLER_TOTAL = 0
 
 
+def _handler_module_name(handler: Path) -> str:
+    """Return a stable importable package name for one handler directory."""
+
+    resolved = os.path.normcase(str(handler.parent.resolve()))
+    slug = "".join(character if character.isalnum() else "_" for character in resolved)
+    slug = slug.strip("_")[-96:] or "handler"
+    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:12]
+    return f"adaos_skill_{slug}_{digest}"
+
+
 def _source_digest(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -641,19 +651,29 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
 
     def _load_handler(self, handler: Path, *, reload: bool = False) -> None:
         with _HANDLER_IMPORT_LOCK:
-            mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+            mod_name = _handler_module_name(handler)
             existing = sys.modules.get(mod_name)
             if existing is not None and not reload:
                 _LOG.debug("reusing already imported skill handler module=%s path=%s", mod_name, handler)
                 return
             registry_snapshot: dict[str, Any] | None = None
+            existing_family = {
+                name: module
+                for name, module in tuple(sys.modules.items())
+                if name == mod_name or name.startswith(f"{mod_name}.")
+            }
             if existing is not None and reload:
                 from adaos.sdk.core.decorators import _registry_snapshot, retire_module_declarations
 
                 registry_snapshot = _registry_snapshot()
-                retire_module_declarations({mod_name})
-                sys.modules.pop(mod_name, None)
-            spec = importlib.util.spec_from_file_location(mod_name, handler)
+                retire_module_declarations(set(existing_family))
+                for family_name in existing_family:
+                    sys.modules.pop(family_name, None)
+            spec = importlib.util.spec_from_file_location(
+                mod_name,
+                handler,
+                submodule_search_locations=[str(handler.parent)],
+            )
             module = importlib.util.module_from_spec(spec)
             assert spec and spec.loader
             configure_skill_module_logging(mod_name)
@@ -662,13 +682,14 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 spec.loader.exec_module(module)  # type: ignore[attr-defined]
                 source = _record_loaded_handler_source(mod_name, handler)
             except Exception:
-                sys.modules.pop(mod_name, None)
+                for family_name in tuple(sys.modules):
+                    if family_name == mod_name or family_name.startswith(f"{mod_name}."):
+                        sys.modules.pop(family_name, None)
                 if registry_snapshot is not None:
                     from adaos.sdk.core.decorators import _restore_registry_snapshot
 
                     _restore_registry_snapshot(registry_snapshot)
-                if existing is not None:
-                    sys.modules[mod_name] = existing
+                sys.modules.update(existing_family)
                 raise
             _LOG.info(
                 "imported skill handler module=%s path=%s source_digest=%s loaded_slot=%s selected_slot=%s",
