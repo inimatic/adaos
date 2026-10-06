@@ -20,6 +20,7 @@ import threading
 import os
 from enum import IntEnum
 from typing import TYPE_CHECKING, Dict, Any, Mapping
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from typing import Awaitable, Callable
@@ -37,6 +38,7 @@ except ImportError as exc:  # pragma: no cover - import guard for dev envs
     raise RuntimeError("ypy_websocket is required for AdaOS realtime collaboration. " "Install dependencies via `pip install -e .[dev]` or `pip install ypy-websocket`.") from exc
 
 create_update_message = _ypy_yutils.create_update_message
+create_sync_step2_message = _ypy_yutils.create_sync_step2_message
 process_sync_message = getattr(_ypy_yutils, "process_sync_message", None)
 read_sync_message = getattr(_ypy_yutils, "read_message", None)
 sync = getattr(_ypy_yutils, "sync", None)
@@ -119,6 +121,7 @@ _TRANSPORT_STATE: dict[str, dict[str, Any]] = {
 _ACTIVE_YWS_CONNECTIONS: dict[str, list[WebSocket]] = {}
 _ACTIVE_YWS_CLIENTS: dict[str, dict[str, int]] = {}
 _ACTIVE_EVENTS_WS_WEBSPACES: dict[int, str] = {}
+_ACTIVE_EVENTS_WS_BROWSER_SESSIONS: dict[int, dict[str, Any]] = {}
 _YWS_OPEN_HISTORY: deque[float] = deque(maxlen=512)
 _YWS_CLIENT_OPEN_HISTORY: dict[str, deque[float]] = {}
 _YWS_ATTEMPT_HISTORY: deque[float] = deque(maxlen=1024)
@@ -505,6 +508,10 @@ _YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC = _env_flag(
     "ADAOS_YJS_SERVER_AUTHORITATIVE_INITIAL_SYNC",
     True,
 )
+_YROOM_SERVER_AUTHORITATIVE_FULL_STEP2 = _env_flag(
+    "ADAOS_YJS_SERVER_AUTHORITATIVE_FULL_STEP2",
+    True,
+)
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 120.0, minimum=0.0)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 64 * 1024 * 1024, minimum=1)
@@ -797,6 +804,42 @@ _AUTHORITATIVE_SCENARIO_LEASES: dict[str, dict[str, Any]] = {}
 _LIVE_ROOM_REFRESH_DIAG_LOCK = threading.RLock()
 _LIVE_ROOM_REFRESH_PENDING: dict[tuple[str, int, str], dict[str, Any]] = {}
 _LIVE_ROOM_REFRESH_RECENT: deque[dict[str, Any]] = deque(maxlen=_LIVE_ROOM_REFRESH_DIAG_MAX)
+_DEVICE_REGISTER_DIAG_LOCK = threading.RLock()
+_DEVICE_REGISTER_RECENT: deque[dict[str, Any]] = deque(maxlen=64)
+_DEVICE_REGISTER_POST_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _record_device_register_diagnostic(value: Mapping[str, Any]) -> None:
+    entry = {
+        str(key): raw
+        for key, raw in dict(value).items()
+        if raw is None or isinstance(raw, (str, int, float, bool))
+    }
+    with _DEVICE_REGISTER_DIAG_LOCK:
+        _DEVICE_REGISTER_RECENT.append(entry)
+
+
+def _device_register_diagnostic_snapshot() -> dict[str, Any]:
+    with _DEVICE_REGISTER_DIAG_LOCK:
+        rows = [dict(item) for item in _DEVICE_REGISTER_RECENT]
+    ack_values = sorted(
+        float(item["ack_ms"])
+        for item in rows
+        if isinstance(item.get("ack_ms"), (int, float))
+    )
+
+    def percentile(fraction: float) -> float | None:
+        if not ack_values:
+            return None
+        index = max(0, min(len(ack_values) - 1, int(len(ack_values) * fraction + 0.999) - 1))
+        return round(ack_values[index], 3)
+
+    return {
+        "sample_count": len(rows),
+        "ack_p50_ms": percentile(0.50),
+        "ack_p95_ms": percentile(0.95),
+        "recent": rows[-10:],
+    }
 
 
 def _elapsed_ms_since(started: float) -> float:
@@ -2001,7 +2044,20 @@ class DiagnosticYRoom(YRoom):
             raise RuntimeError("ypy_websocket.yutils sync helpers are unavailable")
         async with create_task_group() as tg:
             self.clients.append(websocket)
-            await sync(self.ydoc, websocket, self.log)
+            # In the server-authoritative protocol the browser opens the
+            # handshake with STEP1 and the server answers with one complete
+            # STEP2 below.  Sending the native server STEP1 as well makes a
+            # y-websocket client encode its whole (now authoritative) document
+            # back to us.  That redundant payload can be megabytes and is
+            # discarded by the guard anyway.  Apart from wasting bandwidth it
+            # also makes every fresh page compete with materialization work on
+            # the runtime event loop.
+            authoritative_one_way_handshake = bool(
+                _YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC
+                and _YROOM_SERVER_AUTHORITATIVE_FULL_STEP2
+            )
+            if not authoritative_one_way_handshake:
+                await sync(self.ydoc, websocket, self.log)
             # Normal y-websocket/DataChannel providers always emit STEP1 and
             # require the corresponding STEP2 to declare first sync complete.
             # Sending a full effective replay here, before reading STEP1, used
@@ -2009,6 +2065,7 @@ class DiagnosticYRoom(YRoom):
             # Keep the replay only as an exceptional malformed/preflight
             # recovery path below.
             initial_native_update_pending = True
+            authoritative_step2_sent = False
             try:
                 async for message in websocket:
                     skip = False
@@ -2085,6 +2142,61 @@ class DiagnosticYRoom(YRoom):
                         # Keep the server-authoritative guard on the initial
                         # client state/update frames, which are the mutating part
                         # of the handshake.
+                        if (
+                            sync_type == int(YSyncMessageType.SYNC_STEP1)
+                            and _YROOM_SERVER_AUTHORITATIVE_FULL_STEP2
+                        ):
+                            # Do not ask yrs to encode a diff against an
+                            # untrusted/stale browser state vector. A reconnecting
+                            # browser can legitimately hold a vector from a room
+                            # generation that has since been compacted. yrs 0.12
+                            # assumes every requested clock has a local block and
+                            # panics in Store::write_blocks_from when that
+                            # assumption is false, taking every transport in the
+                            # shared room down with it. Sending the full current
+                            # update is protocol-correct and idempotent on the
+                            # browser; the document is bounded and this path only
+                            # runs during sync/reconnect.
+                            import y_py as Y  # pylint: disable=import-outside-toplevel
+
+                            update = Y.encode_state_as_update(self.ydoc)
+                            await websocket.send(create_sync_step2_message(update))
+                            authoritative_step2_sent = True
+                            if authoritative_one_way_handshake:
+                                # No server STEP1 was emitted, so there is no
+                                # legitimate initial client STEP2 to wait for.
+                                # The next ordinary SYNC_UPDATE is a real user
+                                # mutation and must not be mistaken for stale
+                                # bootstrap state.
+                                initial_native_update_pending = False
+                            self.log.debug(
+                                "sent server-authoritative full SYNC_STEP2 "
+                                "webspace=%s endpoint=%s bytes=%s",
+                                self._diag_room_id(),
+                                getattr(websocket, "path", None),
+                                len(update or b""),
+                            )
+                            continue
+                        if (
+                            authoritative_one_way_handshake
+                            and authoritative_step2_sent
+                            and sync_type == int(YSyncMessageType.SYNC_STEP2)
+                        ):
+                            # A conforming y-websocket client cannot send STEP2
+                            # here because the server did not send STEP1.  Treat
+                            # an unsolicited response as stale bootstrap state,
+                            # never as an application edit.
+                            self._diag_authoritative_initial_skip_total += 1
+                            self._diag_authoritative_initial_skip_bytes += len(inbound_payload or b"")
+                            self._diag_authoritative_initial_last_sync_type = "SYNC_STEP2"
+                            _ylog.warning(
+                                "ignored unsolicited browser Y STEP2 after one-way authoritative handshake "
+                                "webspace=%s bytes=%s digest=%s",
+                                self._diag_room_id(),
+                                len(inbound_payload or b""),
+                                hashlib.sha256(inbound_payload or b"").hexdigest(),
+                            )
+                            continue
                         authoritative_initial = bool(
                             sync_type is not None
                             and inbound_payload is not None
@@ -2110,13 +2222,25 @@ class DiagnosticYRoom(YRoom):
                                 int(YSyncMessageType.SYNC_UPDATE),
                             }:
                                 initial_native_update_pending = False
-                                # STEP1 is handled by process_sync_message and
-                                # returns the authoritative STEP2.  Replaying a
-                                # full update after discarding the browser's
-                                # initial state duplicated that same response.
-                                # A prior exceptional replay is already enough;
-                                # either way no additional payload is needed.
-                                self._diag_effective_initial_replay_dedupe_total += 1
+                                # y-websocket clients do not consistently send
+                                # their own STEP1 after answering the server's
+                                # opening STEP1. Once their initial STEP2 is
+                                # discarded, explicitly send the authoritative
+                                # room state or the browser can remain a validly
+                                # connected but empty document forever.
+                                if not authoritative_step2_sent:
+                                    import y_py as Y  # pylint: disable=import-outside-toplevel
+
+                                    update = Y.encode_state_as_update(self.ydoc)
+                                    await websocket.send(create_sync_step2_message(update))
+                                    authoritative_step2_sent = True
+                                    self._diag_effective_initial_replay_total += 1
+                                    self._diag_effective_initial_replay_bytes += len(update or b"")
+                                    self._diag_effective_initial_replay_last_reason = (
+                                        "authoritative_initial_step2"
+                                    )
+                                else:
+                                    self._diag_effective_initial_replay_dedupe_total += 1
                             _ylog.warning(
                                 "ignored initial browser Y sync payload in server-authoritative mode "
                                 "webspace=%s sync_type=%s bytes=%s digest=%s",
@@ -2131,6 +2255,13 @@ class DiagnosticYRoom(YRoom):
                             int(YSyncMessageType.SYNC_UPDATE),
                         }:
                             initial_native_update_pending = False
+                        elif sync_type == int(YSyncMessageType.SYNC_STEP1):
+                            # process_sync_message owns the protocol response
+                            # in the compatibility path below. Mark it before
+                            # scheduling the task so an immediately following
+                            # client STEP2 cannot trigger a duplicate full
+                            # authoritative response.
+                            authoritative_step2_sent = True
                         tg.start_soon(
                             process_sync_message,
                             message[1:],
@@ -4164,9 +4295,57 @@ def _track_events_ws_connection(webspace_id: str, websocket: WebSocket) -> None:
         _schedule_idle_room_reset(previous)
 
 
+def _track_events_ws_browser_session(
+    webspace_id: str,
+    websocket: WebSocket,
+    payload: Mapping[str, Any],
+) -> None:
+    """Record the browser endpoint owned by the control websocket.
+
+    Device inventory must not disappear just because the independent Yjs
+    transport is reconnecting. The events websocket is the control-plane
+    lifetime of a browser page and already carries the same page-scoped
+    identity and representation metadata as YWS.
+    """
+
+    device_id = _clean_browser_metadata_value(payload.get("device_id"), max_len=128)
+    if not device_id:
+        return
+    browser_page_id = _clean_browser_metadata_value(
+        payload.get("browser_page_id") or payload.get("browserPageId"),
+        max_len=128,
+    )
+    browser_session_id = _clean_browser_metadata_value(
+        payload.get("browser_session_id")
+        or payload.get("browserSessionId")
+        or payload.get("client_session_id")
+        or payload.get("clientSessionId"),
+        max_len=128,
+    )
+    peer: dict[str, Any] = {
+        "device_id": device_id,
+        "webspace_id": str(webspace_id or "").strip() or "default",
+        "connection_state": "connected",
+        "events_channel_state": "open",
+        "session_count": 1,
+        "source": "events_gateway",
+    }
+    peer.update(_browser_session_metadata(dict(payload)))
+    if browser_page_id:
+        peer["browser_page_id"] = browser_page_id
+        peer["client_limit_id"] = browser_page_id
+    elif browser_session_id:
+        peer["client_limit_id"] = browser_session_id
+    if browser_session_id:
+        peer["browser_session_id"] = browser_session_id
+    with _ACTIVE_EVENTS_WS_LOCK:
+        _ACTIVE_EVENTS_WS_BROWSER_SESSIONS[id(websocket)] = peer
+
+
 def _untrack_events_ws_connection(websocket: WebSocket) -> None:
     with _ACTIVE_EVENTS_WS_LOCK:
         key = _ACTIVE_EVENTS_WS_WEBSPACES.pop(id(websocket), None)
+        _ACTIVE_EVENTS_WS_BROWSER_SESSIONS.pop(id(websocket), None)
     if key and not _webspace_has_live_transports(key):
         _schedule_idle_room_reset(key)
 
@@ -5964,6 +6143,12 @@ def active_browser_session_snapshot(*, now_ts: float | None = None) -> dict[str,
             webspace_id: list(items or [])
             for webspace_id, items in _ACTIVE_YWS_CONNECTIONS.items()
         }
+    with _ACTIVE_EVENTS_WS_LOCK:
+        events_peers = [
+            dict(peer)
+            for peer in _ACTIVE_EVENTS_WS_BROWSER_SESSIONS.values()
+            if isinstance(peer, Mapping)
+        ]
     peers: list[dict[str, Any]] = []
     for webspace_id, device_counts in clients.items():
         for client_key, session_count in sorted(device_counts.items()):
@@ -5995,6 +6180,19 @@ def active_browser_session_snapshot(*, now_ts: float | None = None) -> dict[str,
                 except Exception:
                     params = {}
                 peer.update(_browser_session_metadata(params))
+                if not str(peer.get("browser_zone") or "").strip():
+                    origin = str(peer.get("browser_origin") or "").strip()
+                    try:
+                        origin_host = str(urlsplit(origin).hostname or "").strip().casefold()
+                    except ValueError:
+                        origin_host = ""
+                    if origin_host in {"127.0.0.1", "localhost", "::1"}:
+                        # Legacy YWS-only clients predate the explicit zone
+                        # query field, but their loopback origin is still an
+                        # authoritative LO signal. Without this inference the
+                        # same local browser was rendered as a synthetic RU
+                        # endpoint in Management.
+                        peer["browser_zone"] = "lo"
                 browser_page_id = _clean_browser_metadata_value(
                     params.get("browser_page_id") or params.get("browserPageId"),
                     max_len=128,
@@ -6011,6 +6209,72 @@ def active_browser_session_snapshot(*, now_ts: float | None = None) -> dict[str,
                 if browser_session_id:
                     peer["browser_session_id"] = browser_session_id
             peers.append(peer)
+    peer_index: dict[tuple[str, str, str], int] = {}
+    for index, peer in enumerate(peers):
+        peer_index[
+            (
+                str(peer.get("webspace_id") or "default"),
+                str(peer.get("device_id") or ""),
+                str(
+                    peer.get("browser_page_id")
+                    or peer.get("client_limit_id")
+                    or peer.get("browser_session_id")
+                    or ""
+                ),
+            )
+        ] = index
+    for event_peer in events_peers:
+        key = (
+            str(event_peer.get("webspace_id") or "default"),
+            str(event_peer.get("device_id") or ""),
+            str(
+                event_peer.get("browser_page_id")
+                or event_peer.get("client_limit_id")
+                or event_peer.get("browser_session_id")
+                or ""
+            ),
+        )
+        existing_index = peer_index.get(key)
+        if existing_index is None:
+            peer_index[key] = len(peers)
+            peers.append(event_peer)
+            continue
+        existing = peers[existing_index]
+        peers[existing_index] = {
+            **event_peer,
+            **existing,
+            "events_channel_state": "open",
+            "connection_state": "connected",
+        }
+    # Older YWS clients used the transport token ``yws`` as their scoped
+    # client id. Once the same browser/device has a real page-scoped control
+    # endpoint, retaining that synthetic peer creates a second RU-looking row
+    # (it has no origin) beside the real LO page. Keep it only for legacy
+    # clients where it is the sole observable representation.
+    page_scoped_groups = {
+        (
+            str(peer.get("webspace_id") or "default"),
+            str(peer.get("device_id") or ""),
+        )
+        for peer in peers
+        if str(peer.get("browser_page_id") or "").strip()
+        or str(peer.get("client_limit_id") or "").strip().startswith("page_")
+    }
+    if page_scoped_groups:
+        peers = [
+            peer
+            for peer in peers
+            if not (
+                (
+                    str(peer.get("webspace_id") or "default"),
+                    str(peer.get("device_id") or ""),
+                )
+                in page_scoped_groups
+                and str(peer.get("client_limit_id") or "").strip().casefold()
+                in {"", "yws"}
+                and not str(peer.get("browser_page_id") or "").strip()
+            )
+        ]
     return {
         "peer_total": len(peers),
         "peers": peers,
@@ -6462,6 +6726,7 @@ def _build_gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[st
         },
         "rooms": room_details,
         "commands": _command_trace_snapshot(now),
+        "device_register": _device_register_diagnostic_snapshot(),
         "ownership": _gateway_transport_ownership_snapshot(),
         "webio_snapshot_demand": snapshot_demand_snapshot(),
         "updated_at": now,
@@ -6547,6 +6812,7 @@ def _cached_gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[s
         "servers": {},
         "rooms": {},
         "commands": {},
+        "device_register": _device_register_diagnostic_snapshot(),
         "ownership": {},
         "webio_snapshot_demand": {},
         "updated_at": now,
@@ -7021,6 +7287,28 @@ def live_webspace_room_ready(webspace_id: str, *, require_transport: bool = Fals
     return not require_transport or _webspace_has_live_transports(key)
 
 
+def live_webspace_materialized_payload(webspace_id: str) -> dict[str, Any] | None:
+    """Return the room's last immutable resolver payload without touching YDoc.
+
+    The websocket owner stores a detached JSON-compatible copy after applying
+    effective branches.  HTTP first-paint readers may safely reuse that copy;
+    reading the native ``yrs`` document concurrently can panic inside the Rust
+    store and disconnect every YWS client in the room.
+    """
+
+    key = str(webspace_id or "").strip() or "default"
+    room = getattr(y_server, "rooms", {}).get(key)
+    if room is None or not bool(getattr(room, "_adaos_open_ready", False)):
+        return None
+    payload = getattr(room, "_last_materialized_payload", None)
+    if not isinstance(payload, Mapping) or not payload:
+        return None
+    try:
+        return json.loads(json.dumps(dict(payload), ensure_ascii=False))
+    except Exception:
+        return dict(payload)
+
+
 _y_server_started = False
 _y_server_task: asyncio.Task[None] | None = None
 _room_locks: dict[str, asyncio.Lock] = {}
@@ -7132,6 +7420,8 @@ def _room_materialized_scenario(ydoc: Any) -> str | None:
         runtime_map = ydoc.get_map("runtime")
         environment = runtime_map.get("environment")
         materialization = _room_branch_get(environment, "materialization")
+        if not _room_branch_is_mapping(materialization):
+            materialization = runtime_map.get("materialization")
         return _room_optional_token(_room_branch_get(materialization, "scenario_id"))
     except Exception:
         return None
@@ -7200,6 +7490,8 @@ def _room_effective_required_branches(ydoc: Any) -> tuple[str, ...]:
         runtime_map = ydoc.get_map("runtime")
         environment = runtime_map.get("environment")
         materialization = _room_branch_get(environment, "materialization")
+        if not _room_branch_is_mapping(materialization):
+            materialization = runtime_map.get("materialization")
         if _room_branch_is_mapping(materialization):
             required = _normalize_required_branch_list(_room_branch_get(materialization, "required_branches"))
             if required:
@@ -7649,21 +7941,26 @@ async def _apply_room_materialized_payload(
                     channel="core.yjs.gateway.materialized_payload",
                     governed=True,
                 ):
+                    apply_kwargs: dict[str, Any] = {
+                        "materialization_identity": materialization_identity,
+                        "previous_payload": previous_payload,
+                        # Scenario navigation is an explicit projection
+                        # boundary. Do not let a stale persisted fingerprint
+                        # turn mere branch presence into proof that the live
+                        # room contains the requested scenario. Other rebuilds
+                        # retain the bounded fingerprint fast path.
+                        "verify_branch_fingerprints": (
+                            bool(force_full_state_update)
+                            or "scenario_switch" in str(reason or "").lower()
+                        ),
+                    }
+                    if "scenario_switch" in str(reason or "").lower():
+                        apply_kwargs["replace_changed_branches"] = True
                     runtime.apply_materialized_payload_to_doc(
                         ydoc,
                         webspace_id,
                         payload,
-                        materialization_identity=materialization_identity,
-                        previous_payload=previous_payload,
-                        # Scenario navigation is an explicit projection
-                        # boundary.  Do not let a stale persisted fingerprint
-                        # turn mere branch presence into proof that the live
-                        # room contains the requested scenario.  Other rebuilds
-                        # retain the bounded fingerprint fast path.
-                        verify_branch_fingerprints=(
-                            bool(force_full_state_update)
-                            or "scenario_switch" in str(reason or "").lower()
-                        ),
+                        **apply_kwargs,
                     )
             finally:
                 phase_timings_ms["branch_apply"] = _elapsed_ms_since(stage_started)
@@ -8157,6 +8454,7 @@ async def _update_live_webspace_effective_branches(
     total_started = time.perf_counter()
     phase_timings_ms: dict[str, float] = {}
     key = str(webspace_id or "").strip() or "default"
+    scenario_switch_boundary = "scenario_switch" in str(reason or "").lower()
     room_created = False
     stage_started = time.perf_counter()
     room = y_server.rooms.get(key)
@@ -8373,6 +8671,13 @@ async def _update_live_webspace_effective_branches(
                     materialized_payload,
                     reason=reason,
                     persist_repair=bool(persist_repair),
+                    # Persist the authoritative scenario diff before the YDoc
+                    # observer can misclassify it as a browser-origin update.
+                    # This also makes the following snapshot compaction see
+                    # the new generation immediately.
+                    persist_before_observers=bool(
+                        persist_repair and scenario_switch_boundary
+                    ),
                     force_full_state_update=bool(force_full_state_update),
                     materialization_identity=materialization_identity,
                 )
@@ -8389,6 +8694,34 @@ async def _update_live_webspace_effective_branches(
             phase_timings_ms["materialized_owner_apply"] = _elapsed_ms_since(stage_started)
         direct_update_size = len(update or b"")
         if bool((direct_result or {}).get("ready")):
+            durable_schedule_started = time.perf_counter()
+            durable_snapshot_scheduled = False
+            if scenario_switch_boundary and persist_repair:
+                request_compaction = getattr(
+                    getattr(room, "ystore", None),
+                    "request_runtime_compaction",
+                    None,
+                )
+                if callable(request_compaction):
+                    try:
+                        durable_snapshot_scheduled = bool(
+                            await request_compaction(
+                                reason="scenario_switch_materialization",
+                                min_quiet_sec=0.0,
+                            )
+                        )
+                    except Exception:
+                        _ylog.warning(
+                            "failed to schedule durable scenario-switch YStore snapshot webspace=%s reason=%s",
+                            key,
+                            reason,
+                            exc_info=True,
+                        )
+            phase_timings_ms["durable_snapshot_schedule"] = _elapsed_ms_since(
+                durable_schedule_started
+            )
+            direct_result = dict(direct_result or {})
+            direct_result["durable_snapshot_scheduled"] = durable_snapshot_scheduled
             marker_key = _live_refresh_update_key(key, update)
             stage_started = time.perf_counter()
             broadcast_diagnostics = _live_refresh_snapshot_by_key(marker_key)
@@ -8426,6 +8759,7 @@ async def _update_live_webspace_effective_branches(
             except Exception:
                 pass
         else:
+            phase_timings_ms["durable_snapshot_schedule"] = 0.0
             phase_timings_ms["client_sync_wait"] = 0.0
             _ylog.warning(
                 "materialized payload did not refresh live Yjs room; falling back to semantic repair webspace=%s reason=%s result=%s",
@@ -8730,6 +9064,89 @@ async def _ensure_room_effective_materialized(
                 }
             )
         return False
+
+    # A scenario transition normally resolved its immutable materialized
+    # payload before the first YWS client joins. Reuse that generation here.
+    # Re-running WebspaceScenarioRuntime during cold room bootstrap used to
+    # spend 6-11 seconds rebuilding catalog sources (and could race an HTTP
+    # first-paint snapshot over the same native document).
+    try:
+        from adaos.services.scenario.webspace_runtime import (  # pylint: disable=import-outside-toplevel
+            get_webspace_rebuild_materialized_payload,
+        )
+
+        cached_payload = get_webspace_rebuild_materialized_payload(webspace_id)
+    except Exception:
+        cached_payload = None
+    cached_scenario = (
+        str(cached_payload.get("scenario_id") or "").strip()
+        if isinstance(cached_payload, Mapping)
+        else ""
+    )
+    if (
+        isinstance(cached_payload, Mapping)
+        and bool(cached_payload)
+        and cached_scenario == expected_scenario
+    ):
+        try:
+            update, apply_result = await _apply_room_materialized_payload(
+                webspace_id,
+                ystore,
+                room,
+                cached_payload,
+                reason="room_bootstrap.rebuild_cache_apply",
+                persist_repair=True,
+                persist_before_observers=True,
+            )
+            if not bool(apply_result.get("ready")):
+                raise RuntimeError(
+                    str(apply_result.get("error") or "room_bootstrap_cached_payload_not_ready")
+                )
+            ready_result = await _finalize_materialized_room_bootstrap(
+                webspace_id,
+                ystore,
+                room,
+                scenario_id=expected_scenario,
+                space=str((seed_result or {}).get("space") or "workspace"),
+                mode="rebuild_cached_payload",
+            )
+            if seed_result is not None:
+                seed_result.update(
+                    {
+                        "mode": "rebuild_cached_payload",
+                        "room_effective_materialized": True,
+                        "room_effective_materialized_persisted": bool(
+                            apply_result.get("bootstrap_update_persisted")
+                            or apply_result.get("full_state_snapshot_persisted")
+                            or not update
+                        ),
+                        "room_effective_materialized_bytes": len(update or b""),
+                        "room_bootstrap_marker_persisted": bool(ready_result.get("persisted")),
+                        "room_resolver_timings_ms": {"cache_hit": True, "total": 0.0},
+                        "room_payload_apply_timings_ms": dict(apply_result.get("phase_timings_ms") or {}),
+                    }
+                )
+            try:
+                room._diag_effective_branch_snapshot = _room_effective_branch_snapshot(ydoc)
+                room._diag_effective_last_full_check_mono = time.monotonic()
+            except Exception:
+                pass
+            _ylog.info(
+                "YRoom reused rebuild materialized payload before open webspace=%s scenario=%s persisted=%s bytes=%d apply_phases=%s",
+                webspace_id,
+                expected_scenario,
+                bool(update),
+                len(update or b""),
+                json.dumps(dict(apply_result.get("phase_timings_ms") or {}), ensure_ascii=True, sort_keys=True),
+            )
+            return True
+        except Exception:
+            _ylog.warning(
+                "YRoom rebuild materialized payload reuse failed; resolving webspace=%s scenario=%s",
+                webspace_id,
+                expected_scenario,
+                exc_info=True,
+            )
 
     try:
         from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
@@ -9977,6 +10394,7 @@ async def process_events_command(
     webspace_id: str,
     send_response: Callable[[dict[str, Any]], Awaitable[None]],
     client_label: str | None = None,
+    defer_device_register_post: bool = False,
 ) -> str | None:
     """
     Process a single events-channel command and send ack via *send_response*.
@@ -9999,6 +10417,17 @@ async def process_events_command(
         await send_response(msg)
 
     if kind == "device.register":
+        register_started = time.perf_counter()
+        received_at_ms = time.time() * 1000.0
+        try:
+            client_sent_at_ms = float(payload.get("client_sent_at_ms") or 0.0)
+        except (TypeError, ValueError):
+            client_sent_at_ms = 0.0
+        queue_age_ms = (
+            round(max(0.0, received_at_ms - client_sent_at_ms), 3)
+            if client_sent_at_ms > 0.0
+            else None
+        )
         new_device = payload.get("device_id") or "dev-unknown"
         requested_webspace = payload.get("webspace_id") or payload.get("id")
         new_webspace = _coerce_gateway_webspace_id(requested_webspace)
@@ -10022,6 +10451,17 @@ async def process_events_command(
             except Exception:
                 pass
             await _ack(False, data={"webspace_id": new_webspace, "reason": env_reject_reason}, error=env_reject_reason)
+            _record_device_register_diagnostic(
+                {
+                    "recorded_at": time.time(),
+                    "device_id": str(captured_device),
+                    "webspace_id": str(captured_ws),
+                    "status": "rejected",
+                    "queue_age_ms": queue_age_ms,
+                    "ack_ms": _elapsed_ms_since(register_started),
+                    "total_ms": _elapsed_ms_since(register_started),
+                }
+            )
             return new_webspace
 
         async def _post_register() -> dict[str, Any]:
@@ -10105,36 +10545,89 @@ async def process_events_command(
         # healthy client hit its control-command timeout and replay the
         # registration while the first request is still being processed.
         await _ack(data={"webspace_id": new_webspace})
+        ack_ms = _elapsed_ms_since(register_started)
+        post_started = time.perf_counter()
 
-        try:
+        async def _complete_post_registration() -> None:
+            try:
             # The browser may establish YWS as soon as it receives the ACK.
-            # Complete the projections afterwards in this connection task so
-            # failures stay observable and do not create an unmanaged task.
-            post_result = await _post_register()
-            event_payload = {
-                "device_id": captured_device,
-                "webspace_id": captured_ws,
-                "kind": "browser",
-            }
-            if post_result.get("yjs_post_skipped"):
-                event_payload["yjs_post_skipped"] = True
-                event_payload["yjs_guard_reason"] = str(post_result.get("yjs_guard_reason") or "")
-            if post_result.get("yjs_presence_deferred"):
-                event_payload["yjs_presence_deferred"] = True
-                event_payload["yjs_presence_reason"] = str(post_result.get("yjs_presence_reason") or "")
-            _publish_bus(
-                "device.registered",
-                event_payload,
+                # Complete the projections after the ACK.  The websocket reader
+                # may defer this work so a replayed registration cannot block a
+                # second, tracked registration behind Yjs projection latency.
+                post_result = await _post_register()
+                event_payload = {
+                    "device_id": captured_device,
+                    "webspace_id": captured_ws,
+                    "kind": "browser",
+                }
+                if post_result.get("yjs_post_skipped"):
+                    event_payload["yjs_post_skipped"] = True
+                    event_payload["yjs_guard_reason"] = str(post_result.get("yjs_guard_reason") or "")
+                if post_result.get("yjs_presence_deferred"):
+                    event_payload["yjs_presence_deferred"] = True
+                    event_payload["yjs_presence_reason"] = str(post_result.get("yjs_presence_reason") or "")
+                _publish_bus(
+                    "device.registered",
+                    event_payload,
+                )
+                post_ms = _elapsed_ms_since(post_started)
+                total_ms = _elapsed_ms_since(register_started)
+                _record_device_register_diagnostic(
+                    {
+                        "recorded_at": time.time(),
+                        "device_id": str(captured_device),
+                        "webspace_id": str(captured_ws),
+                        "status": "ok",
+                        "queue_age_ms": queue_age_ms,
+                        "ack_ms": ack_ms,
+                        "post_projection_ms": post_ms,
+                        "total_ms": total_ms,
+                        "yjs_post_skipped": bool(post_result.get("yjs_post_skipped")),
+                        "yjs_post_failed": bool(post_result.get("yjs_post_failed")),
+                    }
+                )
+                if ack_ms >= 250.0 or post_ms >= 1000.0:
+                    _log.warning(
+                        "device.register slow device=%s webspace=%s queue_age_ms=%s ack_ms=%.3f post_projection_ms=%.3f total_ms=%.3f",
+                        captured_device,
+                        captured_ws,
+                        queue_age_ms,
+                        ack_ms,
+                        post_ms,
+                        total_ms,
+                    )
+            except Exception:
+                # Registration has already succeeded. Projection failures are
+                # best-effort and must not emit a contradictory second ACK.
+                _log.warning(
+                    "device.register projections failed after ack webspace=%s device=%s",
+                    captured_ws,
+                    captured_device,
+                    exc_info=True,
+                )
+                _record_device_register_diagnostic(
+                    {
+                        "recorded_at": time.time(),
+                        "device_id": str(captured_device),
+                        "webspace_id": str(captured_ws),
+                        "status": "projection_failed",
+                        "queue_age_ms": queue_age_ms,
+                        "ack_ms": ack_ms,
+                        "post_projection_ms": _elapsed_ms_since(post_started),
+                        "total_ms": _elapsed_ms_since(register_started),
+                    }
+                )
+
+        if defer_device_register_post:
+            task = asyncio.create_task(
+                _complete_post_registration(),
+                name=f"device-register-post:{captured_ws}:{captured_device}",
             )
-        except Exception:
-            # Registration has already succeeded. Projection failures are
-            # best-effort and must not emit a contradictory second ACK.
-            _log.warning(
-                "device.register projections failed after ack webspace=%s device=%s",
-                captured_ws,
-                captured_device,
-                exc_info=True,
-            )
+            _DEVICE_REGISTER_POST_TASKS.add(task)
+            task.add_done_callback(_DEVICE_REGISTER_POST_TASKS.discard)
+            return new_webspace
+
+        await _complete_post_registration()
         return new_webspace
 
     if kind == "desktop.toggleInstall":
@@ -10817,6 +11310,22 @@ async def events_ws(websocket: WebSocket):
             kind = msg.get("kind")
             payload = msg.get("payload") or {}
 
+            if kind == "device.register" and isinstance(payload, Mapping):
+                registration_webspace = _coerce_gateway_webspace_id(
+                    payload.get("webspace_id") or payload.get("id") or webspace_id
+                )
+                registration_metadata = _browser_session_metadata(dict(payload))
+                registration_device = str(payload.get("device_id") or "").strip()
+                if registration_device and _browser_env_rejected_reason(
+                    registration_device,
+                    registration_metadata,
+                ) is None:
+                    _track_events_ws_browser_session(
+                        registration_webspace,
+                        websocket,
+                        payload,
+                    )
+
             # -- WebRTC signaling (rtc.offer / rtc.ice) -----------------------
             if kind == "rtc.offer":
                 try:
@@ -10913,6 +11422,7 @@ async def events_ws(websocket: WebSocket):
                 webspace_id=webspace_id,
                 client_label=_ws_client_str(websocket),
                 send_response=_ws_send,
+                defer_device_register_post=True,
             )
             # Update connection-scoped state when a command changed it.
             if new_ws is not None:

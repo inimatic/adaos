@@ -171,3 +171,17 @@ def test_runtime_projection_prepare_defers_during_managed_startup(monkeypatch, t
         "reason": "startup_deferred",
         "source_bytes": path.stat().st_size,
     }
+
+
+def test_runtime_projection_prepare_is_not_on_default_interactive_read_path(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    path = tmp_path / "desktop.ysnap"
+    path.write_bytes(b"large-enough-for-the-maintenance-worker")
+    monkeypatch.setattr(ystore, "_YSTORE_RUNTIME_PROJECTION_PREPARE", False)
+    monkeypatch.setattr(ystore, "_YSTORE_RUNTIME_PROJECTION_PREPARE_MIN_BYTES", 1)
+
+    result = ystore._prepare_runtime_projection_snapshot(path)
+
+    assert result == {"changed": False, "applied": False, "reason": "disabled"}

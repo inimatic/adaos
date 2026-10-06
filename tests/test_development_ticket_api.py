@@ -723,6 +723,48 @@ def test_development_ticket_comment_assistant_answers_in_same_thread(tmp_path: P
     )
 
 
+def test_development_ticket_comment_assistant_uses_model_portable_request(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="feedback_note",
+        summary="Clarify compact chat layout",
+        target_scope={"type": "scenario", "id": "web_desktop"},
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(signal, kind="feedback")["ticket"]
+    commented = service.comment_ticket(
+        ticket["ticket_id"],
+        body="The composer must remain visible.",
+        actor="browser",
+        assistant_requested=True,
+    )
+    calls: list[dict[str, object]] = []
+
+    def call_llm(*_args: object, **kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        return {
+            "id": "resp_comment_portable",
+            "output_text": json.dumps(
+                {
+                    "intent": "remark",
+                    "message": "",
+                    "qualification": "Keep controls outside the scrolling feed.",
+                    "clarification_question": "",
+                    "confidence": 0.98,
+                }
+            ),
+            "usage": {"input_tokens": 90, "output_tokens": 20},
+        }
+
+    assisted = service.assist_ticket_comment(
+        ticket["ticket_id"],
+        comment_id=commented["comments"][-1]["id"],
+        llm_call=call_llm,
+    )
+
+    assert assisted is not None
+    assert calls and "reasoning" not in calls[0]
+
+
 def test_development_ticket_api_projects_direct_resolution_as_development_work(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
     created = client.post(
@@ -2142,6 +2184,12 @@ def test_report_sync_retries_unlinked_feedback_and_coalesces_polling(
         def __init__(self) -> None:
             self.flushes = 0
             self.receives = 0
+            self.application_reads = 0
+            self.application_store = self
+
+        def list_applications(self):
+            self.application_reads += 1
+            return ()
 
         def flush_outbox(self, *, limit: int) -> None:
             self.flushes += limit
@@ -2171,6 +2219,7 @@ def test_report_sync_retries_unlinked_feedback_and_coalesces_polling(
     assert forwarded == [ticket["ticket_id"]]
     assert reports.flushes == 50
     assert reports.receives == 50
+    assert reports.application_reads == 1
 
 
 def test_application_tokens_include_nested_scenario_identity() -> None:

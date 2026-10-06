@@ -31,6 +31,8 @@ _HEADER_CACHE_STATS: dict[str, Any] = {
     "max_compute_ms": 0.0,
     "last_error": None,
 }
+_ACCESS_STORE_LOCK = threading.Lock()
+_ACCESS_STORES: dict[str, PersonalizationAccessStore] = {}
 
 
 def _ctx(ctx: AgentContext | None = None) -> AgentContext:
@@ -62,7 +64,14 @@ def current_subnet_id(ctx: AgentContext | None = None) -> str:
 def personalization_access_store(ctx: AgentContext | None = None) -> PersonalizationAccessStore:
     resolved = _ctx(ctx)
     authority = getattr(resolved, "authority_state_dir", None)
-    return PersonalizationAccessStore(Path(authority or _state_dir(resolved)) / "personalization" / "access.v0.json")
+    path = (Path(authority or _state_dir(resolved)) / "personalization" / "access.v0.json").resolve()
+    key = str(path)
+    with _ACCESS_STORE_LOCK:
+        store = _ACCESS_STORES.get(key)
+        if store is None:
+            store = PersonalizationAccessStore(path)
+            _ACCESS_STORES[key] = store
+        return store
 
 
 def deny_browser_session(session_id: str) -> dict[str, Any] | None:

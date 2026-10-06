@@ -766,6 +766,27 @@ def _ensure_api_pre_stop_preflight_or_exit(
     raise typer.Exit(code=1)
 
 
+def _runtime_import_preflight_required(
+    host: str,
+    port: int,
+    *,
+    launch_mode: str,
+) -> bool:
+    """Run the expensive import probe only before replacing a live runtime.
+
+    A cold start has no previous process to protect. Importing the API and all
+    runtime skill handlers in a throwaway subprocess before importing them
+    again in the real process added roughly fifteen seconds to local startup
+    without changing the failure outcome. Restarts retain the fail-before-stop
+    guarantee because an occupied AdaOS listener still enables the probe.
+    """
+
+    if str(launch_mode or "").strip().lower() == "api_serve":
+        return False
+    probe = _probe_api_bind_availability(host, int(port))
+    return bool(probe.get("ok") is True and probe.get("occupied_by"))
+
+
 def _uvicorn_loop_mode() -> str:
     if os.name != "nt":
         return "auto"
@@ -1916,7 +1937,11 @@ def run_api_runtime(
         host,
         port,
         action="api serve",
-        include_runtime_import=str(launch_mode or "").strip().lower() != "api_serve",
+        include_runtime_import=_runtime_import_preflight_required(
+            host,
+            port,
+            launch_mode=launch_mode,
+        ),
     )
     try:
         _stop_previous_server(host, port)

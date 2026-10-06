@@ -1347,7 +1347,11 @@ def _voice_availability(
         return {"status": "descriptor_only", "reason": "runtime_modal_inventory_unavailable", "checked_ids": checked_ids}
     if not checked_ids:
         return {"status": "unknown", "reason": "no_container_reference"}
-    if any(value in available_modal_ids for value in checked_ids):
+    if any(
+        available == checked or available.endswith(f":{checked}")
+        for checked in checked_ids
+        for available in available_modal_ids
+    ):
         return {"status": "reachable", "checked_ids": checked_ids}
     return {"status": "not_currently_reachable", "checked_ids": checked_ids}
 

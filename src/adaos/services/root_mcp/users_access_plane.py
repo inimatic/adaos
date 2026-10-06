@@ -676,17 +676,55 @@ def _audit_projection(
 
 
 def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    directory = _service().admin_summary(
-        actor=_actor(arguments),
-        audit_limit=int(arguments.get("audit_limit") or 50),
-    )
-    surface = applications_sdk.get_users_access_surface(directory)
     requested = {
         str(item).strip()
         for item in arguments.get("sections") or _SUMMARY_SECTIONS
         if str(item).strip() in _SUMMARY_SECTIONS
     }
     detail = str(arguments.get("detail") or "full").strip().lower()
+    audit_limit = int(arguments.get("audit_limit") or 50)
+    service = _service()
+    if requested == {"audit"}:
+        audit = service.admin_audit(actor=_actor(arguments), audit_limit=audit_limit)
+        component_refs = {
+            candidate
+            for item in audit
+            if isinstance(item, Mapping)
+            for candidate in (
+                str((item.get("metadata") or {}).get("resource") or "")
+                if isinstance(item.get("metadata"), Mapping)
+                else "",
+                _typed_ref(item.get("scope")),
+            )
+            if candidate.startswith(("skill:", "scenario:"))
+        }
+        try:
+            application_cache = applications_sdk.get_component_application_owner_index(
+                component_refs
+            )
+        except (FileNotFoundError, OSError, RuntimeError, ValueError):
+            application_cache = {}
+        return {
+            "users_access": {
+                "schema": "adaos.users_access.surface.v1",
+                "diagnostics": {
+                    "content_redacted": True,
+                    "source": "personalization_metadata",
+                },
+            },
+            "administration": {
+                "audit": [
+                    _audit_projection(item, application_cache=application_cache)
+                    for item in audit
+                    if isinstance(item, Mapping)
+                ]
+            },
+        }
+    directory = service.admin_summary(
+        actor=_actor(arguments),
+        audit_limit=audit_limit,
+    )
+    surface = applications_sdk.get_users_access_surface(directory)
 
     def compact_people(items: Any) -> list[dict[str, Any]]:
         if detail != "compact" or not isinstance(items, list):

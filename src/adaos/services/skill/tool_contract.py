@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 import yaml
@@ -18,6 +19,74 @@ _LEGACY_SIDE_EFFECT_PERMISSIONS = {
     "local_write": "workspace.write",
     "runtime_write": "workspace.write",
 }
+_MANIFEST_CACHE_LOCK = threading.RLock()
+_MANIFEST_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
+_MANIFEST_CACHE_MAX = 64
+_IMMUTABLE_RUNTIME_MANIFEST_CACHE: dict[tuple[tuple[str, ...], str], tuple[Path, dict[str, Any]]] = {}
+_IMMUTABLE_RUNTIME_MANIFEST_CACHE_MAX = 128
+
+
+def _resolved_manifest_document(path: Path) -> dict[str, Any]:
+    """Read one immutable runtime manifest once per exact file revision.
+
+    A Management first paint invokes several tools from the same skill in
+    parallel.  Re-reading and decoding that manifest in every worker used to
+    serialize otherwise independent data sources.  The stat tuple is part of
+    the key, so an A/B slot switch or in-place development rebuild cannot
+    inherit a stale authorization contract.
+    """
+
+    resolved = path.resolve()
+    stat = resolved.stat()
+    key = (str(resolved), int(stat.st_mtime_ns), int(stat.st_size))
+    with _MANIFEST_CACHE_LOCK:
+        cached = _MANIFEST_CACHE.get(key)
+        if cached is not None:
+            return cached
+        value = json.loads(resolved.read_text(encoding="utf-8"))
+        manifest = dict(value) if isinstance(value, dict) else {}
+        _MANIFEST_CACHE[key] = manifest
+        while len(_MANIFEST_CACHE) > _MANIFEST_CACHE_MAX:
+            _MANIFEST_CACHE.pop(next(iter(_MANIFEST_CACHE)))
+        return manifest
+
+
+def _resolved_runtime_manifest(
+    manager: Any,
+    *,
+    skill_name: str,
+    dev: bool,
+) -> tuple[Path, dict[str, Any]]:
+    """Resolve a runtime manifest without re-walking immutable Trial state.
+
+    Native Trial managers are bound to a content-addressed Application release.
+    Their authority tuple changes whenever either the release or component
+    package changes, so it is a stronger cache key than repeatedly consulting
+    the A/B marker.  Serialising the first lookup also collapses the page's
+    concurrent data-source fan-out onto one status read.
+    """
+
+    raw_authority = getattr(manager, "_adaos_immutable_trial_authority", None)
+    authority = tuple(str(item) for item in raw_authority) if isinstance(raw_authority, tuple) else ()
+    cache_key = (authority, str(skill_name or "").strip())
+    if authority and not dev:
+        with _MANIFEST_CACHE_LOCK:
+            cached = _IMMUTABLE_RUNTIME_MANIFEST_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
+            status = manager.runtime_status(skill_name)
+            manifest_path = Path(str(status.get("resolved_manifest") or ""))
+            manifest = _resolved_manifest_document(manifest_path)
+            resolved = (manifest_path, manifest)
+            _IMMUTABLE_RUNTIME_MANIFEST_CACHE[cache_key] = resolved
+            while len(_IMMUTABLE_RUNTIME_MANIFEST_CACHE) > _IMMUTABLE_RUNTIME_MANIFEST_CACHE_MAX:
+                _IMMUTABLE_RUNTIME_MANIFEST_CACHE.pop(
+                    next(iter(_IMMUTABLE_RUNTIME_MANIFEST_CACHE))
+                )
+            return resolved
+    status = manager.dev_runtime_status(skill_name) if dev else manager.runtime_status(skill_name)
+    manifest_path = Path(str(status.get("resolved_manifest") or ""))
+    return manifest_path, _resolved_manifest_document(manifest_path)
 
 
 def normalize_side_effects(value: Any) -> str:
@@ -36,9 +105,11 @@ def _resolved_tool_spec(
     dev: bool,
 ) -> dict[str, Any]:
     try:
-        status = manager.dev_runtime_status(skill_name) if dev else manager.runtime_status(skill_name)
-        manifest_path = Path(str(status.get("resolved_manifest") or ""))
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _manifest_path, manifest = _resolved_runtime_manifest(
+            manager,
+            skill_name=skill_name,
+            dev=dev,
+        )
         tools = manifest.get("tools") if isinstance(manifest, dict) else {}
         spec = tools.get(public_tool) if isinstance(tools, dict) else {}
         if not isinstance(spec, dict):
@@ -100,9 +171,11 @@ def declared_skill_webui_owner(
     """Return the trusted UI ownership mode from the active runtime manifest."""
 
     try:
-        status = manager.dev_runtime_status(skill_name) if dev else manager.runtime_status(skill_name)
-        manifest_path = Path(str(status.get("resolved_manifest") or ""))
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_path, manifest = _resolved_runtime_manifest(
+            manager,
+            skill_name=skill_name,
+            dev=dev,
+        )
         if not isinstance(manifest, dict):
             return ""
         owner = str(manifest.get("webui_owner") or "").strip().lower()

@@ -24,7 +24,7 @@ _PREPARED_IMPORT_CONTEXT: tuple[str, str, tuple[str, ...]] | None = None
 # filesystem/source-drift check. Exact revisions and slot paths are part of the
 # key; the short TTL keeps tamper detection bounded instead of trusting a
 # process-lifetime module cache.
-_PREPARED_MODULE_CACHE_TTL_SECONDS = 1.0
+_PREPARED_MODULE_CACHE_TTL_SECONDS = 30.0
 _PREPARED_MODULE_CACHE_MAX_ENTRIES = 128
 _PREPARED_MODULE_CACHE: dict[
     tuple[str, str, tuple[str, ...], str], tuple[float, Any]
@@ -146,10 +146,20 @@ def execute_tool(
             revision,
             tuple(str(path) for path in import_paths),
         )
-        context_was_prepared = bool(
-            revision and _PREPARED_IMPORT_CONTEXT == prepared_key
-        )
-        if not revision or _PREPARED_IMPORT_CONTEXT != prepared_key:
+        module_key = (*prepared_key, module_name)
+        # A first paint invokes several skills in parallel.  The old cache was
+        # only consulted when the immediately preceding invocation happened to
+        # use the same skill.  Alternating between Desktop, Browser and chat
+        # therefore repeated the expensive module-table/source preparation and
+        # let worker threads starve the asyncio loop.  An exact source revision
+        # and slot path already form the cache identity, so a prepared module is
+        # safe to reuse across intervening skill calls for this bounded window.
+        mod = _live_prepared_module(module_key) if revision else None
+        if mod is not None:
+            _prioritize_import_paths(import_paths)
+            _bind_owned_namespace_packages(skill_path)
+            _PREPARED_IMPORT_CONTEXT = prepared_key
+        elif not revision or _PREPARED_IMPORT_CONTEXT != prepared_key:
             _prioritize_import_paths(import_paths)
             _purge_conflicting_local_modules(skill_path)
             _reload_skill_modules_if_sources_changed(
@@ -158,8 +168,6 @@ def execute_tool(
             )
             _bind_owned_namespace_packages(skill_path)
             _PREPARED_IMPORT_CONTEXT = prepared_key if revision else None
-        module_key = (*prepared_key, module_name)
-        mod = _live_prepared_module(module_key) if context_was_prepared else None
         if mod is None:
             mod = _load_skill_module(skill_path, module_name)
             if revision:
@@ -300,10 +308,17 @@ def _module_file_is_under(module: Any, root: Path) -> bool:
     if not raw:
         return False
     try:
-        Path(raw).resolve().relative_to(root)
-    except Exception:
+        # This predicate runs for every loaded module while the global import
+        # lock is held.  ``Path.resolve()`` performs filesystem probes for each
+        # path; on Windows a cold first tool call spent ~10 seconds walking
+        # unrelated stdlib/site-package modules here.  Imported module paths
+        # are already concrete.  A normalized lexical containment check is
+        # sufficient for cache eviction and avoids I/O entirely.
+        candidate = os.path.normcase(os.path.abspath(os.fspath(raw)))
+        root_path = os.path.normcase(os.path.abspath(os.fspath(root)))
+        return os.path.commonpath((candidate, root_path)) == root_path
+    except (OSError, TypeError, ValueError):
         return False
-    return True
 
 
 def _prioritize_import_paths(paths: Iterable[Path]) -> None:

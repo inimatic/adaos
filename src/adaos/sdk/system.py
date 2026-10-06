@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable, Mapping
+import copy
 from datetime import datetime, timezone
 import os
 import shutil
@@ -49,10 +50,27 @@ _ALL_SECTIONS = frozenset(
         "technical",
     }
 )
-_RELIABILITY_CACHE_TTL_S = 2.0
+# These are process-local read models, not authorization decisions.  System is
+# opened infrequently enough that rebuilding them synchronously after a short
+# TTL turns an otherwise instant tab switch into a multi-second filesystem and
+# SQLite burst.  Mutating tools keep their own authoritative write path; the
+# detailed Activity surface remains the explicit fresh-read path.
+# Reliability is an aggregate over persisted activity, not live telemetry.
+# Rebuilding it walks several stores and can add seconds to a System revisit.
+# Live hardware data has its own scoped stream, so keeping this aggregate for
+# five minutes preserves freshness while avoiding repeat cold-path scans.
+_RELIABILITY_CACHE_TTL_S = 300.0
 _RELIABILITY_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
 _RELIABILITY_CACHE_LOCK = threading.Lock()
 _RELIABILITY_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_APPLICATION_SUMMARY_CACHE_TTL_S = 300.0
+_APPLICATION_SUMMARY_CACHE: dict[
+    tuple[str, int, int], tuple[float, list[dict[str, Any]]]
+] = {}
+_APPLICATION_SUMMARY_CACHE_LOCK = threading.Lock()
+_DEVELOPMENT_DELIVERY_CACHE_TTL_S = 300.0
+_DEVELOPMENT_DELIVERY_CACHE: tuple[float, int, dict[str, Any]] | None = None
+_DEVELOPMENT_DELIVERY_CACHE_LOCK = threading.Lock()
 
 
 def _runtime_release_metadata() -> dict[str, Any]:
@@ -65,6 +83,39 @@ def _runtime_release_metadata() -> dict[str, Any]:
         "runtime_channel": "dev" if development else "stable",
         "runtime_version": version,
         "development": development,
+    }
+
+
+def _bounded_update_status(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Project transition facts without returning the installer manifest.
+
+    ``current_update_status`` may contain checkout diagnostics, repaired-file
+    lists and self-hygiene receipts. Those are useful to a dedicated migration
+    or diagnostics flow, but made the compact System card tens of kilobytes and
+    forced the client to decode data it never renders.
+    """
+
+    source = _mapping(value)
+    allowed = (
+        "state",
+        "phase",
+        "action",
+        "message",
+        "target_rev",
+        "target_version",
+        "target_slot",
+        "reason",
+        "planned",
+        "runtime",
+        "transition_id",
+        "validated_at",
+        "finished_at",
+        "started_at",
+        "updated_at",
+    )
+    return {
+        **{key: source[key] for key in allowed if source.get(key) is not None},
+        **_runtime_release_metadata(),
     }
 
 _RENAME_INPUT = {
@@ -669,33 +720,62 @@ def _resource_snapshot() -> dict[str, Any]:
 def _installed_application_summaries(*, webspace_id: str | None, limit: int) -> list[dict[str, Any]]:
     from adaos.sdk import applications
 
-    try:
-        models = applications.list_applications(
-            installed_only=True,
-            include_development=False,
-            webspace_id=webspace_id,
-            view="summary",
-            limit=limit,
-        )
-    except Exception:
-        return []
-    items: list[dict[str, Any]] = []
-    for model in models[:limit]:
-        application = _mapping(model.get("application"))
-        display = _mapping(application.get("display"))
-        summary = _mapping(model.get("installation_summary"))
-        items.append(
-            {
-                "id": str(application.get("application_id") or ""),
-                "title": str(display.get("title") or application.get("application_id") or "Application"),
-                "version": summary.get("effective_version") or model.get("effective_version"),
-                "channel": summary.get("effective_channel") or model.get("effective_channel"),
-                "status": summary.get("status") or ("active" if model.get("installed") else "unknown"),
-                "update_state": model.get("update_state") or summary.get("update_state"),
-                "has_update": bool(model.get("has_update") or summary.get("has_update")),
-            }
-        )
-    return items
+    bounded_limit = max(1, min(int(limit), 200))
+    # Dashboard and selected-node cards consume the same projection. Building
+    # it walks every Application/release document and used to repeat a 1-6s
+    # filesystem/YAML scan under GIL pressure. Cache only this read model
+    # (never an access decision), and single-flight its cold build.
+    key = (
+        str(webspace_id or "").strip(),
+        bounded_limit,
+        id(applications.list_applications),
+    )
+    now = time.monotonic()
+    with _APPLICATION_SUMMARY_CACHE_LOCK:
+        cached = _APPLICATION_SUMMARY_CACHE.get(key)
+        if cached is not None and now - cached[0] <= _APPLICATION_SUMMARY_CACHE_TTL_S:
+            return copy.deepcopy(cached[1])
+        try:
+            models = applications.list_system_application_summaries(
+                webspace_id=webspace_id,
+                limit=bounded_limit,
+            )
+        except Exception:
+            return []
+        items: list[dict[str, Any]] = []
+        for model in models[:bounded_limit]:
+            application = _mapping(model.get("application"))
+            display = _mapping(application.get("display"))
+            summary = _mapping(model.get("installation_summary"))
+            items.append(
+                {
+                    "id": str(application.get("application_id") or ""),
+                    "title": str(
+                        display.get("title")
+                        or application.get("application_id")
+                        or "Application"
+                    ),
+                    "version": summary.get("effective_version")
+                    or model.get("effective_version"),
+                    "channel": summary.get("effective_channel")
+                    or model.get("effective_channel"),
+                    "status": summary.get("status")
+                    or ("active" if model.get("installed") else "unknown"),
+                    "update_state": model.get("update_state")
+                    or summary.get("update_state"),
+                    "has_update": bool(
+                        model.get("has_update") or summary.get("has_update")
+                    ),
+                }
+            )
+        _APPLICATION_SUMMARY_CACHE[key] = (time.monotonic(), items)
+        while len(_APPLICATION_SUMMARY_CACHE) > 16:
+            oldest = min(
+                _APPLICATION_SUMMARY_CACHE,
+                key=lambda item: _APPLICATION_SUMMARY_CACHE[item][0],
+            )
+            _APPLICATION_SUMMARY_CACHE.pop(oldest, None)
+        return copy.deepcopy(items)
 
 
 def _installed_skill_projection(*, limit: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -740,14 +820,88 @@ def _installed_skill_projection(*, limit: int) -> tuple[list[dict[str, Any]], di
 def _development_delivery_projection() -> dict[str, Any]:
     """Aggregate local Development Report delivery without exposing report content."""
 
+    global _DEVELOPMENT_DELIVERY_CACHE
     try:
         from adaos.sdk import applications
 
-        reports = [
-            dict(item)
-            for item in applications.list_development_reports()
-            if isinstance(item, Mapping)
-        ]
+        source_identity = id(applications.list_development_reports)
+        now = time.monotonic()
+        cached = _DEVELOPMENT_DELIVERY_CACHE
+        if (
+            cached is not None
+            and cached[1] == source_identity
+            and now - cached[0] <= _DEVELOPMENT_DELIVERY_CACHE_TTL_S
+        ):
+            return dict(cached[2])
+
+        with _DEVELOPMENT_DELIVERY_CACHE_LOCK:
+            now = time.monotonic()
+            cached = _DEVELOPMENT_DELIVERY_CACHE
+            if (
+                cached is not None
+                and cached[1] == source_identity
+                and now - cached[0] <= _DEVELOPMENT_DELIVERY_CACHE_TTL_S
+            ):
+                return dict(cached[2])
+
+            reports = [
+                dict(item)
+                for item in applications.list_development_reports()
+                if isinstance(item, Mapping)
+            ]
+            delivered_states = {
+                "delivered",
+                "received",
+                "triaged",
+                "accepted",
+                "declined",
+                "duplicate",
+                "planned",
+                "prerelease_available",
+                "released",
+                "awaiting_local_verification",
+                "verified",
+                "still_reproduces",
+            }
+            accepted_states = {
+                "accepted",
+                "planned",
+                "prerelease_available",
+                "released",
+                "awaiting_local_verification",
+                "verified",
+                "still_reproduces",
+            }
+            statuses = [
+                str(item.get("status") or "unknown").strip().lower()
+                for item in reports
+            ]
+            delivered = [
+                item
+                for item, status in zip(reports, statuses)
+                if status in delivered_states
+            ]
+            timestamps = sorted(
+                str(item.get("updated_at") or item.get("created_at") or "").strip()
+                for item in delivered
+                if str(item.get("updated_at") or item.get("created_at") or "").strip()
+            )
+            projection = {
+                "available": True,
+                "total": len(reports),
+                "delivered": sum(status in delivered_states for status in statuses),
+                "accepted": sum(status in accepted_states for status in statuses),
+                "pending": sum(status in {"draft", "queued"} for status in statuses),
+                "last_delivery_at": timestamps[-1] if timestamps else None,
+                "source": "development_reports",
+                "freshness": "current",
+            }
+            _DEVELOPMENT_DELIVERY_CACHE = (
+                time.monotonic(),
+                source_identity,
+                projection,
+            )
+            return dict(projection)
     except Exception as exc:
         return {
             "available": False,
@@ -755,46 +909,6 @@ def _development_delivery_projection() -> dict[str, Any]:
             "freshness": "unavailable",
             "reason": type(exc).__name__,
         }
-    delivered_states = {
-        "delivered",
-        "received",
-        "triaged",
-        "accepted",
-        "declined",
-        "duplicate",
-        "planned",
-        "prerelease_available",
-        "released",
-        "awaiting_local_verification",
-        "verified",
-        "still_reproduces",
-    }
-    accepted_states = {
-        "accepted",
-        "planned",
-        "prerelease_available",
-        "released",
-        "awaiting_local_verification",
-        "verified",
-        "still_reproduces",
-    }
-    statuses = [str(item.get("status") or "unknown").strip().lower() for item in reports]
-    delivered = [item for item, status in zip(reports, statuses) if status in delivered_states]
-    timestamps = sorted(
-        str(item.get("updated_at") or item.get("created_at") or "").strip()
-        for item in delivered
-        if str(item.get("updated_at") or item.get("created_at") or "").strip()
-    )
-    return {
-        "available": True,
-        "total": len(reports),
-        "delivered": sum(status in delivered_states for status in statuses),
-        "accepted": sum(status in accepted_states for status in statuses),
-        "pending": sum(status in {"draft", "queued"} for status in statuses),
-        "last_delivery_at": timestamps[-1] if timestamps else None,
-        "source": "development_reports",
-        "freshness": "current",
-    }
 
 
 def _root_activity_events(*, limit: int) -> dict[str, Any]:
@@ -1027,10 +1141,7 @@ def get_operational_snapshot(
             "context": _mapping(reliability.get("context")),
         }
     if "update" in selected:
-        result["update"] = {
-            **_mapping(current_update_status()),
-            **_runtime_release_metadata(),
-        }
+        result["update"] = _bounded_update_status(current_update_status())
         try:
             from adaos.services.operator_controls import read_controls
 

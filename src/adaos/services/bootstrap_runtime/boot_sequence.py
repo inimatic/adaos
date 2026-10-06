@@ -76,6 +76,7 @@ async def _start_services_before_managed_nlu(
     ensure_managed_nlu_service_skills: Any,
     log: logging.Logger,
     start_initial_service_skills: bool = True,
+    service_activation_summary: Any | None = None,
 ) -> None:
     # Distributed and other already-installed services must not wait for an
     # optional model install or dependency repair on a slow node.
@@ -114,7 +115,24 @@ async def _start_services_before_managed_nlu(
         "updated_at": completed_at,
     }
     if bool(install_payload.get("enabled")) and bool(install_payload.get("installed")):
-        await start_service_skills("post_managed_nlu_start_service_skills")
+        if service_activation_summary is None:
+            from adaos.services.skill.declarations import (
+                runtime_service_activation_summary,
+            )
+
+            service_activation_summary = runtime_service_activation_summary
+        activation = service_activation_summary()
+        eager_skills = tuple(activation.get("eager_startup_skills") or ())
+        if eager_skills:
+            await start_service_skills("post_managed_nlu_start_service_skills")
+        else:
+            # Installing/updating a managed package does not turn lazy services
+            # into eager ones.  start_all() still discovers every runtime and
+            # was spending several seconds immediately after first paint only
+            # to report attempted=0/skipped=N.
+            log.info(
+                "managed NLU installed without eager service skills; supervisor sweep remains lazy"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +361,11 @@ class BootstrapBootCoordinator:
             )
 
         try:
+            # Register the node-owned, demand-driven System telemetry stream
+            # before the global subscription registry is materialized. Trial
+            # Application modules are intentionally not imported globally.
+            import adaos.services.system_hardware_stream  # noqa: F401
+
             from adaos.services.system_model.service import (
                 current_node_status_push_payload as _current_node_status_push_payload,
                 node_status_push_heartbeat_s as _node_status_push_heartbeat_s,
@@ -947,9 +970,29 @@ class BootstrapBootCoordinator:
                     await _finalize_runtime_boot_status()
             except Exception:
                 service._log.debug("failed to finalize core.update.status after runtime readiness", exc_info=True)
-            _control_started = _startup_stage_mark("bootstrap_report_control_lifecycle")
-            await _report_control_lifecycle("candidate.ready" if candidate_runtime_mode else "sys.ready")
-            _startup_stage_mark("bootstrap_report_control_lifecycle", started=_control_started)
+            async def _report_ready_lifecycle() -> None:
+                _control_started = _startup_stage_mark("bootstrap_report_control_lifecycle")
+                try:
+                    await _report_control_lifecycle(
+                        "candidate.ready" if candidate_runtime_mode else "sys.ready"
+                    )
+                except Exception:
+                    service._log.warning(
+                        "failed to report ready lifecycle to control plane",
+                        exc_info=True,
+                    )
+                finally:
+                    _startup_stage_mark(
+                        "bootstrap_report_control_lifecycle",
+                        started=_control_started,
+                    )
+
+            # Local readiness must not depend on WAN/control-plane latency.
+            # The watchdog continues to retry through its normal heartbeats.
+            service._start_boot_task_once(
+                "adaos-control-lifecycle-ready-report",
+                _report_ready_lifecycle,
+            )
             service._status_watchdog.start_heartbeats(service._lifecycle)
         else:
             member_ready_announced = False

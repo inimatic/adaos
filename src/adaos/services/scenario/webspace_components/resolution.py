@@ -186,6 +186,8 @@ class WebspaceResolutionService:
                 "scenario_id": scenario_id,
                 "revision": trial.candidate_id,
                 "source_fingerprint": f"trial:{trial.release_digest}",
+                "application_id": trial.project_id,
+                "application_release_digest": trial.release_digest,
             }
         elif not effective_fingerprint:
             effective_fingerprint = operations.fingerprint_json_like(effective_decls)
@@ -271,6 +273,8 @@ class WebspaceResolutionService:
             materialization_identity = dict(materialization_identity or {}) | {
                 "webspace_id": webspace_id, "scenario_id": scenario_id,
                 "revision": trial.candidate_id, "source_fingerprint": f"trial:{trial.release_digest}",
+                "application_id": trial.project_id,
+                "application_release_digest": trial.release_digest,
             }
         scenarios_ui = operations.mapping_get(ui_map, "scenarios") or {}
         scenario_ui_entry = operations.read_node_scoped_scenario_entry(scenarios_ui, scenario_id)
@@ -1070,6 +1074,7 @@ class WebspaceResolutionService:
         materialization_status_per_phase: bool = True,
         force_selector_write: bool = False,
         verify_branch_fingerprints: bool = False,
+        replace_changed_branches: bool = False,
     ) -> None:
         operations.raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
         effective_inputs = inputs or operations.resolver_inputs_type(
@@ -1117,11 +1122,23 @@ class WebspaceResolutionService:
             for key, value in (resolved_branch_fingerprints_override or {}).items()
             if str(key).strip() and str(value or "").strip()
         }
-        if not all(path in resolved_branch_fingerprints for path in operations.effective_branch_paths if path != "runtime.environment"):
+        payload_fingerprint_paths = (
+            path
+            for path in operations.effective_branch_paths
+            if path not in {"runtime.environment", "runtime.materialization"}
+        )
+        if not all(path in resolved_branch_fingerprints for path in payload_fingerprint_paths):
             fallback_fingerprints = operations.resolved_output_branch_fingerprints(resolved)
             for path, fingerprint in fallback_fingerprints.items():
                 resolved_branch_fingerprints.setdefault(path, fingerprint)
         resolved_branch_fingerprints["runtime.environment"] = operations.fingerprint_json_like(runtime_environment)
+        # Keep a server-owned copy outside the browser-owned atomic
+        # ``runtime.environment`` value. A stale tab can replace the whole
+        # compatibility object during initial sync; startup validation must
+        # still retain the exact scenario that was just materialized.
+        resolved_branch_fingerprints["runtime.materialization"] = (
+            operations.fingerprint_json_like(materialization_contract)
+        )
         previous_branch_values: Dict[str, Any] = {}
         previous_branch_fingerprints: Dict[str, str] = {}
         if previous_resolved is not None:
@@ -1286,7 +1303,14 @@ class WebspaceResolutionService:
 
                 stage_started = time.perf_counter()
                 try:
-                    if stale_branch:
+                    if replace_changed_branches:
+                        # A scenario switch is an explicit projection
+                        # boundary. Replacing the changed top-level branch is
+                        # substantially cheaper than recursively reconciling a
+                        # large tree on the YDoc owner loop, and avoids holding
+                        # every HTTP/WS task behind that traversal.
+                        changed, apply_mode = operations.replace_map_value(y_map, txn, key, value)
+                    elif stale_branch:
                         changed, apply_mode = operations.replace_map_value(y_map, txn, key, value)
                     elif (
                         path in previous_branch_values
@@ -1487,6 +1511,13 @@ class WebspaceResolutionService:
             ("ui.application", ui_map, "application", resolved.application, False),
             ("registry.merged", registry_map, "merged", resolved.registry, False),
             ("runtime.environment", runtime_map, "environment", runtime_environment, False),
+            (
+                "runtime.materialization",
+                runtime_map,
+                "materialization",
+                materialization_contract,
+                False,
+            ),
         )
         interactive_specs = (
             ("data.catalog", data_map, "catalog", resolved.catalog, False),

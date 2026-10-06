@@ -41,6 +41,7 @@ class RebuildOperations:
     refresh_projection_rules_for_rebuild: Callable[..., Any]
     resolve_projection_refresh_space: Callable[..., Any]
     resolve_rebuild_scenario_target: Callable[..., Any]
+    run_materialization_identity: Callable[..., Any]
     scenario_switch_inline_listing_sync_enabled: Callable[..., Any]
     scenario_switch_materialization_identity: Callable[..., Any]
     schedule_live_room_refresh: Callable[..., Any]
@@ -131,14 +132,22 @@ class WebspaceRebuildService:
             stage_started = time.perf_counter()
             try:
                 def _resolve_materialization_identity() -> Any:
-                    source_mode_for_identity = operations.resolve_projection_refresh_space(webspace_id)
+                    source_mode_for_identity = (
+                        str(skill_source_mode or "").strip()
+                        or operations.resolve_projection_refresh_space(webspace_id)
+                    )
                     return operations.scenario_switch_materialization_identity(
                         webspace_id=webspace_id,
                         scenario_id=target_scenario,
                         source_mode=source_mode_for_identity,
                     )
 
-                effective_materialization_identity = await asyncio.to_thread(
+                # The shared default executor carries background read models;
+                # the serial materialization CPU lane may already be occupied
+                # by a larger projection. A tiny interactive identity read must
+                # not sit behind either queue before cached materialization can
+                # even be addressed.
+                effective_materialization_identity = await operations.run_materialization_identity(
                     _resolve_materialization_identity
                 )
             except Exception:
@@ -800,7 +809,13 @@ class WebspaceRebuildService:
             }
 
         event_topic = None
-        if requested_action in {"reload", "reset"}:
+        if requested_action in {"reload", "reset", "scenario_switch_rebuild"}:
+            # A scenario materialization owns the declarative document but it
+            # deliberately does not persist Core/skill live projections such
+            # as data.dialog, data.browsers, data.infrastate, and dashboard
+            # streams.  Announce the completed replacement through the same
+            # post-materialization contract as an explicit reload so those
+            # owners can re-project after (not before) the new document wins.
             event_topic = "desktop.webspace.reloaded"
         elif requested_action == "restore":
             event_topic = "desktop.webspace.restored"

@@ -184,6 +184,7 @@ def _forward_ticket_to_application_publisher(
     ticket_id: str,
     *,
     reports: Any | None = None,
+    applications: Any | None = None,
 ) -> None:
     """Best-effort local-to-publisher bridge; the report outbox remains durable."""
 
@@ -199,7 +200,13 @@ def _forward_ticket_to_application_publisher(
         from adaos.services.applications import get_development_report_service
 
         reports = reports or get_development_report_service()
-        applications = reports.application_store.list_applications()
+        # The Application registry can contain hundreds of current.json files.
+        # Re-reading the whole registry once per ticket made a single status
+        # reconciliation perform O(tickets * applications) filesystem work and
+        # starve first-paint API calls on Windows. Callers reconciling a batch
+        # pass one immutable snapshot; one-off forwarding resolves it here.
+        if applications is None:
+            applications = reports.application_store.list_applications()
         application = _resolve_ticket_application(ticket, applications)
         if application is None or application.publisher_ref == reports.subnet_ref:
             return
@@ -247,6 +254,7 @@ def _sync_ticket_development_reports(service: DevelopmentTicketService) -> None:
 
         reports = get_development_report_service()
         tickets = service.list_tickets(limit=1000)
+        applications = reports.application_store.list_applications()
         for ticket in tickets:
             linked = (
                 ticket.get("metadata", {}).get("development_report", {})
@@ -258,6 +266,7 @@ def _sync_ticket_development_reports(service: DevelopmentTicketService) -> None:
                     service,
                     str(ticket.get("ticket_id") or ""),
                     reports=reports,
+                    applications=applications,
                 )
         reports.flush_outbox(limit=50)
         reports.receive(limit=50)
@@ -319,10 +328,25 @@ def _schedule_ticket_development_report_sync(
                     with _REPORT_SYNC_SCHEDULE_LOCK:
                         pending = list(_REPORT_FORWARD_PENDING.items())
                         _REPORT_FORWARD_PENDING.clear()
+                    pending_reports = None
+                    pending_applications = None
+                    if pending:
+                        try:
+                            from adaos.services.applications import get_development_report_service
+
+                            pending_reports = get_development_report_service()
+                            pending_applications = (
+                                pending_reports.application_store.list_applications()
+                            )
+                        except Exception:
+                            pending_reports = None
+                            pending_applications = None
                     for pending_ticket_id, pending_service in pending:
                         _forward_ticket_to_application_publisher(
                             pending_service,
                             pending_ticket_id,
+                            reports=pending_reports,
+                            applications=pending_applications,
                         )
                     _sync_ticket_development_reports(service)
                     with _REPORT_SYNC_SCHEDULE_LOCK:

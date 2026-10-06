@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -51,6 +51,32 @@ def test_require_token_accepts_x_adaos_token_header_via_request_headers(monkeypa
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_require_token_marks_the_verified_owner_node_credential(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_TOKEN", "dev-local-token")
+    monkeypatch.setattr(auth, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(token="stale-config-token")))
+    monkeypatch.setattr("adaos.services.personalization_runtime.current_user_id", lambda: "owner")
+    app = FastAPI()
+
+    @app.get("/protected", dependencies=[Depends(auth.require_token)])
+    async def _protected(request: Request) -> dict[str, object]:
+        return {
+            "owner_node_credential": bool(
+                getattr(request.state, "adaos_owner_node_credential", False)
+            ),
+            "caller": request.state.adaos_verified_caller.ref(),
+        }
+
+    response = TestClient(app).get(
+        "/protected", headers={"X-AdaOS-Token": "dev-local-token"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "owner_node_credential": True,
+        "caller": "user:owner",
+    }
 
 
 def test_tool_ingress_binds_verified_owner_not_argument_identity(monkeypatch):

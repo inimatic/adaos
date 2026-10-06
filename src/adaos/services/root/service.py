@@ -9,6 +9,7 @@ import logging
 import os
 import shutil
 import ssl
+import threading
 import time
 import zipfile
 from dataclasses import dataclass
@@ -78,6 +79,8 @@ from adaos.services.semver import bump_version
 
 logger = logging.getLogger(__name__)
 _log = logger
+_VERIFY_CONTEXT_CACHE: dict[tuple[str, int, int], ssl.SSLContext] = {}
+_VERIFY_CONTEXT_CACHE_LOCK = threading.Lock()
 
 
 class RootAuthError(RuntimeError):
@@ -2094,6 +2097,16 @@ class RootDeveloperService:
     @staticmethod
     def _load_verify_context(ca_path: Path) -> ssl.SSLContext:
         try:
+            resolved = ca_path.resolve()
+            stat = resolved.stat()
+            cache_key = (str(resolved), int(stat.st_mtime_ns), int(stat.st_size))
+        except OSError as exc:
+            raise RootServiceError(f"Failed to inspect CA certificate at {ca_path}: {exc}") from exc
+        with _VERIFY_CONTEXT_CACHE_LOCK:
+            cached = _VERIFY_CONTEXT_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
+        try:
             context = ssl.create_default_context()
         except ssl.SSLError as exc:  # pragma: no cover - unexpected SSL configuration issues
             raise RootServiceError(f"Failed to create TLS context: {exc}") from exc
@@ -2101,6 +2114,8 @@ class RootDeveloperService:
             context.load_verify_locations(cafile=str(ca_path))
         except (FileNotFoundError, ssl.SSLError) as exc:
             raise RootServiceError(f"Failed to load CA certificate from {ca_path}: {exc}") from exc
+        with _VERIFY_CONTEXT_CACHE_LOCK:
+            _VERIFY_CONTEXT_CACHE[cache_key] = context
         return context
 
     def _ensure_hub_keypair(

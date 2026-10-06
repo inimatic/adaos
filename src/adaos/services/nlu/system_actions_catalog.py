@@ -123,6 +123,58 @@ _SYSTEM_ACTIONS: tuple[dict[str, Any], ...] = (
         ],
     },
     {
+        "id": "host.desktop.modal.close",
+        "kind": "host_action",
+        "status": "active",
+        "action": "desktop.modal.close",
+        "description": "Request closing the top registered desktop modal.",
+        "params": {"webspace_id": "string"},
+        "slots": {},
+        "nlu_intents": [
+            {
+                "intent": "desktop.close_modal",
+                "description": "Close the currently open desktop modal.",
+                "examples": [
+                    "close modal",
+                    "close this window",
+                    "dismiss dialog",
+                    "закрой окно",
+                    "закрой модальное окно",
+                    "закрой диалог",
+                ],
+                "actions": _call_host(
+                    "desktop.modal.close", {"webspace_id": "$ctx.webspace_id"}
+                ),
+            }
+        ],
+    },
+    {
+        "id": "host.desktop.webspace.go_home",
+        "kind": "host_action",
+        "status": "active",
+        "action": "desktop.webspace.go_home",
+        "description": "Switch the current webspace to its configured home scenario.",
+        "params": {"webspace_id": "string"},
+        "slots": {},
+        "nlu_intents": [
+            {
+                "intent": "desktop.go_home",
+                "description": "Return the current desktop to its home scenario.",
+                "examples": [
+                    "go home",
+                    "open home",
+                    "return to home",
+                    "перейди домой",
+                    "вернись домой",
+                    "открой главную",
+                ],
+                "actions": _call_host(
+                    "desktop.webspace.go_home", {"webspace_id": "$ctx.webspace_id"}
+                ),
+            }
+        ],
+    },
+    {
         "id": "host.desktop.webspace.reload",
         "kind": "host_action",
         "status": "active",

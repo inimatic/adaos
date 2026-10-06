@@ -100,7 +100,10 @@ def build_context_packet(
         }
     else:
         phase_started = time.monotonic()
-        search_index = conversation_store.search_index_health()
+        # Prompt construction needs the retrieval capability, not a full
+        # corpus-integrity audit. The latter performs several COUNT(*) scans
+        # and is reserved for the diagnostics endpoint.
+        search_index = conversation_store.search_index_capability()
         phase_timings_ms["search_index_health"] = int(round((time.monotonic() - phase_started) * 1000))
         if _timed_out(started, limits.timeout_ms):
             segment_health = {

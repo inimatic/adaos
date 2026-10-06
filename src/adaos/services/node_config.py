@@ -839,7 +839,13 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
         save_node(conf, ctx=ctx)
         _sync_ctx_config(conf, ctx)
         return conf
-    cache_key = str(path.resolve())
+    # This is an in-process cache identity, not a trust-boundary check.  Calling
+    # Path.resolve() here performs a filesystem walk on every config read.  On
+    # Windows that walk can block the event loop for seconds while the runtime
+    # is materialising Webspaces or antivirus is inspecting generated files.
+    # The configured path is already rooted by _config_path(), so a lexical,
+    # normalised absolute key is both stable and avoids synchronous I/O.
+    cache_key = os.path.normcase(os.path.abspath(os.fspath(path)))
     try:
         mtime_ns = path.stat().st_mtime_ns
     except Exception:
@@ -1037,7 +1043,8 @@ def save_node(conf: NodeConfig, *, ctx: AgentContext | None = None) -> None:
         mtime_ns = path.stat().st_mtime_ns
     except Exception:
         mtime_ns = None
-    _NODE_CONFIG_CACHE[str(path.resolve())] = ((mtime_ns, runtime_state_mtime_ns()), deepcopy(conf))
+    cache_key = os.path.normcase(os.path.abspath(os.fspath(path)))
+    _NODE_CONFIG_CACHE[cache_key] = ((mtime_ns, runtime_state_mtime_ns()), deepcopy(conf))
     _sync_ctx_config(conf, ctx)
 
 

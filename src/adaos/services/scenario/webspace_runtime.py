@@ -39,6 +39,7 @@ from adaos.services.yjs.doc import (
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.runtime_environment import runtime_environment_payload
 from adaos.services.runtime_identity import runtime_shared_state_write_authorized
+from adaos.services.runtime_executor import run_runtime_interactive
 from adaos.services.browser_assets import (
     BrowserAssetPublishError,
     publish_scenario_resource_descriptor,
@@ -298,6 +299,7 @@ _EFFECTIVE_BRANCH_PATHS = (
     "data.routing",
     "registry.merged",
     "runtime.environment",
+    "runtime.materialization",
 )
 _DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES = (
     "ui.application",
@@ -3688,19 +3690,25 @@ def _scenario_exists_in_webspace(scenario_id: str, *, space: str, webspace_id: s
             selected_trial,
         )
 
-        ctx = get_ctx()
-        application = selected_application(
-            ctx, webspace_id, "scenario", scenario_id
-        )
-        runtime_root_ref = str(
-            getattr(application, "runtime_root_ref", "") or ""
-        ).strip()
-        if application is not None and runtime_root_ref == "workspace":
-            return True
-        selected = selected_trial(ctx, webspace_id, "scenario", scenario_id)
-        if selected is not None:
-            selected.verified_source(selected.component("scenario", scenario_id))
-            return True
+        try:
+            ctx = get_ctx()
+            application = selected_application(
+                ctx, webspace_id, "scenario", scenario_id
+            )
+            runtime_root_ref = str(
+                getattr(application, "runtime_root_ref", "") or ""
+            ).strip()
+            if application is not None and runtime_root_ref == "workspace":
+                return True
+            selected = selected_trial(ctx, webspace_id, "scenario", scenario_id)
+            if selected is not None:
+                selected.verified_source(selected.component("scenario", scenario_id))
+                return True
+        except AttributeError:
+            # Recovery/diagnostic callers may provide a deliberately minimal
+            # context without Application paths. The scenario loader remains
+            # the authoritative compatibility fallback in that environment.
+            pass
     return _scenario_exists_for_switch(scenario_id, space=space)
 
 
@@ -4325,6 +4333,8 @@ async def _run_materialization_worker(
     materialization_identity: Mapping[str, Any] | None = None,
     skill_decls_snapshot: Iterable[Mapping[str, Any]] | None = None,
     skill_decls_fingerprint: str | None = None,
+    scenario_content_override: Mapping[str, Any] | None = None,
+    skill_source_mode: str | None = None,
 ) -> dict[str, Any]:
     request = {
         "schema": "adaos.webspace.materialization_worker_request.v1",
@@ -4343,6 +4353,12 @@ async def _run_materialization_worker(
             else None
         ),
         "skill_decls_fingerprint": str(skill_decls_fingerprint or "").strip() or None,
+        "scenario_content_override": (
+            _clone_json_like(scenario_content_override)
+            if isinstance(scenario_content_override, Mapping)
+            else None
+        ),
+        "skill_source_mode": str(skill_source_mode or "").strip() or None,
     }
 
     return await _RUNTIME.materialization_executor.run_worker(
@@ -5739,6 +5755,7 @@ class WebspaceScenarioRuntime:
         materialization_status_per_phase: bool = True,
         force_selector_write: bool = False,
         verify_branch_fingerprints: bool = False,
+        replace_changed_branches: bool = False,
     ) -> None:
         _RUNTIME.resolution.apply(
             self,
@@ -5755,6 +5772,7 @@ class WebspaceScenarioRuntime:
             materialization_status_per_phase=materialization_status_per_phase,
             force_selector_write=force_selector_write,
             verify_branch_fingerprints=verify_branch_fingerprints,
+            replace_changed_branches=replace_changed_branches,
         )
 
     def apply_materialized_payload_to_doc(
@@ -5767,6 +5785,7 @@ class WebspaceScenarioRuntime:
         materialization_identity: Mapping[str, Any] | None = None,
         previous_payload: Mapping[str, Any] | None = None,
         verify_branch_fingerprints: bool = False,
+        replace_changed_branches: bool = False,
     ) -> WebUIRegistryEntry:
         apply_started = time.perf_counter()
         timings: Dict[str, float] = {}
@@ -5810,6 +5829,7 @@ class WebspaceScenarioRuntime:
             materialization_status_per_phase=False,
             force_selector_write=True,
             verify_branch_fingerprints=verify_branch_fingerprints,
+            replace_changed_branches=replace_changed_branches,
         )
         _record_timing(timings, "apply", stage_started)
         apply_phase_timings = _copy_timing_map(self._last_apply_phase_timings_ms) or {}
@@ -6712,12 +6732,16 @@ async def describe_webspace_operational_state(webspace_id: str) -> WebspaceOpera
     )
     return WebspaceOperationalState(
         webspace_id=target_webspace_id,
-        title=row.title,
-        kind=row.effective_kind,
-        source_mode=row.effective_source_mode,
-        is_dev=row.is_dev,
-        stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
-        effective_home_scenario=row.effective_home_scenario,
+        title=str(getattr(row, "title", "") or target_webspace_id),
+        kind=str(getattr(row, "effective_kind", "") or "workspace"),
+        source_mode=str(getattr(row, "effective_source_mode", "") or "workspace"),
+        is_dev=bool(getattr(row, "is_dev", False)),
+        stored_home_scenario=(
+            str(getattr(row, "home_scenario", "") or "").strip() or None
+        ),
+        effective_home_scenario=str(
+            getattr(row, "effective_home_scenario", "") or "web_desktop"
+        ),
         home_scenario_ref=getattr(row, "home_scenario_ref_overlay", {}) or None,
         current_scenario=current_scenario,
         stored_home_scenario_exists=validation.get("stored_home_scenario_exists"),
@@ -6745,12 +6769,16 @@ def _describe_webspace_switch_state_sync(
     )
     return WebspaceOperationalState(
         webspace_id=target_webspace_id,
-        title=row.title,
-        kind=row.effective_kind,
-        source_mode=row.effective_source_mode,
-        is_dev=row.is_dev,
-        stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
-        effective_home_scenario=row.effective_home_scenario,
+        title=str(getattr(row, "title", "") or target_webspace_id),
+        kind=str(getattr(row, "effective_kind", "") or "workspace"),
+        source_mode=str(getattr(row, "effective_source_mode", "") or "workspace"),
+        is_dev=bool(getattr(row, "is_dev", False)),
+        stored_home_scenario=(
+            str(getattr(row, "home_scenario", "") or "").strip() or None
+        ),
+        effective_home_scenario=str(
+            getattr(row, "effective_home_scenario", "") or "web_desktop"
+        ),
         home_scenario_ref=getattr(row, "home_scenario_ref_overlay", {}) or None,
         current_scenario=_workspace_manifest_current_scenario(row),
         stored_home_scenario_exists=None,
@@ -8095,6 +8123,7 @@ def _rebuild_operations() -> RebuildOperations:
         refresh_projection_rules_for_rebuild=_refresh_projection_rules_for_rebuild,
         resolve_projection_refresh_space=_resolve_projection_refresh_space,
         resolve_rebuild_scenario_target=_resolve_rebuild_scenario_target,
+        run_materialization_identity=run_runtime_interactive,
         scenario_switch_inline_listing_sync_enabled=_scenario_switch_inline_listing_sync_enabled,
         scenario_switch_materialization_identity=_scenario_switch_materialization_identity,
         schedule_live_room_refresh=_schedule_live_room_refresh,
@@ -8157,6 +8186,7 @@ async def _complete_scenario_switch_rebuild(
     *,
     scenario_id: str,
     scenario_resolution: str | None,
+    skill_source_mode: str | None = None,
     request_id: str | None = None,
     switch_mode: str | None = None,
     switch_timings_ms: Mapping[str, Any] | None = None,
@@ -8171,6 +8201,7 @@ async def _complete_scenario_switch_rebuild(
         request_id=request_id,
         switch_mode=switch_mode,
         switch_timings_ms=switch_timings_ms,
+        skill_source_mode=skill_source_mode,
     )
 
 
@@ -8179,6 +8210,7 @@ def _schedule_scenario_switch_rebuild(
     *,
     scenario_id: str,
     scenario_resolution: str | None,
+    skill_source_mode: str | None = None,
     switch_mode: str | None = None,
     switch_timings_ms: Mapping[str, Any] | None = None,
     request_id: str | None = None,
@@ -8190,6 +8222,7 @@ def _schedule_scenario_switch_rebuild(
         webspace_id,
         scenario_id=scenario_id,
         scenario_resolution=scenario_resolution,
+        skill_source_mode=skill_source_mode,
         switch_mode=switch_mode,
         switch_timings_ms=switch_timings_ms,
         request_id=request_id,

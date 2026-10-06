@@ -105,13 +105,26 @@ class WebspaceScenarioSwitchingService:
         current_scenario: Any,
         target_scenario: str,
         rebuild_state: Mapping[str, Any],
-        materialization_matches_target: bool,
+        materialization_matches_target: bool | None,
     ) -> ScenarioSwitchDecision:
         current_matches = str(current_scenario or "").strip() == target_scenario
         rebuild_matches = str(rebuild_state.get("scenario_id") or "").strip() == target_scenario
         pending = bool(rebuild_state.get("pending"))
         status = str(rebuild_state.get("status") or "").strip().lower()
-        if current_matches and not pending and status == "ready" and rebuild_matches and materialization_matches_target:
+        # Rebuild status is process-local diagnostic state.  After a Core
+        # restart it can be empty even though the persisted YDoc carries a
+        # ready materialization marker for the requested scenario.  Requiring
+        # both made every cold desktop open perform a redundant semantic
+        # rebuild.  The persisted marker is the durable authority; an active
+        # matching rebuild is still joined below.
+        ready_runtime_witness = status == "ready" and rebuild_matches
+        if current_matches and not pending and (
+            materialization_matches_target is True
+            or (
+                materialization_matches_target is None
+                and ready_runtime_witness
+            )
+        ):
             return ScenarioSwitchDecision(action="skip", reason="already_current_ready")
         if current_matches and pending and rebuild_matches:
             return ScenarioSwitchDecision(action="join", reason="already_pending_rebuild")
@@ -142,6 +155,7 @@ class WebspaceScenarioSwitchingService:
         webspace_id: str,
         scenario_id: str,
         operation: Callable[[], Awaitable[Any]],
+        timeout_s: float | None = None,
         on_cancel: Callable[[], Any] | None = None,
         on_error: Callable[[Exception], Any] | None = None,
     ) -> asyncio.Task[Any]:
@@ -149,7 +163,16 @@ class WebspaceScenarioSwitchingService:
 
         async def _runner() -> None:
             try:
-                await operation()
+                if timeout_s is not None and timeout_s > 0:
+                    # ``wait_for`` schedules the operation in a second Task,
+                    # adding an avoidable event-loop turn before a background
+                    # rebuild can even mark itself running. Keep the timeout
+                    # boundary in this owner task so control-plane feedback is
+                    # immediate under event-loop pressure.
+                    async with asyncio.timeout(timeout_s):
+                        await operation()
+                else:
+                    await operation()
             except asyncio.CancelledError:
                 await self._notify(on_cancel)
                 raise
@@ -253,17 +276,17 @@ class WebspaceScenarioSwitchingService:
         rebuild_state_before = operations.describe_rebuild_state(webspace_id)
         operations.record_timing(timings_ms, "describe_rebuild_before", stage_started)
         materialized_scenario_before: str | None = None
-        materialization_matches_target = True
+        materialization_matches_target: bool | None = None
         if str(state_before.current_scenario or "").strip() == scenario_id:
             stage_started = time.perf_counter()
             materialized_scenario_before = operations.materialization_scenario_from_rebuild_state(rebuild_state_before)
             if materialized_scenario_before is None:
                 materialized_scenario_before = await operations.read_effective_materialization_scenario(webspace_id)
             operations.record_timing(timings_ms, "read_materialization_scenario_before", stage_started)
-            materialization_matches_target = (
-                materialized_scenario_before is None
-                or str(materialized_scenario_before or "").strip() == scenario_id
-            )
+            if materialized_scenario_before is not None:
+                materialization_matches_target = (
+                    str(materialized_scenario_before or "").strip() == scenario_id
+                )
             if materialized_scenario_before and not materialization_matches_target:
                 operations.log.warning(
                     "desktop.scenario.set forcing rebuild for materialization mismatch webspace=%s current_scenario=%s materialized_scenario=%s target_scenario=%s",
@@ -569,6 +592,7 @@ class WebspaceScenarioSwitchingService:
                 webspace_id,
                 scenario_id=scenario_id,
                 scenario_resolution="explicit",
+                skill_source_mode=loader_space,
                 switch_mode=switch_mode,
                 switch_timings_ms=scheduled_switch_timings,
                 request_id=request_id,
@@ -625,6 +649,7 @@ class WebspaceScenarioSwitchingService:
             webspace_id,
             scenario_id=scenario_id,
             scenario_resolution="explicit",
+            skill_source_mode=loader_space,
             switch_mode=switch_mode,
             switch_timings_ms=operations.finalize_timing_map(dict(timings_ms), started_at=switch_started),
         )

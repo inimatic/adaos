@@ -55,6 +55,7 @@ def test_root_mcp_client_exposes_descriptor_search_and_exact_item() -> None:
         "sdk_metadata",
         "adaos.sdk.control_plane.list_quota_objects",
         level="std",
+        consumer="builder",
     )
 
     assert stub.calls[0][2]["json"]["tool_id"] == "development.search_descriptors"
@@ -69,6 +70,7 @@ def test_root_mcp_client_exposes_descriptor_search_and_exact_item() -> None:
     assert stub.calls[1][2]["json"]["arguments"]["item_id"] == (
         "adaos.sdk.control_plane.list_quota_objects"
     )
+    assert stub.calls[1][2]["json"]["arguments"]["consumer"] == "builder"
 
 
 def test_root_mcp_client_exposes_context_search_and_exact_capsule() -> None:
@@ -221,7 +223,7 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     assert stub.calls[6][2]["json"]["tool_id"] == "adaos_dev.get_architecture_catalog"
     assert stub.calls[7][2]["json"]["tool_id"] == "adaos_dev.get_sdk_metadata"
     assert stub.calls[7][2]["json"]["arguments"]["level"] == "mini"
-    assert stub.calls[7][2]["json"]["arguments"]["limit"] == 24
+    assert stub.calls[7][2]["json"]["arguments"]["limit"] == 12
     assert stub.calls[8][2]["json"]["tool_id"] == "adaos_dev.get_template_catalog"
     assert stub.calls[9][2]["json"]["tool_id"] == "adaos_dev.get_public_skill_registry"
     assert stub.calls[10][2]["json"]["tool_id"] == "adaos_dev.get_public_scenario_registry"

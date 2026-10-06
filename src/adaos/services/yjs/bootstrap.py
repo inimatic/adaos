@@ -193,10 +193,31 @@ def write_runtime_bootstrap_state(
     comparable_payload = dict(payload)
     comparable_current.pop("updated_at", None)
     comparable_payload.pop("updated_at", None)
-    if comparable_current == comparable_payload:
+    environment = _coerce_dict(runtime_map.get("environment") or {})
+    environment_materialization = _coerce_dict(environment.get("materialization") or {})
+    canonical_materialization = _coerce_dict(runtime_map.get("materialization") or {})
+    # ``runtime.environment`` is an atomic Yjs value. A reconnecting browser
+    # can legitimately replay an older environment object and win the LWW
+    # register, which used to erase the server-owned materialization proof and
+    # force a full semantic rebuild on every cold room open. Keep the proof in
+    # a separate server-owned register as well; bootstrap restores the
+    # compatibility projection from it when needed.
+    next_materialization = (
+        environment_materialization
+        if str(environment_materialization.get("scenario_id") or "").strip()
+        == str(scenario_id or "").strip()
+        else canonical_materialization
+    )
+    materialization_changed = bool(
+        next_materialization and canonical_materialization != next_materialization
+    )
+    if comparable_current == comparable_payload and not materialization_changed:
         return False
     with ydoc.begin_transaction() as txn:
-        runtime_map.set(txn, BOOTSTRAP_RUNTIME_KEY, payload)
+        if comparable_current != comparable_payload:
+            runtime_map.set(txn, BOOTSTRAP_RUNTIME_KEY, payload)
+        if materialization_changed:
+            runtime_map.set(txn, "materialization", _clone_json_like(next_materialization))
     return True
 
 
@@ -263,10 +284,36 @@ def _project_runtime_environment(ydoc: Y.YDoc) -> bool:
     current = _coerce_dict(runtime_map.get("environment") or {})
     payload = dict(current)
     payload.update(runtime_environment_payload())
-    if current == payload:
+    canonical_materialization = _coerce_dict(runtime_map.get("materialization") or {})
+    environment_materialization = _coerce_dict(current.get("materialization") or {})
+    try:
+        current_scenario = str(ydoc.get_map("ui").get("current_scenario") or "").strip()
+    except Exception:
+        current_scenario = ""
+    environment_scenario = str(environment_materialization.get("scenario_id") or "").strip()
+    canonical_scenario = str(canonical_materialization.get("scenario_id") or "").strip()
+    if environment_materialization and (
+        not current_scenario or environment_scenario == current_scenario
+    ):
+        effective_materialization = environment_materialization
+    elif canonical_materialization and (
+        not current_scenario or canonical_scenario == current_scenario
+    ):
+        effective_materialization = canonical_materialization
+    else:
+        effective_materialization = environment_materialization or canonical_materialization
+    if effective_materialization:
+        payload["materialization"] = _clone_json_like(effective_materialization)
+    canonical_changed = bool(
+        effective_materialization and canonical_materialization != effective_materialization
+    )
+    if current == payload and not canonical_changed:
         return False
     with ydoc.begin_transaction() as txn:
-        runtime_map.set(txn, "environment", _clone_json_like(payload))
+        if current != payload:
+            runtime_map.set(txn, "environment", _clone_json_like(payload))
+        if canonical_changed:
+            runtime_map.set(txn, "materialization", _clone_json_like(effective_materialization))
     return True
 
 
@@ -286,6 +333,8 @@ def _persisted_effective_state_status(
         current = str(ui_map.get("current_scenario") or "").strip()
         environment = _coerce_dict(runtime_map.get("environment") or {})
         materialization = _coerce_dict(environment.get("materialization") or {})
+        if not materialization:
+            materialization = _coerce_dict(runtime_map.get("materialization") or {})
         materialized = str(materialization.get("scenario_id") or "").strip()
         bootstrap = _coerce_dict(runtime_map.get(BOOTSTRAP_RUNTIME_KEY) or {})
         bootstrap_scenario = str(bootstrap.get("scenario_id") or "").strip()

@@ -21,6 +21,7 @@ from adaos.apps.cli.commands.api import (
     _prune_stale_api_pidfiles,
     _run_api_pre_stop_preflight,
     _runtime_import_preflight_timeout_sec,
+    _runtime_import_preflight_required,
     _resolve_stop_bind,
     _resolve_bind,
     _resolve_implicit_api_port_fallback,
@@ -225,6 +226,40 @@ def test_api_preflight_uses_successful_port_repair(monkeypatch, tmp_path):
 
     assert result["ok"] is True
     assert calls["probe"] == 2
+
+
+def test_runtime_import_preflight_only_protects_live_replacement(monkeypatch):
+    monkeypatch.setattr(
+        api_cmd,
+        "_probe_api_bind_availability",
+        lambda host, port: {"ok": True, "host": host, "port": port},
+    )
+    assert not _runtime_import_preflight_required(
+        "127.0.0.1",
+        8777,
+        launch_mode="dev_serve",
+    )
+
+    monkeypatch.setattr(
+        api_cmd,
+        "_probe_api_bind_availability",
+        lambda host, port: {
+            "ok": True,
+            "host": host,
+            "port": port,
+            "occupied_by": 1234,
+        },
+    )
+    assert _runtime_import_preflight_required(
+        "127.0.0.1",
+        8777,
+        launch_mode="dev_serve",
+    )
+    assert not _runtime_import_preflight_required(
+        "127.0.0.1",
+        8777,
+        launch_mode="api_serve",
+    )
 
 
 def test_api_serve_skips_runtime_import_preflight_and_waits_for_runtime_boot(monkeypatch, tmp_path):

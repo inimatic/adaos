@@ -95,6 +95,60 @@ def test_header_cache_snapshot_does_not_wait_for_active_computation(
     assert snapshot["inflight_total"] == 1
 
 
+def test_header_projects_dev_avatar_attachment_to_authenticated_user_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    digest = "ab" * 32
+    stored = (
+        "/api/tools/web_desktop_runtime_skill/read_profile_avatar/attachments/"
+        f"profile-avatars/{digest}/portrait.jpg?webspace_id=desktop-dev&dev=true"
+    )
+    monkeypatch.setattr(
+        personalization.personalization_runtime,
+        "current_user_header_settings",
+        lambda _ctx: {"display_name": "Dmitry", "avatar_ref": stored},
+    )
+
+    response = _client().get(
+        "/api/personalization/current-user/header-settings",
+        headers=TOKEN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["settings"]["avatar_ref"] == (
+        f"/api/personalization/current-user/avatar?v={digest}&size=48"
+    )
+    parsed = personalization._managed_profile_avatar_ref(stored)
+    assert parsed == {
+        "skill": "web_desktop_runtime_skill",
+        "read_tool": "read_profile_avatar",
+        "logical_name": "profile-avatars",
+        "digest": digest,
+        "filename": "portrait.jpg",
+        "webspace_id": "desktop-dev",
+        "dev": True,
+    }
+
+
+def test_header_does_not_proxy_arbitrary_attachment_as_profile_avatar() -> None:
+    value = (
+        "/api/tools/secret_skill/read_secret/attachments/private/"
+        f"{'cd' * 32}/secret.bin"
+    )
+    assert personalization._managed_profile_avatar_ref(value) is None
+    assert personalization._profile_avatar_chrome_ref(value) == value
+
+
+def test_profile_avatar_webp_media_type_is_not_os_mimetype_dependent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(personalization.mimetypes, "guess_type", lambda _name: (None, None))
+
+    assert personalization._profile_avatar_media_type("avatar-digest-48.webp") == "image/webp"
+    assert personalization._profile_avatar_media_type("portrait.jpg") == "image/jpeg"
+    assert personalization._profile_avatar_media_type("avatar.bin") == "application/octet-stream"
+
+
 def test_phase4_current_user_profile_preferences_and_denied_role_edit() -> None:
     client = _client()
 

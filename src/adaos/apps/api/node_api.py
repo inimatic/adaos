@@ -403,6 +403,67 @@ _YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S = _env_float(
     2.5,
     minimum=0.1,
 )
+_YJS_MATERIALIZATION_HTTP_CACHE_TTL_S = _env_float(
+    "ADAOS_YJS_MATERIALIZATION_HTTP_CACHE_TTL_S",
+    120.0,
+    minimum=0.0,
+)
+_YJS_MATERIALIZATION_HTTP_CACHE_LOCK = threading.RLock()
+_YJS_MATERIALIZATION_HTTP_CACHE: dict[
+    tuple[str, str, bool, str], tuple[float, bytes]
+] = {}
+
+
+def _materialization_http_cache_identity(rebuild: Mapping[str, Any]) -> str:
+    """Return a cheap identity for one immutable materialization generation.
+
+    The rebuild description itself contains large timing/diagnostic trees.  A
+    JSON digest of that object would repeat the expensive work this cache is
+    intended to remove, so only authority-changing leaves participate.
+    """
+
+    resolver = rebuild.get("resolver") if isinstance(rebuild.get("resolver"), Mapping) else {}
+    return "|".join(
+        str(value or "")
+        for value in (
+            rebuild.get("scenario_id"),
+            rebuild.get("status"),
+            rebuild.get("pending"),
+            resolver.get("materialization_cache_key"),
+        )
+    )
+
+
+def _get_materialization_http_cache(
+    key: tuple[str, str, bool, str],
+) -> bytes | None:
+    now = time.monotonic()
+    with _YJS_MATERIALIZATION_HTTP_CACHE_LOCK:
+        entry = _YJS_MATERIALIZATION_HTTP_CACHE.get(key)
+        if entry is None:
+            return None
+        expires_at, payload = entry
+        if expires_at <= now:
+            _YJS_MATERIALIZATION_HTTP_CACHE.pop(key, None)
+            return None
+        return payload
+
+
+def _put_materialization_http_cache(
+    key: tuple[str, str, bool, str],
+    payload: bytes,
+) -> None:
+    ttl_s = _YJS_MATERIALIZATION_HTTP_CACHE_TTL_S
+    if ttl_s <= 0.0:
+        return
+    now = time.monotonic()
+    with _YJS_MATERIALIZATION_HTTP_CACHE_LOCK:
+        for stale_key, (expires_at, _value) in list(_YJS_MATERIALIZATION_HTTP_CACHE.items()):
+            if expires_at <= now:
+                _YJS_MATERIALIZATION_HTTP_CACHE.pop(stale_key, None)
+        while len(_YJS_MATERIALIZATION_HTTP_CACHE) >= 8:
+            _YJS_MATERIALIZATION_HTTP_CACHE.pop(next(iter(_YJS_MATERIALIZATION_HTTP_CACHE)))
+        _YJS_MATERIALIZATION_HTTP_CACHE[key] = (now + ttl_s, bytes(payload))
 _BROWSER_RESOURCE_MAX_BYTES = int(
     _env_float(
         "ADAOS_BROWSER_RESOURCE_MAX_BYTES",
@@ -3197,11 +3258,44 @@ async def _describe_yjs_materialization(
     *,
     rebuild_state: Mapping[str, Any] | None = None,
     verify_live: bool = False,
+    recover_persisted: bool = False,
 ) -> dict[str, Any]:
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     cached = _cached_materialization_from_rebuild(rebuild_state)
     if cached and not verify_live:
         return cached
+    if not verify_live and recover_persisted:
+        # Rebuild status is intentionally process-local and is empty after a
+        # core restart, while the authoritative YDoc snapshot remains durable.
+        # Returning ``status_cache_missing`` here made the browser issue a
+        # mutating scenario-set command and wait for a complete semantic
+        # rebuild even when the exact destination was already materialized.
+        # Read the bounded essential projection from the detached YStore; it
+        # neither creates a live room nor touches a native document owned by
+        # an active websocket loop.
+        try:
+            snapshot = await asyncio.wait_for(
+                _read_yjs_materialization_snapshot(
+                    target_webspace_id,
+                    scope="essential",
+                    prefer_live_room=False,
+                ),
+                timeout=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+            )
+            persisted = _describe_materialization_snapshot_payload(
+                target_webspace_id,
+                snapshot,
+                rebuild_state=rebuild_state,
+                source="disk_snapshot_preflight",
+            )
+            if bool(persisted.get("ready")):
+                return persisted
+        except Exception:
+            _log.debug(
+                "persisted materialization preflight unavailable webspace=%s",
+                target_webspace_id,
+                exc_info=True,
+            )
     if not verify_live:
         return _missing_materialization_cache_snapshot(
             target_webspace_id,
@@ -3374,7 +3468,14 @@ async def _read_yjs_materialization_snapshot(
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
         registry_map = ydoc.get_map("registry")
+        runtime_map = ydoc.get_map("runtime")
         if normalized_scope != "full":
+            runtime_environment = _coerce_dict(
+                _clone_json_like(runtime_map.get("environment") or {})
+            )
+            runtime_materialization = _coerce_dict(
+                runtime_environment.get("materialization") or {}
+            )
             return {
                 "ui": {
                     "current_scenario": _clone_json_like(ui_map.get("current_scenario")),
@@ -3388,11 +3489,21 @@ async def _read_yjs_materialization_snapshot(
                     "webspaces": _coerce_dict(_clone_json_like(data_map.get("webspaces") or {})),
                 },
                 "registry": {},
+                # The compact snapshot still carries the exact page authority.
+                # Without it the browser must scan every installed Application
+                # before each first-paint read, even though the room already
+                # resolved the immutable Trial release.
+                "runtime": {
+                    "environment": {
+                        "materialization": runtime_materialization,
+                    },
+                },
             }
         return {
             "ui": _coerce_dict(_clone_json_like(ui_map)),
             "data": _coerce_dict(_clone_json_like(data_map)),
             "registry": _coerce_dict(_clone_json_like(registry_map)),
+            "runtime": _coerce_dict(_clone_json_like(runtime_map)),
         }
 
 
@@ -3443,6 +3554,66 @@ def _materialized_payload_to_snapshot(
         "registry": registry,
         "runtime": runtime,
     }
+
+
+def _attach_exact_snapshot_application_authority(
+    webspace_id: str,
+    snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Backfill exact Trial authority into an early compact snapshot.
+
+    A process restart can serve the last disk YDoc before the live room has
+    rebuilt its materialization metadata.  The scenario selector is already
+    present there, while the older snapshot may predate Application authority.
+    Resolve only the matching per-Webspace RuntimeSelection; never scan the
+    Application catalog.  This lets first-paint reads use the immutable Beta
+    release immediately instead of issuing a broad read and repeating it once
+    YJS becomes ready.
+    """
+
+    payload = dict(snapshot or {})
+    ui = _coerce_dict(payload.get("ui") or {})
+    scenario_id = str(ui.get("current_scenario") or "").strip()
+    if not scenario_id:
+        return payload
+    runtime = _coerce_dict(payload.get("runtime") or {})
+    environment = _coerce_dict(runtime.get("environment") or {})
+    materialization = _coerce_dict(environment.get("materialization") or {})
+    identity = _coerce_dict(materialization.get("identity") or {})
+    if identity.get("application_id") and identity.get("application_release_digest"):
+        return payload
+
+    from adaos.services.applications.store import ApplicationStore
+    ctx = get_ctx()
+    store = ApplicationStore(Path(ctx.paths.state_dir()))
+    try:
+        selection = store.get_runtime_selection(webspace_id, scenario_id)
+        release = store.get_release(selection.application_id, selection.release_digest)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        _log.debug(
+            "exact snapshot application authority unavailable webspace=%s scenario=%s reason=%s",
+            webspace_id,
+            scenario_id,
+            exc,
+        )
+        return payload
+    if not any(
+        item.kind == "scenario" and item.artifact_id == scenario_id
+        for item in release.project_release.components
+    ):
+        return payload
+
+    identity |= {
+        "webspace_id": str(webspace_id),
+        "scenario_id": scenario_id,
+        "application_id": selection.application_id,
+        "application_release_digest": selection.release_digest,
+    }
+    materialization["identity"] = identity
+    environment["materialization"] = materialization
+    runtime["environment"] = environment
+    payload["runtime"] = runtime
+    return payload
 
 
 def _describe_materialization_snapshot_payload(
@@ -3894,6 +4065,8 @@ _YJS_MATERIALIZATION_REPAIR_INFLIGHT: dict[
     str,
     tuple[asyncio.AbstractEventLoop, asyncio.Task[dict[str, Any]]],
 ] = {}
+_YJS_MATERIALIZATION_REPAIR_RECENT: dict[str, tuple[float, dict[str, Any]]] = {}
+_YJS_MATERIALIZATION_REPAIR_RECENT_TTL_S = 10.0
 
 
 async def _coalesced_materialization_repair(
@@ -3903,9 +4076,42 @@ async def _coalesced_materialization_repair(
     from adaos.services.yjs.gateway import apply_materialized_payload_to_live_room
 
     key = str(webspace_id or "").strip() or "default"
+    runtime = materialized_payload.get("runtime")
+    environment = runtime.get("environment") if isinstance(runtime, Mapping) else None
+    contract = environment.get("materialization") if isinstance(environment, Mapping) else None
+    identity = contract.get("identity") if isinstance(contract, Mapping) else None
+    source_fingerprint = str(
+        (identity.get("source_fingerprint") if isinstance(identity, Mapping) else None)
+        or (identity.get("key_hash") if isinstance(identity, Mapping) else None)
+        or (identity.get("revision") if isinstance(identity, Mapping) else None)
+        or ""
+    ).strip()
+    scenario_id = str(
+        materialized_payload.get("scenario_id")
+        or (
+            materialized_payload.get("ui", {}).get("current_scenario")
+            if isinstance(materialized_payload.get("ui"), Mapping)
+            else ""
+        )
+        or ""
+    ).strip()
+    # A recent-result shortcut is valid only for an immutable materialization
+    # identity. A same-scenario Trial publication can change within the TTL;
+    # never reuse a broadcast merely because its Webspace/scenario match.
+    recent_key = (
+        f"{key}|{scenario_id}|{source_fingerprint}"
+        if source_fingerprint
+        else None
+    )
     loop = asyncio.get_running_loop()
     created = False
     with _YJS_MATERIALIZATION_REPAIR_LOCK:
+        recent = _YJS_MATERIALIZATION_REPAIR_RECENT.get(recent_key) if recent_key else None
+        if recent is not None:
+            age_s = time.monotonic() - recent[0]
+            if age_s <= _YJS_MATERIALIZATION_REPAIR_RECENT_TTL_S:
+                return dict(recent[1]), True
+            _YJS_MATERIALIZATION_REPAIR_RECENT.pop(recent_key, None)
         current = _YJS_MATERIALIZATION_REPAIR_INFLIGHT.get(key)
         if current is not None and current[0] is loop and not current[1].done():
             task = current[1]
@@ -3923,7 +4129,18 @@ async def _coalesced_materialization_repair(
             _YJS_MATERIALIZATION_REPAIR_INFLIGHT[key] = (loop, task)
             created = True
     try:
-        return dict(await asyncio.shield(task)), not created
+        result = dict(await asyncio.shield(task))
+        if (
+            recent_key
+            and bool(result.get("ok"))
+            and bool(result.get("materialized_payload_applied"))
+        ):
+            with _YJS_MATERIALIZATION_REPAIR_LOCK:
+                _YJS_MATERIALIZATION_REPAIR_RECENT[recent_key] = (
+                    time.monotonic(),
+                    dict(result),
+                )
+        return result, not created
     finally:
         if task.done():
             with _YJS_MATERIALIZATION_REPAIR_LOCK:
@@ -5593,6 +5810,72 @@ async def node_skill_event_publish(payload: SkillEventPublishRequest) -> dict[st
     }
 
 
+@router.post("/named-entities/refresh", dependencies=[Depends(require_token)])
+async def node_named_entities_refresh(webspace_id: str | None = None) -> dict[str, Any]:
+    """Rebuild and project the bounded named-entity index with compact diagnostics."""
+
+    conf = load_config()
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "hub_role_required",
+        }
+    from adaos.services import named_entities, named_entity_projection  # pylint: disable=import-outside-toplevel
+
+    reconciler = await named_entity_projection.request_named_entity_projection(
+        webspace_id=target_webspace_id,
+        reason="node_api.explicit_refresh",
+        refresh=True,
+        wait=True,
+        allow_detached_build=True,
+    )
+    snapshot = named_entities.named_entity_registry_snapshot(webspace_id=target_webspace_id)
+    records = list(snapshot.records_by_ref.values())
+    kind_counts: dict[str, int] = {}
+    for record in records:
+        kind = str(record.get("kind") or "unknown")
+        kind_counts[kind] = int(kind_counts.get(kind) or 0) + 1
+    source_counts = {
+        str(source): len(items)
+        for source, items in snapshot.records_by_source.items()
+    }
+    browser_samples: list[dict[str, Any]] = []
+    try:
+        from adaos.services.device_inventory import get_device_inventory_service  # pylint: disable=import-outside-toplevel
+
+        browser_rows = list(get_device_inventory_service().list_devices(kind="browser") or [])
+        for row in browser_rows[:5]:
+            identity = row.get("identity") if isinstance(row.get("identity"), dict) else {}
+            policy = row.get("policy") if isinstance(row.get("policy"), dict) else {}
+            observation = row.get("observation") if isinstance(row.get("observation"), dict) else {}
+            browser_samples.append(
+                {
+                    "ref": row.get("ref"),
+                    "browser_device_id": identity.get("browser_device_id"),
+                    "parent_browser_device_id": identity.get("parent_browser_device_id"),
+                    "access_class": policy.get("access_class"),
+                    "online": observation.get("online"),
+                    "last_seen_at": observation.get("last_seen_at"),
+                }
+            )
+    except Exception:
+        browser_rows = []
+    return {
+        "ok": not bool(reconciler.get("last_error")),
+        "accepted": True,
+        "webspace_id": target_webspace_id,
+        "snapshot": snapshot.to_dict(include_payload=False),
+        "kind_counts": dict(sorted(kind_counts.items())),
+        "source_counts": source_counts,
+        "browser_inventory_total": len(browser_rows),
+        "browser_samples": browser_samples,
+        "reconciler": reconciler,
+    }
+
+
 @router.post(
     "/infrastate/action",
     dependencies=[Depends(require_token)],
@@ -5943,6 +6226,7 @@ async def node_yjs_webspace_materialization_state(
         target_webspace_id,
         rebuild_state=rebuild,
         verify_live=verify_live,
+        recover_persisted=not verify_live,
     )
     result = {
         "ok": True,
@@ -5963,13 +6247,35 @@ async def node_yjs_webspace_materialization_state(
 @router.get("/yjs/webspaces/{webspace_id}/materialization/snapshot", dependencies=[Depends(require_token)])
 async def node_yjs_webspace_materialization_snapshot(
     webspace_id: str,
+    request: Request = None,
     include_runtime: bool = False,
     scope: str = "essential",
-) -> dict[str, Any]:
+) -> Any:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     snapshot_scope = "full" if str(scope or "").strip().lower() == "full" else "essential"
     rebuild = describe_webspace_rebuild_state(target_webspace_id)
+    cache_key = (
+        target_webspace_id,
+        snapshot_scope,
+        bool(include_runtime),
+        _materialization_http_cache_identity(rebuild),
+    )
+    # Unit-level callers intentionally bypass this process cache so monkeypatch
+    # isolation remains exact.  HTTP clients, however, commonly ask for the
+    # same immutable generation several times while Angular/YJS mounts the
+    # destination. Rebuilding its ~800 KiB projection on every request caused
+    # seconds of avoidable CPU work and starved unrelated tool reads.
+    if request is not None:
+        cached_result = _get_materialization_http_cache(cache_key)
+        if cached_result is not None:
+            # A Starlette Response is stateful: middleware can rewrite its
+            # headers (notably Content-Length during gzip) while sending it.
+            # Reusing that object produced a compressed length paired with an
+            # uncompressed body on the next request and h11 closed the socket.
+            # Cache immutable encoded bytes and create a fresh response for
+            # every request instead.
+            return Response(content=cached_result, media_type="application/json")
     degraded = False
     try:
         operational_state = await describe_webspace_operational_state(target_webspace_id)
@@ -5989,9 +6295,22 @@ async def node_yjs_webspace_materialization_snapshot(
             or str(rebuild.get("scenario_id") or "").strip()
             or None
         )
+        materialized_payload = get_webspace_rebuild_materialized_payload(
+            target_webspace_id
+        )
+        payload_source = "rebuild_materialized_payload"
+        if materialized_payload is None:
+            from adaos.services.yjs.gateway import (
+                live_webspace_materialized_payload,
+            )
+
+            materialized_payload = live_webspace_materialized_payload(
+                target_webspace_id
+            )
+            payload_source = "live_room_materialized_payload"
         payload_snapshot = _materialized_payload_to_snapshot(
             target_webspace_id,
-            get_webspace_rebuild_materialized_payload(target_webspace_id),
+            materialized_payload,
             scope=snapshot_scope,
         )
         if payload_snapshot is not None:
@@ -5999,7 +6318,7 @@ async def node_yjs_webspace_materialization_snapshot(
                 target_webspace_id,
                 payload_snapshot,
                 rebuild_state=rebuild,
-                source="rebuild_materialized_payload",
+                source=payload_source,
             )
             payload_scenario = str(payload_materialization.get("current_scenario") or "").strip() or None
             if (
@@ -6019,12 +6338,12 @@ async def node_yjs_webspace_materialization_snapshot(
                         "ready": True,
                         "readiness_state": payload_materialization.get("readiness_state"),
                         "missing_branches": [],
-                        "snapshot_source": "rebuild_materialized_payload",
+                        "snapshot_source": payload_source,
                     }
                 seed_health = _materialization_seed_health(
                     state="ready",
-                    reason="rebuild_materialized_payload",
-                    source="rebuild_materialized_payload",
+                    reason=payload_source,
+                    source=payload_source,
                     stale=False,
                     last_good_snapshot_at=(
                         materialization.get("observed_at")
@@ -6039,6 +6358,7 @@ async def node_yjs_webspace_materialization_snapshot(
         else:
             payload_snapshot = None
         if payload_snapshot is None:
+            snapshot_source = "disk_snapshot"
             snapshot = await asyncio.wait_for(
                 _read_yjs_materialization_snapshot(
                     target_webspace_id,
@@ -6051,7 +6371,7 @@ async def node_yjs_webspace_materialization_snapshot(
                 target_webspace_id,
                 snapshot,
                 rebuild_state=rebuild,
-                source="disk_snapshot",
+                source=snapshot_source,
             )
             snapshot_scenario = str(snapshot_materialization.get("current_scenario") or "").strip() or None
             if expected_snapshot_scenario and snapshot_scenario and snapshot_scenario != expected_snapshot_scenario:
@@ -6076,18 +6396,18 @@ async def node_yjs_webspace_materialization_snapshot(
                         "ready": True,
                         "readiness_state": snapshot_materialization.get("readiness_state"),
                         "missing_branches": [],
-                        "snapshot_source": "disk_snapshot",
+                        "snapshot_source": snapshot_source,
                     }
             else:
                 materialization = snapshot_materialization
             seed_health = _materialization_seed_health(
                 state="ready" if bool(materialization.get("ready")) else "degraded",
                 reason=(
-                    "disk_snapshot_read"
+                    snapshot_source
                     if bool(materialization.get("ready"))
                     else str(materialization.get("readiness_state") or "materialization_cache_missing")
                 ),
-                source="disk_snapshot",
+                source=snapshot_source,
                 stale=not bool(materialization.get("ready")),
                 last_good_snapshot_at=(
                     materialization.get("observed_at")
@@ -6119,6 +6439,17 @@ async def node_yjs_webspace_materialization_snapshot(
         materialization = fallback["materialization"]
         seed_health = fallback["seed_health"]
         degraded = True
+    try:
+        snapshot = await asyncio.to_thread(
+            _attach_exact_snapshot_application_authority,
+            target_webspace_id,
+            snapshot,
+        )
+    except Exception:
+        logging.getLogger("adaos.api.node").debug(
+            "failed to attach exact application authority to materialization snapshot",
+            exc_info=True,
+        )
     result = {
         "ok": True,
         "accepted": True,
@@ -6140,6 +6471,14 @@ async def node_yjs_webspace_materialization_snapshot(
             role=conf.role,
             webspace_id=target_webspace_id,
         )
+    if request is not None:
+        # Cache the encoded response, not just the Python tree. FastAPI's
+        # recursive jsonable_encoder pass over this projection is itself
+        # measurable for large application schemas and otherwise repeats on
+        # every Angular remount.
+        response = JSONResponse(content=result)
+        _put_materialization_http_cache(cache_key, bytes(response.body))
+        return response
     return result
 
 

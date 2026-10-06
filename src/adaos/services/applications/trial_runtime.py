@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from io import BytesIO
@@ -27,6 +29,14 @@ _READY_MANAGER_CACHE: dict[
     tuple[tuple[tuple[str, int, int, int], ...], object],
 ] = {}
 _READY_MANAGER_CACHE_MAX = 64
+_READY_MANAGER_VALIDATED_AT: dict[tuple[str, str, str, str], float] = {}
+_READY_MANAGER_REVALIDATE_SECONDS = max(
+    0.25,
+    min(
+        60.0,
+        float(os.getenv("ADAOS_TRIAL_MANAGER_REVALIDATE_SECONDS") or "5"),
+    ),
+)
 
 
 def _runtime_tree_signature(source: Path, manifest_path: Path) -> tuple[tuple[str, int, int, int], ...]:
@@ -193,6 +203,23 @@ class NativeTrialRuntime:
             cached = _READY_MANAGER_CACHE.get(cache_key)
             if cached is not None:
                 manager = cached[1]
+                setattr(
+                    manager,
+                    "_adaos_immutable_trial_authority",
+                    (str(self.root), self.release_digest, package.digest),
+                )
+                # Trial workspaces are immutable and were content-verified
+                # before entering this cache. A page mounts several read
+                # sources concurrently; recursively hashing the complete
+                # runtime tree for every waiter turned the integrity check
+                # into 5-10 seconds of first-paint latency on Windows. Retain
+                # fail-closed periodic revalidation without repeating it for
+                # the whole first-paint burst.
+                last_validated = float(
+                    _READY_MANAGER_VALIDATED_AT.get(cache_key) or 0.0
+                )
+                if time.monotonic() - last_validated <= _READY_MANAGER_REVALIDATE_SECONDS:
+                    return manager
                 status = manager.runtime_status(skill)
                 manifest_path = Path(status.get("resolved_manifest") or "")
                 try:
@@ -206,13 +233,39 @@ class NativeTrialRuntime:
                     and source.is_relative_to(self.root / "skills/.runtime")
                     and cached[0] == _runtime_tree_signature(source, manifest_path)
                 ):
+                    _READY_MANAGER_VALIDATED_AT[cache_key] = time.monotonic()
                     return manager
+                # The cached runtime failed immutable-source revalidation.
+                # Remove it before entering the single build lane.  The old
+                # implementation kept the stale entry, observed it again
+                # under ``_READY_MANAGER_BUILD_LOCK`` and recursively called
+                # ``ready_manager``.  Because the build lock is deliberately
+                # non-reentrant, that path deadlocked the only materialization
+                # worker and every later Application navigation appeared to
+                # be accepted without ever becoming visible.
+                _READY_MANAGER_CACHE.pop(cache_key, None)
+                _READY_MANAGER_VALIDATED_AT.pop(cache_key, None)
         with _READY_MANAGER_BUILD_LOCK:
             with _READY_MANAGER_CACHE_LOCK:
-                cache_filled = cache_key in _READY_MANAGER_CACHE
-            if cache_filled:
-                return self.ready_manager(skill)
+                cache_filled = _READY_MANAGER_CACHE.get(cache_key)
+                if cache_filled is not None:
+                    # Another waiter rebuilt and verified the immutable
+                    # runtime while this caller waited for the build lane.
+                    # It is fresh by construction; returning it directly also
+                    # avoids recursively acquiring the non-reentrant lock.
+                    manager = cache_filled[1]
+                    setattr(
+                        manager,
+                        "_adaos_immutable_trial_authority",
+                        (str(self.root), self.release_digest, package.digest),
+                    )
+                    return manager
             manager = self.manager()
+            setattr(
+                manager,
+                "_adaos_immutable_trial_authority",
+                (str(self.root), self.release_digest, package.digest),
+            )
             status = manager.runtime_status(skill)
             if not status.get("ready") or status.get("version") != package.version:
                 raise TrialRuntimeUnavailable("Trial native runtime is not prepared")
@@ -224,8 +277,11 @@ class NativeTrialRuntime:
             signature = _runtime_tree_signature(source, Path(status["resolved_manifest"]))
             with _READY_MANAGER_CACHE_LOCK:
                 if len(_READY_MANAGER_CACHE) >= _READY_MANAGER_CACHE_MAX:
-                    _READY_MANAGER_CACHE.pop(next(iter(_READY_MANAGER_CACHE)))
+                    evicted = next(iter(_READY_MANAGER_CACHE))
+                    _READY_MANAGER_CACHE.pop(evicted)
+                    _READY_MANAGER_VALIDATED_AT.pop(evicted, None)
                 _READY_MANAGER_CACHE[cache_key] = (signature, manager)
+                _READY_MANAGER_VALIDATED_AT[cache_key] = time.monotonic()
             return manager
 
     def identity(self, skill: str) -> dict[str, str]:

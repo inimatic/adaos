@@ -238,6 +238,7 @@ def test_node_yjs_projection_bridge_applies_data_projection(monkeypatch) -> None
 
 def test_materialization_repair_coalesces_concurrent_room_broadcasts(monkeypatch) -> None:
     node_api_module._YJS_MATERIALIZATION_REPAIR_INFLIGHT.clear()
+    node_api_module._YJS_MATERIALIZATION_REPAIR_RECENT.clear()
     started = asyncio.Event()
     release = asyncio.Event()
     calls: list[str] = []
@@ -271,6 +272,46 @@ def test_materialization_repair_coalesces_concurrent_room_broadcasts(monkeypatch
     assert first[1] is False
     assert second[1] is True
     assert node_api_module._YJS_MATERIALIZATION_REPAIR_INFLIGHT == {}
+
+
+def test_materialization_repair_reuses_recent_success(monkeypatch) -> None:
+    node_api_module._YJS_MATERIALIZATION_REPAIR_INFLIGHT.clear()
+    node_api_module._YJS_MATERIALIZATION_REPAIR_RECENT.clear()
+    calls: list[str] = []
+
+    async def _fake_apply(webspace_id: str, **_kwargs) -> dict[str, object]:
+        calls.append(webspace_id)
+        return {"ok": True, "materialized_payload_applied": True}
+
+    monkeypatch.setattr(
+        "adaos.services.yjs.gateway.apply_materialized_payload_to_live_room",
+        _fake_apply,
+    )
+
+    async def _run():
+        payload = {
+            "scenario_id": "web_desktop",
+            "runtime": {
+                "environment": {
+                    "materialization": {
+                        "identity": {"source_fingerprint": "trial:sha256:release-1"}
+                    }
+                }
+            },
+        }
+        first = await node_api_module._coalesced_materialization_repair(
+            "desktop", payload
+        )
+        second = await node_api_module._coalesced_materialization_repair(
+            "desktop", payload
+        )
+        return first, second
+
+    first, second = asyncio.run(_run())
+
+    assert calls == ["desktop"]
+    assert first[1] is False
+    assert second[1] is True
 
 
 def test_node_yjs_switch_scenario_endpoint_forwards_set_home(monkeypatch) -> None:
@@ -1540,7 +1581,7 @@ def test_node_yjs_webspace_materialization_state_endpoint_returns_lightweight_sn
     monkeypatch.setattr(
         node_api_module,
         "_describe_yjs_materialization",
-        lambda webspace_id, rebuild_state=None, verify_live=False: _awaitable(
+        lambda webspace_id, rebuild_state=None, verify_live=False, recover_persisted=False: _awaitable(
             {
                 "ready": False,
                 "webspace_id": webspace_id,
@@ -1582,6 +1623,53 @@ def test_node_yjs_webspace_materialization_state_endpoint_returns_lightweight_sn
     }
 
 
+def test_materialization_preflight_recovers_ready_persisted_snapshot_when_process_cache_is_empty(monkeypatch) -> None:
+    async def _persisted_snapshot(*_args, **_kwargs):
+        return {
+            "ui": {
+                "current_scenario": "web_desktop",
+                "application": {
+                    "desktop": {
+                        "pageSchema": {"id": "desktop", "widgets": []},
+                        "topbar": [],
+                    },
+                    "modals": {
+                        "apps_catalog": {},
+                        "widgets_catalog": {},
+                    },
+                },
+            },
+            "data": {
+                "catalog": {"apps": [], "widgets": []},
+                "desktop": {},
+                "installed": {"apps": [], "widgets": []},
+            },
+            "registry": {},
+        }
+
+    monkeypatch.setattr(
+        node_api_module,
+        "_read_yjs_materialization_snapshot",
+        _persisted_snapshot,
+    )
+
+    result = asyncio.run(
+        node_api_module._describe_yjs_materialization(
+            "desktop",
+            rebuild_state={
+                "webspace_id": "desktop",
+                "status": "idle",
+                "pending": False,
+            },
+            recover_persisted=True,
+        )
+    )
+
+    assert result["ready"] is True
+    assert result["current_scenario"] == "web_desktop"
+    assert result["snapshot_source"] == "disk_snapshot_preflight"
+
+
 def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkeypatch) -> None:
     fake_state = {
         "ui": _FakeMap(
@@ -1602,6 +1690,18 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
             }
         ),
         "registry": _FakeMap({"scenarios": {"hub-1": {"web_desktop": {"title": "Desktop"}}}}),
+        "runtime": _FakeMap(
+            {
+                "environment": {
+                    "materialization": {
+                        "identity": {
+                            "application_id": "web_desktop",
+                            "application_release_digest": "sha256:release",
+                        }
+                    }
+                }
+            }
+        ),
     }
 
     monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
@@ -1664,6 +1764,7 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
     assert result["snapshot"]["data"]["catalog"]["widgets"][0]["id"] == "w1"
     assert result["snapshot"]["data"]["installed"]["widgets"] == ["w1"]
     assert result["snapshot"]["registry"]["scenarios"]["hub-1"]["web_desktop"]["title"] == "Desktop"
+    assert result["snapshot"]["runtime"]["environment"]["materialization"]["identity"]["application_id"] == "web_desktop"
     assert result["runtime"]["webspace_id"] == "desktop"
     assert describe_calls
     assert all(call["verify_live"] is False for call in describe_calls)
@@ -1673,10 +1774,61 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
     assert sorted(essential["snapshot"]["data"].keys()) == ["catalog", "desktop", "installed", "nodes", "webspaces"]
     assert essential["snapshot"]["data"]["nodes"]["hub-1"]["weather"]["current"]["city"] == "Moscow"
     assert essential["snapshot"]["registry"] == {}
+    assert essential["snapshot"]["runtime"]["environment"]["materialization"]["identity"]["application_release_digest"] == "sha256:release"
     assert len(describe_calls) == 2
     assert all(call["verify_live"] is False for call in describe_calls)
     assert read_calls
     assert all(call.get("prefer_live_room") is False for call in read_calls)
+
+
+def test_early_materialization_snapshot_backfills_exact_trial_authority(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from adaos.services.applications import store as store_module
+    from adaos.services.workspaces import index as workspace_index
+
+    selection = SimpleNamespace(
+        application_id="web_desktop",
+        release_digest="sha256:management-beta",
+    )
+    release = SimpleNamespace(
+        project_release=SimpleNamespace(
+            components=[SimpleNamespace(kind="scenario", artifact_id="web_desktop")]
+        )
+    )
+    fake_store = SimpleNamespace(
+        get_runtime_selection=lambda webspace_id, application_id: (
+            selection
+            if (webspace_id, application_id) == ("desktop", "web_desktop")
+            else (_ for _ in ()).throw(FileNotFoundError())
+        ),
+        get_release=lambda application_id, release_digest: (
+            release
+            if (application_id, release_digest)
+            == ("web_desktop", "sha256:management-beta")
+            else (_ for _ in ()).throw(FileNotFoundError())
+        ),
+    )
+    monkeypatch.setattr(store_module, "ApplicationStore", lambda _root: fake_store)
+    monkeypatch.setattr(workspace_index, "get_workspace", lambda _webspace_id: None)
+    monkeypatch.setattr(
+        node_api_module,
+        "get_ctx",
+        lambda: SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path)),
+    )
+
+    snapshot = node_api_module._attach_exact_snapshot_application_authority(
+        "desktop",
+        {
+            "ui": {"current_scenario": "web_desktop", "application": {}},
+            "runtime": {"environment": {"materialization": {}}},
+        },
+    )
+
+    identity = snapshot["runtime"]["environment"]["materialization"]["identity"]
+    assert identity["application_id"] == "web_desktop"
+    assert identity["application_release_digest"] == "sha256:management-beta"
 
 
 def test_node_yjs_webspace_path_reads_live_nested_projection(monkeypatch) -> None:
@@ -1837,6 +1989,82 @@ def test_node_yjs_webspace_materialization_snapshot_validates_disk_snapshot(monk
     assert "ui.application" in result["materialization"]["missing_branches"]
     assert "data.catalog.apps" in result["materialization"]["missing_branches"]
     assert "data.installed.apps" in result["materialization"]["missing_branches"]
+
+
+def test_node_yjs_webspace_materialization_snapshot_uses_detached_live_room_payload_before_stale_disk(
+    monkeypatch,
+) -> None:
+    from adaos.services.yjs import gateway as gateway_module
+
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_operational_state",
+        lambda webspace_id: _awaitable(
+            SimpleNamespace(
+                webspace_id=webspace_id,
+                current_scenario="web_desktop",
+                effective_home_scenario="web_desktop",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_rebuild_state",
+        lambda webspace_id: {
+            "webspace_id": webspace_id,
+            "status": "ready",
+            "pending": False,
+            "scenario_id": "web_desktop",
+        },
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "_describe_yjs_materialization",
+        lambda webspace_id, rebuild_state=None, verify_live=False: _awaitable(
+            {
+                "ready": True,
+                "webspace_id": webspace_id,
+                "current_scenario": "web_desktop",
+                "readiness_state": "ready",
+                "missing_branches": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "live_webspace_materialized_payload",
+        lambda webspace_id: {
+            "scenario_id": "web_desktop",
+            "application": {
+                "desktop": {"pageSchema": {"id": "desktop", "widgets": []}},
+                "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+            },
+            "catalog": {"apps": [], "widgets": []},
+            "desktop": {},
+            "installed": {"apps": [], "widgets": []},
+            "metadata": {"materialization": {}},
+        },
+    )
+
+    async def _unexpected_snapshot_read(*_args, **_kwargs):
+        raise AssertionError("detached live-room payload must avoid native YDoc read")
+
+    monkeypatch.setattr(
+        node_api_module,
+        "_read_yjs_materialization_snapshot",
+        _unexpected_snapshot_read,
+    )
+
+    result = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("desktop"))
+
+    assert result["degraded"] is False
+    assert result["state"] == "ready"
+    assert result["source"] == "live_room_materialized_payload"
+    assert result["reason"] == "live_room_materialized_payload"
+    assert result["materialization"]["ready"] is True
+    assert result["materialization"]["snapshot_validation"]["snapshot_source"] == "live_room_materialized_payload"
+    assert result["snapshot"]["ui"]["application"]["desktop"]["pageSchema"]["id"] == "desktop"
 
 
 def test_node_yjs_webspace_materialization_snapshot_degrades_on_scenario_mismatch(monkeypatch) -> None:
@@ -4157,18 +4385,19 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
     assert ydoc.get_map("data")["webio"] is stable_identity["data.webio"]
 
     summary = runtime._last_apply_summary or {}
-    assert summary["branch_count"] == 8
+    assert summary["branch_count"] == 9
     assert summary["changed_branches"] == 0
-    assert summary["unchanged_branches"] == 8
+    assert summary["unchanged_branches"] == 9
     assert summary["failed_branches"] == 0
     assert summary["changed_paths"] == []
     assert summary["defaults_failed"] is False
     assert summary["transaction_total"] == 2
-    assert summary["fingerprint_unchanged_branches"] == 8
+    assert summary["fingerprint_unchanged_branches"] == 9
     assert summary["fingerprint_unchanged_paths"] == [
         "ui.application",
         "registry.merged",
         "runtime.environment",
+        "runtime.materialization",
         "data.catalog",
         "data.installed",
         "data.desktop",
@@ -4179,6 +4408,7 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
         "ui.application",
         "registry.merged",
         "runtime.environment",
+        "runtime.materialization",
     ]
     assert summary["phases"]["interactive"]["fingerprint_unchanged_paths"] == [
         "data.catalog",

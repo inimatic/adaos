@@ -64,6 +64,9 @@ def _json_text(payload: Any) -> str:
 
 _MODEL_TEXT_FORMATS = {"json", "min_json", "jsonl", "toon"}
 _COMPACT_MODEL_TEXT_TOOLS = {
+    "companion_context_get",
+    "companion_action_preview",
+    "companion_activity_list",
     "foundation",
     "get_builder_context",
     "get_architecture_catalog",
@@ -496,6 +499,83 @@ class CodexRootMcpBridge:
         target_properties = {"target_id": {"type": "string", "description": "Managed target id. Defaults to the configured test hub."}}
         target_required = [] if target_optional else ["target_id"]
         definitions = [
+            {
+                "name": "companion_context_get",
+                "description": "Read the current Companion Context Frame with active scenario, semantic UI inventory, published affordances, and context digest.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "webspace_id": {"type": "string", "default": "desktop"},
+                        "include_live": {"type": "boolean", "default": True},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "companion_action_preview",
+                "description": "Validate one allowlisted Companion operation against the current context without executing it.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "request_id": {"type": "string"},
+                        "operation": {"type": "string"},
+                        "params": {"type": "object"},
+                        "webspace_id": {"type": "string", "default": "desktop"},
+                        "context_digest": {"type": "string"},
+                        "utterance": {"type": "string"},
+                    },
+                    "required": ["operation"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "companion_action_execute",
+                "description": "Execute one allowlisted context-guarded Companion operation and return its durable receipt.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "request_id": {"type": "string"},
+                        "operation": {"type": "string"},
+                        "params": {"type": "object"},
+                        "webspace_id": {"type": "string", "default": "desktop"},
+                        "context_digest": {"type": "string"},
+                        "utterance": {"type": "string"},
+                    },
+                    "required": ["operation"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "companion_activity_list",
+                "description": "Read recent redacted Companion action receipts.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "webspace_id": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 30},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "companion_capability_request_capture",
+                "description": "Record an unmet user request as a deduplicated local AdaOS Dev Ticket.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string"},
+                        "desired_outcome": {"type": "string"},
+                        "capability_id": {"type": "string"},
+                        "utterance": {"type": "string"},
+                        "webspace_id": {"type": "string"},
+                        "companion_id": {"type": "string"},
+                        "context_digest": {"type": "string"},
+                        "severity": {"type": "string", "enum": ["info", "low", "medium", "high"]},
+                    },
+                    "required": ["summary"],
+                    "additionalProperties": False,
+                },
+            },
             {
                 "name": "foundation",
                 "description": "Read the AdaOS Root MCP foundation snapshot used by this bridge.",
@@ -1588,6 +1668,25 @@ class CodexRootMcpBridge:
         ):
             raise PermissionError(f"MCP tool is outside this bridge profile: {tool}")
         model_text_format = str(args.get("model_text_format") or "json").strip().lower()
+        companion_tools = {
+            "companion_context_get": "companion.context.get",
+            "companion_action_preview": "companion.action.preview",
+            "companion_action_execute": "companion.action.execute",
+            "companion_activity_list": "companion.activity.list",
+            "companion_capability_request_capture": "companion.capability_request.capture",
+        }
+        if tool in companion_tools:
+            return _tool_text(
+                client.call(
+                    companion_tools[tool],
+                    arguments={
+                        key: value
+                        for key, value in args.items()
+                        if key != "model_text_format"
+                    },
+                ),
+                model_text_format=model_text_format,
+            )
         if tool == "foundation":
             payload = client.foundation()
             task_scoped = bool(self.profile.task_id)

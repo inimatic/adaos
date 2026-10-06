@@ -99,6 +99,23 @@ def test_self_host_checks_actual_scenario_and_production_ancestor(tmp_path):
         registry.require_preview_target(child.target_webspace_id)
 
 
+def test_candidate_materialization_falls_back_from_dormant_self_host(tmp_path):
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("desktop")
+    registry.ensure("desktop", purpose=BUILDER_SELF_HOST, scenario_id="builder")
+    registry.sql.workspace("desktop-dev", kind="dev", scenario="applications")
+    service = BuilderWorkbenchService(
+        state_dir=tmp_path / "state",
+        relationship_registry=registry,
+    )
+
+    assert service.resolve_source_webspace_id("desktop-dev") == "desktop-dev"
+    assert service.resolve_candidate_materialization_host("desktop-dev") == "desktop"
+
+    registry.sql.workspace("desktop-dev", kind="dev", scenario="builder")
+    assert service.resolve_candidate_materialization_host("desktop-dev") == "desktop-dev"
+
+
 @pytest.mark.asyncio
 async def test_direct_dev_creation_requires_builder_pair_and_recreates_after_delete(monkeypatch):
     from adaos.services.scenario import webspace_runtime as runtime
@@ -497,6 +514,39 @@ def test_materialization_worker_default_and_test_override(monkeypatch) -> None:
 
     monkeypatch.setenv("ADAOS_MATERIALIZATION_WORKER", "1")
     assert webspace_runtime._materialization_worker_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_materialization_worker_carries_exact_preview_override(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime
+
+    captured: dict[str, object] = {}
+
+    async def run_worker(request, **kwargs):
+        captured["request"] = request
+        captured["kwargs"] = kwargs
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        webspace_runtime._RUNTIME.materialization_executor,
+        "run_worker",
+        run_worker,
+    )
+    content = {"ui": {"application": {"desktop": {"pageSchema": {"id": "management"}}}}}
+
+    result = await webspace_runtime._run_materialization_worker(
+        "desktop-dev",
+        mode="payload_only",
+        scenario_id="web_desktop",
+        scenario_content_override=content,
+        skill_source_mode="automation",
+    )
+
+    assert result == {"ok": True}
+    request = captured["request"]
+    assert request["scenario_content_override"] == content
+    assert request["scenario_content_override"] is not content
+    assert request["skill_source_mode"] == "automation"
 
 
 @pytest.mark.asyncio

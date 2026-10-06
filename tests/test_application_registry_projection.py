@@ -381,6 +381,7 @@ def test_registry_snapshot_trust_requires_closed_graceful_epoch(tmp_path: Path) 
 
     assert sealed["seal_status"] == "complete"
     assert trusted["trusted_snapshot"] is True
+    assert trusted["sqlite_integrity_mode"] == "quick_check"
     assert trusted["shutdown_request_id"] == "shutdown.1"
 
 

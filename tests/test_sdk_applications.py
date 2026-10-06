@@ -579,6 +579,7 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
 
 
 def test_component_application_owners_use_bounded_reference_index(monkeypatch) -> None:
+    calls = {"references": 0}
     class Store:
         @staticmethod
         def get_application(application_id: str):
@@ -594,6 +595,7 @@ def test_component_application_owners_use_bounded_reference_index(monkeypatch) -
 
         @staticmethod
         def component_references():
+            calls["references"] += 1
             return {
                 "components": {
                     "skill:gmail": [
@@ -612,6 +614,16 @@ def test_component_application_owners_use_bounded_reference_index(monkeypatch) -
         {"application_id": "mail", "title": "Mail"},
     ]
     assert applications.get_component_application_owners("skill:unknown") == []
+    assert applications.get_component_application_owner_index(
+        ("skill:gmail", "skill:unknown")
+    ) == {
+        "skill:gmail": [
+            {"application_id": "triage", "title": "Inbox Triage"},
+            {"application_id": "mail", "title": "Mail"},
+        ],
+        "skill:unknown": [],
+    }
+    assert calls["references"] == 3
 
 
 def test_sdk_component_placement_plans_forward_exact_cas_context(monkeypatch) -> None:

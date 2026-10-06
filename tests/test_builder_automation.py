@@ -90,6 +90,11 @@ def _write_project_manifest(
                     "categories": [],
                     "tags": [],
                 },
+                "permission_profile": {
+                    "schema": "adaos.application.permission_profile.v1",
+                    "required": [],
+                    "optional": [],
+                },
                 "lifecycle": {
                     "uninstall": {
                         "components": "remove_if_unreferenced",
@@ -11684,6 +11689,73 @@ def test_browser_feedback_temporarily_borrows_and_restores_unrelated_preview(
         ("select", "desktop", "web_desktop"),
         ("topology", "desktop", "web_desktop:force=True"),
         ("owner", "web_desktop", "prototype:004"),
+    ]
+
+
+def test_browser_feedback_resolves_preview_to_its_builder_owner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[tuple[str, str]] = []
+
+    class FakeWorkbench:
+        def __init__(self, **_kwargs):
+            pass
+
+        def resolve_source_webspace_id(self, webspace_id):
+            calls.append(("resolve", webspace_id))
+            return "desktop"
+
+        def get_workspace_binding(self, source_webspace_id):
+            calls.append(("binding", source_webspace_id))
+            return {"preview_webspace_id": "desktop-dev", "preview_target": {}}
+
+        def set_active_draft(self, *, source_webspace_id, **_kwargs):
+            calls.append(("prepare", source_webspace_id))
+            return {}
+
+        def set_preview_target(self, *, source_webspace_id, **_kwargs):
+            calls.append(("select", source_webspace_id))
+            return {}
+
+        async def ensure_dev_webspace(self, source_webspace_id, **_kwargs):
+            calls.append(("topology", source_webspace_id))
+            return {
+                "preview_webspace_id": "desktop-dev",
+                "runtime": {"ok": True, "webspace_id": "desktop-dev"},
+            }
+
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.materialize_revision_via_owner",
+        lambda webspace_id, **_kwargs: {
+            "ok": True,
+            "accepted": True,
+            "webspace_id": webspace_id,
+        },
+    )
+
+    materialized = service._materialize_candidate_for_browser_feedback(
+        {
+            "object_type": "scenario",
+            "object_id": "web_desktop",
+            "current_task_id": "task.management",
+        },
+        webspace_id="desktop-dev",
+    )
+
+    assert materialized["requested_webspace_id"] == "desktop-dev"
+    assert materialized["webspace_id"] == "desktop"
+    assert materialized["preview_webspace_id"] == "desktop-dev"
+    assert calls == [
+        ("resolve", "desktop-dev"),
+        ("binding", "desktop"),
+        ("prepare", "desktop"),
+        ("select", "desktop"),
+        ("topology", "desktop"),
     ]
 
 

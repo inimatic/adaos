@@ -41,6 +41,11 @@ async def _materialize(request: Mapping[str, Any]) -> dict[str, Any]:
         else None
     )
     skill_decls_fingerprint = str(request.get("skill_decls_fingerprint") or "").strip() or None
+    raw_content_override = request.get("scenario_content_override")
+    scenario_content_override = (
+        dict(raw_content_override) if isinstance(raw_content_override, Mapping) else None
+    )
+    skill_source_mode = str(request.get("skill_source_mode") or "").strip() or None
     runtime = WebspaceScenarioRuntime()
     if mode == "payload_only":
         entry = await runtime.resolve_materialized_payload_async(
@@ -51,6 +56,8 @@ async def _materialize(request: Mapping[str, Any]) -> dict[str, Any]:
             isolate_process=False,
             skill_decls_snapshot=skill_decls_snapshot,
             skill_decls_fingerprint=skill_decls_fingerprint,
+            scenario_content_override=scenario_content_override,
+            skill_source_mode=skill_source_mode,
         )
         return {
             "materialized_payload": _json_clone(runtime._last_materialized_payload or {}),

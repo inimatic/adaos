@@ -17,7 +17,17 @@ class _FakeDeviceInventory:
         self._devices = list(devices)
 
     def list_devices(self, kind=None) -> list[dict[str, object]]:
-        return [dict(item) for item in self._devices]
+        return [
+            dict(item)
+            for item in self._devices
+            if kind is None or str(item.get("kind") or "") == str(kind)
+        ]
+
+    def get_device(self, device_ref: str) -> dict[str, object] | None:
+        for item in self._devices:
+            if str(item.get("ref") or "") == str(device_ref):
+                return dict(item)
+        return None
 
 
 def _empty_lookup_provider(*, webspace_id: str = "desktop") -> dict[str, object]:
@@ -134,7 +144,7 @@ def test_named_entity_service_suggests_browser_draft_name_without_display_overwr
                         "form_factor": "desktop",
                     },
                     "policy": {"display_name": "", "managed_state": "observed_only"},
-                    "observation": {"source": "browser_session", "last_seen_at": 120.0},
+                    "observation": {"source": "browser_session", "last_seen_at": 120.0, "online": True},
                     "diagnostics": {},
                 }
             ]
@@ -182,6 +192,52 @@ def test_named_entity_service_uses_browser_device_display_name_before_endpoint_n
     assert record.display_name == "Мой телефон"
     assert record.display_label == "Мой телефон"
     assert record.source_authority["display_name"] == "access_links.device_display_name"
+
+
+def test_named_entity_service_collapses_browser_pages_to_stable_parent() -> None:
+    service = named_entities.NamedEntityService(
+        device_inventory_service=_FakeDeviceInventory(
+            [
+                {
+                    "ref": "browser:browser-1",
+                    "kind": "browser",
+                    "identity": {"browser_device_id": "browser-1", "browser_family": "chrome"},
+                    "policy": {"device_display_name": "Office browser"},
+                    "observation": {"source": "browser_session", "last_seen_at": 100.0},
+                },
+                {
+                    "ref": "browser:browser-1::page-a",
+                    "kind": "browser",
+                    "identity": {
+                        "browser_device_id": "browser-1::page-a",
+                        "parent_browser_device_id": "browser-1::page-a",
+                        "browser_family": "chrome",
+                    },
+                    "policy": {"device_display_name": "Office browser"},
+                    "observation": {"source": "browser_session", "last_seen_at": 200.0, "online": True},
+                },
+                {
+                    "ref": "browser:browser-1::page-b",
+                    "kind": "browser",
+                    "identity": {
+                        "browser_device_id": "browser-1::page-b",
+                        "parent_browser_device_id": "browser-1",
+                        "browser_family": "chrome",
+                    },
+                    "policy": {"device_display_name": "Office browser"},
+                    "observation": {"source": "browser_session", "last_seen_at": 300.0, "online": True},
+                },
+            ]
+        ),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    records = service.list_entities(kind="device.browser")
+
+    assert len(records) == 1
+    assert records[0].canonical_ref == "device:browser:browser-1"
+    assert records[0].display_label == "Office browser"
+    assert records[0].updated_at == 300.0
 
 
 def test_resolver_matches_exact_labels_without_dispatch_side_effects() -> None:
@@ -523,6 +579,52 @@ def test_named_entity_registry_refresh_rebuilds_only_dirty_sources(
     assert diagnostics["source_build_total"] == 9
     assert diagnostics["source_reuse_total"] == 3
     assert diagnostics["fingerprint_hit_total"] == 1
+
+
+def test_named_entity_registry_refreshes_one_exact_device_without_inventory_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventory = _FakeDeviceInventory(
+        [
+            {
+                "ref": "browser:browser-1",
+                "kind": "browser",
+                "identity": {
+                    "browser_device_id": "browser-1",
+                    "browser_family": "chrome",
+                    "os_name": "windows",
+                },
+                "policy": {"display_name": "Browser one"},
+                "observation": {"source": "browser_session", "last_seen_at": 100.0, "online": True},
+                "diagnostics": {},
+            }
+        ]
+    )
+    service = named_entities.NamedEntityService(
+        device_inventory_service=inventory,
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    registry = named_entities.NamedEntityRegistry()
+    first = registry.refresh(webspace_id="desktop", service=service)
+    assert first.records_by_ref["device:browser:browser-1"]["display_label"] == "Browser one"
+
+    inventory._devices[0]["policy"] = {"display_name": "Renamed browser"}
+
+    def _unexpected_scan(*_args, **_kwargs):
+        raise AssertionError("exact device invalidation must not scan the full inventory")
+
+    monkeypatch.setattr(service, "list_source_entities", _unexpected_scan)
+    second = registry.refresh(
+        webspace_id="desktop",
+        service=service,
+        dirty_sources=("devices",),
+        dirty_refs=("device:browser:browser-1",),
+    )
+
+    assert second.revision == first.revision + 1
+    assert second.changed_refs == ("device:browser:browser-1",)
+    assert second.records_by_ref["device:browser:browser-1"]["display_label"] == "Renamed browser"
+    assert second.source_timings_ms["devices"] < 50
 
 
 def test_named_entity_registry_serializes_cross_webspace_refreshes() -> None:
@@ -982,6 +1084,7 @@ async def test_named_entity_projection_defers_background_build_until_room_ready(
         refresh=True,
         wait=False,
         dirty_sources=("devices",),
+        dirty_refs=("device:browser:browser-1",),
     )
     reconcile = {}
     for _ in range(20):
@@ -996,6 +1099,7 @@ async def test_named_entity_projection_defers_background_build_until_room_ready(
     assert reconcile["pending_total"] == 1
     assert reconcile["states"][0]["last_snapshot_mode"] == "deferred_room_not_ready"
     assert reconcile["states"][0]["dirty_sources"] == ["devices"]
+    assert reconcile["states"][0]["dirty_refs"] == ["device:browser:browser-1"]
 
     room_generation = 7
     await named_entity_projection.request_named_entity_projection(
@@ -1276,6 +1380,19 @@ async def test_sys_ready_reuses_warm_named_entity_sources(monkeypatch) -> None:
     assert calls == {source: 1 for source in named_entities.REGISTRY_SOURCES}
 
 
+def test_browser_registry_events_only_invalidate_device_entities() -> None:
+    from adaos.services import named_entity_projection
+
+    assert named_entity_projection._registry_invalidation_sources(
+        "entity.registry.changed",
+        {
+            "source": "browser_session",
+            "entity_ref": "browser:dev-1::page-1",
+            "entity_kind": "device.browser",
+        },
+    ) == ("devices",)
+
+
 def test_named_entity_projection_v2_is_keyed_and_idempotent(monkeypatch) -> None:
     import json
 
@@ -1324,6 +1441,7 @@ def test_named_entity_projection_v2_is_keyed_and_idempotent(monkeypatch) -> None
     assert registry.get("named_entities") is None
     rendered = json.loads(v2.to_json())
     assert rendered["meta"]["revision"] == 7
+    assert rendered["meta"]["projection_version"] == 2
     assert rendered["entities"]["device:member:node-1"]["display_name"] == "Kitchen Display"
     assert rendered["conflicts"]["en:screen"]["locale"] == "en"
 
@@ -1369,6 +1487,51 @@ def test_named_entity_projection_v2_is_keyed_and_idempotent(monkeypatch) -> None
     rendered = json.loads(v2.to_json())
     assert rendered["meta"]["revision"] == 9
     assert "skill:browsers_skill" not in rendered["entities"]
+
+
+@pytest.mark.anyio
+async def test_room_ready_reuses_persisted_named_entity_projection(monkeypatch) -> None:
+    import y_py as Y
+
+    from adaos.services import named_entity_projection
+    from adaos.services.yjs import gateway_ws
+
+    webspace_id = f"named-entities-{uuid4().hex}"
+    ydoc = Y.YDoc()
+    payload = {
+        "webspace_id": webspace_id,
+        "items": [],
+        "summary": {
+            "registry_revision": 7,
+            "fingerprint": "registry-v7",
+            "updated_at": 123.0,
+        },
+        "conflicts": [],
+    }
+    with ydoc.begin_transaction() as txn:
+        assert named_entity_projection._write_payload_to_doc(ydoc, txn, payload) is True
+
+    monkeypatch.setattr(
+        gateway_ws,
+        "y_server",
+        SimpleNamespace(rooms={webspace_id: SimpleNamespace(ydoc=ydoc)}),
+    )
+    monkeypatch.setattr(
+        named_entity_projection,
+        "_current_live_room_generation",
+        lambda _webspace_id: 9,
+    )
+    named_entity_projection.clear_named_entity_projection_reconciler(
+        webspace_id=webspace_id
+    )
+
+    result = await named_entity_projection.notify_named_entity_room_ready(webspace_id)
+
+    assert result["persisted_projection_reused"] is True
+    assert result["deferred"] is False
+    assert result["applied_revision"] == 7
+    assert result["applied_room_generation"] == 9
+    assert result["last_snapshot_mode"] == "persisted_projection_reused"
 
 
 def test_named_entity_projection_can_dual_write_legacy_payload(monkeypatch) -> None:

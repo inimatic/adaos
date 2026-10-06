@@ -61,7 +61,14 @@ _YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S = _env_float("ADAOS_YSTORE_SNAPSHOT_PREFLIG
 _YSTORE_SNAPSHOT_PREFLIGHT_LIMITER = anyio.CapacityLimiter(
     _env_int("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_WORKERS", 2, minimum=1)
 )
-_YSTORE_RUNTIME_PROJECTION_PREPARE = _env_flag("ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE", True)
+# Structural projection maintenance can start a separate Python process and
+# decode/rebuild a multi-megabyte document.  It is useful for an explicit
+# offline maintenance pass, but it must never sit in the first interactive
+# YRoom read path: on a cold Windows filesystem that worker has taken tens of
+# seconds even when the persisted projection was already within budget.
+# Keep the opt-in for recovery/maintenance tooling while the ordinary runtime
+# relies on bounded writes plus the lightweight corruption preflight below.
+_YSTORE_RUNTIME_PROJECTION_PREPARE = _env_flag("ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE", False)
 _YSTORE_RUNTIME_PROJECTION_PREPARE_MIN_BYTES = _env_int(
     "ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE_MIN_BYTES",
     1200 * 1024,

@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.middleware.gzip import GZipMiddleware
 
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
@@ -34,6 +35,18 @@ if "ypy_websocket" not in sys.modules:
 from adaos.apps.api import server as api_server
 from adaos.apps.api import node_api
 from adaos.services.system_model import service as system_model_service
+
+
+def test_api_compresses_large_json_responses() -> None:
+    middleware = [
+        item
+        for item in api_server.app.user_middleware
+        if item.cls is GZipMiddleware
+    ]
+
+    assert len(middleware) == 1
+    assert middleware[0].kwargs["minimum_size"] == 1024
+    assert middleware[0].kwargs["compresslevel"] == 5
 
 
 def test_artifact_activation_observation_has_event_timestamp(monkeypatch) -> None:
@@ -951,6 +964,63 @@ def test_admin_root_mcp_call_allows_live_nlu_probe(monkeypatch) -> None:
     assert calls[0]["scope"]["target_id"] == "hub:sn-test"
 
 
+def test_admin_root_mcp_call_delegates_companion_profile_to_skill_actor(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Resp:
+        ok = True
+
+        def to_dict(self) -> dict[str, object]:
+            return {"ok": True, "status": "ok", "result": {"context": {}}}
+
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=types.SimpleNamespace(subnet_id="sn-test")),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "invoke_root_mcp_tool",
+        lambda requested_tool_id, **kwargs: calls.append(
+            {"tool_id": requested_tool_id, **kwargs}
+        )
+        or _Resp(),
+    )
+
+    payload = asyncio.run(
+        api_server.admin_root_mcp_call(
+            api_server.AdminRootMcpCallRequest(
+                tool_id="companion.context.get",
+                capability_profile="CompanionOperator",
+                actor="skill:conversation_companions",
+            )
+        )
+    )
+
+    assert payload["ok"] is True
+    assert calls[0]["actor"] == "skill:conversation_companions"
+    assert calls[0]["auth_context"]["capability_profile"] == "CompanionOperator"
+    assert calls[0]["auth_context"]["grant_source"] == "local_capability_profile"
+    assert "companion.read" in calls[0]["auth_context"]["capabilities"]
+    assert "companion.execute" in calls[0]["auth_context"]["capabilities"]
+
+
+def test_admin_root_mcp_call_rejects_non_skill_delegated_actor() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_server.admin_root_mcp_call(
+                api_server.AdminRootMcpCallRequest(
+                    tool_id="companion.context.get",
+                    capability_profile="CompanionOperator",
+                    actor="user:spoofed",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["code"] == "invalid_local_actor"
+
+
 def test_admin_root_mcp_call_runs_tool_off_event_loop(monkeypatch) -> None:
     main_thread_id = threading.get_ident()
     invoked_on: list[int] = []
@@ -1054,6 +1124,7 @@ def test_admin_root_mcp_call_allows_read_only_descriptor_tools(monkeypatch, tool
         ("applications.setup.credential", "applications.apply"),
         ("applications.setup.provider", "applications.apply"),
         ("applications.list_development_reports", "applications.report"),
+        ("applications.list_development_report_intakes", "applications.publisher.read"),
         ("applications.development.list_operations", "applications.develop"),
         ("applications.development.get_operation", "applications.develop"),
         ("applications.development.reconcile_operation", "applications.recover"),

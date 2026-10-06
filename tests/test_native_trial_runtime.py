@@ -53,6 +53,108 @@ def test_trial_declarations_do_not_replace_same_named_workspace_skill(tmp_path):
     assert runtime_skill_declarations_snapshot("same") == before
 
 
+def test_ready_manager_collapses_immutable_tree_revalidation_burst(tmp_path, monkeypatch):
+    import json
+
+    from adaos.services.applications import trial_runtime as trial_runtime_module
+
+    source = tmp_path / "trial/skills/.runtime/example/v0.1/slots/A/src"
+    source.mkdir(parents=True)
+    (source / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    manifest_path = tmp_path / "trial/runtime-manifest.json"
+    manifest_path.write_text(json.dumps({"source": str(source)}), encoding="utf-8")
+    package = SimpleNamespace(
+        kind="skill",
+        artifact_id="example",
+        version="0.1.0",
+        digest="sha256:" + "b" * 64,
+    )
+    runtime = NativeTrialRuntime(
+        get_ctx(),
+        "candidate-1",
+        "sha256:" + "a" * 64,
+        tmp_path / "trial",
+        (package,),
+    )
+
+    class _Manager:
+        def __init__(self) -> None:
+            self.status_calls = 0
+
+        def runtime_status(self, _skill):
+            self.status_calls += 1
+            return {
+                "ready": True,
+                "version": "0.1.0",
+                "resolved_manifest": str(manifest_path),
+            }
+
+    manager = _Manager()
+    monkeypatch.setattr(NativeTrialRuntime, "manager", lambda _self: manager)
+    monkeypatch.setattr(
+        NativeTrialRuntime,
+        "verified_source",
+        lambda _self, *_args, **_kwargs: source,
+    )
+    trial_runtime_module._READY_MANAGER_CACHE.clear()
+    trial_runtime_module._READY_MANAGER_VALIDATED_AT.clear()
+
+    assert runtime.ready_manager("example") is manager
+    first_status_calls = manager.status_calls
+    assert runtime.ready_manager("example") is manager
+    assert manager.status_calls == first_status_calls
+
+
+def test_ready_manager_rebuilds_invalid_cached_runtime_without_recursive_lock(tmp_path, monkeypatch):
+    import json
+
+    from adaos.services.applications import trial_runtime as trial_runtime_module
+
+    source = tmp_path / "trial/skills/.runtime/example/v0.1/slots/A/src"
+    source.mkdir(parents=True)
+    (source / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    manifest_path = tmp_path / "trial/runtime-manifest.json"
+    manifest_path.write_text(json.dumps({"source": str(source)}), encoding="utf-8")
+    package = SimpleNamespace(
+        kind="skill",
+        artifact_id="example",
+        version="0.1.0",
+        digest="sha256:" + "b" * 64,
+    )
+    runtime = NativeTrialRuntime(
+        get_ctx(),
+        "candidate-1",
+        "sha256:" + "a" * 64,
+        tmp_path / "trial",
+        (package,),
+    )
+
+    class _Manager:
+        def runtime_status(self, _skill):
+            return {
+                "ready": True,
+                "version": "0.1.0",
+                "resolved_manifest": str(manifest_path),
+            }
+
+    stale_manager = _Manager()
+    rebuilt_manager = _Manager()
+    cache_key = (str(runtime.root), runtime.release_digest, "example", package.digest)
+    trial_runtime_module._READY_MANAGER_CACHE.clear()
+    trial_runtime_module._READY_MANAGER_VALIDATED_AT.clear()
+    trial_runtime_module._READY_MANAGER_CACHE[cache_key] = ((("stale", 0, 0, 0),), stale_manager)
+    trial_runtime_module._READY_MANAGER_VALIDATED_AT[cache_key] = 0.0
+    monkeypatch.setattr(NativeTrialRuntime, "manager", lambda _self: rebuilt_manager)
+    monkeypatch.setattr(
+        NativeTrialRuntime,
+        "verified_source",
+        lambda _self, *_args, **_kwargs: source,
+    )
+
+    assert runtime.ready_manager("example") is rebuilt_manager
+    assert trial_runtime_module._READY_MANAGER_CACHE[cache_key][1] is rebuilt_manager
+
+
 def test_production_host_uses_registered_relation_not_suffix(tmp_path, monkeypatch):
     from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
     from adaos.services.workspaces import index

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import mimetypes
 import re
 import time
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
@@ -64,6 +67,109 @@ _COMMON_TIMEZONES = (
     "Asia/Shanghai",
     "Asia/Tokyo",
 )
+_PROFILE_AVATAR_ROUTE = "/api/personalization/current-user/avatar"
+_PROFILE_AVATAR_SKILL = "web_desktop_runtime_skill"
+_PROFILE_AVATAR_READ_TOOL = "read_profile_avatar"
+_PROFILE_AVATAR_LOGICAL_NAME = "profile-avatars"
+
+
+def _managed_profile_avatar_ref(value: Any) -> dict[str, Any] | None:
+    """Parse only the app-owned attachment shape used for profile avatars.
+
+    A profile image is user chrome, not an Application runtime asset.  The
+    stored receipt still names the DEV/stable runtime that accepted the upload,
+    but the authenticated self endpoint below must be able to read that exact
+    blob after the user navigates to another Application runtime.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    parsed = urlsplit(raw)
+    segments = [unquote(item) for item in parsed.path.split("/") if item]
+    if len(segments) != 8 or segments[:2] != ["api", "tools"]:
+        return None
+    _, _, skill, read_tool, attachment_token, logical_name, digest, filename = segments
+    if (
+        skill != _PROFILE_AVATAR_SKILL
+        or read_tool != _PROFILE_AVATAR_READ_TOOL
+        or attachment_token != "attachments"
+        or logical_name != _PROFILE_AVATAR_LOGICAL_NAME
+        or len(digest) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in digest)
+    ):
+        return None
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    return {
+        "skill": skill,
+        "read_tool": read_tool,
+        "logical_name": logical_name,
+        "digest": digest.lower(),
+        "filename": filename,
+        "webspace_id": str(query.get("webspace_id") or "").strip(),
+        "dev": str(query.get("dev") or "").strip().lower() in {"1", "true", "yes", "on"},
+    }
+
+
+def _profile_avatar_chrome_ref(value: Any) -> str:
+    parsed = _managed_profile_avatar_ref(value)
+    if parsed is None:
+        return str(value or "").strip()
+    # Chrome renders this at 18px.  Request a small DPR-friendly derivative
+    # instead of decoding the original upload on every page load.
+    return f"{_PROFILE_AVATAR_ROUTE}?v={parsed['digest']}&size=48"
+
+
+def _profile_avatar_media_type(filename: str) -> str:
+    """Return a browser-renderable image type independently of OS MIME tables."""
+    suffix = Path(str(filename or "")).suffix.lower()
+    explicit = {
+        ".gif": "image/gif",
+        ".jpeg": "image/jpeg",
+        ".jpg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }.get(suffix)
+    if explicit:
+        return explicit
+    guessed = mimetypes.guess_type(str(filename or ""))[0] or "application/octet-stream"
+    if guessed in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
+        return guessed
+    return "application/octet-stream"
+
+
+def _materialize_profile_avatar_thumbnail(
+    source: Path,
+    *,
+    cache_root: Path,
+    digest: str,
+    size: int,
+) -> Path:
+    """Create one immutable square WebP derivative and reuse it by digest."""
+    from PIL import Image, ImageOps
+
+    target_root = cache_root / "profile-avatar-thumbnails"
+    target_root.mkdir(parents=True, exist_ok=True)
+    target = target_root / f"{digest}-{size}.webp"
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+    temporary = target_root / f".{digest}-{size}-{uuid4().hex}.tmp"
+    try:
+        with Image.open(source) as image:
+            frame = ImageOps.exif_transpose(image)
+            if getattr(frame, "is_animated", False):
+                frame.seek(0)
+            rgba = frame.convert("RGBA")
+            thumb = ImageOps.fit(rgba, (size, size), method=Image.Resampling.LANCZOS)
+            thumb.save(temporary, format="WEBP", quality=86, method=6)
+        try:
+            temporary.replace(target)
+        except FileExistsError:
+            pass
+        return target
+    finally:
+        if temporary.exists():
+            temporary.unlink(missing_ok=True)
 
 
 class ScopePayload(BaseModel):
@@ -678,11 +784,104 @@ def _listed_invites(service: Any) -> list[dict[str, Any]]:
 @router.get("/current-user/header-settings", dependencies=[Depends(require_token)])
 def get_current_user_header(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     settings = personalization_runtime.current_user_header_settings(ctx)
+    if settings.get("avatar_ref"):
+        settings["avatar_ref"] = _profile_avatar_chrome_ref(settings["avatar_ref"])
     device_status = _current_device_status(request)
     settings["device_status"] = device_status
     settings["device_trust_status"] = str(device_status.get("label") or settings.get("device_trust_status") or "current")
     settings["identity_source"] = "owner_settings_fallback"
     return {"ok": True, "settings": settings}
+
+
+@router.get("/current-user/avatar", dependencies=[Depends(require_token)])
+async def get_current_user_avatar(
+    size: int = Query(default=48, ge=16, le=256),
+    ctx: AgentContext = Depends(get_ctx),
+) -> FileResponse:
+    """Serve the signed-in user's avatar independently of page Application runtime.
+
+    The profile itself is the authority for the blob reference.  Restricting the
+    accepted receipt to the dedicated avatar skill/tool/store prevents this
+    convenience route from becoming a generic digest reader.
+    """
+
+    from adaos.domain.blob_storage import BlobStorageRequirements
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+    from adaos.services.storage.blob import get_blob_storage_broker
+    from adaos.services.storage.upload_context import attachment_filename
+
+    profile = _profile(ctx).get_profile()
+    avatar = _managed_profile_avatar_ref(profile.avatar_ref)
+    if avatar is None:
+        raise HTTPException(status_code=404, detail="profile avatar is unavailable")
+    try:
+        safe_filename = attachment_filename(str(avatar["filename"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        skills_accessor = (
+            getattr(ctx.paths, "dev_skills_dir")
+            if avatar["dev"]
+            else getattr(ctx.paths, "skills_dir")
+        )
+        skills_root = Path(
+            skills_accessor() if callable(skills_accessor) else skills_accessor
+        )
+        environment = SkillRuntimeEnvironment(
+            skills_root=skills_root,
+            skill_name=str(avatar["skill"]),
+        )
+        version = environment.resolve_active_version()
+        if not version:
+            raise FileNotFoundError("profile avatar runtime is unavailable")
+        data_root = environment.data_root(version)
+        broker = get_blob_storage_broker(ctx)
+        binding = broker.bind(
+            owner_ref=f"skill:{avatar['skill']}",
+            logical_name=str(avatar["logical_name"]),
+            requirements=BlobStorageRequirements(),
+            scope_root=data_root / "files",
+        )
+        digest = f"sha256:{avatar['digest']}"
+        path = await asyncio.to_thread(
+            broker.materialize_digest,
+            binding,
+            digest,
+            owner_ref=f"skill:{avatar['skill']}",
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="profile avatar is unavailable") from exc
+    except (ValueError, NotImplementedError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    response_path = path
+    response_filename = safe_filename
+    try:
+        cache_accessor = getattr(ctx.paths, "cache_dir")
+        cache_root = Path(cache_accessor() if callable(cache_accessor) else cache_accessor)
+        response_path = await asyncio.to_thread(
+            _materialize_profile_avatar_thumbnail,
+            Path(path),
+            cache_root=cache_root,
+            digest=str(avatar["digest"]),
+            size=int(size),
+        )
+        response_filename = f"avatar-{str(avatar['digest'])[:12]}-{int(size)}.webp"
+    except Exception:
+        # Pillow/derivative cache is an optimization.  The authenticated
+        # original remains a correct fallback and must keep profile chrome up.
+        response_path = path
+    media_type = _profile_avatar_media_type(response_filename)
+    return FileResponse(
+        response_path,
+        media_type=media_type,
+        filename=response_filename,
+        content_disposition_type="inline",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=3600",
+            "ETag": f'"sha256:{avatar["digest"]}:thumb:{int(size)}"',
+        },
+    )
 
 
 @router.get("/options", dependencies=[Depends(require_token)])

@@ -384,6 +384,52 @@ def test_trial_runtime_context_resolves_without_stable_installation(
     assert resolved["runtime_selection"]["source"] == "local_trial"
 
 
+def test_webspace_selection_disambiguates_installed_stable_and_trial(
+    tmp_path: Path,
+) -> None:
+    applications, management, stable = _services(tmp_path)
+    trial = _release(applications, version="1.1.0", updated=True)
+    applications.store.save_installation(
+        ApplicationInstallation(
+            installation_id="installation:family_tasks",
+            application_id="family_tasks",
+            installed_release_digest=stable.release_digest,
+            component_refs=(
+                {
+                    "component_ref": "skill:family_tasks_skill",
+                    "package_digest": DIGEST_A,
+                    "lifecycle": "bound",
+                },
+            ),
+            data_policy="retain",
+            status="active",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+    applications.store.save_runtime_selection(
+        RuntimeSelection(
+            webspace_id="desktop",
+            application_id="family_tasks",
+            source="local_trial",
+            release_digest=trial.release_digest,
+            runtime_root_ref="trial://family-tasks",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+
+    resolved = management.resolve_runtime_context(
+        skill_name="family_tasks_skill",
+        requested_application_id="family_tasks",
+        webspace_id="desktop",
+    )
+
+    assert resolved is not None
+    assert resolved["release_digest"] == trial.release_digest
+    assert resolved["runtime_selection"]["source"] == "local_trial"
+
+
 def test_runtime_context_cache_reuses_stable_authority_and_invalidates_on_selection(
     tmp_path: Path,
     monkeypatch,

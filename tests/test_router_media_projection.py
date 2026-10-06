@@ -73,7 +73,10 @@ def _patch_router_yjs(monkeypatch, factory) -> None:
 
     monkeypatch.setattr(router_service_module, "async_get_ydoc", _context)
     monkeypatch.setattr(router_service_module, "async_read_ydoc", _context)
-    monkeypatch.setattr(router_service_module, "mutate_live_room", lambda *_args, **_kwargs: False)
+    async def _no_live_room(*_args, **_kwargs):
+        return {"accepted": False, "applied": False, "reason": "room_not_ready"}
+
+    monkeypatch.setattr(router_service_module, "submit_live_room_mutation", _no_live_room)
 
 
 async def test_router_projects_media_route_contract_to_yjs(monkeypatch) -> None:

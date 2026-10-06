@@ -11731,7 +11731,20 @@ class BuilderAutomationService:
 
         scenario_id = str(current.get("object_id") or "").strip()
         workbench = BuilderWorkbenchService(state_dir=self.state_dir)
-        binding = dict(workbench.get_workspace_binding(webspace_id) or {})
+        requested_webspace_id = str(webspace_id or "").strip()
+        resolve_source = getattr(
+            workbench,
+            "resolve_candidate_materialization_host",
+            None,
+        ) or getattr(workbench, "resolve_source_webspace_id", None)
+        source_webspace_id = (
+            str(resolve_source(requested_webspace_id) or "").strip()
+            if callable(resolve_source)
+            else requested_webspace_id
+        )
+        if not source_webspace_id:
+            raise RuntimeError("Browser feedback requires a Builder owner Webspace")
+        binding = dict(workbench.get_workspace_binding(source_webspace_id) or {})
         current_target = (
             dict(binding.get("preview_target"))
             if isinstance(binding.get("preview_target"), Mapping)
@@ -11763,7 +11776,7 @@ class BuilderAutomationService:
         # ensure_dev_webspace() can clear the pin while reconciling a changed
         # selection, and an already-open scenario can retain its previous payload.
         workbench.set_active_draft(
-            source_webspace_id=webspace_id,
+            source_webspace_id=source_webspace_id,
             active_draft_id=None,
             runtime_scenario_id=scenario_id,
             persist_projection=False,
@@ -11771,10 +11784,10 @@ class BuilderAutomationService:
         # Runtime bootstrap resolves Automation content through the persisted
         # Preview identity. Pin the exact retained task before rebuilding so it
         # cannot read a previous task snapshot or DEV working-tree content.
-        workbench.set_preview_target(source_webspace_id=webspace_id, target=target)
+        workbench.set_preview_target(source_webspace_id=source_webspace_id, target=target)
         binding = asyncio.run(
             workbench.ensure_dev_webspace(
-                webspace_id,
+                source_webspace_id,
                 runtime_scenario_id=scenario_id,
                 wait_for_rebuild=True,
                 force_runtime_reload=True,
@@ -11809,7 +11822,7 @@ class BuilderAutomationService:
             preview_label=str(target.get("label") or "").strip() or None,
             event_payload={
                 "source": "builder.automation.browser_feedback",
-                "source_webspace_id": webspace_id,
+                "source_webspace_id": source_webspace_id,
                 "_meta": {"cmd_id": f"browser-feedback:{task_id}"},
             },
             timeout_s=120.0,
@@ -11818,7 +11831,8 @@ class BuilderAutomationService:
             **runtime,
             "ok": bool(runtime.get("ok")) and bool(runtime.get("accepted", True)),
             "source": "candidate_browser_feedback",
-            "webspace_id": webspace_id,
+            "webspace_id": source_webspace_id,
+            "requested_webspace_id": requested_webspace_id,
             "preview_webspace_id": preview_webspace_id or None,
             "topology_runtime": topology_runtime,
             "candidate_preview_target": copy.deepcopy(target),

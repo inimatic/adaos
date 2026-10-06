@@ -8,6 +8,22 @@ import pytest
 import yaml
 
 
+def test_voice_affordance_matches_node_scoped_modal_inventory() -> None:
+    from adaos.services.nlu.teacher_read_model import _voice_availability
+
+    availability = _voice_availability(
+        {"parent": "infrastate_modal"},
+        activation=[
+            {"type": "desktop.open_modal", "params": {"modal_id": "infrastate_modal"}}
+        ],
+        runtime_state={
+            "available_modal_ids": ["node:node-1:infrastate_modal"]
+        },
+    )
+
+    assert availability["status"] == "reachable"
+
+
 def test_nlu_teacher_read_model_lists_templates_and_targets():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.teacher_read_model import (

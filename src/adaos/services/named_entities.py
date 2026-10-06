@@ -618,9 +618,26 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
     ref = _text(device.get("ref"))
     if not ref:
         return None
-    canonical_ref = canonical_device_ref(ref)
     kind_token = _text(device.get("kind"))
     identity = _mapping(device.get("identity"))
+    if kind_token == "browser":
+        # Browser pages are volatile runtime representations of one addressable
+        # browser endpoint.  Keeping a named entity per page made the shared
+        # Yjs registry grow without bound (and also taught NLU tab ids instead
+        # of the user-assigned browser name).  Always project the stable parent.
+        browser_identity = (
+            _text(identity.get("parent_browser_device_id"))
+            or _text(identity.get("browser_device_id"))
+        )
+        # Early browser-session rows sometimes persisted the complete
+        # page-scoped id in parent_browser_device_id as well.  Normalize both
+        # fields, not only browser_device_id.
+        browser_device_id = browser_identity.split("::", 1)[0]
+        canonical_ref = canonical_device_ref(
+            f"browser:{browser_device_id}" if browser_device_id else ref.split("::", 1)[0]
+        )
+    else:
+        canonical_ref = canonical_device_ref(ref)
     policy = _mapping(device.get("policy"))
     observation = _mapping(device.get("observation"))
     diagnostics = _mapping(device.get("diagnostics"))
@@ -950,6 +967,17 @@ class NamedEntityService:
             )
         records.sort(key=lambda item: (item.kind, item.display_label.casefold(), item.canonical_ref))
         return records
+
+    def get_device_entity(self, canonical_ref: str) -> NamedEntityRecord | None:
+        """Resolve one device entity without scanning unrelated device kinds."""
+
+        device_ref = compatibility_device_ref(canonical_ref)
+        try:
+            service = self._device_inventory_service or device_inventory.get_device_inventory_service()
+            device = service.get_device(device_ref)
+        except Exception:
+            device = None
+        return _entity_from_device(_mapping(device)) if isinstance(device, Mapping) else None
 
     def list_source_entities(
         self,
@@ -1692,12 +1720,46 @@ class NamedEntityService:
             devices = list(service.list_devices() or [])
         except Exception:
             devices = []
-        records: list[NamedEntityRecord] = []
+        records_by_ref: dict[str, NamedEntityRecord] = {}
         for device in devices:
-            record = _entity_from_device(_mapping(device))
-            if record is not None:
-                records.append(record)
-        return records
+            mapped_device = _mapping(device)
+            if _text(mapped_device.get("kind")) == "browser":
+                policy = _mapping(mapped_device.get("policy"))
+                observation = _mapping(mapped_device.get("observation"))
+                ref = _text(mapped_device.get("ref"))
+                is_page = policy.get("access_class") == "client" or "::" in ref
+                explicitly_named_parent = bool(
+                    policy.get("device_display_name")
+                    or policy.get("aliases")
+                    or policy.get("labels")
+                ) and not is_page
+                # Historical page sessions are retained by access-links for
+                # audit/reconciliation, but they are not addressable devices.
+                # Project live representations plus explicitly named stable
+                # parents. Probe/test browser ids and stale unnamed parents are
+                # durable audit records, not useful NLU address targets.
+                if not bool(observation.get("online")) and not explicitly_named_parent:
+                    continue
+            record = _entity_from_device(mapped_device)
+            if record is None:
+                continue
+            current = records_by_ref.get(record.canonical_ref)
+            if current is None:
+                records_by_ref[record.canonical_ref] = record
+                continue
+            # Device inventory orders the stable browser policy before its
+            # page representations.  Only replace it when a representation
+            # carries an explicit user name that the current record lacks, or
+            # when both are observations and the replacement is newer.
+            if record.display_name and not current.display_name:
+                records_by_ref[record.canonical_ref] = record
+                continue
+            if (
+                bool(record.display_name) == bool(current.display_name)
+                and (record.updated_at or 0.0) > (current.updated_at or 0.0)
+            ):
+                records_by_ref[record.canonical_ref] = record
+        return list(records_by_ref.values())
 
     def _lookup_payload(self, *, webspace_id: str | None = None) -> Mapping[str, Any]:
         webspace = _text(webspace_id) or self._default_webspace_id
@@ -1932,9 +1994,19 @@ def _compact_registry_payload_from_records(
         for item in records
     ]
     conflicts = _registry_conflicts(records)
-    fingerprint = hashlib.sha256(
-        json.dumps(all_items, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
-    ).hexdigest()
+    # Every record fingerprint already covers its complete semantic payload.
+    # Hashing the complete (currently ~850 KiB) JSON index again made every
+    # browser registration spend hundreds of milliseconds holding the GIL.
+    # A framed digest of stable identities + record digests has the same
+    # change-detection semantics without serialising the catalog twice.
+    fingerprint_hash = hashlib.sha256()
+    for item in all_items:
+        canonical_ref = str(item.get("canonical_ref") or "")
+        item_fingerprint = str(item.get("fingerprint") or "")
+        fingerprint_hash.update(len(canonical_ref).to_bytes(4, "big"))
+        fingerprint_hash.update(canonical_ref.encode("utf-8"))
+        fingerprint_hash.update(item_fingerprint.encode("ascii", errors="ignore"))
+    fingerprint = fingerprint_hash.hexdigest()
     bounded_offset = max(0, int(offset or 0))
     bounded_limit = None if limit is None else max(1, min(int(limit), 256))
     items = (
@@ -1996,6 +2068,7 @@ class NamedEntityRegistrySnapshot:
     source_timings_ms: Mapping[str, float] = field(default_factory=dict, repr=False)
     phase_timings_ms: Mapping[str, float] = field(default_factory=dict, repr=False)
     service_identity: int = field(default=0, repr=False)
+    payload_bytes: int = field(default=0, repr=False)
     built_at: float = 0.0
 
     def to_dict(self, *, include_payload: bool = True) -> dict[str, Any]:
@@ -2011,6 +2084,7 @@ class NamedEntityRegistrySnapshot:
             "source_timings_ms": {str(key): round(float(value), 3) for key, value in self.source_timings_ms.items()},
             "phase_timings_ms": {str(key): round(float(value), 3) for key, value in self.phase_timings_ms.items()},
             "built_at": self.built_at,
+            "payload_bytes": self.payload_bytes,
         }
         if include_payload:
             result["payload"] = dict(self.payload)
@@ -2058,6 +2132,7 @@ class NamedEntityRegistry:
         webspace_id: str | None = None,
         service: NamedEntityService | None = None,
         dirty_sources: Iterable[str] | None = None,
+        dirty_refs: Iterable[str] | None = None,
     ) -> NamedEntityRegistrySnapshot:
         # Different webspaces can request the same expensive device projection at
         # once. Build one snapshot at a time so worker threads do not contend for
@@ -2067,6 +2142,7 @@ class NamedEntityRegistry:
                 webspace_id=webspace_id,
                 service=service,
                 dirty_sources=dirty_sources,
+                dirty_refs=dirty_refs,
             )
 
     def _refresh_serialized(
@@ -2075,6 +2151,7 @@ class NamedEntityRegistry:
         webspace_id: str | None = None,
         service: NamedEntityService | None = None,
         dirty_sources: Iterable[str] | None = None,
+        dirty_refs: Iterable[str] | None = None,
     ) -> NamedEntityRegistrySnapshot:
         webspace = _text(webspace_id) or "desktop"
         entity_service = service or get_named_entity_service()
@@ -2101,6 +2178,15 @@ class NamedEntityRegistry:
         reused_sources: list[str] = []
         source_timings_ms: dict[str, float] = {}
         collect_started = time.perf_counter()
+        exact_device_refs = tuple(
+            sorted(
+                {
+                    _text(canonical_ref)
+                    for canonical_ref in dirty_refs or ()
+                    if _text(canonical_ref).startswith("device:")
+                }
+            )
+        )
         for source in REGISTRY_SOURCES:
             source_started = time.perf_counter()
             if previous is not None and source not in requested_sources:
@@ -2110,6 +2196,34 @@ class NamedEntityRegistry:
                     reused_sources.append(source)
                     source_timings_ms[source] = round(max(0.0, time.perf_counter() - source_started) * 1000.0, 3)
                     continue
+            if (
+                source == "devices"
+                and previous is not None
+                and requested_sources == {"devices"}
+                and exact_device_refs
+            ):
+                # Registry-change events carry the exact canonical device ref.
+                # Refresh only that endpoint instead of enumerating browser,
+                # member and ReDevice control planes for every new page.
+                current = {
+                    item.canonical_ref: item
+                    for item in previous.records_by_source.get("devices", ())
+                }
+                for canonical_ref in exact_device_refs:
+                    record = entity_service.get_device_entity(canonical_ref)
+                    if record is None:
+                        current.pop(canonical_ref, None)
+                    else:
+                        current[canonical_ref] = record
+                records_by_source[source] = tuple(
+                    sorted(
+                        current.values(),
+                        key=lambda item: (item.kind, item.display_label.casefold(), item.canonical_ref),
+                    )
+                )
+                rebuilt_sources.append(source)
+                source_timings_ms[source] = round(max(0.0, time.perf_counter() - source_started) * 1000.0, 3)
+                continue
             records_by_source[source] = tuple(
                 entity_service.list_source_entities(source, webspace_id=webspace)
             )
@@ -2124,6 +2238,9 @@ class NamedEntityRegistry:
         ]
         records.sort(key=lambda item: (item.kind, item.display_label.casefold(), item.canonical_ref))
         payload = _compact_registry_payload_from_records(records, webspace_id=webspace)
+        payload_bytes = len(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        )
         payload_ms = round(max(0.0, time.perf_counter() - payload_started) * 1000.0, 3)
         summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
         fingerprint = str(summary.get("fingerprint") or "")
@@ -2167,6 +2284,7 @@ class NamedEntityRegistry:
                 source_timings_ms=source_timings_ms,
                 phase_timings_ms=phase_timings_ms,
                 service_identity=id(entity_service),
+                payload_bytes=payload_bytes,
                 built_at=built_at,
             )
             self._snapshots[webspace] = snapshot
@@ -2255,11 +2373,13 @@ def refresh_named_entity_registry_snapshot(
     webspace_id: str | None = None,
     service: NamedEntityService | None = None,
     dirty_sources: Iterable[str] | None = None,
+    dirty_refs: Iterable[str] | None = None,
 ) -> NamedEntityRegistrySnapshot:
     return _REGISTRY.refresh(
         webspace_id=webspace_id,
         service=service,
         dirty_sources=dirty_sources,
+        dirty_refs=dirty_refs,
     )
 
 

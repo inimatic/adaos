@@ -64,6 +64,10 @@ class _Service:
             "audit": [],
         }
 
+    def admin_audit(self, *, actor, audit_limit: int) -> list[dict]:
+        self.calls.append(("audit", actor.ref(), audit_limit))
+        return []
+
     def grant_role_preset(
         self, *, subject, scope, role, actor, expires_at=None
     ) -> dict:
@@ -471,7 +475,10 @@ def test_summary_redacts_and_normalizes_access_audit(
         ]
         return payload
 
-    monkeypatch.setattr(service, "admin_summary", summary)
+    def audit(*, actor, audit_limit: int) -> list[dict]:
+        return summary(actor=actor, audit_limit=audit_limit)["audit"]
+
+    monkeypatch.setattr(service, "admin_audit", audit)
     result = plane.handlers()["users_access.summary"](
         {"sections": ["audit"], "detail": "compact", "_mcp_context": _context()},
         dry_run=False,

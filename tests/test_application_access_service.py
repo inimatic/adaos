@@ -217,6 +217,37 @@ def test_application_access_audit_recovers_from_stale_derived_sequence(
     assert second["sequence"] == 2
 
 
+def test_application_access_audit_batch_keeps_individual_ordered_events(
+    tmp_path: Path,
+) -> None:
+    service, _access, _release_digest = _service(tmp_path)
+
+    events = service.store.append_application_access_audits(
+        (
+            {
+                "application_id": "family_tasks",
+                "subject_ref": "user:masha",
+                "action": "permission_decision",
+                "permission_id": "workspace.read",
+            },
+            {
+                "application_id": "family_tasks",
+                "subject_ref": "user:masha",
+                "action": "permission_decision",
+                "permission_id": "workspace.write",
+            },
+        )
+    )
+
+    assert [item["sequence"] for item in events] == [1, 2]
+    assert [item["permission_id"] for item in events] == [
+        "workspace.read",
+        "workspace.write",
+    ]
+    persisted = service.store.list_application_access_audit("family_tasks")
+    assert [item["sequence"] for item in persisted] == [2, 1]
+
+
 def test_application_access_pauses_when_release_profile_digest_changes(tmp_path: Path) -> None:
     service, access, release_digest = _service(tmp_path)
     grant = access.grant_access(

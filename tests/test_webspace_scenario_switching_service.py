@@ -61,6 +61,18 @@ def test_scenario_switching_service_deduplicates_ready_target() -> None:
     assert decision.reason == "already_current_ready"
 
 
+def test_scenario_switching_service_trusts_persisted_materialization_after_restart() -> None:
+    decision = WebspaceScenarioSwitchingService().decide(
+        current_scenario="demo",
+        target_scenario="demo",
+        rebuild_state={"pending": False, "status": "idle"},
+        materialization_matches_target=True,
+    )
+
+    assert decision.action == "skip"
+    assert decision.reason == "already_current_ready"
+
+
 def test_scenario_switching_service_joins_pending_target() -> None:
     decision = WebspaceScenarioSwitchingService().decide(
         current_scenario="demo",
@@ -114,6 +126,30 @@ async def test_scenario_switching_service_owns_task_replacement_and_cleanup() ->
     await second
 
     assert cancelled == ["one"]
+    assert state.task_count(state.SCENARIO_SWITCH) == 0
+
+
+@pytest.mark.asyncio
+async def test_scenario_switching_service_bounds_background_rebuild() -> None:
+    service = WebspaceScenarioSwitchingService()
+    state = WebspaceTaskState()
+    errors: list[Exception] = []
+
+    async def blocked() -> None:
+        await asyncio.Event().wait()
+
+    task = service.schedule_rebuild(
+        task_state=state,
+        webspace_id="desktop",
+        scenario_id="blocked",
+        operation=blocked,
+        timeout_s=0.01,
+        on_error=errors.append,
+    )
+    await task
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], asyncio.TimeoutError)
     assert state.task_count(state.SCENARIO_SWITCH) == 0
 
 

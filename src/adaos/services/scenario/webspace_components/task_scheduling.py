@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+
+def _scenario_switch_background_timeout_s() -> float:
+    raw = str(os.getenv("ADAOS_SCENARIO_SWITCH_BACKGROUND_TIMEOUT_S") or "20").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 20.0
+    return max(2.0, min(120.0, value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +398,7 @@ class WebspaceTaskSchedulingService:
         *,
         scenario_id: str,
         scenario_resolution: str | None,
+        skill_source_mode: str | None = None,
         switch_mode: str | None = None,
         switch_timings_ms: Mapping[str, Any] | None = None,
         request_id: str | None = None,
@@ -459,13 +470,18 @@ class WebspaceTaskSchedulingService:
                     snapshot_source="rebuild:running",
                 ),
             )
+            rebuild_kwargs: dict[str, Any] = {
+                "scenario_id": scenario_id,
+                "scenario_resolution": scenario_resolution,
+                "request_id": request_id,
+                "switch_mode": switch_mode,
+                "switch_timings_ms": None,
+            }
+            if str(skill_source_mode or "").strip():
+                rebuild_kwargs["skill_source_mode"] = str(skill_source_mode).strip()
             result = await operations.complete_scenario_switch_rebuild(
                 webspace_id,
-                scenario_id=scenario_id,
-                scenario_resolution=scenario_resolution,
-                request_id=request_id,
-                switch_mode=switch_mode,
-                switch_timings_ms=None,
+                **rebuild_kwargs,
             )
             if bool(result.get("accepted")) or str(result.get("error") or "").strip() == "stale_rebuild_superseded":
                 return
@@ -505,6 +521,7 @@ class WebspaceTaskSchedulingService:
             )
 
         def _on_error(exc: Exception) -> None:
+            timeout = isinstance(exc, asyncio.TimeoutError)
             operations.set_webspace_rebuild_status_if_current(
                 webspace_id,
                 request_id,
@@ -512,7 +529,11 @@ class WebspaceTaskSchedulingService:
                 pending=False,
                 background=True,
                 finished_at=time.time(),
-                error=f"background_scenario_switch_rebuild_failed:{type(exc).__name__}",
+                error=(
+                    "scenario_switch_timeout"
+                    if timeout
+                    else f"background_scenario_switch_rebuild_failed:{type(exc).__name__}"
+                ),
             )
             operations.logger.warning(
                 "background scenario switch rebuild failed webspace=%s scenario=%s",
@@ -526,6 +547,7 @@ class WebspaceTaskSchedulingService:
             webspace_id=webspace_id,
             scenario_id=scenario_id,
             operation=_operation,
+            timeout_s=_scenario_switch_background_timeout_s(),
             on_cancel=_on_cancel,
             on_error=_on_error,
         )

@@ -181,6 +181,33 @@ def workspace_objects() -> list[Any]:
 
 
 def _browser_session_payloads() -> list[dict[str, Any]]:
+    def _session_identity(item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Return the page-scoped identity used by the browser inventory.
+
+        A browser installation has one durable device id, while every open
+        page is an independently addressable endpoint.  Collapsing peers by
+        the durable id made the last tab win and randomly hid LO/RU or
+        desktop/desktop-dev representations from Management.
+        """
+
+        base_id = str(item.get("device_id") or item.get("id") or "").strip()
+        page_id = str(
+            item.get("browser_page_id")
+            or item.get("client_limit_id")
+            or ""
+        ).strip()
+        if not base_id:
+            return "", dict(item)
+        scoped_id = base_id
+        if page_id and not base_id.endswith(f"::{page_id}"):
+            scoped_id = f"{base_id}::{page_id}"
+        payload = dict(item)
+        payload["device_id"] = scoped_id
+        payload.setdefault("browser_device_id", base_id.split("::", 1)[0])
+        if page_id:
+            payload.setdefault("browser_page_id", page_id)
+        return scoped_id, payload
+
     merged: dict[str, dict[str, Any]] = {}
     try:
         from adaos.services.yjs.gateway_ws import active_browser_session_snapshot
@@ -191,10 +218,10 @@ def _browser_session_payloads() -> list[dict[str, Any]]:
     for item in list(snapshot.get("peers") or []):
         if not isinstance(item, dict):
             continue
-        device_id = str(item.get("device_id") or item.get("id") or "").strip()
+        device_id, payload = _session_identity(item)
         if not device_id:
             continue
-        merged[device_id] = dict(item)
+        merged[device_id] = payload
     try:
         from adaos.services.webrtc.peer import webrtc_peer_snapshot
 
@@ -204,10 +231,10 @@ def _browser_session_payloads() -> list[dict[str, Any]]:
     for item in list(snapshot.get("peers") or []):
         if not isinstance(item, dict):
             continue
-        device_id = str(item.get("device_id") or item.get("id") or "").strip()
+        device_id, payload = _session_identity(item)
         if not device_id:
             continue
-        merged[device_id] = {**merged.get(device_id, {}), **item}
+        merged[device_id] = {**merged.get(device_id, {}), **payload}
     try:
         from adaos.services.access_links import browser_snapshot
 

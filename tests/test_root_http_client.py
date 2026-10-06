@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ssl
+
 import pytest
 
 from adaos.services.root import client as root_client_module
@@ -18,6 +20,25 @@ class _FakeRootHttpLogger:
 
     def warning(self, *args, **kwargs) -> None:  # noqa: ARG002
         self.calls.append(("warning", args))
+
+
+def test_effective_verify_reuses_default_ssl_context(monkeypatch) -> None:
+    root_client_module._SSL_CONTEXT_CACHE.clear()
+    calls = {"count": 0}
+    real_create_default_context = ssl.create_default_context
+
+    def create_default_context(*args, **kwargs):
+        calls["count"] += 1
+        return real_create_default_context(*args, **kwargs)
+
+    monkeypatch.setattr(root_client_module.ssl, "create_default_context", create_default_context)
+
+    first = RootHttpClient._effective_verify(True)
+    second = RootHttpClient._effective_verify(True)
+
+    assert isinstance(first, ssl.SSLContext)
+    assert second is first
+    assert calls["count"] == 1
 
 
 def test_scoped_session_reuses_one_httpx_client(monkeypatch) -> None:

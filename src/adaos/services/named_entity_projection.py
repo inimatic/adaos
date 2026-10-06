@@ -162,7 +162,12 @@ def _registry_invalidation_sources(topic: str, payload: Mapping[str, Any]) -> tu
     source = str(payload.get("source") or "").strip()
     entity_ref = str(payload.get("entity_ref") or "").strip()
     entity_kind = str(payload.get("entity_kind") or "").strip()
-    if source in {"access_links", "device_inventory"} or entity_ref.startswith("device:"):
+    if (
+        source in {"access_links", "browser_session", "browser_sessions", "device_inventory"}
+        or entity_ref.startswith(("device:", "browser:"))
+        or entity_kind.startswith(("device.", "browser."))
+        or entity_kind in {"device", "browser", "browser_session"}
+    ):
         return ("devices",)
     if source.startswith(("node_config", "subnet")) or entity_ref.startswith("assistant:"):
         return ("subnet",)
@@ -201,6 +206,7 @@ def _resolve_webspace_id(payload: Mapping[str, Any] | None = None) -> str:
 
 NAMED_ENTITIES_V2_KEY = "namedEntitiesV2"
 NAMED_ENTITIES_V2_SCHEMA = "adaos.named-entities.projection.v2"
+NAMED_ENTITIES_PROJECTION_VERSION = 2
 
 
 def _legacy_projection_enabled() -> bool:
@@ -232,6 +238,7 @@ def _v2_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "meta": {
             "schema": NAMED_ENTITIES_V2_SCHEMA,
             "version": 2,
+            "projection_version": NAMED_ENTITIES_PROJECTION_VERSION,
             "webspace_id": str(payload.get("webspace_id") or ""),
             "revision": int(summary.get("registry_revision") or 0),
             "fingerprint": str(summary.get("fingerprint") or ""),
@@ -342,6 +349,25 @@ def _write_payload_to_doc(
 
 _RECONCILE_LOCK = threading.RLock()
 _RECONCILE_STATES: dict[str, dict[str, Any]] = {}
+_ROOM_READY_TASKS: dict[str, asyncio.Task[Any]] = {}
+
+
+def _room_ready_projection_delay_s() -> float:
+    """Leave the interactive first-paint lane uncontended.
+
+    A cold registry currently includes application lookup aliases and device
+    inventory.  Building it is deliberately off the owner loop, but the
+    Python work is still GIL-heavy enough to delay the first materialization
+    response by several seconds.  The persisted YDoc already contains the
+    last registry projection, so a short bounded grace is safe; fresh entity
+    events continue to reconcile their exact records afterwards.
+    """
+
+    try:
+        value = float(str(os.getenv("ADAOS_NAMED_ENTITY_ROOM_READY_DELAY_S") or "6").strip())
+    except (TypeError, ValueError):
+        value = 6.0
+    return max(0.0, min(value, 30.0))
 
 
 def _new_reconcile_state(webspace_id: str) -> dict[str, Any]:
@@ -359,6 +385,7 @@ def _new_reconcile_state(webspace_id: str) -> dict[str, Any]:
         "refresh_required": False,
         "refresh_all_required": False,
         "dirty_sources": set(),
+        "dirty_refs": set(),
         "fingerprint_hints": {},
         "fingerprint_hints_complete": True,
         "allow_detached_build": False,
@@ -387,6 +414,7 @@ def _public_reconcile_state(state: Mapping[str, Any]) -> dict[str, Any]:
         if key != "task"
     }
     result["dirty_sources"] = sorted(str(item) for item in state.get("dirty_sources") or ())
+    result["dirty_refs"] = sorted(str(item) for item in state.get("dirty_refs") or ())
     result["fingerprint_hints"] = dict(state.get("fingerprint_hints") or {})
     return result
 
@@ -417,6 +445,9 @@ def clear_named_entity_projection_reconciler(*, webspace_id: str | None = None) 
             task = state.get("task") if isinstance(state, Mapping) else None
             if isinstance(task, asyncio.Task) and not task.done():
                 task.cancel()
+            room_ready_task = _ROOM_READY_TASKS.pop(key, None)
+            if isinstance(room_ready_task, asyncio.Task) and not room_ready_task.done():
+                room_ready_task.cancel()
 
 
 async def _apply_snapshot_to_live_room(
@@ -538,11 +569,13 @@ async def _run_reconciler(webspace_id: str) -> None:
                 refresh = bool(state["refresh_required"])
                 refresh_all = bool(state["refresh_all_required"])
                 dirty_sources = tuple(sorted(state["dirty_sources"]))
+                dirty_refs = tuple(sorted(state["dirty_refs"]))
                 fingerprint_hints = dict(state["fingerprint_hints"])
                 fingerprint_hints_complete = bool(state["fingerprint_hints_complete"])
                 state["refresh_required"] = False
                 state["refresh_all_required"] = False
                 state["dirty_sources"].clear()
+                state["dirty_refs"].clear()
                 state["fingerprint_hints"].clear()
                 state["fingerprint_hints_complete"] = True
                 state["allow_detached_build"] = False
@@ -567,6 +600,7 @@ async def _run_reconciler(webspace_id: str) -> None:
                         named_entities.refresh_named_entity_registry_snapshot,
                         webspace_id=webspace_id,
                         dirty_sources=None if refresh_all else dirty_sources,
+                        dirty_refs=None if refresh_all else dirty_refs,
                     )
                     snapshot_mode = "full_refresh" if refresh_all else "source_refresh"
             else:
@@ -583,7 +617,12 @@ async def _run_reconciler(webspace_id: str) -> None:
                     timings_ms[f"registry.{phase}"] = float(value)
             except Exception:
                 pass
-            payload_bytes = _payload_size_bytes(snapshot.payload)
+            # The worker that builds the immutable snapshot already serialized
+            # it once. Reuse that measurement instead of JSON-encoding the
+            # ~850 KiB registry again on the event-loop thread.
+            payload_bytes = int(getattr(snapshot, "payload_bytes", 0) or 0)
+            if payload_bytes <= 0:
+                payload_bytes = _payload_size_bytes(snapshot.payload)
             apply_started = time.perf_counter()
             with _RECONCILE_LOCK:
                 state = _reconcile_state(webspace_id)
@@ -730,6 +769,7 @@ async def request_named_entity_projection(
     refresh: bool = True,
     wait: bool = False,
     dirty_sources: Iterable[str] | None = None,
+    dirty_refs: Iterable[str] | None = None,
     fingerprint_hints: Mapping[str, str] | None = None,
     allow_detached_build: bool = False,
 ) -> dict[str, Any]:
@@ -743,6 +783,7 @@ async def request_named_entity_projection(
             if dirty_sources is None:
                 state["refresh_all_required"] = True
                 state["dirty_sources"].clear()
+                state["dirty_refs"].clear()
                 state["fingerprint_hints"].clear()
                 state["fingerprint_hints_complete"] = False
             elif not state["refresh_all_required"]:
@@ -750,6 +791,11 @@ async def request_named_entity_projection(
                     source
                     for source in dirty_sources
                     if source in named_entities.REGISTRY_SOURCES
+                )
+                state["dirty_refs"].update(
+                    str(canonical_ref).strip()
+                    for canonical_ref in dirty_refs or ()
+                    if str(canonical_ref).strip()
                 )
                 state["fingerprint_hints"].update(
                     {
@@ -776,13 +822,119 @@ async def request_named_entity_projection(
         return _public_reconcile_state(_reconcile_state(webspace))
 
 
+def _persisted_registry_room_state(webspace_id: str) -> dict[str, Any] | None:
+    """Read the already-replayed registry marker without rebuilding sources."""
+
+    try:
+        from adaos.services.yjs.gateway_ws import y_server
+
+        room = y_server.rooms.get(webspace_id)
+        if room is None:
+            return None
+        registry = room.ydoc.get_map("registry")
+        projected = registry.get(NAMED_ENTITIES_V2_KEY)
+        if not is_y_map_value(projected):
+            return None
+        meta = projected.get("meta")
+        if not is_y_map_value(meta) and not isinstance(meta, Mapping):
+            return None
+        getter = meta.get
+        projection_version = int(getter("projection_version") or 0)
+        if projection_version != NAMED_ENTITIES_PROJECTION_VERSION:
+            return None
+        fingerprint = str(getter("fingerprint") or "").strip()
+        revision = int(getter("revision") or 0)
+        if not fingerprint or revision <= 0:
+            return None
+        generation = _current_live_room_generation(webspace_id)
+        if generation is None:
+            return None
+        return {
+            "fingerprint": fingerprint,
+            "revision": revision,
+            "room_generation": generation,
+        }
+    except Exception:
+        return None
+
+
 async def notify_named_entity_room_ready(webspace_id: str) -> dict[str, Any]:
-    return await request_named_entity_projection(
-        webspace_id=webspace_id,
-        reason="room_ready",
-        refresh=False,
-        wait=False,
-    )
+    webspace = str(webspace_id or default_webspace_id()).strip() or default_webspace_id()
+    persisted = _persisted_registry_room_state(webspace)
+    if persisted is not None:
+        # The authoritative room has just replayed this projection from its
+        # durable YStore.  Treat it as applied for this room generation rather
+        # than rebuilding the 850 KiB registry six seconds into first paint.
+        # Subsequent entity/catalog events still invalidate and reconcile the
+        # exact affected sources through the normal path.
+        with _RECONCILE_LOCK:
+            previous = _ROOM_READY_TASKS.pop(webspace, None)
+            if isinstance(previous, asyncio.Task) and not previous.done():
+                previous.cancel()
+            state = _reconcile_state(webspace)
+            state["applied_revision"] = int(persisted["revision"])
+            state["desired_revision"] = int(persisted["revision"])
+            state["applied_fingerprint"] = str(persisted["fingerprint"])
+            state["desired_fingerprint"] = str(persisted["fingerprint"])
+            state["applied_room_generation"] = persisted["room_generation"]
+            state["pending"] = False
+            state["last_reason"] = "room_ready_persisted_projection"
+            state["last_outcome"] = "persisted_projection_reused"
+            state["last_error"] = None
+            state["last_snapshot_mode"] = "persisted_projection_reused"
+            state["last_updated_at"] = time.time()
+            result = _public_reconcile_state(state)
+        result["deferred"] = False
+        result["delay_s"] = 0.0
+        result["persisted_projection_reused"] = True
+        return result
+    delay_s = _room_ready_projection_delay_s()
+
+    async def _project_after_first_paint() -> None:
+        try:
+            if delay_s > 0.0:
+                await asyncio.sleep(delay_s)
+            await request_named_entity_projection(
+                webspace_id=webspace,
+                reason="room_ready_after_first_paint",
+                # Missing/outdated persisted metadata means code-level
+                # projection semantics may have changed.  Re-enumerate the
+                # authoritative sources after first paint instead of replaying
+                # the stale in-process cache forever.
+                refresh=True,
+                wait=False,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.debug(
+                "failed deferred named-entity room-ready projection webspace=%s",
+                webspace,
+                exc_info=True,
+            )
+        finally:
+            current = asyncio.current_task()
+            with _RECONCILE_LOCK:
+                if _ROOM_READY_TASKS.get(webspace) is current:
+                    _ROOM_READY_TASKS.pop(webspace, None)
+
+    loop = asyncio.get_running_loop()
+    with _RECONCILE_LOCK:
+        previous = _ROOM_READY_TASKS.get(webspace)
+        if isinstance(previous, asyncio.Task) and not previous.done():
+            previous.cancel()
+        task = loop.create_task(
+            _project_after_first_paint(),
+            name=f"named-entity-room-ready:{webspace}",
+        )
+        _ROOM_READY_TASKS[webspace] = task
+        state = _reconcile_state(webspace)
+        state["last_reason"] = "room_ready_deferred"
+        state["last_updated_at"] = time.time()
+        result = _public_reconcile_state(state)
+    result["deferred"] = delay_s > 0.0
+    result["delay_s"] = delay_s
+    return result
 
 
 async def project_named_entity_registry(*, webspace_id: str | None = None) -> dict[str, Any]:
@@ -808,6 +960,8 @@ async def on_entity_registry_changed(evt: Any) -> None:
     try:
         payload = _payload(evt)
         dirty_sources = _registry_invalidation_sources(_topic(evt), payload)
+        entity_ref = str(payload.get("entity_ref") or "").strip()
+        dirty_refs = (entity_ref,) if entity_ref.startswith("device:") else ()
         if "lookups" in dirty_sources:
             from adaos.services.nlu_lookup_tables import invalidate_desktop_lookup_baseline_cache
 
@@ -826,6 +980,7 @@ async def on_entity_registry_changed(evt: Any) -> None:
                 refresh=True,
                 wait=False,
                 dirty_sources=dirty_sources,
+                dirty_refs=dirty_refs,
                 fingerprint_hints=_registry_fingerprint_hints(payload),
             )
     except Exception:

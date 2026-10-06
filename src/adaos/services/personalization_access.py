@@ -185,6 +185,7 @@ class PersonalizationAccessStore:
         self.path = Path(path).resolve() if path else None
         self._memory_lock = threading.RLock()
         self._data: dict[str, Any] = {key: ({} if key != "audit" else []) for key in self._BUCKETS}
+        self._loaded_signature: tuple[int, int] | None = None
         self._batch_depth = 0
         self._batch_dirty = False
         self._batch_failed = False
@@ -193,6 +194,13 @@ class PersonalizationAccessStore:
 
     def _load(self) -> None:
         if self.path is None:
+            return
+        try:
+            stat = self.path.stat()
+            signature = (int(stat.st_mtime_ns), int(stat.st_size))
+        except FileNotFoundError:
+            signature = None
+        if signature is not None and signature == self._loaded_signature:
             return
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -207,6 +215,7 @@ class PersonalizationAccessStore:
             raise PersonalizationAccessError("access facts have an invalid bucket shape")
         self._data = {key: _list(payload.get(key)) if key == "audit" else _dict(payload.get(key))
                       for key in self._BUCKETS}
+        self._loaded_signature = signature
 
     def save(self) -> None:
         with self.batch():
@@ -226,6 +235,8 @@ class PersonalizationAccessStore:
             while True:
                 try:
                     temporary_path.replace(self.path)
+                    stat = self.path.stat()
+                    self._loaded_signature = (int(stat.st_mtime_ns), int(stat.st_size))
                     return
                 except PermissionError:
                     if time.time() >= deadline:
@@ -277,6 +288,11 @@ class PersonalizationAccessStore:
                 self._batch_failed = True
                 if outer:
                     self._data = previous
+                    # A failed persisted transaction may have mutated the
+                    # in-memory object before save/rollback. Force the next
+                    # read to re-establish the file as the authority.
+                    if self.path is not None:
+                        self._loaded_signature = None
                 raise
             finally:
                 self._batch_depth -= 1
@@ -1624,6 +1640,13 @@ class PersonalizationAccessService:
             "recovery_actions": values("recovery_actions"),
             "audit": self.store.list_audit(limit=audit_limit),
         }
+
+    def admin_audit(self, *, actor: SubjectRef, audit_limit: int = 50) -> list[dict[str, Any]]:
+        """Read the bounded audit tail without materializing the full admin directory."""
+        decision = self.evaluate(actor=actor, action="users.manage", audit_success=False)
+        if decision.decision != "allow":
+            raise PermissionError(f"policy denied: {decision.reason_code or 'users.manage'}")
+        return self.store.list_audit(limit=max(1, min(int(audit_limit), 200)))
 
     def put_recovery_action(self, action: RecoveryAction) -> dict[str, Any]:
         data = self.store.put_recovery_action(action)

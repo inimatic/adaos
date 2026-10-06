@@ -11,7 +11,7 @@ from copy import deepcopy
 from functools import lru_cache
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 import uuid
 
 from adaos.domain.application import RuntimeSelection, utc_now
@@ -1992,6 +1992,64 @@ def list_applications(
     return models
 
 
+def list_system_application_summaries(
+    *,
+    webspace_id: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return the bounded installed-Application facts needed by System.
+
+    The general catalog projection deliberately enriches rows with Home,
+    placement, Builder, marketplace and navigation state. System only renders
+    the installed count and update state; expanding those unrelated closures
+    made a cold System load scan the full catalog for tens of seconds.
+    """
+
+    maximum = max(1, min(int(limit), 200))
+    models = _service().list_models(
+        installed_only=True,
+        subscriber_subnet_ref=_local_subnet_ref(),
+        summary=True,
+    )
+    result: list[dict[str, Any]] = []
+    for raw in models[:maximum]:
+        model = _application_read_model(raw)
+        application = (
+            dict(model.get("application") or {})
+            if isinstance(model.get("application"), Mapping)
+            else {}
+        )
+        application_id = str(application.get("application_id") or "").strip()
+        if not application_id:
+            continue
+        installation = _installation_summary(model, webspace_id=webspace_id)
+        effective = (
+            dict(model.get("effective_release") or {})
+            if isinstance(model.get("effective_release"), Mapping)
+            else {}
+        )
+        result.append(
+            {
+                "application": application,
+                "installed": bool(model.get("installed")),
+                "installation_summary": installation,
+                "effective_version": installation.get("version"),
+                "effective_channel": (
+                    "beta"
+                    if installation.get("local_beta_active")
+                    else effective.get("channel")
+                    or installation.get("update_track")
+                    or "stable"
+                ),
+                "update_state": (
+                    "available" if model.get("update_available") else "current"
+                ),
+                "has_update": bool(model.get("update_available")),
+            }
+        )
+    return result
+
+
 def get_application(
     application_id: str, *, webspace_id: str | None = None
 ) -> dict[str, Any]:
@@ -2107,36 +2165,58 @@ def list_application_components(
     )
 
 
+def get_component_application_owner_index(
+    component_refs: Iterable[str],
+) -> dict[str, list[dict[str, str]]]:
+    """Project a bounded set of installed components in one reference scan."""
+
+    requested = {
+        str(component_ref or "").strip()
+        for component_ref in component_refs
+        if str(component_ref or "").strip()
+    }
+    if not requested:
+        return {}
+    service = _service()
+    references = service.component_references().get("components") or {}
+    applications: dict[str, dict[str, str] | None] = {}
+    result: dict[str, list[dict[str, str]]] = {}
+    for reference in requested:
+        owners: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in references.get(reference) or ():
+            if not isinstance(item, Mapping):
+                continue
+            application_id = str(item.get("application_id") or "").strip()
+            if not application_id or application_id in seen:
+                continue
+            if application_id not in applications:
+                try:
+                    application = service.store.get_application(application_id)
+                except FileNotFoundError:
+                    applications[application_id] = None
+                else:
+                    display = dict(application.display or {})
+                    applications[application_id] = {
+                        "application_id": application.application_id,
+                        "title": str(display.get("title") or application.application_id),
+                    }
+            owner = applications[application_id]
+            if owner is not None:
+                owners.append(dict(owner))
+                seen.add(application_id)
+        owners.sort(key=lambda value: (value["title"].casefold(), value["application_id"]))
+        result[reference] = owners
+    return result
+
+
 def get_component_application_owners(component_ref: str) -> list[dict[str, str]]:
     """Project one installed component to its owning Applications cheaply."""
 
     reference = str(component_ref or "").strip()
     if not reference:
         return []
-    service = _service()
-    references = service.component_references().get("components") or {}
-    owners: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for item in references.get(reference) or ():
-        if not isinstance(item, Mapping):
-            continue
-        application_id = str(item.get("application_id") or "").strip()
-        if not application_id or application_id in seen:
-            continue
-        try:
-            application = service.store.get_application(application_id)
-        except FileNotFoundError:
-            continue
-        display = dict(application.display or {})
-        owners.append(
-            {
-                "application_id": application.application_id,
-                "title": str(display.get("title") or application.application_id),
-            }
-        )
-        seen.add(application_id)
-    owners.sort(key=lambda item: (item["title"].casefold(), item["application_id"]))
-    return owners
+    return get_component_application_owner_index((reference,)).get(reference, [])
 
 
 def list_application_placements(
@@ -5087,6 +5167,7 @@ __all__ = [
     "get_application",
     "get_current_builder_application",
     "get_component_application_owners",
+    "get_component_application_owner_index",
     "get_application_access_surface",
     "get_application_setup",
     "get_application_privacy_report",
@@ -5111,6 +5192,7 @@ __all__ = [
     "list_application_components",
     "list_application_placements",
     "list_applications",
+    "list_system_application_summaries",
     "list_catalog",
     "list_development_projects",
     "list_development_report_appeals",

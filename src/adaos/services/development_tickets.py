@@ -6093,7 +6093,6 @@ class DevelopmentTicketService:
             response = caller(
                 self._comment_assistance_messages(ticket, source_comment),
                 max_tokens=700,
-                reasoning={"effort": "low"},
                 text={"format": {"type": "json_object"}, "verbosity": "low"},
                 request_id=request_id,
                 prompt_cache_key="adaos.dev-ticket.comment-assistance.v1",

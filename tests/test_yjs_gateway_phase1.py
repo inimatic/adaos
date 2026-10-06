@@ -318,6 +318,7 @@ def test_room_serve_processes_state_vector_without_mutating_preflight(monkeypatc
     monkeypatch.setattr(gateway_module, "sync", _sync)
     monkeypatch.setattr(gateway_module, "process_sync_message", _process)
     monkeypatch.setattr(gateway_module, "read_sync_message", lambda _payload: b"vector")
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_FULL_STEP2", False)
     monkeypatch.setattr(gateway_module, "_preflight_inbound_y_sync_payload", _preflight)
     monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_INITIAL_REPLAY", False)
 
@@ -356,6 +357,7 @@ def test_tracked_client_send_prunes_failed_transport_without_failing_room() -> N
 
 def test_room_serve_keeps_initial_browser_sync_server_authoritative(monkeypatch) -> None:
     processed: list[bytes] = []
+    sent: list[bytes] = []
 
     class _Websocket:
         path = "/yws/desktop-dev"
@@ -372,8 +374,8 @@ def test_room_serve_keeps_initial_browser_sync_server_authoritative(monkeypatch)
             except StopIteration as exc:
                 raise StopAsyncIteration from exc
 
-        async def send(self, _message: bytes) -> None:
-            return None
+        async def send(self, message: bytes) -> None:
+            sent.append(message)
 
     async def _sync(_ydoc, _websocket, _log) -> None:
         return None
@@ -401,6 +403,15 @@ def test_room_serve_keeps_initial_browser_sync_server_authoritative(monkeypatch)
     assert room._diag_authoritative_initial_skip_total == 1
     assert room._diag_authoritative_initial_skip_bytes == 2
     assert room._diag_authoritative_initial_last_sync_type == "SYNC_STEP2"
+    assert len(sent) == 1
+    assert sent[0][:2] == bytes(
+        [
+            int(gateway_module.YMessageType.SYNC),
+            int(gateway_module.YSyncMessageType.SYNC_STEP2),
+        ]
+    )
+    assert room._diag_effective_initial_replay_total == 1
+    assert room._diag_effective_initial_replay_last_reason == "authoritative_initial_step2"
 
 
 def test_room_serve_answers_step1_and_applies_updates_after_authoritative_initial_sync(monkeypatch) -> None:
@@ -439,6 +450,7 @@ def test_room_serve_answers_step1_and_applies_updates_after_authoritative_initia
     monkeypatch.setattr(gateway_module, "sync", _sync)
     monkeypatch.setattr(gateway_module, "process_sync_message", _process)
     monkeypatch.setattr(gateway_module, "read_sync_message", lambda payload: payload)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_FULL_STEP2", False)
     monkeypatch.setattr(
         gateway_module,
         "_preflight_inbound_y_sync_payload",
@@ -499,6 +511,7 @@ def test_room_serve_uses_protocol_step1_without_redundant_effective_replay(
     monkeypatch.setattr(gateway_module, "sync", _sync)
     monkeypatch.setattr(gateway_module, "process_sync_message", _process)
     monkeypatch.setattr(gateway_module, "read_sync_message", lambda payload: payload)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_FULL_STEP2", False)
     monkeypatch.setattr(
         gateway_module,
         "_preflight_inbound_y_sync_payload",
@@ -520,6 +533,105 @@ def test_room_serve_uses_protocol_step1_without_redundant_effective_replay(
     assert replay_calls == []
     assert room._diag_effective_initial_replay_dedupe_total == 1
     assert room._diag_authoritative_initial_skip_total == 1
+
+
+def test_room_serve_answers_step1_with_full_authoritative_state(monkeypatch) -> None:
+    processed: list[bytes] = []
+    sent: list[bytes] = []
+    native_sync_calls: list[str] = []
+
+    class _Websocket:
+        path = "/yws/desktop"
+
+        def __init__(self) -> None:
+            self._messages = iter([b"\x00\x00stale-vector"])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def send(self, message: bytes) -> None:
+            sent.append(message)
+
+    async def _sync(_ydoc, _websocket, _log) -> None:
+        native_sync_calls.append(_websocket.path)
+
+    async def _process(message, _ydoc, _websocket, _log) -> None:
+        processed.append(message)
+
+    monkeypatch.setattr(gateway_module, "sync", _sync)
+    monkeypatch.setattr(gateway_module, "process_sync_message", _process)
+    monkeypatch.setattr(gateway_module, "read_sync_message", lambda payload: payload)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_FULL_STEP2", True)
+
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = []
+    room.ydoc = y_py.YDoc()
+    asyncio.run(room.serve(_Websocket()))
+
+    assert processed == []
+    assert native_sync_calls == []
+    assert len(sent) == 1
+    assert sent[0][:2] == bytes(
+        [
+            int(gateway_module.YMessageType.SYNC),
+            int(gateway_module.YSyncMessageType.SYNC_STEP2),
+        ]
+    )
+
+
+def test_room_serve_accepts_first_update_after_one_way_authoritative_handshake(monkeypatch) -> None:
+    processed: list[bytes] = []
+    sent: list[bytes] = []
+
+    class _Websocket:
+        path = "/yws/desktop"
+
+        def __init__(self) -> None:
+            self._messages = iter(
+                [
+                    b"\x00\x00client-vector",
+                    b"\x00\x02user-update",
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def send(self, message: bytes) -> None:
+            sent.append(message)
+
+    async def _sync(_ydoc, _websocket, _log) -> None:
+        raise AssertionError("native server STEP1 must be suppressed")
+
+    async def _process(message, _ydoc, _websocket, _log) -> None:
+        processed.append(message)
+
+    monkeypatch.setattr(gateway_module, "sync", _sync)
+    monkeypatch.setattr(gateway_module, "process_sync_message", _process)
+    monkeypatch.setattr(gateway_module, "read_sync_message", lambda payload: payload)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC", True)
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_FULL_STEP2", True)
+
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = []
+    room.ydoc = y_py.YDoc()
+    asyncio.run(room.serve(_Websocket()))
+
+    assert len(sent) == 1
+    assert processed == [b"\x02user-update"]
+    assert room._diag_authoritative_initial_skip_total == 0
 
 
 def test_repair_room_effective_branches_runs_directly_on_owner_thread(monkeypatch) -> None:
@@ -3099,6 +3211,65 @@ def test_apply_materialized_payload_does_not_wait_for_client_sync_without_client
     gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
 
 
+def test_scenario_switch_persists_before_observers_and_schedules_durable_snapshot(monkeypatch) -> None:
+    key = "gateway-scenario-switch-durable"
+    update = b"scenario-switch-update"
+    apply_kwargs: dict[str, object] = {}
+    compact_calls: list[tuple[str, float]] = []
+
+    class _Store:
+        async def request_runtime_compaction(self, *, reason: str, min_quiet_sec: float) -> bool:
+            compact_calls.append((reason, min_quiet_sec))
+            return True
+
+    gateway_module.y_server.rooms[key] = SimpleNamespace(
+        ystore=_Store(),
+        clients=[],
+    )
+    gateway_module._LIVE_ROOM_REFRESH_PENDING.clear()
+    gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
+
+    async def _fake_apply(webspace_id, _ystore, _room, _payload, **kwargs):
+        apply_kwargs.update(kwargs)
+        marker = gateway_module._register_live_refresh_update(
+            webspace_id,
+            update,
+            reason="semantic_rebuild:scenario_switch_rebuild",
+            phase_timings_ms={"branch_apply": 1.0},
+        )
+        return update, "direct_owner_context", {
+            "ok": True,
+            "ready": True,
+            "snapshot": {"ready": True},
+            "phase_timings_ms": {"branch_apply": 1.0},
+            "broadcast_diagnostics": marker,
+        }
+
+    monkeypatch.setattr(
+        gateway_module,
+        "_apply_room_materialized_payload_on_owner_loop",
+        _fake_apply,
+    )
+
+    result = asyncio.run(
+        gateway_module.apply_materialized_payload_to_live_room(
+            key,
+            reason="semantic_rebuild:scenario_switch_rebuild",
+            materialized_payload={"ui": {"application": {}}},
+        )
+    )
+
+    assert result["ok"] is True
+    assert apply_kwargs["persist_before_observers"] is True
+    assert compact_calls == [("scenario_switch_materialization", 0.0)]
+    assert result["materialized_payload"]["durable_snapshot_scheduled"] is True
+    assert result["phase_timings_ms"]["durable_snapshot_schedule"] >= 0.0
+
+    gateway_module.y_server.rooms.pop(key, None)
+    gateway_module._LIVE_ROOM_REFRESH_PENDING.clear()
+    gateway_module._LIVE_ROOM_REFRESH_RECENT.clear()
+
+
 def test_live_room_refresh_waits_for_client_delivery_by_default() -> None:
     assert gateway_module._LIVE_ROOM_REFRESH_CLIENT_SYNC_WAIT_MS > 0.0
 
@@ -3218,6 +3389,7 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
     room = SimpleNamespace(ydoc=ydoc, clients=[])
     observed_authority: list[str | None] = []
     observed_verification: list[bool] = []
+    observed_branch_replacement: list[bool] = []
 
     class _FakeStore:
         def __init__(self) -> None:
@@ -3238,6 +3410,7 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
     ) -> None:
         observed_authority.append(gateway_module._authoritative_current_scenario(webspace_id))
         observed_verification.append(bool(_kwargs.get("verify_branch_fingerprints")))
+        observed_branch_replacement.append(bool(_kwargs.get("replace_changed_branches")))
         with target_ydoc.begin_transaction() as txn:
             target_ydoc.get_map("ui").set(txn, "current_scenario", "test04_recipes")
         self._last_apply_summary = {"failed_branches": 0, "changed_branches": 0}
@@ -3276,6 +3449,7 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
     assert marker["already_persisted"] is True
     assert observed_authority == ["test04_recipes"]
     assert observed_verification == [True]
+    assert observed_branch_replacement == [True]
     assert gateway_module._authoritative_current_scenario(key) == "test04_recipes"
     gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
     reset_backend_room_update_markers()
@@ -3730,6 +3904,81 @@ def test_room_bootstrap_rebuilds_ready_effective_branches_after_seed_override(mo
     assert seen_current == ["web_desktop"]
     assert dict(ydoc.get_map("ui").get("application") or {})["desktop"]["pageSchema"]["id"] == "web_desktop"
     assert store.writes
+
+
+def test_room_bootstrap_reuses_matching_rebuild_payload_before_resolving(monkeypatch) -> None:
+    import y_py as Y
+
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    ydoc = Y.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("ui").set(txn, "current_scenario", "old")
+        ydoc.get_map("ui").set(txn, "application", {"desktop": {"pageSchema": {"id": "old"}}})
+        ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+        ydoc.get_map("data").set(txn, "installed", {"apps": [], "widgets": []})
+        ydoc.get_map("data").set(txn, "desktop", {})
+        ydoc.get_map("data").set(txn, "webio", {})
+        ydoc.get_map("data").set(txn, "routing", {})
+        ydoc.get_map("registry").set(txn, "merged", {})
+
+    payload = {
+        "scenario_id": "management",
+        "source_mode": "workspace",
+        "application": {
+            "desktop": {"pageSchema": {"id": "management"}},
+            "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+        },
+        "catalog": {"apps": [], "widgets": []},
+        "installed": {"apps": [], "widgets": []},
+        "desktop": {},
+        "webio": {},
+        "routing": {},
+        "registry": {"widgets": {}, "modals": {}},
+        "skill_decls": [],
+    }
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "get_webspace_rebuild_materialized_payload",
+        lambda _webspace_id: payload,
+    )
+
+    async def _unexpected_resolve(*_args, **_kwargs) -> None:
+        raise AssertionError("matching rebuild payload must bypass catalog resolution")
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _unexpected_resolve,
+    )
+
+    class _FakeStore:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        async def write_update(self, update: bytes, **_kwargs) -> bool:
+            self.writes.append(bytes(update))
+            return True
+
+    seed_result = {
+        "scenario_id": "management",
+        "current_scenario_overridden": True,
+        "mode": "projected_seed_reuse",
+        "space": "workspace",
+    }
+    result = asyncio.run(
+        gateway_module._ensure_room_effective_materialized(
+            "bootstrap-rebuild-cache",
+            _FakeStore(),
+            SimpleNamespace(ydoc=ydoc),
+            seed_result=seed_result,
+        )
+    )
+
+    assert result is True
+    assert seed_result["mode"] == "rebuild_cached_payload"
+    assert seed_result["room_resolver_timings_ms"]["cache_hit"] is True
+    assert dict(ydoc.get_map("ui").get("application") or {})["desktop"]["pageSchema"]["id"] == "management"
 
 
 def test_room_bootstrap_stuck_incident_is_sticky_until_ready() -> None:
@@ -4452,6 +4701,62 @@ def test_process_events_command_publishes_device_registered(monkeypatch) -> None
     assert lifecycle == ["ack", "start_y_server"]
 
 
+def test_device_register_websocket_path_does_not_serialize_post_projection(monkeypatch) -> None:
+    responses: list[dict[str, object]] = []
+    published: list[tuple[str, dict[str, object] | None]] = []
+
+    async def _exercise() -> None:
+        release_post = asyncio.Event()
+        post_started = asyncio.Event()
+
+        async def _fake_start_y_server() -> None:
+            post_started.set()
+            await release_post.wait()
+
+        async def _fake_update_device_presence(_webspace_id: str, _device_id: str) -> bool:
+            return True
+
+        async def _send_response(msg: dict[str, object]) -> None:
+            responses.append(msg)
+
+        monkeypatch.setattr(gateway_module, "start_y_server", _fake_start_y_server)
+        monkeypatch.setattr(gateway_module, "_update_device_presence", _fake_update_device_presence)
+        monkeypatch.setattr(
+            gateway_module,
+            "_make_publish_bus",
+            lambda *args, **kwargs: (
+                lambda topic, extra=None: published.append((topic, extra))
+            ),
+        )
+
+        selected = await asyncio.wait_for(
+            gateway_module.process_events_command(
+                kind="device.register",
+                cmd_id="cmd-deferred",
+                payload={"device_id": "dev-deferred", "webspace_id": "ops"},
+                device_id="dev-deferred",
+                webspace_id="default",
+                send_response=_send_response,
+                defer_device_register_post=True,
+            ),
+            timeout=0.2,
+        )
+        assert selected == "ops"
+        assert responses[-1]["ok"] is True
+        await asyncio.wait_for(post_started.wait(), timeout=0.2)
+        assert published == []
+        release_post.set()
+        await asyncio.gather(*tuple(gateway_module._DEVICE_REGISTER_POST_TASKS))
+
+    asyncio.run(_exercise())
+    assert published == [
+        (
+            "device.registered",
+            {"device_id": "dev-deferred", "webspace_id": "ops", "kind": "browser"},
+        )
+    ]
+
+
 def test_device_register_rejects_missing_client_version_when_min_version_set(monkeypatch) -> None:
     responses: list[dict[str, object]] = []
     touched: list[dict[str, object]] = []
@@ -4766,6 +5071,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
 def test_active_browser_session_snapshot_tracks_yws_clients() -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._ACTIVE_EVENTS_WS_BROWSER_SESSIONS.clear()
 
     ws = SimpleNamespace(query_params={"dev": "dev-2"})
     gateway_module._track_yws_connection("ops", ws, device_id="dev-2")
@@ -4785,6 +5091,49 @@ def test_active_browser_session_snapshot_tracks_yws_clients() -> None:
     ]
 
     gateway_module._untrack_yws_connection("ops", ws)
+    assert gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"] == []
+
+
+def test_active_browser_session_snapshot_keeps_control_endpoint_without_yws() -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
+    gateway_module._ACTIVE_EVENTS_WS_BROWSER_SESSIONS.clear()
+
+    ws = SimpleNamespace()
+    gateway_module._track_events_ws_connection("desktop", ws)
+    gateway_module._track_events_ws_browser_session(
+        "desktop",
+        ws,
+        {
+            "device_id": "dev-local",
+            "browser_page_id": "page-lo-1",
+            "browser_session_id": "session-lo-1",
+            "browser_zone": "lo",
+            "browser_origin": "http://127.0.0.1:8100",
+            "endpoint_display_name": "Local browser",
+        },
+    )
+
+    snapshot = gateway_module.active_browser_session_snapshot(now_ts=123.0)
+
+    assert snapshot["peer_total"] == 1
+    assert snapshot["peers"][0] == {
+        "device_id": "dev-local",
+        "webspace_id": "desktop",
+        "connection_state": "connected",
+        "events_channel_state": "open",
+        "session_count": 1,
+        "source": "events_gateway",
+        "browser_zone": "lo",
+        "browser_origin": "http://127.0.0.1:8100",
+        "endpoint_display_name": "Local browser",
+        "browser_page_id": "page-lo-1",
+        "client_limit_id": "page-lo-1",
+        "browser_session_id": "session-lo-1",
+    }
+
+    gateway_module._untrack_events_ws_connection(ws)
     assert gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"] == []
 
 
@@ -4858,6 +5207,63 @@ def test_active_browser_session_snapshot_preserves_page_zone_and_origin() -> Non
     assert peer["endpoint_display_name"] == "Local browser"
 
     gateway_module._untrack_yws_connection("desktop", ws)
+
+
+def test_active_browser_session_snapshot_infers_lo_for_legacy_loopback_origin() -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+
+    ws = SimpleNamespace(
+        query_params={
+            "dev": "dev-local-legacy",
+            "browser_session_id": "yws",
+            "browser_origin": "http://127.0.0.1:8100",
+        }
+    )
+    gateway_module._track_yws_connection("desktop", ws, device_id="dev-local-legacy")
+
+    peer = gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"][0]
+
+    assert peer["browser_origin"] == "http://127.0.0.1:8100"
+    assert peer["browser_zone"] == "lo"
+
+    gateway_module._untrack_yws_connection("desktop", ws)
+
+
+def test_active_browser_session_snapshot_drops_synthetic_yws_when_page_exists() -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
+    gateway_module._ACTIVE_EVENTS_WS_BROWSER_SESSIONS.clear()
+
+    legacy = SimpleNamespace(
+        query_params={
+            "dev": "dev-local",
+            "browser_session_id": "yws",
+        }
+    )
+    control = SimpleNamespace()
+    gateway_module._track_yws_connection("desktop", legacy, device_id="dev-local")
+    gateway_module._track_events_ws_connection("desktop", control)
+    gateway_module._track_events_ws_browser_session(
+        "desktop",
+        control,
+        {
+            "device_id": "dev-local",
+            "browser_page_id": "page-lo-1",
+            "browser_zone": "lo",
+            "browser_origin": "http://127.0.0.1:8100",
+        },
+    )
+
+    peers = gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"]
+
+    assert len(peers) == 1
+    assert peers[0]["browser_page_id"] == "page-lo-1"
+    assert peers[0]["browser_zone"] == "lo"
+
+    gateway_module._untrack_yws_connection("desktop", legacy)
+    gateway_module._untrack_events_ws_connection(control)
 
 
 def test_yjs_balancer_snapshot_reports_limits_usage_and_guard(monkeypatch) -> None:

@@ -43,6 +43,7 @@ def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
     from adaos.services.applications import runtime_selection
 
     monkeypatch.setattr(runtime_selection, "selected_trial", lambda *args: None)
+    monkeypatch.setattr(runtime_selection, "selected_trial_exact", lambda *args: None)
     monkeypatch.setattr(tool_bridge_module, "_existing_trial_preview_target", lambda *args: None)
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LAST_SYNC_AT"):
         tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
@@ -50,6 +51,19 @@ def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
         tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
     if hasattr(tool_bridge_module, "_TOOL_CALL_IDEMPOTENCY_CACHE"):
         tool_bridge_module._TOOL_CALL_IDEMPOTENCY_CACHE.clear()
+    if hasattr(tool_bridge_module, "_EXACT_TRIAL_ASYNC_CACHE"):
+        tool_bridge_module._EXACT_TRIAL_ASYNC_CACHE.clear()
+    if hasattr(tool_bridge_module, "_EXACT_TRIAL_ASYNC_INFLIGHT"):
+        tool_bridge_module._EXACT_TRIAL_ASYNC_INFLIGHT.clear()
+    for cache_name in (
+        "_APPLICATION_RUNTIME_ASYNC_CACHE",
+        "_APPLICATION_RUNTIME_ASYNC_INFLIGHT",
+        "_APPLICATION_ACCESS_ASYNC_CACHE",
+        "_APPLICATION_ACCESS_ASYNC_INFLIGHT",
+    ):
+        cache = getattr(tool_bridge_module, cache_name, None)
+        if cache is not None:
+            cache.clear()
     yield
 
 
@@ -360,6 +374,70 @@ def test_trial_admission_precedes_idempotency_replay(monkeypatch):
         asyncio.run(tool_bridge_module._call_tool_with_identity(tool_bridge_module.ToolCall(tool="owned:read"), None, Response(), _fake_ctx()))
 
 
+def test_dev_webspace_does_not_inherit_selected_trial_unavailability(monkeypatch):
+    observed: list[str] = []
+
+    async def allow(*_args, **_kwargs):
+        return None
+
+    async def execute(*_args, **_kwargs):
+        return {"ok": True, "result": {"source": "dev"}}
+
+    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", lambda *_args: True)
+    monkeypatch.setattr(tool_bridge_module, "_reject_unavailable_trial_execution", lambda *_args: observed.append("rejected"))
+    monkeypatch.setattr(tool_bridge_module, "_authorize_scoped_tool_call", allow)
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_impl", execute)
+
+    request = SimpleNamespace(state=SimpleNamespace(
+        adaos_root_routed=False,
+        adaos_development_access=True,
+    ))
+    body = tool_bridge_module.ToolCall(
+        tool="builder_sdk_control_skill:get_workbench",
+        context={"webspace_id": "desktop-dev"},
+    )
+    result = asyncio.run(
+        tool_bridge_module._call_tool_with_identity(body, request, Response(), _fake_ctx())
+    )
+
+    assert result["result"]["source"] == "dev"
+    assert observed == []
+
+
+def test_explicit_dev_call_without_webspace_does_not_inherit_selected_trial_unavailability(monkeypatch):
+    observed: list[str] = []
+
+    async def allow(*_args, **_kwargs):
+        return None
+
+    async def execute(*_args, **_kwargs):
+        return {"ok": True, "result": {"source": "dev"}}
+
+    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", lambda *_args: False)
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_reject_unavailable_trial_execution",
+        lambda *_args: observed.append("rejected"),
+    )
+    monkeypatch.setattr(tool_bridge_module, "_authorize_scoped_tool_call", allow)
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_impl", execute)
+
+    request = SimpleNamespace(state=SimpleNamespace(
+        adaos_root_routed=False,
+        adaos_development_access=True,
+    ))
+    body = tool_bridge_module.ToolCall(
+        tool="builder_sdk_control_skill:get_workbench",
+        dev=True,
+    )
+    result = asyncio.run(
+        tool_bridge_module._call_tool_with_identity(body, request, Response(), _fake_ctx())
+    )
+
+    assert result["result"]["source"] == "dev"
+    assert observed == []
+
+
 def test_trial_admission_uses_exact_candidate_not_same_version(tmp_path, monkeypatch):
     from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
 
@@ -558,6 +636,57 @@ def test_tool_permission_error_is_bounded_403(monkeypatch) -> None:
         "reason": "application_context_missing",
         "retryable": False,
     }
+
+
+def test_read_only_runtime_channel_transition_is_retryable(monkeypatch) -> None:
+    from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+
+    class Manager:
+        def run_tool(self, *_args, **_kwargs):
+            raise RuntimeChannelConflict("Application channel is changing")
+
+    async def _manager(_ctx):
+        return Manager()
+
+    async def _authorize(**kwargs):
+        return kwargs["body"], {}
+
+    async def _safe_action(**_kwargs):
+        return {"risk_class": "none", "approval_required": False}
+
+    async def _not_started(_skill_name):
+        return False
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "_skill_manager_for_context", _manager)
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_declared_tool_contract",
+        lambda *_args, **_kwargs: {"side_effects": "none"},
+    )
+    monkeypatch.setattr(tool_bridge_module, "_authorize_application_tool_call", _authorize)
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _safe_action)
+    monkeypatch.setattr(tool_bridge_module, "_ensure_on_demand_service_started", _not_started)
+    monkeypatch.setattr(tool_bridge_module, "_should_autosync_workspace_runtime", lambda **_kwargs: False)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda *_args: "trace-read")
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            tool_bridge_module.call_tool(
+                tool_bridge_module.ToolCall(
+                    tool="sample:get_records",
+                    arguments={},
+                    intent="read",
+                ),
+                SimpleNamespace(headers={}),
+                Response(),
+                ctx=_fake_ctx(),
+            )
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail["error"] == "application_runtime_inactive"
+    assert error.value.detail["retryable"] is True
 
 
 def test_dev_read_like_tool_loads_application_contract(monkeypatch) -> None:
@@ -1341,6 +1470,142 @@ def test_call_tool_infers_dev_runtime_from_http_context(monkeypatch) -> None:
     assert trial_selections == []
 
 
+def test_exact_application_authority_uses_direct_trial_resolution(
+    monkeypatch,
+) -> None:
+    from adaos.services.applications import runtime_selection
+
+    monkeypatch.setattr(
+        runtime_selection,
+        "selected_trial",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact Application authority must bypass selected_trial")
+        ),
+    )
+    exact_calls = []
+    monkeypatch.setattr(
+        runtime_selection,
+        "selected_trial_exact",
+        lambda *args: exact_calls.append(args) or None,
+    )
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_webspace_uses_dev_runtime",
+        lambda *_args, **_kwargs: False,
+    )
+
+    async def fake_impl(*_args, **_kwargs):
+        return {"ok": True}
+
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_impl", fake_impl)
+
+    result = asyncio.run(
+        tool_bridge_module._call_tool_with_identity(
+            tool_bridge_module.ToolCall(
+                tool="browsers_skill:get_device_settings",
+                arguments={"webspace_id": "desktop"},
+                context={
+                    "webspace_id": "desktop",
+                    "application_id": "web_desktop",
+                    "application_release_digest": "sha256:" + "a" * 64,
+                },
+            ),
+            SimpleNamespace(headers={}, state=SimpleNamespace()),
+            Response(),
+            _fake_ctx(),
+        )
+    )
+
+    assert result == {"ok": True}
+    assert exact_calls and exact_calls[0][1:] == (
+        "desktop",
+        "web_desktop",
+        "sha256:" + "a" * 64,
+        "skill",
+        "browsers_skill",
+        True,
+    )
+
+
+def test_exact_stable_application_authority_does_not_inherit_selected_trial_unavailability(
+    monkeypatch,
+) -> None:
+    observed: list[str] = []
+
+    async def allow(*_args, **_kwargs):
+        return None
+
+    async def execute(*_args, **_kwargs):
+        return {"ok": True, "result": {"source": "stable_application"}}
+
+    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", lambda *_args: False)
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_reject_unavailable_trial_execution",
+        lambda *_args: observed.append("rejected"),
+    )
+    monkeypatch.setattr(tool_bridge_module, "_authorize_scoped_tool_call", allow)
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_impl", execute)
+
+    body = tool_bridge_module.ToolCall(
+        tool="builder_sdk_control_skill:get_workbench",
+        context={
+            "webspace_id": "desktop",
+            "application_id": "adaos_builder",
+            "application_release_digest": "sha256:" + "a" * 64,
+        },
+    )
+    result = asyncio.run(
+        tool_bridge_module._call_tool_with_identity(
+            body,
+            SimpleNamespace(state=SimpleNamespace()),
+            Response(),
+            _fake_ctx(),
+        )
+    )
+
+    assert result["result"]["source"] == "stable_application"
+    assert observed == []
+
+
+def test_exact_application_authority_collapses_concurrent_first_paint(monkeypatch) -> None:
+    from adaos.services.applications import runtime_selection
+
+    calls: list[tuple] = []
+
+    def resolve(*args):
+        calls.append(args)
+        # Keep the first worker alive long enough for the second request to
+        # observe and join the same in-flight authority lookup.
+        import time
+
+        time.sleep(0.03)
+        return "runtime"
+
+    monkeypatch.setattr(runtime_selection, "selected_trial_exact", resolve)
+    ctx = _fake_ctx()
+
+    async def run():
+        values = await asyncio.gather(
+            tool_bridge_module._selected_trial_exact_singleflight(
+                ctx, "desktop", "web_desktop", "sha256:test", "skill", "management", True
+            ),
+            tool_bridge_module._selected_trial_exact_singleflight(
+                ctx, "desktop", "web_desktop", "sha256:test", "skill", "management", True
+            ),
+        )
+        cached = await tool_bridge_module._selected_trial_exact_singleflight(
+            ctx, "desktop", "web_desktop", "sha256:test", "skill", "management", True
+        )
+        return values, cached
+
+    values, cached = asyncio.run(run())
+
+    assert values == ["runtime", "runtime"]
+    assert cached == "runtime"
+    assert len(calls) == 1
+
+
 def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     owner_thread_id = threading.get_ident()
@@ -1593,6 +1858,93 @@ permission_profile:
         tool="mail_provider:list_messages",
         arguments={"webspace_id": "desktop-dev"},
         context={"application_id": "caller-controlled-project"},
+        dev=True,
+    )
+    with verified_caller(SubjectRef("user", "owner")):
+        _, access = asyncio.run(
+            tool_bridge_module._authorize_application_tool_call(
+                body=body,
+                request=SimpleNamespace(headers={}),
+                ctx=SimpleNamespace(paths=_Paths()),
+                skill_name="mail_provider",
+                public_tool="list_messages",
+                manager=object(),
+                declared_side_effects="none",
+                component_capabilities=("providers.google.gmail",),
+                application_contract={
+                    "permission": "providers.google.gmail",
+                    "capability": "mail.read",
+                },
+            )
+        )
+
+    assert access is not None
+    assert access["context"]["application_id"] == "mail_client"
+
+
+def test_dev_application_context_recovers_from_stale_webspace_project(
+    tmp_path, monkeypatch
+) -> None:
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.policy.caller import verified_caller
+
+    projects = tmp_path / "projects"
+    skills = tmp_path / "skills"
+    (projects / "mail_client").mkdir(parents=True)
+    (projects / "previous_app").mkdir(parents=True)
+    (skills / "mail_provider").mkdir(parents=True)
+    (projects / "mail_client" / "project.yaml").write_text(
+        """
+id: mail_client
+components:
+  owned:
+    - ref: scenario:mail_client
+    - ref: skill:mail_provider
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: providers.google.gmail
+      purpose: Use Gmail.
+  optional: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (projects / "previous_app" / "project.yaml").write_text(
+        """
+id: previous_app
+components:
+  owned:
+    - ref: scenario:previous_app
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required: []
+  optional: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (skills / "mail_provider" / "skill.yaml").write_text(
+        "name: mail_provider\ncapabilities: [providers.google.gmail]\n",
+        encoding="utf-8",
+    )
+
+    class _Paths:
+        def dev_projects_dir(self):
+            return projects
+
+        def dev_skills_dir(self):
+            return skills
+
+    monkeypatch.setattr(
+        "adaos.services.workspaces.index.get_workspace",
+        lambda _webspace_id: SimpleNamespace(
+            is_dev=True,
+            current_scenario_overlay="previous_app",
+            home_scenario="previous_app",
+        ),
+    )
+    body = tool_bridge_module.ToolCall(
+        tool="mail_provider:list_messages",
+        arguments={"webspace_id": "desktop-dev"},
         dev=True,
     )
     with verified_caller(SubjectRef("user", "owner")):

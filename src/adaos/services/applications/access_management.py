@@ -97,11 +97,21 @@ def _runtime_authority_signature(
     # definitions/releases reachable from them; hundreds of unpublished local
     # definitions are not runtime authority and must not tax every tool call.
     active_keys: set[str] = set()
+    active_releases: set[tuple[str, str]] = set()
     installations_root = root / "installations"
     if installations_root.is_dir():
         for path in sorted(installations_root.glob("*/current.json")):
             append(path)
             active_keys.add(path.parent.name)
+            try:
+                record = _read(path)
+                application = str(record.get("application_id") or "").strip()
+                digest = str(record.get("installed_release_digest") or "").strip()
+            except ApplicationStoreError:
+                application = ""
+                digest = ""
+            if application and digest:
+                active_releases.add((identity(application), digest.split(":", 1)[-1]))
     selections_root = root / "runtime_selections"
     if selections_root.is_dir():
         for path in sorted(selections_root.glob("*/current.json")):
@@ -111,7 +121,14 @@ def _runtime_authority_signature(
             except ApplicationStoreError:
                 application = ""
             if application:
-                active_keys.add(identity(application))
+                application_key = identity(application)
+                active_keys.add(application_key)
+                try:
+                    digest = str(_read(path).get("release_digest") or "").strip()
+                except ApplicationStoreError:
+                    digest = ""
+                if digest:
+                    active_releases.add((application_key, digest.split(":", 1)[-1]))
     channels_root = root / "runtime_channels"
     if channels_root.is_dir():
         for path in sorted(channels_root.glob("*.sqlite3")):
@@ -119,10 +136,12 @@ def _runtime_authority_signature(
             active_keys.add(path.stem)
     for key in sorted(active_keys):
         append(root / "definitions" / key / "current.json")
-        release_root = root / "releases" / key
-        if release_root.is_dir():
-            for path in sorted(release_root.glob("*.json")):
-                append(path)
+    # Releases are immutable and content addressed.  Only the exact releases
+    # referenced by an active installation or runtime selection can affect
+    # admission.  Scanning every historical release made every cache hit O(N)
+    # and amplified a first-paint burst into seconds of filesystem work.
+    for key, digest in sorted(active_releases):
+        append(root / "releases" / key / f"{digest}.json")
     return tuple(values)
 
 
@@ -480,6 +499,7 @@ class ApplicationAccessManagementService:
             )
 
         candidates: list[dict[str, Any]] = []
+        exact_selection = None
         if requested_application_id and webspace_id:
             try:
                 exact_selection = self.store.get_runtime_selection(
@@ -516,6 +536,19 @@ class ApplicationAccessManagementService:
             installations = self.store.list_installations()
         for installation in installations:
             if installation.status != "active":
+                continue
+            if (
+                requested_application_id
+                and webspace_id
+                and exact_selection is not None
+                and installation.application_id == exact_selection.application_id
+                and installation.installed_release_digest
+                != exact_selection.release_digest
+            ):
+                # A webspace runtime selection is the exact active channel for
+                # this Application. Keeping the installed Stable release as a
+                # second candidate made every Stable+Trial caller ambiguous
+                # until the client happened to receive a release digest.
                 continue
             release = self.store.get_release(
                 installation.application_id,

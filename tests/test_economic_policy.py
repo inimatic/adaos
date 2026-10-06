@@ -300,6 +300,41 @@ def test_report_codex_usage_to_root_uses_mtls_route(monkeypatch, tmp_path) -> No
     assert kwargs["json"]["zone_id"] == "ru"
 
 
+def test_usage_change_refreshes_snapshot_before_event(monkeypatch, tmp_path) -> None:
+    order = []
+
+    class FakeRootClient:
+        base_url = "https://ru.api.inimatic.com"
+
+        def request(self, method, path, **kwargs):
+            order.append("report")
+            return {"ok": True, "root_event_id": "usage-1"}
+
+    monkeypatch.setattr(economic_policy, "load_config", lambda: _config())
+    monkeypatch.setattr(economic_policy, "current_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        economic_policy,
+        "_economic_root_http_client",
+        lambda conf, *, base_dir, root_base_url=None: FakeRootClient(),
+    )
+    monkeypatch.setattr(
+        economic_policy,
+        "refresh_entitlement_snapshot_from_root",
+        lambda **_kwargs: order.append("refresh") or {"ok": True},
+    )
+    events = []
+    monkeypatch.setattr(
+        economic_policy,
+        "_publish_subscription_changed",
+        lambda payload: order.append("event") or events.append(dict(payload)),
+    )
+
+    economic_policy.report_codex_usage_to_root({"total_tokens": 1}, timeout=2)
+
+    assert order == ["report", "refresh", "event"]
+    assert events[0]["snapshot_status"] == "ready"
+
+
 def test_economic_status_observes_nlu_teacher_llm_usage(monkeypatch, tmp_path) -> None:
     state_dir = tmp_path / "state"
     teacher_dir = state_dir / "skills" / "nlu_teacher"

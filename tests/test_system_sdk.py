@@ -210,7 +210,7 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
     )
     monkeypatch.setattr(
         applications,
-        "list_applications",
+        "list_system_application_summaries",
         lambda **_: [{
             "application": {"application_id": "notebook", "display": {"title": "Notebook"}},
             "installed": True,
@@ -340,6 +340,56 @@ def test_operational_snapshot_exposes_bounded_progressive_system_sections(monkey
         "ready": 1,
     }
     assert result["technical"]["update"] == {"state": "idle", "phase": "ready"}
+
+
+def test_installed_application_projection_singleflights_repeated_system_cards(monkeypatch) -> None:
+    from adaos.sdk import applications, system
+
+    calls = 0
+
+    def list_system_application_summaries(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return [{
+            "application": {
+                "application_id": "notebook",
+                "display": {"title": "Notebook"},
+            },
+            "installed": True,
+        }]
+
+    monkeypatch.setattr(
+        applications,
+        "list_system_application_summaries",
+        list_system_application_summaries,
+    )
+    first = system._installed_application_summaries(webspace_id="desktop", limit=40)
+    first[0]["title"] = "mutated by consumer"
+    second = system._installed_application_summaries(webspace_id="desktop", limit=40)
+
+    assert calls == 1
+    assert second[0]["title"] == "Notebook"
+
+
+def test_development_delivery_projection_is_single_flight_cached(monkeypatch) -> None:
+    from adaos.sdk import applications, system
+
+    calls = 0
+
+    def list_development_reports():
+        nonlocal calls
+        calls += 1
+        return [{"status": "accepted", "updated_at": "2026-10-04T10:00:00Z"}]
+
+    monkeypatch.setattr(applications, "list_development_reports", list_development_reports)
+    system._DEVELOPMENT_DELIVERY_CACHE = None
+
+    first = system._development_delivery_projection()
+    first["accepted"] = 99
+    second = system._development_delivery_projection()
+
+    assert calls == 1
+    assert second["accepted"] == 1
 
 
 def test_progressive_system_sections_fail_closed_with_explicit_unavailable(monkeypatch) -> None:
@@ -527,6 +577,31 @@ def test_operational_snapshot_exposes_core_autoupdate_control(monkeypatch) -> No
         "source": "operator_controls",
         "mutable": True,
     }
+
+
+def test_operational_snapshot_keeps_update_projection_bounded(monkeypatch) -> None:
+    from adaos.sdk import system
+
+    monkeypatch.setattr(system.control_plane, "get_self_object", lambda: _object("node:hub", "node"))
+    monkeypatch.setattr(system.control_plane, "get_local_capacity_object", lambda: _object("capacity:hub", "capacity"))
+    monkeypatch.setattr(
+        system,
+        "current_update_status",
+        lambda: {
+            "state": "succeeded",
+            "message": "runtime validated",
+            "target_version": "0.1.1132",
+            "manifest": {"history": "x" * 300_000},
+            "self_hygiene": {"removed": ["irrelevant"] * 1000},
+        },
+    )
+
+    result = system.get_operational_snapshot(sections={"summary", "update"})
+
+    assert result["update"]["state"] == "succeeded"
+    assert result["update"]["target_version"] == "0.1.1132"
+    assert "manifest" not in result["update"]
+    assert "self_hygiene" not in result["update"]
 
 
 def test_set_core_autoupdate_requires_write_and_reports_transition(monkeypatch) -> None:

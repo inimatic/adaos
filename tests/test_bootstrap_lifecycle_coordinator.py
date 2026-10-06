@@ -110,7 +110,13 @@ async def test_installed_services_start_before_managed_nlu_maintenance() -> None
         state=state,
         start_service_skills=_start,
         ensure_managed_nlu_service_skills=_ensure,
-        log=SimpleNamespace(warning=lambda *args, **kwargs: None),
+        log=SimpleNamespace(
+            warning=lambda *args, **kwargs: None,
+            info=lambda *args, **kwargs: None,
+        ),
+        service_activation_summary=lambda: {
+            "eager_startup_skills": ("managed_nlu_skill",),
+        },
     )
 
     assert calls == [
@@ -118,6 +124,36 @@ async def test_installed_services_start_before_managed_nlu_maintenance() -> None
         "ensure_managed_nlu",
         "post_managed_nlu_start_service_skills",
     ]
+    assert state.managed_nlu_install_status["state"] == "ready"
+
+
+async def test_managed_nlu_install_does_not_sweep_lazy_services() -> None:
+    calls: list[str] = []
+    state = SimpleNamespace()
+
+    async def _start(stage: str) -> None:
+        calls.append(stage)
+
+    def _ensure(_log: object) -> dict[str, object]:
+        calls.append("ensure_managed_nlu")
+        return {"ok": True, "enabled": True, "installed": True}
+
+    await _start_services_before_managed_nlu(
+        state=state,
+        start_service_skills=_start,
+        ensure_managed_nlu_service_skills=_ensure,
+        log=SimpleNamespace(
+            warning=lambda *args, **kwargs: None,
+            info=lambda *args, **kwargs: None,
+        ),
+        start_initial_service_skills=False,
+        service_activation_summary=lambda: {
+            "known_service_total": 8,
+            "eager_startup_skills": (),
+        },
+    )
+
+    assert calls == ["ensure_managed_nlu"]
     assert state.managed_nlu_install_status["state"] == "ready"
 
 

@@ -135,6 +135,18 @@ def uninstall(scenario_id: str) -> str:
     return scenario_id
 
 
+@tool(
+    "manage.scenarios.pull",
+    summary="Legacy mutable scenario pull retained only for migration discovery.",
+    stability="deprecated",
+    deprecated=True,
+    removed_in="1.0",
+    replacement="subscription update-plan and package activation",
+    migration_recipe=(
+        "Resolve the published scenario release, create a subscription update plan, "
+        "then activate the digest-pinned package; do not pull mutable Workspace sources."
+    ),
+)
 def pull(scenario_id: str) -> str:
     raise RuntimeError(
         "manage.scenarios.pull is retired because it mutates Workspace from a mutable source; "

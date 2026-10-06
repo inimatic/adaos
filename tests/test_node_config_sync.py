@@ -164,6 +164,22 @@ def test_load_config_reuses_cached_node_yaml_without_reparsing(monkeypatch) -> N
     path.write_text(original, encoding="utf-8")
 
 
+def test_cached_config_reads_do_not_resolve_the_path_again(monkeypatch) -> None:
+    """Hot config reads must not synchronously walk the filesystem."""
+    import adaos.services.node_config as mod
+
+    mod._NODE_CONFIG_CACHE.clear()
+    baseline = mod.load_config()
+
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda *_args, **_kwargs: pytest.fail("cached config read resolved its path"),
+    )
+
+    assert mod.load_config().node_id == baseline.node_id
+
+
 def test_save_config_stores_managed_key_paths_relative_to_base() -> None:
     ctx = get_ctx()
     detached = _detached_config()

@@ -366,6 +366,69 @@ def test_browser_session_catalog_unions_yws_and_webrtc_snapshots(monkeypatch) ->
     assert objects[1]["health"]["yjs_channel"] == "reachable"
 
 
+def test_browser_session_catalog_preserves_pages_on_same_browser_device(monkeypatch) -> None:
+    from adaos.services.system_model import catalog
+
+    monkeypatch.setattr(catalog, "_governed", lambda obj: obj)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway_ws",
+        SimpleNamespace(
+            active_browser_session_snapshot=lambda: {
+                "peers": [
+                    {
+                        "device_id": "dev-shared",
+                        "browser_page_id": "page-lo",
+                        "client_limit_id": "page-lo",
+                        "zone": "lo",
+                        "webspace_id": "desktop",
+                        "connection_state": "connected",
+                    },
+                    {
+                        "device_id": "dev-shared",
+                        "browser_page_id": "page-ru",
+                        "client_limit_id": "page-ru",
+                        "zone": "ru",
+                        "webspace_id": "desktop-dev",
+                        "connection_state": "connected",
+                    },
+                ]
+            }
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.webrtc.peer",
+        SimpleNamespace(webrtc_peer_snapshot=lambda: {"peers": []}),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.access_links",
+        SimpleNamespace(
+            browser_snapshot=lambda: [
+                {
+                    "device_id": "dev-shared::page-lo",
+                    "display_name": "Local browser",
+                    "browser_family": "Chrome",
+                },
+                {
+                    "device_id": "dev-shared::page-ru",
+                    "display_name": "Remote browser",
+                    "browser_family": "Chrome",
+                },
+            ]
+        ),
+    )
+
+    objects = [item.to_dict() for item in catalog.browser_session_objects()]
+
+    assert [item["id"] for item in objects] == [
+        "browser:dev-shared::page-lo",
+        "browser:dev-shared::page-ru",
+    ]
+    assert [item["title"] for item in objects] == ["Local browser", "Remote browser"]
+
+
 def test_device_catalog_uses_device_inventory_records_and_preserves_workspace_bindings(monkeypatch) -> None:
     sys.modules.setdefault(
         "y_py",

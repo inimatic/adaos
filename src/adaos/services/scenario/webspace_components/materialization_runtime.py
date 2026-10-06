@@ -78,10 +78,21 @@ class WebspaceMaterializationService:
         use_process_worker = (
             operations.materialization_worker_enabled()
             and isolate_process is not False
-            and not scenario_content_override
-            and not skill_source_mode
         )
-        cache_eligible = not scenario_content_override and not skill_source_mode
+        # An explicit source-mode override is cache-safe when the caller also
+        # supplies the canonical content/policy-scoped identity. Scenario
+        # switching does exactly that. Treating every override as uncacheable
+        # forced DEV Applications/Builder to rebuild the entire catalog on
+        # every switch even though a digest-addressed payload was on disk.
+        identity_key = (
+            str(materialization_identity.get("key_hash") or "").strip()
+            if isinstance(materialization_identity, Mapping)
+            else ""
+        )
+        cache_eligible = bool(
+            not scenario_content_override
+            and (not skill_source_mode or identity_key)
+        )
         worker_result = None
         cache_lookup_started = time.perf_counter()
         if cache_eligible:
@@ -110,17 +121,20 @@ class WebspaceMaterializationService:
                     materialization_identity=materialization_identity,
                     skill_decls_snapshot=prepared_skill_decls,
                     skill_decls_fingerprint=prepared_skill_fingerprint,
+                    scenario_content_override=scenario_content_override,
+                    skill_source_mode=skill_source_mode,
                 )
                 if prepared_skill_decls is None:
                     ydoc_timings["prepare_skill_decls_in_worker"] = 0.0
                 operations.record_timing(ydoc_timings, "payload_worker", stage_started)
                 ydoc_timings["materialization_cache_miss"] = 0.0
-                operations.remember_materialized_worker_result(
-                    materialization_identity,
-                    worker_result,
-                    cache_mode="payload_only",
-                    require_snapshot=False,
-                )
+                if cache_eligible:
+                    operations.remember_materialized_worker_result(
+                        materialization_identity,
+                        worker_result,
+                        cache_mode="payload_only",
+                        require_snapshot=False,
+                    )
             operations.raise_if_rebuild_request_superseded(webspace_id, request_id)
             payload = worker_result.get("materialized_payload")
             if not isinstance(payload, Mapping):

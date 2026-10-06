@@ -3043,7 +3043,7 @@ def test_materialization_cpu_worker_count_is_bounded(monkeypatch) -> None:
     assert webspace_runtime_module._materialization_cpu_workers() == 1
 
 
-def test_materialized_payload_apply_replaces_existing_effective_branches() -> None:
+def test_materialized_payload_apply_replaces_existing_effective_branches(monkeypatch) -> None:
     Y = pytest.importorskip("y_py")
     ydoc = Y.YDoc()
     ui_map = ydoc.get_map("ui")
@@ -3082,12 +3082,22 @@ def test_materialized_payload_apply_replaces_existing_effective_branches() -> No
     )
     payload = webspace_runtime_module._resolved_outputs_to_materialized_payload(resolved)  # noqa: SLF001
 
+    def _unexpected_fingerprint_fallback(_resolved):
+        raise AssertionError("complete materialized payload fingerprints must not be recomputed")
+
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_resolved_output_branch_fingerprints",
+        _unexpected_fingerprint_fallback,
+    )
+
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
     entry = runtime.apply_materialized_payload_to_doc(
         ydoc,
         "desktop-dev",
         payload,
         materialization_identity={"key_hash": "test-key", "key": "test-key"},
+        replace_changed_branches=True,
     )
 
     assert entry.scenario_id == "prompt_engineer_scenario"
@@ -3104,6 +3114,8 @@ def test_materialized_payload_apply_replaces_existing_effective_branches() -> No
     assert runtime._last_apply_summary["selector_reasserted"] is True
     assert runtime._last_apply_summary["selector_apply_mode"] == "reasserted"
     assert runtime._last_apply_summary["transaction_total"] == 1
+    assert runtime._last_apply_summary["branch_apply_modes"]["ui.application"] == "changed:replace"
+    assert runtime._last_apply_summary["branch_apply_modes"]["data.catalog"] == "changed:replace"
     assert "apply_combined_transaction" in runtime._last_apply_phase_timings_ms
 
 
@@ -4824,16 +4836,14 @@ def test_skill_materialization_fingerprint_is_stable_across_runtime_slots(
     )
     monkeypatch.setattr(
         webspace_runtime_module,
-        "get_local_capacity",
-        lambda: {
-            "skills": [
+        "get_local_skill_capacity",
+        lambda: [
                 {
                     "name": "reusable_skill",
                     "version": "1.0.0",
                     "active": True,
                 }
-            ]
-        },
+            ],
     )
 
     webspace_runtime_module._RUNTIME.cache.clear_skill_source_fingerprints()  # noqa: SLF001
@@ -7021,12 +7031,13 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
     runtime._apply_resolved_state_in_doc(fake_doc, "phase5-apply-summary", resolved)
     second_summary = dict(runtime._last_apply_summary or {})
 
-    assert first_summary["changed_branches"] == 8
+    assert first_summary["changed_branches"] == 9
     assert first_summary["unchanged_branches"] == 0
     assert first_summary["changed_paths"] == [
         "ui.application",
         "registry.merged",
         "runtime.environment",
+        "runtime.materialization",
         "data.catalog",
         "data.installed",
         "data.desktop",
@@ -7037,6 +7048,7 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
         "ui.application",
         "registry.merged",
         "runtime.environment",
+        "runtime.materialization",
     ]
     assert first_summary["phases"]["interactive"]["changed_paths"] == [
         "data.catalog",
@@ -7046,11 +7058,11 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
         "data.routing",
     ]
     assert second_summary["changed_branches"] == 0
-    assert second_summary["unchanged_branches"] == 8
+    assert second_summary["unchanged_branches"] == 9
     assert second_summary["failed_branches"] == 0
     assert second_summary["transaction_total"] == 2
     assert second_summary["changed_paths"] == []
-    assert second_summary["phases"]["structure"]["unchanged_branches"] == 3
+    assert second_summary["phases"]["structure"]["unchanged_branches"] == 4
     assert second_summary["phases"]["interactive"]["unchanged_branches"] == 5
     assert second_summary["branch_apply_modes"]["ui.application"] == "fingerprint_unchanged"
     assert second_summary["branch_apply_modes"]["data.catalog"] == "fingerprint_unchanged"

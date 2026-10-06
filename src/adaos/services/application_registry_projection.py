@@ -561,7 +561,12 @@ class ApplicationRegistryProjection:
                 LIMIT 1
                 """
             ).fetchone()
-            integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+            # The complete integrity check walks every index and used to add
+            # double-digit seconds to every cold runtime start on the real
+            # registry.  The projection is still fully checked when an epoch
+            # is sealed; startup only needs SQLite's bounded structural check
+            # before deciding whether the sealed snapshot can be reused.
+            integrity = con.execute("PRAGMA quick_check(1)").fetchone()[0]
         integrity_ms = round((time.perf_counter() - started) * 1000.0, 3)
         if str(integrity) != "ok":
             return {
@@ -569,6 +574,7 @@ class ApplicationRegistryProjection:
                 "reason": "sqlite_integrity_failed",
                 "projection_status": "invalid",
                 "sqlite_integrity_ms": integrity_ms,
+                "sqlite_integrity_mode": "quick_check",
                 "integrity": str(integrity),
             }
         if row is None:
@@ -577,6 +583,7 @@ class ApplicationRegistryProjection:
                 "reason": "projection_epoch_absent",
                 "projection_status": "untrusted_rebuild",
                 "sqlite_integrity_ms": integrity_ms,
+                "sqlite_integrity_mode": "quick_check",
             }
         reasons = []
         if int(row["schema_version"]) != APPLICATION_REGISTRY_PROJECTION_SCHEMA_VERSION:
@@ -602,6 +609,7 @@ class ApplicationRegistryProjection:
             "source_watermark": row["source_watermark"],
             "projection_digest": row["projection_digest"],
             "sqlite_integrity_ms": integrity_ms,
+            "sqlite_integrity_mode": "quick_check",
         }
 
     def runtime_start_snapshot_trust_state(self) -> dict[str, Any]:

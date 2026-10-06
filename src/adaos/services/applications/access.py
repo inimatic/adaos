@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
+from queue import Empty, Full, Queue
 import secrets
+from threading import Lock, Thread
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +33,162 @@ class TrialAccessError(ApplicationServiceError):
 
 class ApplicationAccessError(ApplicationServiceError):
     pass
+
+
+_log = logging.getLogger("adaos.applications.access")
+_DEFERRED_AUDIT_QUEUE: Queue[tuple[Any, dict[str, Any]]] = Queue(maxsize=2048)
+_DEFERRED_AUDIT_START_LOCK = Lock()
+_DEFERRED_AUDIT_THREAD: Thread | None = None
+_DECISION_INPUT_CACHE_LOCK = Lock()
+_DECISION_INPUT_CACHE: dict[
+    tuple[str, str, str, str],
+    tuple[tuple[tuple[str, int, int], ...], Any, tuple[Any, ...]],
+] = {}
+_DECISION_INPUT_CACHE_MAX = 256
+
+
+def _decision_input_signature(store: Any, application_id: str, release_digest: str) -> tuple[tuple[str, int, int], ...]:
+    release_path = store._release_path(application_id, release_digest)
+    grant_root = Path(store.root) / "application_access_grants"
+    # ApplicationStore advances this collection marker atomically with every
+    # grant mutation. This keeps revocation immediately visible across
+    # processes while replacing an O(all grants) filesystem walk on each tool
+    # call with two bounded stats.
+    paths = [release_path, grant_root / ".collection-revision.json"]
+    values: list[tuple[str, int, int]] = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            values.append((str(path), 0, 0))
+        else:
+            values.append((str(path), int(stat.st_mtime_ns), int(stat.st_size)))
+    return tuple(values)
+
+
+def _decision_inputs(
+    store: Any,
+    application_id: str,
+    release_digest: str,
+    subject_ref: str,
+) -> tuple[Any, tuple[Any, ...]]:
+    """Reuse parsed immutable policy inputs while preserving stat invalidation."""
+
+    if not hasattr(store, "root") or not callable(getattr(store, "_release_path", None)):
+        return (
+            store.get_release(application_id, release_digest),
+            tuple(store.list_application_access_grants(application_id, subject_ref=subject_ref)),
+        )
+    key = (str(store.root), application_id, release_digest, subject_ref)
+    signature = _decision_input_signature(store, application_id, release_digest)
+    with _DECISION_INPUT_CACHE_LOCK:
+        cached = _DECISION_INPUT_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1], cached[2]
+    release = store.get_release(application_id, release_digest)
+    grants = tuple(
+        store.list_application_access_grants(
+            application_id,
+            subject_ref=subject_ref,
+        )
+    )
+    stable_signature = _decision_input_signature(store, application_id, release_digest)
+    if stable_signature != signature:
+        release = store.get_release(application_id, release_digest)
+        grants = tuple(
+            store.list_application_access_grants(
+                application_id,
+                subject_ref=subject_ref,
+            )
+        )
+        stable_signature = _decision_input_signature(store, application_id, release_digest)
+    with _DECISION_INPUT_CACHE_LOCK:
+        if len(_DECISION_INPUT_CACHE) >= _DECISION_INPUT_CACHE_MAX:
+            _DECISION_INPUT_CACHE.pop(next(iter(_DECISION_INPUT_CACHE)))
+        _DECISION_INPUT_CACHE[key] = (stable_signature, release, grants)
+    return release, grants
+
+
+def prewarm_application_access_inputs(
+    store: Any,
+    *,
+    application_id: str,
+    release_digest: str,
+    subject_ref: str,
+) -> dict[str, Any]:
+    """Parse immutable release/grant inputs before interactive admission.
+
+    This does not compute or cache an allow/deny decision: request-specific
+    actor-chain, permission and observation checks still run for every caller.
+    It only moves the content-addressed release and current grant parsing out
+    of the first-paint request.
+    """
+
+    release, grants = _decision_inputs(
+        store,
+        str(application_id or "").strip(),
+        str(release_digest or "").strip(),
+        str(subject_ref or "").strip(),
+    )
+    return {
+        "application_id": str(application_id or "").strip(),
+        "release_digest": str(release_digest or "").strip(),
+        "subject_ref": str(subject_ref or "").strip(),
+        "grant_total": len(grants),
+        "permission_profile_digest": str(
+            getattr(getattr(release, "permission_profile", None), "digest", "")
+            or ""
+        ),
+    }
+
+
+def _run_deferred_application_access_audits() -> None:
+    while True:
+        first_store, first_payload = _DEFERRED_AUDIT_QUEUE.get()
+        batch = [(first_store, first_payload)]
+        # Collapse a first-paint fan-out into one sequence lock without adding
+        # latency to the authorization decision or tool response.
+        time.sleep(0.15)
+        while len(batch) < 64:
+            try:
+                batch.append(_DEFERRED_AUDIT_QUEUE.get_nowait())
+            except Empty:
+                break
+        grouped: dict[str, tuple[Any, list[dict[str, Any]]]] = {}
+        for store, payload in batch:
+            key = str(store.root)
+            entry = grouped.get(key)
+            if entry is None:
+                grouped[key] = (store, [payload])
+            else:
+                entry[1].append(payload)
+        for store, payloads in grouped.values():
+            try:
+                store.append_application_access_audits(payloads)
+            except Exception:
+                _log.exception(
+                    "deferred Application access audit batch failed count=%d",
+                    len(payloads),
+                )
+        for _ in batch:
+            _DEFERRED_AUDIT_QUEUE.task_done()
+
+
+def _defer_application_access_audit(store: Any, payload: Mapping[str, Any]) -> None:
+    global _DEFERRED_AUDIT_THREAD
+    with _DEFERRED_AUDIT_START_LOCK:
+        if _DEFERRED_AUDIT_THREAD is None or not _DEFERRED_AUDIT_THREAD.is_alive():
+            _DEFERRED_AUDIT_THREAD = Thread(
+                target=_run_deferred_application_access_audits,
+                name="adaos-application-access-audit",
+                daemon=True,
+            )
+            _DEFERRED_AUDIT_THREAD.start()
+    try:
+        _DEFERRED_AUDIT_QUEUE.put_nowait((store, dict(payload)))
+    except Full:
+        # Audit saturation must not silently discard an authorization event.
+        store.append_application_access_audit(payload)
 
 
 class TrialAccessService:
@@ -585,13 +745,13 @@ class ApplicationAccessService:
         component_capabilities: tuple[str, ...] = (),
         approval_id: str | None = None,
         observation: Mapping[str, Any] | None = None,
+        defer_audit: bool = False,
     ) -> ApplicationAccessDecision:
-        release = self.store.get_release(application_id, release_digest)
-        subject_grants = tuple(
-            self.store.list_application_access_grants(
-                application_id,
-                subject_ref=subject_ref,
-            )
+        release, subject_grants = _decision_inputs(
+            self.store,
+            application_id,
+            release_digest,
+            subject_ref,
         )
         grant = next(
             (
@@ -645,13 +805,17 @@ class ApplicationAccessService:
                     ),
                 }
             )
-        self._audit(audit_payload)
+        if defer_audit:
+            _defer_application_access_audit(self.store, audit_payload)
+        else:
+            self._audit(audit_payload)
         return decision
 
 
 __all__ = [
     "ApplicationAccessError",
     "ApplicationAccessService",
+    "prewarm_application_access_inputs",
     "TrialAccessError",
     "TrialAccessService",
 ]

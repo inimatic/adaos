@@ -176,6 +176,42 @@ _TOOL_CALL_IDEMPOTENCY_WAIT_S = max(
 )
 _TOOL_CALL_IDEMPOTENCY_LOCK = threading.RLock()
 _TOOL_CALL_IDEMPOTENCY_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
+_EXACT_TRIAL_ASYNC_CACHE_TTL_S = max(
+    10.0,
+    min(
+        600.0,
+        float(os.getenv("ADAOS_EXACT_TRIAL_AUTHORITY_CACHE_TTL_S") or "120"),
+    ),
+)
+_EXACT_TRIAL_ASYNC_CACHE_MAX = 128
+_EXACT_TRIAL_ASYNC_CACHE: dict[tuple[object, ...], tuple[float, Any]] = {}
+_EXACT_TRIAL_ASYNC_INFLIGHT: dict[tuple[object, ...], asyncio.Task[Any]] = {}
+_EXACT_TRIAL_MANAGER_CACHE_MAX = 128
+_EXACT_TRIAL_MANAGER_CACHE: dict[tuple[object, ...], Any] = {}
+_EXACT_TRIAL_MANAGER_INFLIGHT: dict[tuple[object, ...], asyncio.Task[Any]] = {}
+_APPLICATION_RUNTIME_ASYNC_CACHE_TTL_S = max(
+    10.0,
+    min(
+        600.0,
+        float(os.getenv("ADAOS_APPLICATION_RUNTIME_AUTHORITY_CACHE_TTL_S") or "120"),
+    ),
+)
+_APPLICATION_RUNTIME_ASYNC_CACHE_MAX = 256
+_APPLICATION_RUNTIME_ASYNC_CACHE: dict[tuple[object, ...], tuple[float, Any]] = {}
+_APPLICATION_RUNTIME_ASYNC_INFLIGHT: dict[tuple[object, ...], asyncio.Task[Any]] = {}
+_APPLICATION_ACCESS_ASYNC_CACHE_TTL_S = max(
+    1.0,
+    min(
+        30.0,
+        float(os.getenv("ADAOS_APPLICATION_ACCESS_DECISION_CACHE_TTL_S") or "5"),
+    ),
+)
+_APPLICATION_ACCESS_ASYNC_CACHE_MAX = 256
+_APPLICATION_ACCESS_ASYNC_CACHE: dict[tuple[object, ...], tuple[float, Any]] = {}
+_APPLICATION_ACCESS_ASYNC_INFLIGHT: dict[tuple[object, ...], asyncio.Task[Any]] = {}
+_WEBSPACE_RUNTIME_CLASS_CACHE_TTL_S = 5.0
+_WEBSPACE_RUNTIME_CLASS_CACHE_LOCK = threading.RLock()
+_WEBSPACE_RUNTIME_CLASS_CACHE: dict[tuple[int, str], tuple[float, bool]] = {}
 _APPROVED_ACTION_STATES = {"approve", "approved", "allowed", "operator_apply_allowed", "responded"}
 _RISK_FREEFORM_ARGUMENT_KEYS = {"content", "text"}
 
@@ -267,8 +303,31 @@ def _webspace_uses_dev_runtime(
     try:
         from adaos.services.workspaces import index as workspace_index
 
-        manifest = workspace_index.get_workspace(webspace_id)
-        return bool(manifest and manifest.is_dev)
+        # This classification is requested twice per tool call and a mounted
+        # page starts several calls concurrently. On Windows the old shape
+        # opened SQLite for every check; under a cold YDoc replay those tiny
+        # reads queued for seconds before any actual tool work could start.
+        # Collapse the burst while keeping workspace-kind changes visible on a
+        # short bounded interval.
+        try:
+            ctx_id = id(get_ctx())
+        except Exception:
+            ctx_id = 0
+        cache_key = (ctx_id, webspace_id)
+        now = time.monotonic()
+        with _WEBSPACE_RUNTIME_CLASS_CACHE_LOCK:
+            cached = _WEBSPACE_RUNTIME_CLASS_CACHE.get(cache_key)
+            if cached is not None and now < cached[0]:
+                return cached[1]
+            manifest = workspace_index.get_workspace(webspace_id)
+            is_dev = bool(manifest and manifest.is_dev)
+            _WEBSPACE_RUNTIME_CLASS_CACHE[cache_key] = (
+                time.monotonic() + _WEBSPACE_RUNTIME_CLASS_CACHE_TTL_S,
+                is_dev,
+            )
+            while len(_WEBSPACE_RUNTIME_CLASS_CACHE) > 64:
+                _WEBSPACE_RUNTIME_CLASS_CACHE.pop(next(iter(_WEBSPACE_RUNTIME_CLASS_CACHE)))
+            return is_dev
     except Exception:
         _log.debug("failed to resolve runtime space for webspace=%s", webspace_id, exc_info=True)
         return False
@@ -2138,6 +2197,36 @@ def _project_tool_context_meta(
     return projected
 
 
+async def _cached_thread_singleflight(
+    *,
+    cache: dict[tuple[object, ...], tuple[float, Any]],
+    inflight: dict[tuple[object, ...], asyncio.Task[Any]],
+    key: tuple[object, ...],
+    ttl_s: float,
+    max_entries: int,
+    invoke,
+) -> Any:
+    """Collapse duplicate bounded authority reads before they enter workers."""
+
+    now = time.monotonic()
+    cached = cache.get(key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+    task = inflight.get(key)
+    if task is None:
+        task = asyncio.create_task(asyncio.to_thread(invoke))
+        inflight[key] = task
+    try:
+        resolved = await asyncio.shield(task)
+    finally:
+        if inflight.get(key) is task and task.done():
+            inflight.pop(key, None)
+    cache[key] = (time.monotonic() + ttl_s, resolved)
+    while len(cache) > max_entries:
+        cache.pop(next(iter(cache)))
+    return resolved
+
+
 async def _authorize_application_tool_call(
     *,
     body: ToolCall,
@@ -2181,13 +2270,36 @@ async def _authorize_application_tool_call(
             body,
             ctx,
         )
+        component_ref = f"skill:{skill_name}"
         authority = await asyncio.to_thread(
             application_permissions_context,
-            component_ref=f"skill:{skill_name}",
+            component_ref=component_ref,
             requested_project_ref=requested_project_ref or None,
             dev_projects_root=Path(projects_dir()),
             dev_skills_root=Path(skills_dir()),
         )
+        # A DEV webspace can briefly retain the previous scenario selection
+        # while its newly materialized application is already executing.  The
+        # workspace remains the preferred authority, but a stale selection
+        # must not make the real, uniquely-declared owner unusable.  Fall back
+        # only for this exact ownership mismatch; ambiguous ownership and an
+        # invalid permission profile still fail closed below.
+        diagnostics = {
+            str(item).strip()
+            for item in authority.get("diagnostics") or ()
+            if str(item).strip()
+        }
+        if (
+            requested_project_ref
+            and "requested Project does not declare the component" in diagnostics
+        ):
+            authority = await asyncio.to_thread(
+                application_permissions_context,
+                component_ref=component_ref,
+                requested_project_ref=None,
+                dev_projects_root=Path(projects_dir()),
+                dev_skills_root=Path(skills_dir()),
+            )
         if (
             authority.get("status") != "present"
             or authority.get("authority_status") != "valid"
@@ -2297,34 +2409,67 @@ async def _authorize_application_tool_call(
     state_dir = Path(getattr(ctx, "authority_state_dir", None) or state_dir_getter())
     management = ApplicationAccessManagementService(get_application_service(state_dir))
     admission_timings = phase_timings if phase_timings is not None else {}
+    shared_dependency = bool(requested_application_id) and (
+        _declared_skill_webui_owner(
+            manager,
+            skill_name=skill_name,
+            dev=False,
+        )
+        == "shared"
+    )
+    runtime_webspace_id = _resolve_tool_webspace_id(
+        body.arguments or {}, context=body.context
+    )
+    runtime_context_key = (
+        str(state_dir),
+        skill_name,
+        requested_application_id,
+        requested_release_digest,
+        requested_scenario_id,
+        runtime_webspace_id,
+    )
     stage_started = time.perf_counter()
     try:
-        runtime = await asyncio.to_thread(
-            management.resolve_runtime_context,
-            skill_name=skill_name,
-            requested_application_id=requested_application_id,
-            requested_release_digest=requested_release_digest,
-            requested_scenario_id=requested_scenario_id,
-            webspace_id=_resolve_tool_webspace_id(body.arguments or {}, context=body.context),
+        runtime = await _cached_thread_singleflight(
+            cache=_APPLICATION_RUNTIME_ASYNC_CACHE,
+            inflight=_APPLICATION_RUNTIME_ASYNC_INFLIGHT,
+            key=runtime_context_key,
+            ttl_s=_APPLICATION_RUNTIME_ASYNC_CACHE_TTL_S,
+            max_entries=_APPLICATION_RUNTIME_ASYNC_CACHE_MAX,
+            invoke=lambda: management.resolve_runtime_context(
+                skill_name=skill_name,
+                requested_application_id=requested_application_id,
+                requested_release_digest=requested_release_digest,
+                requested_scenario_id=requested_scenario_id,
+                webspace_id=runtime_webspace_id,
+            ),
         )
     except ApplicationAccessError as exc:
         ambiguous = "ambiguous" in str(exc).lower()
-        raise HTTPException(
-            status_code=409 if ambiguous else 403,
-            detail={
-                "error": (
-                    "application_context_ambiguous"
-                    if ambiguous
-                    else "application_context_invalid"
-                ),
-                "retryable": False,
-                "technical_detail": {
-                    "tool": body.tool,
-                    "requested_application_id": requested_application_id or None,
-                    "requested_scenario_id": requested_scenario_id or None,
+        # The page Application can legitimately have both Stable and Trial
+        # releases while it consumes a shared dependency. Before the browser
+        # receives the materialization digest, that caller identity is
+        # ambiguous, but it is not the authority which owns the shared skill.
+        # Resolve the unique provider below instead of making first paint race
+        # the Yjs materialization metadata. Owned components remain fail-closed.
+        if not (ambiguous and shared_dependency):
+            raise HTTPException(
+                status_code=409 if ambiguous else 403,
+                detail={
+                    "error": (
+                        "application_context_ambiguous"
+                        if ambiguous
+                        else "application_context_invalid"
+                    ),
+                    "retryable": False,
+                    "technical_detail": {
+                        "tool": body.tool,
+                        "requested_application_id": requested_application_id or None,
+                        "requested_scenario_id": requested_scenario_id or None,
+                    },
                 },
-            },
-        ) from exc
+            ) from exc
+        runtime = None
     finally:
         admission_timings["application_runtime_resolution_ms"] = (
             time.perf_counter() - stage_started
@@ -2332,12 +2477,7 @@ async def _authorize_application_tool_call(
     if (
         runtime is None
         and requested_application_id
-        and _declared_skill_webui_owner(
-            manager,
-            skill_name=skill_name,
-            dev=False,
-        )
-        == "shared"
+        and shared_dependency
     ):
         # A shared skill can render inside another Application's scenario.  In
         # that case the page Application identity is a routing hint for the
@@ -2398,30 +2538,34 @@ async def _authorize_application_tool_call(
     # The cheap read-only path may skip manifest loading for legacy skills.
     # Application authorization cannot inherit that shortcut: its permission
     # must be derived from the active runtime contract, never from a tool name.
-    if not declared_side_effects:
-        declared_side_effects = await asyncio.to_thread(
-            _declared_tool_side_effects,
+    if not declared_side_effects or not component_capabilities or not application_contract:
+        # The cheap public read path deliberately arrives without a resolved
+        # manifest contract.  Resolve the three authority fields in one worker
+        # admission instead of queueing three serial filesystem reads.  This
+        # path is hit by every declarative Management datasource on first
+        # paint, so the old shape added roughly 150 ms per widget even after
+        # runtime-selection caches were warm.
+        resolved_contract = await asyncio.to_thread(
+            _declared_tool_contract,
             manager,
             skill_name=skill_name,
             public_tool=public_tool,
             dev=False,
         )
-    if not component_capabilities:
-        component_capabilities = await asyncio.to_thread(
-            _declared_tool_permissions,
-            manager,
-            skill_name=skill_name,
-            public_tool=public_tool,
-            dev=False,
-        )
-    if not application_contract:
-        application_contract = await asyncio.to_thread(
-            _declared_tool_application_access,
-            manager,
-            skill_name=skill_name,
-            public_tool=public_tool,
-            dev=False,
-        )
+        if not declared_side_effects:
+            declared_side_effects = str(resolved_contract.get("side_effects") or "")
+        if not component_capabilities:
+            component_capabilities = tuple(
+                str(item)
+                for item in resolved_contract.get("permissions") or ()
+                if str(item)
+            )
+        if not application_contract:
+            application_contract = dict(
+                resolved_contract.get("application_access")
+                if isinstance(resolved_contract.get("application_access"), Mapping)
+                else {}
+            )
 
     stage_started = time.perf_counter()
     actor = current_caller()
@@ -2432,10 +2576,16 @@ async def _authorize_application_tool_call(
     device_ref = ""
     session_trusted = False
     device_trusted = False
-    access_service = personalization_access_service(ctx)
-    access_store = access_service.store
+    access_store = None
+
+    def _access_store():
+        nonlocal access_store
+        if access_store is None:
+            access_store = personalization_access_service(ctx).store
+        return access_store
+
     if actor.kind == "session":
-        session = await asyncio.to_thread(access_store.get_session, actor.id)
+        session = await asyncio.to_thread(_access_store().get_session, actor.id)
         if session:
             subject = _mapping(session.get("subject"))
             if subject.get("kind") and subject.get("id"):
@@ -2450,14 +2600,18 @@ async def _authorize_application_tool_call(
         request.headers.get("x-adaos-device-id"),
     )
     if header_device_id:
-        device = await asyncio.to_thread(access_store.get_device_key, header_device_id)
-        subject_id = subject_ref.partition(":")[2]
-        if device and str(device.get("status") or "active") == "active" and str(device.get("user_id") or "") == subject_id:
+        if bool(getattr(request.state, "adaos_owner_node_credential", False)):
             device_ref = f"device:{header_device_id}"
             device_trusted = True
+        else:
+            device = await asyncio.to_thread(_access_store().get_device_key, header_device_id)
+            subject_id = subject_ref.partition(":")[2]
+            if device and str(device.get("status") or "active") == "active" and str(device.get("user_id") or "") == subject_id:
+                device_ref = f"device:{header_device_id}"
+                device_trusted = True
     if device_ref and not device_trusted:
         device_id = device_ref.partition(":")[2]
-        device = await asyncio.to_thread(access_store.get_device_key, device_id)
+        device = await asyncio.to_thread(_access_store().get_device_key, device_id)
         device_trusted = bool(device and str(device.get("status") or "active") == "active")
     admission_timings["application_identity_resolution_ms"] = (
         time.perf_counter() - stage_started
@@ -2495,21 +2649,38 @@ async def _authorize_application_tool_call(
         "external_provider_ref": _first_text(payload.get(provider_argument)) if provider_argument else "",
     }
     stage_started = time.perf_counter()
-    decision = await asyncio.to_thread(
-        management.access.decide,
+    decision_key = (
+        str(state_dir),
         runtime["application_id"],
-        release_digest=runtime["release_digest"],
-        subject_ref=subject_ref,
-        permission_id=permission_id,
-        app_capability=app_capability,
-        actor_chain=actor_chain,
-        component_capabilities=component_capabilities,
-        observation={
-            "network_destination": str(
-                actor_chain.get("external_provider_ref") or ""
-            ),
-            "data_categories": (),
-        },
+        runtime["release_digest"],
+        subject_ref,
+        permission_id,
+        app_capability,
+        json.dumps(actor_chain, sort_keys=True, separators=(",", ":"), default=str),
+        tuple(component_capabilities),
+    )
+    decision = await _cached_thread_singleflight(
+        cache=_APPLICATION_ACCESS_ASYNC_CACHE,
+        inflight=_APPLICATION_ACCESS_ASYNC_INFLIGHT,
+        key=decision_key,
+        ttl_s=_APPLICATION_ACCESS_ASYNC_CACHE_TTL_S,
+        max_entries=_APPLICATION_ACCESS_ASYNC_CACHE_MAX,
+        invoke=lambda: management.access.decide(
+            runtime["application_id"],
+            release_digest=runtime["release_digest"],
+            subject_ref=subject_ref,
+            permission_id=permission_id,
+            app_capability=app_capability,
+            actor_chain=actor_chain,
+            component_capabilities=component_capabilities,
+            observation={
+                "network_destination": str(
+                    actor_chain.get("external_provider_ref") or ""
+                ),
+                "data_categories": (),
+            },
+            defer_audit=True,
+        ),
     )
     admission_timings["application_access_decision_ms"] = (
         time.perf_counter() - stage_started
@@ -2775,7 +2946,7 @@ async def _tool_attachment_store(
         skill_name,
     )
     manager = (
-        await asyncio.to_thread(trial_runtime.ready_manager, skill_name)
+        await _ready_trial_manager_singleflight(trial_runtime, skill_name)
         if trial_runtime is not None
         else await _skill_manager_for_context(ctx)
     )
@@ -2922,7 +3093,7 @@ async def _authorize_scoped_tool_call(
     if await asyncio.to_thread(_webspace_uses_dev_runtime, routing):
         raise HTTPException(status_code=403, detail="scoped_caller_dev_runtime_not_supported")
     manager = resolved_manager or (
-        await asyncio.to_thread(trial_runtime.ready_manager, skill)
+        await _ready_trial_manager_singleflight(trial_runtime, skill)
         if trial_runtime is not None
         else await _skill_manager_for_context(ctx)
     )
@@ -2939,6 +3110,189 @@ async def _authorize_scoped_tool_call(
         raise HTTPException(status_code=403, detail={"error": "caller_access_denied", "reason": decision.reason_code})
 
 
+async def _selected_trial_exact_singleflight(
+    ctx: AgentContext,
+    webspace: str,
+    application_id: str,
+    release_digest: str,
+    kind: str,
+    component_id: str,
+    workspace_classified: bool,
+) -> Any:
+    """Collapse concurrent page reads onto one exact authority lookup.
+
+    The synchronous resolver already validates its filesystem fingerprint.
+    This event-loop layer prevents a first-paint fan-out from queueing the same
+    resolver N times in the shared worker pool, where unrelated Yjs and skill
+    filesystem work can otherwise turn each cache hit into a multi-second wait.
+    """
+
+    from adaos.services.applications.runtime_selection import selected_trial_exact
+
+    key = (
+        id(ctx),
+        str(webspace or "").strip(),
+        str(application_id or "").strip(),
+        str(release_digest or "").strip(),
+        str(kind or "").strip(),
+        str(component_id or "").strip(),
+        bool(workspace_classified),
+    )
+    now = time.monotonic()
+    cached = _EXACT_TRIAL_ASYNC_CACHE.get(key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+    task = _EXACT_TRIAL_ASYNC_INFLIGHT.get(key)
+    if task is None:
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                selected_trial_exact,
+                ctx,
+                webspace,
+                application_id,
+                release_digest,
+                kind,
+                component_id,
+                workspace_classified,
+            )
+        )
+        _EXACT_TRIAL_ASYNC_INFLIGHT[key] = task
+    try:
+        resolved = await asyncio.shield(task)
+    finally:
+        if _EXACT_TRIAL_ASYNC_INFLIGHT.get(key) is task and task.done():
+            _EXACT_TRIAL_ASYNC_INFLIGHT.pop(key, None)
+    _EXACT_TRIAL_ASYNC_CACHE[key] = (
+        time.monotonic() + _EXACT_TRIAL_ASYNC_CACHE_TTL_S,
+        resolved,
+    )
+    while len(_EXACT_TRIAL_ASYNC_CACHE) > _EXACT_TRIAL_ASYNC_CACHE_MAX:
+        _EXACT_TRIAL_ASYNC_CACHE.pop(next(iter(_EXACT_TRIAL_ASYNC_CACHE)))
+    return resolved
+
+
+async def _ready_trial_manager_singleflight(trial_runtime: Any, skill_name: str) -> Any:
+    """Return a manager already verified for an immutable Trial component."""
+
+    identity = trial_runtime.identity(skill_name)
+    key = (
+        str(getattr(trial_runtime, "root", "")),
+        str(identity.get("release_digest") or ""),
+        str(identity.get("package_digest") or ""),
+        str(skill_name or ""),
+    )
+    cached = _EXACT_TRIAL_MANAGER_CACHE.get(key)
+    if cached is not None:
+        return cached
+    task = _EXACT_TRIAL_MANAGER_INFLIGHT.get(key)
+    if task is None:
+        task = asyncio.create_task(
+            asyncio.to_thread(trial_runtime.ready_manager, skill_name)
+        )
+        _EXACT_TRIAL_MANAGER_INFLIGHT[key] = task
+    try:
+        manager = await asyncio.shield(task)
+    finally:
+        if _EXACT_TRIAL_MANAGER_INFLIGHT.get(key) is task and task.done():
+            _EXACT_TRIAL_MANAGER_INFLIGHT.pop(key, None)
+    _EXACT_TRIAL_MANAGER_CACHE[key] = manager
+    while len(_EXACT_TRIAL_MANAGER_CACHE) > _EXACT_TRIAL_MANAGER_CACHE_MAX:
+        _EXACT_TRIAL_MANAGER_CACHE.pop(next(iter(_EXACT_TRIAL_MANAGER_CACHE)))
+    return manager
+
+
+async def prewarm_selected_application_tool_authority(
+    ctx: AgentContext,
+    *,
+    webspace_id: str,
+    application_id: str,
+    release_digest: str,
+    scenario_id: str,
+    skill_name: str,
+    public_tools: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Prime immutable execution and Application routing without a caller.
+
+    Caller-specific policy decisions remain fail-closed and are never warmed
+    here.  The expensive release/component resolution is independent of the
+    user, however, and is shared by every datasource in the selected page.
+    """
+
+    from adaos.services.applications.access_management import (
+        ApplicationAccessManagementService,
+    )
+    from adaos.services.applications.runtime import get_application_service
+    from adaos.services.applications.access import prewarm_application_access_inputs
+    from adaos.services.personalization_runtime import current_user_id
+
+    runtime = await _selected_trial_exact_singleflight(
+        ctx,
+        webspace_id,
+        application_id,
+        release_digest,
+        "skill",
+        skill_name,
+        True,
+    )
+    if runtime is None:
+        return {"ok": False, "reason": "selected_trial_missing"}
+    manager = await _ready_trial_manager_singleflight(runtime, skill_name)
+    paths = getattr(ctx, "paths", None)
+    state_dir_getter = getattr(paths, "state_dir", None)
+    if not callable(state_dir_getter) and not getattr(ctx, "authority_state_dir", None):
+        return {"ok": False, "reason": "application_authority_unavailable"}
+    state_dir = Path(getattr(ctx, "authority_state_dir", None) or state_dir_getter())
+    management = ApplicationAccessManagementService(get_application_service(state_dir))
+    runtime_key = (
+        str(state_dir),
+        skill_name,
+        application_id,
+        release_digest,
+        scenario_id,
+        webspace_id,
+    )
+    resolved = await _cached_thread_singleflight(
+        cache=_APPLICATION_RUNTIME_ASYNC_CACHE,
+        inflight=_APPLICATION_RUNTIME_ASYNC_INFLIGHT,
+        key=runtime_key,
+        ttl_s=_APPLICATION_RUNTIME_ASYNC_CACHE_TTL_S,
+        max_entries=_APPLICATION_RUNTIME_ASYNC_CACHE_MAX,
+        invoke=lambda: management.resolve_runtime_context(
+            skill_name=skill_name,
+            requested_application_id=application_id,
+            requested_release_digest=release_digest,
+            requested_scenario_id=scenario_id,
+            webspace_id=webspace_id,
+        ),
+    )
+    access_inputs = await asyncio.to_thread(
+        prewarm_application_access_inputs,
+        management.store,
+        application_id=str(resolved.get("application_id") or application_id),
+        release_digest=str(resolved.get("release_digest") or release_digest),
+        subject_ref=f"user:{current_user_id(ctx)}",
+    )
+    contracts: list[str] = []
+    for public_tool in tuple(dict.fromkeys(public_tools))[:16]:
+        await asyncio.to_thread(
+            _declared_tool_contract,
+            manager,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=False,
+        )
+        contracts.append(public_tool)
+    return {
+        "ok": True,
+        "application_id": str(resolved.get("application_id") or application_id),
+        "release_digest": str(resolved.get("release_digest") or release_digest),
+        "webspace_id": webspace_id,
+        "skill": skill_name,
+        "contracts": contracts,
+        "access_inputs": access_inputs,
+    }
+
+
 async def _call_tool_with_identity(body: ToolCall, request: Request, response: Response, ctx: AgentContext):
     # Authorization precedes cached results as well as new execution.
     from adaos.services.applications.runtime_selection import selected_trial
@@ -2948,6 +3302,10 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     request_started_at = time.perf_counter()
     outer_timings: dict[str, float] = {"request_started_at": request_started_at}
     request_context = _mapping(body.context)
+    has_exact_application_authority = bool(
+        _first_text(request_context.get("application_id"))
+        and _first_text(request_context.get("application_release_digest"))
+    )
     webspace = str(request_context.get("webspace_id") or "").strip() or _resolve_tool_webspace_id(
         body.arguments or {}, context=body.context
     )
@@ -2976,13 +3334,32 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
         # A DEV webspace is authoritative for its preview rail. Selecting a
         # production Trial first can otherwise bind one declarative read to an
         # older beta runtime while the rest of the page uses DEV.
-        trial_runtime = None if body.dev or implicit_dev_webspace else await asyncio.to_thread(selected_trial, ctx, webspace, "skill", body.tool.partition(":")[0])
+        if body.dev or implicit_dev_webspace:
+            trial_runtime = None
+        elif has_exact_application_authority:
+            trial_runtime = await _selected_trial_exact_singleflight(
+                ctx,
+                webspace,
+                _first_text(request_context.get("application_id")),
+                _first_text(request_context.get("application_release_digest")),
+                "skill",
+                body.tool.partition(":")[0],
+                True,
+            )
+        else:
+            trial_runtime = await asyncio.to_thread(
+                selected_trial,
+                ctx,
+                webspace,
+                "skill",
+                body.tool.partition(":")[0],
+            )
         resolved_manager = None
         if trial_runtime is not None:
             if body.dev:
                 raise TrialRuntimeUnavailable("A production Trial selection cannot execute DEV tools")
-            resolved_manager = await asyncio.to_thread(
-                trial_runtime.ready_manager,
+            resolved_manager = await _ready_trial_manager_singleflight(
+                trial_runtime,
                 body.tool.partition(":")[0],
             )
             context = dict(body.context or {})
@@ -3011,7 +3388,21 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
         time.perf_counter() - stage_started
     ) * 1000.0
     stage_started = time.perf_counter()
-    await asyncio.to_thread(_reject_unavailable_trial_execution, body, ctx)
+    # An exact Trial executor selected above is itself the admitted runtime.
+    # Re-reading Builder preview state here cannot make it more available and
+    # only queues another filesystem job for every first-paint datasource.
+    # A development Webspace is an explicit runtime authority, not a fallback
+    # for the Trial currently selected in Builder's workbench.  The previous
+    # guard inspected that global workbench selection even for requests coming
+    # from desktop-dev and consequently disabled unrelated Builder panels as
+    # soon as the selected change entered Trial.  Keep fail-closed behaviour
+    # on production surfaces, but do not let a Trial selection shadow DEV.
+    if trial_runtime is None and not (
+        body.dev
+        or implicit_dev_webspace
+        or has_exact_application_authority
+    ):
+        await asyncio.to_thread(_reject_unavailable_trial_execution, body, ctx)
     outer_timings["availability_admission_ms"] = (
         time.perf_counter() - stage_started
     ) * 1000.0
@@ -3134,7 +3525,7 @@ async def _call_tool_impl(
 
     phase_started = time.perf_counter()
     mgr = resolved_manager or (
-        await asyncio.to_thread(trial_runtime.ready_manager, skill_name)
+        await _ready_trial_manager_singleflight(trial_runtime, skill_name)
         if trial_runtime is not None
         else await _skill_manager_for_context(ctx)
     )
@@ -3344,8 +3735,18 @@ async def _call_tool_impl(
                 from adaos.services.agent_context import use_ctx
 
                 local_execution_started = True
-                with use_ctx(mgr.ctx):
-                    return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                stage_started = time.perf_counter()
+                try:
+                    with use_ctx(mgr.ctx):
+                        return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                finally:
+                    # Trial-backed Applications use the same execution path but
+                    # previously reported a misleading 0 ms skill-dispatch in
+                    # Server-Timing. Keep the public latency split trustworthy;
+                    # it is the basis of the Management first-paint RCA.
+                    local_timings["run_tool_ms"] = (
+                        time.perf_counter() - stage_started
+                    ) * 1000.0
             if not body.dev and _should_autosync_workspace_runtime(
                 tool_name=body.tool,
                 declared_read_only=trusted_read_only,
@@ -3407,11 +3808,25 @@ async def _call_tool_impl(
         skill_startup_ms = float(local_timings.get("service_startup_ms") or 0.0) + float(
             local_timings.get("prepare_ms") or 0.0
         )
-        server_timing = (
-            f"admission;dur={admission_ms:.1f}, "
-            f"skill-startup;dur={skill_startup_ms:.1f}, "
-            f"skill-dispatch;dur={float(local_timings.get('run_tool_ms') or 0.0):.1f}"
-        )
+        # Keep the coarse groups for dashboards and expose the individual
+        # gates for a browser/operator RCA.  Without this split a 700 ms
+        # permission lookup and a 700 ms runtime selection were both reported
+        # merely as `admission`, which made cold-page regressions opaque.
+        server_timing_parts = [
+            f"admission;dur={admission_ms:.1f}",
+            f"runtime-selection;dur={float(phase_timings.get('runtime_selection_ms') or 0.0):.1f}",
+            f"scope-admission;dur={float(phase_timings.get('scope_admission_ms') or 0.0):.1f}",
+            f"availability-admission;dur={float(phase_timings.get('availability_admission_ms') or 0.0):.1f}",
+            f"application-admission;dur={float(phase_timings.get('application_admission_ms') or 0.0):.1f}",
+            f"application-runtime;dur={float(phase_timings.get('application_runtime_resolution_ms') or 0.0):.1f}",
+            f"application-identity;dur={float(phase_timings.get('application_identity_resolution_ms') or 0.0):.1f}",
+            f"application-decision;dur={float(phase_timings.get('application_access_decision_ms') or 0.0):.1f}",
+            f"application-projection;dur={float(phase_timings.get('application_projection_ms') or 0.0):.1f}",
+            f"action-admission;dur={float(phase_timings.get('action_admission_ms') or 0.0):.1f}",
+            f"skill-startup;dur={skill_startup_ms:.1f}",
+            f"skill-dispatch;dur={float(local_timings.get('run_tool_ms') or 0.0):.1f}",
+        ]
+        server_timing = ", ".join(server_timing_parts)
         response.headers["Server-Timing"] = server_timing
         _log.debug(
             "tools.call profile tool=%s total_ms=%.1f runtime_selection_ms=%.1f "
@@ -3481,7 +3896,10 @@ async def _call_tool_impl(
         ) from exc
     except RuntimeChannelConflict as exc:
         raise HTTPException(status_code=409, detail={"error": "application_runtime_inactive",
-            "message": str(exc), "retryable": False}) from exc
+            # The manifest contract is the authority here. A tool declared
+            # read-only is safe to replay after an Application channel cutover,
+            # even when a conservative action classifier returned "unknown".
+            "message": str(exc), "retryable": bool(trusted_read_only)}) from exc
     except (FileNotFoundError, RuntimeError, KeyError) as e:
         if trial_runtime is not None:
             raise HTTPException(status_code=409, detail={"error": "trial_execution_failed", "message": str(e), "retryable": False}) from e

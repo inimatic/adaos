@@ -58,8 +58,9 @@ _TIMER_START_RE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 
-_RULES_CACHE_TTL_S = 2.0
+_RULES_CACHE_TTL_S = 60.0
 _rules_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_baseline_rules_cache: tuple[float, list[dict[str, Any]]] | None = None
 _rules_lock: asyncio.Lock | None = None
 _rules_lock_loop: asyncio.AbstractEventLoop | None = None
 _NEURO_LITE_SKILL_NAME = "neuro_nlu_lite_skill"
@@ -133,8 +134,10 @@ def _use_neural_stage() -> bool:
 
 
 def invalidate_dynamic_regex_cache(*, webspace_id: str | None = None) -> None:
+    global _baseline_rules_cache
     if webspace_id is None:
         _rules_cache.clear()
+        _baseline_rules_cache = None
         return
     _rules_cache.pop(str(webspace_id), None)
 
@@ -588,6 +591,25 @@ def _iter_rules_from_skills() -> list[dict[str, Any]]:
     return out
 
 
+def _cached_baseline_rules() -> list[dict[str, Any]]:
+    """Read immutable scenario/skill matchers once per bounded generation.
+
+    The former two-second per-webspace cache reparsed every installed YAML
+    manifest on the asyncio event loop.  On the observed workstation that
+    blocked YJS, chat and device.register for 3-7 seconds on an ordinary
+    weather question.  Invalidators still clear this cache immediately when
+    Builder/Teacher changes the registry.
+    """
+    global _baseline_rules_cache
+    now = time.time()
+    cached = _baseline_rules_cache
+    if cached and now - cached[0] < _RULES_CACHE_TTL_S:
+        return [dict(item) for item in cached[1]]
+    rules = [*_iter_rules_from_all_scenarios(), *_iter_rules_from_skills()]
+    _baseline_rules_cache = (now, [dict(item) for item in rules])
+    return rules
+
+
 async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
     """
     Load compiled regex rules for the given webspace.
@@ -617,8 +639,9 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
         # Collect scenario rules from all installed workspace scenarios. If we can
         # resolve the active scenario for this webspace, we'll use it to scope
         # scenario-owned rules during matching.
-        baseline_rules.extend(_iter_rules_from_all_scenarios())
-        baseline_rules.extend(_iter_rules_from_skills())
+        # Filesystem traversal + YAML parsing is blocking work.  Keep it away
+        # from the shared runtime loop used by YJS and the control plane.
+        baseline_rules.extend(await asyncio.to_thread(_cached_baseline_rules))
 
         # Runtime Teacher rules remain scoped to the webspace until Builder
         # promotes them into a validated conversational package.

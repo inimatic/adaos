@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -19,6 +20,10 @@ from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 _log = logging.getLogger("adaos.nlu.teacher")
 
 _MAX_ITEMS = int(os.getenv("ADAOS_NLU_TEACHER_MAX", "200") or "200")
+_DIALOG_OUTCOME_WAIT_S = max(
+    0.0,
+    float(os.getenv("ADAOS_NLU_TEACHER_DIALOG_OUTCOME_WAIT_S", "12") or "12"),
+)
 
 
 def _env_enabled(value: str | None) -> bool | None:
@@ -269,6 +274,42 @@ def _teacher_enabled(ctx: Any) -> bool:
         return True
 
 
+async def _dialog_outcome_was_handled(payload: Mapping[str, Any], meta: Mapping[str, Any]) -> bool:
+    """Wait for the dialog fallback that races the Teacher subscriber.
+
+    Only router-originated dialog turns opt into this fence. Other NLU miss
+    producers keep their existing immediate Teacher behaviour. Polling the
+    dispatch ledger is bounded and does not invoke another model.
+    """
+
+    if meta.get("teacher_outcome_fence") is not True:
+        return False
+    request_id = str(payload.get("request_id") or "").strip()
+    if not request_id:
+        return False
+    webspace_id = _resolve_webspace_id(payload)
+    route_id = str(meta.get("route_id") or meta.get("route") or "voice_chat").strip() or "voice_chat"
+    try:
+        from adaos.services.nlu.dispatcher import has_dispatched_request
+    except Exception:
+        return False
+
+    deadline = asyncio.get_running_loop().time() + _DIALOG_OUTCOME_WAIT_S
+    while True:
+        try:
+            if has_dispatched_request(
+                request_id=request_id,
+                webspace_id=webspace_id,
+                route_id=route_id,
+            ):
+                return True
+        except Exception:
+            return False
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.1)
+
+
 async def _append_teacher_item(webspace_id: str, item: dict) -> None:
     from adaos.services.yjs.doc import async_get_ydoc
 
@@ -314,6 +355,13 @@ async def _on_not_obtained(evt: Any) -> None:
     if meta.get("suppress_teacher_bridge") is True:
         return
     if meta.get("nlu_teacher_dispatch") is True:
+        return
+    if await _dialog_outcome_was_handled(payload, meta):
+        _log.info(
+            "Teacher miss suppressed after successful dialog fallback request_id=%s webspace=%s",
+            request_id,
+            webspace_id,
+        )
         return
     status = _effective_not_obtained_status(reason=raw_reason, via=raw_via, meta=meta)
     reason = str(status.get("reason") or raw_reason or "unknown")

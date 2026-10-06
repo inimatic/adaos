@@ -158,6 +158,41 @@ def test_sdk_root_mcp_local_runtime_uses_embedded_without_bridge_probe(monkeypat
     ]
 
 
+def test_sdk_root_mcp_local_tool_uses_named_capability_profile(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(
+        sdk_root_mcp,
+        "get_local_target_context",
+        lambda **kwargs: {
+            "root_url": "https://root.test",
+            "target_id": "hub:test-subnet",
+            "subnet_id": "test-subnet",
+            "zone": "lab-a",
+            "local_runtime": True,
+        },
+    )
+
+    def invoke(tool_id, **kwargs):
+        calls.append((tool_id, kwargs))
+        return {"ok": True, "response": {"result": {"context": {"webspace_id": "desktop"}}}}
+
+    monkeypatch.setattr(sdk_root_mcp, "_call_local_control_tool", invoke)
+
+    result = sdk_root_mcp.call_local_root_mcp_tool(
+        "companion.context.get",
+        arguments={"webspace_id": "desktop"},
+        capability_profile="CompanionOperator",
+        actor="skill:conversation_companions",
+        request_id="request-1",
+    )
+
+    assert result["ok"] is True
+    assert calls[0][0] == "companion.context.get"
+    assert calls[0][1]["capability_profile"] == "CompanionOperator"
+    assert calls[0][1]["actor"] == "skill:conversation_companions"
+
+
 def test_sdk_root_mcp_falls_back_to_embedded_surface_on_bridge_fetch_failure(monkeypatch) -> None:
     sdk_root_mcp._EMBEDDED_FALLBACK_UNTIL.clear()
 

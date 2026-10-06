@@ -63,6 +63,11 @@ async def require_token(
     from adaos.services.personalization_runtime import current_user_id
 
     request.state.adaos_verified_caller = SubjectRef("user", current_user_id())
+    # This exact ingress path validated the node-owner credential. Downstream
+    # admission can trust an accompanying local device identifier without a
+    # second personalization-store lookup. Scoped bearer credentials never set
+    # this marker and retain full device/session validation.
+    request.state.adaos_owner_node_credential = True
     request.state.adaos_root_routed = (
         str(request.headers.get("X-AdaOS-Route-Authenticated") or "").strip() == "1"
     )

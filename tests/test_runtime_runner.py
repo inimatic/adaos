@@ -330,7 +330,7 @@ def test_execute_tool_reuses_prepared_import_context_for_immutable_revision(
             payload={},
             source_revision="sha256:one",
         )
-        monotonic[0] += 2.0
+        monotonic[0] += runtime_runner_module._PREPARED_MODULE_CACHE_TTL_SECONDS + 1.0
         third = runtime_runner_module.execute_tool(
             skill_dir,
             module="handlers.main",
@@ -346,6 +346,58 @@ def test_execute_tool_reuses_prepared_import_context_for_immutable_revision(
     assert third["marker"] == "one"
     assert purge_calls == 1
     assert module_load_calls == 2
+
+
+def test_execute_tool_reuses_revisioned_module_across_intervening_skill(
+    tmp_path: Path, monkeypatch
+) -> None:
+    first_skill = _write_skill(tmp_path, "first_revisioned_skill", "first")
+    second_skill = _write_skill(tmp_path, "second_revisioned_skill", "second")
+    monotonic = [100.0]
+    monkeypatch.setattr(runtime_runner_module.time, "monotonic", lambda: monotonic[0])
+    load_counts: dict[str, int] = {}
+    original_module_load = runtime_runner_module._load_skill_module
+
+    def counted_module_load(skill_path: Path, module_name: str):
+        key = skill_path.name
+        load_counts[key] = load_counts.get(key, 0) + 1
+        return original_module_load(skill_path, module_name)
+
+    monkeypatch.setattr(runtime_runner_module, "_load_skill_module", counted_module_load)
+    previous_context = runtime_runner_module._PREPARED_IMPORT_CONTEXT
+    runtime_runner_module._PREPARED_IMPORT_CONTEXT = None
+    try:
+        first = runtime_runner_module.execute_tool(
+            first_skill,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+            source_revision="sha256:first",
+        )
+        second = runtime_runner_module.execute_tool(
+            second_skill,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+            source_revision="sha256:second",
+        )
+        first_again = runtime_runner_module.execute_tool(
+            first_skill,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+            source_revision="sha256:first",
+        )
+    finally:
+        runtime_runner_module._PREPARED_IMPORT_CONTEXT = previous_context
+
+    assert first["marker"] == "first"
+    assert second["marker"] == "second"
+    assert first_again["marker"] == "first"
+    assert load_counts == {
+        "first_revisioned_skill": 1,
+        "second_revisioned_skill": 1,
+    }
 
 
 def test_execute_tool_revision_change_reloads_even_with_preserved_mtime(tmp_path: Path) -> None:
@@ -668,3 +720,16 @@ def test_absolute_namespace_helpers_do_not_resolve_to_another_skill(tmp_path):
     alpha, beta = create("namespace_alpha", "alpha"), create("namespace_beta", "beta")
     for root, expected in ((alpha, "alpha"), (beta, "beta"), (alpha, "alpha")):
         assert runtime_runner_module.execute_tool(root, module="handlers.main", attr="read", payload={}) == expected
+def test_module_file_containment_is_lexical_and_boundary_safe(tmp_path: Path) -> None:
+    skill = tmp_path / "skill"
+    inside = skill / "handlers" / "main.py"
+    sibling = tmp_path / "skill-other" / "handlers" / "main.py"
+
+    assert runtime_runner_module._module_file_is_under(
+        type("Module", (), {"__file__": str(inside)})(),
+        skill,
+    ) is True
+    assert runtime_runner_module._module_file_is_under(
+        type("Module", (), {"__file__": str(sibling)})(),
+        skill,
+    ) is False

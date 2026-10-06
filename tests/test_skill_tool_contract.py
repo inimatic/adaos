@@ -61,6 +61,61 @@ def test_declared_tool_contract_reads_one_runtime_snapshot(tmp_path: Path) -> No
     }
 
 
+def test_immutable_trial_contract_reuses_content_addressed_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "resolved.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "webui_owner": "application",
+                "tools": {
+                    "read": {
+                        "side_effects": "read_only",
+                        "permissions": {"required": ["workspace.read"]},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Manager:
+        calls = 0
+        _adaos_immutable_trial_authority = (
+            str(tmp_path),
+            "sha256:release",
+            "sha256:component",
+        )
+
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            self.calls += 1
+            return {"resolved_manifest": str(manifest_path)}
+
+    manager = _Manager()
+    first = declared_tool_contract(
+        manager,
+        skill_name="management",
+        public_tool="read",
+        dev=False,
+    )
+    second = declared_tool_contract(
+        manager,
+        skill_name="management",
+        public_tool="read",
+        dev=False,
+    )
+    owner = declared_skill_webui_owner(
+        manager,
+        skill_name="management",
+        dev=False,
+    )
+
+    assert first == second
+    assert owner == "application"
+    assert manager.calls == 1
+
+
 def test_legacy_runtime_effect_recovers_only_standard_workspace_capability(
     tmp_path: Path,
 ) -> None:

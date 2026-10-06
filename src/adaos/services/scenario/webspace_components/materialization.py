@@ -81,7 +81,11 @@ class MaterializationExecutorOwner:
             result_path = root / "result.json"
             stdout_path = root / "stdout.log"
             stderr_path = root / "stderr.log"
-            request_path.write_text(
+            # Generated Webspaces can make these files large, and Windows
+            # filesystem/antivirus latency is unbounded. Never make the
+            # asyncio owner thread wait for staging or result I/O.
+            await asyncio.to_thread(
+                request_path.write_text,
                 json.dumps(dict(request), ensure_ascii=True, separators=(",", ":")),
                 encoding="utf-8",
             )
@@ -205,18 +209,31 @@ class MaterializationExecutorOwner:
                         await asyncio.shield(wait_task)
                     raise
 
-            try:
-                stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-            except Exception:
-                stderr_tail = ""
-            if not result_path.exists():
+            def _read_worker_files() -> tuple[str, bool, int, str]:
+                try:
+                    stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+                except Exception:
+                    stderr_tail = ""
+                result_exists = result_path.exists()
+                if not result_exists:
+                    return stderr_tail, False, 0, ""
+                return (
+                    stderr_tail,
+                    True,
+                    int(result_path.stat().st_size),
+                    result_path.read_text(encoding="utf-8"),
+                )
+
+            stderr_tail, result_exists, result_size, result_text = await asyncio.to_thread(
+                _read_worker_files
+            )
+            if not result_exists:
                 raise RuntimeError(
                     f"materialization_worker_no_result: returncode={returncode} stderr={stderr_tail}"
                 )
-            result_size = int(result_path.stat().st_size)
             if result_size > max_result_bytes:
                 raise RuntimeError(f"materialization_worker_result_limit: bytes={result_size}")
-            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result = json.loads(result_text)
             if not isinstance(result, dict) or returncode != 0 or not bool(result.get("ok")):
                 detail = str(result.get("detail") if isinstance(result, dict) else "")
                 raise RuntimeError(

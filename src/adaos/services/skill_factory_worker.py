@@ -10588,6 +10588,42 @@ No secret, placeholder code or blocker-report files. Use
                 "subnet_data_integration",
             }
         )
+        if bounded_repair:
+            # A repair worker does not need the application-trace and user-
+            # clarification branches of the general feedback grammar. Keep a
+            # deterministic consumer field mask in the prompt while the full
+            # parser contract remains authoritative in Core. This prevents
+            # bounded repair prompts from growing with unrelated feedback
+            # capabilities.
+            feedback_rules = development_feedback_model_rules()
+            feedback_projection = {
+                key: feedback_rules[key]
+                for key in (
+                    "category",
+                    "impact",
+                    "max_items",
+                    "max_target_refs",
+                    "max_evidence_refs",
+                    "target_refs",
+                    "text_limits",
+                )
+                if key in feedback_rules
+            }
+            development_feedback_contract = """## Development feedback channel
+
+Only when the repair exposes a contract, context, SDK-cost, observability or
+validation gap, append at most one envelope after the result:
+
+```adaos-development-feedback
+{"schema":"adaos.development_feedback_output.v1","items":[{"category":"ambiguous_contract","summary":"...","blocking":false,"confidence":0.9,"impact":["comprehension"],"target_refs":["sdk:area.method"],"details":"...","recommendation":"...","evidence_refs":[{"type":"file","ref":"path"}]}]}
+```
+
+Use `blocking:true` only for an unresolved requirement. Do not emit secrets,
+placeholder files or invented enum values. Exact repair feedback field mask:
+```json
+""" + json.dumps(feedback_projection, separators=(",", ":")) + """
+```
+"""
         repair_coverage = (
             dict(repair_target_context.get("coverage") or {})
             if isinstance(repair_target_context.get("coverage"), Mapping)
@@ -10874,17 +10910,11 @@ the accepted semantic Application.
             """## Commit-bound public AdaOS SDK contracts
 
 Read `public-sdk-contracts.json` before implementation. It is the bounded,
-authoritative signature and runtime-semantics closure for caller authorization,
-owned persistence, typed content generation, separate image generation and
-Resource Workbench access. The isolated remote worker intentionally does not
-install AdaOS Core, so an import failure there is not evidence that these
-origin-runtime contracts are absent. Author against this file and use bounded
-syntax/unit checks; the origin Builder performs authoritative SDK and package
-validation after applying the verified delta.
-This JSON is compact and may occupy one physical line: never search it with
-`rg`/`Select-String` and never print `response_contracts` as a whole. Parse JSON,
-list keys if needed, then print exactly one selected response contract per
-command within the command-output budget.
+authoritative signature and runtime-semantics closure. AdaOS Core is absent in
+the isolated worker, so an import failure does not invalidate these contracts;
+the origin Builder performs authoritative validation. Parse this compact JSON
+and inspect only one selected `response_contracts` entry at a time. Never print
+the bundle as a whole or search its one-line representation as text.
 """
             if packet.get("public_sdk_contracts_ref")
             else ""
@@ -11179,12 +11209,13 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "sha256": hashlib.sha256(raw).hexdigest(),
                     }
                 )
+        compiler_context_files: list[dict[str, Any]] = []
         for reference in compiler_view_refs:
             path = Path(str(reference.get("path") or ""))
             if not path.is_file():
                 continue
             raw = path.read_bytes()
-            context_files.append(
+            compiler_context_files.append(
                 {
                     "name": f"compiler-view:{reference.get('facet')}",
                     "path": path.resolve().as_posix(),
@@ -11193,10 +11224,29 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     "payload_digest": reference.get("digest"),
                 }
             )
+        if compiler_context_files:
+            # Keep the model prompt bounded as field-mask coverage grows. The
+            # signed index is one admitted input; it carries the exact paths,
+            # sizes and digests of the independently cached compiler views.
+            compiler_index_path = input_dir / "compiler-view-index.json"
+            compiler_index_raw = json.dumps(
+                compiler_context_files,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            compiler_index_path.write_bytes(compiler_index_raw)
+            context_files.append(
+                {
+                    "name": "compiler-view-index.json",
+                    "path": compiler_index_path.resolve().as_posix(),
+                    "bytes": len(compiler_index_raw),
+                    "sha256": hashlib.sha256(compiler_index_raw).hexdigest(),
+                }
+            )
         prompt += (
             "\n## Read-only task inputs\n\n"
-            "Exact absolute paths below are admitted read-only context, not checkout-relative paths. "
-            "Read needed JSON fields only; never edit inputs, enumerate sibling tasks or read assignment credentials.\n\n```json\n"
+            "Absolute paths below are admitted read-only context; an index admits only its digest-bound children. "
+            "Read needed JSON fields only; never edit inputs, enumerate sibling tasks, or read credentials.\n\n```json\n"
             + json.dumps(context_files, ensure_ascii=False, separators=(",", ":"))
             + "\n```\n"
         )

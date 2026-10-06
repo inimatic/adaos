@@ -5,6 +5,33 @@ from types import SimpleNamespace
 
 
 @pytest.mark.anyio
+async def test_teacher_bridge_waits_for_successful_dialog_fallback(monkeypatch):
+    from adaos.services.nlu import dispatcher, teacher_bridge
+
+    checks = iter((False, True))
+    monkeypatch.setattr(
+        dispatcher,
+        "has_dispatched_request",
+        lambda **_kwargs: next(checks, True),
+    )
+    monkeypatch.setattr(teacher_bridge, "_DIALOG_OUTCOME_WAIT_S", 1.0)
+
+    handled = await teacher_bridge._dialog_outcome_was_handled(
+        {
+            "text": "Какая погода в Токио?",
+            "webspace_id": "desktop",
+            "request_id": "req.weather.tokyo",
+        },
+        {
+            "route_id": "voice_chat",
+            "teacher_outcome_fence": True,
+        },
+    )
+
+    assert handled is True
+
+
+@pytest.mark.anyio
 async def test_teacher_bridge_skips_explicitly_suppressed_voice_fallback(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_bridge

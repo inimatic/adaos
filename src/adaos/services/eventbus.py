@@ -161,6 +161,28 @@ def _bounded_event_concurrency() -> int:
     return max(1, min(value, 32))
 
 
+def _bounded_stream_concurrency(default: int) -> int:
+    """Bound independent WebIO receiver lanes without unbounding the bus.
+
+    A slow snapshot for one receiver must not head-of-line block unrelated
+    dashboards. Ordering is still preserved inside a receiver lane.
+    """
+
+    try:
+        value = int(
+            str(
+                os.getenv(
+                    "ADAOS_EVENTBUS_STREAM_CONCURRENCY",
+                    str(max(4, int(default))),
+                )
+                or str(max(4, int(default)))
+            ).strip()
+        )
+    except Exception:
+        value = max(4, int(default))
+    return max(1, min(value, 16))
+
+
 def _bounded_event_queue_limit() -> int:
     try:
         value = int(str(os.getenv("ADAOS_EVENTBUS_BOUNDED_QUEUE_LIMIT", "128") or "128").strip())
@@ -262,6 +284,7 @@ class LocalEventBus(EventBus):
         self._bounded_topics = _bounded_event_topics()
         self._bounded_supersede_by_handler_topics = _bounded_supersede_by_handler_topics()
         self._bounded_concurrency = _bounded_event_concurrency()
+        self._bounded_stream_concurrency = _bounded_stream_concurrency(self._bounded_concurrency)
         self._bounded_queue_limit = _bounded_event_queue_limit()
         self._bounded_queues: DefaultDict[
             str,
@@ -269,6 +292,7 @@ class LocalEventBus(EventBus):
         ] = defaultdict(deque)
         self._bounded_worker_tasks: set[asyncio.Task[Any]] = set()
         self._bounded_active_workers: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_active_lanes: set[tuple[str, tuple[Any, ...]]] = set()
         self._bounded_active_meta: dict[asyncio.Task[Any], dict[str, Any]] = {}
         self._bounded_peak_workers: DefaultDict[str, int] = defaultdict(int)
         self._bounded_queued_by_type: DefaultDict[str, int] = defaultdict(int)
@@ -302,6 +326,22 @@ class LocalEventBus(EventBus):
             elif event_type == spec:
                 return True
         return False
+
+    def _bounded_concurrency_for_topic(self, topic_key: str) -> int:
+        if topic_key in _WEBIO_STREAM_CONTROL_EVENTS:
+            return self._bounded_stream_concurrency
+        return self._bounded_concurrency
+
+    @staticmethod
+    def _bounded_lane_key(
+        topic_key: str,
+        item: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float],
+    ) -> tuple[str, tuple[Any, ...]]:
+        supersede_key = item[5]
+        if supersede_key is not None:
+            return (topic_key, tuple(supersede_key))
+        # Topics without a projection identity retain per-handler ordering.
+        return (topic_key, (str(item[3] or ""), str(item[4] or "")))
 
     def _event_field(self, event: Any, *names: str) -> Any:
         payload = getattr(event, "payload", None)
@@ -837,10 +877,23 @@ class LocalEventBus(EventBus):
                 queued: tuple[
                     Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float
                 ] | None = None
+                active_lane: tuple[str, tuple[Any, ...]] | None = None
                 with self._lock:
                     queue = self._bounded_queues.get(topic_key)
                     if queue:
-                        queued = queue.popleft()
+                        # Pick the oldest receiver lane that is not already
+                        # running. This removes cross-receiver head-of-line
+                        # blocking while preserving order within each lane.
+                        for index, candidate in enumerate(queue):
+                            candidate_lane = self._bounded_lane_key(topic_key, candidate)
+                            if candidate_lane in self._bounded_active_lanes:
+                                continue
+                            queue.rotate(-index)
+                            queued = queue.popleft()
+                            queue.rotate(index)
+                            active_lane = candidate_lane
+                            self._bounded_active_lanes.add(candidate_lane)
+                            break
                     if queued is not None:
                         _coro, _handler, _event, event_type, handler_name, _supersede_key, _queued_at = queued
                         if event_type in self._bounded_queued_by_type:
@@ -898,6 +951,9 @@ class LocalEventBus(EventBus):
                         )
                         self._bounded_handler_timing[_handler_name] = timing
                 finally:
+                    if active_lane is not None:
+                        with self._lock:
+                            self._bounded_active_lanes.discard(active_lane)
                     if task is not None:
                         with self._lock:
                             self._bounded_active_meta.pop(task, None)
@@ -924,7 +980,15 @@ class LocalEventBus(EventBus):
         if not queue:
             return
         active = int(self._bounded_active_workers.get(topic_key) or 0)
-        target = min(self._bounded_concurrency, len(queue))
+        eligible_lanes = {
+            self._bounded_lane_key(topic_key, item)
+            for item in queue
+            if self._bounded_lane_key(topic_key, item) not in self._bounded_active_lanes
+        }
+        target = min(
+            self._bounded_concurrency_for_topic(topic_key),
+            active + len(eligible_lanes),
+        )
         while active < target:
             task = loop.create_task(self._bounded_worker(topic_key), name=f"eventbus-bounded:{topic_key}")
             self._bounded_worker_tasks.add(task)

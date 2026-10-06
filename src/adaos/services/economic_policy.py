@@ -45,6 +45,24 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _publish_subscription_changed(payload: Mapping[str, Any]) -> None:
+    """Notify demand-driven consumers after Root accepted new usage data."""
+    try:
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.eventbus import emit as bus_emit
+
+        bus_emit(
+            get_ctx().bus,
+            "economic.subscription.changed",
+            dict(payload),
+            source="economic_policy",
+        )
+    except Exception:
+        # Reporting usage is authoritative even when no local runtime/event
+        # bus is active (CLI and recovery paths deliberately run headless).
+        return
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -420,6 +438,33 @@ def report_codex_usage_to_root(
     result = client.request("POST", "/v1/hub/economic/codex/usage", json=payload, timeout=timeout)
     if not isinstance(result, Mapping):
         raise RuntimeError("root returned invalid Codex usage response")
+    # A subscription-change event is a commit notification: consumers may
+    # immediately read the public SDK snapshot without issuing another Root
+    # request. Refresh here, in the control plane that owns the credentials,
+    # before publishing. A failed refresh does not invalidate an accepted
+    # usage report; it is carried in the event and consumers retain the last
+    # known snapshot as stale.
+    refresh_status = "ready"
+    refresh_error = ""
+    try:
+        refresh_entitlement_snapshot_from_root(
+            root_base_url=client.base_url,
+            timeout=max(0.1, float(timeout)),
+        )
+    except Exception as exc:
+        refresh_status = "stale"
+        refresh_error = f"{type(exc).__name__}: {_text(exc)}"[:240]
+    _publish_subscription_changed(
+        {
+            "schema": "adaos.subscription.change.v1",
+            "resource": "codex.api.tokens",
+            "subnet_id": payload.get("subnet_id"),
+            "root_event_id": result.get("root_event_id") or result.get("event_id"),
+            "reason": "root_usage_accepted",
+            "snapshot_status": refresh_status,
+            "snapshot_error": refresh_error or None,
+        }
+    )
     return dict(result)
 
 

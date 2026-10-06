@@ -229,12 +229,67 @@ def test_verified_compatibility_execution_ignores_empty_channel_tombstone(
     assert channel.read() == ()
 
 
+def test_application_caller_does_not_fence_shared_dependency_to_its_trial(
+    tmp_path, monkeypatch
+) -> None:
+    from adaos.services.applications import runtime_selection
+    from adaos.services.policy.application import bind_application, clear_application
+
+    channel = ApplicationRuntimeChannel(tmp_path, "management")
+    selected = replace(selection(beta=True), application_id="management")
+    channel.select(selected, expected_revision=0)
+    caller_release = SimpleNamespace(
+        project_release=SimpleNamespace(
+            components=[SimpleNamespace(kind="skill", artifact_id="management_skill")]
+        )
+    )
+
+    class Store:
+        def __init__(self, state):
+            assert state == tmp_path
+
+        def get_release(self, *_args):
+            return caller_release
+
+        def list_runtime_selections(self):
+            return channel.read()
+
+    monkeypatch.setattr(runtime_selection, "ApplicationStore", Store)
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            state_dir=lambda: tmp_path,
+            runtime_channel_ref="workspace",
+        )
+    )
+    bind_application(
+        {
+            "application_id": "management",
+            "release_digest": selected.release_digest,
+            "runtime_root_ref": selected.runtime_root_ref,
+            "component_ref": "skill:shared_browser_skill",
+        }
+    )
+    try:
+        with runtime_selection.application_execution(ctx, "shared_browser_skill"):
+            pass
+    finally:
+        clear_application()
+
+
 def test_trial_resolution_is_node_wide_but_never_overrides_dev(tmp_path, monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.applications import runtime_selection
     from adaos.services.workspaces import index
 
     choices = [selection(beta=True), selection("mobile", beta=True)]
+    runtime_selection._SELECTED_TRIAL_CACHE.clear()
+    runtime_selection._TRIAL_SELECTION_FINGERPRINT_CACHE.clear()
+    fingerprints = []
+    monkeypatch.setattr(
+        runtime_selection,
+        "_trial_selection_fingerprint",
+        lambda _state_dir: fingerprints.append(True) or (("channel", 1, 1),),
+    )
     release = SimpleNamespace(accepted_candidate_id="candidate", project_release=SimpleNamespace(
         components=[SimpleNamespace(kind="scenario", artifact_id="screen")]))
     monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _: SimpleNamespace(
@@ -246,6 +301,73 @@ def test_trial_resolution_is_node_wide_but_never_overrides_dev(tmp_path, monkeyp
     assert len(calls) == 1
     assert runtime_selection.selected_trial(get_ctx(), "preview", "scenario", "screen") is None
     assert len(calls) == 1
+    assert len(fingerprints) == 1
+
+
+def test_exact_trial_resolution_reads_only_requested_application(tmp_path, monkeypatch):
+    from adaos.services.applications import runtime_selection
+    from adaos.services.workspaces import index
+
+    selected = selection(beta=True)
+    release = SimpleNamespace(
+        accepted_candidate_id="candidate",
+        project_release=SimpleNamespace(
+            components=[SimpleNamespace(kind="skill", artifact_id="management_skill")]
+        ),
+    )
+    store = SimpleNamespace(
+        get_runtime_selection=lambda webspace, application: (
+            selected
+            if (webspace, application) == ("desktop", "sample")
+            else pytest.fail("unexpected runtime authority lookup")
+        ),
+        get_release=lambda application, digest: (
+            release
+            if (application, digest) == ("sample", DIGEST)
+            else pytest.fail("unexpected release lookup")
+        ),
+    )
+    monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _: store)
+    monkeypatch.setattr(index, "get_workspace", lambda _: SimpleNamespace(is_dev=False))
+    runtime_selection._SELECTED_TRIAL_CACHE.clear()
+    runtime_selection._EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE.clear()
+    fingerprint_calls = []
+    original_stat_fingerprint = runtime_selection._exact_trial_selection_stat_fingerprint
+    monkeypatch.setattr(
+        runtime_selection,
+        "_exact_trial_selection_stat_fingerprint",
+        lambda *args: fingerprint_calls.append(args)
+        or original_stat_fingerprint(*args),
+    )
+    resolved = []
+    monkeypatch.setattr(
+        runtime_selection.NativeTrialRuntime,
+        "resolve",
+        lambda *args: resolved.append(args) or "exact-beta",
+    )
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+
+    assert runtime_selection.selected_trial_exact(
+        ctx,
+        "desktop",
+        "sample",
+        DIGEST,
+        "skill",
+        "management_skill",
+    ) == "exact-beta"
+    assert runtime_selection.selected_trial_exact(
+        ctx,
+        "desktop",
+        "sample",
+        DIGEST,
+        "skill",
+        "management_skill",
+    ) == "exact-beta"
+    assert resolved == [(ctx, "candidate", DIGEST)]
+    # One pre-resolution stat plus one stable post-resolution stat. The second
+    # page read reuses that bounded authority fingerprint instead of walking
+    # the same files again.
+    assert len(fingerprint_calls) == 2
 
 
 def test_selected_application_is_webspace_exact_and_never_overrides_dev(tmp_path, monkeypatch):

@@ -3490,7 +3490,27 @@ class SkillManager:
             run_timings[name] = (now - phase_started) * 1000.0
             phase_started = now
 
-        status = self.runtime_status(name)
+        immutable_authority = getattr(self, "_adaos_immutable_trial_authority", None)
+        immutable_cache = getattr(self, "_adaos_immutable_tool_runtime_cache", None)
+        if not isinstance(immutable_cache, dict):
+            immutable_cache = {}
+            if immutable_authority:
+                setattr(self, "_adaos_immutable_tool_runtime_cache", immutable_cache)
+        immutable_cache_key = (
+            tuple(immutable_authority)
+            if isinstance(immutable_authority, (tuple, list))
+            else immutable_authority,
+            name,
+        )
+        cached_runtime = (
+            immutable_cache.get(immutable_cache_key)
+            if immutable_authority and slot is None and not allow_inactive
+            else None
+        )
+        if isinstance(cached_runtime, tuple) and len(cached_runtime) == 2:
+            status = cached_runtime[0]
+        else:
+            status = self.runtime_status(name)
         _mark_phase("runtime_status_ms")
         env = self._runtime_env(name)
         version = status.get("version")
@@ -3532,7 +3552,18 @@ class SkillManager:
             reason = str((status.get("deactivation") or {}).get("reason") or "deactivated").strip()
             raise RuntimeError(f"skill '{name}' is deactivated: {reason}")
 
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(cached_runtime, tuple) and len(cached_runtime) == 2:
+            data = cached_runtime[1]
+        else:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if immutable_authority and slot is None and not allow_inactive:
+                # ready_manager() verified the content-addressed Trial tree and
+                # records the exact root/release/package authority on this
+                # manager.  Re-reading runtime status and the same manifest for
+                # every declarative datasource only adds filesystem/YAML/GIL
+                # contention; a different publication digest receives a
+                # different manager/cache key and is verified again.
+                immutable_cache[immutable_cache_key] = (status, data)
         _mark_phase("manifest_ms")
         self._load_runtime_data_projections(data, skill_name=name)
         _mark_phase("projections_ms")

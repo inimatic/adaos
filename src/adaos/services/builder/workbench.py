@@ -743,6 +743,25 @@ class BuilderWorkbenchService:
             return token if relation_purpose_for_scenario(scenario_id) == BUILDER_SELF_HOST else source
         return self.relationships.resolve_builder_host(token)
 
+    def resolve_candidate_materialization_host(self, value: Any) -> str:
+        """Resolve the live Builder owner used for Automation browser feedback.
+
+        A self-hosting DEV Builder is a valid owner only while Builder is the
+        scenario actually running there.  Once that surface is showing an
+        ordinary application, candidate feedback must reuse its production
+        parent's paired Preview instead of trying to allocate a nested child.
+        """
+
+        token = self.resolve_source_webspace_id(value)
+        try:
+            return self.relationships.require_preview_host(token)
+        except ValueError:
+            incoming = self.relationships.get_incoming(token)
+            if incoming is None or incoming.purpose != BUILDER_SELF_HOST:
+                raise
+            parent = incoming.source_webspace_id
+            return self.relationships.require_preview_host(parent)
+
     def resolve_action_source_webspace_id(
         self,
         value: Any,

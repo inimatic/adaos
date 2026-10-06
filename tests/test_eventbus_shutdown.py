@@ -417,6 +417,48 @@ async def test_local_event_bus_preserves_each_webio_stream_control_handler(monke
     assert seen == ["first:infrastate.skills", "second:infrastate.skills"]
 
 
+@pytest.mark.asyncio
+async def test_local_event_bus_does_not_head_of_line_block_independent_stream_receivers(monkeypatch):
+    monkeypatch.delenv("ADAOS_EVENTBUS_BOUNDED_TOPICS", raising=False)
+    monkeypatch.delenv("ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS", raising=False)
+    monkeypatch.delenv("ADAOS_EVENTBUS_STREAM_CONCURRENCY", raising=False)
+    bus = LocalEventBus()
+    slow_started = asyncio.Event()
+    release_slow = asyncio.Event()
+    fast_finished = asyncio.Event()
+
+    async def handler(event: Event):
+        receiver = str(event.payload.get("receiver") or "")
+        if receiver == "drive.sharing":
+            slow_started.set()
+            await release_slow.wait()
+        elif receiver == "system.hardware":
+            fast_finished.set()
+
+    bus.subscribe("webio.stream.snapshot.requested", handler)
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            payload={"webspace_id": "desktop", "receiver": "drive.sharing"},
+            source="test",
+            ts=0.0,
+        )
+    )
+    await asyncio.wait_for(slow_started.wait(), timeout=1.0)
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            payload={"webspace_id": "desktop", "receiver": "system.hardware"},
+            source="test",
+            ts=0.0,
+        )
+    )
+
+    await asyncio.wait_for(fast_finished.wait(), timeout=0.2)
+    release_slow.set()
+    assert await bus.wait_for_idle(timeout=1.0)
+
+
 def test_local_event_bus_keeps_distinct_webio_stream_receivers_for_same_handler():
     async def _run() -> None:
         bus = LocalEventBus()

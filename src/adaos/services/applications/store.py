@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
+import time
 from typing import Any, Callable, Mapping, TypeVar
 
 from adaos.domain.application import (
@@ -147,7 +149,10 @@ class ApplicationStore:
     """
 
     def __init__(self, state_dir: Path) -> None:
-        self.state_dir = Path(state_dir).expanduser().resolve()
+        # ``state_dir`` comes from AgentPaths, not user input. Resolving every
+        # short-lived store performs a synchronous filesystem walk and made a
+        # burst of first-paint reads serialize for seconds on Windows.
+        self.state_dir = Path(os.path.abspath(os.fspath(Path(state_dir).expanduser())))
 
     @property
     def root(self) -> Path:
@@ -635,6 +640,18 @@ class ApplicationStore:
             if value.revision != observed + 1:
                 raise ApplicationStoreError("record revision must advance by exactly one")
             atomic_write_json(path, value.to_dict())
+            if collection == "application_access_grants":
+                # One bounded stat can now invalidate authorization input
+                # caches without walking every grant directory on every UI
+                # read. The marker is written under the same mutation lock as
+                # the grant, so another process observes a coherent epoch.
+                atomic_write_json(
+                    self.root / collection / ".collection-revision.json",
+                    {
+                        "schema": "adaos.application.collection_revision.v1",
+                        "changed_at_ns": time.time_ns(),
+                    },
+                )
             return value
 
     def get_installation(self, application_id: str) -> ApplicationInstallation:
@@ -910,11 +927,31 @@ class ApplicationStore:
         )
 
     def append_application_access_audit(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        application_id = str(payload.get("application_id") or "").strip()
-        subject_ref = str(payload.get("subject_ref") or "").strip()
-        event_action = str(payload.get("action") or payload.get("decision") or "access").strip()
-        if not application_id or not subject_ref:
-            raise ApplicationStoreError("Application access audit requires application_id and subject_ref")
+        return self.append_application_access_audits((payload,))[0]
+
+    def append_application_access_audits(
+        self,
+        payloads: Iterable[Mapping[str, Any]],
+    ) -> tuple[dict[str, Any], ...]:
+        """Append a bounded audit batch under one sequence lock.
+
+        Authorization is evaluated before this persistence step. Grouping a
+        first-paint burst only removes repeated lock and sequence-file churn;
+        every policy decision remains an individual immutable event.
+        """
+
+        pending = tuple(dict(item) for item in payloads)
+        if not pending:
+            return ()
+        for payload in pending:
+            application_id = str(payload.get("application_id") or "").strip()
+            subject_ref = str(payload.get("subject_ref") or "").strip()
+            if not application_id or not subject_ref:
+                raise ApplicationStoreError(
+                    "Application access audit requires application_id and subject_ref"
+                )
+
+        events: list[dict[str, Any]] = []
         with mutation_lock(self.lock_path, timeout_s=30.0):
             parent = self.root / "application_access_audit"
             sequence_path = parent / "sequence.json"
@@ -926,17 +963,25 @@ class ApplicationStore:
                 )
             except ApplicationStoreError:
                 sequence = 1
-            while (parent / f"{sequence:020d}.json").exists():
+            for payload in pending:
+                while (parent / f"{sequence:020d}.json").exists():
+                    sequence += 1
+                application_id = str(payload.get("application_id") or "").strip()
+                subject_ref = str(payload.get("subject_ref") or "").strip()
+                event_action = str(
+                    payload.get("action") or payload.get("decision") or "access"
+                ).strip()
+                event = {
+                    "schema": "adaos.application.access_audit.v1",
+                    "sequence": sequence,
+                    "event_id": f"appaccess.{_key(f'{sequence}:{application_id}:{subject_ref}:{event_action}')}",
+                    **payload,
+                }
+                atomic_write_json(parent / f"{sequence:020d}.json", event)
+                events.append(event)
                 sequence += 1
-            event = {
-                "schema": "adaos.application.access_audit.v1",
-                "sequence": sequence,
-                "event_id": f"appaccess.{_key(f'{sequence}:{application_id}:{subject_ref}:{event_action}')}",
-                **dict(payload),
-            }
-            atomic_write_json(parent / f"{sequence:020d}.json", event)
-            _write_derived_sequence_cache(sequence_path, sequence)
-            return event
+            _write_derived_sequence_cache(sequence_path, sequence - 1)
+        return tuple(events)
 
     def list_application_access_audit(
         self,

@@ -240,8 +240,10 @@ def test_bootstrap_trusts_matching_ready_marker_without_reprojection(monkeypatch
 
     assert result["mode"] == "persisted_effective_state"
     assert result["persisted_effective_state_ready"] is True
-    assert result["persisted_via"] is None
-    assert store.write_calls == 0
+    # Matching legacy snapshots are reused, with one bounded migration diff
+    # that copies the materialization proof into its server-owned register.
+    assert result["persisted_via"] == "diff"
+    assert store.write_calls == 1
 
 
 def test_bootstrap_trusts_nested_required_paths_from_ready_marker(monkeypatch) -> None:
@@ -280,7 +282,7 @@ def test_bootstrap_trusts_nested_required_paths_from_ready_marker(monkeypatch) -
 
     assert result["mode"] == "persisted_effective_state"
     assert result["persisted_effective_state_ready"] is True
-    assert store.write_calls == 0
+    assert store.write_calls == 1
 
 
 def test_persisted_effective_state_status_reports_bounded_rejection_reason() -> None:
@@ -316,6 +318,54 @@ def test_persisted_effective_state_status_reports_bounded_rejection_reason() -> 
     assert reason == "missing_required_branch"
     assert details["missing_required_branch"] == "ui.application"
     assert details["bootstrap_stage"] == "detached_materialization_commit"
+
+
+def test_bootstrap_restores_materialization_from_server_owned_register() -> None:
+    """A stale browser environment must not turn every cold open into a rebuild."""
+
+    ydoc = Y.YDoc()
+    required = ["ui.application", "data.catalog"]
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("ui").set(txn, "current_scenario", "web_desktop")
+        ydoc.get_map("ui").set(txn, "application", {"desktop": {}})
+        ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+        ydoc.get_map("runtime").set(
+            txn,
+            "environment",
+            {
+                "mode": "dev",
+                "materialization": {
+                    "scenario_id": "web_desktop",
+                    "required_branches": required,
+                },
+            },
+        )
+
+    assert bootstrap_module.write_runtime_bootstrap_state(
+        ydoc,
+        webspace_id="desktop",
+        scenario_id="web_desktop",
+        state="ready",
+        stage="room_bootstrap_ready",
+        ready=True,
+    ) is True
+    canonical = ydoc.get_map("runtime").get("materialization")
+    assert canonical["scenario_id"] == "web_desktop"
+
+    # Reproduce a reconnecting browser winning the atomic environment LWW
+    # register with a locally cached object that predates materialization.
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("runtime").set(txn, "environment", {"mode": "dev"})
+
+    assert bootstrap_module._project_runtime_environment(ydoc) is True
+    restored = ydoc.get_map("runtime").get("environment")
+    assert restored["materialization"]["scenario_id"] == "web_desktop"
+    ready, reason, _details = bootstrap_module._persisted_effective_state_status(
+        ydoc,
+        scenario_id="web_desktop",
+    )
+    assert ready is True
+    assert reason == "ready"
 
 
 def test_bootstrap_requires_fresh_provided_doc_after_partial_apply_failure(monkeypatch) -> None:

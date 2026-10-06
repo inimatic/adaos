@@ -31,6 +31,14 @@ class RootHttpError(RuntimeError):
 
 _ROOT_HTTP_LOG = logging.getLogger("adaos.root-http")
 
+# Loading the Windows certificate stores is CPU-heavy and holds the GIL for a
+# noticeable amount of time. Root heartbeats and NATS credential refreshes
+# construct short-lived clients, so rebuilding the same default context on
+# every call can stall unrelated API work for seconds. SSLContext is immutable
+# for our use after construction and safe to share between httpx transports.
+_SSL_CONTEXT_CACHE: dict[tuple[Any, ...], ssl.SSLContext] = {}
+_SSL_CONTEXT_CACHE_LOCK = threading.Lock()
+
 
 @dataclass(slots=True)
 class _RoutineRootHttpLogWindow:
@@ -296,16 +304,39 @@ class RootHttpClient:
     def _effective_verify(
         verify: str | bool | ssl.SSLContext,
     ) -> str | bool | ssl.SSLContext:
+        if isinstance(verify, ssl.SSLContext) or verify is False:
+            return verify
         effective_verify = verify
-        if isinstance(effective_verify, str):
+        cache_key: tuple[Any, ...] | None = None
+        ca_path: Path | None = None
+        if effective_verify is True:
+            cache_key = ("default",)
+        elif isinstance(effective_verify, str):
             mode = (os.getenv("ADAOS_ROOT_CA_MODE") or "append").strip().lower()
             if mode == "append":
                 ca_path = Path(effective_verify)
                 if ca_path.exists():
-                    ctx = ssl.create_default_context()
-                    ctx.load_verify_locations(cafile=str(ca_path))
-                    effective_verify = ctx
-        return effective_verify
+                    try:
+                        stat = ca_path.stat()
+                        cache_key = (
+                            "append",
+                            str(ca_path.resolve()),
+                            int(stat.st_mtime_ns),
+                            int(stat.st_size),
+                        )
+                    except OSError:
+                        cache_key = None
+        if cache_key is None:
+            return effective_verify
+        with _SSL_CONTEXT_CACHE_LOCK:
+            cached = _SSL_CONTEXT_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
+            ctx = ssl.create_default_context()
+            if ca_path is not None:
+                ctx.load_verify_locations(cafile=str(ca_path))
+            _SSL_CONTEXT_CACHE[cache_key] = ctx
+            return ctx
 
     def _request(
         self,
