@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 import types
 import importlib.util
 from contextlib import asynccontextmanager, contextmanager
@@ -139,6 +140,43 @@ def test_publish_pending_action_rejects_zero_ttl(pending_action_docs) -> None:
         _publish(ctx, ttl_s=0)
 
     assert pending_action_docs == {}
+
+
+def test_worker_publication_hands_off_live_doc_without_detached_replay(monkeypatch):
+    doc = _FakeYDoc()
+    calls = []
+
+    @contextmanager
+    def live_doc(*args, **kwargs):
+        raise RuntimeError("sync_get_ydoc_live_room_requires_owner_handoff")
+        yield
+
+    async def submit(ws, mutator, **kwargs):
+        calls.append((ws, kwargs))
+        # The owner owns the transaction; opening another would be a borrow error.
+        doc.begin_transaction = lambda: pytest.fail("nested YDoc transaction")
+        return {"applied": True, "mutator_result": mutator(doc, _FakeTxn())}
+
+    monkeypatch.setattr(pending_actions, "get_ydoc", live_doc)
+    monkeypatch.setattr(pending_actions, "submit_live_room_mutation", submit)
+    ctx = _make_ctx()
+    action = _publish(ctx)
+    assert len(calls) == 1
+    assert doc.get_map("data")["pending_actions"]["active"] == [action["id"]]
+    assert [event.type for event in ctx.bus.events] == ["pending_actions.created", "pending_actions.changed"]
+
+
+def test_async_publication_prefers_live_owner_and_does_not_emit_on_failed_mutation(monkeypatch):
+    async def submit(*args, **kwargs):
+        return {"applied": False, "reason": "room_generation_changed"}
+
+    monkeypatch.setattr(pending_actions, "submit_live_room_mutation", submit)
+    ctx = _make_ctx()
+    with pytest.raises(RuntimeError, match="room_generation_changed"):
+        asyncio.run(pending_actions.publish_pending_action_async(
+            ctx=ctx, webspace_id="default", kind="test", title="Test", actions=["approve"], response_topic="test.response",
+        ))
+    assert ctx.bus.events == []
 
 
 def test_response_marks_action_terminal_and_routes_once(pending_action_docs) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ from typing import Any
 from adaos.domain import Event
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import AgentContext, get_ctx
-from adaos.services.yjs.doc import async_get_ydoc, get_ydoc
+from adaos.services.yjs.doc import async_get_ydoc, get_ydoc, submit_live_room_mutation
 from adaos.services.yjs.store import ystore_write_metadata, ystore_write_metadata_sync
 from adaos.services.yjs.webspace import default_webspace_id
 
@@ -335,7 +336,10 @@ def _read_projection(ydoc: Any) -> tuple[Any, dict[str, Any]]:
     return data_map, _normalize_projection(data_map.get("pending_actions"))
 
 
-def _write_projection(data_map: Any, ydoc: Any, snapshot: dict[str, Any]) -> None:
+def _write_projection(data_map: Any, ydoc: Any, snapshot: dict[str, Any], txn: Any = None) -> None:
+    if txn is not None:
+        data_map.set(txn, "pending_actions", snapshot)
+        return
     with ydoc.begin_transaction() as txn:
         data_map.set(txn, "pending_actions", snapshot)
 
@@ -499,7 +503,7 @@ def _normalize_pending_action(
     return action
 
 
-def _add_action_to_doc(ydoc: Any, action: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _add_action_to_doc(ydoc: Any, action: dict[str, Any], txn: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
     data_map, projection = _read_projection(ydoc)
     by_id: dict[str, dict[str, Any]] = projection["by_id"]
     order: list[str] = projection["order"]
@@ -509,8 +513,23 @@ def _add_action_to_doc(ydoc: Any, action: dict[str, Any]) -> tuple[dict[str, Any
     by_id[action_id] = _json_clone(action)
     order.append(action_id)
     snapshot = _build_projection(projection, updated_at=_now_ts())
-    _write_projection(data_map, ydoc, snapshot)
+    _write_projection(data_map, ydoc, snapshot, txn)
     return _json_clone(action), snapshot
+
+
+async def _publish_action_on_live_room(ws: str, action: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    # Normalize outside the owner loop; only the small atomic projection mutation
+    # crosses into it. No YDoc/transaction may escape this callback.
+    result = await submit_live_room_mutation(
+        ws, lambda doc, txn: _add_action_to_doc(doc, action, txn),
+        root_names=["data"], source="pending_actions.core", owner="core:pending_actions",
+        channel="core.pending_actions.async", governed=True,
+    )
+    if result.get("applied"):
+        return result["mutator_result"]
+    if result.get("reason") == "room_not_ready":
+        return None
+    raise RuntimeError(result.get("error") or result.get("reason") or "pending_action_publish_failed")
 
 
 def publish_pending_action(
@@ -568,10 +587,26 @@ def publish_pending_action(
         payload_ref=payload_ref,
         metadata=metadata,
     )
-    with _LOCK:
-        with _pending_actions_sync_write_meta():
-            with get_ydoc(ws, load_mark_roots=["data"], governed=True) as ydoc:
-                stored_action, snapshot = _add_action_to_doc(ydoc, action)
+    try:
+        with _LOCK:
+            with _pending_actions_sync_write_meta():
+                with get_ydoc(ws, load_mark_roots=["data"], governed=True) as ydoc:
+                    stored_action, snapshot = _add_action_to_doc(ydoc, action)
+    except RuntimeError as exc:
+        if str(exc) != "sync_get_ydoc_live_room_requires_owner_handoff":
+            raise
+        # This synchronous entry point is also used by diagnostics workers.
+        # Never wait for the owner while holding the projection lock, and never
+        # try to block an async caller's loop: it must use the async API.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            stored = asyncio.run(_publish_action_on_live_room(ws, action))
+            if stored is None:
+                raise RuntimeError("pending_action_live_room_not_ready") from exc
+            stored_action, snapshot = stored
+        else:
+            raise RuntimeError("pending_action_publish_requires_async_api") from exc
     for topic, payload in _event_sequence_for_publish(stored_action, snapshot):
         _emit(ctx, topic, payload)
     return stored_action
@@ -581,17 +616,21 @@ async def publish_pending_action_async(**kwargs: Any) -> dict[str, Any]:
     ctx = kwargs.pop("ctx", None) or get_ctx()
     ws = _resolve_webspace_id(kwargs.pop("webspace_id", None))
     action = _normalize_pending_action(ctx=ctx, webspace_id=ws, **kwargs)
-    with _LOCK:
-        async with _pending_actions_async_write_meta():
-            async with async_get_ydoc(
-                ws,
-                load_mark_roots=["data"],
-                governed=True,
-                write_source="pending_actions.core",
-                write_owner="core:pending_actions",
-                write_channel="core.pending_actions.async",
-            ) as ydoc:
-                stored_action, snapshot = _add_action_to_doc(ydoc, action)
+    stored = await _publish_action_on_live_room(ws, action)
+    if stored is not None:
+        stored_action, snapshot = stored
+    else:
+        with _LOCK:
+            async with _pending_actions_async_write_meta():
+                async with async_get_ydoc(
+                    ws,
+                    load_mark_roots=["data"],
+                    governed=True,
+                    write_source="pending_actions.core",
+                    write_owner="core:pending_actions",
+                    write_channel="core.pending_actions.async",
+                ) as ydoc:
+                    stored_action, snapshot = _add_action_to_doc(ydoc, action)
     for topic, payload in _event_sequence_for_publish(stored_action, snapshot):
         _emit(ctx, topic, payload)
     return stored_action
