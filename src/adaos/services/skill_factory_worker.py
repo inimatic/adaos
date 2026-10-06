@@ -10911,10 +10911,11 @@ the accepted semantic Application.
 
 Read `public-sdk-contracts.json` before implementation. It is the bounded,
 authoritative signature and runtime-semantics closure. AdaOS Core is absent in
-the isolated worker, so an import failure does not invalidate these contracts;
-the origin Builder performs authoritative validation. Parse this compact JSON
-and inspect only one selected `response_contracts` entry at a time. Never print
-the bundle as a whole or search its one-line representation as text.
+the isolated worker, so an import failure there is not evidence that these
+contracts are absent; the origin Builder performs authoritative validation.
+Parse this compact JSON and inspect only one selected `response_contracts`
+entry at a time. Never print the bundle as a whole and never search it with
+`rg`/`Select-String`; parse it structurally instead.
 """
             if packet.get("public_sdk_contracts_ref")
             else ""
