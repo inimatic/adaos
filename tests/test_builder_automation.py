@@ -9560,6 +9560,43 @@ def test_component_update_notice_defers_exhausted_transient_projection(
     assert sleeps == [1.0, 1.0]
 
 
+def test_component_update_notice_defers_live_room_owner_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.builder import applications
+
+    service = _service(tmp_path)
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        applications,
+        "refresh_placement",
+        lambda webspace_id: (_ for _ in ()).throw(
+            RuntimeError("sync_get_ydoc_live_room_requires_owner_handoff")
+        ),
+    )
+    monkeypatch.setattr("adaos.services.builder.automation.time.sleep", sleeps.append)
+
+    result = service._refresh_component_update_projection(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "webspace_id": "desktop",
+        },
+        {
+            "mode": "immutable_candidate_trial_workspace",
+            "webspace_id": "desktop",
+            "trial": {"status": "published", "decision": "accept"},
+        },
+    )
+
+    assert result is not None and result["ok"] is False
+    assert result["retryable"] is True
+    assert result["error"] == "sync_get_ydoc_live_room_requires_owner_handoff"
+    assert len(result["attempts"]) == 3
+    assert sleeps == [1.0, 1.0]
+
+
 def test_completed_session_reconciles_retryable_component_update_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

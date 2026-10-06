@@ -14362,6 +14362,7 @@ class BuilderAutomationService:
 
         transient_errors = {
             "stale_rebuild_superseded",
+            "sync_get_ydoc_live_room_requires_owner_handoff",
             "webspace_rebuild_failed",
             "webspace_rebuild_timeout",
         }
@@ -14373,7 +14374,16 @@ class BuilderAutomationService:
             # owns Yjs/runtime state.  Refresh through that owner instead of
             # opening the production document locally.  The selected
             # RuntimeSelection decides between immutable Beta and Stable.
-            projection = applications.refresh_placement(webspace_id)
+            try:
+                projection = applications.refresh_placement(webspace_id)
+            except RuntimeError as exc:
+                error = str(exc).strip()
+                if error not in transient_errors:
+                    raise
+                projection = {
+                    "ok": False,
+                    "error": error,
+                }
             materialization = (
                 dict(projection.get("materialization"))
                 if isinstance(projection.get("materialization"), Mapping)
