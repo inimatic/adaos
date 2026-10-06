@@ -1,11 +1,14 @@
 from __future__ import annotations
 from typing import Any, Callable, Dict, Iterable, List, Tuple, Optional
 import asyncio
+import contextvars
+from concurrent.futures import Future, ThreadPoolExecutor
 import inspect
 import logging
 import os
 import re
 import time
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from adaos.sdk.data.bus import on, emit, _thread_safe_plain
@@ -38,6 +41,10 @@ _LOG = logging.getLogger("adaos.sdk.subscriptions")
 _SUBSCRIPTION_DENY_LOG_AT: Dict[str, float] = {}
 _SUBSCRIPTION_DENY_LOG_INTERVAL_S = 5.0
 _SUBSCRIPTION_COMPATIBILITY_REPORT_AT: Dict[str, float] = {}
+_SUBSCRIPTION_COMPATIBILITY_LOCK = threading.Lock()
+_SUBSCRIPTION_COMPATIBILITY_EXECUTOR: ThreadPoolExecutor | None = None
+_SUBSCRIPTION_COMPATIBILITY_PENDING: set[str] = set()
+_SUBSCRIPTION_COMPATIBILITY_MAX_PENDING = 64
 _SKILL_SUBSCRIPTION_GENERATIONS: Dict[str, int] = {}
 _REGISTERED_SKILL_SUBSCRIPTIONS: Dict[str, list[tuple[str, Callable]]] = {}
 _STREAM_CONTROL_SUBSCRIPTION_TOPICS = {
@@ -462,7 +469,15 @@ def _report_subscription_receiver_policy_missing(
     topic: str,
     evt: object,
     admission: dict[str, Any],
-) -> None:
+) -> Future | None:
+    """Queue bounded diagnostics without delaying stream admission or the owner loop.
+
+    Ticket persistence performs synchronous filesystem I/O and publishes through
+    the synchronous YDoc bridge. Both must run outside the runtime event loop.
+    Keep one worker and coalesce pending findings so a reconnect storm cannot
+    create an unbounded second queue or starve the interactive executor.
+    """
+    global _SUBSCRIPTION_COMPATIBILITY_EXECUTOR
     if not _stream_receiver_compatibility_reporting_enabled():
         return
     if str(admission.get("reason") or "").strip() != "stream_receiver_policy_missing":
@@ -482,10 +497,58 @@ def _report_subscription_receiver_policy_missing(
     report_key = f"{skill}:{topic}:stream_receiver_policy_missing:{receiver or '-'}"
     now = time.monotonic()
     interval_s = float(_env_int("ADAOS_DEV_TICKET_RUNTIME_COMPATIBILITY_REPORT_INTERVAL_S", 30, minimum=0))
-    last = float(_SUBSCRIPTION_COMPATIBILITY_REPORT_AT.get(report_key) or 0.0)
-    if interval_s > 0 and now - last < interval_s:
-        return
-    _SUBSCRIPTION_COMPATIBILITY_REPORT_AT[report_key] = now
+    with _SUBSCRIPTION_COMPATIBILITY_LOCK:
+        last = _SUBSCRIPTION_COMPATIBILITY_REPORT_AT.get(report_key)
+        if last is not None and interval_s > 0 and now - last < interval_s:
+            return
+        if report_key in _SUBSCRIPTION_COMPATIBILITY_PENDING:
+            return
+        if len(_SUBSCRIPTION_COMPATIBILITY_PENDING) >= _SUBSCRIPTION_COMPATIBILITY_MAX_PENDING:
+            # Do not mark as reported: a subsequent event can retry after drain.
+            return
+        if _SUBSCRIPTION_COMPATIBILITY_EXECUTOR is None:
+            _SUBSCRIPTION_COMPATIBILITY_EXECUTOR = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="adaos-receiver-diagnostics"
+            )
+        executor = _SUBSCRIPTION_COMPATIBILITY_EXECUTOR
+        _SUBSCRIPTION_COMPATIBILITY_PENDING.add(report_key)
+        if len(_SUBSCRIPTION_COMPATIBILITY_REPORT_AT) >= 2048:
+            oldest = min(_SUBSCRIPTION_COMPATIBILITY_REPORT_AT, key=_SUBSCRIPTION_COMPATIBILITY_REPORT_AT.get)
+            _SUBSCRIPTION_COMPATIBILITY_REPORT_AT.pop(oldest, None)
+        _SUBSCRIPTION_COMPATIBILITY_REPORT_AT[report_key] = now
+    context = contextvars.copy_context()
+    # Never hand thread-affine event/YDoc objects to the diagnostic worker.
+    finding = _thread_safe_plain(admission)
+    event_type = _subscription_event_type(evt, topic)
+    webspace_id = str(payload.get("webspace_id") or "").strip() or None
+
+    def report() -> None:
+        try:
+            context.run(
+                _record_subscription_receiver_policy_missing,
+                skill, topic, receiver, finding, event_type, webspace_id,
+            )
+        finally:
+            with _SUBSCRIPTION_COMPATIBILITY_LOCK:
+                _SUBSCRIPTION_COMPATIBILITY_PENDING.discard(report_key)
+
+    try:
+        return executor.submit(report)
+    except RuntimeError:
+        with _SUBSCRIPTION_COMPATIBILITY_LOCK:
+            _SUBSCRIPTION_COMPATIBILITY_PENDING.discard(report_key)
+            _SUBSCRIPTION_COMPATIBILITY_REPORT_AT.pop(report_key, None)
+        return None
+
+
+def _record_subscription_receiver_policy_missing(
+    skill: str,
+    topic: str,
+    receiver: str,
+    admission: dict[str, Any],
+    event_type: str,
+    webspace_id: str | None,
+) -> None:
     try:
         try:
             ctx = require_ctx("sdk.core.decorators.receiver_compatibility")
@@ -497,10 +560,10 @@ def _report_subscription_receiver_policy_missing(
             skill_id=skill,
             admission=admission,
             topic=topic,
-            event_type=_subscription_event_type(evt, topic),
+            event_type=event_type,
             publish_pending_action=True,
             ctx=ctx,
-            webspace_id=str(payload.get("webspace_id") or "").strip() or None,
+            webspace_id=webspace_id,
         )
     except Exception:
         _LOG.warning(

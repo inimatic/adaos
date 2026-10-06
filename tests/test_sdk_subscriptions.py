@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -570,12 +571,56 @@ def test_stream_subscription_reports_missing_receiver_policy(tmp_path: Path, mon
     asyncio.run(wrapped(evt))  # type: ignore[misc]
 
     assert calls == ["legacy.panel"]
+    decorators._SUBSCRIPTION_COMPATIBILITY_EXECUTOR.submit(lambda: None).result(timeout=5)
     assert len(ticket_calls) == 1
     assert ticket_calls[0]["skill_id"] == "legacy_skill"
     assert ticket_calls[0]["admission"]["reason"] == "stream_receiver_policy_missing"
     assert ticket_calls[0]["admission"]["receiver"] == "legacy.panel"
     assert ticket_calls[0]["publish_pending_action"] is True
     assert ticket_calls[0]["webspace_id"] == "desktop"
+
+
+def test_receiver_diagnostics_do_not_block_stream_loop_and_coalesce(monkeypatch) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    owner_thread = threading.get_ident()
+    worker_threads = []
+    monkeypatch.setenv("ADAOS_DEV_TICKET_RUNTIME_COMPATIBILITY_REPORT_INTERVAL_S", "0")
+    monkeypatch.setattr(decorators, "_SUBSCRIPTION_COMPATIBILITY_REPORT_AT", {})
+    monkeypatch.setattr(decorators, "_SUBSCRIPTION_COMPATIBILITY_MAX_PENDING", 1)
+
+    def persist(*args):
+        worker_threads.append(threading.get_ident())
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("synchronous ticket/YDoc persistence ran on the owner loop")
+        entered.set()
+        assert release.wait(5)
+
+    monkeypatch.setattr(decorators, "_record_subscription_receiver_policy_missing", persist)
+    admission = {"reason": "stream_receiver_policy_missing", "receiver": "panel"}
+    event = {"webspace_id": "desktop", "receiver": "panel"}
+
+    async def exercise():
+        future = decorators._report_subscription_receiver_policy_missing("test_skill", "snapshot", event, admission)
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            # Both a duplicate and another receiver at capacity must return immediately.
+            assert decorators._report_subscription_receiver_policy_missing("test_skill", "snapshot", event, admission) is None
+            assert decorators._report_subscription_receiver_policy_missing("other_skill", "snapshot", event, admission) is None
+            await asyncio.sleep(0)
+            assert not future.done()
+        finally:
+            release.set()
+            await asyncio.wrap_future(future)
+
+    asyncio.run(exercise())
+    assert worker_threads == [worker_threads[0]]
+    assert worker_threads[0] != owner_thread
+    assert not decorators._SUBSCRIPTION_COMPATIBILITY_PENDING
 
 
 def test_non_stream_subscription_still_uses_yjs_owner_guard(monkeypatch) -> None:
