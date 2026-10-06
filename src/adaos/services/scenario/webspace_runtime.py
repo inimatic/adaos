@@ -3163,7 +3163,13 @@ def _remember_materialized_worker_result_in_memory(
         "identity": dict(value.get("identity") or {}) if isinstance(value.get("identity"), Mapping) else {},
         "cache_mode": str(value.get("cache_mode") or "fresh_doc"),
     }
-    cached_size = _approximate_cache_size_bytes(cached_value)
+    # Binary updates cannot pass through JSON, but all remaining fields can.
+    # Recursively counting every Python node here used to stall the owner loop
+    # for large UI trees after the off-thread materialization had completed.
+    cached_size = _resolved_cache_size_bytes({
+        key: item for key, item in cached_value.items()
+        if key not in {"snapshot_update", "state_vector"}
+    }) + sys.getsizeof(cached_value["snapshot_update"]) + sys.getsizeof(cached_value["state_vector"])
     max_bytes = _cache_byte_limit("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_MAX_MB", 64)
     if cached_size > max_bytes:
         return
