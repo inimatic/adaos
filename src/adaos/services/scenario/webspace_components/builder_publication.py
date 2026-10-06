@@ -662,6 +662,14 @@ class WebspaceBuilderPublicationService:
                 source_webspace_id=source_webspace_id or None,
             )
 
+        # Reject an invalid retained revision before changing persisted identity.
+        content_override, skill_source_mode = self.preview_content_override(
+            resolved_scenario_id,
+            stage=str(preview_stage or ""),
+            revision=revision,
+            label=preview_label,
+            operations=operations,
+        )
         identity_update = {
             "attempted": False,
             "changed": False,
@@ -669,17 +677,38 @@ class WebspaceBuilderPublicationService:
             "home_scenario_before": state.effective_home_scenario,
             "home_scenario": state.effective_home_scenario,
         }
-        if state.is_dev and str(state.effective_home_scenario or "").strip() != resolved_scenario_id:
+        if state.is_dev:
             stage_started = time.perf_counter()
             try:
-                row = operations.workspace_index.set_workspace_manifest(
-                    webspace_id, home_scenario=resolved_scenario_id
-                )
+                def persist_preview_identity():
+                    row_before = operations.workspace_index.get_workspace(webspace_id)
+                    if row_before is None:
+                        raise ValueError("Builder Preview Webspace no longer exists")
+                    overlay = dict(row_before.ui_overlay or {})
+                    workspace = dict(overlay.get("workspace") or {})
+                    workspace["currentScenario"] = resolved_scenario_id
+                    workspace.pop("current_scenario", None)
+                    overlay["workspace"] = workspace
+                    changed = (
+                        row_before.home_scenario != resolved_scenario_id
+                        or row_before.current_scenario_overlay != resolved_scenario_id
+                    )
+                    # Cold YRoom admission prefers currentScenario over Home.
+                    # Persist both in one manifest write, before publishing the
+                    # new document, so an old selection cannot reseed the room.
+                    row = operations.workspace_index.set_workspace_manifest(
+                        webspace_id, home_scenario=resolved_scenario_id,
+                        ui_overlay_json=overlay,
+                    )
+                    return row, changed
+
+                row, changed = await asyncio.to_thread(persist_preview_identity)
                 identity_update.update(
                     {
                         "attempted": True,
-                        "changed": True,
+                        "changed": changed,
                         "home_scenario": row.effective_home_scenario,
+                        "current_scenario": row.current_scenario_overlay,
                         "timing_ms": operations.elapsed_ms(stage_started),
                     }
                 )
@@ -698,6 +727,13 @@ class WebspaceBuilderPublicationService:
                     resolved_scenario_id,
                     exc_info=True,
                 )
+                return {
+                    "ok": False, "accepted": False,
+                    "action": "builder_revision_apply", "webspace_id": webspace_id,
+                    "scenario_id": resolved_scenario_id,
+                    "error": "builder_preview_identity_persist_failed",
+                    "webspace_identity_update": identity_update,
+                }
 
         identity = operations.canonical_materialization_identity(
             webspace_id=webspace_id,
@@ -707,13 +743,6 @@ class WebspaceBuilderPublicationService:
             user_id=user_id,
             roles=roles,
             policy_fingerprint=policy_fingerprint,
-        )
-        content_override, skill_source_mode = self.preview_content_override(
-            resolved_scenario_id,
-            stage=str(preview_stage or ""),
-            revision=revision,
-            label=preview_label,
-            operations=operations,
         )
         skill_decls_snapshot = None
         skill_decls_fingerprint = None

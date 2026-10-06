@@ -5875,7 +5875,9 @@ def test_builder_revision_apply_invalidates_loader_cache_without_reseed(monkeypa
     assert "seed_from_scenario" not in result["timings_ms"]
 
 
-def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypatch) -> None:
+@pytest.mark.parametrize("previous_home", ["prompt_engineer_scenario", "todo_list_5b9319fa"])
+@pytest.mark.parametrize("persist_fails", [False, True])
+def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypatch, previous_home, persist_fails) -> None:
     webspace_id = "phase2-builder-dev-home"
     _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
@@ -5884,11 +5886,13 @@ def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypat
         display_name="DEV: Builder Home",
         kind="dev",
         source_mode="dev",
-        home_scenario="prompt_engineer_scenario",
+        home_scenario=previous_home,
+        ui_overlay_json={"workspace": {"currentScenario": "stale_site_studio"}, "desktop": {"widgetOrder": ["keep"]}},
     )
     sync_listing_calls: list[bool] = []
 
     async def _fake_rebuild(*args, **kwargs):  # noqa: ARG001
+        assert not persist_fails, "Do not publish a candidate with inconsistent persisted identity"
         return {"ok": True, "accepted": True, "action": "builder_revision_apply"}
 
     async def _fake_sync_listing() -> None:
@@ -5901,6 +5905,10 @@ def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypat
     )
     monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
+    if persist_fails:
+        def fail_persist(*args, **kwargs):
+            raise OSError("simulated storage failure")
+        monkeypatch.setattr(webspace_runtime_module.workspace_index, "set_workspace_manifest", fail_persist)
 
     result = asyncio.run(
         webspace_runtime_module.apply_builder_revision_materialization(
@@ -5910,15 +5918,24 @@ def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypat
         )
     )
 
+    if persist_fails:
+        assert result["ok"] is False and result["accepted"] is False
+        assert result["error"] == "builder_preview_identity_persist_failed"
+        assert get_workspace(webspace_id).current_scenario_overlay == "stale_site_studio"
+        return
     row = get_workspace(webspace_id)
     assert row is not None
     assert row.home_scenario == "todo_list_5b9319fa"
+    assert row.current_scenario_overlay == "todo_list_5b9319fa"
+    assert row.ui_overlay["desktop"]["widgetOrder"] == ["keep"]
     assert sync_listing_calls == []
     assert result["accepted"] is True
     assert result["home_scenario"] == "todo_list_5b9319fa"
     assert result["webspace_identity_update"]["attempted"] is True
     assert result["webspace_identity_update"]["changed"] is True
-    assert result["webspace_identity_update"]["home_scenario_before"] == "prompt_engineer_scenario"
+    assert result["webspace_identity_update"]["home_scenario_before"] == previous_home
+    snapshot = __import__("adaos.services.yjs.gateway_ws", fromlist=["_workspace_bootstrap_snapshot_sync"])._workspace_bootstrap_snapshot_sync(webspace_id)
+    assert snapshot["current_scenario_overlay"] == "todo_list_5b9319fa"
 
 
 def test_builder_revision_apply_rejects_workspace_fallback(monkeypatch) -> None:
