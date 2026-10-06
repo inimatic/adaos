@@ -48,6 +48,9 @@ def test_consumer_migration_is_idempotent_and_leaves_voice_alone():
     assert result == migrate(result, 'web_desktop')
     assert validate_surfaces(result) == 1
     assert result['widgets'][0]['inputs']['openCommand'] == 'voice.chat.open'
+    assert result['widgets'][0]['inputs']['autoSpeak'] is False
+    assert 'autoSpeakFrom' not in result['widgets'][0]['inputs']
+    assert result['widgets'][0]['inputs']['conversation']['voiceOutput'] == 'shell'
     assert len(doc['widgets']) == 4
     with pytest.raises(ValueError):
         migrate(doc, 'voice')

@@ -130,6 +130,54 @@ def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
     assert [item["id"] for item in older["messages"]] == ["msg.1", "msg.2"]
 
 
+def test_conversation_projection_is_scoped_to_selected_agent() -> None:
+    conversation_store.upsert_conversation(
+        conversation_id="conv.agents",
+        webspace_id="desktop",
+        owner="skill:conversation_companions",
+    )
+    for index, agent_id in enumerate(("agent:test:nika", "agent:test:arseni"), start=1):
+        conversation_store.append_message(
+            conversation_id="conv.agents",
+            webspace_id="desktop",
+            channel_id="conversational",
+            owner="skill:conversation_companions",
+            role="user",
+            text=f"question {index}",
+            payload={
+                "id": f"question.{index}",
+                "from": "user",
+                "text": f"question {index}",
+                "active_agent_id": agent_id,
+            },
+            meta={"active_agent_id": agent_id},
+        )
+        conversation_store.append_message(
+            conversation_id="conv.agents",
+            webspace_id="desktop",
+            channel_id="conversational",
+            owner="skill:conversation_companions",
+            role="hub",
+            text=f"answer {index}",
+            payload={
+                "id": f"answer.{index}",
+                "from": "hub",
+                "text": f"answer {index}",
+                "active_agent_id": agent_id,
+            },
+            actor_id=agent_id,
+        )
+
+    projection = conversation_store.list_projection(
+        "conv.agents",
+        active_agent_id="agent:test:arseni",
+        limit=8,
+    )
+
+    assert [item["id"] for item in projection["messages"]] == ["question.2", "answer.2"]
+    assert projection["total_message_count"] == 2
+
+
 def test_conversation_schema_uses_persisted_migration_version(
     monkeypatch,
 ) -> None:
@@ -1288,3 +1336,72 @@ def test_conversation_store_returns_latest_dialog_channel_from_messages() -> Non
     assert latest["conversation_id"] == "conv.latest"
     assert latest["active_agent_id"] == "agent:test:one"
     assert latest["active_agent_label"] == "One"
+
+
+def test_agent_projection_keeps_user_turn_owned_by_agent_metadata() -> None:
+    suffix = uuid4().hex[:10]
+    conversation_id = f"conv.agent-turn.{suffix}"
+    agent_id = "agent:conversation_companions:arseni"
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:conversation_companions",
+    )
+    stored = conversation_store.materialize_message(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        role="user",
+        text="How many teeth?",
+        payload={"id": f"m.{suffix}", "from": "user"},
+        meta={"active_agent_id": agent_id, "active_agent_label": "Arseni"},
+    )
+
+    assert stored and stored["active_agent_id"] == agent_id
+    projection = conversation_store.list_projection(
+        conversation_id,
+        active_agent_id=agent_id,
+    )
+    assert [item["text"] for item in projection["messages"]] == ["How many teeth?"]
+    assert projection["messages"][0]["active_agent_id"] == agent_id
+
+
+def test_general_feed_projects_messages_across_agent_conversations() -> None:
+    suffix = uuid4().hex[:10]
+    webspace_id = f"ws.general-feed.{suffix}"
+    for index, (agent_id, label) in enumerate(
+        (
+            ("agent:conversation_companions:nika", "Nika"),
+            ("agent:conversation_companions:arseni", "Arseni"),
+        ),
+        start=1,
+    ):
+        conversation_id = f"conv.general-feed.{suffix}.{index}"
+        conversation_store.upsert_conversation(
+            conversation_id=conversation_id,
+            webspace_id=webspace_id,
+            owner="skill:conversation_companions",
+        )
+        conversation_store.append_message(
+            conversation_id=conversation_id,
+            webspace_id=webspace_id,
+            channel_id="conversational",
+            owner="skill:conversation_companions",
+            role="hub",
+            text=f"reply from {label}",
+            payload={"id": f"general-feed.{suffix}.{index}", "from": "hub"},
+            actor_id=agent_id,
+            actor_label=label,
+            route_id="voice_chat",
+            ts=100.0 + index,
+        )
+
+    projection = conversation_store.list_webspace_projection(webspace_id, limit=8)
+
+    assert [item["active_agent_id"] for item in projection["messages"]] == [
+        "agent:conversation_companions:nika",
+        "agent:conversation_companions:arseni",
+    ]
+    assert projection["feed_scope"] == "all"
+    assert projection["total_message_count"] == 2

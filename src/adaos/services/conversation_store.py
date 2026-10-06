@@ -461,6 +461,7 @@ _POST_COLUMN_SCHEMA = (
 )
 _ENSURED_SQL_IDS: set[tuple[int, str]] = set()
 _FTS_UNAVAILABLE_SQL_IDS: set[int] = set()
+_FTS_CAPABILITY_BY_SQL: dict[tuple[int, str], bool] = {}
 
 
 def _schema_cache_key(sql: Any) -> tuple[int, str]:
@@ -942,6 +943,58 @@ def search_index_health() -> dict[str, Any]:
     }
 
 
+def search_index_capability() -> dict[str, Any]:
+    """Return the FTS capability without counting the entire search corpus.
+
+    Context assembly only needs to know whether indexed retrieval is available;
+    the exact base/indexed counts belong to the diagnostics surface. Counting
+    every FTS table for each chat turn held the shared SQLite connection for
+    several seconds on a developed ledger and delayed both persistence and the
+    agent response.
+    """
+
+    sql = _sql()
+    if not sql or not ensure_schema(sql):
+        return {
+            "schema": "adaos.conversation.search_index_health.v1",
+            "status": "unavailable",
+            "fts_available": False,
+            "counts_checked": False,
+        }
+    key = _schema_cache_key(sql)
+    available = _FTS_CAPABILITY_BY_SQL.get(key)
+    if available is None:
+        try:
+            with sql.connect() as con:
+                names = {
+                    str(row[0])
+                    for row in con.execute(
+                        """
+                        SELECT name FROM sqlite_master
+                        WHERE type='table' AND name IN (
+                            'conversation_messages_fts',
+                            'conversation_memory_fts',
+                            'conversation_segments_fts'
+                        )
+                        """
+                    )
+                }
+            available = names == {
+                "conversation_messages_fts",
+                "conversation_memory_fts",
+                "conversation_segments_fts",
+            }
+        except sqlite3.Error:
+            available = False
+        _FTS_CAPABILITY_BY_SQL[key] = available
+    return {
+        "schema": "adaos.conversation.search_index_health.v1",
+        "status": "available" if available else "fts_unavailable",
+        "fts_available": bool(available),
+        "counts_checked": False,
+    }
+
+
 def retrieval_health_report(
     conversation_id: str | None = None,
     *,
@@ -1360,6 +1413,23 @@ def _row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
         msg.setdefault("active_agent_label", str(_row_value(row, "actor_label")))
     if _row_value(row, "actor_icon"):
         msg.setdefault("active_agent_icon", str(_row_value(row, "actor_icon")))
+    # User turns are owned by the selected conversational agent through their
+    # canonical metadata, while actor_id correctly remains empty (the actor is
+    # the user).  Promote that routing identity into the compact projection so
+    # browser-side agent filtering keeps both halves of the turn after the
+    # optimistic echo is replaced by a durable snapshot.
+    if isinstance(meta, dict):
+        for field in (
+            "active_agent_id",
+            "active_agent_label",
+            "active_agent_icon",
+            "active_agent_avatar_ref",
+            "active_agent_gender",
+            "active_agent_voice",
+        ):
+            value = meta.get(field)
+            if isinstance(value, str) and value.strip():
+                msg.setdefault(field, value.strip())
     if _row_value(row, "turn_trace_id"):
         msg["turn_trace_id"] = str(_row_value(row, "turn_trace_id"))
     msg["retention_class"] = str(_row_value(row, "retention_class", "normal") or "normal")
@@ -3307,6 +3377,18 @@ def append_message(
         message_payload.setdefault("active_agent_label", actor_label)
     if actor_icon:
         message_payload.setdefault("active_agent_icon", actor_icon)
+    if meta:
+        for field in (
+            "active_agent_id",
+            "active_agent_label",
+            "active_agent_icon",
+            "active_agent_avatar_ref",
+            "active_agent_gender",
+            "active_agent_voice",
+        ):
+            value = meta.get(field)
+            if isinstance(value, str) and value.strip():
+                message_payload.setdefault(field, value.strip())
     if turn_trace_id:
         message_payload["turn_trace_id"] = turn_trace_id
     if meta:
@@ -3678,6 +3760,7 @@ def list_projection(
     conversation_id: str,
     *,
     thread_id: str | None = None,
+    active_agent_id: str | None = None,
     before_cursor: Any = None,
     limit: int = 8,
     max_items: int = 200,
@@ -3702,6 +3785,19 @@ def list_projection(
     if thread_filter:
         where += " AND thread_id=?"
         params_base.append(thread_filter)
+    agent_filter = str(active_agent_id or "").strip()
+    if agent_filter:
+        # Conversational agents intentionally share one durable conversation.
+        # Keep their browser projections independent by selecting the agent
+        # recorded either as the actor or in the canonical message envelope.
+        where += """
+            AND (
+                actor_id=?
+                OR (json_valid(payload_json) AND json_extract(payload_json, '$.active_agent_id')=?)
+                OR (json_valid(meta_json) AND json_extract(meta_json, '$.active_agent_id')=?)
+            )
+        """
+        params_base.extend([agent_filter, agent_filter, agent_filter])
     with _sql().connect() as con:  # type: ignore[union-attr]
         con.row_factory = sqlite3.Row
         total = int(
@@ -3754,11 +3850,95 @@ def list_projection(
     }
 
 
+def list_webspace_projection(
+    webspace_id: str,
+    *,
+    before_cursor: Any = None,
+    limit: int = 8,
+    max_items: int = 200,
+) -> dict[str, Any]:
+    """Return the canonical cross-agent dialog timeline for one webspace.
+
+    Individual agent feeds remain projections of their shared conversation.
+    General is a read-model over all dialog conversations, ordered by message
+    time rather than per-conversation sequence numbers.
+    """
+
+    if not ensure_schema():
+        return {
+            "messages": [],
+            "has_more_before": False,
+            "before_cursor": "",
+            "total_message_count": 0,
+            "feed_scope": "all",
+        }
+    ws = str(webspace_id or "").strip() or "default"
+    safe_limit = max(1, min(int(limit or 8), 64))
+    safe_max = max(safe_limit, min(int(max_items or 200), 500))
+    cursor: float | None = None
+    try:
+        cursor = float(str(before_cursor or "").strip()) if str(before_cursor or "").strip() else None
+    except Exception:
+        cursor = None
+    where = "webspace_id=? AND COALESCE(channel_id, '') <> '' AND COALESCE(route_id, 'voice_chat')='voice_chat'"
+    params: list[Any] = [ws]
+    if cursor is not None:
+        where += " AND ts < ?"
+        params.append(cursor)
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        total = int(
+            con.execute(
+                """
+                SELECT COUNT(*) FROM conversation_messages
+                WHERE webspace_id=? AND COALESCE(channel_id, '') <> ''
+                  AND COALESCE(route_id, 'voice_chat')='voice_chat'
+                """,
+                (ws,),
+            ).fetchone()[0]
+            or 0
+        )
+        rows = con.execute(
+            f"""
+            SELECT * FROM conversation_messages
+            WHERE {where}
+            ORDER BY ts DESC, created_at DESC, message_id DESC
+            LIMIT ?
+            """,
+            [*params, safe_max if cursor is not None else safe_limit],
+        ).fetchall()
+    rows = list(reversed(rows))
+    messages = [_row_to_message(row) for row in rows]
+    oldest_ts = min((float(item.get("ts") or 0.0) for item in messages), default=0.0)
+    visible_before = 0
+    if oldest_ts > 0:
+        with _sql().connect() as con:  # type: ignore[union-attr]
+            visible_before = int(
+                con.execute(
+                    """
+                    SELECT COUNT(*) FROM conversation_messages
+                    WHERE webspace_id=? AND COALESCE(channel_id, '') <> ''
+                      AND COALESCE(route_id, 'voice_chat')='voice_chat' AND ts < ?
+                    """,
+                    (ws, oldest_ts),
+                ).fetchone()[0]
+                or 0
+            )
+    return {
+        "messages": messages,
+        "has_more_before": visible_before > 0,
+        "before_cursor": format(oldest_ts, ".9f") if messages and visible_before > 0 else "",
+        "total_message_count": total,
+        "feed_scope": "all",
+    }
+
+
 def recover_projection_from_store(
     current_projection: Mapping[str, Any] | None,
     *,
     conversation_id: str,
     thread_id: str | None = None,
+    active_agent_id: str | None = None,
     limit: int = 8,
     max_items: int = 200,
 ) -> dict[str, Any]:
@@ -3766,7 +3946,13 @@ def recover_projection_from_store(
     if not cid:
         raise ValueError("conversation_id is required")
     current = dict(current_projection or {}) if isinstance(current_projection, Mapping) else {}
-    store_projection = list_projection(cid, thread_id=thread_id, limit=limit, max_items=max_items)
+    store_projection = list_projection(
+        cid,
+        thread_id=thread_id,
+        active_agent_id=active_agent_id,
+        limit=limit,
+        max_items=max_items,
+    )
     store_messages = [dict(item) for item in store_projection.get("messages") or [] if isinstance(item, Mapping)]
     current_messages = [dict(item) for item in current.get("messages") or [] if isinstance(item, Mapping)]
     reason = _projection_recovery_reason(

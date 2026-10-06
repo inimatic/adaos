@@ -2262,6 +2262,10 @@
           }
         },
         "voice": { "type": "boolean", "default": false },
+        "voiceOutput": {
+          "enum": ["shell", "surface", "none"],
+          "description": "Single speech-playback owner. Shared desktop conversations normally use shell; surface is for an application-owned isolated route."
+        },
         "attachments": {
           "type": "object", "additionalProperties": false,
           "required": ["uploadTarget", "readTarget", "accept", "maxFiles", "maxBytes"],

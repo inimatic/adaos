@@ -41,9 +41,12 @@ def migrate(document: dict, application: str) -> dict:
             'version': 1, 'owner': 'application:web_desktop',
             'agent': {'mode': 'select', 'source': {'kind': 'y', 'path': 'data/dialog', 'observe': 'dataRoot'}},
             'history': {'mode': 'auto', 'allAgents': True, 'defaultAll': True, 'maxMessages': 200},
-            'voice': True, 'presentation': {'floating': True},
+            'voice': True, 'voiceOutput': 'shell', 'presentation': {'floating': True},
         }
-        chat['inputs'].update(syncDialogSelection=False, autoSpeak=True, autoSpeakFrom='hub', openCommand='voice.chat.open')
+        # Desktop chrome owns audio playback. The embedded/floating renderer
+        # is a visual projection and must not synthesize the same reply again.
+        chat['inputs'].update(syncDialogSelection=False, autoSpeak=False, openCommand='voice.chat.open')
+        chat['inputs'].pop('autoSpeakFrom', None)
         remove = {'chat-channel-selector', 'chat-agent-selector', 'chat-voice-input'}
         for node in nodes:
             for key, value in list(node.items()):

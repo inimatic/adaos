@@ -29,7 +29,11 @@ from adaos.sdk.data.env import get_tts_backend
 from adaos.adapters.audio.tts.native_tts import NativeTTS
 from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 from adaos.services.webspace_id import coerce_webspace_id
-from adaos.services.yjs.doc import async_get_ydoc, async_read_ydoc, mutate_live_room
+from adaos.services.yjs.doc import (
+    async_get_ydoc,
+    async_read_ydoc,
+    submit_live_room_mutation,
+)
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.scenario.node_data_scope import node_scope_data_path
 from adaos.services.scenario.projection_service import _merge_nested_path
@@ -491,6 +495,9 @@ class RouterService:
         self._voice_chat_persist_committed_signatures: dict[tuple[str, str], str] = {}
         self._voice_chat_persist_next_allowed_at: dict[tuple[str, str], float] = {}
         self._voice_chat_snapshot_deferred_tasks: dict[tuple[str, ...], asyncio.Task[None]] = {}
+        self._voice_chat_general_subscriptions: set[tuple[str, str, str, str]] = set()
+        self._voice_turn_trace_tasks: set[asyncio.Task[None]] = set()
+        self._voice_turn_trace_tails: dict[str, asyncio.Task[None]] = {}
         self._dialog_state_tasks: dict[str, asyncio.Task[None]] = {}
         self._dialog_state_pending_events: dict[str, str] = {}
         self._webio_receiver_metadata_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
@@ -1122,8 +1129,22 @@ class RouterService:
                 token = str(value or "").strip()
                 return token or None
             channel_meta = channel.get("meta") if isinstance(channel.get("meta"), dict) else {}
-            meta_payload = {k: v for k, v in channel.items() if k not in {"policy", "meta"}}
-            meta_payload.update(channel_meta)
+            # Persist identity/presentation facts only. The former whole UI
+            # projection duplicated modeled columns and included transient
+            # ``active`` plus nested agent objects, so every snapshot looked
+            # like a channel mutation and took the shared SQLite write gate.
+            meta_payload = dict(channel_meta)
+            for key in (
+                "active_agent_label",
+                "active_agent_owner",
+                "active_agent_kind",
+                "active_agent_gender",
+                "active_agent_voice",
+                "active_agent_icon",
+                "active_agent_avatar_ref",
+            ):
+                if channel.get(key) not in (None, ""):
+                    meta_payload[key] = channel.get(key)
             try:
                 conversation_store.upsert_dialog_channel(
                     webspace_id=webspace_id,
@@ -1410,14 +1431,19 @@ class RouterService:
                 "channel": channel,
             }
 
-        def _active_voice_chat_channel_id(webspace_id: str) -> str:
+        def _active_voice_chat_selection(webspace_id: str) -> tuple[str, str]:
             ws = str(webspace_id or "default").strip() or "default"
             try:
                 active = dialog_runtime.get_active_channel(ws) or _restore_active_dialog_channel_from_store(ws)
                 if active is not None:
-                    channel_id = str(active.as_dict().get("channel_id") or active.channel_id or "").strip()
+                    active_payload = active.as_dict()
+                    channel_id = str(active_payload.get("channel_id") or active.channel_id or "").strip()
                     if channel_id:
-                        return channel_id
+                        return channel_id, str(
+                            active_payload.get("active_agent_id")
+                            or getattr(active, "active_agent_id", "")
+                            or ""
+                        ).strip()
             except Exception:
                 pass
             try:
@@ -1425,24 +1451,40 @@ class RouterService:
             except Exception:
                 active_row = None
             if isinstance(active_row, dict):
-                return str(active_row.get("channel_id") or active_row.get("id") or "").strip()
-            return ""
+                return (
+                    str(active_row.get("channel_id") or active_row.get("id") or "").strip(),
+                    str(active_row.get("active_agent_id") or "").strip(),
+                )
+            return "", ""
 
         def _voice_chat_message_targets_active_stream(
             webspace_id: str,
             msg: Mapping[str, Any],
             *,
             channel_id: str,
+            active_agent_id: str = "",
         ) -> bool:
-            if str(msg.get("from") or "").strip() == "user":
-                return True
             message_channel_id = str(channel_id or "").strip()
             if not message_channel_id:
                 return True
-            active_channel_id = _active_voice_chat_channel_id(webspace_id)
+            active_channel_id, stream_agent_id = _active_voice_chat_selection(webspace_id)
             if not active_channel_id:
                 return True
-            return active_channel_id == message_channel_id
+            if active_channel_id != message_channel_id:
+                return False
+            # A dialog channel can host several personas.  Channel equality is
+            # therefore insufficient: an optimistic user echo addressed to
+            # Arseni used to be published into the currently selected Nika
+            # projection before the canonical dialog switch completed.
+            message_agent_id = str(
+                active_agent_id
+                or msg.get("active_agent_id")
+                or ((msg.get("_meta") or {}).get("active_agent_id") if isinstance(msg.get("_meta"), Mapping) else "")
+                or ""
+            ).strip()
+            if stream_agent_id and message_agent_id and stream_agent_id != message_agent_id:
+                return False
+            return True
 
         def _record_voice_turn_trace(
             webspace_id: str,
@@ -1521,32 +1563,78 @@ class RouterService:
                 if extra_policy:
                     policy.update(dict(extra_policy))
                 trace_renderer = dict(renderer or {"receiver": "voice_chat.messages", "projection": "compact_tail"})
-                if status == "tool_ok":
-                    try:
-                        existing = conversation_store.get_turn_trace(trace_id)
-                    except Exception:
-                        existing = None
-                    if isinstance(existing, dict) and str(existing.get("status") or "") == "materialized":
-                        return trace_id
-                conversation_store.start_turn_trace(
-                    turn_trace_id=trace_id,
-                    webspace_id=ws,
-                    conversation_id=conversation_id or None,
-                    channel_id=channel_id,
-                    agent_id=agent_id or None,
-                    selected_tool=tool or None,
-                    policy_decision=policy,
-                    renderer=trace_renderer,
-                    message_id=message_id,
-                    summary=summary,
-                )
-                if status:
-                    conversation_store.finish_turn_trace(
-                        trace_id,
-                        status=status,
-                        summary=summary,
+                def _write_trace() -> None:
+                    if status == "tool_ok":
+                        try:
+                            existing = conversation_store.get_turn_trace(trace_id)
+                        except Exception:
+                            existing = None
+                        if isinstance(existing, dict) and str(existing.get("status") or "") == "materialized":
+                            return
+                    conversation_store.start_turn_trace(
+                        turn_trace_id=trace_id,
+                        webspace_id=ws,
+                        conversation_id=conversation_id or None,
+                        channel_id=channel_id,
+                        agent_id=agent_id or None,
+                        selected_tool=tool or None,
+                        policy_decision=policy,
                         renderer=trace_renderer,
+                        message_id=message_id,
+                        summary=summary,
                     )
+                    if status:
+                        conversation_store.finish_turn_trace(
+                            trace_id,
+                            status=status,
+                            summary=summary,
+                            renderer=trace_renderer,
+                        )
+
+                # Trace persistence is audit/control-plane work.  Running it
+                # inline used to hold the shared SQLite connection on the
+                # router event loop for several seconds, delaying the actual
+                # agent dispatch even though the user's message had already
+                # been accepted.  Preserve update order per turn while moving
+                # all blocking ledger access to a worker thread.
+                previous = self._voice_turn_trace_tails.get(trace_id)
+
+                async def _write_trace_ordered() -> None:
+                    if previous is not None:
+                        try:
+                            await previous
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    await asyncio.to_thread(_write_trace)
+
+                try:
+                    task = asyncio.create_task(
+                        _write_trace_ordered(),
+                        name=f"router-turn-trace:{trace_id}",
+                    )
+                except RuntimeError:
+                    _write_trace()
+                else:
+                    self._voice_turn_trace_tasks.add(task)
+                    self._voice_turn_trace_tails[trace_id] = task
+
+                    def _forget_trace_task(done: asyncio.Task[None]) -> None:
+                        self._voice_turn_trace_tasks.discard(done)
+                        if self._voice_turn_trace_tails.get(trace_id) is done:
+                            self._voice_turn_trace_tails.pop(trace_id, None)
+                        try:
+                            done.result()
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception:
+                            logging.getLogger("adaos.router.voice_chat").debug(
+                                "voice turn trace update failed webspace=%s trace_id=%s",
+                                ws,
+                                trace_id,
+                                exc_info=True,
+                            )
+
+                    task.add_done_callback(_forget_trace_task)
             except Exception:
                 logging.getLogger("adaos.router.voice_chat").debug(
                     "voice turn trace update failed webspace=%s trace_id=%s",
@@ -1796,11 +1884,17 @@ class RouterService:
             memory_owner = str(active_dict.get("owner") or active_agent.get("owner") or "core").strip() or "core"
             agent_owner = str(active_agent.get("owner") or memory_owner).strip() or memory_owner
             active_conversation_id = str(active_dict.get("conversation_id") or "").strip()
+            active_agent_filter = (
+                str(active_dict.get("active_agent_id") or active_agent.get("id") or "").strip()
+                if active_id == CONVERSATIONAL_DIALOG_CHANNEL_ID
+                else ""
+            )
             try:
                 visible_tail_projection = (
                     conversation_store.recover_projection_from_store(
                         {},
                         conversation_id=active_conversation_id,
+                        active_agent_id=active_agent_filter or None,
                         limit=VOICE_CHAT_VISIBLE_TAIL,
                         max_items=VOICE_CHAT_HISTORY_LIMIT,
                     )
@@ -1812,6 +1906,7 @@ class RouterService:
             visible_tail = {
                 "conversation_id": active_conversation_id,
                 "dialog_channel_id": active_id,
+                "active_agent_id": active_agent_filter or None,
                 "messages": list(visible_tail_projection.get("messages") or [])
                 if isinstance(visible_tail_projection, dict)
                 else [],
@@ -1877,10 +1972,34 @@ class RouterService:
                     "write_requires_owner": True,
                 },
             }
+            # Management and Voice must consume the same canonical registry.
+            # General has its own channel tab, so this selector contains the
+            # conversational and application-published agents only.
+            agents = [
+                _agent_projection_from_record(record)
+                for record in _agent_registry_records()
+                if str(record.get("id") or "").strip() != GENERAL_DIALOG_AGENT_ID
+            ]
+            agents = [item for item in agents if item.get("id") and item.get("channel_id")]
+            preferred_agent_order = {
+                "agent:conversation_companions:arseni": 0,
+                "agent:conversation_companions:nika": 1,
+                "agent:conversation_companions:mira": 2,
+                "agent:builder_skill:builder": 3,
+                "agent:research_orchestrator_skill:researcher": 4,
+            }
+            agents.sort(
+                key=lambda item: (
+                    preferred_agent_order.get(str(item.get("id") or ""), 100),
+                    str(item.get("label") or item.get("id") or "").casefold(),
+                    str(item.get("id") or ""),
+                )
+            )
             return {
                 "active_channel_id": active_id,
                 "active_channel": active_dict,
                 "active_agent": active_agent,
+                "agents": agents,
                 "channels": channels,
                 "visible_tail": visible_tail,
                 "memory": memory,
@@ -1901,15 +2020,23 @@ class RouterService:
             def _apply(ydoc: Any, txn: Any) -> None:
                 mutator(ydoc.get_map("data"), txn)
 
-            if prefer_live_room and mutate_live_room(
-                webspace_id,
-                _apply,
-                root_names=["data"],
-                source=source,
-                owner="core:router",
-                channel=channel,
-            ):
-                return
+            if prefer_live_room:
+                live_result = await submit_live_room_mutation(
+                    webspace_id,
+                    _apply,
+                    root_names=["data"],
+                    source=source,
+                    owner="core:router",
+                    channel=channel,
+                )
+                if bool(live_result.get("accepted")) and bool(live_result.get("applied")):
+                    return
+                logging.getLogger("adaos.router.dialog").debug(
+                    "dialog live-room projection fell back webspace=%s reason=%s error=%s",
+                    webspace_id,
+                    live_result.get("reason"),
+                    live_result.get("error"),
+                )
             async with self._router_yjs_write_meta():
                 async with async_get_ydoc(
                     webspace_id,
@@ -2305,6 +2432,7 @@ class RouterService:
             total_message_count: int | None = None,
             suppress_unchanged: bool = False,
             active_agent_id: Any = None,
+            requested_params: Mapping[str, Any] | None = None,
         ) -> str:
             # Keep the browser stream as a compact tail. Voice must never wait
             # on heavier YJS history writes before dispatching NLU.
@@ -2330,11 +2458,6 @@ class RouterService:
                 has_more_before=effective_has_more_before,
                 total_message_count=total_count,
             )
-            projection_signature = f"{signature}:agent:{resolved_active_agent_id}"
-            cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
-            current_cache = _voice_chat_stream_cache.get(cache_key) or {}
-            if suppress_unchanged and str(current_cache.get("stream_signature") or "") == projection_signature:
-                return projection_signature
             stream_params = {
                 key: value
                 for key, value in {
@@ -2347,6 +2470,20 @@ class RouterService:
                 }.items()
                 if str(value or "").strip()
             }
+            if isinstance(requested_params, Mapping):
+                stream_params.update(
+                    {
+                        str(key): value
+                        for key, value in requested_params.items()
+                        if str(key or "").strip() and str(value or "").strip()
+                    }
+                )
+            parameter_signature = json.dumps(stream_params, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            projection_signature = f"{signature}:agent:{resolved_active_agent_id}:params:{parameter_signature}"
+            cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
+            current_cache = _voice_chat_stream_cache.get(cache_key) or {}
+            if suppress_unchanged and str(current_cache.get("stream_signature") or "") == projection_signature:
+                return projection_signature
             _voice_chat_stream_cache[cache_key] = {
                 "messages": cached_messages,
                 "last_refresh_ts": last_refresh_ts,
@@ -2379,6 +2516,7 @@ class RouterService:
                     "conversation_topic_id": topic_id,
                     "thread_id": topic_id,
                     "active_agent_id": resolved_active_agent_id or None,
+                    "feed_scope": str(stream_params.get("feed_scope") or "").strip() or None,
                 },
                 "_meta": {
                     "webspace_id": webspace_id,
@@ -2595,11 +2733,59 @@ class RouterService:
             dialog_channel_id: Any = None,
             thread_id: Any = None,
             active_agent_id: Any = None,
+            feed_scope: Any = None,
             persist: bool = False,
             suppress_unchanged: bool = False,
         ) -> None:
             cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
+            requested_feed_scope = str(feed_scope or "").strip().lower()
+            requested_stream_params = {
+                key: value
+                for key, value in {
+                    "conversation_id": str(conversation_id or "").strip(),
+                    "dialog_channel_id": str(dialog_channel_id or "").strip(),
+                    "thread_id": str(thread_id or "").strip(),
+                    "active_agent_id": str(active_agent_id or "").strip(),
+                    "feed_scope": requested_feed_scope
+                    or ("agent" if str(active_agent_id or "").strip() else ""),
+                }.items()
+                if str(value or "").strip()
+            }
+            if requested_feed_scope in {"all", "general"}:
+                projection = await asyncio.to_thread(
+                    conversation_store.list_webspace_projection,
+                    webspace_id,
+                    limit=VOICE_CHAT_VISIBLE_TAIL,
+                    max_items=VOICE_CHAT_HISTORY_LIMIT,
+                )
+                aggregate_messages = [
+                    dict(item)
+                    for item in projection.get("messages") or []
+                    if isinstance(item, Mapping)
+                ]
+                _publish_voice_chat_stream(
+                    webspace_id,
+                    target_node_id,
+                    aggregate_messages,
+                    time.time(),
+                    before_cursor=str(projection.get("before_cursor") or ""),
+                    has_more_before=bool(projection.get("has_more_before")),
+                    total_message_count=int(projection.get("total_message_count") or len(aggregate_messages)),
+                    suppress_unchanged=suppress_unchanged,
+                    requested_params={
+                        "feed_scope": requested_feed_scope,
+                        "dialog_channel_id": str(dialog_channel_id or "").strip(),
+                        "active_agent_id": str(active_agent_id or "").strip(),
+                    },
+                )
+                return
             current = _voice_chat_stream_cache.get(cache_key) or {}
+            requested_active_agent_id = str(active_agent_id or "").strip()
+            cached_active_agent_id = str(current.get("active_agent_id") or "").strip() if isinstance(current, dict) else ""
+            if requested_active_agent_id and cached_active_agent_id != requested_active_agent_id:
+                # The conversational channel is shared by several agents. A
+                # cache entry for another agent must never seed this snapshot.
+                current = {}
             raw_messages = current.get("messages") if isinstance(current, dict) else None
             messages = [dict(item) for item in raw_messages if isinstance(item, dict)] if isinstance(raw_messages, list) else []
             resolved_conversation_id = await asyncio.to_thread(
@@ -2634,6 +2820,7 @@ class RouterService:
                     current if isinstance(current, dict) else {},
                     conversation_id=resolved_conversation_id,
                     thread_id=resolved_topic_id or None,
+                    active_agent_id=requested_active_agent_id or None,
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
                 )
@@ -2675,6 +2862,7 @@ class RouterService:
                     has_more_before=bool(ledger_projection.get("has_more_before")),
                     total_message_count=int(ledger_projection.get("total_message_count") or len(ledger_messages)),
                     active_agent_id=active_agent_id,
+                    requested_params=requested_stream_params,
                 )
                 if suppress_unchanged:
                     _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
@@ -2739,6 +2927,7 @@ class RouterService:
                         has_more_before=has_more_before,
                         total_message_count=total_message_count,
                         active_agent_id=active_agent_id,
+                        requested_params=requested_stream_params,
                     )
                     if suppress_unchanged:
                         _voice_chat_snapshot_published[cache_key] = (time.monotonic(), published_signature)
@@ -2749,6 +2938,7 @@ class RouterService:
                     current if isinstance(current, dict) else {},
                     conversation_id=resolved_conversation_id,
                     thread_id=resolved_topic_id or None,
+                    active_agent_id=requested_active_agent_id or None,
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
                 )
@@ -2779,6 +2969,7 @@ class RouterService:
                     has_more_before=bool(projection.get("has_more_before")),
                     total_message_count=int(projection.get("total_message_count") or len(stream_messages)),
                     active_agent_id=active_agent_id,
+                    requested_params=requested_stream_params,
                 )
                 if suppress_unchanged:
                     _voice_chat_snapshot_published[cache_key] = (
@@ -2801,6 +2992,17 @@ class RouterService:
                         total_message_count=int(projection.get("total_message_count") or len(stream_messages)),
                     )
                 return
+            if not messages and requested_active_agent_id:
+                _publish_voice_chat_stream(
+                    webspace_id,
+                    target_node_id,
+                    [],
+                    time.time(),
+                    total_message_count=0,
+                    active_agent_id=requested_active_agent_id,
+                    requested_params=requested_stream_params,
+                )
+                return
             if not messages:
                 return
 
@@ -2812,7 +3014,38 @@ class RouterService:
             conversation_id: Any = None,
             dialog_channel_id: Any = None,
             thread_id: Any = None,
+            active_agent_id: Any = None,
+            feed_scope: Any = None,
         ) -> None:
+            requested_feed_scope = str(feed_scope or "").strip().lower()
+            if requested_feed_scope in {"all", "general"}:
+                projection = await asyncio.to_thread(
+                    conversation_store.list_webspace_projection,
+                    webspace_id,
+                    before_cursor=before_cursor,
+                    limit=VOICE_CHAT_VISIBLE_TAIL,
+                    max_items=VOICE_CHAT_HISTORY_LIMIT,
+                )
+                window = [
+                    dict(item)
+                    for item in projection.get("messages") or []
+                    if isinstance(item, Mapping)
+                ]
+                _publish_voice_chat_stream(
+                    webspace_id,
+                    target_node_id,
+                    window,
+                    time.time(),
+                    before_cursor=str(projection.get("before_cursor") or ""),
+                    has_more_before=bool(projection.get("has_more_before")),
+                    total_message_count=int(projection.get("total_message_count") or len(window)),
+                    requested_params={
+                        "feed_scope": requested_feed_scope,
+                        "dialog_channel_id": str(dialog_channel_id or "").strip(),
+                        "active_agent_id": str(active_agent_id or "").strip(),
+                    },
+                )
+                return
             cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
             cached = _voice_chat_stream_cache.get(cache_key) or {}
             cached_raw = cached.get("messages") if isinstance(cached, dict) else None
@@ -2845,6 +3078,7 @@ class RouterService:
                     conversation_store.list_projection,
                     resolved_conversation_id,
                     thread_id=resolved_topic_id or None,
+                    active_agent_id=str(active_agent_id or "").strip() or None,
                     before_cursor=before_cursor,
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
@@ -2859,6 +3093,7 @@ class RouterService:
                     conversation_id=resolved_conversation_id,
                     dialog_channel_id=dialog_channel_id,
                     thread_id=resolved_topic_id,
+                    active_agent_id=active_agent_id,
                 )
                 return
             window = [dict(item) for item in store_messages if isinstance(item, dict)]
@@ -2871,6 +3106,7 @@ class RouterService:
                 before_cursor=str(projection.get("before_cursor") or ""),
                 has_more_before=bool(projection.get("has_more_before")),
                 total_message_count=int(projection.get("total_message_count") or len(window)),
+                active_agent_id=active_agent_id,
             )
 
         async def _append_voice_chat_message(
@@ -2944,6 +3180,7 @@ class RouterService:
                 worker_webspace_id,
                 clean_msg,
                 channel_id=channel_id,
+                active_agent_id=str(worker_agent.get("id") or ""),
             )
             optimistic_published = False
             if visible_in_active_stream:
@@ -2960,6 +3197,7 @@ class RouterService:
                     worker_webspace_id,
                     local_msg,
                     channel_id=channel_id,
+                    active_agent_id=str(worker_agent.get("id") or ""),
                 )
                 local_turn_trace_id = str(local_msg.get("turn_trace_id") or "").strip()
                 if not local_turn_trace_id:
@@ -3035,6 +3273,11 @@ class RouterService:
                 projection = conversation_store.list_projection(
                     conversation_id,
                     thread_id=topic_id or None,
+                    active_agent_id=(
+                        str(local_msg.get("active_agent_id") or local_meta.get("active_agent_id") or worker_agent.get("id") or "").strip()
+                        if channel_id == CONVERSATIONAL_DIALOG_CHANNEL_ID
+                        else None
+                    ),
                     limit=VOICE_CHAT_VISIBLE_TAIL,
                     max_items=VOICE_CHAT_HISTORY_LIMIT,
                 )
@@ -3100,6 +3343,29 @@ class RouterService:
                     if not optimistic_published and visible_in_active_stream:
                         _fallback_publish_voice_chat_message(webspace_id, target_node_id, clean_msg)
                     return
+                aggregate_subscriptions = [
+                    item
+                    for item in self._voice_chat_general_subscriptions
+                    if item[0] == worker_webspace_id
+                ]
+                for (
+                    _subscription_webspace_id,
+                    subscription_target_node_id,
+                    subscription_channel_id,
+                    subscription_agent_id,
+                ) in aggregate_subscriptions:
+                    await _publish_voice_chat_snapshot(
+                        worker_webspace_id,
+                        subscription_target_node_id or None,
+                        dialog_channel_id=subscription_channel_id,
+                        active_agent_id=subscription_agent_id,
+                        # `all` is the canonical aggregate projection address.
+                        # Publishing later updates as `general` made strict
+                        # parameterized clients discard them after a valid
+                        # `feed_scope=all` subscription.
+                        feed_scope="all",
+                        suppress_unchanged=True,
+                    )
                 if not bool(materialized.get("visible_in_active_stream")):
                     if bool(materialized.get("finished_turn_trace")):
                         _schedule_dialog_state_write(webspace_id, event="inactive_turn_stored")
@@ -3889,10 +4155,11 @@ class RouterService:
                 )
             except Exception:
                 pass
-            if ev.type == "webio.stream.subscription.changed":
-                action = str(payload.get("action") or "").strip().lower()
-                if action == "unsubscribed":
-                    return
+            action = (
+                str(payload.get("action") or "").strip().lower()
+                if ev.type == "webio.stream.subscription.changed"
+                else ""
+            )
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
             stream_params: dict[str, Any] = {}
             if isinstance(meta.get("params"), dict):
@@ -3922,21 +4189,26 @@ class RouterService:
                 or stream_params.get("active_agent_id")
                 or stream_params.get("activeAgentId")
             )
+            feed_scope = (
+                payload.get("feed_scope")
+                or meta.get("feed_scope")
+                or stream_params.get("feed_scope")
+                or stream_params.get("feedScope")
+            )
             thread_id = _voice_chat_topic_id_from_sources(payload, meta, stream_params)
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
-                publish_args = {
-                    "conversation_id": conversation_id,
-                    "dialog_channel_id": dialog_channel_id,
-                    "thread_id": thread_id,
-                    "active_agent_id": active_agent_id,
-                    "persist": _voice_chat_persist_stream_snapshots_enabled(),
-                    "suppress_unchanged": ev.type == "webio.stream.snapshot.requested",
-                }
-                if _voice_snapshot_yroom_ready(ws):
-                    await _publish_voice_chat_snapshot(ws, target_node_id, **publish_args)
-                    continue
-
+                general_subscription = (
+                    str(ws or "").strip(),
+                    str(target_node_id or "").strip(),
+                    str(dialog_channel_id or "general").strip(),
+                    str(active_agent_id or "").strip(),
+                )
+                if str(feed_scope or "").strip().lower() in {"all", "general"}:
+                    if action == "unsubscribed":
+                        self._voice_chat_general_subscriptions.discard(general_subscription)
+                    elif action == "subscribed":
+                        self._voice_chat_general_subscriptions.add(general_subscription)
                 key = tuple(
                     str(value or "").strip()
                     for value in (
@@ -3946,8 +4218,27 @@ class RouterService:
                         dialog_channel_id,
                         thread_id,
                         active_agent_id,
+                        feed_scope,
                     )
                 )
+                if action == "unsubscribed":
+                    deferred = self._voice_chat_snapshot_deferred_tasks.pop(key, None)
+                    if deferred is not None and not deferred.done():
+                        deferred.cancel()
+                    continue
+                publish_args = {
+                    "conversation_id": conversation_id,
+                    "dialog_channel_id": dialog_channel_id,
+                    "thread_id": thread_id,
+                    "active_agent_id": active_agent_id,
+                    "feed_scope": feed_scope,
+                    "persist": _voice_chat_persist_stream_snapshots_enabled(),
+                    "suppress_unchanged": ev.type == "webio.stream.snapshot.requested",
+                }
+                if _voice_snapshot_yroom_ready(ws):
+                    await _publish_voice_chat_snapshot(ws, target_node_id, **publish_args)
+                    continue
+
                 existing = self._voice_chat_snapshot_deferred_tasks.get(key)
                 if existing is not None and not existing.done():
                     continue
@@ -4044,6 +4335,18 @@ class RouterService:
                 or stream_params.get("channelId")
             )
             thread_id = _voice_chat_topic_id_from_sources(payload, meta, stream_params)
+            active_agent_id = (
+                payload.get("active_agent_id")
+                or meta.get("active_agent_id")
+                or stream_params.get("active_agent_id")
+                or stream_params.get("activeAgentId")
+            )
+            feed_scope = (
+                payload.get("feed_scope")
+                or meta.get("feed_scope")
+                or stream_params.get("feed_scope")
+                or stream_params.get("feedScope")
+            )
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
                 await _publish_voice_chat_history_more(
@@ -4053,6 +4356,8 @@ class RouterService:
                     conversation_id=conversation_id,
                     dialog_channel_id=dialog_channel_id,
                     thread_id=thread_id,
+                    active_agent_id=active_agent_id,
+                    feed_scope=feed_scope,
                 )
 
         async def _on_browser_session_changed(ev: Event) -> None:
@@ -4060,6 +4365,14 @@ class RouterService:
             if not isinstance(payload, dict):
                 return
             targets = _resolve_webspace_ids_basic(payload)
+            # A freshly materialized Webspace intentionally contains only the
+            # scenario-owned branches.  Re-project Core-owned dialog state as
+            # soon as a browser surface is observed, even when that surface
+            # has not opened a media route.  Previously Chat could render its
+            # static General/Agents tabs forever while ``data/dialog`` stayed
+            # absent; clicking an agent then had no roster to select from.
+            for ws in targets:
+                _schedule_dialog_state_write(ws, event="browser_session")
             tracked_targets = [ws for ws in targets if ws in self._media_route_webspaces]
             if not tracked_targets:
                 return
@@ -4071,6 +4384,18 @@ class RouterService:
                 cause="browser.session.changed",
                 observed_failure=observed_failure,
             )
+
+        async def _on_webspace_reloaded(ev: Event) -> None:
+            payload = ev.payload or {}
+            if not isinstance(payload, dict):
+                return
+            # Scenario rebuilds replace scenario-owned roots atomically.  The
+            # canonical dialog registry is Core-owned, so restore it only
+            # after that replacement has completed.  Relying solely on the
+            # earlier browser.session.changed event made the roster race the
+            # materializer and left Chat empty until another user action.
+            for ws in _resolve_webspace_ids_basic(payload):
+                _schedule_dialog_state_write(ws, event="webspace_reloaded")
 
         async def _on_member_media_inventory_changed(ev: Event) -> None:
             if not self._media_route_webspaces:
@@ -4481,7 +4806,7 @@ class RouterService:
                     exc_info=True,
                 )
 
-        def _attach_dialog_context_payload(
+        async def _attach_dialog_context_payload(
             payload: dict[str, Any],
             *,
             webspace_id: str,
@@ -4511,20 +4836,45 @@ class RouterService:
             payload.setdefault("conversation_id", conversation_id)
             payload.setdefault("dialog_channel_id", channel_id)
             payload.setdefault("conversation_owner", owner)
+            context_budget_ms = 250
             try:
-                payload["conversation_context"] = conversation_context.build_context_packet(
-                    conversation_id=conversation_id,
-                    requester_owner=owner,
-                    channel_id=channel_id,
-                    thread_id=thread_id or None,
-                    agent_id=agent_id,
-                    budgets={
-                        "max_tokens": 4_000,
-                        "max_messages": 20,
-                        "max_memory_items": 12,
-                        "timeout_ms": 250,
-                    },
+                # SQLite health/retrieval reads can wait behind a concurrent
+                # writer.  The packet's internal timeout is cooperative and
+                # therefore cannot interrupt a blocked DB call.  Keep that
+                # work off the router loop and enforce the latency budget at
+                # the async boundary so chat dispatch cannot freeze every
+                # other client while context diagnostics are being prepared.
+                payload["conversation_context"] = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        conversation_context.build_context_packet,
+                        conversation_id=conversation_id,
+                        requester_owner=owner,
+                        channel_id=channel_id,
+                        thread_id=thread_id or None,
+                        agent_id=agent_id,
+                        budgets={
+                            "max_tokens": 4_000,
+                            "max_messages": 20,
+                            "max_memory_items": 12,
+                            "timeout_ms": context_budget_ms,
+                        },
+                    ),
+                    timeout=(context_budget_ms + 100) / 1000.0,
                 )
+            except asyncio.TimeoutError:
+                payload["conversation_context"] = {
+                    "schema": "adaos.context.packet.v1",
+                    "conversation_id": conversation_id,
+                    "requester_owner": owner,
+                    "channel_id": channel_id,
+                    "agent_id": agent_id,
+                    "messages": [],
+                    "memory": [],
+                    "diagnostics": {
+                        "fallbacks": ["context_packet_timeout"],
+                        "latency_budget_ms": context_budget_ms,
+                    },
+                }
             except Exception as exc:
                 payload["conversation_context"] = {
                     "schema": "adaos.context.packet.v1",
@@ -4639,9 +4989,24 @@ class RouterService:
                 or action_channel.get("active_agent_id")
                 or ""
             ).strip() or None
+            # Persona is part of the turn contract, not mutable session
+            # ambience.  conversation_companions historically inferred the
+            # character from its last session state, so a fast tab switch or
+            # another surface using the same webspace could route an Arseni
+            # turn through Mira.  Pin every addressed turn to the canonical
+            # agent id before the tool crosses the runtime boundary.
+            if (
+                skill == "conversation_companions"
+                and tool == "talk"
+                and not str(action_payload.get("character_id") or "").strip()
+                and agent_id
+            ):
+                prefix = "agent:conversation_companions:"
+                if agent_id.startswith(prefix):
+                    action_payload["character_id"] = agent_id[len(prefix):]
             if not conversation_id:
                 conversation_id = _skill_conversation_id(skill, webspace_id)
-            _attach_dialog_context_payload(
+            await _attach_dialog_context_payload(
                 action_payload,
                 webspace_id=webspace_id,
                 channel_id=channel_id,
@@ -4978,6 +5343,28 @@ class RouterService:
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
                 route_meta = {**meta, "webspace_id": ws, "route_id": str(meta.get("route_id") or "voice_chat")}
+                requested_agent_id = str(
+                    payload.get("active_agent_id")
+                    or route_meta.get("active_agent_id")
+                    or ""
+                ).strip()
+                if requested_agent_id:
+                    route_meta["active_agent_id"] = requested_agent_id
+                    agent_record = _agent_record_by_id(requested_agent_id)
+                    if isinstance(agent_record, dict):
+                        agent_projection = _agent_projection_from_record(agent_record)
+                        for target_key, source_key in (
+                            ("active_agent_label", "label"),
+                            ("active_agent_owner", "owner"),
+                            ("active_agent_kind", "kind"),
+                            ("active_agent_gender", "gender"),
+                            ("active_agent_voice", "voice"),
+                            ("active_agent_icon", "icon"),
+                            ("active_agent_avatar_ref", "avatar_ref"),
+                        ):
+                            value = str(agent_projection.get(source_key) or "").strip()
+                            if value:
+                                route_meta[target_key] = value
                 current = dialog_runtime.get_active_channel(ws)
                 current_id = str(current.channel_id).strip().lower() if current is not None else "general"
                 if channel_id == "general":
@@ -5000,9 +5387,16 @@ class RouterService:
                     # requests to the general agent retain their own response.
                     _schedule_dialog_state_write(ws, event="selected")
                     continue
-                if current_id == channel_id:
+                current_agent_id = str(current.active_agent_id or "").strip() if current is not None else ""
+                if current_id == channel_id and (
+                    not requested_agent_id or current_agent_id == requested_agent_id
+                ):
                     _schedule_dialog_state_write(ws, event="selected")
                     continue
+                if channel_id == CONVERSATIONAL_DIALOG_CHANNEL_ID and requested_agent_id:
+                    if await _activate_requested_dialog_channel(ws, channel_id, route_meta):
+                        _schedule_dialog_state_write(ws, event="selected")
+                        continue
                 if channel_id != "conversational":
                     try:
                         def _load_persisted_channel() -> Any:
@@ -5643,6 +6037,59 @@ class RouterService:
                 meta.setdefault("target_node_id", target_node_id)
             meta.setdefault("turn_trace_id", _make_id("trace"))
             requested_dialog_channel_id = str(meta.get("dialog_channel_id") or payload.get("dialog_channel_id") or "").strip().lower()
+            # Agent tabs are allowed to submit only their stable agent id.  The
+            # WebUI selector used to rely on a preceding channel-selection
+            # event, so a quick submit (or a reconnect between select and
+            # submit) fell through to general NLU even though the message was
+            # explicitly addressed to Arseni/Nika/Mira.  The agent id is
+            # itself authoritative routing metadata: derive the owning dialog
+            # channel before resolving the turn.
+            requested_active_agent_id = str(
+                meta.get("active_agent_id")
+                or payload.get("active_agent_id")
+                or ""
+            ).strip()
+            if requested_active_agent_id:
+                # Agent discovery can touch the durable registry on a cold
+                # request.  Keep that filesystem/SQLite work off the runtime
+                # loop so selecting an agent cannot stall Yjs, command ACKs,
+                # or the optimistic chat echo.
+                requested_agent_record = await asyncio.to_thread(
+                    _agent_record_by_id,
+                    requested_active_agent_id,
+                )
+                if isinstance(requested_agent_record, dict):
+                    requested_agent = _agent_projection_from_record(requested_agent_record)
+                    # The channel label ("Conversational") is not a persona
+                    # label.  Resolve persona presentation from the canonical
+                    # registry at ingress so replies and durable history keep
+                    # the selected Arseni/Nika/Mira identity even after a
+                    # reconnect or a stale channel projection.
+                    for target_key, source_key in (
+                        ("active_agent_label", "label"),
+                        ("active_agent_owner", "owner"),
+                        ("active_agent_kind", "kind"),
+                        ("active_agent_gender", "gender"),
+                        ("active_agent_voice", "voice"),
+                        ("active_agent_icon", "icon"),
+                        ("active_agent_avatar_ref", "avatar_ref"),
+                    ):
+                        value = str(requested_agent.get(source_key) or "").strip()
+                        if value:
+                            meta[target_key] = value
+                    voice_profile = requested_agent.get("voice_profile")
+                    if isinstance(voice_profile, dict) and voice_profile:
+                        meta["voice_profile"] = dict(voice_profile)
+                    if meta.get("active_agent_gender"):
+                        meta["voice_gender"] = meta["active_agent_gender"]
+                    if meta.get("active_agent_voice"):
+                        meta["voice"] = meta["active_agent_voice"]
+            if (
+                not requested_dialog_channel_id
+                and requested_active_agent_id.startswith("agent:conversation_companions:")
+            ):
+                requested_dialog_channel_id = CONVERSATIONAL_DIALOG_CHANNEL_ID
+                meta["dialog_channel_id"] = CONVERSATIONAL_DIALOG_CHANNEL_ID
             try:
                 pre_addressed_agent = _extract_addressed_agent(text)
             except Exception:
@@ -6281,6 +6728,11 @@ class RouterService:
                 status="routed",
                 target_node_id=target_node_id,
             )
+            # The NLU Teacher and the dialog fallback consume the same miss
+            # event. Fence Teacher until the dialog outcome is known so a
+            # successful skill fallback (for example weather.current) is not
+            # simultaneously recorded as an NLU gap.
+            meta["teacher_outcome_fence"] = True
             try:
                 self.bus.publish(
                     Event(
@@ -6512,6 +6964,7 @@ class RouterService:
             ("webio.stream.subscription.changed", _on_voice_chat_stream_snapshot),
             ("conversation.history.more", _on_conversation_history_more),
             ("browser.session.changed", _on_browser_session_changed),
+            ("desktop.webspace.reloaded", _on_webspace_reloaded),
             ("subnet.member.snapshot.changed", _on_member_media_inventory_changed),
             ("subnet.member.link.up", _on_member_media_inventory_changed),
             ("subnet.member.link.down", _on_member_media_inventory_changed),
@@ -6597,6 +7050,24 @@ class RouterService:
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
             self._voice_chat_snapshot_deferred_tasks.clear()
+        self._voice_chat_general_subscriptions.clear()
+        if self._voice_turn_trace_tasks:
+            try:
+                timeout_s = max(0.0, float(os.getenv("ADAOS_VOICE_TURN_TRACE_DRAIN_TIMEOUT_S") or "1.0"))
+            except Exception:
+                timeout_s = 1.0
+            pending = [task for task in self._voice_turn_trace_tasks if not task.done()]
+            try:
+                if pending:
+                    await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+            except Exception:
+                pass
+            self._voice_turn_trace_tasks.clear()
+            self._voice_turn_trace_tails.clear()
         if self._voice_chat_append_tasks:
             try:
                 timeout_s = max(0.0, float(os.getenv("ADAOS_VOICE_CHAT_APPEND_DRAIN_TIMEOUT_S") or "1.0"))

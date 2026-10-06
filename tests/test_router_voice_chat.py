@@ -841,6 +841,85 @@ async def test_voice_chat_open_projects_general_dialog_state(monkeypatch) -> Non
     assert [item["id"] for item in dialog["channels"][:2]] == ["general", "conversational"]
 
 
+async def test_browser_session_projects_dialog_roster_without_media_route(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node", subnet_id="sn_home")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="browser.session.changed",
+            source="test",
+            ts=1.0,
+            payload={"webspace_id": "desktop", "connection_state": "connected"},
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+    dialog = doc.get_map("data")["dialog"]
+    agents = {item["id"]: item for item in dialog["agents"]}
+    assert "agent:core:general" not in agents
+    assert "agent:conversation_companions:arseni" in agents
+    assert agents["agent:conversation_companions:arseni"]["gender"] == "male"
+    assert "agent:builder_skill:builder" in agents
+    assert [item["id"] for item in dialog["agents"][:4]] == [
+        "agent:conversation_companions:arseni",
+        "agent:conversation_companions:nika",
+        "agent:conversation_companions:mira",
+        "agent:builder_skill:builder",
+    ]
+    assert router._media_route_webspaces == set()
+
+
+async def test_webspace_reload_reprojects_dialog_roster_after_materialization(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node", subnet_id="sn_home")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="desktop.webspace.reloaded",
+            source="scenario.webspace_runtime",
+            ts=1.0,
+            payload={
+                "webspace_id": "desktop",
+                "scenario_id": "web_desktop",
+                "action": "scenario_switch_rebuild",
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+    dialog = doc.get_map("data")["dialog"]
+    agents = {item["id"]: item for item in dialog["agents"]}
+    assert "agent:conversation_companions:arseni" in agents
+    assert "agent:conversation_companions:nika" in agents
+    assert "agent:conversation_companions:mira" in agents
+    assert "agent:builder_skill:builder" in agents
+
+
 async def test_dialog_projection_is_non_blocking_and_does_not_cancel_slow_ydoc(monkeypatch) -> None:
     bus = LocalEventBus()
     doc = _Doc()
@@ -856,7 +935,10 @@ async def test_dialog_projection_is_non_blocking_and_does_not_cancel_slow_ydoc(m
     )
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
-    monkeypatch.setattr(router_service_module, "mutate_live_room", lambda *_args, **_kwargs: False)
+    async def _no_live_room(*_args, **_kwargs):
+        return {"accepted": False, "applied": False, "reason": "room_not_ready"}
+
+    monkeypatch.setattr(router_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(
         router_service_module,
         "async_get_ydoc",
@@ -1096,6 +1178,7 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
     monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
     monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "_voice_snapshot_yroom_ready", lambda _ws: True)
 
     def _run_tool(skill, tool, payload, **opts):
         calls.append((skill, tool, dict(payload), dict(opts)))
@@ -1128,10 +1211,54 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     )
     monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
     dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=f"conv.skill.conversation_companions.default.{webspace_id}",
+        active_agent_id="agent:conversation_companions:arseni",
+        active_agent_label="Арсений",
+        route_id="voice_chat",
+    )
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
     bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    bus.publish(
+        Event(
+            type="webio.stream.subscription.changed",
+            source="test",
+            ts=0.5,
+            payload={
+                "receiver": "voice_chat.messages",
+                "webspace_id": webspace_id,
+                "action": "subscribed",
+                "params": {
+                    "feed_scope": "agent",
+                    "dialog_channel_id": "builder",
+                    "active_agent_id": "agent:builder_skill:builder",
+                },
+            },
+        )
+    )
+    bus.publish(
+        Event(
+            type="webio.stream.subscription.changed",
+            source="test",
+            ts=0.6,
+            payload={
+                "receiver": "voice_chat.messages",
+                "webspace_id": webspace_id,
+                "action": "subscribed",
+                "params": {"feed_scope": "all"},
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=1.0)
+    seen_stream.clear()
 
     original_to_thread = router_service_module.asyncio.to_thread
     builder_ran_in_thread = False
@@ -1187,6 +1314,15 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     assert any(
         any(item.get("from") == "hub" and item.get("text") == "builder draft created" for item in payload["data"]["messages"])
         for payload in addressed_streams
+    )
+    aggregate_streams = [
+        event.payload
+        for event in seen_stream
+        if (event.payload.get("params") or {}).get("feed_scope") == "all"
+    ]
+    assert any(
+        any(item.get("from") == "hub" and item.get("text") == "builder draft created" for item in payload["data"]["messages"])
+        for payload in aggregate_streams
     )
     dialog_runtime.reset_all()
 
@@ -2605,7 +2741,7 @@ async def test_voice_chat_user_active_companion_uses_dev_fallback_when_runtime_t
     dialog_runtime.reset_all()
 
 
-async def test_voice_chat_requested_conversational_channel_uses_fallback_when_manifest_missing(monkeypatch) -> None:
+async def test_voice_chat_active_companion_agent_derives_channel_and_uses_fallback_when_manifest_missing(monkeypatch) -> None:
     from adaos.services import dialog_runtime
 
     doc = _Doc()
@@ -2686,7 +2822,7 @@ async def test_voice_chat_requested_conversational_channel_uses_fallback_when_ma
                     "route_id": "voice_chat",
                     "voice_chat_scope": "node",
                     "target_node_id": target_node_id,
-                    "dialog_channel_id": "conversational",
+                    "active_agent_id": "agent:conversation_companions:arseni",
                     "active_agent_label": "Arseni",
                 },
             },
@@ -2703,7 +2839,8 @@ async def test_voice_chat_requested_conversational_channel_uses_fallback_when_ma
     assert calls[0][2]["_meta"]["dialog_channel_id"] == "conversational"
     assert calls[0][2]["_meta"]["target_node_id"] == target_node_id
     assert calls[0][2]["_meta"]["active_agent_id"] == "agent:conversation_companions:arseni"
-    assert calls[0][2]["_meta"]["active_agent_label"] == "Arseni"
+    assert calls[0][2]["character_id"] == "arseni"
+    assert calls[0][2]["_meta"]["active_agent_label"] == "Арсений"
     assert calls[0][2]["conversation_context"]["conversation_id"] == (
         f"conv.skill.conversation_companions.default.{webspace_id}"
     )
@@ -2813,6 +2950,7 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     doc = _Doc()
     calls: list[tuple[str, str, dict, dict]] = []
     seen_nlu: list[Event] = []
+    seen_stream: list[Event] = []
     webspace_id = "addressed-companion-ws"
     user_text = "Ника, назови 3 последних русских царей"
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
@@ -2837,6 +2975,7 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
     monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
     monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "_voice_snapshot_yroom_ready", lambda _ws: True)
     monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
 
     def _run_tool(skill, tool, payload, **opts):
@@ -2870,9 +3009,41 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
         lambda **_kwargs: SimpleNamespace(run_tool=_run_tool),
     )
     dialog_runtime.reset_all()
+    dialog_runtime.activate_channel(
+        webspace_id=webspace_id,
+        channel_id="conversational",
+        owner="skill:conversation_companions",
+        default_skill="conversation_companions",
+        default_tool="talk",
+        conversation_id=f"conv.skill.conversation_companions.default.{webspace_id}",
+        active_agent_id="agent:conversation_companions:arseni",
+        active_agent_label="Арсений",
+        route_id="voice_chat",
+    )
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    bus.publish(
+        Event(
+            type="webio.stream.subscription.changed",
+            source="test",
+            ts=0.5,
+            payload={
+                "receiver": "voice_chat.messages",
+                "webspace_id": webspace_id,
+                "action": "subscribed",
+                "params": {
+                    "feed_scope": "general",
+                    "dialog_channel_id": "general",
+                    "active_agent_id": "agent:core:general",
+                },
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=1.0)
+    seen_stream.clear()
 
     bus.publish(
         Event(
@@ -2900,6 +3071,7 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert calls[0][2]["text"] == user_text
     assert calls[0][2]["_meta"]["dialog_channel_id"] == "conversational"
     assert calls[0][2]["_meta"]["active_agent_id"] == "agent:conversation_companions:nika"
+    assert calls[0][2]["character_id"] == "nika"
     assert calls[0][2]["_meta"]["active_agent_label"] == "Ника"
     assert calls[0][2]["_meta"]["active_agent_gender"] == "female"
     assert calls[0][2]["_meta"]["voice_gender"] == "female"
@@ -2936,6 +3108,73 @@ async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(
     assert trace["renderer"]["projection"] in {"skill_emitted_message", "compact_tail"}
     assert data["dialog"]["last_turn_trace"]["status"] == "materialized"
     assert data["dialog"]["last_turn_trace"]["renderer"]["projection"] in {"skill_emitted_message", "compact_tail"}
+    user_streams = [
+        event.payload
+        for event in seen_stream
+        if any(
+            item.get("from") == "user" and item.get("text") == user_text
+            for item in (event.payload.get("data") or {}).get("messages") or []
+        )
+    ]
+    assert user_streams
+    assert all(
+        str((payload.get("params") or {}).get("active_agent_id") or "")
+        != "agent:conversation_companions:arseni"
+        for payload in user_streams
+    )
+    general_streams = [
+        event.payload
+        for event in seen_stream
+        if str((event.payload.get("params") or {}).get("feed_scope") or "") == "general"
+    ]
+    assert general_streams
+    assert any(
+        any(item.get("from") == "user" and item.get("text") == user_text for item in payload["data"]["messages"])
+        and any(item.get("from") == "hub" for item in payload["data"]["messages"])
+        for payload in general_streams
+    )
+
+    # Switching away and back must rebuild both filtered feeds from the
+    # durable ledger: the addressed turn belongs only to Nika and cannot be
+    # lost after the optimistic browser echo is gone.
+    snapshots: dict[str, dict] = {}
+    for requested_agent_id in (
+        "agent:conversation_companions:arseni",
+        "agent:conversation_companions:nika",
+    ):
+        seen_stream.clear()
+        bus.publish(
+            Event(
+                type="webio.stream.snapshot.requested",
+                source="test",
+                ts=2.0,
+                payload={
+                    "receiver": "voice_chat.messages",
+                    "webspace_id": webspace_id,
+                    "params": {
+                        "dialog_channel_id": "conversational",
+                        "active_agent_id": requested_agent_id,
+                    },
+                },
+            )
+        )
+        assert await bus.wait_for_idle(timeout=2.0)
+        matching = [
+            event.payload
+            for event in seen_stream
+            if str((event.payload.get("params") or {}).get("active_agent_id") or "") == requested_agent_id
+        ]
+        assert matching
+        snapshots[requested_agent_id] = matching[-1]
+
+    assert not any(
+        item.get("text") == user_text
+        for item in snapshots["agent:conversation_companions:arseni"]["data"]["messages"]
+    )
+    assert any(
+        item.get("text") == user_text
+        for item in snapshots["agent:conversation_companions:nika"]["data"]["messages"]
+    )
     dialog_runtime.reset_all()
 
 
@@ -3273,6 +3512,38 @@ async def test_voice_chat_snapshot_waits_for_live_yroom_and_coalesces(monkeypatc
             break
         await asyncio.sleep(0.05)
     assert recovery_calls
+    await router.stop()
+
+
+async def test_voice_chat_unsubscribe_cancels_matching_deferred_snapshot(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "_voice_snapshot_yroom_ready", lambda _ws: False)
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    payload = {
+        "receiver": "voice_chat.messages",
+        "webspace_id": "desktop",
+        "params": {
+            "dialog_channel_id": "arseni",
+            "active_agent_id": "agent:arseni",
+        },
+    }
+
+    bus.publish(Event(type="webio.stream.subscription.changed", source="test", ts=1.0, payload={**payload, "action": "subscribed"}))
+    assert await bus.wait_for_idle(timeout=1.0)
+    assert len(router._voice_chat_snapshot_deferred_tasks) == 1
+
+    bus.publish(Event(type="webio.stream.subscription.changed", source="test", ts=2.0, payload={**payload, "action": "unsubscribed"}))
+    assert await bus.wait_for_idle(timeout=1.0)
+    await asyncio.sleep(0)
+    assert router._voice_chat_snapshot_deferred_tasks == {}
     await router.stop()
 
 
@@ -4015,7 +4286,10 @@ async def test_voice_chat_user_continues_when_yjs_history_write_times_out(monkey
     monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
-    monkeypatch.setattr(router_service_module, "mutate_live_room", lambda *_args, **_kwargs: False)
+    async def _no_live_room(*_args, **_kwargs):
+        return {"accepted": False, "applied": False, "reason": "room_not_ready"}
+
+    monkeypatch.setattr(router_service_module, "submit_live_room_mutation", _no_live_room)
     monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _SlowAsyncDoc())
     monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
 
