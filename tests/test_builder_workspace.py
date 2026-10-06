@@ -1203,8 +1203,15 @@ def test_builder_api_recovers_validated_result_in_node_context() -> None:
     assert response.status_code == 200, response.text
     assert response.json()["worker"]["model_started"] is False
     assert calls == [
-        {"object_type": "skill", "object_id": "demo_metrics_skill"}
+        {"object_type": "skill", "object_id": "demo_metrics_skill", "permission_decision": None}
     ]
+    decision = {"decision": "deny", "task_id": "task.reviewed-candidate"}
+    response = client.post(
+        "/api/builder/automation/recover-validated",
+        json={"object_type": "skill", "object_id": "demo_metrics_skill", "permission_decision": decision},
+    )
+    assert response.status_code == 200
+    assert calls[-1]["permission_decision"] == decision
 
 
 def test_builder_api_preflights_and_validates_preserved_candidate() -> None:

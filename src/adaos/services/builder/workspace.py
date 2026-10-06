@@ -582,6 +582,33 @@ class BuilderWorkspaceService:
             token = token[: -len(suffix)]
         return token
 
+    def resolve_project_repair_target(self, project_id: str, *, preferred_ref: str | None = None) -> dict[str, str]:
+        """Resolve a project/application ticket without guessing a same-name scenario."""
+        from adaos.sdk.developer.compositions import validate
+
+        token = _slug(project_id)
+        dev_root = self._dev_project_root(token)
+        dev_manifest = dev_root / "project.yaml" if dev_root is not None else None
+        if dev_manifest is not None and dev_manifest.is_file():
+            manifest = validate(_read_yaml(dev_manifest))
+        else:
+            source = self._read_workspace_project_manifest(token)
+            if source is None:
+                raise ValueError(f"Project repair requires an authoritative project manifest: {token}")
+            manifest = validate(source[1])
+        if str(manifest.get("id") or "") != token:
+            raise ValueError("Project repair manifest identity does not match the ticket")
+        owned = self._project_owned_component_refs(manifest)
+        defaults = [item for item in manifest.get("entrypoints") or [] if item.get("default") is True]
+        primary = next((item["ref"] for item in manifest["components"]["owned"] if item.get("role") == "primary"), "")
+        ref = preferred_ref or (str(defaults[0].get("presentation") or "") if defaults else primary)
+        if ref not in owned:
+            raise ValueError("Project repair target must be an owned component, not a dependency")
+        kind, _, artifact_id = ref.partition(":")
+        if kind not in {"scenario", "skill"} or not artifact_id:
+            raise ValueError("Project repair target must be a scenario or skill")
+        return {"object_type": kind, "object_id": artifact_id, "project_id": token, "project_ref": f"project:{token}"}
+
     def resolve_owning_dev_project(
         self,
         *,

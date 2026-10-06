@@ -505,10 +505,15 @@ def _automation_target_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
     repair_hints = _bounded_repair_hints(ticket)
     qualified_type = _text(repair_hints.get("target_object_type")).lower()
     qualified_id = _text(repair_hints.get("target_object_id"))
-    if qualified_type in {"skill", "scenario"} and qualified_id:
-        return {"object_type": qualified_type, "object_id": qualified_id}
     target_type = _text(target.get("type")).lower().rstrip("s")
     target_id = _text(target.get("id") or target.get("name"))
+    if target_type in {"application", "project"} and target_id:
+        from adaos.services.builder.workspace import BuilderWorkspaceService
+
+        preferred = f"{qualified_type}:{qualified_id}" if qualified_type in {"skill", "scenario"} and qualified_id else None
+        return BuilderWorkspaceService.from_context().resolve_project_repair_target(target_id, preferred_ref=preferred)
+    if qualified_type in {"skill", "scenario"} and qualified_id:
+        return {"object_type": qualified_type, "object_id": qualified_id}
     if target_type in {"skill", "scenario"} and target_id:
         return {"object_type": target_type, "object_id": target_id}
     for key, object_type in (
@@ -605,6 +610,8 @@ def _development_source_scope(
     }
     metadata = _mapping(ticket.get("metadata"))
     for key in ("project_id", "project_ref"):
+        if _text(target.get(key)):
+            resolved[key] = target[key]
         if not _text(resolved.get(key)) and _text(metadata.get(key)):
             resolved[key] = metadata[key]
     return resolved
@@ -623,6 +630,9 @@ def _project_id_for_materialization(ticket: Mapping[str, Any], development_sourc
 def _project_identity_from_ticket(ticket: Mapping[str, Any]) -> dict[str, str]:
     target = _mapping(ticket.get("target_scope"))
     metadata = _mapping(ticket.get("metadata"))
+    if _text(target.get("type")).lower() in {"application", "project"} and _text(target.get("id")):
+        project_id = _text(target["id"])
+        return {"project_ref": f"project:{project_id}", "project_id": project_id}
     for source in (target, metadata):
         project_ref = _text(source.get("project_ref"))
         project_id = _text(source.get("project_id"))
