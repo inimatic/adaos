@@ -484,6 +484,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
 
     from adaos.sdk.core.exporter import export as sdk_export
     from adaos.services.applications.data_lifecycle import automation_data_contract
+    from adaos.services.skill.data_route_contract import automation_stream_contract
 
     exported = sdk_export(
         level="std",
@@ -540,6 +541,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
         "contracts": contracts,
         "manifest_contracts": {
             "owned_skill_data_lifecycle": automation_data_contract(),
+            "skill_stream_data_routes": automation_stream_contract(),
         },
         "runtime_rules": {
             "authorization": (
