@@ -902,7 +902,7 @@ def _build_hub_route_http_bases(
     cfg_base = str(getattr(cfg, "hub_url", None) or "").strip()
     runtime_port = str(os.getenv("ADAOS_RUNTIME_PORT") or "").strip()
     runtime_port_base = _runtime_port_local_http_base()
-    state_bases = _active_runtime_state_local_http_bases(ctx)
+    state_bases = [] if runtime_port_base else _active_runtime_state_local_http_bases(ctx)
 
     if _hub_route_prefers_supervisor_public_status(path_norm, method):
         bases.extend(_supervisor_local_bases())
@@ -914,16 +914,25 @@ def _build_hub_route_http_bases(
             state=state,
         )
         bases.append(runtime_port_base)
+        # This relay runs inside the serving runtime. A slow response must not
+        # turn into a request to a stale or passive candidate slot.
+        return list(dict.fromkeys(bases))
     if runtime_port.isdigit():
         bases.append(f"http://127.0.0.1:{runtime_port}")
     bases.extend(state_bases)
+    if state_bases:
+        return list(dict.fromkeys(bases))
     _append_local_http_base(bases, env_base)
+    _append_local_http_base(bases, getattr(cfg, "local_api_url", None))
     _append_local_http_base(bases, cfg_base)
+    if bases:
+        return list(dict.fromkeys(bases))
 
     if not runtime_port_base and not state_bases:
         active_runtime_base = _discover_active_runtime_local_base(state=state)
         if active_runtime_base:
             _append_local_http_base(bases, active_runtime_base)
+            return list(dict.fromkeys(bases))
 
     # Keep runtime ports as fallback even for the browser-safe supervisor status path.
     bases.extend(
@@ -959,7 +968,7 @@ def _build_hub_route_ws_bases(
     env_base = str(os.getenv("ADAOS_SELF_BASE_URL") or "").strip()
     cfg_base = str(getattr(cfg, "hub_url", None) or "").strip()
     runtime_port_base = _runtime_port_local_http_base()
-    state_bases = _active_runtime_state_local_http_bases(ctx)
+    state_bases = [] if runtime_port_base else _active_runtime_state_local_http_bases(ctx)
 
     if runtime_port_base:
         _note_route_local_base_shortcut(
@@ -968,17 +977,28 @@ def _build_hub_route_ws_bases(
             state=state,
         )
         bases.append(_http_base_to_ws_base(runtime_port_base))
+        return list(dict.fromkeys(bases))
     for state_base in state_bases:
         bases.append(_http_base_to_ws_base(state_base))
+    if state_bases:
+        return list(dict.fromkeys(bases))
     if env_base and _is_local_http_base(env_base):
         bases.append(_http_base_to_ws_base(env_base))
+    local_api_base = str(getattr(cfg, "local_api_url", None) or "").strip()
+    if local_api_base and _is_local_http_base(local_api_base):
+        bases.append(_http_base_to_ws_base(local_api_base))
     if cfg_base and _is_local_http_base(cfg_base):
         bases.append(_http_base_to_ws_base(cfg_base))
+    # Sidecar addresses alone do not identify the active runtime, so allow
+    # discovery when no local runtime authority was supplied.
+    if any(base and _is_local_http_base(base) for base in (env_base, local_api_base, cfg_base)):
+        return list(dict.fromkeys(bases))
 
     if not runtime_port_base and not state_bases:
         active_runtime_base = _discover_active_runtime_local_base(state=state)
         if active_runtime_base:
             bases.append(_http_base_to_ws_base(active_runtime_base))
+            return list(dict.fromkeys(bases))
 
     bases.extend(runtime_fallback_ws_bases(include_localhost=False, include_dev=False))
 

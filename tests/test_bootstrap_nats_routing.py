@@ -841,9 +841,6 @@ def test_build_hub_route_ws_bases_prefers_process_runtime_port(monkeypatch) -> N
 
     assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg) == [
         "ws://127.0.0.1:8780",
-        "ws://127.0.0.1:8779",
-        "ws://127.0.0.1:8778",
-        "ws://127.0.0.1:8777",
     ]
 
 
@@ -867,9 +864,8 @@ def test_build_hub_route_http_bases_prefers_process_runtime_port_over_stale_stat
         path_norm="/api/tools/call",
         method="POST",
         cfg=cfg,
-    )[:2] == [
+    ) == [
         "http://127.0.0.1:8777",
-        "http://127.0.0.1:8778",
     ]
 
 
@@ -895,9 +891,8 @@ def test_build_hub_route_http_bases_prefers_supervisor_state_over_legacy_env(mon
         path_norm="/api/node/reliability/summary",
         method="GET",
         cfg=cfg,
-    )[:2] == [
+    ) == [
         "http://127.0.0.1:8778",
-        "http://127.0.0.1:8777",
     ]
 
 
@@ -919,9 +914,8 @@ def test_build_hub_route_ws_bases_prefers_supervisor_state_over_legacy_env(monke
 
     cfg = SimpleNamespace(hub_url="http://127.0.0.1:8777")
 
-    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg, path="/ws")[:2] == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg, path="/ws") == [
         "ws://127.0.0.1:8778",
-        "ws://127.0.0.1:8777",
     ]
 
 
@@ -1035,9 +1029,8 @@ def test_build_hub_route_http_bases_prefers_supervisor_active_runtime(monkeypatc
         path_norm="/api/ws/test",
         method="GET",
         cfg=cfg,
-    )[:2] == [
+    ) == [
         "http://127.0.0.1:8777",
-        "http://127.0.0.1:8778",
     ]
 
 
@@ -1052,9 +1045,8 @@ def test_build_hub_route_ws_bases_prefers_supervisor_active_runtime(monkeypatch)
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg)[:2] == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg) == [
         "ws://127.0.0.1:8777",
-        "ws://127.0.0.1:8778",
     ]
 
 
@@ -1106,9 +1098,8 @@ def test_build_hub_route_ws_bases_skips_discovery_when_runtime_port_available(mo
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg)[:2] == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg) == [
         "ws://127.0.0.1:8777",
-        "ws://127.0.0.1:8778",
     ]
 
 
@@ -1127,10 +1118,19 @@ def test_build_hub_route_http_bases_skips_discovery_when_runtime_port_available(
         path_norm="/api/ws/test",
         method="GET",
         cfg=cfg,
-    )[:2] == [
+    ) == [
         "http://127.0.0.1:8777",
-        "http://127.0.0.1:8778",
     ]
+
+
+def test_hub_route_uses_configured_local_api_without_guessing_passive_slot(monkeypatch) -> None:
+    for key in ("ADAOS_SELF_BASE_URL", "ADAOS_RUNTIME_PORT", "ADAOS_BASE", "ADAOS_API_BASE"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(_hub_route_proxy, "_active_runtime_state_local_http_bases", lambda ctx=None: [])
+    monkeypatch.setattr(_hub_route_proxy, "realtime_sidecar_route_tunnel_ws_bases", lambda **_: [])
+    cfg = SimpleNamespace(local_api_url="http://127.0.0.1:8900", hub_url="https://root/hubs/example")
+    assert _hub_route_proxy._build_hub_route_http_bases(path_norm="/api/node/voice/listening", method="GET", cfg=cfg) == ["http://127.0.0.1:8900"]
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg, path="/yws") == ["ws://127.0.0.1:8900"]
 
 
 def test_bootstrap_shutdown_stops_scheduler(monkeypatch) -> None:
