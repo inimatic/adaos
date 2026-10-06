@@ -869,7 +869,9 @@ def _change_set_compatibility(
 ) -> dict[str, Any] | None:
     if not isinstance(change, Mapping):
         return None
-    value = copy.deepcopy(dict(change))
+    # Drop non-legacy history before copying: large Run evidence was copied
+    # repeatedly only to be discarded immediately afterwards.
+    value = dict(change)
     value["schema"] = BUILDER_CHANGE_SET_SCHEMA
     value["change_set_id"] = str(
         value.get("change_id") or value.get("change_set_id") or ""
@@ -892,7 +894,7 @@ def _change_set_compatibility(
         ).strip()
         or None
     )
-    return value
+    return copy.deepcopy(value)
 
 
 def _stable_digest(value: Mapping[str, Any]) -> str:
@@ -3213,7 +3215,8 @@ class BuilderWorkflowService:
 
     @staticmethod
     def _capabilities(
-        workflow: Mapping[str, Any], *, archived: bool, object_type: str
+        workflow: Mapping[str, Any], *, archived: bool, object_type: str,
+        normalized: bool = False,
     ) -> dict[str, bool]:
         active = str(workflow.get("active_phase") or "prototype")
         automation = _mapping(workflow.get("automation"))
@@ -3222,7 +3225,8 @@ class BuilderWorkflowService:
             _mapping(workflow.get("delivery")).get("status") or "idle"
         )
         retained_automation = bool(str(automation.get("snapshot_path") or "").strip())
-        change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+        change = (workflow.get("change") if normalized else
+                  _normalize_change(workflow.get("change") or workflow.get("change_set")))
         change_set_status = str((change or {}).get("status") or "")
         automation_previewable = automation_status == "completed" or (
             retained_automation
@@ -3280,7 +3284,7 @@ class BuilderWorkflowService:
             "object_id": project_id,
             "archived": bool(state.get("archived")),
             "capabilities": self._capabilities(
-                workflow, archived=bool(state.get("archived")), object_type=kind
+                workflow, archived=bool(state.get("archived")), object_type=kind, normalized=True
             ),
         }
         description = workflow_description(
@@ -3294,7 +3298,7 @@ class BuilderWorkflowService:
             self._executor_registry(),
         )
         projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
-        projection["process"] = self._process_projection(projection)
+        projection["process"] = self._process_projection(projection, normalized=True)
         projection["project_summary"] = self._project_summary(projection)
         projection["specification"] = specification_projection(
             projection.get("change") or projection.get("change_set")
@@ -4132,13 +4136,14 @@ class BuilderWorkflowService:
         return {"ok": True, "workflow": self.describe(kind, project_id)}
 
     @staticmethod
-    def _process_projection(workflow: Mapping[str, Any]) -> dict[str, Any]:
+    def _process_projection(workflow: Mapping[str, Any], *, normalized: bool = False) -> dict[str, Any]:
         """Build one dependent lineage tree from canonical state and exact refs."""
 
         object_type = str(workflow.get("object_type") or "scenario")
         object_id = str(workflow.get("object_id") or "")
         project_ref = f"{object_type}:{object_id}"
-        change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+        change = (workflow.get("change") if normalized else
+                  _normalize_change(workflow.get("change") or workflow.get("change_set")))
         prototype = _mapping(workflow.get("prototype"))
         automation = _mapping(workflow.get("automation"))
         delivery = _mapping(workflow.get("delivery"))

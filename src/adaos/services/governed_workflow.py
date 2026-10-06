@@ -100,8 +100,15 @@ def _abi_registry() -> Registry:
     return registry
 
 
+@lru_cache(maxsize=64)
+def _abi_validator(schema_name: str) -> Draft202012Validator:
+    # ABI contracts and the reference registry are build-scoped. Compile once,
+    # but validate every instance, including subsequent edits, on every call.
+    return Draft202012Validator(_abi_schema(schema_name), registry=_abi_registry())
+
+
 def _validate(schema_name: str, value: Mapping[str, Any]) -> None:
-    validator = Draft202012Validator(_abi_schema(schema_name), registry=_abi_registry())
+    validator = _abi_validator(schema_name)
     errors = sorted(validator.iter_errors(dict(value)), key=lambda item: list(item.absolute_path))
     if not errors:
         return
@@ -116,7 +123,7 @@ def workflow_schema_diagnostics(
 ) -> list[dict[str, Any]]:
     """Return stable, machine-readable ABI diagnostics without weakening admission."""
 
-    validator = Draft202012Validator(_abi_schema(schema_name), registry=_abi_registry())
+    validator = _abi_validator(schema_name)
     errors = sorted(
         validator.iter_errors(dict(value)),
         key=lambda item: (list(item.absolute_path), item.validator, item.message),

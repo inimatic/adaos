@@ -29,6 +29,24 @@ from adaos.services.governed_workflow import (
 )
 
 
+def test_cached_validator_still_checks_each_changed_record(monkeypatch):
+    from adaos.services import governed_workflow as module
+
+    module._abi_validator.cache_clear()
+    reads = []
+    def schema(name):
+        reads.append(name)
+        return {"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]}
+    monkeypatch.setattr(module, "_abi_schema", schema)
+    try:
+        module._validate("isolated-test", {"count": 1})
+        with pytest.raises(WorkflowDefinitionError):
+            module._validate("isolated-test", {"count": "invalid"})
+        assert reads == ["isolated-test"]
+    finally:
+        module._abi_validator.cache_clear()
+
+
 def _transition(
     transition_id: str,
     source: str,

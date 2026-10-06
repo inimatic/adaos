@@ -453,6 +453,36 @@ def test_workflow_migrates_legacy_state_without_mutating_it(
     )
 
 
+def test_legacy_change_projection_skips_discarded_run_payloads():
+    from adaos.services.builder.workflow import _change_set_compatibility
+
+    class MustNotCopy:
+        def __deepcopy__(self, memo):
+            raise AssertionError("discarded run data must not be traversed")
+
+    change = {"change_id": "CH-1", "runs": [MustNotCopy()], "issues": [{"title": "original"}]}
+    result = _change_set_compatibility(change)
+    assert "runs" not in result and result["change_set_id"] == "CH-1"
+    result["issues"][0]["title"] = "edited"
+    assert change["issues"][0]["title"] == "original"
+
+
+def test_describe_normalizes_change_once(workflow_project, monkeypatch):
+    from adaos.services.builder import workflow as module
+
+    service, _ = workflow_project
+    original = module._normalize_change
+    calls = []
+
+    def counted(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(module, "_normalize_change", counted)
+    service.describe("scenario", "recipes")
+    assert len(calls) == 1
+
+
 def test_development_summary_is_bounded_and_read_only(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
