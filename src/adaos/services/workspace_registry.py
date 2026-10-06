@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
+from copy import deepcopy
 import logging
 import re
 import subprocess
 import unicodedata
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal
@@ -26,6 +29,12 @@ REGISTRY_FILE_NAME = "registry.json"
 REGISTRY_FORMAT_VERSION = 2
 RegistryKind = Literal["skills", "scenarios", "projects"]
 _LOG = logging.getLogger("adaos.workspace_registry")
+_REGISTRY_SNAPSHOT_LOCK = threading.Lock()
+# Content keys, not mtimes: in-place edits and atomic replacements are visible
+# immediately. Only portable v2 records are cached; v1 normalization reads disk.
+_REGISTRY_SNAPSHOTS: OrderedDict[bytes, dict[str, Any]] = OrderedDict()
+_REGISTRY_SNAPSHOT_MAX_BYTES = 512 * 1024
+_REGISTRY_SNAPSHOT_MAX_ENTRIES = 4
 _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
 _INSTALL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _COMPATIBILITY_SCHEMA = "adaos.workspace.artifact_compatibility.v1"
@@ -91,10 +100,21 @@ def workspace_registry_is_git_tracked(workspace_root: Path) -> bool:
 
 
 def load_workspace_registry(workspace_root: Path, *, fallback_to_scan: bool = True) -> dict[str, Any]:
+    return deepcopy(_workspace_registry_snapshot(workspace_root, fallback_to_scan=fallback_to_scan))
+
+
+def _workspace_registry_snapshot(workspace_root: Path, *, fallback_to_scan: bool = True) -> dict[str, Any]:
+    """Internal read-only snapshot. Public callers always receive owned copies."""
     path = workspace_registry_path(workspace_root)
     if path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            content = path.read_bytes()
+            with _REGISTRY_SNAPSHOT_LOCK:
+                cached = _REGISTRY_SNAPSHOTS.get(content)
+                if cached is not None:
+                    _REGISTRY_SNAPSHOTS.move_to_end(content)
+                    return cached
+            data = json.loads(content.decode("utf-8"))
         except Exception as exc:
             raise WorkspaceRegistryError(f"cannot parse workspace registry: {path}") from exc
         if not isinstance(data, dict):
@@ -112,10 +132,17 @@ def load_workspace_registry(workspace_root: Path, *, fallback_to_scan: bool = Tr
             raise WorkspaceRegistryError(
                 f"unsupported workspace registry version {raw_version!r}: {path}"
             )
-        return _normalize_registry_payload(
+        normalized = _normalize_registry_payload(
             data,
             workspace_root=Path(workspace_root) if version == 1 else None,
         )
+        if version == REGISTRY_FORMAT_VERSION and len(content) <= _REGISTRY_SNAPSHOT_MAX_BYTES:
+            with _REGISTRY_SNAPSHOT_LOCK:
+                _REGISTRY_SNAPSHOTS[content] = normalized
+                _REGISTRY_SNAPSHOTS.move_to_end(content)
+                while len(_REGISTRY_SNAPSHOTS) > _REGISTRY_SNAPSHOT_MAX_ENTRIES:
+                    _REGISTRY_SNAPSHOTS.popitem(last=False)
+        return normalized
     if fallback_to_scan:
         return rebuild_workspace_registry(workspace_root)
     return _normalize_registry_payload({})
@@ -322,7 +349,7 @@ def list_workspace_registry_entries(
     name: str | None = None,
     fallback_to_scan: bool = True,
 ) -> list[dict[str, Any]]:
-    payload = load_workspace_registry(workspace_root, fallback_to_scan=fallback_to_scan)
+    payload = _workspace_registry_snapshot(workspace_root, fallback_to_scan=fallback_to_scan)
     kinds = (kind,) if kind else ("skills", "scenarios", "projects")
     results: list[dict[str, Any]] = []
     wanted_name = (name or "").strip().lower()
@@ -333,7 +360,7 @@ def list_workspace_registry_entries(
             artifact_name = str(item.get("name") or "")
             if wanted_name and artifact_name.lower() != wanted_name:
                 continue
-            results.append(dict(item))
+            results.append(deepcopy(item))
     return results
 
 
@@ -347,15 +374,12 @@ def find_workspace_registry_entry(
     needle = str(name_or_id or "").strip().lower()
     if not needle:
         return None
-    for item in list_workspace_registry_entries(
-        workspace_root,
-        kind=kind,
-        fallback_to_scan=fallback_to_scan,
-    ):
+    payload = _workspace_registry_snapshot(workspace_root, fallback_to_scan=fallback_to_scan)
+    for item in payload.get(kind) or []:
         name = str(item.get("name") or "").strip().lower()
         artifact_id = str(item.get("id") or "").strip().lower()
         if needle in {name, artifact_id}:
-            return dict(item)
+            return deepcopy(item)
     return None
 
 
