@@ -9,6 +9,7 @@ from typing import Optional, Tuple
 from datetime import datetime, timezone
 
 from ._ctx import require_ctx
+from adaos.services.log_redaction import redact_log_value
 
 __all__ = ["setup_scenario_logger", "JsonFormatter"]
 
@@ -34,7 +35,7 @@ def _json_payload(record: logging.LogRecord) -> str:
     extra = getattr(record, "extra", None)
     if isinstance(extra, dict):
         base.update(extra)
-    return json.dumps(base, ensure_ascii=False)
+    return json.dumps(redact_log_value(base), ensure_ascii=False)
 
 
 class JsonFormatter(logging.Formatter):

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from adaos.domain import Event
 from adaos.ports.paths import PathProvider
 from adaos.ports import EventBus
+from adaos.services.log_redaction import redact_log_text, redact_log_value
 
 
 _ACTIVE_QUEUE_HANDLER: NonBlockingQueueHandler | None = None
@@ -66,7 +67,7 @@ def _json_formatter(record: logging.LogRecord) -> str:
         base["exception"] = logging.Formatter().formatException(record.exc_info)
     if record.stack_info:
         base["stack"] = str(record.stack_info)
-    return json.dumps(base, ensure_ascii=False)
+    return json.dumps(redact_log_value(base), ensure_ascii=False)
 
 
 class JsonFormatter(logging.Formatter):
@@ -213,7 +214,7 @@ class NonBlockingQueueHandler(QueueHandler):
         # into the listener thread. y_py objects are thread-affine and may be
         # referenced by either record args or traceback locals. Capturing only
         # primitive frame coordinates also avoids linecache disk I/O here.
-        message = record.getMessage()
+        message = redact_log_text(record.getMessage())
         prepared = logging.LogRecord(
             record.name,
             record.levelno,
@@ -236,9 +237,11 @@ class NonBlockingQueueHandler(QueueHandler):
         prepared.adaos_skill_runtime_log_path = str(
             getattr(record, "adaos_skill_runtime_log_path", "") or ""
         )
-        prepared.adaos_exception = _safe_exception_payload(record.exc_info)
+        prepared.adaos_exception = redact_log_value(_safe_exception_payload(record.exc_info))
+        if prepared.stack_info:
+            prepared.stack_info = redact_log_text(prepared.stack_info)
         if hasattr(record, "extra"):
-            prepared.extra = _safe_log_value(getattr(record, "extra", {}))
+            prepared.extra = redact_log_value(_safe_log_value(getattr(record, "extra", {})))
         return prepared
 
     def enqueue(self, record: logging.LogRecord) -> None:
@@ -457,7 +460,7 @@ def append_rotating_json_lines(
     """Append JSONL records with bounded, process-local Windows-safe rotation."""
 
     lines = [
-        json.dumps(dict(record), ensure_ascii=False, sort_keys=True) + "\n"
+        json.dumps(redact_log_value(dict(record)), ensure_ascii=False, sort_keys=True) + "\n"
         for record in records
     ]
     if not lines:
