@@ -11975,6 +11975,14 @@ def test_browser_feedback_timeout_is_not_sent_to_codex_repair() -> None:
     )
 
 
+def test_browser_feedback_inner_wait_timeout_is_not_an_application_repair():
+    sample = {"checks": [], "hard_failures": ["page.waitForFunction: Timeout 90000ms exceeded."]}
+    receipt = {"timed_out": False, "exit_code": 1, "report": {"samples": [sample]}}
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
+    sample["hard_failures"].append("horizontal overflow")
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is True
+
+
 def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair() -> None:
     receipt = {
         "ok": False,

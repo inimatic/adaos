@@ -12082,6 +12082,14 @@ class BuilderAutomationService:
         ]
         if not hard_failures:
             return False
+        # A Playwright wait expiring does not establish a source-level defect.
+        # Preserve the candidate for runtime diagnosis instead of paying for a
+        # speculative rewrite (even if the runner itself exited normally).
+        if all(
+            re.search(r"(?:page\.|locator\.|browserContext\.).*\bTimeout \d+ms exceeded", failure)
+            for failure in hard_failures
+        ):
+            return False
 
         # A saturated node-health probe is evidence that the browser runner could
         # not assess the candidate, not evidence that the candidate is defective.

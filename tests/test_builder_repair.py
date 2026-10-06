@@ -9,6 +9,18 @@ from jsonschema import Draft202012Validator
 from adaos.services.builder.repair import BuilderRepairService
 
 
+def test_failed_repair_reconciles_authoritative_core_blocker(tmp_path: Path) -> None:
+    service = BuilderRepairService(state_dir=tmp_path)
+    repair = service.report(project_id="drive", signal_type="guard", summary="Folder consent")["task"]
+    service.transition_work_item(repair["repair_id"], status="failed", actor="test", reason="launch_failed")
+    linked = service.link_automation(repair["repair_id"], actor="test", automation={
+        "automation": {"session_id": "automation.drive", "task_id": "task.retry", "status": "waiting_for_core"},
+    })
+    assert linked["work_status"] == "blocked"
+    reconciled = service.transition_work_item(repair["repair_id"], status="blocked", actor="test", reason="waiting_for_core_capability")
+    assert reconciled["work_status"] == "blocked"
+
+
 def test_repair_tasks_deduplicate_supersede_and_require_acceptance_evidence(tmp_path: Path) -> None:
     service = BuilderRepairService(state_dir=tmp_path)
     first = service.report(

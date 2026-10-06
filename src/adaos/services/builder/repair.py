@@ -94,6 +94,8 @@ def _automation_work_status(automation: Mapping[str, Any]) -> str | None:
         return "claimed"
     if status in {"running", "in_progress", "busy"}:
         return "in_progress"
+    if status == "waiting_for_core":
+        return "blocked"
     if status in {"failed", "errored", "cancelled"}:
         return "failed"
     if status in {"completed", "succeeded", "success"}:
