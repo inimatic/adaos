@@ -16,6 +16,7 @@ from adaos.apps.cli.active_control import (
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.core_update_policy import current_env_type
+from adaos.services.log_redaction import redact_log_text, redact_log_value
 
 BROWSER_FEEDBACK_SCHEMA = "adaos.builder.browser_feedback_receipt.v1"
 
@@ -298,11 +299,12 @@ class BuilderBrowserFeedbackService:
                 if isinstance(exc.stderr, bytes)
                 else str(exc.stderr or "")
             )
-        log_path.write_text(stdout + stderr, encoding="utf-8")
+        log_path.write_text(redact_log_text(stdout + stderr), encoding="utf-8")
 
         report_path = output / "report.json"
         try:
-            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report = redact_log_value(json.loads(report_path.read_text(encoding="utf-8")))
+            atomic_write_json(report_path, report)
         except (OSError, json.JSONDecodeError):
             report = {
                 "schema": "adaos.builder.browser_feedback.v1",

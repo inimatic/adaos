@@ -2,6 +2,7 @@ import { chromium } from '@playwright/test'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { redactDiagnosticValue } from './diagnostic-redaction.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') {
   throw new Error('Builder candidate browser feedback requires ENV_TYPE=dev')
@@ -1148,6 +1149,7 @@ for (const name of screenshots) {
   const bytes = await fs.readFile(path.join(output, name))
   report[`${name.replace(/\.png$/, '').replace(/-/g, '_')}_sha256`] = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`
 }
-await fs.writeFile(path.join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-console.log(JSON.stringify(report, null, 2))
+const safeReport = redactDiagnosticValue(report)
+await fs.writeFile(path.join(output, 'report.json'), `${JSON.stringify(safeReport, null, 2)}\n`, 'utf8')
+console.log(JSON.stringify(safeReport, null, 2))
 if (!report.passed) process.exitCode = 1
