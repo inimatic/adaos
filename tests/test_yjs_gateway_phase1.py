@@ -4538,6 +4538,58 @@ def test_process_events_command_submits_conversation_interaction_token(monkeypat
     assert responses[-1]["ok"] is True
 
 
+def test_process_events_command_lists_acl_checked_canonical_pending_actions(monkeypatch) -> None:
+    responses: list[dict[str, object]] = []
+    query_calls: list[dict[str, object]] = []
+    projection_calls: list[tuple[str, dict[str, object]]] = []
+
+    from adaos.services import conversation_interactions
+    from adaos.services import pending_action_projection
+
+    def _query_interactions(**kwargs):
+        query_calls.append(dict(kwargs))
+        return {
+            "items": [{"interaction_id": "interaction.web"}],
+            "next_cursor": "cursor.next",
+        }
+
+    def _project(interaction_id, *, principal):
+        projection_calls.append((interaction_id, dict(principal)))
+        return {
+            "schema": "adaos.pending_action.projection.v1",
+            "projection_id": f"pending-action:{interaction_id}",
+        }
+
+    monkeypatch.setattr(conversation_interactions, "query_interactions", _query_interactions)
+    monkeypatch.setattr(pending_action_projection, "project_pending_action_from_store", _project)
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="conversation.interaction.list.request",
+            cmd_id="cmd-interaction-list-1",
+            payload={"limit": 1000, "cursor": "cursor.current"},
+            device_id="dev-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert query_calls[0]["limit"] == 100
+    assert query_calls[0]["cursor"] == "cursor.current"
+    assert query_calls[0]["principal"] == {
+        "kind": "transport",
+        "id": "browser:dev-1",
+        "actor_id": "transport:browser:dev-1",
+    }
+    assert projection_calls == [("interaction.web", query_calls[0]["principal"])]
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["items"][0]["projection_id"] == "pending-action:interaction.web"
+    assert responses[-1]["data"]["next_cursor"] == "cursor.next"
+
+
 def test_process_events_command_requires_scenario_id_for_set_home(monkeypatch) -> None:
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []

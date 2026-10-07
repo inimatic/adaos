@@ -10922,6 +10922,81 @@ async def process_events_command(
             await _ack(False, error=f"{type(exc).__name__}: {exc}")
         return None
 
+    if kind in {
+        "conversation.interaction.get.request",
+        "conversation.interaction.list.request",
+    }:
+        event_payload = dict(payload or {})
+        event_payload.pop("_meta", None)
+        transport_actor_id = (
+            f"transport:browser:{str(device_id or 'unknown').strip() or 'unknown'}"
+        )
+        principal = {
+            "kind": "transport",
+            "id": f"browser:{str(device_id or 'unknown').strip() or 'unknown'}",
+            "actor_id": transport_actor_id,
+        }
+        try:
+            from adaos.services import conversation_interactions
+            from adaos.services.pending_action_projection import (
+                project_pending_action_from_store,
+            )
+
+            if kind == "conversation.interaction.get.request":
+                interaction_id = str(event_payload.get("interaction_id") or "").strip()
+                if not interaction_id:
+                    raise ValueError("interaction_id is required")
+                result = project_pending_action_from_store(
+                    interaction_id,
+                    principal=principal,
+                )
+            else:
+                page = conversation_interactions.query_interactions(
+                    principal=principal,
+                    conversation_id=(
+                        str(event_payload.get("conversation_id") or "").strip() or None
+                    ),
+                    statuses=(
+                        "created", "projected", "awaiting_input",
+                        "partially_answered", "validation_failed", "answered",
+                        "accepted", "completed", "expired", "cancelled",
+                        "superseded",
+                    ),
+                    active_only=False,
+                    field_mask="summary",
+                    limit=max(1, min(int(event_payload.get("limit") or 50), 100)),
+                    cursor=str(event_payload.get("cursor") or "").strip() or None,
+                )
+                items: list[dict[str, Any]] = []
+                skipped: list[dict[str, str]] = []
+                for item in page.get("items") or []:
+                    interaction_id = str(item.get("interaction_id") or "").strip()
+                    try:
+                        items.append(
+                            project_pending_action_from_store(
+                                interaction_id,
+                                principal=principal,
+                            )
+                        )
+                    except Exception as exc:
+                        skipped.append(
+                            {
+                                "interaction_id": interaction_id,
+                                "reason_code": type(exc).__name__,
+                            }
+                        )
+                result = {
+                    "schema": "adaos.pending_action.projection_page.v1",
+                    "items": items,
+                    "next_cursor": page.get("next_cursor"),
+                    "skipped": skipped,
+                }
+            await _ack(data=result)
+        except Exception as exc:
+            _log.warning("conversation interaction projection command failed", exc_info=True)
+            await _ack(False, error=f"{type(exc).__name__}: {exc}")
+        return None
+
     if kind == "pending_actions.expire.request":
         # Expiry is a server lifecycle operation. Client-triggered lifecycle
         # mutation makes offline/reconnect projections an authority source.
