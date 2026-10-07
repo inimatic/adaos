@@ -95,7 +95,9 @@ try {
         return sync?.materializationReady && sync.materialization.currentScenario === expected
       }, scenario, { timeout: 60_000 })
       await page.evaluate(() => {
-        const component = window.ng?.getComponent(document.querySelector('ada-details-widget'))
+        const details = document.querySelector('ada-details-widget')
+        if (!details) return
+        const component = window.ng?.getComponent(details)
         const service = component?.actions?.modals?.focusRuntime
         window.__E2E_FOCUS_TRACE__ = []
         if (!service) return

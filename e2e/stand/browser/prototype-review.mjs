@@ -2,6 +2,7 @@ import { chromium } from 'playwright'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { installSystemOverlayDismissal } from './prototype-navigation.mjs'
 import { canonicalRenderedWidgetSources, canonicalWidgetSources } from './widget-source-parity.mjs'
 
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
@@ -85,6 +86,8 @@ try {
       })) localStorage.setItem(key, value)
     }, { hub, token, subnet, webspace, locale })
     const page = await context.newPage()
+    const dismissedSystemOverlays = []
+    await installSystemOverlayDismissal(page, overlay => dismissedSystemOverlays.push(overlay))
     const emptyChecks = []
     if (emptyMode) {
       await page.route('**/api/resources/query', async route => {
@@ -337,7 +340,8 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-bottom.png`), fullPage: true })
     }
     await Promise.allSettled(responseTasks)
-    samples.push({ layout, viewport, locale, selectWidget, geometry, mediaChecks, emptyChecks, scrollSurfaces, failure, errors, requestFailures, text })
+    samples.push({ layout, viewport, locale, selectWidget, geometry, mediaChecks, emptyChecks, scrollSurfaces,
+      dismissedSystemOverlays, failure, errors, requestFailures, text })
     await context.close()
   }
 } finally { await browser.close() }

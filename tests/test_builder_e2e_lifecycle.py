@@ -200,6 +200,7 @@ def test_browser_records_scoped_evidence_and_clears_inherited_probe_options(cont
     from adaos.services import agent_context
     from adaos.e2e import builder_browser
 
+    monkeypatch.setattr(active_control, "resolve_control_base_url", lambda **kwargs: "http://127.0.0.1:8777")
     monkeypatch.setattr(active_control, "resolve_control_token", lambda **kwargs: "secret")
     monkeypatch.setattr(agent_context, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(subnet_id_value="subnet")))
     monkeypatch.setenv("ADAOS_E2E_DICTIONARY_PROBE", "1")
@@ -216,6 +217,7 @@ def test_browser_records_scoped_evidence_and_clears_inherited_probe_options(cont
         assert "ADAOS_E2E_SELECT_WIDGET" not in env
         assert env["ADAOS_E2E_WEBSPACE_ID"] == "preview-owned"
         assert env["ADAOS_E2E_LOCALE"] == "ru"
+        assert env["ADAOS_E2E_HUB_URL"] == "http://127.0.0.1:8777"
         seen.append(Path(env["ADAOS_E2E_OUTPUT"]))
         if timeout:
             raise builder_browser.subprocess.TimeoutExpired(args, 240, output="Partial output".encode("utf-8"))

@@ -17,7 +17,7 @@ PROBES = {"review": ("prototype-review.mjs", "review.json"),
 
 
 def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root: Path) -> dict[str, Any]:
-    from adaos.apps.cli.active_control import resolve_control_token
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
     from adaos.e2e.builder import _write_json
     from adaos.services.agent_context import get_ctx
 
@@ -46,7 +46,10 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
         "steps": [{"id": "create", "output": created}],
         "cleanup": {"test": True, "status": "review_in_progress", "acceptance": "not_approved",
                     "owned_artifacts": context["owned_artifacts"], "previews": [preview]}})
-    hub = str(inputs.get("hub_url") or "http://127.0.0.1:8778")
+    hub = resolve_control_base_url(
+        explicit=str(inputs.get("hub_url") or "") or None,
+        prefer_local=True,
+    )
     subnet = str(inputs.get("subnet_id") or get_ctx().config.subnet_id_value)
     env = {**{key: value for key, value in os.environ.items() if not key.startswith("ADAOS_E2E_")},
            "ADAOS_E2E_CHECKPOINT": str(checkpoint), "ADAOS_E2E_OUTPUT": str(output),

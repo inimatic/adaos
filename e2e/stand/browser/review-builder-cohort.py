@@ -12,13 +12,14 @@ import subprocess
 
 from dotenv import load_dotenv
 
-from adaos.apps.cli.active_control import resolve_control_token
+from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=Path)
     parser.add_argument("--subnet", required=True)
+    parser.add_argument("--hub", help="Explicit active local control API base URL")
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--attempt", type=int, default=1)
     parser.add_argument("--builder-webspace", help="Explicit DEV Builder host for Conversation review")
@@ -32,7 +33,7 @@ def main() -> int:
     load_dotenv(".env")
     if os.environ.get("ENV_TYPE") != "dev":
         raise SystemExit("Browser cohort reviews require ENV_TYPE=dev")
-    hub = "http://127.0.0.1:8778"
+    hub = resolve_control_base_url(explicit=args.hub, prefer_local=True)
     environment = {**os.environ, "ADAOS_E2E_HUB_URL": hub,
                    "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub)}
     summary = []

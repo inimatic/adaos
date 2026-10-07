@@ -1,6 +1,7 @@
 import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { installSystemOverlayDismissal } from './prototype-navigation.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Requires ENV_TYPE=dev')
 const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))
@@ -43,6 +44,7 @@ try {
     page.setDefaultTimeout(20_000)
     const sample = { layout, checks: [], errors: [], operations: [], queries: [] }
     report.samples.push(sample)
+    await installSystemOverlayDismissal(page, overlay => sample.checks.push({ task: 'system-overlay-dismissed', overlay, status: 'passed' }))
     page.on('pageerror', error => sample.errors.push(error.message))
     const requests = new Map()
     page.on('request', request => {
