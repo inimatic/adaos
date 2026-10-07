@@ -621,6 +621,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         expected_version: str | None = None,
         expected_slot: str | None = None,
         expected_source_manifest_digest: str | None = None,
+        drain_timeout_s: float = 10.0,
     ) -> dict[str, Any]:
         """Reload one exact runtime generation under a per-skill process lock."""
 
@@ -636,6 +637,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 expected_version=expected_version,
                 expected_slot=expected_slot,
                 expected_source_manifest_digest=expected_source_manifest_digest,
+                drain_timeout_s=drain_timeout_s,
             )
         finally:
             lock.release()
@@ -648,6 +650,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         expected_version: str | None = None,
         expected_slot: str | None = None,
         expected_source_manifest_digest: str | None = None,
+        drain_timeout_s: float = 10.0,
     ) -> dict[str, Any]:
         root = Path(skills_root() if callable(skills_root) else skills_root)
         self._manifest_cache.clear()
@@ -759,9 +762,37 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                     "handlers": [],
                 }
 
-        registry_before = _registry_snapshot()
-        generation_before = _capture_handler_generation(target, handlers)
-        subscriptions = deactivate_skill_subscriptions({target})
+        from adaos.services.skill.subscription_execution import (
+            begin_skill_drain,
+            end_skill_drain,
+            wait_for_skill_drain,
+        )
+
+        drain = begin_skill_drain(target, reason="exact_runtime_reactivation")
+        drain_receipt: dict[str, Any]
+        try:
+            drain_receipt = await wait_for_skill_drain(
+                target,
+                str(drain["drain_id"]),
+                timeout_s=max(0.0, min(float(drain_timeout_s), 3600.0)),
+            )
+            if not drain_receipt.get("drained"):
+                return {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "reactivation_in_flight_drain_timeout",
+                    "skill": target,
+                    "drain": drain_receipt,
+                    "subscriptions": subscriptions,
+                    "preserved_previous_generation": True,
+                    "handlers": [],
+                }
+            registry_before = _registry_snapshot()
+            generation_before = _capture_handler_generation(target, handlers)
+            subscriptions = deactivate_skill_subscriptions({target})
+        finally:
+            end_skill_drain(target, str(drain["drain_id"]))
+        subscriptions["drain"] = drain_receipt
 
         # Fence the selection again after invalidating bus handlers and before
         # importing any candidate code. Concurrent activation must not make a

@@ -22,6 +22,7 @@ _PENDING_BY_HANDLER: dict[str, int] = defaultdict(int)
 _STATS: dict[str, dict[str, Any]] = {}
 _LAST_OVERLOAD_LOG_AT: dict[str, float] = {}
 _CIRCUITS: dict[str, dict[str, Any]] = {}
+_DRAINING_SKILLS: dict[str, dict[str, Any]] = {}
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -51,6 +52,103 @@ def _executor() -> ThreadPoolExecutor:
 
 def _handler_key(skill: str, topic: str, handler: str) -> str:
     return f"{skill or '<unknown>'}\0{topic or '<unknown>'}\0{handler or '<unknown>'}"
+
+
+def _skill_drain_snapshot_locked(skill: str) -> dict[str, Any]:
+    token = str(skill or "").strip() or "<unknown>"
+    prefix = f"{token}\0"
+    active = [dict(item) for item in _ACTIVE.values() if str(item.get("skill") or "") == token]
+    pending = sum(
+        int(value or 0)
+        for key, value in _PENDING_BY_HANDLER.items()
+        if str(key).startswith(prefix)
+    )
+    return {
+        "skill": token,
+        "active_total": len(active),
+        "pending_total": pending,
+        "active": active,
+    }
+
+
+def begin_skill_drain(skill: str, *, reason: str) -> dict[str, Any]:
+    """Fence new subscription admission before one exact generation reload."""
+
+    token = str(skill or "").strip()
+    if not token or token == "<unknown>":
+        raise ValueError("skill is required for subscription drain")
+    now = time.time()
+    with _LOCK:
+        existing = _DRAINING_SKILLS.get(token)
+        if existing is not None:
+            raise ValueError(f"skill subscription drain is already active: {token}")
+        lease = {
+            "schema": "adaos.skill_subscription_drain.v1",
+            "drain_id": f"skill-drain.{uuid.uuid4().hex}",
+            "skill": token,
+            "reason": str(reason or "runtime_reactivation").strip() or "runtime_reactivation",
+            "started_at": now,
+        }
+        _DRAINING_SKILLS[token] = lease
+        snapshot = _skill_drain_snapshot_locked(token)
+    return {**lease, **snapshot}
+
+
+async def wait_for_skill_drain(
+    skill: str,
+    drain_id: str,
+    *,
+    timeout_s: float = 10.0,
+    poll_s: float = 0.01,
+) -> dict[str, Any]:
+    """Wait for admitted work only; never cancel an unknown external effect."""
+
+    token = str(skill or "").strip()
+    selected_id = str(drain_id or "").strip()
+    timeout = max(0.0, min(float(timeout_s), 3600.0))
+    interval = max(0.001, min(float(poll_s), 1.0))
+    started = time.monotonic()
+    while True:
+        with _LOCK:
+            lease = dict(_DRAINING_SKILLS.get(token) or {})
+            if str(lease.get("drain_id") or "") != selected_id:
+                raise ValueError("skill subscription drain lease is no longer current")
+            snapshot = _skill_drain_snapshot_locked(token)
+        elapsed = max(0.0, time.monotonic() - started)
+        if snapshot["active_total"] == 0 and snapshot["pending_total"] == 0:
+            return {
+                "schema": "adaos.skill_subscription_drain_receipt.v1",
+                "drain_id": selected_id,
+                "skill": token,
+                "drained": True,
+                "reason": "in_flight_drained",
+                "elapsed_s": round(elapsed, 6),
+                "active_total": 0,
+                "pending_total": 0,
+            }
+        if elapsed >= timeout:
+            return {
+                "schema": "adaos.skill_subscription_drain_receipt.v1",
+                "drain_id": selected_id,
+                "skill": token,
+                "drained": False,
+                "reason": "in_flight_drain_timeout",
+                "elapsed_s": round(elapsed, 6),
+                "active_total": int(snapshot["active_total"]),
+                "pending_total": int(snapshot["pending_total"]),
+            }
+        await asyncio.sleep(min(interval, max(0.0, timeout - elapsed)))
+
+
+def end_skill_drain(skill: str, drain_id: str) -> bool:
+    token = str(skill or "").strip()
+    selected_id = str(drain_id or "").strip()
+    with _LOCK:
+        lease = _DRAINING_SKILLS.get(token)
+        if lease is None or str(lease.get("drain_id") or "") != selected_id:
+            return False
+        _DRAINING_SKILLS.pop(token, None)
+        return True
 
 
 def _stats_row(key: str, *, skill: str, topic: str, handler: str) -> dict[str, Any]:
@@ -220,7 +318,12 @@ async def run_sync_subscription(
     with _LOCK:
         pending = int(_PENDING_BY_HANDLER.get(key) or 0)
         stats = _stats_row(key, skill=skill, topic=topic, handler=handler)
-        if pending >= max_pending:
+        drain_payload = dict(_DRAINING_SKILLS.get(str(skill or "").strip()) or {})
+        if drain_payload:
+            should_log = False
+            stats["drain_rejected_total"] = int(stats.get("drain_rejected_total") or 0) + 1
+            stats["last_drain_rejected_at"] = now
+        elif pending >= max_pending:
             stats["overload_total"] = int(stats.get("overload_total") or 0) + 1
             stats["last_overload_at"] = now
             last_log = float(_LAST_OVERLOAD_LOG_AT.get(key) or 0.0)
@@ -231,6 +334,14 @@ async def run_sync_subscription(
             should_log = False
             _PENDING_BY_HANDLER[key] = pending + 1
             stats["submitted_total"] = int(stats.get("submitted_total") or 0) + 1
+    if drain_payload:
+        _LOG.info(
+            "skill subscription admission paused for generation drain skill=%s topic=%s drain_id=%s",
+            skill,
+            topic,
+            drain_payload.get("drain_id"),
+        )
+        return None
     if pending >= max_pending:
         if should_log:
             _LOG.warning(
@@ -347,19 +458,22 @@ async def run_async_subscription(
     max_pending = _async_max_pending_per_handler()
     now = time.time()
     with _LOCK:
-        circuit = _active_circuit_locked(key, now)
+        pending = int(_PENDING_BY_HANDLER.get(key) or 0)
+        stats = _stats_row(key, skill=skill, topic=topic, handler=handler)
+        stats["execution_mode"] = "async_owner_loop"
+        drain_payload = dict(_DRAINING_SKILLS.get(str(skill or "").strip()) or {})
+        circuit = None if drain_payload else _active_circuit_locked(key, now)
         if circuit is not None:
-            stats = _stats_row(key, skill=skill, topic=topic, handler=handler)
-            stats["execution_mode"] = "async_owner_loop"
             stats["circuit_rejected_total"] = int(stats.get("circuit_rejected_total") or 0) + 1
             stats["last_circuit_rejected_at"] = now
             circuit_payload = dict(circuit)
         else:
             circuit_payload = None
-        pending = int(_PENDING_BY_HANDLER.get(key) or 0)
-        stats = _stats_row(key, skill=skill, topic=topic, handler=handler)
-        stats["execution_mode"] = "async_owner_loop"
-        if circuit_payload is not None:
+        if drain_payload:
+            should_log = False
+            stats["drain_rejected_total"] = int(stats.get("drain_rejected_total") or 0) + 1
+            stats["last_drain_rejected_at"] = now
+        elif circuit_payload is not None:
             should_log = False
         elif pending >= max_pending:
             stats["overload_total"] = int(stats.get("overload_total") or 0) + 1
@@ -372,6 +486,14 @@ async def run_async_subscription(
             should_log = False
             _PENDING_BY_HANDLER[key] = pending + 1
             stats["submitted_total"] = int(stats.get("submitted_total") or 0) + 1
+    if drain_payload:
+        _LOG.info(
+            "async skill subscription admission paused for generation drain skill=%s topic=%s drain_id=%s",
+            skill,
+            topic,
+            drain_payload.get("drain_id"),
+        )
+        return None
     if circuit_payload is not None:
         remaining_s = max(0.0, float(circuit_payload.get("open_until") or 0.0) - now)
         _LOG.warning(
@@ -582,6 +704,10 @@ def subscription_execution_snapshot(*, limit: int = 25) -> dict[str, Any]:
         stats = [dict(item) for item in _STATS.values()]
         pending_total = sum(int(value or 0) for value in _PENDING_BY_HANDLER.values())
         circuits = [dict(item) for item in _CIRCUITS.values() if float(item.get("open_until") or 0.0) > now]
+        drains = [
+            {**dict(item), **_skill_drain_snapshot_locked(skill)}
+            for skill, item in _DRAINING_SKILLS.items()
+        ]
     for item in active:
         started = float(item.get("running_at") or item.get("queued_at") or now)
         item["age_s"] = round(max(0.0, now - started), 3)
@@ -611,7 +737,9 @@ def subscription_execution_snapshot(*, limit: int = 25) -> dict[str, Any]:
         "active_total": len(active),
         "pending_total": pending_total,
         "open_circuit_total": len(circuits),
+        "draining_skill_total": len(drains),
         "active": active[:bounded_limit],
+        "draining_skills": drains[:bounded_limit],
         "open_circuits": circuits[:bounded_limit],
         "top_handlers": stats[:bounded_limit],
         "updated_at": now,
@@ -625,13 +753,17 @@ def reset_subscription_execution_runtime() -> None:
         _STATS.clear()
         _LAST_OVERLOAD_LOG_AT.clear()
         _CIRCUITS.clear()
+        _DRAINING_SKILLS.clear()
 
 
 __all__ = [
+    "begin_skill_drain",
     "capture_active_skill_handlers_for_stack",
     "correlate_runtime_event_loop_stall",
+    "end_skill_drain",
     "reset_subscription_execution_runtime",
     "run_async_subscription",
     "run_sync_subscription",
     "subscription_execution_snapshot",
+    "wait_for_skill_drain",
 ]

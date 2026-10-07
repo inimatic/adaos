@@ -871,6 +871,61 @@ def test_reload_without_handlers_preserves_previous_skill_generation(monkeypatch
         sdk_decorators._restore_registry_snapshot(registry_snapshot)
 
 
+def test_reload_drain_timeout_preserves_previous_skill_generation(monkeypatch, tmp_path: Path) -> None:
+    from adaos.services.skill import subscription_execution
+
+    loader = ImportlibSkillsLoader()
+    skill_name = "busy_handler_skill"
+    handler = tmp_path / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    deactivated: list[set[str]] = []
+    ended: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(loader, "_discover_runtime_handlers", lambda _root: [(handler, skill_name)])
+    monkeypatch.setattr(loader, "_handler_runs_in_process", lambda _handler: True)
+    monkeypatch.setattr(loader, "_runtime_safety_issues", lambda _handler: [])
+    monkeypatch.setattr(
+        sdk_decorators,
+        "deactivate_skill_subscriptions",
+        lambda names: deactivated.append(set(names)) or {"skills": sorted(names), "removed_handlers": 1},
+    )
+    monkeypatch.setattr(
+        subscription_execution,
+        "begin_skill_drain",
+        lambda skill, reason: {"drain_id": "drain.busy", "skill": skill, "reason": reason},
+    )
+
+    async def timed_out(*_args, **_kwargs):
+        return {
+            "schema": "adaos.skill_subscription_drain_receipt.v1",
+            "drain_id": "drain.busy",
+            "skill": skill_name,
+            "drained": False,
+            "reason": "in_flight_drain_timeout",
+            "active_total": 1,
+            "pending_total": 1,
+        }
+
+    monkeypatch.setattr(subscription_execution, "wait_for_skill_drain", timed_out)
+    monkeypatch.setattr(
+        subscription_execution,
+        "end_skill_drain",
+        lambda skill, drain_id: ended.append((skill, drain_id)) or True,
+    )
+
+    receipt = asyncio.run(
+        loader.reload_skill_handlers(tmp_path, skill_name, drain_timeout_s=0.01)
+    )
+
+    assert receipt["ok"] is False
+    assert receipt["reason"] == "reactivation_in_flight_drain_timeout"
+    assert receipt["preserved_previous_generation"] is True
+    assert receipt["drain"]["active_total"] == 1
+    assert deactivated == []
+    assert ended == [(skill_name, "drain.busy")]
+
+
 def test_reload_rejects_runtime_selection_different_from_activation_receipt(tmp_path: Path) -> None:
     skill_name = "media_center_skill"
     runtime_root = tmp_path / ".runtime" / skill_name

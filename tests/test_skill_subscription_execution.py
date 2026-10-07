@@ -306,3 +306,75 @@ def test_cancelled_waiter_keeps_running_worker_admitted(monkeypatch) -> None:
     assert active["pending_total"] == 1
     assert completed["active_total"] == 0
     assert completed["pending_total"] == 0
+
+
+def test_skill_generation_drain_fences_new_work_and_waits_for_admitted_handler() -> None:
+    subscription_execution.reset_subscription_execution_runtime()
+
+    async def run() -> tuple[object, dict, dict, dict, object]:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def active_handler() -> str:
+            started.set()
+            await release.wait()
+            return "completed-old-generation"
+
+        active_task = asyncio.create_task(
+            subscription_execution.run_async_subscription(
+                active_handler,
+                skill="reload_skill",
+                topic="runtime.changed",
+                handler="handlers.main.on_runtime_changed",
+            )
+        )
+        await started.wait()
+        lease = subscription_execution.begin_skill_drain(
+            "reload_skill",
+            reason="test_reactivation",
+        )
+        blocked = await subscription_execution.run_async_subscription(
+            lambda: "must-not-run",
+            skill="reload_skill",
+            topic="runtime.changed",
+            handler="handlers.main.on_runtime_changed",
+        )
+        timed_out = await subscription_execution.wait_for_skill_drain(
+            "reload_skill",
+            lease["drain_id"],
+            timeout_s=0.01,
+            poll_s=0.001,
+        )
+        during = subscription_execution.subscription_execution_snapshot()
+        release.set()
+        old_result = await active_task
+        drained = await subscription_execution.wait_for_skill_drain(
+            "reload_skill",
+            lease["drain_id"],
+            timeout_s=1.0,
+        )
+        assert subscription_execution.end_skill_drain(
+            "reload_skill", lease["drain_id"]
+        )
+        admitted_after = await subscription_execution.run_async_subscription(
+            lambda: "new-generation",
+            skill="reload_skill",
+            topic="runtime.changed",
+            handler="handlers.main.on_runtime_changed",
+        )
+        return blocked, timed_out, during, drained, (old_result, admitted_after)
+
+    try:
+        blocked, timed_out, during, drained, results = asyncio.run(run())
+
+        assert blocked is None
+        assert timed_out["drained"] is False
+        assert timed_out["reason"] == "in_flight_drain_timeout"
+        assert during["draining_skill_total"] == 1
+        assert during["draining_skills"][0]["active_total"] == 1
+        assert drained["drained"] is True
+        assert results == ("completed-old-generation", "new-generation")
+        stats = subscription_execution.subscription_execution_snapshot()["top_handlers"][0]
+        assert stats["drain_rejected_total"] == 1
+    finally:
+        subscription_execution.reset_subscription_execution_runtime()

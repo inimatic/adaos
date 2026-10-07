@@ -124,6 +124,7 @@ async def reactivate_exact_admitted_package(
     attempt_budget: int = 3,
     cooldown_s: float = 300.0,
     running_lease_s: float = 120.0,
+    in_flight_drain_timeout_s: float = 10.0,
     now: float | None = None,
     loader: ImportlibSkillsLoader | None = None,
 ) -> dict[str, Any]:
@@ -143,6 +144,7 @@ async def reactivate_exact_admitted_package(
     budget = max(1, min(int(attempt_budget), 10))
     cooldown = max(1.0, min(float(cooldown_s), 86400.0))
     running_lease = max(1.0, min(float(running_lease_s), 3600.0))
+    drain_timeout = max(0.0, min(float(in_flight_drain_timeout_s), 3600.0))
     _classification_admits(classification, package_digest=package_digest)
     _ensure_schema(ctx)
     timestamp = float(time.time() if now is None else now)
@@ -236,6 +238,7 @@ async def reactivate_exact_admitted_package(
             expected_version=version,
             expected_slot=slot,
             expected_source_manifest_digest=package_digest,
+            drain_timeout_s=drain_timeout,
         )
     except Exception as exc:
         reload_receipt = {
