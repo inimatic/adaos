@@ -1760,7 +1760,13 @@ class BuilderWorkspaceService:
 
         remote: dict[str, Any] | None = None
         mode = "local_fallback"
-        if submit_remote:
+        if submit_remote and create_pending_action and pending_action is None:
+            mode = "approval_unavailable"
+        elif submit_remote and create_pending_action:
+            # Publication is only a request for consent. Remote execution starts
+            # after the admitted decision consumer resumes this exact request.
+            mode = "approval_required"
+        elif submit_remote:
             try:
                 remote = factory.submit_realize_request(request)
                 task = remote.get("task") if isinstance(remote, dict) else None
@@ -1773,7 +1779,7 @@ class BuilderWorkspaceService:
                 mode = "local_fallback"
 
         return {
-            "ok": True,
+            "ok": mode != "approval_unavailable",
             "mode": mode,
             "remote_submitted": bool(remote and remote.get("ok") and mode == "remote_queued"),
             "realize_request": request,

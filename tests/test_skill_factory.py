@@ -780,6 +780,29 @@ def test_builder_realize_request_preserves_local_fallback(tmp_path: Path) -> Non
     assert Path(result["request_dir"], "realize_request.json").exists()
 
 
+def test_builder_realize_never_submits_remote_before_admitted_decision(tmp_path: Path) -> None:
+    service = _builder_service(tmp_path)
+    draft_result = service.create_draft(
+        kind="skill",
+        artifact_id="demo_guarded_realize",
+        source_idea="Create a guarded remote realization.",
+        webspace_id="builder-test",
+    )
+
+    result = service.create_realize_request(
+        draft_id=draft_result["draft"]["draft_id"],
+        user_subnet_id="subnet-test",
+        submit_remote=True,
+        create_pending_action=True,
+    )
+
+    assert result["ok"] is False
+    assert result["mode"] == "approval_unavailable"
+    assert result["remote_submitted"] is False
+    assert result["remote"] is None
+    assert "pending_action_choice_closure_missing" in result["pending_action_error"]
+
+
 def test_skill_factory_projects_root_mcp_profile_without_secret(tmp_path: Path) -> None:
     service = SkillFactoryService(state_dir=tmp_path)
     task = service.submit_realize_request(

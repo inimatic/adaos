@@ -4519,7 +4519,7 @@ def test_process_events_command_submits_conversation_interaction_token(monkeypat
                 "action_token": "ia:0:abc",
                 "idempotency_key": "web:m1:ia:0:abc",
                 "source_message_id": "m1",
-                "_meta": {"route_id": "voice_chat"},
+                "_meta": {"route_id": "voice_chat", "user_id": "forged-owner"},
             },
             device_id="dev-1",
             webspace_id="dev1-dev",
@@ -4528,9 +4528,12 @@ def test_process_events_command_submits_conversation_interaction_token(monkeypat
     )
 
     assert calls[0]["token"] == "ia:0:abc"
+    assert calls[0]["actor_id"] == "transport:browser:dev-1"
     assert calls[0]["idempotency_key"] == "web:m1:ia:0:abc"
     assert calls[0]["metadata"]["webspace_id"] == "dev1-dev"
     assert calls[0]["metadata"]["source_message_id"] == "m1"
+    assert calls[0]["metadata"]["verified_transport_actor_id"] == "transport:browser:dev-1"
+    assert "user_id" not in calls[0]["metadata"]
     assert published[0][0] == "conversation.interaction.responded"
     assert responses[-1]["ok"] is True
 

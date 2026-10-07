@@ -10,6 +10,7 @@ from adaos.services.pending_action_inventory import (
     audit_pending_action_projection,
     build_pending_action_baseline,
     load_pending_action_inventory,
+    validate_legacy_publication,
 )
 
 
@@ -53,6 +54,22 @@ def test_inventory_does_not_treat_topics_or_direct_methods_as_consumer_proof() -
         assert by_id[roadmap_id]["consumer"]["status"] == "missing"
         assert by_id[roadmap_id]["status"] == "missing_consumer"
     assert by_id["PA6-08"]["status"] == "missing_publisher"
+
+
+def test_dynamic_clarification_choices_are_bounded_by_family_contract() -> None:
+    contract = validate_legacy_publication(
+        kind="nlu.teacher.clarification",
+        response_topic="nlp.teacher.candidate.confirmation.response",
+        choices=["media_indexer", "media_server", "postpone"],
+    )
+
+    assert contract["roadmap_id"] == "PA6-05"
+    with pytest.raises(ValueError, match="choice_contract_mismatch"):
+        validate_legacy_publication(
+            kind="nlu.teacher.clarification",
+            response_topic="nlp.teacher.candidate.confirmation.response",
+            choices=["postpone"],
+        )
 
 
 def test_projection_audit_is_redacted_and_reports_orphans_and_latency() -> None:

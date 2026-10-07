@@ -14,11 +14,12 @@
     "task_id": { "type": "string", "minLength": 1 },
     "source_url": { "type": "string", "minLength": 1 },
     "source_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "status": { "enum": ["approval_pending", "accepted", "rejected", "invalid"] },
+    "status": { "enum": ["approval_pending", "input_required", "accepted", "rejected", "invalid"] },
     "result": { "type": "object" },
     "validation": { "type": "object" },
-    "pending_action_id": { "type": "string", "minLength": 1 },
+    "pending_action_id": { "type": ["string", "null"], "minLength": 1 },
     "decision": { "type": ["object", "null"] },
+    "error": { "type": ["object", "null"] },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" }
   }

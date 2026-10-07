@@ -5,15 +5,28 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from adaos.sdk import access
+from adaos.sdk.core.contracts import public_contract
 from adaos.sdk.core._ctx import require_ctx
 
 __all__ = [
-    "expire_pending_actions",
     "list_pending_actions",
     "publish_pending_action",
 ]
 
 
+@public_contract(
+    capabilities=("human_decision.legacy_publish",),
+    effects=("durable_write",),
+    errors=("pending_action_kind_not_admitted", "pending_action_choice_closure_missing"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="deprecated",
+    since="1.0.0",
+    deprecated=True,
+    replacement="adaos.sdk.workflow.create_interaction + adaos.sdk.chat.request",
+    migration_recipe="Model the decision as a governed workflow Interaction and present it through adaos.sdk.chat.request.",
+)
 def publish_pending_action(
     *,
     kind: str,
@@ -91,15 +104,44 @@ def respond_pending_action(
     )
 
 
+@public_contract(
+    capabilities=("human_decision.read",),
+    permissions=("workspace.read",),
+    effects=("read_only",),
+    errors=("caller_access_denied", "invalid_cursor", "unsupported_field_mask"),
+    boundedness={"kind": "bounded_page", "arguments": ["limit"]},
+    pagination={"supported": True, "arguments": ["cursor"]},
+    stability="beta",
+    since="1.5.0",
+    runtime_support={"owner": "pending_action_projection", "min_contract": 1},
+)
 def list_pending_actions(
     *,
     webspace_id: str | None = None,
-    include_terminal: bool = True,
+    limit: int = 50,
+    cursor: str | None = None,
+    statuses: Sequence[str] | None = None,
+    kinds: Sequence[str] | None = None,
+    field_mask: str = "summary",
 ) -> dict[str, Any]:
     require_ctx("sdk.pending_actions.list")
-    from adaos.services.pending_actions import list_pending_actions as _list_pending
+    access.require("workspace.read")
+    application = access.application() or {}
+    caller = access.caller() or {}
+    principal = {**caller}
+    if application.get("application_id"):
+        principal["application_id"] = str(application["application_id"])
+    from adaos.services.pending_actions import query_pending_actions as _query_pending
 
-    return _list_pending(webspace_id=webspace_id, include_terminal=include_terminal)
+    return _query_pending(
+        webspace_id=webspace_id,
+        limit=limit,
+        cursor=cursor,
+        statuses=statuses,
+        kinds=kinds,
+        field_mask=field_mask,
+        principal=principal,
+    )
 
 
 def expire_pending_actions(*, webspace_id: str | None = None) -> dict[str, Any]:

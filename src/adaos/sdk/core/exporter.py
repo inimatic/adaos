@@ -31,6 +31,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.data.skill_env",
     "adaos.sdk.data.configuration",
     "adaos.sdk.data.lifecycle",
+    "adaos.sdk.data.pending_actions",
     "adaos.sdk.data.secrets",
     "adaos.sdk.deployment",
     "adaos.sdk.distributed",

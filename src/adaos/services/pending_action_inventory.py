@@ -43,6 +43,78 @@ def load_pending_action_inventory() -> dict[str, Any]:
     return {**_clone(inventory), "digest": f"sha256:{digest}"}
 
 
+def legacy_publication_contract(kind: str) -> dict[str, Any]:
+    """Return the admitted legacy contract or fail closed for an unknown family."""
+
+    normalized = str(kind or "").strip()
+    inventory = load_pending_action_inventory()
+    family = next(
+        (
+            item
+            for item in inventory["families"]
+            if str(item.get("kind") or "").strip() == normalized
+        ),
+        None,
+    )
+    if family is None:
+        raise ValueError(f"pending_action_kind_not_admitted: {normalized or '<missing>'}")
+    status = str(family.get("status") or "").strip()
+    consumer_status = str((family.get("consumer") or {}).get("status") or "").strip()
+    if status in {"missing_publisher", "missing_consumer"} or consumer_status in {
+        "missing",
+        "not_applicable",
+    }:
+        raise ValueError(
+            f"pending_action_choice_closure_missing: {normalized}; roadmap_id={family['roadmap_id']}"
+        )
+    return {
+        **_clone(family),
+        "inventory": {
+            "schema": inventory["schema"],
+            "version": inventory["inventory_version"],
+            "digest": inventory["digest"],
+        },
+    }
+
+
+def validate_legacy_publication(
+    *,
+    kind: str,
+    response_topic: str,
+    choices: Sequence[str],
+) -> dict[str, Any]:
+    """Validate that a legacy card cannot advertise an unbound choice."""
+
+    contract = legacy_publication_contract(kind)
+    expected_topic = str(contract.get("response_topic") or "").strip()
+    actual_topic = str(response_topic or "").strip()
+    if not expected_topic or actual_topic != expected_topic:
+        raise ValueError(
+            f"pending_action_response_route_mismatch: {kind}; expected={expected_topic or '<none>'}"
+        )
+    expected_choices = {
+        str(choice or "").strip()
+        for choice in contract.get("choices") or []
+        if str(choice or "").strip()
+    }
+    actual_choices = {
+        str(choice or "").strip() for choice in choices if str(choice or "").strip()
+    }
+    if "dynamic_answer" in expected_choices:
+        fixed_choices = expected_choices - {"dynamic_answer"}
+        matches_choices = fixed_choices.issubset(actual_choices) and bool(
+            actual_choices - fixed_choices
+        )
+    else:
+        matches_choices = actual_choices == expected_choices
+    if not actual_choices or not matches_choices:
+        raise ValueError(
+            f"pending_action_choice_contract_mismatch: {kind}; "
+            f"expected={','.join(sorted(expected_choices))}; actual={','.join(sorted(actual_choices))}"
+        )
+    return contract
+
+
 def _number(value: Any) -> float | None:
     try:
         return float(value)
@@ -170,5 +242,7 @@ def build_pending_action_baseline(
 __all__ = [
     "audit_pending_action_projection",
     "build_pending_action_baseline",
+    "legacy_publication_contract",
     "load_pending_action_inventory",
+    "validate_legacy_publication",
 ]

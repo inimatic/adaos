@@ -3,6 +3,28 @@ import time
 import pytest
 
 
+def _bind_voice_record(conf, record: dict, webspace_id: str) -> dict:
+    pending_action_id = f"pa.{record['id']}"
+    binding = conf._new_voice_binding(
+        pending_action_id=pending_action_id,
+        subject_id=record["id"],
+        request_id=str(record.get("request_id") or ""),
+        meta={"route_id": "voice_chat", "webspace_id": webspace_id},
+    )
+    record["pending_action_id"] = pending_action_id
+    record["voice_binding"] = binding
+    return binding
+
+
+def _admit_pending_action_response(monkeypatch) -> None:
+    from adaos.services import pending_actions
+
+    async def _respond(*_args, **_kwargs):
+        return {"duplicate": False, "terminal": True}
+
+    monkeypatch.setattr(pending_actions, "respond_pending_action_async", _respond)
+
+
 @pytest.mark.anyio
 async def test_voice_confirmation_consumes_russian_yes_from_canonical_store(monkeypatch):
     from adaos.services.nlu import teacher_confirmation_runtime as conf
@@ -588,11 +610,18 @@ async def test_voice_confirmation_yes_applies_candidate():
             "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
         }
     )
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        voice_binding = dict(teacher["pending_confirmations"][-1]["voice_binding"])
     await conf._on_voice_chat_user(
         {
             "webspace_id": webspace_id,
             "text": "да",
-            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+            "_meta": {
+                "route_id": "voice_chat",
+                "webspace_id": webspace_id,
+                "human_decision_binding": voice_binding,
+            },
         }
     )
 
@@ -675,7 +704,7 @@ async def test_voice_confirmation_suppresses_short_stt_tail():
 
 
 @pytest.mark.anyio
-async def test_voice_confirmation_answer_consumed_after_teacher_accepts():
+async def test_voice_confirmation_answer_consumed_after_teacher_accepts(monkeypatch):
     from adaos.services.nlu import teacher_confirmation_runtime as conf
     from adaos.services.yjs.doc import async_get_ydoc
 
@@ -690,6 +719,8 @@ async def test_voice_confirmation_answer_consumed_after_teacher_accepts():
         "question": "Open infrastructure state?",
         "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
     }
+    voice_binding = _bind_voice_record(conf, confirmation, webspace_id)
+    _admit_pending_action_response(monkeypatch)
 
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
@@ -701,7 +732,11 @@ async def test_voice_confirmation_answer_consumed_after_teacher_accepts():
         {
             "webspace_id": webspace_id,
             "text": "yes",
-            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+            "_meta": {
+                "route_id": "voice_chat",
+                "webspace_id": webspace_id,
+                "human_decision_binding": voice_binding,
+            },
         }
     )
 
@@ -711,6 +746,52 @@ async def test_voice_confirmation_answer_consumed_after_teacher_accepts():
 
     assert confirmations[-1]["status"] == "accepted"
     assert await conf.should_consume_voice_confirmation_answer(webspace_id, "yes")
+
+
+@pytest.mark.anyio
+async def test_voice_confirmation_without_exact_binding_requires_visual_handoff() -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-confirmation-unbound"
+    confirmation = {
+        "id": "confirm.unbound",
+        "ts": time.time(),
+        "status": "awaiting_user",
+        "candidate_id": "cand.unbound",
+        "request_id": "req.unbound",
+        "request_text": "open panel",
+        "question": "Open panel?",
+        "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+    }
+    _bind_voice_record(conf, confirmation, webspace_id)
+    handoffs: list[dict] = []
+    ctx.bus.subscribe(
+        "pending_actions.voice_handoff.required",
+        lambda event: handoffs.append(dict(getattr(event, "payload", None) or {})),
+    )
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(
+                txn,
+                "nlu_teacher",
+                {"pending_confirmations": [confirmation], "events": []},
+            )
+
+    await conf._on_voice_chat_user(
+        {
+            "webspace_id": webspace_id,
+            "text": "yes",
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        stored = (ydoc.get_map("data").get("nlu_teacher") or {})["pending_confirmations"][-1]
+    assert stored["status"] == "awaiting_user"
+    assert handoffs[-1]["reason"] == "exact_voice_binding_missing_or_expired"
 
 
 @pytest.mark.anyio
@@ -744,6 +825,8 @@ async def test_voice_confirmation_apply_timeout_marks_candidate_failed(monkeypat
         "question": "Open infrastructure state?",
         "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
     }
+    voice_binding = _bind_voice_record(conf, confirmation, webspace_id)
+    _admit_pending_action_response(monkeypatch)
 
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
@@ -772,7 +855,11 @@ async def test_voice_confirmation_apply_timeout_marks_candidate_failed(monkeypat
         {
             "webspace_id": webspace_id,
             "text": "yes",
-            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+            "_meta": {
+                "route_id": "voice_chat",
+                "webspace_id": webspace_id,
+                "human_decision_binding": voice_binding,
+            },
         }
     )
 
@@ -820,6 +907,8 @@ async def test_voice_confirmation_timeout_does_not_override_successful_apply(mon
         "question": "Open NLU Teacher?",
         "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
     }
+    voice_binding = _bind_voice_record(conf, confirmation, webspace_id)
+    _admit_pending_action_response(monkeypatch)
 
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
@@ -864,7 +953,11 @@ async def test_voice_confirmation_timeout_does_not_override_successful_apply(mon
         {
             "webspace_id": webspace_id,
             "text": "yes",
-            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+            "_meta": {
+                "route_id": "voice_chat",
+                "webspace_id": webspace_id,
+                "human_decision_binding": voice_binding,
+            },
         }
     )
 
@@ -918,11 +1011,18 @@ async def test_voice_confirmation_no_retries_once_with_rejected_candidate_contex
             "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
         }
     )
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        voice_binding = dict(teacher["pending_confirmations"][-1]["voice_binding"])
     await conf._on_voice_chat_user(
         {
             "webspace_id": webspace_id,
             "text": "нет, нужно открыть Infra State",
-            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+            "_meta": {
+                "route_id": "voice_chat",
+                "webspace_id": webspace_id,
+                "human_decision_binding": voice_binding,
+            },
         }
     )
 
@@ -946,7 +1046,7 @@ async def test_voice_confirmation_no_retries_once_with_rejected_candidate_contex
 
 
 @pytest.mark.anyio
-async def test_voice_clarification_short_answer_resolves_session():
+async def test_voice_clarification_short_answer_resolves_session(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf
     from adaos.services.yjs.doc import async_get_ydoc
@@ -984,6 +1084,8 @@ async def test_voice_clarification_short_answer_resolves_session():
         ],
         "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
     }
+    voice_binding = _bind_voice_record(conf, session, webspace_id)
+    _admit_pending_action_response(monkeypatch)
 
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
@@ -1005,7 +1107,11 @@ async def test_voice_clarification_short_answer_resolves_session():
         {
             "webspace_id": webspace_id,
             "text": "first",
-            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+            "_meta": {
+                "route_id": "voice_chat",
+                "webspace_id": webspace_id,
+                "human_decision_binding": voice_binding,
+            },
         }
     )
 

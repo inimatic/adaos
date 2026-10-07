@@ -17,6 +17,10 @@ def public_contract(
     pagination: Mapping[str, Any] | None = None,
     stability: str = "experimental",
     since: str | None = None,
+    deprecated: bool = False,
+    removed_in: str | None = None,
+    replacement: str | None = None,
+    migration_recipe: str | None = None,
     runtime_support: Mapping[str, Any] | None = None,
     action_closure: Mapping[str, Any] | None = None,
 ) -> Callable[[F], F]:
@@ -31,6 +35,10 @@ def public_contract(
         "pagination": dict(pagination or {}),
         "stability": str(stability or "experimental"),
         "since": since,
+        "deprecated": bool(deprecated),
+        "removed_in": removed_in,
+        "replacement": replacement,
+        "migration_recipe": migration_recipe,
         "runtime_support": dict(runtime_support or {}),
         "action_closure": dict(action_closure or {}),
     }

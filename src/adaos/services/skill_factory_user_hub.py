@@ -107,6 +107,7 @@ class UserHubResultService:
             },
             "pending_action_id": f"pa.{submission_id}",
             "decision": None,
+            "error": None,
             "created_at": now,
             "updated_at": now,
         }
@@ -116,25 +117,36 @@ class UserHubResultService:
             from adaos.services.pending_actions import publish_pending_action
 
             publisher = publish_pending_action
-        publisher(
-            webspace_id=webspace_id,
-            action_id=submission["pending_action_id"],
-            kind="skill_factory.user_hub_result.review",
-            title="Review User Hub development result",
-            summary=f"Validated result for task {task_id} is staged and has not been activated.",
-            domain_ref={"type": "user_hub_submission", "id": submission_id},
-            allowed_actions=[
-                {"id": "approve", "label": "Accept result", "terminal": True},
-                {"id": "refuse", "label": "Reject result", "terminal": True},
-            ],
-            response_topic="skill_factory.user_hub_result.response",
-            metadata={
-                "submission_id": submission_id,
-                "task_id": task_id,
-                "source_digest": observed_digest,
-                "validation": submission["validation"],
-            },
-        )
+        try:
+            publisher(
+                webspace_id=webspace_id,
+                action_id=submission["pending_action_id"],
+                kind="skill_factory.user_hub_result.review",
+                title="Review User Hub development result",
+                summary=f"Validated result for task {task_id} is staged and has not been activated.",
+                domain_ref={"type": "user_hub_submission", "id": submission_id},
+                allowed_actions=[
+                    {"id": "approve", "label": "Accept result", "terminal": True},
+                    {"id": "refuse", "label": "Reject result", "terminal": True},
+                ],
+                response_topic="skill_factory.user_hub_result.response",
+                metadata={
+                    "submission_id": submission_id,
+                    "task_id": task_id,
+                    "source_digest": observed_digest,
+                    "validation": submission["validation"],
+                },
+            )
+        except Exception as exc:
+            submission["status"] = "input_required"
+            submission["pending_action_id"] = None
+            submission["error"] = {
+                "code": "human_decision_capability_unavailable",
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+            submission["updated_at"] = _now()
+            self._write(submission)
         return submission
 
     def decide(

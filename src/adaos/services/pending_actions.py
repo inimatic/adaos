@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -12,6 +13,8 @@ from typing import Any
 
 from adaos.domain import Event
 from adaos.services.agent_context import AgentContext, get_ctx
+from adaos.services.pending_action_inventory import validate_legacy_publication
+from adaos.services.root_mcp.opaque_cursor import decode_opaque_cursor, encode_opaque_cursor
 from adaos.services.yjs.doc import async_get_ydoc, get_ydoc, submit_live_room_mutation
 from adaos.services.yjs.store import ystore_write_metadata, ystore_write_metadata_sync
 from adaos.services.yjs.webspace import default_webspace_id
@@ -21,6 +24,69 @@ _LOCK = threading.RLock()
 _ACTIVE_STATUSES = {"pending", "postponed"}
 _TERMINAL_STATUSES = {"responded", "expired", "cancelled"}
 _NO_VALUE = object()
+_QUERY_FIELD_MASKS: dict[str, tuple[str, ...]] = {
+    "summary": (
+        "id",
+        "kind",
+        "status",
+        "created_at",
+        "updated_at",
+        "expires_at",
+        "title",
+        "summary",
+        "priority",
+        "roadmap_id",
+        "producer",
+        "owner_scope",
+        "domain_ref",
+        "allowed_actions",
+        "contract_ref",
+    ),
+    "detail": (
+        "id",
+        "kind",
+        "status",
+        "created_at",
+        "updated_at",
+        "finished_at",
+        "expires_at",
+        "title",
+        "summary",
+        "title_i18n",
+        "summary_i18n",
+        "request_text",
+        "request_locale",
+        "preferred_locales",
+        "priority",
+        "roadmap_id",
+        "producer",
+        "owner_scope",
+        "domain_ref",
+        "allowed_actions",
+        "default_text_binding",
+        "payload_ref",
+        "metadata",
+        "response",
+        "last_response",
+        "cancellation",
+        "contract_ref",
+    ),
+    "audit": (
+        "id",
+        "kind",
+        "status",
+        "created_at",
+        "updated_at",
+        "finished_at",
+        "expires_at",
+        "roadmap_id",
+        "producer",
+        "owner_scope",
+        "domain_ref",
+        "history",
+        "contract_ref",
+    ),
+}
 
 _DEFAULT_ACTIONS: dict[str, dict[str, Any]] = {
     "test": {
@@ -77,6 +143,17 @@ def _now_ts() -> float:
 
 def _json_clone(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def _content_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _text(value: Any) -> str:
@@ -541,6 +618,12 @@ def _normalize_pending_action(
         normalized_owner_scope["node_id"] = _text(producer_actor.get("node_id"))
     route = _normalize_response_route(response_route=response_route, response_topic=response_topic, ctx=ctx)
     selected_actions = allowed_actions if allowed_actions is not None else actions
+    normalized_actions = _normalize_allowed_actions(selected_actions)
+    publication_contract = validate_legacy_publication(
+        kind=kind_token,
+        response_topic=_text(route.get("topic")),
+        choices=[_text(item.get("id")) for item in normalized_actions],
+    )
     action = {
         "id": normalized_id,
         "kind": kind_token,
@@ -556,11 +639,13 @@ def _normalize_pending_action(
         "producer": producer_actor,
         "owner_scope": normalized_owner_scope,
         "domain_ref": _mapping(domain_ref),
-        "allowed_actions": _normalize_allowed_actions(selected_actions),
+        "allowed_actions": normalized_actions,
         "default_text_binding": bool(default_text_binding),
         "response_route": route,
         "webspace_id": webspace_id,
         "history": [],
+        "contract_ref": publication_contract["inventory"],
+        "roadmap_id": publication_contract["roadmap_id"],
     }
     normalized_title_i18n = _normalize_i18n(title_i18n)
     if normalized_title_i18n is not None:
@@ -942,6 +1027,96 @@ def list_pending_actions(
         "by_id": active_by_id,
         "order": list(snapshot["active"]),
         "active_items": [_json_clone(active_by_id[action_id]) for action_id in snapshot["active"]],
+    }
+
+
+def _principal_can_read(action: Mapping[str, Any], principal: Mapping[str, Any] | None) -> bool:
+    if principal is None:
+        return True
+    actor_kind = _text(principal.get("kind"))
+    actor_id = _text(principal.get("id"))
+    application_id = _text(principal.get("application_id"))
+    scope = _mapping(action.get("owner_scope"))
+    scoped_application = _text(scope.get("application_id"))
+    if scoped_application and scoped_application != application_id:
+        return False
+    scoped_user = _text(scope.get("user_id")) or (
+        _text(scope.get("id")) if _text(scope.get("type")) == "user" else ""
+    )
+    if scoped_user and not (actor_kind == "user" and actor_id == scoped_user):
+        return False
+    return True
+
+
+def query_pending_actions(
+    *,
+    webspace_id: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+    statuses: Sequence[str] | None = None,
+    kinds: Sequence[str] | None = None,
+    field_mask: str = "summary",
+    principal: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return one ACL-filtered, digest-bound page from the legacy projection."""
+
+    page_size = max(1, min(int(limit), 100))
+    mask_name = _text(field_mask) or "summary"
+    fields = _QUERY_FIELD_MASKS.get(mask_name)
+    if fields is None:
+        raise ValueError(f"unsupported pending action field mask: {mask_name}")
+    status_filter = sorted({_text(item) for item in statuses or () if _text(item)})
+    kind_filter = sorted({_text(item) for item in kinds or () if _text(item)})
+    query = {
+        "webspace_id": _resolve_webspace_id(webspace_id),
+        "statuses": status_filter,
+        "kinds": kind_filter,
+    }
+    snapshot = list_pending_actions(webspace_id=query["webspace_id"], include_terminal=True)
+    ordered = [
+        snapshot["by_id"][action_id]
+        for action_id in reversed(snapshot["order"])
+        if action_id in snapshot["by_id"]
+    ]
+    selected = [
+        item
+        for item in ordered
+        if (not status_filter or _text(item.get("status")) in status_filter)
+        and (not kind_filter or _text(item.get("kind")) in kind_filter)
+        and _principal_can_read(item, principal)
+    ]
+    digest = _content_digest(selected)
+    offset = decode_opaque_cursor(
+        cursor,
+        namespace="pending_actions.query.v1",
+        query=query,
+        field_mask={"name": mask_name, "fields": fields},
+        content_digest=digest,
+    )
+    page = selected[offset : offset + page_size]
+    next_offset = offset + len(page)
+    next_cursor = (
+        encode_opaque_cursor(
+            namespace="pending_actions.query.v1",
+            offset=next_offset,
+            query=query,
+            field_mask={"name": mask_name, "fields": fields},
+            content_digest=digest,
+        )
+        if next_offset < len(selected)
+        else None
+    )
+    return {
+        "schema": "adaos.pending_action.query_page.v1",
+        "items": [
+            {field: _json_clone(item[field]) for field in fields if field in item}
+            for item in page
+        ],
+        "next_cursor": next_cursor,
+        "limit": page_size,
+        "field_mask": mask_name,
+        "content_digest": digest,
+        "has_more": next_cursor is not None,
     }
 
 

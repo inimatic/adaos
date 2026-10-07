@@ -165,3 +165,27 @@ def test_user_hub_result_fails_closed_on_digest_or_path_violation(tmp_path: Path
             fetcher=lambda _url: bad,
             pending_action_publisher=lambda **payload: payload,
         )
+
+
+def test_user_hub_staging_exposes_missing_decision_capability(tmp_path: Path) -> None:
+    factory, task, assignment = _assigned(tmp_path)
+    result = _result(task, assignment)
+    body = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    service = UserHubResultService(factory=factory, state_dir=tmp_path)
+
+    submission = service.fetch_validate_stage(
+        task_id=task["task_id"],
+        source_url="https://user-hub.example/results/result.json",
+        source_digest=f"sha256:{hashlib.sha256(body).hexdigest()}",
+        webspace_id="desktop",
+        fetcher=lambda _url: body,
+        pending_action_publisher=lambda **_payload: (_ for _ in ()).throw(
+            ValueError("pending_action_choice_closure_missing: skill_factory.user_hub_result.review")
+        ),
+    )
+
+    assert submission["status"] == "input_required"
+    assert submission["pending_action_id"] is None
+    assert submission["error"]["code"] == "human_decision_capability_unavailable"
+    current = next(item for item in factory.snapshot()["tasks"] if item["task_id"] == task["task_id"])
+    assert current["status"] == "assigned"

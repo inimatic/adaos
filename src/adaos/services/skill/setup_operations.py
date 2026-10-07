@@ -77,7 +77,11 @@ class SetupOperationService:
         with _LOCK, mutation_lock(self.lock_path, timeout_s=30.0):
             for existing in self.list():
                 if existing.get("idempotency_key") == probe.idempotency_key:
-                    return {"ok": True, "duplicate": True, "operation": existing}
+                    return {
+                        "ok": existing.get("status") != "input_required",
+                        "duplicate": True,
+                        "operation": existing,
+                    }
             operation_id = f"setupop.{new_id()}"
             now = _now()
             operation = {
@@ -127,7 +131,25 @@ class SetupOperationService:
                 },
             )
         except Exception as exc:
-            self._append_log(operation_id, "pending_action.publish_failed", error=f"{type(exc).__name__}: {exc}")
+            operation = self.get(operation_id)
+            operation["status"] = "input_required"
+            operation["pending_action_id"] = None
+            operation["error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "code": "human_decision_capability_unavailable",
+            }
+            operation["recovery"] = {
+                "mode": "upgrade_or_migrate_human_decision_consumer",
+                "automatic_retry": False,
+            }
+            self._log(
+                operation,
+                "pending_action.publish_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            self._write_locked(operation)
+            return {"ok": False, "duplicate": False, "operation": operation}
         return {"ok": True, "duplicate": False, "operation": self.get(operation_id)}
 
     def approve_and_execute(

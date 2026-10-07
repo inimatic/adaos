@@ -174,9 +174,41 @@ def test_async_publication_prefers_live_owner_and_does_not_emit_on_failed_mutati
     ctx = _make_ctx()
     with pytest.raises(RuntimeError, match="room_generation_changed"):
         asyncio.run(pending_actions.publish_pending_action_async(
-            ctx=ctx, webspace_id="default", kind="test", title="Test", actions=["approve"], response_topic="test.response",
+            ctx=ctx,
+            webspace_id="default",
+            kind="nlu.teacher.candidate_confirmation",
+            title="Test",
+            actions=["test", "approve", "refuse", "postpone"],
+            response_topic="nlp.teacher.candidate.confirmation.response",
         ))
     assert ctx.bus.events == []
+
+
+def test_publish_rejects_unknown_or_unclosed_legacy_family(pending_action_docs) -> None:
+    ctx = _make_ctx()
+
+    with pytest.raises(ValueError, match="pending_action_kind_not_admitted"):
+        _publish(ctx, kind="application.unknown")
+    with pytest.raises(ValueError, match="pending_action_choice_closure_missing"):
+        _publish(
+            ctx,
+            kind="memory.write.review",
+            actions=["approve", "refuse", "postpone"],
+            response_topic="memory.pending_action.response",
+        )
+
+    assert pending_action_docs == {}
+
+
+def test_publish_rejects_route_or_choice_drift_before_storage(pending_action_docs) -> None:
+    ctx = _make_ctx()
+
+    with pytest.raises(ValueError, match="pending_action_response_route_mismatch"):
+        _publish(ctx, response_topic="foreign.response")
+    with pytest.raises(ValueError, match="pending_action_choice_contract_mismatch"):
+        _publish(ctx, actions=["approve", "refuse", "postpone"])
+
+    assert pending_action_docs == {}
 
 
 def test_response_marks_action_terminal_and_routes_once(pending_action_docs) -> None:
@@ -276,6 +308,78 @@ def test_list_projects_due_action_as_expired_without_client_command(pending_acti
     assert snapshot["by_id"][action["id"]]["status"] == "expired"
     assert snapshot["active"] == []
     assert snapshot["history_items"][0]["id"] == action["id"]
+
+
+def test_bounded_query_uses_digest_bound_cursor_and_field_mask(pending_action_docs) -> None:
+    ctx = _make_ctx()
+    for index in range(3):
+        _publish(ctx, action_id=f"pa.page.{index}")
+
+    first = pending_actions.query_pending_actions(
+        webspace_id="default",
+        limit=2,
+        field_mask="summary",
+    )
+    second = pending_actions.query_pending_actions(
+        webspace_id="default",
+        limit=2,
+        field_mask="summary",
+        cursor=first["next_cursor"],
+    )
+
+    assert [item["id"] for item in first["items"]] == ["pa.page.2", "pa.page.1"]
+    assert [item["id"] for item in second["items"]] == ["pa.page.0"]
+    assert first["has_more"] is True
+    assert second["next_cursor"] is None
+    assert "metadata" not in first["items"][0]
+    with pytest.raises(ValueError, match="does not match"):
+        pending_actions.query_pending_actions(
+            webspace_id="default",
+            limit=2,
+            field_mask="audit",
+            cursor=first["next_cursor"],
+        )
+
+
+def test_bounded_query_cursor_is_invalidated_by_projection_change(pending_action_docs) -> None:
+    ctx = _make_ctx()
+    _publish(ctx, action_id="pa.change.1")
+    _publish(ctx, action_id="pa.change.2")
+    first = pending_actions.query_pending_actions(webspace_id="default", limit=1)
+    _publish(ctx, action_id="pa.change.3")
+
+    with pytest.raises(ValueError, match="does not match"):
+        pending_actions.query_pending_actions(
+            webspace_id="default",
+            limit=1,
+            cursor=first["next_cursor"],
+        )
+
+
+def test_bounded_query_applies_application_and_user_scope_acl(pending_action_docs) -> None:
+    ctx = _make_ctx()
+    _publish(
+        ctx,
+        action_id="pa.app.a",
+        owner_scope={"webspace_id": "default", "application_id": "app.a"},
+    )
+    _publish(
+        ctx,
+        action_id="pa.app.b",
+        owner_scope={"webspace_id": "default", "application_id": "app.b"},
+    )
+    _publish(
+        ctx,
+        action_id="pa.user.a",
+        owner_scope={"webspace_id": "default", "type": "user", "id": "user.a"},
+    )
+
+    page = pending_actions.query_pending_actions(
+        webspace_id="default",
+        principal={"kind": "user", "id": "user.a", "application_id": "app.a"},
+    )
+
+    assert {item["id"] for item in page["items"]} == {"pa.app.a", "pa.user.a"}
 
 
 def test_projection_limit_never_evicts_active_actions(monkeypatch) -> None:

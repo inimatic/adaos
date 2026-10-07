@@ -82,3 +82,25 @@ def test_setup_failure_requires_explicit_retry_and_restart_never_reexecutes(tmp_
     assert recovered[0]["recovery"]["automatic_retry"] is False
     assert manager.calls == 1
 
+
+def test_setup_publication_failure_is_not_reported_as_approval_pending(tmp_path: Path) -> None:
+    service = SetupOperationService(state_dir=tmp_path)
+    manager = Manager()
+
+    result = service.create(
+        skill_id="example_skill",
+        release_digest="sha256:" + "5" * 64,
+        plan_digest="sha256:" + "6" * 64,
+        webspace_id="desktop",
+        manager=manager,
+        pending_action_publisher=lambda **_payload: (_ for _ in ()).throw(
+            ValueError("pending_action_choice_closure_missing: skill.setup.approval")
+        ),
+    )
+
+    assert result["ok"] is False
+    assert result["operation"]["status"] == "input_required"
+    assert result["operation"]["pending_action_id"] is None
+    assert result["operation"]["error"]["code"] == "human_decision_capability_unavailable"
+    assert manager.calls == 0
+

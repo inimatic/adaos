@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from collections.abc import Iterable
 from typing import Any, Mapping
 
@@ -795,6 +796,87 @@ async def _emit_chat(webspace_id: str, text: str, meta: Mapping[str, Any]) -> No
     )
 
 
+def _new_voice_binding(
+    *,
+    pending_action_id: str,
+    subject_id: str,
+    request_id: str,
+    meta: Mapping[str, Any],
+) -> dict[str, Any]:
+    now = time.time()
+    return {
+        "schema": "adaos.human_decision.voice_binding.v1",
+        "pending_action_id": pending_action_id,
+        "subject_id": subject_id,
+        "request_id": request_id,
+        "presentation_id": f"voice.{uuid.uuid4().hex}",
+        "session_id": str(
+            meta.get("voice_session_id")
+            or meta.get("session_id")
+            or meta.get("device_session_id")
+            or request_id
+            or ""
+        ).strip(),
+        "issued_at": now,
+        "expires_at": now + 30.0,
+    }
+
+
+def _voice_binding_matches(record: Mapping[str, Any], meta: Mapping[str, Any]) -> bool:
+    expected = coerce_dict(record.get("voice_binding"))
+    supplied = coerce_dict(meta.get("human_decision_binding"))
+    if not expected or not supplied:
+        return False
+    for key in (
+        "schema",
+        "pending_action_id",
+        "subject_id",
+        "request_id",
+        "presentation_id",
+        "session_id",
+    ):
+        if str(expected.get(key) or "") != str(supplied.get(key) or ""):
+            return False
+    try:
+        return float(expected.get("expires_at") or 0.0) > time.time()
+    except (TypeError, ValueError):
+        return False
+
+
+async def _emit_voice_handoff_required(
+    webspace_id: str,
+    record: Mapping[str, Any],
+    meta: Mapping[str, Any],
+) -> None:
+    pending_action_id = str(record.get("pending_action_id") or "").strip()
+    bus_emit(
+        get_ctx().bus,
+        "pending_actions.voice_handoff.required",
+        {
+            "webspace_id": webspace_id,
+            "pending_action_id": pending_action_id,
+            "reason": "exact_voice_binding_missing_or_expired",
+            "_meta": dict(meta),
+        },
+        source="nlu.teacher.confirmation",
+    )
+    locale = str(meta.get("request_locale") or meta.get("locale") or "").lower()
+    text = (
+        "Подтвердите это действие в карточке Pending Actions."
+        if locale.startswith("ru")
+        else "Confirm this action on its Pending Actions card."
+    )
+    await _emit_chat(
+        webspace_id,
+        text,
+        {
+            **dict(meta),
+            "i18n_key": "pending_actions.voice_handoff.required",
+            "pending_action_id": pending_action_id,
+        },
+    )
+
+
 def _pending_action_id_for_confirmation(confirmation: Mapping[str, Any]) -> str:
     confirmation_id = str(confirmation.get("id") or "").strip()
     candidate_id = str(confirmation.get("candidate_id") or "").strip()
@@ -889,19 +971,31 @@ async def _attach_confirmation_pending_action(
     confirmation: Mapping[str, Any],
     *,
     meta: Mapping[str, Any],
-) -> None:
+) -> dict[str, Any]:
     pending_action_id = await _publish_confirmation_pending_action(webspace_id, confirmation, meta=meta)
     confirmation_id = str(confirmation.get("id") or "").strip()
     if not pending_action_id or not confirmation_id:
-        return
+        return dict(confirmation)
+    binding = _new_voice_binding(
+        pending_action_id=pending_action_id,
+        subject_id=confirmation_id,
+        request_id=str(confirmation.get("request_id") or "").strip(),
+        meta=meta,
+    )
     try:
-        await _patch_confirmation(
+        updated = await _patch_confirmation(
             webspace_id,
             confirmation_id,
-            {"pending_action_id": pending_action_id, "pending_action_status": "pending"},
+            {
+                "pending_action_id": pending_action_id,
+                "pending_action_status": "pending",
+                "voice_binding": binding,
+            },
         )
+        return dict(updated or {**dict(confirmation), "voice_binding": binding})
     except Exception:
         _log.debug("failed to attach pending action id to NLU confirmation webspace=%s", webspace_id, exc_info=True)
+        return dict(confirmation)
 
 
 async def _publish_clarification_pending_action(
@@ -1021,12 +1115,22 @@ async def _attach_clarification_pending_action(
     session_id = str(session.get("id") or "").strip()
     if not pending_action_id or not session_id:
         return dict(session)
+    binding = _new_voice_binding(
+        pending_action_id=pending_action_id,
+        subject_id=session_id,
+        request_id=str(session.get("request_id") or "").strip(),
+        meta=meta,
+    )
     updated = await _patch_clarification_session(
         webspace_id,
         session_id,
-        {"pending_action_id": pending_action_id, "pending_action_status": "pending"},
+        {
+            "pending_action_id": pending_action_id,
+            "pending_action_status": "pending",
+            "voice_binding": binding,
+        },
     )
-    return dict(updated or session)
+    return dict(updated or {**dict(session), "voice_binding": binding})
 
 
 def _find_confirmation(
@@ -1084,6 +1188,10 @@ async def request_clarification(
     normalized.setdefault("uncertainty_kind", "llm_uncertainty")
     requested = await _append_clarification_session(webspace_id, normalized)
     requested = await _attach_clarification_pending_action(webspace_id, requested, meta=merged_meta)
+    presentation_meta = {
+        **dict(merged_meta),
+        "human_decision_binding": dict(requested.get("voice_binding") or {}),
+    }
     request_id = str(requested.get("request_id") or "").strip()
     request_text = str(requested.get("request_text") or "").strip()
     question = str(requested.get("question") or "").strip()
@@ -1097,20 +1205,20 @@ async def request_clarification(
             title="Clarification requested",
             subtitle=question,
             raw=requested,
-            meta=merged_meta,
+            meta=presentation_meta,
         ),
     )
     bus_emit(
         get_ctx().bus,
         "nlp.teacher.clarification.requested",
-        {"webspace_id": webspace_id, "session": requested, "_meta": merged_meta},
+        {"webspace_id": webspace_id, "session": requested, "_meta": presentation_meta},
         source="nlu.teacher.confirmation",
     )
     if question and _route_id(merged_meta) == "voice_chat":
         await _emit_chat(
             webspace_id,
             _clarification_instruction(question, _as_list(requested.get("allowed_answers"))),
-            merged_meta,
+            presentation_meta,
         )
     return requested
 
@@ -1677,7 +1785,15 @@ async def request_existing_candidate_confirmation(
     }
     try:
         await _append_confirmation(webspace_id, confirmation)
-        await _attach_confirmation_pending_action(webspace_id, confirmation, meta=merged_meta)
+        confirmation = await _attach_confirmation_pending_action(
+            webspace_id,
+            confirmation,
+            meta=merged_meta,
+        )
+        presentation_meta = {
+            **dict(merged_meta),
+            "human_decision_binding": dict(confirmation.get("voice_binding") or {}),
+        }
         await append_event(
             webspace_id,
             make_event(
@@ -1688,7 +1804,7 @@ async def request_existing_candidate_confirmation(
                 title="Voice confirmation requested",
                 subtitle=confirmation["question"],
                 raw=confirmation,
-                meta=merged_meta,
+                meta=presentation_meta,
             ),
         )
         await _emit_chat(
@@ -1697,7 +1813,7 @@ async def request_existing_candidate_confirmation(
                 "Для такого обращения уже есть ожидающий шаблон NLU.\n"
                 + _confirmation_instruction(str(confirmation["question"]), attempt=attempt)
             ),
-            merged_meta,
+            presentation_meta,
         )
         return True
     except Exception:
@@ -1749,7 +1865,15 @@ async def _on_candidate_proposed(evt: Any) -> None:
     }
     try:
         await _append_confirmation(webspace_id, confirmation)
-        await _attach_confirmation_pending_action(webspace_id, confirmation, meta=meta)
+        confirmation = await _attach_confirmation_pending_action(
+            webspace_id,
+            confirmation,
+            meta=meta,
+        )
+        presentation_meta = {
+            **dict(meta),
+            "human_decision_binding": dict(confirmation.get("voice_binding") or {}),
+        }
         await append_event(
             webspace_id,
             make_event(
@@ -1760,13 +1884,13 @@ async def _on_candidate_proposed(evt: Any) -> None:
                 title="Voice confirmation requested",
                 subtitle=confirmation["question"],
                 raw=confirmation,
-                meta=meta,
+                meta=presentation_meta,
             ),
         )
         await _emit_chat(
             webspace_id,
             _confirmation_instruction(str(confirmation["question"]), attempt=attempt),
-            meta,
+            presentation_meta,
         )
     except Exception:
         _log.warning("failed to request NLU Teacher confirmation webspace=%s", webspace_id, exc_info=True)
@@ -1915,6 +2039,11 @@ async def _on_voice_chat_user(evt: Any) -> None:
     except Exception:
         _log.debug("failed to read teacher confirmation state webspace=%s", webspace_id, exc_info=True)
         return
+    active_record = confirmation or clarification
+    if active_record and not _voice_binding_matches(active_record, meta):
+        _remember_consumed_voice_confirmation_answer(webspace_id, text)
+        await _emit_voice_handoff_required(webspace_id, active_record, meta)
+        return
     if not confirmation:
         if clarification:
             _remember_consumed_voice_confirmation_answer(webspace_id, text)
@@ -1984,6 +2113,8 @@ async def _on_voice_chat_user(evt: Any) -> None:
             return
         except Exception:
             _log.debug("failed to route voice confirmation through pending action webspace=%s", webspace_id, exc_info=True)
+            await _emit_voice_handoff_required(webspace_id, confirmation, meta)
+            return
     try:
         await _handle_confirmation_answer(
             webspace_id,

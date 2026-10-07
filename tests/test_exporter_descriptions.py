@@ -174,6 +174,29 @@ def test_deprecated_sdk_members_are_hidden_from_authoring_but_visible_to_migrati
     ]
 
 
+def test_pending_action_sdk_exposes_bounded_read_and_migration_only_publish() -> None:
+    authoring = sdk_export(level="std", query="pending action human decision", limit=24)
+    migration = sdk_export(
+        level="std",
+        query="pending action human decision legacy publish",
+        limit=24,
+        include_deprecated=True,
+    )
+    authoring_names = {item["name"] for item in authoring["tools"]}
+    migration_names = {item["name"] for item in migration["tools"]}
+
+    assert "adaos.sdk.data.pending_actions.list_pending_actions" in authoring_names
+    assert "adaos.sdk.data.pending_actions.publish_pending_action" not in authoring_names
+    assert "adaos.sdk.data.pending_actions.publish_pending_action" in migration_names
+    detail = next(
+        item
+        for item in authoring["tools"]
+        if item["name"] == "adaos.sdk.data.pending_actions.list_pending_actions"
+    )
+    assert detail["contract"]["boundedness"]["kind"] == "bounded_page"
+    assert detail["contract"]["pagination"]["supported"] is True
+
+
 def test_canonical_sdk_bundle_excludes_wall_clock_metadata(monkeypatch) -> None:
     generated = iter(("2026-10-03T05:00:00+00:00", "2026-10-03T05:00:01+00:00"))
 

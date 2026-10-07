@@ -516,45 +516,56 @@ def publish_eval_repair_pending_action(
     failed_count = int(summary.get("failed_count") or 0)
     title = "Review conversation eval failures"
     text_summary = f"{failed_count} conversation evaluation failure(s) need Builder repair triage."
-    action = pending_actions.publish_pending_action(
-        webspace_id=webspace_id,
-        action_id=action_id,
-        kind="builder.eval_repair.review",
-        title=title,
-        summary=text_summary,
-        request_text=text_summary,
-        producer={"type": "system", "system_id": "conversation_eval"},
-        owner_scope={"webspace_id": webspace_id, "owner": "skill:builder_skill"},
-        domain_ref={
-            "schema": "adaos.builder.eval_repair_ref.v1",
-            "source_schema": summary.get("source_schema"),
-            "failed_count": failed_count,
-            "dataset_ids": [
-                str(item.get("dataset_id") or "")
-                for item in summary.get("dataset_refs", [])
-                if isinstance(item, Mapping) and str(item.get("dataset_id") or "")
-            ],
-        },
-        allowed_actions=[
-            {"id": "preview", "label": "Preview Evidence", "terminal": False},
-            {"id": "create_repair_tasks", "label": "Create Repair Tasks", "terminal": True},
-            {"id": "postpone", "label": "Later", "terminal": False},
-            {"id": "refuse", "label": "Dismiss", "terminal": True},
-        ],
-        default_text_binding=False,
-        response_topic="builder.eval_repair.response",
-        priority=80,
-        metadata={
-            "schema": "adaos.builder.eval_repair.pending_action_metadata.v1",
-            "eval_summary": summary,
-            "source_refs": summary.get("source_refs", []),
-            "approval_policy": {
-                "action_risk": risk,
-                "requires_human_review": True,
-                "reason": "repair tasks may generate or apply runtime changes",
+    try:
+        action = pending_actions.publish_pending_action(
+            webspace_id=webspace_id,
+            action_id=action_id,
+            kind="builder.eval_repair.review",
+            title=title,
+            summary=text_summary,
+            request_text=text_summary,
+            producer={"type": "system", "system_id": "conversation_eval"},
+            owner_scope={"webspace_id": webspace_id, "owner": "skill:builder_skill"},
+            domain_ref={
+                "schema": "adaos.builder.eval_repair_ref.v1",
+                "source_schema": summary.get("source_schema"),
+                "failed_count": failed_count,
+                "dataset_ids": [
+                    str(item.get("dataset_id") or "")
+                    for item in summary.get("dataset_refs", [])
+                    if isinstance(item, Mapping) and str(item.get("dataset_id") or "")
+                ],
             },
-        },
-    )
+            allowed_actions=[
+                {"id": "preview", "label": "Preview Evidence", "terminal": False},
+                {"id": "create_repair_tasks", "label": "Create Repair Tasks", "terminal": True},
+                {"id": "postpone", "label": "Later", "terminal": False},
+                {"id": "refuse", "label": "Dismiss", "terminal": True},
+            ],
+            default_text_binding=False,
+            response_topic="builder.eval_repair.response",
+            priority=80,
+            metadata={
+                "schema": "adaos.builder.eval_repair.pending_action_metadata.v1",
+                "eval_summary": summary,
+                "source_refs": summary.get("source_refs", []),
+                "approval_policy": {
+                    "action_risk": risk,
+                    "requires_human_review": True,
+                    "reason": "repair tasks may generate or apply runtime changes",
+                },
+            },
+        )
+    except ValueError as exc:
+        if not str(exc).startswith("pending_action_choice_closure_missing"):
+            raise
+        return {
+            "ok": False,
+            "published": False,
+            "reason": "human_decision_capability_unavailable",
+            "capability_gap": str(exc),
+            "summary": summary,
+        }
     return {"ok": True, "published": True, "pending_action": action, "summary": summary}
 
 

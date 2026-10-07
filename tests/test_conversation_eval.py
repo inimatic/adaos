@@ -360,6 +360,28 @@ def test_conversation_eval_skips_pending_action_for_passed_gate(monkeypatch) -> 
     assert published == []
 
 
+def test_conversation_eval_exposes_missing_decision_consumer(monkeypatch) -> None:
+    gate = conversation_eval.run_golden_migration_gate(
+        fixture_paths=[FIXTURE_DIR / "general_no_match_repair.json"],
+        required_dataset_ids=["general_no_match_repair", "builder_review_handoff"],
+    )
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(
+        pending_actions,
+        "publish_pending_action",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ValueError("pending_action_choice_closure_missing: builder.eval_repair.review")
+        ),
+    )
+
+    result = conversation_eval.publish_eval_repair_pending_action(gate)
+
+    assert result["ok"] is False
+    assert result["published"] is False
+    assert result["reason"] == "human_decision_capability_unavailable"
+
+
 def test_approved_conversation_eval_materializes_repair_with_backlinks(tmp_path: Path) -> None:
     gate = conversation_eval.run_golden_migration_gate(
         fixture_paths=[FIXTURE_DIR / "general_no_match_repair.json"],

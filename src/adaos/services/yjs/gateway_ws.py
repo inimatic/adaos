@@ -10897,12 +10897,16 @@ async def process_events_command(
         try:
             from adaos.services import conversation_interactions
 
+            transport_actor_id = (
+                f"transport:browser:{str(device_id or 'unknown').strip() or 'unknown'}"
+            )
             result = conversation_interactions.submit_action_token(
                 action_token,
-                actor_id=str(meta.get("user_id") or "user:local").strip() or "user:local",
+                actor_id=transport_actor_id,
                 idempotency_key=idempotency_key,
                 metadata={
-                    **meta,
+                    **{key: value for key, value in meta.items() if key != "user_id"},
+                    "verified_transport_actor_id": transport_actor_id,
                     "io_type": "web",
                     "source_message_id": str(event_payload.get("source_message_id") or "").strip()
                     or None,
