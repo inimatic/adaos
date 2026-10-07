@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -55,6 +56,43 @@ def _choice(
     )
 
 
+def _confirmation(conversation_id: str, interaction_id: str) -> dict[str, object]:
+    return conversation_interactions.create_interaction(
+        conversation_id=conversation_id,
+        owner="skill:test",
+        prompt="Continue?",
+        interaction_id=interaction_id,
+        input_spec={
+            "kind": "confirmation",
+            "required_fields": [],
+            "choices": [],
+            "sensitive": False,
+        },
+        actions=[
+            {
+                "action_id": "continue",
+                "label": "Continue",
+                "command": "workflow.continue",
+                "value": True,
+                "risk": "read",
+                "confirmation_required": False,
+                "expected_generation": 3,
+                "target_ref": {"kind": "workflow", "id": "work.1", "generation": 3},
+            },
+            {
+                "action_id": "cancel",
+                "label": "Cancel",
+                "command": "workflow.cancel",
+                "value": False,
+                "risk": "read",
+                "confirmation_required": False,
+                "expected_generation": 3,
+                "target_ref": {"kind": "workflow", "id": "work.1", "generation": 3},
+            },
+        ],
+    )
+
+
 @pytest.mark.parametrize(
     ("locale", "text", "expected"),
     [
@@ -88,6 +126,110 @@ def test_deterministic_short_choice_is_proposed_and_committed(
     assert result["response"]["values"]["choice"] == expected
     assert result["response"]["consumed_command"]["command"] == f"builder.route.{expected}"
     assert result["proposal"]["disposition"] == "committed"
+
+
+@pytest.mark.parametrize(
+    ("locale", "text", "expected"),
+    [
+        ("en", "yes please", True),
+        ("en", "I confirm", True),
+        ("en", "no thanks", False),
+        ("en", "do not confirm", False),
+        ("ru", "да, подтверждаю", True),
+        ("ru", "согласна", True),
+        ("ru", "нет, спасибо", False),
+        ("ru", "не подтверждаю", False),
+    ],
+)
+def test_localized_confirmation_uses_bounded_explicit_phrases(
+    locale: str,
+    text: str,
+    expected: bool,
+) -> None:
+    case_id = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    interaction = _confirmation(
+        f"conv.confirm.{locale}.{expected}.{case_id}",
+        f"interaction.confirm.{locale}.{expected}.{case_id}",
+    )
+
+    proposal = intent_mediation.propose_intent(
+        interaction["conversation_id"],
+        f"message.confirm.{locale}.{expected}.{case_id}",
+        text,
+        locale=locale,
+    )
+    result = intent_mediation.commit_proposal(
+        proposal["proposal_id"],
+        actor_id="user:local",
+        idempotency_key=f"confirm:{locale}:{expected}:{text}",
+    )
+
+    assert proposal["disposition"] == "proposed"
+    assert result["response"]["values"]["confirmed"] is expected
+    assert result["response"]["consumed_command"]["command"] == (
+        "workflow.continue" if expected else "workflow.cancel"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes no",
+        "no, actually yes",
+        "yes, maybe",
+        "да нет",
+        "нет, хотя да",
+        "да, наверное",
+    ],
+)
+def test_ambiguous_or_same_utterance_correction_never_mutates_confirmation(text: str) -> None:
+    case_id = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    interaction = _confirmation(
+        f"conv.ambiguous.{case_id}",
+        f"interaction.ambiguous.{case_id}",
+    )
+
+    proposal = intent_mediation.propose_intent(
+        interaction["conversation_id"],
+        f"message.ambiguous.{case_id}",
+        text,
+        locale="ru" if any("а" <= char <= "я" for char in text.casefold()) else "en",
+    )
+
+    assert proposal["disposition"] == "clarification_required"
+    assert proposal["clarification"]["reason_code"] == "localized_confirmation_ambiguous"
+    assert conversation_store.get_interaction(interaction["interaction_id"])["generation"] == 0
+    with pytest.raises(intent_mediation.IntentMediationError, match="not committable"):
+        intent_mediation.commit_proposal(
+            proposal["proposal_id"],
+            actor_id="user:local",
+            idempotency_key=f"ambiguous:{text}",
+        )
+
+
+def test_confirmation_correction_is_a_new_versioned_proposal() -> None:
+    interaction = _confirmation("conv.confirm.correction", "interaction.confirm.correction")
+    ambiguous = intent_mediation.propose_intent(
+        interaction["conversation_id"],
+        "message.confirm.correction",
+        "no, actually yes",
+        locale="en",
+    )
+
+    corrected = intent_mediation.correct_proposal(
+        ambiguous["proposal_id"],
+        "yes",
+        source_message_id="message.confirm.correction.2",
+    )
+    result = intent_mediation.commit_proposal(
+        corrected["proposal_id"],
+        actor_id="user:local",
+        idempotency_key="confirm:correction:yes",
+    )
+
+    assert conversation_store.get_intent_proposal(ambiguous["proposal_id"])["disposition"] == "corrected"
+    assert corrected["supersedes_proposal_id"] == ambiguous["proposal_id"]
+    assert result["response"]["values"]["confirmed"] is True
 
 
 def test_multiple_pending_targets_require_clarification_without_mutation() -> None:

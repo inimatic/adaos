@@ -18,8 +18,46 @@ from adaos.services.conversational_runtime import (
 INTENT_PROPOSAL_SCHEMA = "adaos.intent.proposal.v1"
 _PENDING = {"created", "projected", "awaiting_input", "partially_answered", "validation_failed"}
 _PROTECTED_RISKS = {"external", "destructive", "irreversible", "privileged", "publication", "release"}
-_YES = {"yes", "y", "ok", "okay", "confirm", "confirmed", "да", "д", "ок", "подтверждаю"}
-_NO = {"no", "n", "cancel", "reject", "нет", "н", "отмена", "отменить", "отклонить"}
+_CONFIRMATION_AFFIRMATIVE = {
+    "yes",
+    "yes please",
+    "confirm",
+    "i confirm",
+    "confirmed",
+    "approve",
+    "proceed",
+    "да",
+    "да подтверждаю",
+    "подтверждаю",
+    "согласен",
+    "согласна",
+    "продолжить",
+}
+_CONFIRMATION_NEGATIVE = {
+    "no",
+    "no thanks",
+    "cancel",
+    "reject",
+    "do not confirm",
+    "don t confirm",
+    "i do not confirm",
+    "i don t confirm",
+    "нет",
+    "нет спасибо",
+    "отмена",
+    "отменить",
+    "отклонить",
+    "не подтверждаю",
+    "не согласен",
+    "не согласна",
+}
+_CONFIRMATION_POSITIVE_MARKERS = {
+    "yes", "confirm", "confirmed", "approve", "proceed",
+    "да", "подтверждаю", "согласен", "согласна", "продолжить",
+}
+_CONFIRMATION_NEGATIVE_MARKERS = {
+    "no", "not", "cancel", "reject", "нет", "не", "отмена", "отменить", "отклонить",
+}
 _ORDINALS = {
     "first": 0,
     "one": 0,
@@ -62,6 +100,28 @@ def _normalized(text: str) -> str:
 def _segments(text: str) -> list[str]:
     parts = [item.strip() for item in re.split(r"[\r\n;]+", text) if item.strip()]
     return parts or [text.strip()]
+
+
+def _confirmation_polarity(text: str) -> bool | str | None:
+    """Classify only a bounded EN/RU confirmation vocabulary.
+
+    Unrecognised phrases containing decision markers are ambiguous instead of
+    being guessed.  This makes negation, mixed polarity, and same-utterance
+    corrections fail closed; a caller can submit a versioned correction as a
+    new intent proposal.
+    """
+
+    value = _normalized(text)
+    if value in _CONFIRMATION_AFFIRMATIVE:
+        return True
+    if value in _CONFIRMATION_NEGATIVE:
+        return False
+    words = set(value.split())
+    has_positive = bool(words & _CONFIRMATION_POSITIVE_MARKERS)
+    has_negative = bool(words & _CONFIRMATION_NEGATIVE_MARKERS)
+    if has_positive or has_negative:
+        return "ambiguous"
+    return None
 
 
 def _pending(conversation_id: str, explicit_interaction_id: str | None) -> list[dict[str, Any]]:
@@ -187,6 +247,7 @@ def _action_candidates(
     interactions: Sequence[Mapping[str, Any]],
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     value = _normalized(segment)
+    confirmation = _confirmation_polarity(segment)
     candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for interaction in interactions:
         actions = [dict(item) for item in interaction.get("actions") or []]
@@ -199,8 +260,8 @@ def _action_candidates(
             candidates.append((dict(interaction), actions[index]))
             continue
         spec = dict(interaction.get("input_spec") or {})
-        if spec.get("kind") == "confirmation" and value in _YES | _NO:
-            wanted = value in _YES
+        if spec.get("kind") == "confirmation" and isinstance(confirmation, bool):
+            wanted = confirmation
             for action in actions:
                 if bool(action.get("value")) is wanted:
                     candidates.append((dict(interaction), action))
@@ -305,6 +366,22 @@ def propose_intent(
     ambiguity: dict[str, Any] | None = None
     protected: dict[str, Any] | None = None
     for index, segment in enumerate(_segments(text), start=1):
+        confirmation = _confirmation_polarity(segment)
+        confirmation_targets = [
+            item
+            for item in interactions
+            if dict(item.get("input_spec") or {}).get("kind") == "confirmation"
+        ]
+        if confirmation == "ambiguous" and confirmation_targets:
+            ambiguity = {
+                "reason_code": "localized_confirmation_ambiguous",
+                "candidates": [
+                    {"interaction_id": item["interaction_id"], "action_id": None}
+                    for item in confirmation_targets[:20]
+                ],
+            }
+            acts.append(_act(index, "unrelated", segment, confidence=0.0))
+            continue
         candidates = _action_candidates(segment, interactions)
         if len(candidates) == 1:
             interaction, action = candidates[0]
