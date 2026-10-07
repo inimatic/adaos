@@ -226,10 +226,16 @@ class WorkflowActivityRunner:
                 **result,
                 "reason_code": "invalid_activity_outcome",
             }
+        result_data = copy.deepcopy(dict(result.get("data") or result))
+        effect_assertion = result.get("effect_assertion")
+        if not isinstance(effect_assertion, Mapping):
+            effect_assertion = result_data.get("effect_assertion")
+        elif "effect_assertion" not in result_data:
+            result_data["effect_assertion"] = copy.deepcopy(dict(effect_assertion))
         completed = workflow_persistence.complete_activity(
             attempt["attempt_id"],
             outcome,
-            result=dict(result.get("data") or result),
+            result=result_data,
             evidence_refs=tuple(str(item) for item in result.get("evidence_refs") or []),
         )
         dispatch_id = str(binding.get("interaction_dispatch_id") or "").strip()
@@ -240,8 +246,13 @@ class WorkflowActivityRunner:
                 status=outcome,
                 outcome={
                     "attempt_id": attempt["attempt_id"],
-                    "result": copy.deepcopy(dict(result.get("data") or result)),
+                    "result": result_data,
                     "evidence_refs": list(result.get("evidence_refs") or []),
+                    **(
+                        {"effect_assertion": copy.deepcopy(dict(effect_assertion))}
+                        if isinstance(effect_assertion, Mapping)
+                        else {}
+                    ),
                 },
             )
         if conversation_id:
@@ -813,6 +824,7 @@ def execute_invocation(
         dispatch = conversation_store.claim_interaction_dispatch(
             str(response_ref["id"]),
             lease_owner=dispatch_owner,
+            reconciliation_contract="adaos.governed_workflow.dispatch_replay.v1",
         )
         if dispatch is None:
             raise WorkflowExecutionError("interaction dispatch disappeared before execution")

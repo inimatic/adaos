@@ -265,6 +265,7 @@ def _cross_channel_invocations(
     instance: dict[str, object],
     *,
     suffix: str = "",
+    require_effect_assertion: bool = False,
 ) -> tuple[dict[str, dict[str, object]], object, object]:
     definition = compiled_builder_change_definition()
     adapters = platform_workflow_adapter_registry()
@@ -298,6 +299,23 @@ def _cross_channel_invocations(
             interaction_id=f"interaction:ingress:{channel}{suffix}",
             workflow_ref=workflow,
             command_context_ref=workflow_ref("command_context", "builder:ingress"),
+            action_semantics=(
+                {
+                    "start_automation": {
+                        "preset": "custom",
+                        "effect_class": "workflow",
+                        "operation": "start_automation",
+                        "executor": "workflow",
+                        "mutates_domain": True,
+                        "records_consent": True,
+                        "terminal": True,
+                        "effect_ref": None,
+                        "assertion_required": True,
+                    }
+                }
+                if require_effect_assertion
+                else None
+            ),
         )
         profile = (
             conversation_interactions.channel_capability_profile(
@@ -406,7 +424,10 @@ def test_interaction_dispatch_rejects_tampered_invocation_input() -> None:
 def test_activity_runner_persists_started_and_terminal_without_reexecuting_effect() -> None:
     instance = new_instance(compiled_builder_change_definition(), "change:activity-runner")
     instance["state"] = "automation_ready"
-    invocations, definition, adapters = _cross_channel_invocations(instance)
+    invocations, definition, adapters = _cross_channel_invocations(
+        instance,
+        require_effect_assertion=True,
+    )
     contract = adapters.get("activity", "builder.codex.run")
     executors = WorkflowExecutorRegistry(
         adapters,
@@ -438,6 +459,14 @@ def test_activity_runner_persists_started_and_terminal_without_reexecuting_effec
                     "text": "Automation task accepted by the isolated worker.",
                     "data": {"task_id": "task:codex:1"},
                     "evidence_refs": ["evidence:codex:accepted"],
+                    "effect_assertion": {
+                        "schema": "adaos.conversation.action_effect_assertion.v1",
+                        "preset": "custom",
+                        "operation": "start_automation",
+                        "effect_ref": None,
+                        "observed": True,
+                        "domain_mutated": True,
+                    },
                 }
             )
         },
@@ -448,6 +477,7 @@ def test_activity_runner_persists_started_and_terminal_without_reexecuting_effec
     assert admitted["accepted"] is True
     assert completed and completed["status"] == "succeeded"
     assert completed["evidence_refs"] == ["evidence:codex:accepted"]
+    assert completed["outcome"]["effect_assertion"]["observed"] is True
     assert executed[0]["effect_binding"]["command_input"]["confirmed"] is True
     assert runner.run_once() is None
     dispatch = conversation_store.get_interaction_dispatch(
@@ -455,6 +485,7 @@ def test_activity_runner_persists_started_and_terminal_without_reexecuting_effec
     )
     assert dispatch["status"] == "succeeded"
     assert dispatch["outcome"]["attempt_id"] == completed["attempt_id"]
+    assert dispatch["outcome"]["effect_assertion"]["observed"] is True
     assert durable_delivery.get_envelope(
         f"response:{completed['attempt_id']}:started"
     )["category"] == "started"

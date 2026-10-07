@@ -317,7 +317,7 @@ def test_response_and_generation_are_committed_atomically() -> None:
     assert len(conversation_store.list_interaction_responses("interaction.atomic")) == 1
 
 
-def test_dispatch_obligation_lease_recovers_before_effect_and_closes_once() -> None:
+def test_dispatch_obligation_lease_requires_reconciliation_contract_before_reclaim() -> None:
     interaction = conversation_interactions.create_interaction(
         conversation_id="conv.dispatch-lease",
         owner="skill:test",
@@ -351,9 +351,54 @@ def test_dispatch_obligation_lease_recovers_before_effect_and_closes_once() -> N
             lease_owner="worker:two",
             now_epoch=105,
         )
+    with pytest.raises(ValueError, match="requires an admitted reconciliation contract"):
+        conversation_store.claim_interaction_dispatch(
+            response_id,
+            lease_owner="worker:two",
+            now_epoch=111,
+            now_iso="2026-10-07T00:00:11+00:00",
+        )
+    with pytest.raises(ValueError, match="requires an admitted reconciliation contract"):
+        conversation_store.claim_interaction_dispatch(
+            response_id,
+            lease_owner="worker:two",
+            reconciliation_contract="adaos.governed_workflow.dispatch_replay.v1",
+            now_epoch=111,
+            now_iso="2026-10-07T00:00:11+00:00",
+        )
+
+
+def test_governed_workflow_dispatch_lease_can_recover_before_effect_and_close_once() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.workflow-dispatch-lease",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        workflow_ref={"kind": "workflow", "id": "workflow:lease", "generation": 0},
+        interaction_id="interaction.workflow-dispatch-lease",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    accepted = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:local",
+        idempotency_key="workflow-dispatch-lease:first",
+    )
+    response_id = str(accepted["response"]["response_id"])
+    conversation_store.claim_interaction_dispatch(
+        response_id,
+        lease_owner="worker:one",
+        lease_seconds=10,
+        now_epoch=100,
+        now_iso="2026-10-07T00:00:00+00:00",
+    )
     recovered = conversation_store.claim_interaction_dispatch(
         response_id,
         lease_owner="worker:two",
+        reconciliation_contract="adaos.governed_workflow.dispatch_replay.v1",
         now_epoch=111,
         now_iso="2026-10-07T00:00:11+00:00",
     )

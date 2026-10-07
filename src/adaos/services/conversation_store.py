@@ -2982,6 +2982,7 @@ def claim_interaction_dispatch(
     *,
     lease_owner: str,
     lease_seconds: float = 30.0,
+    reconciliation_contract: str | None = None,
     now_epoch: float | None = None,
     now_iso: str | None = None,
 ) -> dict[str, Any] | None:
@@ -3012,6 +3013,18 @@ def claim_interaction_dispatch(
         if status == "dispatching" and active_lease:
             con.rollback()
             raise ValueError("interaction dispatch already has an active executor lease")
+        if status == "dispatching" and not active_lease:
+            contract = str(reconciliation_contract or "").strip()
+            workflow_ref = record.get("workflow_ref")
+            if (
+                contract != "adaos.governed_workflow.dispatch_replay.v1"
+                or not isinstance(workflow_ref, Mapping)
+                or not str(workflow_ref.get("id") or "").strip()
+            ):
+                con.rollback()
+                raise ValueError(
+                    "expired interaction dispatch lease requires an admitted reconciliation contract"
+                )
         if int(record.get("attempt_count") or 0) >= 5:
             con.rollback()
             raise ValueError("interaction dispatch attempt budget is exhausted")
