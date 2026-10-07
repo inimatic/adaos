@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jsonschema import Draft202012Validator
 
@@ -395,13 +396,27 @@ def _normalize_semantic_message(
         for locale, variant in dict(supplied.get("translations") or {}).items()
         if str(locale).strip() and isinstance(variant, Mapping)
     }
+    params = copy.deepcopy(dict(supplied.get("params") or {}))
+    default_timezone = str(
+        dict(locale_context or {}).get("timezone")
+        or dict(locale_context or {}).get("user_timezone")
+        or ""
+    ).strip()
+    if default_timezone:
+        for parameter in params.values():
+            if (
+                isinstance(parameter, dict)
+                and str(parameter.get("type") or "") in {"timestamp", "date"}
+                and not str(parameter.get("timezone") or "").strip()
+            ):
+                parameter["timezone"] = default_timezone
     record = _validate(
         SEMANTIC_MESSAGE_SCHEMA,
         {
             "schema": SEMANTIC_MESSAGE_SCHEMA,
             "key": str(supplied.get("key") or key or "").strip(),
             "version": int(supplied.get("version") or 1),
-            "params": copy.deepcopy(dict(supplied.get("params") or {})),
+            "params": params,
             "fallback": copy.deepcopy(dict(fallback_value)),
             "translations": translations,
             "catalog_ref": (
@@ -436,7 +451,112 @@ def _normalize_semantic_message(
     return record
 
 
-def _materialize_message_template(template: str, params: Mapping[str, Any]) -> str:
+def _localized_number(value: int | float, *, locale: str, precision: int | None) -> str:
+    if precision is None:
+        rendered = str(value)
+    else:
+        rendered = f"{float(value):,.{precision}f}"
+    if str(locale).split("-", 1)[0] == "ru":
+        rendered = rendered.replace(",", "\u00a0").replace(".", ",")
+    return rendered
+
+
+def _format_message_parameter(parameter: Mapping[str, Any], *, locale: str) -> str:
+    kind = str(parameter.get("type") or "text")
+    value = parameter.get("value")
+    language = str(locale or "en").split("-", 1)[0]
+    if kind == "boolean":
+        return ("да" if value else "нет") if language == "ru" else ("yes" if value else "no")
+    if kind in {"number", "integer", "amount"}:
+        precision_value = parameter.get("precision")
+        precision = (
+            int(precision_value)
+            if isinstance(precision_value, int)
+            else 2
+            if kind == "amount"
+            else 0
+            if kind == "integer"
+            else None
+        )
+        rendered = _localized_number(value, locale=locale, precision=precision)
+        suffix = str(parameter.get("currency") or parameter.get("unit") or "").strip()
+        return f"{rendered} {suffix}" if suffix else rendered
+    if kind in {"timestamp", "date"}:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ConversationInteractionError(
+                f"semantic message parameter is not a valid {kind}"
+            ) from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        timezone_name = str(parameter.get("timezone") or "UTC").strip()
+        try:
+            localized = parsed.astimezone(ZoneInfo(timezone_name))
+        except ZoneInfoNotFoundError as exc:
+            raise ConversationInteractionError(
+                f"semantic message timezone is unavailable: {timezone_name}"
+            ) from exc
+        if kind == "date":
+            return localized.strftime("%d.%m.%Y" if language == "ru" else "%Y-%m-%d")
+        date_time = localized.strftime(
+            "%d.%m.%Y %H:%M:%S" if language == "ru" else "%Y-%m-%d %H:%M:%S"
+        )
+        zone = localized.tzname() or timezone_name
+        return f"{date_time} {zone}"
+    suffix = str(parameter.get("unit") or "").strip()
+    rendered = str(value)
+    return f"{rendered} {suffix}" if suffix else rendered
+
+
+def _plural_category(value: Any, *, locale: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "other"
+    if isinstance(value, float) and not value.is_integer():
+        return "other"
+    number = abs(int(value))
+    if str(locale or "en").split("-", 1)[0] == "ru":
+        mod10 = number % 10
+        mod100 = number % 100
+        if mod10 == 1 and mod100 != 11:
+            return "one"
+        if 2 <= mod10 <= 4 and not 12 <= mod100 <= 14:
+            return "few"
+        return "many"
+    return "one" if number == 1 else "other"
+
+
+def _variant_template(
+    variant: Mapping[str, Any],
+    *,
+    channel: str,
+    params: Mapping[str, Any],
+    locale: str,
+) -> tuple[str, str | None]:
+    plural_parameter = str(variant.get("plural_param") or "").strip()
+    if not plural_parameter:
+        return str(variant[channel]), None
+    if plural_parameter not in params:
+        raise ConversationInteractionError(
+            f"semantic message plural parameter is missing: {plural_parameter}"
+        )
+    category = _plural_category(
+        dict(params[plural_parameter]).get("value"),
+        locale=locale,
+    )
+    choices = variant.get(f"{channel}_plural")
+    if not isinstance(choices, Mapping):
+        return str(variant[channel]), category
+    selected = choices.get(category) or choices.get("other") or variant[channel]
+    return str(selected), category
+
+
+def _materialize_message_template(
+    template: str,
+    params: Mapping[str, Any],
+    *,
+    locale: str,
+) -> str:
     source = str(template)
     if "{" in _MESSAGE_PARAMETER.sub("", source) or "}" in _MESSAGE_PARAMETER.sub("", source):
         raise ConversationInteractionError("semantic message contains an unsafe placeholder")
@@ -445,7 +565,7 @@ def _materialize_message_template(template: str, params: Mapping[str, Any]) -> s
         name = match.group(1)
         if name not in params:
             raise ConversationInteractionError(f"semantic message parameter is missing: {name}")
-        return str(dict(params[name])["value"])
+        return _format_message_parameter(dict(params[name]), locale=locale)
 
     return _MESSAGE_PARAMETER.sub(replace, source)
 
@@ -485,16 +605,47 @@ def _resolve_semantic_message(
         }
     variant = dict(translations[selected_locale]) if selected_locale else dict(semantic["fallback"])
     params = dict(semantic["params"])
+    resolved_locale = selected_locale or semantic["source_locale"]
+    visual_template, plural_category = _variant_template(
+        variant,
+        channel="visual",
+        params=params,
+        locale=resolved_locale,
+    )
+    spoken_template, spoken_plural_category = _variant_template(
+        variant,
+        channel="spoken",
+        params=params,
+        locale=resolved_locale,
+    )
     return {
         "available": True,
         "key": semantic["key"],
         "version": semantic["version"],
         "requested_locale": requested,
-        "resolved_locale": selected_locale or semantic["source_locale"],
+        "resolved_locale": resolved_locale,
         "used_fallback": used_fallback,
         "catalog_ref": copy.deepcopy(semantic["catalog_ref"]),
-        "visual": _materialize_message_template(str(variant["visual"]), params),
-        "spoken": _materialize_message_template(str(variant["spoken"]), params),
+        "formatting": {
+            "timezones": sorted(
+                {
+                    str(parameter.get("timezone"))
+                    for parameter in params.values()
+                    if isinstance(parameter, Mapping) and parameter.get("timezone")
+                }
+            ),
+            "plural_category": plural_category or spoken_plural_category,
+        },
+        "visual": _materialize_message_template(
+            visual_template,
+            params,
+            locale=resolved_locale,
+        ),
+        "spoken": _materialize_message_template(
+            spoken_template,
+            params,
+            locale=resolved_locale,
+        ),
     }
 
 

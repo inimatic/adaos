@@ -20,7 +20,11 @@
         "required": ["type", "value"],
         "properties": {
           "type": { "enum": ["text", "number", "integer", "boolean", "timestamp", "date", "duration", "amount", "unit", "identifier"] },
-          "value": { "type": ["string", "number", "integer", "boolean"] }
+          "value": { "type": ["string", "number", "integer", "boolean"] },
+          "timezone": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+          "precision": { "type": "integer", "minimum": 0, "maximum": 6 }
         },
         "additionalProperties": false
       }
@@ -53,9 +57,19 @@
       "required": ["visual", "spoken"],
       "properties": {
         "visual": { "type": "string", "minLength": 1, "maxLength": 12000 },
-        "spoken": { "type": "string", "minLength": 1, "maxLength": 12000 }
+        "spoken": { "type": "string", "minLength": 1, "maxLength": 12000 },
+        "plural_param": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$" },
+        "visual_plural": { "$ref": "#/$defs/pluralVariants" },
+        "spoken_plural": { "$ref": "#/$defs/pluralVariants" }
       },
       "additionalProperties": false
+    },
+    "pluralVariants": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 4,
+      "propertyNames": { "enum": ["one", "few", "many", "other"] },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 12000 }
     }
   }
 }

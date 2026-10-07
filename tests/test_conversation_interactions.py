@@ -1411,6 +1411,119 @@ def test_critical_semantic_message_can_require_exact_locale() -> None:
     assert presentation["action_tokens"] == {}
 
 
+def test_semantic_message_formats_timezone_numbers_and_ru_plural_category() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.locale-formatting",
+        owner="skill:test",
+        prompt="Items",
+        locale_context={"source_locale": "en", "timezone": "Europe/Moscow"},
+        prompt_message={
+            "key": "test.items.observed",
+            "params": {
+                "count": {"type": "integer", "value": 23},
+                "observed": {
+                    "type": "timestamp",
+                    "value": "2026-10-07T12:00:00+00:00",
+                },
+                "amount": {
+                    "type": "amount",
+                    "value": 1234.5,
+                    "currency": "RUB",
+                    "precision": 2,
+                },
+            },
+            "fallback": {
+                "visual": "{count} items at {observed}: {amount}",
+                "spoken": "{count} items at {observed}: {amount}",
+                "plural_param": "count",
+                "visual_plural": {
+                    "one": "en-one {count} at {observed}: {amount}",
+                    "other": "en-other {count} at {observed}: {amount}",
+                },
+                "spoken_plural": {
+                    "one": "en-one {count} at {observed}: {amount}",
+                    "other": "en-other {count} at {observed}: {amount}",
+                },
+            },
+            "translations": {
+                "ru": {
+                    "visual": "ru-other {count} at {observed}: {amount}",
+                    "spoken": "ru-other {count} at {observed}: {amount}",
+                    "plural_param": "count",
+                    "visual_plural": {
+                        "one": "ru-one {count} at {observed}: {amount}",
+                        "few": "ru-few {count} at {observed}: {amount}",
+                        "many": "ru-many {count} at {observed}: {amount}",
+                        "other": "ru-other {count} at {observed}: {amount}",
+                    },
+                    "spoken_plural": {
+                        "one": "ru-one {count} at {observed}: {amount}",
+                        "few": "ru-few {count} at {observed}: {amount}",
+                        "many": "ru-many {count} at {observed}: {amount}",
+                        "other": "ru-other {count} at {observed}: {amount}",
+                    },
+                }
+            },
+            "catalog_ref": None,
+            "source_locale": "en",
+            "critical": True,
+            "fallback_policy": "allow",
+        },
+        interaction_id="interaction.locale-formatting",
+    )
+
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web", locale="ru-RU"),
+    )
+
+    expected = "ru-few 23 at 07.10.2026 15:00:00 MSK: 1\u00a0234,50 RUB"
+    assert presentation["prompt"] == expected
+    assert presentation["spoken_prompt"] == expected
+    receipt = presentation["metadata"]["message_receipts"]["prompt"]
+    assert receipt["formatting"] == {
+        "timezones": ["Europe/Moscow"],
+        "plural_category": "few",
+    }
+
+
+def test_semantic_message_rejects_unknown_timezone_at_presentation() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.bad-timezone",
+        owner="skill:test",
+        prompt="Observed {observed}",
+        prompt_message={
+            "key": "test.bad-timezone",
+            "params": {
+                "observed": {
+                    "type": "timestamp",
+                    "value": "2026-10-07T12:00:00+00:00",
+                    "timezone": "Unknown/Nowhere",
+                }
+            },
+            "fallback": {
+                "visual": "Observed {observed}",
+                "spoken": "Observed {observed}",
+            },
+            "translations": {},
+            "catalog_ref": None,
+            "source_locale": "en",
+            "critical": True,
+            "fallback_policy": "allow",
+        },
+        interaction_id="interaction.bad-timezone",
+    )
+
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="timezone is unavailable",
+    ):
+        conversation_interactions.negotiate_presentation(
+            interaction,
+            conversation_interactions.standard_capability_profile("web"),
+        )
+
+
 def test_semantic_message_rejects_parameter_type_mismatch() -> None:
     with pytest.raises(
         conversation_interactions.ConversationInteractionError,
