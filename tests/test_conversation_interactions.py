@@ -657,3 +657,168 @@ def test_action_token_is_bound_to_exact_presentation() -> None:
         idempotency_key="exact-presentation",
     )
     assert accepted["response"]["presentation_id"] == first["presentation_id"]
+
+
+def test_semantic_messages_render_typed_en_ru_variants_with_provenance() -> None:
+    catalog_ref = {
+        "package_id": "skill:test",
+        "package_version": "1.2.3",
+        "catalog_digest": "sha256:" + "a" * 64,
+    }
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.localized",
+        owner="skill:test",
+        prompt="Continue for {device}?",
+        prompt_message={
+            "key": "test.continue.prompt",
+            "version": 2,
+            "params": {"device": {"type": "identifier", "value": "Node0"}},
+            "fallback": {
+                "visual": "Continue for {device}?",
+                "spoken": "Continue for {device}?",
+            },
+            "translations": {
+                "ru": {
+                    "visual": "Продолжить для {device}?",
+                    "spoken": "Продолжить работу для {device}?",
+                }
+            },
+            "catalog_ref": catalog_ref,
+            "source_locale": "en",
+            "critical": True,
+            "fallback_policy": "allow",
+        },
+        input_spec=_choice_interaction()["input_spec"],
+        actions=[
+            {
+                "action_id": "inspect",
+                "label": "Inspect",
+                "label_message": {
+                    "key": "test.inspect.label",
+                    "version": 1,
+                    "params": {},
+                    "fallback": {"visual": "Inspect", "spoken": "Inspect"},
+                    "translations": {
+                        "ru": {"visual": "Проверить", "spoken": "Проверить"}
+                    },
+                    "catalog_ref": catalog_ref,
+                    "source_locale": "en",
+                    "critical": True,
+                    "fallback_policy": "allow",
+                },
+                "command": "record.inspect",
+                "value": "prototype",
+                "risk": "read",
+                "confirmation_required": False,
+            }
+        ],
+        interaction_id="interaction.localized",
+    )
+    profile = conversation_interactions.standard_capability_profile("web", locale="ru-RU")
+
+    presentation = conversation_interactions.negotiate_presentation(interaction, profile)
+
+    assert presentation["prompt"] == "Продолжить для Node0?"
+    assert presentation["spoken_prompt"] == "Продолжить работу для Node0?"
+    assert presentation["actions"][0]["label"] == "Проверить"
+    receipt = presentation["metadata"]["message_receipts"]["prompt"]
+    assert receipt["resolved_locale"] == "ru"
+    assert receipt["catalog_ref"] == catalog_ref
+    assert receipt["used_fallback"] is False
+
+
+def test_critical_semantic_message_can_require_exact_locale() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.locale-required",
+        owner="skill:test",
+        prompt="Approve?",
+        prompt_message={
+            "key": "test.approve.prompt",
+            "version": 1,
+            "params": {},
+            "fallback": {"visual": "Approve?", "spoken": "Approve?"},
+            "translations": {"en": {"visual": "Approve?", "spoken": "Approve?"}},
+            "catalog_ref": {
+                "package_id": "skill:test",
+                "package_version": "1.0.0",
+                "catalog_digest": "sha256:" + "b" * 64,
+            },
+            "source_locale": "en",
+            "critical": True,
+            "fallback_policy": "require_locale",
+        },
+        input_spec=_choice_interaction()["input_spec"],
+        actions=[
+            {
+                "action_id": "inspect",
+                "label": "Inspect",
+                "command": "record.inspect",
+                "value": "prototype",
+                "risk": "read",
+                "confirmation_required": False,
+            }
+        ],
+        interaction_id="interaction.locale-required",
+    )
+    profile = conversation_interactions.standard_capability_profile("web", locale="de-DE")
+
+    presentation = conversation_interactions.negotiate_presentation(interaction, profile)
+
+    assert presentation["supported"] is False
+    assert presentation["mode"] == "unsupported"
+    assert presentation["reason_code"] == "unsupported:localized_material_unavailable"
+    assert presentation["action_tokens"] == {}
+
+
+def test_semantic_message_rejects_parameter_type_mismatch() -> None:
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="does not match declared type integer",
+    ):
+        conversation_interactions.create_interaction(
+            conversation_id="conv.bad-param",
+            owner="skill:test",
+            prompt="Count: {count}",
+            prompt_message={
+                "key": "test.count",
+                "params": {"count": {"type": "integer", "value": "many"}},
+                "fallback": {"visual": "Count: {count}", "spoken": "Count: {count}"},
+                "translations": {},
+                "catalog_ref": None,
+                "source_locale": "en",
+                "critical": True,
+                "fallback_policy": "allow",
+            },
+            interaction_id="interaction.bad-param",
+        )
+
+
+def test_semantic_message_parameter_is_plain_data_not_a_template() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.safe-param",
+        owner="skill:test",
+        prompt="Subject: {subject}",
+        prompt_message={
+            "key": "test.subject",
+            "params": {
+                "subject": {"type": "text", "value": "<b>{not_a_parameter}</b>"}
+            },
+            "fallback": {
+                "visual": "Subject: {subject}",
+                "spoken": "Subject: {subject}",
+            },
+            "translations": {},
+            "catalog_ref": None,
+            "source_locale": "en",
+            "critical": True,
+            "fallback_policy": "allow",
+        },
+        interaction_id="interaction.safe-param",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+
+    assert presentation["prompt"] == "Subject: <b>{not_a_parameter}</b>"
+    assert presentation["spoken_prompt"] == "Subject: <b>{not_a_parameter}</b>"

@@ -94,7 +94,14 @@
         "interaction_schema": { "$ref": "#/$defs/token" },
         "presentation_schema": { "$ref": "#/$defs/token" },
         "profile_id": { "$ref": "#/$defs/token" },
-        "profile_version": { "type": "integer", "minimum": 1 }
+        "profile_version": { "type": "integer", "minimum": 1 },
+        "presentation_locale": { "type": ["string", "null"], "minLength": 2, "maxLength": 40 },
+        "message_catalog_digests": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/digest" }
+        }
       },
       "additionalProperties": false
     },

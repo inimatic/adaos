@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import uuid
 import unicodedata
 from dataclasses import dataclass
@@ -21,10 +22,12 @@ CAPABILITY_PROFILE_SCHEMA = "adaos.conversation.channel_capability_profile.v1"
 INTERACTION_REQUIREMENTS_SCHEMA = "adaos.conversation.interaction_requirements.v1"
 INTERACTION_PRESENTATION_SCHEMA = "adaos.conversation.interaction_presentation.v1"
 INTERACTION_PRESENTATION_PLAN_SCHEMA = "adaos.conversation.interaction_presentation_plan.v1"
+SEMANTIC_MESSAGE_SCHEMA = "adaos.conversation.semantic_message.v1"
 _PENDING_STATUSES = {"created", "projected", "awaiting_input", "partially_answered", "validation_failed"}
 _TERMINAL_STATUSES = {"completed", "expired", "cancelled", "superseded"}
 _NON_MUTATING_RISK_CLASSES = {"read", "none"}
 _STEP_UP_RISK_CLASSES = {"external", "destructive", "admin", "privileged", "registry"}
+_MESSAGE_PARAMETER = re.compile(r"\{([A-Za-z][A-Za-z0-9_]{0,63})\}")
 
 
 class ConversationInteractionError(ValueError):
@@ -166,11 +169,139 @@ def _assurance_admission(
 
 
 def _unsupported_reason(reason: str, missing: Sequence[str]) -> str:
-    if reason == "assurance_handoff_required":
-        return "unsupported:assurance_handoff_required"
+    if reason in {"assurance_handoff_required", "localized_material_unavailable"}:
+        return f"unsupported:{reason}"
     detail = ",".join(str(item) for item in list(missing)[:3]) or str(reason)
     value = f"unsupported:{detail}"
     return value[:160]
+
+
+def _normalize_semantic_message(
+    value: Mapping[str, Any] | None,
+    *,
+    key: str | None,
+    fallback: str,
+    locale_context: Mapping[str, Any] | None,
+    critical: bool,
+) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping) and not str(key or "").strip():
+        return None
+    supplied = copy.deepcopy(dict(value or {}))
+    fallback_value = supplied.get("fallback")
+    if not isinstance(fallback_value, Mapping):
+        fallback_value = {"visual": fallback, "spoken": fallback}
+    source_locale = str(
+        supplied.get("source_locale")
+        or dict(locale_context or {}).get("source_locale")
+        or dict(locale_context or {}).get("locale")
+        or "en"
+    ).strip().lower()
+    translations = {
+        str(locale).strip().lower(): copy.deepcopy(dict(variant))
+        for locale, variant in dict(supplied.get("translations") or {}).items()
+        if str(locale).strip() and isinstance(variant, Mapping)
+    }
+    record = _validate(
+        SEMANTIC_MESSAGE_SCHEMA,
+        {
+            "schema": SEMANTIC_MESSAGE_SCHEMA,
+            "key": str(supplied.get("key") or key or "").strip(),
+            "version": int(supplied.get("version") or 1),
+            "params": copy.deepcopy(dict(supplied.get("params") or {})),
+            "fallback": copy.deepcopy(dict(fallback_value)),
+            "translations": translations,
+            "catalog_ref": (
+                copy.deepcopy(dict(supplied["catalog_ref"]))
+                if isinstance(supplied.get("catalog_ref"), Mapping)
+                else None
+            ),
+            "source_locale": source_locale,
+            "critical": bool(supplied.get("critical", critical)),
+            "fallback_policy": str(supplied.get("fallback_policy") or "allow"),
+        },
+    )
+    for name, parameter in record["params"].items():
+        kind = str(parameter["type"])
+        parameter_value = parameter["value"]
+        valid = (
+            kind in {"text", "timestamp", "date", "duration", "unit", "identifier"}
+            and isinstance(parameter_value, str)
+        ) or (
+            kind in {"number", "amount"}
+            and isinstance(parameter_value, (int, float))
+            and not isinstance(parameter_value, bool)
+        ) or (
+            kind == "integer"
+            and isinstance(parameter_value, int)
+            and not isinstance(parameter_value, bool)
+        ) or (kind == "boolean" and isinstance(parameter_value, bool))
+        if not valid:
+            raise ConversationInteractionError(
+                f"semantic message parameter {name} does not match declared type {kind}"
+            )
+    return record
+
+
+def _materialize_message_template(template: str, params: Mapping[str, Any]) -> str:
+    source = str(template)
+    if "{" in _MESSAGE_PARAMETER.sub("", source) or "}" in _MESSAGE_PARAMETER.sub("", source):
+        raise ConversationInteractionError("semantic message contains an unsafe placeholder")
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in params:
+            raise ConversationInteractionError(f"semantic message parameter is missing: {name}")
+        return str(dict(params[name])["value"])
+
+    return _MESSAGE_PARAMETER.sub(replace, source)
+
+
+def _resolve_semantic_message(
+    message: Mapping[str, Any],
+    *,
+    requested_locale: str,
+) -> dict[str, Any]:
+    semantic = _validate(SEMANTIC_MESSAGE_SCHEMA, message)
+    requested = str(requested_locale or semantic["source_locale"]).strip().lower()
+    language = requested.split("-", 1)[0]
+    translations = dict(semantic["translations"])
+    locale_candidates = [requested, language]
+    if semantic["fallback_policy"] == "allow":
+        locale_candidates.append(str(semantic["source_locale"]).lower())
+    selected_locale = next(
+        (
+            candidate
+            for candidate in locale_candidates
+            if candidate in translations
+        ),
+        None,
+    )
+    used_fallback = selected_locale is None
+    if (
+        used_fallback
+        and semantic["critical"] is True
+        and semantic["fallback_policy"] == "require_locale"
+    ):
+        return {
+            "available": False,
+            "reason_code": "critical_locale_unavailable",
+            "key": semantic["key"],
+            "requested_locale": requested,
+            "catalog_ref": copy.deepcopy(semantic["catalog_ref"]),
+        }
+    variant = dict(translations[selected_locale]) if selected_locale else dict(semantic["fallback"])
+    params = dict(semantic["params"])
+    return {
+        "available": True,
+        "key": semantic["key"],
+        "version": semantic["version"],
+        "requested_locale": requested,
+        "resolved_locale": selected_locale or semantic["source_locale"],
+        "used_fallback": used_fallback,
+        "catalog_ref": copy.deepcopy(semantic["catalog_ref"]),
+        "visual": _materialize_message_template(str(variant["visual"]), params),
+        "spoken": _materialize_message_template(str(variant["spoken"]), params),
+    }
 
 
 def interaction_requirements(
@@ -358,6 +489,7 @@ def create_interaction(
     owner: str,
     prompt: str,
     prompt_ref: str | None = None,
+    prompt_message: Mapping[str, Any] | None = None,
     locale_context: Mapping[str, Any] | None = None,
     input_spec: Mapping[str, Any] | None = None,
     actions: Sequence[Mapping[str, Any]] | None = None,
@@ -389,6 +521,13 @@ def create_interaction(
             "action_id": str(item.get("action_id") or item.get("id") or "").strip(),
             "label": str(item.get("label") or "").strip(),
             "label_ref": str(item.get("label_ref") or "").strip() or None,
+            "label_message": _normalize_semantic_message(
+                item.get("label_message") if isinstance(item.get("label_message"), Mapping) else None,
+                key=str(item.get("label_ref") or "").strip() or None,
+                fallback=str(item.get("label") or "").strip(),
+                locale_context=locale_context,
+                critical=True,
+            ),
             "command": str(item.get("command") or "").strip(),
             "value": copy.deepcopy(item.get("value")),
             "risk": str(item.get("risk") or "read").strip(),
@@ -434,6 +573,13 @@ def create_interaction(
             "owner": str(owner or "").strip(),
             "prompt": str(prompt or "").strip(),
             "prompt_ref": str(prompt_ref or "").strip() or None,
+            "prompt_message": _normalize_semantic_message(
+                prompt_message,
+                key=str(prompt_ref or "").strip() or None,
+                fallback=str(prompt or "").strip(),
+                locale_context=locale_context,
+                critical=True,
+            ),
             "locale_context": copy.deepcopy(dict(locale_context or {})) or None,
             "input_spec": spec,
             "actions": normalized_actions,
@@ -605,7 +751,41 @@ def negotiate_presentation(
         dict(semantic.get("requirements") or {}),
     )
     required = set(requirements["required"])
-    actions = list(semantic["actions"])
+    actions = copy.deepcopy(list(semantic["actions"]))
+    locale = str(channel.get("locale") or "en").strip().lower()
+    message_receipts: dict[str, Any] = {"prompt": None, "actions": {}}
+    prompt_resolution: dict[str, Any] | None = None
+    if isinstance(semantic.get("prompt_message"), Mapping):
+        prompt_resolution = _resolve_semantic_message(
+            dict(semantic["prompt_message"]),
+            requested_locale=locale,
+        )
+        message_receipts["prompt"] = {
+            key: copy.deepcopy(value)
+            for key, value in prompt_resolution.items()
+            if key not in {"visual", "spoken"}
+        }
+    localized_actions: list[dict[str, Any]] = []
+    i18n_missing: list[str] = []
+    if prompt_resolution is not None and prompt_resolution.get("available") is not True:
+        i18n_missing.append(f"i18n:{prompt_resolution['key']}")
+    for action in actions:
+        localized = copy.deepcopy(action)
+        label_message = action.get("label_message")
+        if isinstance(label_message, Mapping):
+            resolution = _resolve_semantic_message(label_message, requested_locale=locale)
+            message_receipts["actions"][str(action["action_id"])] = {
+                key: copy.deepcopy(value)
+                for key, value in resolution.items()
+                if key not in {"visual", "spoken"}
+            }
+            if resolution.get("available") is True:
+                localized["label"] = str(resolution["visual"])
+                localized["spoken_label"] = str(resolution["spoken"])
+            else:
+                i18n_missing.append(f"i18n:{resolution['key']}")
+        localized_actions.append(localized)
+    actions = localized_actions
     action_limit = int(dict(channel.get("limits") or {}).get("actions") or 0)
     buttons_usable = bool(capabilities.get("buttons")) and (
         not actions or action_limit <= 0 or len(actions) <= action_limit
@@ -651,6 +831,12 @@ def negotiate_presentation(
         mode, supported, reason = "deep_link", True, "deep_link_fallback"
         deep_link = f"{deep_link_base.rstrip('/')}?interaction={semantic['interaction_id']}"
 
+    if i18n_missing:
+        missing.extend(item for item in i18n_missing if item not in missing)
+        mode = "unsupported"
+        supported = False
+        reason = "localized_material_unavailable"
+
     action_admissions = [
         _assurance_admission(_action_assurance(action), capabilities)
         for action in actions
@@ -662,13 +848,22 @@ def negotiate_presentation(
             for capability in admission["missing_capabilities"]
         }
     )
-    if actions and assurance_missing:
+    if actions and assurance_missing and not i18n_missing:
         missing.extend(item for item in assurance_missing if item not in missing)
         mode = "unsupported"
         supported = False
         reason = "assurance_handoff_required"
 
-    prompt = str(semantic["prompt"])
+    prompt = (
+        str(prompt_resolution["visual"])
+        if prompt_resolution is not None and prompt_resolution.get("available") is True
+        else str(semantic["prompt"])
+    )
+    spoken_prompt = (
+        str(prompt_resolution["spoken"])
+        if prompt_resolution is not None and prompt_resolution.get("available") is True
+        else str(semantic["prompt"])
+    )
     timestamp = now or _now()
     fallback_used = (
         mode
@@ -684,7 +879,7 @@ def negotiate_presentation(
         )
         and not (semantic["input_spec"].get("sensitive") and mode in {"plain_text", "numbered_text"})
     )
-    if requirements["semantic_equivalence_required"] and not semantic_equivalent:
+    if requirements["semantic_equivalence_required"] and supported and not semantic_equivalent:
         mode = "unsupported"
         supported = False
         reason = "semantic_equivalence_unavailable"
@@ -760,6 +955,7 @@ def negotiate_presentation(
             "supported": supported,
             "reason_code": reason if supported else unsupported_reason,
             "prompt": prompt,
+            "spoken_prompt": spoken_prompt,
             "actions": projected_actions,
             "action_tokens": tokens,
             "deep_link": deep_link,
@@ -769,10 +965,12 @@ def negotiate_presentation(
                 "transport": channel["transport"],
                 "client": channel["client"],
                 "surface": channel["surface"],
+                "locale": locale,
                 "assurance_capabilities": {
                     name: capabilities.get(name) is True
                     for name in ("bound_dialog_response", "trusted_interface", "step_up")
                 },
+                "message_receipts": message_receipts,
             },
         },
     )

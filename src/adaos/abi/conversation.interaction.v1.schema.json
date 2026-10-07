@@ -17,6 +17,7 @@
     "owner": { "type": "string", "minLength": 1, "maxLength": 240 },
     "prompt": { "type": "string", "minLength": 1, "maxLength": 8000 },
     "prompt_ref": { "type": ["string", "null"], "maxLength": 160 },
+    "prompt_message": { "type": ["object", "null"] },
     "locale_context": { "type": ["object", "null"] },
     "input_spec": {
       "type": "object",
@@ -48,6 +49,7 @@
           "action_id": { "type": "string", "minLength": 1, "maxLength": 160 },
           "label": { "type": "string", "minLength": 1, "maxLength": 240 },
           "label_ref": { "type": ["string", "null"], "maxLength": 160 },
+          "label_message": { "type": ["object", "null"] },
           "command": { "type": "string", "minLength": 1, "maxLength": 160 },
           "value": {},
           "risk": { "type": "string", "minLength": 1, "maxLength": 80 },

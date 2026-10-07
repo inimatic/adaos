@@ -150,6 +150,11 @@ def request(
         owner=owner,
         prompt=prompt,
         prompt_ref=str(specification.get("prompt_ref") or "").strip() or None,
+        prompt_message=(
+            specification.get("prompt_message")
+            if isinstance(specification.get("prompt_message"), Mapping)
+            else None
+        ),
         locale_context=(
             specification.get("locale_context")
             if isinstance(specification.get("locale_context"), Mapping)

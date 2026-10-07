@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.semantic_message.v1",
+  "title": "AdaOS Conversation Semantic Message",
+  "type": "object",
+  "required": [
+    "schema", "key", "version", "params", "fallback", "translations",
+    "catalog_ref", "source_locale", "critical", "fallback_policy"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.semantic_message.v1" },
+    "key": { "type": "string", "minLength": 1, "maxLength": 240, "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "params": {
+      "type": "object",
+      "maxProperties": 40,
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "value"],
+        "properties": {
+          "type": { "enum": ["text", "number", "integer", "boolean", "timestamp", "date", "duration", "amount", "unit", "identifier"] },
+          "value": { "type": ["string", "number", "integer", "boolean"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "fallback": { "$ref": "#/$defs/variant" },
+    "translations": {
+      "type": "object",
+      "maxProperties": 20,
+      "propertyNames": { "type": "string", "minLength": 2, "maxLength": 40 },
+      "additionalProperties": { "$ref": "#/$defs/variant" }
+    },
+    "catalog_ref": {
+      "type": ["object", "null"],
+      "required": ["package_id", "package_version", "catalog_digest"],
+      "properties": {
+        "package_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "package_version": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "catalog_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "source_locale": { "type": "string", "minLength": 2, "maxLength": 40 },
+    "critical": { "type": "boolean" },
+    "fallback_policy": { "enum": ["allow", "require_locale"] }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "variant": {
+      "type": "object",
+      "required": ["visual", "spoken"],
+      "properties": {
+        "visual": { "type": "string", "minLength": 1, "maxLength": 12000 },
+        "spoken": { "type": "string", "minLength": 1, "maxLength": 12000 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

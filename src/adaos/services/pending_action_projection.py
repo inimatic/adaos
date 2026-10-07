@@ -135,6 +135,16 @@ def project_pending_action(
         }
     )
     owner = str(semantic.get("owner") or "").strip()
+    message_receipts = _mapping(_mapping(view.get("metadata")).get("message_receipts"))
+    receipt_values = [message_receipts.get("prompt")]
+    receipt_values.extend(_mapping(message_receipts.get("actions")).values())
+    catalog_digests = sorted(
+        {
+            str(_mapping(_mapping(item).get("catalog_ref")).get("catalog_digest"))
+            for item in receipt_values
+            if str(_mapping(_mapping(item).get("catalog_ref")).get("catalog_digest")).startswith("sha256:")
+        }
+    )
     record = {
         "schema": PROJECTION_SCHEMA,
         "projection_id": f"pending-action:{interaction_id}",
@@ -169,6 +179,8 @@ def project_pending_action(
             "presentation_schema": str(view.get("schema") or "").strip(),
             "profile_id": str(view.get("profile_id") or "").strip(),
             "profile_version": int(view.get("profile_version") or 0),
+            "presentation_locale": str(_mapping(view.get("metadata")).get("locale") or "").strip() or None,
+            "message_catalog_digests": catalog_digests,
         },
         "created_at": str(semantic.get("created_at") or "").strip(),
         "updated_at": str(semantic.get("updated_at") or semantic.get("created_at") or "").strip(),
