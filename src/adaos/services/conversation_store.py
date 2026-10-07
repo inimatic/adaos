@@ -13,6 +13,35 @@ from adaos.services.conversation_action_semantics import validate_effect_asserti
 
 
 _CONVERSATION_SCHEMA_VERSION = 1
+
+
+def _publish_interaction_projection_invalidation(kind: str) -> None:
+    """Best-effort content-free signal; readers re-enter through ACL queries."""
+
+    try:
+        from adaos.domain import Event
+
+        ctx = get_ctx()
+        bus = getattr(ctx, "bus", None)
+        if bus is None:
+            return
+        bus.publish(
+            Event(
+                type=str(kind),
+                source="conversation_store",
+                ts=time.time(),
+                payload={
+                    "schema": "adaos.conversation.interaction_invalidation.v1",
+                    "projection": "canonical_pending_actions",
+                },
+            )
+        )
+    except Exception:
+        # Persistence is authoritative. A disconnected or unavailable push
+        # channel is recovered by the next bounded canonical read.
+        return
+
+
 _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS conversation_schema_meta (
@@ -2359,6 +2388,7 @@ def save_interaction(
         raise ValueError("interaction_id is required")
     if not ensure_schema():
         return None
+    created = False
     with _sql().connect() as con:  # type: ignore[union-attr]
         con.row_factory = sqlite3.Row
         con.execute("BEGIN IMMEDIATE")
@@ -2369,6 +2399,7 @@ def save_interaction(
         if existing and create_only:
             con.rollback()
             return _json_load(existing["payload_json"], {})
+        created = existing is None
         if expected_generation is not None:
             actual = int(existing["generation"]) if existing else -1
             if actual != int(expected_generation):
@@ -2416,7 +2447,11 @@ def save_interaction(
             ),
         )
         con.commit()
-    return get_interaction(interaction_id)
+    stored = get_interaction(interaction_id)
+    _publish_interaction_projection_invalidation(
+        "conversation.interaction.created" if created else "conversation.interaction.changed"
+    )
+    return stored
 
 
 def commit_interaction_supersession(
@@ -2525,6 +2560,7 @@ def commit_interaction_supersession(
                 (_json_dump(dispatch), dispatch["updated_at"], dispatch["dispatch_id"]),
             )
         con.commit()
+    _publish_interaction_projection_invalidation("conversation.interaction.changed")
     return {"interaction": current, "replacement": candidate}
 
 
@@ -2908,6 +2944,7 @@ def commit_interaction_response(
             con.rollback()
             raise ValueError("interaction response transaction did not close every required write")
         con.commit()
+    _publish_interaction_projection_invalidation("conversation.interaction.responded")
     return {
         "interaction": dict(interaction_value),
         "response": dict(response_value),
@@ -3091,6 +3128,7 @@ def claim_interaction_dispatch(
             ),
         )
         con.commit()
+    _publish_interaction_projection_invalidation("conversation.interaction.dispatch.changed")
     return record
 
 
@@ -3170,6 +3208,7 @@ def complete_interaction_dispatch(
             (selected_status, _json_dump(record), timestamp, identifier),
         )
         con.commit()
+    _publish_interaction_projection_invalidation("conversation.interaction.dispatch.changed")
     return record
 
 
@@ -3222,6 +3261,7 @@ def reject_interaction_dispatch_if_pending(
             con.rollback()
             return get_interaction_dispatch(response_id=response)
         con.commit()
+    _publish_interaction_projection_invalidation("conversation.interaction.dispatch.changed")
     return record
 
 

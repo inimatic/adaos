@@ -5,6 +5,7 @@ import pytest
 from adaos.domain import Event
 from adaos.sdk import chat
 from adaos.services import conversation_interactions, conversation_store
+from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.router.service import _compact_voice_chat_stream_message, _telegram_output_projection
 
@@ -366,6 +367,60 @@ def test_dispatch_obligation_lease_requires_reconciliation_contract_before_recla
             now_epoch=111,
             now_iso="2026-10-07T00:00:11+00:00",
         )
+
+
+def test_canonical_interaction_writes_publish_content_free_invalidations() -> None:
+    seen: list[Event] = []
+    bus = get_ctx().bus
+    topics = (
+        "conversation.interaction.created",
+        "conversation.interaction.responded",
+        "conversation.interaction.dispatch.changed",
+    )
+    for topic in topics:
+        bus.subscribe(topic, lambda event: seen.append(event))
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.invalidation",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.invalidation",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    accepted = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:local",
+        idempotency_key="invalidation:response",
+    )
+    dispatch = conversation_store.claim_interaction_dispatch(
+        accepted["response"]["response_id"],
+        lease_owner="worker:invalidation",
+    )
+    conversation_store.complete_interaction_dispatch(
+        dispatch["dispatch_id"],
+        lease_owner="worker:invalidation",
+        status="succeeded",
+        outcome={"result": "ok"},
+    )
+
+    assert [event.type for event in seen] == [
+        "conversation.interaction.created",
+        "conversation.interaction.responded",
+        "conversation.interaction.dispatch.changed",
+        "conversation.interaction.dispatch.changed",
+    ]
+    assert all(
+        event.payload
+        == {
+            "schema": "adaos.conversation.interaction_invalidation.v1",
+            "projection": "canonical_pending_actions",
+        }
+        for event in seen
+    )
 
 
 def test_governed_workflow_dispatch_lease_can_recover_before_effect_and_close_once() -> None:
