@@ -2897,8 +2897,7 @@ class DevelopmentTicketService:
             ),
         }
         target = _mapping(target_scope) or {"type": "skill", "id": skill, "source": "installed"}
-        return {
-            **self.report_compatibility_finding(
+        reported = self.report_compatibility_finding(
                 code=f"compat.{reason}",
                 summary=summary,
                 target_scope=target,
@@ -2933,11 +2932,102 @@ class DevelopmentTicketService:
                 publish_pending_action=False,
                 ctx=ctx,
                 webspace_id=webspace_id,
-            ),
+            )
+        reconciled = self.reconcile_compatibility_pending_actions(
+            reported["ticket"]["ticket_id"],
+            qualification=qualification,
+            ctx=ctx,
+            webspace_id=webspace_id,
+        )
+        return {
+            **reported,
+            "ticket": reconciled["ticket"],
             "reported": True,
             "qualification": qualification,
             "pending_action_suppressed": bool(publish_pending_action),
+            "pending_action_reconciliation": {
+                "cancelled": reconciled["cancelled"],
+                "failures": reconciled["failures"],
+            },
         }
+
+    def reconcile_compatibility_pending_actions(
+        self,
+        ticket_id: str,
+        *,
+        qualification: Mapping[str, Any],
+        ctx: Any = None,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Cancel obsolete legacy compatibility cards after requalification.
+
+        Runtime reactivation, exact package update, and scoped Builder repair
+        have different authorities. The former generic compatibility card
+        cannot safely represent any of them and must not survive a new
+        classifier result as an actionable request.
+        """
+
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            raise KeyError(ticket_id)
+        refs = _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+        active = [
+            ref
+            for ref in refs
+            if ref.get("kind") == COMPATIBILITY_PENDING_ACTION_KIND
+            and _text(ref.get("status") or "pending") in {"pending", "postponed"}
+            and _text(ref.get("id"))
+        ]
+        if not active:
+            return {"ticket": ticket, "cancelled": [], "failures": []}
+        from adaos.services import pending_actions
+
+        code = _text(qualification.get("code")) or "requalified"
+        reason = f"compatibility_requalified:{code}"
+        updated_refs = [dict(ref) for ref in refs]
+        cancelled: list[str] = []
+        failures: list[dict[str, str]] = []
+        for ref in active:
+            action_id = _text(ref.get("id"))
+            try:
+                pending_actions.cancel_pending_action(
+                    action_id,
+                    reason=reason,
+                    ctx=ctx,
+                    webspace_id=webspace_id,
+                    actor={"type": "system", "system_id": "runtime_compatibility"},
+                )
+            except Exception as exc:
+                failures.append(
+                    {
+                        "pending_action_id": action_id,
+                        "error": f"{type(exc).__name__}: {exc}"[:500],
+                    }
+                )
+                continue
+            updated_refs = _with_pending_action_ref_status(
+                updated_refs,
+                action_id=action_id,
+                status="cancelled",
+                reason=reason,
+            )
+            cancelled.append(action_id)
+        if not cancelled:
+            return {"ticket": ticket, "cancelled": [], "failures": failures}
+        status = _text(ticket.get("status"))
+        updated = self._update_ticket(
+            ticket["ticket_id"],
+            pending_action_refs=updated_refs,
+            status="accepted" if status == "waiting_for_user" else status,
+            history_item={
+                "kind": "compatibility_pending_actions_reconciled",
+                "pending_action_ids": cancelled,
+                "qualification_code": code,
+                "recommended_action": _text(qualification.get("recommended_action")) or None,
+                "reason": reason,
+            },
+        )
+        return {"ticket": updated, "cancelled": cancelled, "failures": failures}
 
     def publish_compatibility_pending_action(
         self,

@@ -958,6 +958,59 @@ def test_declared_receiver_denials_remain_separate_compatibility_findings(tmp_pa
     assert all(item["ticket"]["policy"]["blocking"] for item in findings)
 
 
+def test_runtime_requalification_cancels_obsolete_compatibility_card(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    report = service.report_compatibility_finding(
+        code="compat.stream_receiver_policy_missing",
+        summary="Legacy compatibility finding",
+        target_scope={"type": "skill", "id": "legacy_skill"},
+        context={"receiver": "legacy.panel"},
+        blocking=True,
+    )
+    ticket = service._update_ticket(
+        report["ticket"]["ticket_id"],
+        status="waiting_for_user",
+        pending_action_refs=[
+            {
+                "id": "pa.legacy.compatibility",
+                "kind": COMPATIBILITY_PENDING_ACTION_KIND,
+                "status": "pending",
+            }
+        ],
+    )
+    cancelled: list[dict] = []
+
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(
+        pending_actions,
+        "cancel_pending_action",
+        lambda action_id, **kwargs: cancelled.append({"id": action_id, **kwargs}) or {"duplicate": False},
+    )
+    qualification = {
+        "schema": "adaos.runtime_compatibility.classification.v1",
+        "code": "stale_runtime_memory",
+        "recommended_action": "reactivate_exact_admitted_package",
+    }
+
+    result = service.reconcile_compatibility_pending_actions(
+        ticket["ticket_id"],
+        qualification=qualification,
+    )
+
+    assert result["cancelled"] == ["pa.legacy.compatibility"]
+    assert result["failures"] == []
+    assert result["ticket"]["status"] == "accepted"
+    assert result["ticket"]["pending_action_refs"][0]["status"] == "cancelled"
+    assert cancelled[0]["reason"] == "compatibility_requalified:stale_runtime_memory"
+    assert result["ticket"]["history"][-1]["kind"] == (
+        "compatibility_pending_actions_reconciled"
+    )
+
+
 def test_compatibility_pending_action_response_creates_builder_repair(tmp_path: Path) -> None:
     admission = stream_receiver_event_admission(
         ("declared.other",),
