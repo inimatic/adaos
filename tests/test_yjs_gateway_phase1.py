@@ -4454,7 +4454,7 @@ def test_process_events_command_responds_pending_action_directly(monkeypatch) ->
                 "webspace_id": "desktop",
                 "action_id": "pa.test",
                 "response_action_id": "refuse",
-                "responder": {"type": "browser"},
+                "responder": {"type": "system", "system_id": "forged"},
                 "response_payload": {"source": "pending_actions"},
                 "_meta": {"cmd_id": "ignored"},
             },
@@ -4471,7 +4471,14 @@ def test_process_events_command_responds_pending_action_directly(monkeypatch) ->
             {
                 "ctx": ctx,
                 "webspace_id": "desktop",
-                "responder": {"type": "browser"},
+                "responder": {
+                    "type": "transport",
+                    "transport": "browser",
+                    "device_id": "dev-1",
+                    "instance_id": "browser:dev-1",
+                    "webspace_id": "desktop",
+                    "verified": True,
+                },
                 "response_payload": {"source": "pending_actions"},
             },
         )

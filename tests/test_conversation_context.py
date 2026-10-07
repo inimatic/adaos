@@ -368,6 +368,10 @@ def test_memory_propose_write_uses_pending_action(monkeypatch) -> None:
     proposal = published[0]["metadata"]["proposed_memory"]
     assert proposal["scope"] == "agent_user"
     assert proposal["text"] == "prefers concise critique"
+    assert "source_refs" not in published[0]
+    assert published[0]["metadata"]["source_refs"] == [
+        {"type": "conversation_message", "message_id": "msg.1"}
+    ]
     assert published[0]["response_topic"] == "memory.pending_action.response"
 
 

@@ -217,20 +217,17 @@ def test_response_marks_action_terminal_and_routes_once(pending_action_docs) -> 
     assert topics.count("nlp.teacher.candidate.confirmation.response") == 1
 
 
-def test_response_to_stale_missing_action_is_idempotent(pending_action_docs) -> None:
+def test_response_to_missing_action_fails_closed(pending_action_docs) -> None:
     ctx = _make_ctx()
 
-    result = pending_actions.respond_pending_action(
-        "pa.missing",
-        "approve",
-        ctx=ctx,
-        webspace_id="default",
-    )
+    with pytest.raises(ValueError, match="pending action not found"):
+        pending_actions.respond_pending_action(
+            "pa.missing",
+            "approve",
+            ctx=ctx,
+            webspace_id="default",
+        )
 
-    assert result["duplicate"] is True
-    assert result["terminal"] is True
-    assert result["action"]["stale"] is True
-    assert result["response"]["stale"] is True
     assert [event.type for event in ctx.bus.events] == []
 
 
@@ -255,7 +252,9 @@ def test_non_terminal_test_action_keeps_pending_action_active(pending_action_doc
 
 def test_expire_pending_actions_marks_stale_items(pending_action_docs) -> None:
     ctx = _make_ctx()
-    action = _publish(ctx, ttl_s=None, expires_at=1)
+    action = _publish(ctx)
+    stored = pending_action_docs["default"].get_map("data")["pending_actions"]["by_id"][action["id"]]
+    stored["expires_at"] = 1
 
     result = pending_actions.expire_pending_actions(ctx=ctx, webspace_id="default")
 
@@ -264,6 +263,101 @@ def test_expire_pending_actions_marks_stale_items(pending_action_docs) -> None:
     assert projection["by_id"][action["id"]]["status"] == "expired"
     assert projection["active"] == []
     assert any(event.type == "pending_actions.expired" for event in ctx.bus.events)
+
+
+def test_list_projects_due_action_as_expired_without_client_command(pending_action_docs) -> None:
+    ctx = _make_ctx()
+    action = _publish(ctx)
+    stored = pending_action_docs["default"].get_map("data")["pending_actions"]["by_id"][action["id"]]
+    stored["expires_at"] = 1
+
+    snapshot = pending_actions.list_pending_actions(webspace_id="default")
+
+    assert snapshot["by_id"][action["id"]]["status"] == "expired"
+    assert snapshot["active"] == []
+    assert snapshot["history_items"][0]["id"] == action["id"]
+
+
+def test_projection_limit_never_evicts_active_actions(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_PENDING_ACTIONS_MAX_ITEMS", "20")
+    projection = {
+        "by_id": {
+            f"pa.{index}": {"id": f"pa.{index}", "status": "pending"}
+            for index in range(21)
+        },
+        "order": [f"pa.{index}" for index in range(21)],
+    }
+
+    snapshot = pending_actions._build_projection(projection, updated_at=1.0)
+
+    assert len(snapshot["active"]) == 21
+    assert len(snapshot["by_id"]) == 21
+
+
+def test_projection_limit_prunes_terminal_before_active(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_PENDING_ACTIONS_MAX_ITEMS", "20")
+    projection = {
+        "by_id": {
+            "pa.done": {"id": "pa.done", "status": "responded"},
+            **{
+                f"pa.{index}": {"id": f"pa.{index}", "status": "pending"}
+                for index in range(20)
+            },
+        },
+        "order": ["pa.done", *[f"pa.{index}" for index in range(20)]],
+    }
+
+    snapshot = pending_actions._build_projection(projection, updated_at=1.0)
+
+    assert "pa.done" not in snapshot["by_id"]
+    assert len(snapshot["active"]) == 20
+
+
+def test_publish_rejects_oversized_payload_before_storage(pending_action_docs, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_PENDING_ACTION_MAX_BYTES", "1024")
+    ctx = _make_ctx()
+
+    with pytest.raises(ValueError, match="pending_action_payload_too_large"):
+        _publish(ctx, request_text="x" * 2000)
+
+    assert pending_action_docs["default"].get_map("data").get("pending_actions") is None
+
+
+def test_publish_enforces_per_producer_outstanding_limit(pending_action_docs, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_PENDING_ACTION_MAX_OUTSTANDING_PER_PRODUCER", "2")
+    ctx = _make_ctx()
+    _publish(ctx, action_id="pa.1")
+    _publish(ctx, action_id="pa.2")
+
+    with pytest.raises(ValueError, match="pending_action_producer_outstanding_limit"):
+        _publish(ctx, action_id="pa.3")
+
+    projection = pending_action_docs["default"].get_map("data")["pending_actions"]
+    assert projection["active"] == ["pa.1", "pa.2"]
+
+
+def test_publish_enforces_quota_for_legacy_producer_id(pending_action_docs, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_PENDING_ACTION_MAX_OUTSTANDING_PER_PRODUCER", "1")
+    ctx = _make_ctx()
+    producer = {"type": "skill", "id": "legacy-producer"}
+    _publish(ctx, action_id="pa.1", producer=producer)
+
+    with pytest.raises(ValueError, match="pending_action_producer_outstanding_limit"):
+        _publish(ctx, action_id="pa.2", producer=producer)
+
+
+def test_expired_action_does_not_consume_outstanding_quota(pending_action_docs, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_PENDING_ACTION_MAX_OUTSTANDING_PER_PRODUCER", "1")
+    ctx = _make_ctx()
+    first = _publish(ctx, action_id="pa.1")
+    stored = pending_action_docs["default"].get_map("data")["pending_actions"]["by_id"][first["id"]]
+    stored["expires_at"] = 1
+
+    second = _publish(ctx, action_id="pa.2")
+
+    projection = pending_action_docs["default"].get_map("data")["pending_actions"]
+    assert projection["by_id"]["pa.1"]["status"] == "expired"
+    assert projection["active"] == [second["id"]]
 
 
 def test_cancel_pending_action_closes_obsolete_action_without_user_response(

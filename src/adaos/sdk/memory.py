@@ -241,12 +241,12 @@ def propose_write(
             "conversation_id": conversation_id,
             "agent_id": agent_id,
         },
-        source_refs=[dict(source_ref or {})] if source_ref else [],
         metadata={
             "schema": "adaos.memory.write_proposal.v1",
             "reason": reason,
             "write_policy": policy,
             "proposed_memory": proposed_memory,
+            "source_refs": [dict(source_ref)] if source_ref else [],
         },
         producer={"type": "skill" if owner.startswith("skill:") else "system", "id": owner},
         response_topic="memory.pending_action.response",

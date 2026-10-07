@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.pending_action.producer_inventory.v1",
+  "title": "AdaOS Pending Action Producer Inventory",
+  "type": "object",
+  "required": ["schema", "inventory_version", "observed_at", "families"],
+  "properties": {
+    "schema": { "const": "adaos.pending_action.producer_inventory.v1" },
+    "inventory_version": { "type": "integer", "minimum": 1 },
+    "observed_at": { "type": "string", "format": "date" },
+    "families": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/family" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "source": {
+      "type": ["object", "null"],
+      "required": ["path", "symbol"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 200 }
+      },
+      "additionalProperties": false
+    },
+    "family": {
+      "type": "object",
+      "required": [
+        "roadmap_id", "name", "kind", "publisher", "choices", "response_topic",
+        "consumer", "responder_admission", "delivery", "outcome", "status", "gaps"
+      ],
+      "properties": {
+        "roadmap_id": { "type": "string", "pattern": "^PA6-(0[1-9]|1[0-6])$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "kind": { "type": ["string", "null"], "maxLength": 200 },
+        "publisher": { "$ref": "#/$defs/source" },
+        "choices": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 100 }
+        },
+        "response_topic": { "type": ["string", "null"], "maxLength": 240 },
+        "consumer": {
+          "type": "object",
+          "required": ["status", "source", "binding"],
+          "properties": {
+            "status": { "enum": ["verified", "partial", "missing", "not_applicable"] },
+            "source": { "$ref": "#/$defs/source" },
+            "binding": { "enum": ["event_subscription", "projection_poll", "direct_method", "none"] }
+          },
+          "additionalProperties": false
+        },
+        "responder_admission": { "enum": ["server_transport", "internal_runtime", "legacy_unverified", "none"] },
+        "delivery": { "enum": ["volatile_event", "projection_poll", "direct", "none"] },
+        "outcome": { "enum": ["observed", "partial", "decision_only", "none"] },
+        "status": { "enum": ["verified", "partial", "missing_publisher", "missing_consumer", "broken_publisher"] },
+        "gaps": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

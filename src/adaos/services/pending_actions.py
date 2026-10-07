@@ -113,6 +113,44 @@ def _max_items() -> int:
     return max(20, min(value, 5000))
 
 
+def _limit_from_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    raw = _text(os.getenv(name))
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(value, maximum))
+
+
+def _max_payload_bytes() -> int:
+    return _limit_from_env(
+        "ADAOS_PENDING_ACTION_MAX_BYTES",
+        default=64 * 1024,
+        minimum=1024,
+        maximum=1024 * 1024,
+    )
+
+
+def _max_outstanding() -> int:
+    return _limit_from_env(
+        "ADAOS_PENDING_ACTION_MAX_OUTSTANDING",
+        default=500,
+        minimum=20,
+        maximum=5000,
+    )
+
+
+def _max_outstanding_per_producer() -> int:
+    return _limit_from_env(
+        "ADAOS_PENDING_ACTION_MAX_OUTSTANDING_PER_PRODUCER",
+        default=50,
+        minimum=1,
+        maximum=500,
+    )
+
+
 def _ctx_node_id(ctx: AgentContext | None) -> str:
     if ctx is None:
         return ""
@@ -154,6 +192,22 @@ def _normalize_actor(value: Any, *, ctx: AgentContext | None, default_type: str 
         elif system_id:
             actor["instance_id"] = system_id
     return actor
+
+
+def _actor_instance_key(value: Any) -> str:
+    """Return a stable admission key for both old and current producer shapes."""
+
+    actor = _mapping(value)
+    instance_id = _text(actor.get("instance_id"))
+    if instance_id:
+        return instance_id
+    actor_type = _text(actor.get("type")) or "unknown"
+    for field in ("skill_id", "scenario_id", "system_id", "device_id", "user_id", "id"):
+        actor_id = _text(actor.get(field))
+        if actor_id:
+            node_id = _text(actor.get("node_id"))
+            return f"{actor_type}:{field}:{actor_id}@{node_id}" if node_id else f"{actor_type}:{field}:{actor_id}"
+    return ""
 
 
 def _normalize_i18n(value: Any) -> dict[str, Any] | None:
@@ -297,13 +351,36 @@ def _prune_projection(projection: dict[str, Any]) -> None:
                 for idx, action_id in enumerate(order)
                 if _text(by_id.get(action_id, {}).get("status")) in _TERMINAL_STATUSES
             ),
-            0,
+            None,
         )
+        if drop_index is None:
+            # Projection/history limits must never discard an unresolved human
+            # decision. Admission limits prevent unbounded active growth.
+            break
         action_id = order.pop(drop_index)
         by_id.pop(action_id, None)
 
 
+def _project_expired_actions(projection: dict[str, Any], *, now: float) -> None:
+    """Derive an honest view even when the periodic expiry write has not run."""
+
+    by_id: dict[str, dict[str, Any]] = projection["by_id"]
+    for action_id, action in list(by_id.items()):
+        if _text(action.get("status")) not in _ACTIVE_STATUSES:
+            continue
+        expires_at = action.get("expires_at")
+        if expires_at is None:
+            continue
+        try:
+            due = float(expires_at) <= now
+        except (TypeError, ValueError):
+            due = False
+        if due:
+            by_id[action_id] = _mark_expired(action, now=now)
+
+
 def _build_projection(projection: dict[str, Any], *, updated_at: float) -> dict[str, Any]:
+    _project_expired_actions(projection, now=updated_at)
     _prune_projection(projection)
     by_id: dict[str, dict[str, Any]] = projection["by_id"]
     order: list[str] = [action_id for action_id in projection["order"] if action_id in by_id]
@@ -510,9 +587,28 @@ def _add_action_to_doc(ydoc: Any, action: dict[str, Any], txn: Any = None) -> tu
     action_id = _text(action.get("id"))
     if action_id in by_id:
         raise ValueError(f"pending action already exists: {action_id}")
+    encoded = json.dumps(action, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > _max_payload_bytes():
+        raise ValueError(
+            f"pending_action_payload_too_large: {len(encoded)} > {_max_payload_bytes()} bytes"
+        )
+    now = _now_ts()
+    _project_expired_actions(projection, now=now)
+    active = [item for item in by_id.values() if _text(item.get("status")) in _ACTIVE_STATUSES]
+    if len(active) >= _max_outstanding():
+        raise ValueError("pending_action_outstanding_limit")
+    producer_instance = _actor_instance_key(action.get("producer"))
+    if producer_instance:
+        producer_active = sum(
+            1
+            for item in active
+            if _actor_instance_key(item.get("producer")) == producer_instance
+        )
+        if producer_active >= _max_outstanding_per_producer():
+            raise ValueError("pending_action_producer_outstanding_limit")
     by_id[action_id] = _json_clone(action)
     order.append(action_id)
-    snapshot = _build_projection(projection, updated_at=_now_ts())
+    snapshot = _build_projection(projection, updated_at=now)
     _write_projection(data_map, ydoc, snapshot, txn)
     return _json_clone(action), snapshot
 
@@ -681,27 +777,7 @@ def _respond_in_doc(
     by_id: dict[str, dict[str, Any]] = projection["by_id"]
     action = _mapping(by_id.get(action_id))
     if not action:
-        now = _now_ts()
-        snapshot = _build_projection(projection, updated_at=now)
-        response = {
-            "response_action_id": response_action_id,
-            "responder": _normalize_actor(responder or {}, ctx=ctx, default_type="user"),
-            "payload": _mapping(response_payload),
-            "responded_at": now,
-            "stale": True,
-        }
-        if idempotency_key:
-            response["idempotency_key"] = idempotency_key
-        stale_action = {
-            "id": action_id,
-            "status": "responded",
-            "stale": True,
-            "webspace_id": "",
-            "updated_at": now,
-            "finished_at": now,
-            "response": response,
-        }
-        return stale_action, snapshot, response, True
+        raise ValueError("pending action not found")
     status = _text(action.get("status")) or "pending"
     if status == "responded" and _same_terminal_response(
         action,

@@ -10858,6 +10858,18 @@ async def process_events_command(
     if kind == "pending_actions.respond.request":
         event_payload = dict(payload or {})
         event_payload.pop("_meta", None)
+        # A PA producer/client cannot choose its own responder identity. The
+        # events connection has already admitted this browser device, so bind
+        # the legacy response to that verified transport principal.
+        event_payload.pop("responder", None)
+        event_payload["responder"] = {
+            "type": "transport",
+            "transport": "browser",
+            "device_id": str(device_id or "unknown").strip() or "unknown",
+            "instance_id": f"browser:{str(device_id or 'unknown').strip() or 'unknown'}",
+            "webspace_id": str(webspace_id or "").strip(),
+            "verified": True,
+        }
         action_id = str(event_payload.pop("action_id", event_payload.pop("pending_action_id", "")) or "").strip()
         response_action_id = str(event_payload.pop("response_action_id", event_payload.pop("action", "")) or "").strip()
         try:
