@@ -519,7 +519,9 @@ class RouterService:
         self._voice_chat_persist_committed_signatures: dict[tuple[str, str], str] = {}
         self._voice_chat_persist_next_allowed_at: dict[tuple[str, str], float] = {}
         self._voice_chat_snapshot_deferred_tasks: dict[tuple[str, ...], asyncio.Task[None]] = {}
-        self._voice_chat_general_subscriptions: set[tuple[str, str, str, str]] = set()
+        self._voice_chat_general_subscriptions: set[
+            tuple[str, str, str, str, str]
+        ] = set()
         self._voice_turn_trace_tasks: set[asyncio.Task[None]] = set()
         self._voice_turn_trace_tails: dict[str, asyncio.Task[None]] = {}
         self._dialog_state_tasks: dict[str, asyncio.Task[None]] = {}
@@ -3376,17 +3378,17 @@ class RouterService:
                     subscription_target_node_id,
                     subscription_channel_id,
                     subscription_agent_id,
+                    subscription_feed_scope,
                 ) in aggregate_subscriptions:
                     await _publish_voice_chat_snapshot(
                         worker_webspace_id,
                         subscription_target_node_id or None,
                         dialog_channel_id=subscription_channel_id,
                         active_agent_id=subscription_agent_id,
-                        # `all` is the canonical aggregate projection address.
-                        # Publishing later updates as `general` made strict
-                        # parameterized clients discard them after a valid
-                        # `feed_scope=all` subscription.
-                        feed_scope="all",
+                        # Echo the exact aggregate projection address. Strict
+                        # parameterized clients reject `all` for a `general`
+                        # subscription and vice versa.
+                        feed_scope=subscription_feed_scope,
                         suppress_unchanged=True,
                     )
                 if not bool(materialized.get("visible_in_active_stream")):
@@ -4226,6 +4228,7 @@ class RouterService:
                     str(target_node_id or "").strip(),
                     str(dialog_channel_id or "general").strip(),
                     str(active_agent_id or "").strip(),
+                    str(feed_scope or "").strip().lower(),
                 )
                 if str(feed_scope or "").strip().lower() in {"all", "general"}:
                     if action == "unsubscribed":
