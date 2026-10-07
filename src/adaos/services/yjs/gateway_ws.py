@@ -10843,16 +10843,10 @@ async def process_events_command(
         return None
 
     if kind == "pending_actions.publish.request":
-        event_payload = dict(payload or {})
-        event_payload.pop("_meta", None)
-        try:
-            from adaos.services.pending_actions import publish_pending_action_async
-
-            action = await publish_pending_action_async(ctx=get_agent_ctx(), **event_payload)
-            await _ack(data={"action": action})
-        except Exception as exc:
-            _log.warning("pending action publish command failed", exc_info=True)
-            await _ack(False, error=f"{type(exc).__name__}: {exc}")
+        # A browser is a presentation/response channel, not a PA producer.
+        # Producers must enter through an admitted SDK/runtime capability so
+        # identity, handler closure and policy cannot be client-authored.
+        await _ack(False, error="pending_action_publish_internal_only")
         return None
 
     if kind == "pending_actions.respond.request":
@@ -10925,19 +10919,9 @@ async def process_events_command(
         return None
 
     if kind == "pending_actions.expire.request":
-        event_payload = dict(payload or {})
-        event_payload.pop("_meta", None)
-        try:
-            from adaos.services.pending_actions import expire_pending_actions_async
-
-            result = await expire_pending_actions_async(
-                webspace_id=event_payload.get("webspace_id"),
-                ctx=get_agent_ctx(),
-            )
-            await _ack(data=result)
-        except Exception as exc:
-            _log.warning("pending action expire command failed", exc_info=True)
-            await _ack(False, error=f"{type(exc).__name__}: {exc}")
+        # Expiry is a server lifecycle operation. Client-triggered lifecycle
+        # mutation makes offline/reconnect projections an authority source.
+        await _ack(False, error="pending_action_expiry_internal_only")
         return None
 
     if kind == "desktop.webspace.reload":

@@ -4382,19 +4382,8 @@ def test_process_events_command_publishes_neutral_dialog_user_message(monkeypatc
     gateway_module._COMMAND_TRACE_SEQ = 0
 
 
-def test_process_events_command_publishes_pending_action_directly(monkeypatch) -> None:
+def test_process_events_command_rejects_browser_pending_action_publish(monkeypatch) -> None:
     responses: list[dict[str, object]] = []
-    calls: list[dict[str, object]] = []
-    ctx = SimpleNamespace(name="ctx")
-
-    import adaos.services.pending_actions as pending_actions_module
-
-    async def _publish_pending_action_async(**kwargs):
-        calls.append(dict(kwargs))
-        return {"id": kwargs["action_id"], "status": "pending"}
-
-    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: ctx)
-    monkeypatch.setattr(pending_actions_module, "publish_pending_action_async", _publish_pending_action_async)
 
     async def _send_response(msg: dict[str, object]) -> None:
         responses.append(msg)
@@ -4416,17 +4405,29 @@ def test_process_events_command_publishes_pending_action_directly(monkeypatch) -
         )
     )
 
-    assert calls == [
-        {
-            "ctx": ctx,
-            "webspace_id": "desktop",
-            "action_id": "pa.test",
-            "kind": "test.pending",
-            "title": "Pending test",
-        }
-    ]
-    assert responses[-1]["ok"] is True
-    assert responses[-1]["data"] == {"action": {"id": "pa.test", "status": "pending"}}
+    assert responses[-1]["ok"] is False
+    assert responses[-1]["error"] == "pending_action_publish_internal_only"
+
+
+def test_process_events_command_rejects_browser_pending_action_expiry() -> None:
+    responses: list[dict[str, object]] = []
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="pending_actions.expire.request",
+            cmd_id="cmd-pending-expire-1",
+            payload={"webspace_id": "desktop"},
+            device_id="dev-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert responses[-1]["ok"] is False
+    assert responses[-1]["error"] == "pending_action_expiry_internal_only"
 
 
 def test_process_events_command_responds_pending_action_directly(monkeypatch) -> None:

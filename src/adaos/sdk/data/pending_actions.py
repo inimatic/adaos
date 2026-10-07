@@ -11,7 +11,6 @@ __all__ = [
     "expire_pending_actions",
     "list_pending_actions",
     "publish_pending_action",
-    "respond_pending_action",
 ]
 
 
@@ -83,17 +82,12 @@ def respond_pending_action(
     idempotency_key: str | None = None,
     webspace_id: str | None = None,
 ) -> dict[str, Any]:
-    ctx = require_ctx("sdk.pending_actions.respond")
-    from adaos.services.pending_actions import respond_pending_action as _respond
+    """Rejected legacy API; responses require an authenticated channel ingress."""
 
-    return _respond(
-        action_id,
-        response_action_id,
-        ctx=ctx,
-        webspace_id=webspace_id,
-        responder=responder,
-        response_payload=response_payload,
-        idempotency_key=idempotency_key,
+    del action_id, response_action_id, responder, response_payload, idempotency_key, webspace_id
+    raise PermissionError(
+        "pending_action_response_requires_verified_ingress; use an interaction action token "
+        "or the trusted Client Pending Actions surface"
     )
 
 

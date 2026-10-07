@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.pending_action.projection.v1",
+  "title": "AdaOS Pending Action Projection",
+  "type": "object",
+  "required": [
+    "schema", "projection_id", "kind", "interaction_ref", "subject_digest",
+    "plan_digest", "owner", "participants", "prompt", "locale_context",
+    "choices", "status", "deadline", "receipts", "evidence_refs", "lineage",
+    "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.pending_action.projection.v1" },
+    "projection_id": { "$ref": "#/$defs/token" },
+    "kind": { "$ref": "#/$defs/token" },
+    "interaction_ref": {
+      "type": "object",
+      "required": ["id", "generation", "presentation_id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/token" },
+        "generation": { "type": "integer", "minimum": 0 },
+        "presentation_id": { "$ref": "#/$defs/token" }
+      },
+      "additionalProperties": false
+    },
+    "subject_digest": { "$ref": "#/$defs/digest" },
+    "plan_digest": { "$ref": "#/$defs/digest" },
+    "owner": { "$ref": "#/$defs/token" },
+    "participants": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/token" }
+    },
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "locale_context": { "type": ["object", "null"], "maxProperties": 20 },
+    "choices": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "action_token", "command", "risk", "assurance", "target_ref"],
+        "properties": {
+          "id": { "$ref": "#/$defs/token" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "action_token": { "$ref": "#/$defs/token" },
+          "command": { "$ref": "#/$defs/token" },
+          "risk": { "$ref": "#/$defs/token" },
+          "assurance": {
+            "type": "object",
+            "required": ["voice_permitted", "trusted_interface_required", "step_up_required"],
+            "properties": {
+              "voice_permitted": { "type": "boolean" },
+              "trusted_interface_required": { "type": "boolean" },
+              "step_up_required": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
+          "target_ref": { "type": ["object", "null"], "maxProperties": 30 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "status": {
+      "enum": [
+        "awaiting_decision", "decision_recorded", "decision_rejected",
+        "dispatch_pending", "running", "succeeded", "failed",
+        "input_required", "outcome_unknown", "expired", "cancelled", "superseded"
+      ]
+    },
+    "deadline": { "type": ["string", "null"], "format": "date-time" },
+    "receipts": {
+      "type": "object",
+      "required": ["delivery", "decision", "execution", "outcome"],
+      "properties": {
+        "delivery": { "type": ["object", "null"] },
+        "decision": { "type": ["object", "null"] },
+        "execution": { "type": ["object", "null"] },
+        "outcome": { "type": ["object", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "evidence_refs": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "object", "maxProperties": 30 }
+    },
+    "lineage": {
+      "type": "object",
+      "required": ["interaction_schema", "presentation_schema", "profile_id", "profile_version"],
+      "properties": {
+        "interaction_schema": { "$ref": "#/$defs/token" },
+        "presentation_schema": { "$ref": "#/$defs/token" },
+        "profile_id": { "$ref": "#/$defs/token" },
+        "profile_version": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "token": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

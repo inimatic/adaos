@@ -11,7 +11,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from adaos.domain import Event
-from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.yjs.doc import async_get_ydoc, get_ydoc, submit_live_room_mutation
 from adaos.services.yjs.store import ystore_write_metadata, ystore_write_metadata_sync
@@ -1099,33 +1098,7 @@ async def expire_pending_actions_async(
     return {"expired": expired, "snapshot": snapshot}
 
 
-@subscribe("pending_actions.publish.request")
-async def _on_pending_action_publish(evt: Any) -> None:
-    payload = _event_payload(evt)
-    payload.pop("_meta", None)
-    try:
-        await publish_pending_action_async(**payload)
-    except Exception:
-        _log.warning("failed to publish pending action from event", exc_info=True)
-
-
-@subscribe("pending_actions.respond.request")
-async def _on_pending_action_respond(evt: Any) -> None:
-    payload = _event_payload(evt)
-    payload.pop("_meta", None)
-    action_id = _text(payload.pop("action_id", payload.pop("pending_action_id", "")))
-    response_action_id = _text(payload.pop("response_action_id", payload.pop("action", "")))
-    try:
-        await respond_pending_action_async(action_id, response_action_id, **payload)
-    except Exception:
-        _log.warning("failed to respond to pending action from event", exc_info=True)
-
-
-@subscribe("pending_actions.expire.request")
-async def _on_pending_action_expire(evt: Any) -> None:
-    payload = _event_payload(evt)
-    payload.pop("_meta", None)
-    try:
-        await expire_pending_actions_async(webspace_id=payload.get("webspace_id"))
-    except Exception:
-        _log.warning("failed to expire pending actions from event", exc_info=True)
+# There are deliberately no generic event-bus subscribers for publish,
+# respond, or expire requests. The local bus has no authenticated caller
+# principal, so accepting these control operations there would let any skill
+# or browser-forwarded event forge producer/responder authority.
