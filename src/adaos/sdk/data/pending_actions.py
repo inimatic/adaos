@@ -10,9 +10,54 @@ from adaos.sdk.core.contracts import public_contract
 from adaos.sdk.core._ctx import require_ctx
 
 __all__ = [
+    "list_pending_interactions",
     "list_pending_actions",
     "publish_pending_action",
 ]
+
+
+@public_contract(
+    capabilities=("human_decision.read", "conversation.interaction"),
+    permissions=("workspace.read",),
+    effects=("read_only",),
+    errors=("caller_access_denied", "invalid_cursor", "unsupported_field_mask", "query_too_broad"),
+    boundedness={"kind": "bounded_page", "arguments": ["limit"]},
+    pagination={"supported": True, "arguments": ["cursor"]},
+    stability="beta",
+    since="1.5.0",
+    runtime_support={"owner": "conversation_runtime", "min_contract": 1},
+)
+def list_pending_interactions(
+    *,
+    conversation_id: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+    statuses: Sequence[str] | None = None,
+    owners: Sequence[str] | None = None,
+    active_only: bool = True,
+    field_mask: str = "summary",
+) -> dict[str, Any]:
+    """List canonical human-decision interactions visible to the caller."""
+
+    require_ctx("sdk.pending_actions.list_interactions")
+    access.require("workspace.read")
+    application = access.application() or {}
+    caller = access.caller() or {}
+    principal = {**caller}
+    if application.get("application_id"):
+        principal["application_id"] = str(application["application_id"])
+    from adaos.services.conversation_interactions import query_interactions
+
+    return query_interactions(
+        principal=principal,
+        conversation_id=conversation_id,
+        statuses=statuses,
+        owners=owners,
+        active_only=active_only,
+        field_mask=field_mask,
+        limit=limit,
+        cursor=cursor,
+    )
 
 
 @public_contract(

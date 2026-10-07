@@ -83,6 +83,7 @@ __all__ = [
     "update_model_if_changed",
     "upload_model",
     "publish_pending_action",
+    "list_pending_interactions",
     "list_pending_actions",
     "get_tts_backend",
     "get_stt_backend",
@@ -188,6 +189,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "update_model_if_changed": ("adaos.sdk.data.models", "update_model_if_changed"),
     "upload_model": ("adaos.sdk.data.models", "upload_model"),
     "publish_pending_action": ("adaos.sdk.data.pending_actions", "publish_pending_action"),
+    "list_pending_interactions": ("adaos.sdk.data.pending_actions", "list_pending_interactions"),
     "list_pending_actions": ("adaos.sdk.data.pending_actions", "list_pending_actions"),
 }
 

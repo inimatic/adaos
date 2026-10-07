@@ -28,6 +28,51 @@ _TERMINAL_STATUSES = {"completed", "expired", "cancelled", "superseded"}
 _NON_MUTATING_RISK_CLASSES = {"read", "none"}
 _STEP_UP_RISK_CLASSES = {"external", "destructive", "admin", "privileged", "registry"}
 _MESSAGE_PARAMETER = re.compile(r"\{([A-Za-z][A-Za-z0-9_]{0,63})\}")
+_INTERACTION_QUERY_FIELD_MASKS: dict[str, tuple[str, ...]] = {
+    "summary": (
+        "interaction_id",
+        "conversation_id",
+        "owner",
+        "status",
+        "generation",
+        "prompt",
+        "expires_at",
+        "updated_at",
+    ),
+    "detail": (
+        "interaction_id",
+        "conversation_id",
+        "thread_id",
+        "owner",
+        "prompt",
+        "prompt_message",
+        "locale_context",
+        "input_spec",
+        "actions",
+        "status",
+        "generation",
+        "task_ref",
+        "workflow_ref",
+        "expires_at",
+        "created_at",
+        "updated_at",
+        "completed_at",
+    ),
+    "audit": (
+        "interaction_id",
+        "conversation_id",
+        "thread_id",
+        "owner",
+        "status",
+        "generation",
+        "task_ref",
+        "workflow_ref",
+        "expires_at",
+        "created_at",
+        "updated_at",
+        "completed_at",
+    ),
+}
 
 
 class ConversationInteractionError(ValueError):
@@ -59,6 +104,17 @@ class InteractionHandle:
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _canonical_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _schema(name: str) -> dict[str, Any]:
@@ -1019,6 +1075,161 @@ def _principal_in_scope(actor_id: str, principal_scope: Sequence[str]) -> bool:
         return False
     namespace = actor.split(":", 1)[0]
     return "*" in scopes or actor in scopes or namespace in scopes
+
+
+def _principal_can_read_interaction(
+    interaction: Mapping[str, Any],
+    principal: Mapping[str, Any],
+) -> bool:
+    kind = str(principal.get("kind") or "").strip()
+    principal_id = str(principal.get("id") or "").strip()
+    actor_id = str(principal.get("actor_id") or "").strip()
+    if not actor_id and kind and principal_id:
+        actor_id = f"{kind}:{principal_id}"
+    application_id = str(principal.get("application_id") or "").strip()
+    identities = {
+        value
+        for value in (
+            actor_id,
+            principal_id,
+            application_id,
+            f"application:{application_id}" if application_id else "",
+            f"skill:{application_id}" if application_id else "",
+        )
+        if value
+    }
+    owner = str(interaction.get("owner") or "").strip()
+    if owner in identities:
+        return True
+    participants = {
+        str(item).strip()
+        for item in dict(interaction.get("metadata") or {}).get("participants") or []
+        if str(item).strip()
+    }
+    if identities.intersection(participants):
+        return True
+    if actor_id:
+        return any(
+            _principal_in_scope(actor_id, action.get("principal_scope") or [])
+            for action in interaction.get("actions") or []
+            if isinstance(action, Mapping)
+        )
+    return False
+
+
+def query_interactions(
+    *,
+    principal: Mapping[str, Any],
+    conversation_id: str | None = None,
+    statuses: Sequence[str] | None = None,
+    owners: Sequence[str] | None = None,
+    active_only: bool = False,
+    field_mask: str = "summary",
+    limit: int = 50,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """Return an ACL-filtered page of canonical interactions.
+
+    The signed cursor is bound to the query, caller identity, field mask, and
+    exact selected content digest. The bounded snapshot refuses an oversized
+    query instead of silently omitting unresolved obligations.
+    """
+
+    from adaos.services.root_mcp.opaque_cursor import (
+        decode_opaque_cursor,
+        encode_opaque_cursor,
+    )
+
+    if not isinstance(principal, Mapping) or not dict(principal):
+        raise ConversationInteractionError("verified interaction query principal is required")
+    mask_name = str(field_mask or "summary").strip()
+    fields = _INTERACTION_QUERY_FIELD_MASKS.get(mask_name)
+    if fields is None:
+        raise ConversationInteractionError(f"unsupported interaction field mask: {mask_name}")
+    page_size = max(1, min(int(limit), 100))
+    selected_statuses = sorted(
+        {
+            str(item).strip()
+            for item in (
+                _PENDING_STATUSES if active_only else statuses or ()
+            )
+            if str(item).strip()
+        }
+    )
+    if any(status not in _PENDING_STATUSES | _TERMINAL_STATUSES | {"answered", "accepted"} for status in selected_statuses):
+        raise ConversationInteractionError("unsupported interaction status filter")
+    selected_owners = sorted({str(item).strip() for item in owners or () if str(item).strip()})
+    normalized_principal = {
+        key: str(principal.get(key) or "").strip()
+        for key in ("kind", "id", "actor_id", "application_id")
+        if str(principal.get(key) or "").strip()
+    }
+    query = {
+        "conversation_id": str(conversation_id or "").strip() or None,
+        "statuses": selected_statuses,
+        "owners": selected_owners,
+        "active_only": bool(active_only),
+        "principal": normalized_principal,
+    }
+    records = conversation_store.list_interactions(
+        conversation_id=query["conversation_id"],
+        statuses=selected_statuses,
+        limit=1000,
+    )
+    if len(records) >= 1000:
+        raise ConversationInteractionError(
+            "interaction query exceeds the bounded snapshot; narrow the filters"
+        )
+    selected = [
+        item
+        for item in records
+        if (not selected_owners or str(item.get("owner") or "") in selected_owners)
+        and _principal_can_read_interaction(item, principal)
+    ]
+    selected.sort(
+        key=lambda item: (
+            str(item.get("updated_at") or ""),
+            str(item.get("interaction_id") or ""),
+        ),
+        reverse=True,
+    )
+    content_digest = _canonical_digest(selected)
+    mask_contract = {"name": mask_name, "fields": list(fields)}
+    try:
+        offset = decode_opaque_cursor(
+            cursor,
+            namespace="conversation.interactions.query.v1",
+            query=query,
+            field_mask=mask_contract,
+            content_digest=content_digest,
+        )
+    except ValueError as exc:
+        raise ConversationInteractionError(str(exc)) from exc
+    page = selected[offset : offset + page_size]
+    next_offset = offset + len(page)
+    next_cursor = (
+        encode_opaque_cursor(
+            namespace="conversation.interactions.query.v1",
+            offset=next_offset,
+            query=query,
+            field_mask=mask_contract,
+            content_digest=content_digest,
+        )
+        if next_offset < len(selected)
+        else None
+    )
+    return {
+        "schema": "adaos.conversation.interaction_query_page.v1",
+        "items": [
+            {field: copy.deepcopy(item[field]) for field in fields if field in item}
+            for item in page
+        ],
+        "next_cursor": next_cursor,
+        "limit": page_size,
+        "field_mask": mask_name,
+        "content_digest": content_digest,
+        "has_more": next_cursor is not None,
+    }
 
 
 def submit_response(

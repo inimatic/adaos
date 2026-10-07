@@ -822,3 +822,131 @@ def test_semantic_message_parameter_is_plain_data_not_a_template() -> None:
 
     assert presentation["prompt"] == "Subject: <b>{not_a_parameter}</b>"
     assert presentation["spoken_prompt"] == "Subject: <b>{not_a_parameter}</b>"
+
+
+def test_interaction_query_is_acl_filtered_bounded_and_cursor_bound() -> None:
+    for index in range(3):
+        conversation_interactions.create_interaction(
+            conversation_id="conv.query",
+            owner="skill:publisher",
+            prompt=f"Question {index}",
+            actions=[
+                {
+                    "action_id": "inspect",
+                    "label": "Inspect",
+                    "command": "record.inspect",
+                    "value": index,
+                    "risk": "read",
+                    "confirmation_required": False,
+                    "principal_scope": ["user"],
+                }
+            ],
+            interaction_id=f"interaction.query.{index}",
+            now=f"2026-10-07T00:00:0{index}+00:00",
+        )
+    conversation_interactions.create_interaction(
+        conversation_id="conv.query",
+        owner="skill:private",
+        prompt="Transport only",
+        actions=[
+            {
+                "action_id": "inspect",
+                "label": "Inspect",
+                "command": "record.inspect",
+                "value": "private",
+                "risk": "read",
+                "confirmation_required": False,
+                "principal_scope": ["transport"],
+            }
+        ],
+        interaction_id="interaction.query.private",
+        now="2026-10-07T00:00:04+00:00",
+    )
+    principal = {"kind": "user", "id": "local", "actor_id": "user:local"}
+
+    first = conversation_interactions.query_interactions(
+        principal=principal,
+        conversation_id="conv.query",
+        limit=1,
+        field_mask="summary",
+    )
+    assert len(first["items"]) == 1
+    assert first["has_more"] is True
+    assert "actions" not in first["items"][0]
+    assert first["items"][0]["interaction_id"] != "interaction.query.private"
+
+    second = conversation_interactions.query_interactions(
+        principal=principal,
+        conversation_id="conv.query",
+        limit=1,
+        field_mask="summary",
+        cursor=first["next_cursor"],
+    )
+    assert second["items"][0]["interaction_id"] != first["items"][0]["interaction_id"]
+
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="does not match",
+    ):
+        conversation_interactions.query_interactions(
+            principal=principal,
+            conversation_id="conv.query",
+            limit=1,
+            field_mask="audit",
+            cursor=first["next_cursor"],
+        )
+
+
+def test_interaction_query_cursor_rejects_changed_snapshot() -> None:
+    principal = {"kind": "user", "id": "local", "actor_id": "user:local"}
+    for suffix in ("one", "two"):
+        conversation_interactions.create_interaction(
+            conversation_id="conv.query-change",
+            owner="skill:publisher",
+            prompt=f"Question {suffix}",
+            actions=[
+                {
+                    "action_id": "inspect",
+                    "label": "Inspect",
+                    "command": "record.inspect",
+                    "value": suffix,
+                    "risk": "read",
+                    "confirmation_required": False,
+                    "principal_scope": ["user"],
+                }
+            ],
+            interaction_id=f"interaction.query-change.{suffix}",
+        )
+    first = conversation_interactions.query_interactions(
+        principal=principal,
+        conversation_id="conv.query-change",
+        limit=1,
+    )
+    conversation_interactions.create_interaction(
+        conversation_id="conv.query-change",
+        owner="skill:publisher",
+        prompt="Question three",
+        actions=[
+            {
+                "action_id": "inspect",
+                "label": "Inspect",
+                "command": "record.inspect",
+                "value": "three",
+                "risk": "read",
+                "confirmation_required": False,
+                "principal_scope": ["user"],
+            }
+        ],
+        interaction_id="interaction.query-change.three",
+    )
+
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="does not match",
+    ):
+        conversation_interactions.query_interactions(
+            principal=principal,
+            conversation_id="conv.query-change",
+            limit=1,
+            cursor=first["next_cursor"],
+        )
