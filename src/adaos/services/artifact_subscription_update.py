@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Literal
+
+from packaging.version import InvalidVersion, Version
 
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.services.agent_context import AgentContext
@@ -24,6 +28,7 @@ from adaos.services.yjs.webspace import default_webspace_id
 
 ArtifactKind = Literal["scenario", "skill"]
 ARTIFACT_UPDATE_ROUTE_SCHEMA = "adaos.artifact.update_route.v1"
+RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA = "adaos.runtime_compatibility.exact_update_command.v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +136,173 @@ class ArtifactSubscriptionUpdateCoordinator:
         return await asyncio.to_thread(
             self.root.inspect_artifact_subscription_update,
             str(project_id or "").strip(),
+        )
+
+    async def plan_qualified_runtime_update(
+        self,
+        kind: ArtifactKind,
+        project_id: str,
+        *,
+        qualification: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Bind one compatibility decision to an exact package update plan."""
+
+        token = str(project_id or "").strip()
+        qualified = dict(qualification or {})
+        if qualified.get("schema") != "adaos.runtime_compatibility.classification.v1":
+            raise ArtifactSubscriptionUpdateError(
+                "runtime compatibility classification is required",
+                code="runtime_compatibility_classification_required",
+            )
+        if (
+            qualified.get("code") != "eligible_exact_update"
+            or qualified.get("evidence_complete") is not True
+            or qualified.get("human_decision_required") is not True
+            or qualified.get("recommended_action") != "offer_exact_update"
+        ):
+            raise ArtifactSubscriptionUpdateError(
+                "classification does not admit an exact runtime update",
+                code="runtime_compatibility_update_not_eligible",
+            )
+        inspected = await self.inspect(token)
+        plan = inspected.get("update_plan")
+        if inspected.get("available") is not True or not isinstance(plan, Mapping):
+            raise ArtifactSubscriptionUpdateError(
+                "the exact subscription update is no longer available",
+                code="runtime_compatibility_update_unavailable",
+            )
+        activation = dict(plan.get("activation") or {})
+        component_key = f"{kind}:{token}"
+        observed = next(
+            (
+                dict(item)
+                for item in activation.get("observed_components") or ()
+                if isinstance(item, Mapping) and str(item.get("key") or "") == component_key
+            ),
+            None,
+        )
+        target = next(
+            (
+                dict(item)
+                for item in activation.get("target_components") or ()
+                if isinstance(item, Mapping) and str(item.get("key") or "") == component_key
+            ),
+            None,
+        )
+        installed_digest = str(qualified.get("installed_package_digest") or "").strip()
+        desired_digest = str(qualified.get("desired_package_digest") or "").strip()
+        eligible_digest = str(qualified.get("eligible_update_package_digest") or "").strip()
+        eligible_from = str(qualified.get("eligible_update_from_package_digest") or "").strip()
+        if observed is None or target is None:
+            raise ArtifactSubscriptionUpdateError(
+                "the reviewed activation plan does not contain the exact runtime component",
+                code="runtime_compatibility_component_missing",
+                update_plan=plan,
+            )
+        if (
+            str(observed.get("package_digest") or "").strip() != installed_digest
+            or eligible_from != installed_digest
+            or str(target.get("package_digest") or "").strip() != desired_digest
+            or eligible_digest != desired_digest
+        ):
+            raise ArtifactSubscriptionUpdateError(
+                "the reviewed update plan no longer matches the classified package identities",
+                code="runtime_compatibility_identity_changed",
+                update_plan=plan,
+            )
+        current_version = str(observed.get("version") or "").strip()
+        target_version = str(target.get("version") or "").strip()
+        eligible_version = str(qualified.get("eligible_update_version") or "").strip()
+        if eligible_version and eligible_version != target_version:
+            raise ArtifactSubscriptionUpdateError(
+                "the eligible update version differs from the reviewed target",
+                code="runtime_compatibility_version_changed",
+                update_plan=plan,
+            )
+        try:
+            if Version(target_version) < Version(current_version):
+                raise ArtifactSubscriptionUpdateError(
+                    "runtime compatibility recovery cannot downgrade the component",
+                    code="runtime_compatibility_downgrade_rejected",
+                    update_plan=plan,
+                )
+        except InvalidVersion as exc:
+            raise ArtifactSubscriptionUpdateError(
+                "exact runtime update requires comparable release versions",
+                code="runtime_compatibility_version_invalid",
+                update_plan=plan,
+            ) from exc
+        command: dict[str, Any] = {
+            "schema": RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA,
+            "kind": kind,
+            "project_id": token,
+            "from": {
+                "version": current_version,
+                "package_digest": installed_digest,
+            },
+            "target": {
+                "version": target_version,
+                "package_digest": desired_digest,
+            },
+            "plan_digest": str(plan.get("plan_digest") or "").strip(),
+            "consequences": {
+                "component_changes": dict(activation.get("component_changes") or {}),
+                "permissions": dict(activation.get("permissions") or {}),
+                "migrations": dict(activation.get("migrations") or {}),
+                "rollback": dict(activation.get("rollback") or {}),
+                "warnings": list(activation.get("warnings") or ())[:20],
+            },
+        }
+        if not command["plan_digest"]:
+            raise ArtifactSubscriptionUpdateError(
+                "exact runtime update has no reviewed plan digest",
+                code="runtime_compatibility_plan_digest_missing",
+            )
+        canonical = json.dumps(command, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        command["command_digest"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return command
+
+    async def execute_qualified_runtime_update(
+        self,
+        command: Mapping[str, Any],
+        *,
+        qualification: Mapping[str, Any],
+        permission_decision: bool | Mapping[str, Any],
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Revalidate and execute the exact command that a person reviewed."""
+
+        supplied = dict(command or {})
+        if supplied.get("schema") != RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA:
+            raise ArtifactSubscriptionUpdateError(
+                "unsupported runtime compatibility update command",
+                code="runtime_compatibility_command_invalid",
+            )
+        kind = str(supplied.get("kind") or "").strip()
+        if kind not in {"skill", "scenario"}:
+            raise ArtifactSubscriptionUpdateError(
+                "runtime compatibility update kind is invalid",
+                code="runtime_compatibility_command_invalid",
+            )
+        project_id = str(supplied.get("project_id") or "").strip()
+        current = await self.plan_qualified_runtime_update(
+            kind,  # type: ignore[arg-type]
+            project_id,
+            qualification=qualification,
+        )
+        if current != supplied:
+            raise ArtifactSubscriptionUpdateError(
+                "runtime compatibility update changed after review",
+                code="runtime_compatibility_command_stale",
+                update_plan=current,
+            )
+        return await self.update(
+            kind,  # type: ignore[arg-type]
+            project_id,
+            expected_plan_digest=str(supplied["plan_digest"]),
+            permission_decision=permission_decision,
+            idempotency_key=f"runtime-compatibility:{supplied['command_digest']}",
+            webspace_id=webspace_id,
         )
 
     async def update(
@@ -412,6 +584,7 @@ class ArtifactSubscriptionUpdateCoordinator:
 
 __all__ = [
     "ARTIFACT_UPDATE_ROUTE_SCHEMA",
+    "RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA",
     "ArtifactSubscriptionUpdateCoordinator",
     "ArtifactSubscriptionUpdateError",
     "ArtifactUpdateRoute",

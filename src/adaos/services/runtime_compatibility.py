@@ -184,6 +184,10 @@ def classify_runtime_compatibility(snapshot: Mapping[str, Any]) -> dict[str, Any
         "desired_package_digest": desired_digest or None,
         "installed_package_digest": installed_digest or None,
         "loaded_package_digest": loaded_digest or None,
+        "eligible_update_version": _text(update.get("version")) or None,
+        "eligible_update_package_digest": _text(update.get("package_digest")) or None,
+        "eligible_update_from_package_digest": _text(update.get("from_package_digest")) or None,
+        "eligible_update_consequences": _mapping(update.get("consequences")),
     }
 
 

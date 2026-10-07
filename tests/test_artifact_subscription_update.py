@@ -266,3 +266,182 @@ def test_update_rejects_deferred_projection_before_planning(monkeypatch, tmp_pat
 
     assert raised.value.code == "artifact_runtime_projection_required"
     assert coordinator.root.activations == []
+
+
+def _qualified_update(*, desired: str = "sha256:desired", installed: str = "sha256:installed"):
+    return {
+        "schema": "adaos.runtime_compatibility.classification.v1",
+        "code": "eligible_exact_update",
+        "evidence_complete": True,
+        "human_decision_required": True,
+        "recommended_action": "offer_exact_update",
+        "desired_package_digest": desired,
+        "installed_package_digest": installed,
+        "eligible_update_version": "2.0.0",
+        "eligible_update_package_digest": desired,
+        "eligible_update_from_package_digest": installed,
+    }
+
+
+def test_qualified_runtime_update_is_bound_to_exact_from_target_and_plan(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ctx = _context(tmp_path, "skill", "recipe_skill", "2.0.0")
+
+    class _ExactRoot(_Root):
+        def inspect_artifact_subscription_update(self, project_id: str):
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "available": True,
+                "update_plan": {
+                    "schema": "adaos.artifact.subscription_update_plan.v1",
+                    "plan_digest": PLAN_DIGEST,
+                    "activation": {
+                        "observed_components": [
+                            {
+                                "key": "skill:recipe_skill",
+                                "version": "1.0.0",
+                                "package_digest": "sha256:installed",
+                            }
+                        ],
+                        "target_components": [
+                            {
+                                "key": "skill:recipe_skill",
+                                "version": "2.0.0",
+                                "package_digest": "sha256:desired",
+                            }
+                        ],
+                        "component_changes": {"changed": ["skill:recipe_skill"]},
+                        "permissions": {"added": ["network.egress"]},
+                        "migrations": {"count": 0},
+                        "rollback": {"available": True},
+                        "warnings": [],
+                    },
+                },
+            }
+
+    monkeypatch.setattr(update_service, "RootDeveloperService", _ExactRoot)
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(ctx)
+
+    command = asyncio.run(
+        coordinator.plan_qualified_runtime_update(
+            "skill",
+            "recipe_skill",
+            qualification=_qualified_update(),
+        )
+    )
+
+    assert command["from"] == {
+        "version": "1.0.0",
+        "package_digest": "sha256:installed",
+    }
+    assert command["target"] == {
+        "version": "2.0.0",
+        "package_digest": "sha256:desired",
+    }
+    assert command["plan_digest"] == PLAN_DIGEST
+    assert command["consequences"]["permissions"]["added"] == ["network.egress"]
+    assert command["command_digest"].startswith("sha256:")
+
+
+def test_qualified_runtime_update_rejects_identity_drift_before_user_choice(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ctx = _context(tmp_path, "skill", "recipe_skill", "2.0.0")
+
+    class _DriftedRoot(_Root):
+        def inspect_artifact_subscription_update(self, project_id: str):
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "available": True,
+                "update_plan": {
+                    "plan_digest": PLAN_DIGEST,
+                    "activation": {
+                        "observed_components": [
+                            {"key": "skill:recipe_skill", "version": "1.0.0", "package_digest": "sha256:other"}
+                        ],
+                        "target_components": [
+                            {"key": "skill:recipe_skill", "version": "2.0.0", "package_digest": "sha256:desired"}
+                        ],
+                    },
+                },
+            }
+
+    monkeypatch.setattr(update_service, "RootDeveloperService", _DriftedRoot)
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(ctx)
+
+    with pytest.raises(update_service.ArtifactSubscriptionUpdateError) as raised:
+        asyncio.run(
+            coordinator.plan_qualified_runtime_update(
+                "skill",
+                "recipe_skill",
+                qualification=_qualified_update(),
+            )
+        )
+
+    assert raised.value.code == "runtime_compatibility_identity_changed"
+
+
+def test_qualified_runtime_update_revalidates_command_before_activation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ctx = _context(tmp_path, "skill", "recipe_skill", "2.0.0")
+    monkeypatch.setattr(update_service, "RootDeveloperService", _Root)
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(ctx)
+    command = {
+        "schema": update_service.RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA,
+        "kind": "skill",
+        "project_id": "recipe_skill",
+        "from": {"version": "1.0.0", "package_digest": "sha256:installed"},
+        "target": {"version": "2.0.0", "package_digest": "sha256:desired"},
+        "plan_digest": PLAN_DIGEST,
+        "consequences": {},
+        "command_digest": "sha256:command",
+    }
+    updates: list[dict] = []
+
+    async def _plan(*_args, **_kwargs):
+        return dict(command)
+
+    async def _update(kind, project_id, **kwargs):
+        updates.append({"kind": kind, "project_id": project_id, **kwargs})
+        return {"ok": True, "updated": True}
+
+    monkeypatch.setattr(coordinator, "plan_qualified_runtime_update", _plan)
+    monkeypatch.setattr(coordinator, "update", _update)
+    stale = {**command, "plan_digest": "sha256:stale"}
+
+    with pytest.raises(update_service.ArtifactSubscriptionUpdateError) as raised:
+        asyncio.run(
+            coordinator.execute_qualified_runtime_update(
+                stale,
+                qualification=_qualified_update(),
+                permission_decision=True,
+            )
+        )
+    result = asyncio.run(
+        coordinator.execute_qualified_runtime_update(
+            command,
+            qualification=_qualified_update(),
+            permission_decision={"approved": True},
+            webspace_id="desktop",
+        )
+    )
+
+    assert raised.value.code == "runtime_compatibility_command_stale"
+    assert result["updated"] is True
+    assert updates == [
+        {
+            "kind": "skill",
+            "project_id": "recipe_skill",
+            "expected_plan_digest": PLAN_DIGEST,
+            "permission_decision": {"approved": True},
+            "idempotency_key": "runtime-compatibility:sha256:command",
+            "webspace_id": "desktop",
+        }
+    ]

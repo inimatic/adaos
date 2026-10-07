@@ -1345,6 +1345,17 @@ class WorkspaceActivationManager:
             or plan.release.computed_digest(),
             "slot_id": slot_id,
             "observed_lock_digest": self._lock_digest(current),
+            "observed_components": [
+                {
+                    "key": item.key,
+                    "version": item.version,
+                    "package_digest": item.digest,
+                }
+                for item in sorted(
+                    current.components if current is not None else (),
+                    key=lambda value: value.key,
+                )
+            ],
             "component_changes": component_changes,
             "slot_changes": slot_changes,
             "target_components": [
