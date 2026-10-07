@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple, Union, get_args, get_origin, get_type_hints
 
+from .capability_packs import human_decision_capability_pack
 from .decorators import emits_map, event_payloads, tools_meta, tools_registry
 
 _ALLOWED_TOOL_PREFIXES: Tuple[str, ...] = ("manage.", "skills.", "scenarios.", "resources.")
@@ -574,10 +575,11 @@ def export(
         for item in _public_facade_symbols(level)
         if include_deprecated or not bool((item.get("contract") or {}).get("deprecated"))
     ]
+    capability_packs = [human_decision_capability_pack()]
     terms = _query_terms(query)
     bounded_limit = max(1, min(int(limit or 24), 64))
     if terms:
-        candidates = [*tools, *facade_symbols]
+        candidates = [*tools, *facade_symbols, *capability_packs]
         ranked = sorted(
             (
                 (_selection_score(item, terms), _usage_frequency(item), item)
@@ -593,7 +595,7 @@ def export(
         # Build artifacts contain the complete public facade contract. Runtime
         # discovery still uses bounded search/drill-down and mini module cards;
         # this full branch is the content-addressed source for CI and migration.
-        tools.extend(facade_symbols)
+        tools.extend([*facade_symbols, *capability_packs])
         tools.sort(key=lambda item: (-_usage_frequency(item), str(item.get("name") or "")))
 
     events = [

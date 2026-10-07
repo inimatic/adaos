@@ -9,6 +9,10 @@ from jsonschema import Draft202012Validator
 
 from adaos.sdk.core.exporter import export as sdk_export
 from adaos.sdk.core import exporter as sdk_exporter
+from adaos.sdk.core.capability_packs import (
+    HUMAN_DECISION_PACK_ID,
+    validate_human_decision_capability_pack,
+)
 from adaos.services.root_mcp.registry import get_descriptor_set
 from adaos.services.root_mcp.descriptor_search import get_descriptor_item, search_descriptors
 
@@ -154,6 +158,60 @@ def test_human_decision_sdk_contract_is_discoverable_in_english_and_russian():
     assert "durable_dispatch" in workflow_closure
     assert "effect_assertion" in workflow_closure
     assert "durable_outcome" in workflow_closure
+
+
+def test_human_decision_capability_pack_closes_sdk_lifecycle() -> None:
+    exported = sdk_export(level="std")
+    pack = next(
+        item for item in exported["tools"] if item["name"] == HUMAN_DECISION_PACK_ID
+    )
+
+    report = validate_human_decision_capability_pack(pack, exported["tools"])
+
+    assert report["ok"] is True
+    assert report["findings"] == []
+    assert report["coverage"] == {
+        "members": 4,
+        "positive_examples": 1,
+        "negative_examples": 5,
+    }
+    assert pack["contract"]["digest"].startswith("sha256:")
+    assert [stage["stage"] for stage in pack["examples"][0]["stages"]] == [
+        "publish",
+        "present",
+        "verified_answer",
+        "dispatch_effect_outcome",
+    ]
+
+    search = search_descriptors(
+        "complete human decision lifecycle publish effect outcome",
+        descriptor_ids=["sdk_metadata"],
+        limit=6,
+    )
+    assert search["items"][0]["item_id"] == HUMAN_DECISION_PACK_ID
+    detail = get_descriptor_item("sdk_metadata", HUMAN_DECISION_PACK_ID)
+    assert detail["item"]["validators"] == pack["validators"]
+    assert detail["receipt"]["source_digests"]["examples"].startswith("sha256:")
+
+
+def test_human_decision_capability_pack_validator_rejects_missing_closure() -> None:
+    exported = sdk_export(level="std")
+    pack = next(
+        item for item in exported["tools"] if item["name"] == HUMAN_DECISION_PACK_ID
+    )
+    request = next(
+        item for item in exported["tools"] if item["name"] == "adaos.sdk.chat.request"
+    )
+    request["contract"]["action_closure"]["requires"].remove("expiry")
+
+    report = validate_human_decision_capability_pack(pack, exported["tools"])
+
+    assert report["ok"] is False
+    assert {
+        "code": "sdk_action_closure_incomplete",
+        "api": "adaos.sdk.chat.request",
+        "missing": ["expiry"],
+    } in report["findings"]
 
 
 def test_sdk_contract_is_generated_from_one_metadata_source() -> None:
