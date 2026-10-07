@@ -75,6 +75,10 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   channel-specific `ResponseEnvelope` materialization
 - `conversation.action_policy.v1.schema.json` - canonical workflow-facing risk,
   side-effect, and confirmation policy shared through explicit legacy adapters
+- `conversation.interaction.v1.schema.json` includes explicit per-choice action
+  semantics. Standard Details, Preview, Open, Test, Snooze, Defer, Refuse,
+  Cancel, and Compensate presets are effect contracts rather than UI labels;
+  successful execution must carry a matching effect assertion.
 - `skill.invocation.v1.schema.json` - governed skill operation invocation built
   from an admitted `IntentProposal`
 - `conversational.package_manifest.v1.schema.json` - git-versioned

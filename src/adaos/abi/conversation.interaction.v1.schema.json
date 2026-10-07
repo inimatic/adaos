@@ -44,7 +44,7 @@
     "actions": {
       "type": "array", "maxItems": 100,
       "items": {
-        "type": "object", "required": ["action_id", "label", "command", "value", "risk", "confirmation_required", "target_ref", "expected_generation", "principal_scope", "command_context_ref"],
+        "type": "object", "required": ["action_id", "label", "command", "value", "risk", "confirmation_required", "semantics", "target_ref", "expected_generation", "principal_scope", "command_context_ref"],
         "properties": {
           "action_id": { "type": "string", "minLength": 1, "maxLength": 160 },
           "label": { "type": "string", "minLength": 1, "maxLength": 240 },
@@ -54,6 +54,32 @@
           "value": {},
           "risk": { "type": "string", "minLength": 1, "maxLength": 80 },
           "confirmation_required": { "type": "boolean" },
+          "semantics": {
+            "type": "object",
+            "required": ["schema", "preset", "effect_class", "operation", "executor", "mutates_domain", "records_consent", "terminal", "effect_ref", "assertion_required"],
+            "properties": {
+              "schema": { "const": "adaos.conversation.action_semantics.v1" },
+              "preset": { "enum": ["details", "preview", "open", "test", "snooze", "defer", "refuse", "cancel", "compensate", "custom"] },
+              "effect_class": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "operation": { "type": "string", "minLength": 1, "maxLength": 160 },
+              "executor": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "mutates_domain": { "type": "boolean" },
+              "records_consent": { "type": "boolean" },
+              "terminal": { "type": "boolean" },
+              "effect_ref": {
+                "type": ["object", "null"],
+                "required": ["kind", "id", "digest"],
+                "properties": {
+                  "kind": { "type": "string", "minLength": 1, "maxLength": 80 },
+                  "id": { "type": "string", "minLength": 1, "maxLength": 240 },
+                  "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+                },
+                "additionalProperties": false
+              },
+              "assertion_required": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
           "assurance": {
             "type": "object",
             "required": ["mode", "voice_permitted", "trusted_interface_required", "step_up_required"],

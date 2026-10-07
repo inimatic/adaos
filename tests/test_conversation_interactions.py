@@ -410,6 +410,142 @@ def test_action_token_rejects_actor_outside_principal_scope() -> None:
         )
 
 
+def test_standard_action_presets_are_semantic_contracts_not_labels() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.action-semantics",
+        owner="skill:test",
+        prompt="Inspect the evidence",
+        input_spec={
+            "kind": "choice",
+            "required_fields": [],
+            "choices": [{"value": "details", "label": "Details", "description": None}],
+            "sensitive": False,
+        },
+        actions=[
+            {
+                "action_id": "inspect",
+                "label": "Details",
+                "command": "evidence.details",
+                "value": "details",
+                "risk": "read",
+                "confirmation_required": False,
+                "preset": "details",
+            }
+        ],
+        interaction_id="interaction.action-semantics",
+    )
+
+    semantics = interaction["actions"][0]["semantics"]
+    assert semantics == {
+        "schema": "adaos.conversation.action_semantics.v1",
+        "preset": "details",
+        "effect_class": "observation",
+        "operation": "inspect_details",
+        "executor": "client",
+        "mutates_domain": False,
+        "records_consent": False,
+        "terminal": False,
+        "effect_ref": None,
+        "assertion_required": True,
+    }
+
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="preview action must be read-only",
+    ):
+        conversation_interactions.create_interaction(
+            conversation_id="conv.false-preview",
+            owner="skill:test",
+            prompt="Repair",
+            actions=[
+                {
+                    "action_id": "repair",
+                    "label": "Preview",
+                    "command": "repair.apply",
+                    "value": "repair",
+                    "risk": "destructive",
+                    "confirmation_required": True,
+                    "preset": "preview",
+                }
+            ],
+            interaction_id="interaction.false-preview",
+        )
+
+    legacy = dict(interaction)
+    legacy["actions"] = [dict(interaction["actions"][0])]
+    legacy["actions"][0].pop("semantics")
+    assert conversation_interactions.interaction_handle(legacy).interaction_id == interaction["interaction_id"]
+
+
+def test_declared_test_requires_exact_effect_and_completion_assertion() -> None:
+    digest = "sha256:" + "a" * 64
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.test-effect",
+        owner="skill:test",
+        prompt="Run the declared test",
+        input_spec={
+            "kind": "choice",
+            "required_fields": [],
+            "choices": [{"value": "run", "label": "Run test", "description": None}],
+            "sensitive": False,
+        },
+        actions=[
+            {
+                "action_id": "run",
+                "label": "Run test",
+                "command": "test.run",
+                "value": "run",
+                "risk": "read",
+                "confirmation_required": False,
+                "preset": "test",
+                "semantics": {
+                    "effect_ref": {"kind": "test", "id": "suite:smoke", "digest": digest}
+                },
+            }
+        ],
+        interaction_id="interaction.test-effect",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    accepted = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:local",
+        idempotency_key="test-effect:run",
+    )
+    dispatch = conversation_store.claim_interaction_dispatch(
+        accepted["response"]["response_id"],
+        lease_owner="worker:test",
+    )
+    with pytest.raises(ValueError, match="requires an effect_assertion"):
+        conversation_store.complete_interaction_dispatch(
+            dispatch["dispatch_id"],
+            lease_owner="worker:test",
+            status="succeeded",
+            outcome={"result": "callback returned"},
+        )
+
+    completed = conversation_store.complete_interaction_dispatch(
+        dispatch["dispatch_id"],
+        lease_owner="worker:test",
+        status="succeeded",
+        outcome={
+            "effect_assertion": {
+                "schema": "adaos.conversation.action_effect_assertion.v1",
+                "preset": "test",
+                "operation": "run_declared_test",
+                "effect_ref": {"kind": "test", "id": "suite:smoke", "digest": digest},
+                "observed": True,
+                "domain_mutated": False,
+                "test_executed": True,
+            }
+        },
+    )
+    assert completed["status"] == "succeeded"
+    assert completed["command"]["semantics"]["preset"] == "test"
+
+
 def test_interaction_lifecycle_accepts_completes_cancels_and_expires() -> None:
     interaction = conversation_interactions.create_interaction(
         conversation_id="conv.lifecycle",

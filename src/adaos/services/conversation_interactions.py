@@ -14,6 +14,10 @@ from typing import Any, Mapping, Sequence
 from jsonschema import Draft202012Validator
 
 from adaos.services import conversation_store
+from adaos.services.conversation_action_semantics import (
+    ActionSemanticsError,
+    normalize_action_semantics,
+)
 
 
 INTERACTION_SCHEMA = "adaos.conversation.interaction.v1"
@@ -129,20 +133,27 @@ def _validate(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
     if name == CAPABILITY_PROFILE_SCHEMA:
         record.setdefault("permission_boundary", "separate")
         record.setdefault("business_availability_boundary", "separate")
-    elif name == INTERACTION_SCHEMA and "requirements" not in record:
-        record["requirements"] = {
-            "schema": INTERACTION_REQUIREMENTS_SCHEMA,
-            "requirements_id": f"requirements:{record.get('interaction_id') or 'unknown'}",
-            "version": 1,
-            "required": list(record.get("required_capabilities") or []),
-            "optional": list(record.get("optional_capabilities") or []),
-            "limits": {},
-            "fallbacks": list(record.get("fallbacks") or []),
-            "fail_closed": True,
-            "semantic_equivalence_required": True,
-            "permission_boundary": "separate",
-            "business_availability_boundary": "separate",
-        }
+    elif name == INTERACTION_SCHEMA:
+        if "requirements" not in record:
+            record["requirements"] = {
+                "schema": INTERACTION_REQUIREMENTS_SCHEMA,
+                "requirements_id": f"requirements:{record.get('interaction_id') or 'unknown'}",
+                "version": 1,
+                "required": list(record.get("required_capabilities") or []),
+                "optional": list(record.get("optional_capabilities") or []),
+                "limits": {},
+                "fallbacks": list(record.get("fallbacks") or []),
+                "fail_closed": True,
+                "semantic_equivalence_required": True,
+                "permission_boundary": "separate",
+                "business_availability_boundary": "separate",
+            }
+        # Persisted v1 records created before action semantics remain readable,
+        # but are deliberately classified as custom.  A standard preset is
+        # never inferred from an old label, id, or command.
+        for action in record.get("actions") or []:
+            if isinstance(action, dict) and "semantics" not in action:
+                action["semantics"] = normalize_action_semantics(action)
     elif name == INTERACTION_PRESENTATION_SCHEMA and "plan" not in record:
         record["plan"] = {
             "schema": INTERACTION_PRESENTATION_PLAN_SCHEMA,
@@ -573,8 +584,9 @@ def create_interaction(
         "sensitive": False,
         **copy.deepcopy(dict(input_spec or {})),
     }
-    normalized_actions = [
-        {
+    normalized_actions = []
+    for item in actions or []:
+        action = {
             "action_id": str(item.get("action_id") or item.get("id") or "").strip(),
             "label": str(item.get("label") or "").strip(),
             "label_ref": str(item.get("label_ref") or "").strip() or None,
@@ -606,8 +618,11 @@ def create_interaction(
             ],
             "command_context_ref": copy.deepcopy(item.get("command_context_ref")) if isinstance(item.get("command_context_ref"), Mapping) else None,
         }
-        for item in actions or []
-    ]
+        try:
+            action["semantics"] = normalize_action_semantics({**dict(item), **action})
+        except ActionSemanticsError as exc:
+            raise ConversationInteractionError(str(exc)) from exc
+        normalized_actions.append(action)
     required = list(dict.fromkeys(str(item).strip() for item in required_capabilities if str(item).strip()))
     if bool(spec.get("sensitive")) and "secure_input" not in required:
         required.append("secure_input")
@@ -1485,6 +1500,7 @@ def submit_response(
                     "risk": resolved_action["risk"],
                     "confirmation_required": bool(resolved_action["confirmation_required"]),
                     "assurance": _action_assurance(resolved_action),
+                    "semantics": copy.deepcopy(resolved_action["semantics"]),
                 }
                 if resolved_action and valid and not missing
                 else None

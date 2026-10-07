@@ -9,6 +9,7 @@ import time
 import uuid
 
 from adaos.services.agent_context import get_ctx
+from adaos.services.conversation_action_semantics import validate_effect_assertion
 
 
 _CONVERSATION_SCHEMA_VERSION = 1
@@ -2983,6 +2984,11 @@ def complete_interaction_dispatch(
         if existing_status == "dispatching" and str(row["lease_owner"] or "") != owner:
             con.rollback()
             raise ValueError("interaction dispatch completion owner does not match lease")
+        if selected_status == "succeeded":
+            validate_effect_assertion(
+                dict(record.get("command") or {}).get("semantics") or {},
+                outcome,
+            )
         record.update(
             {
                 "status": selected_status,
