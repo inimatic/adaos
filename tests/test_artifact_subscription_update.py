@@ -668,3 +668,172 @@ def test_exact_runtime_update_reconciler_resumes_only_owned_dispatches(
             "lease_owner": "reconciler:artifact-subscription-update",
         }
     ]
+
+
+def test_exact_runtime_update_refusal_is_terminal_without_executor(
+    monkeypatch,
+    _autocontext,
+) -> None:
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(_autocontext)
+    command = {
+        "schema": update_service.RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA,
+        "kind": "skill",
+        "project_id": "refused_skill",
+        "from": {"version": "1.0.0", "package_digest": "sha256:old"},
+        "target": {"version": "2.0.0", "package_digest": "sha256:new"},
+        "plan_digest": PLAN_DIGEST,
+        "command_digest": "sha256:" + "c" * 64,
+        "consequences": {},
+    }
+    executions: list[dict] = []
+
+    async def _plan(*_args, **_kwargs):
+        return dict(command)
+
+    async def _execute(*args, **kwargs):
+        executions.append({"args": args, "kwargs": kwargs})
+        raise AssertionError("a refusal must not invoke the update executor")
+
+    monkeypatch.setattr(coordinator, "plan_qualified_runtime_update", _plan)
+    monkeypatch.setattr(coordinator, "execute_qualified_runtime_update", _execute)
+    presentation = asyncio.run(
+        coordinator.publish_qualified_runtime_update_interaction(
+            "skill",
+            "refused_skill",
+            qualification=_qualified_update(),
+            conversation_id="conv.runtime-update-refused",
+            owner="skill:runtime_compatibility",
+            expires_at="2099-01-01T00:00:00+00:00",
+            interaction_id="interaction.runtime-update-refused",
+        )
+    )
+    refusal = next(
+        item
+        for item in presentation["presentation"]["actions"]
+        if item["action_id"] == "refuse"
+    )
+    accepted = conversation_interactions.submit_action_token(
+        refusal["token"],
+        actor_id="user:owner",
+        idempotency_key="runtime-update:refuse",
+    )
+
+    result = asyncio.run(
+        coordinator.execute_qualified_runtime_update_interaction(
+            "interaction.runtime-update-refused",
+            accepted["response"]["response_id"],
+        )
+    )
+    duplicate = asyncio.run(
+        coordinator.execute_qualified_runtime_update_interaction(
+            "interaction.runtime-update-refused",
+            accepted["response"]["response_id"],
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["refused"] is True
+    assert result["dispatch"]["status"] == "cancelled"
+    assert result["interaction"]["status"] == "cancelled"
+    assert duplicate["duplicate"] is True
+    assert duplicate["dispatch"]["status"] == "cancelled"
+    assert executions == []
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "project_id"),
+    [
+        ("runtime_compatibility_command_stale", "stale_skill"),
+        ("artifact_subscription_not_found", "uninstalled_skill"),
+        ("artifact_runtime_component_missing", "executor_lost_skill"),
+    ],
+)
+def test_exact_runtime_update_failure_is_durable_and_not_retried(
+    monkeypatch,
+    _autocontext,
+    reason_code: str,
+    project_id: str,
+) -> None:
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(_autocontext)
+    command = {
+        "schema": update_service.RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA,
+        "kind": "skill",
+        "project_id": project_id,
+        "from": {"version": "1.0.0", "package_digest": "sha256:old"},
+        "target": {"version": "2.0.0", "package_digest": "sha256:new"},
+        "plan_digest": PLAN_DIGEST,
+        "command_digest": "sha256:" + hashlib.sha256(project_id.encode()).hexdigest(),
+        "consequences": {},
+    }
+    executions: list[dict] = []
+
+    async def _plan(*_args, **_kwargs):
+        return dict(command)
+
+    async def _execute(*args, **kwargs):
+        executions.append({"args": args, "kwargs": kwargs})
+        raise update_service.ArtifactSubscriptionUpdateError(
+            "the reviewed update can no longer execute",
+            code=reason_code,
+        )
+
+    monkeypatch.setattr(coordinator, "plan_qualified_runtime_update", _plan)
+    monkeypatch.setattr(coordinator, "execute_qualified_runtime_update", _execute)
+    interaction_id = f"interaction.runtime-update-failed.{project_id}"
+    presentation = asyncio.run(
+        coordinator.publish_qualified_runtime_update_interaction(
+            "skill",
+            project_id,
+            qualification=_qualified_update(),
+            conversation_id=f"conv.runtime-update-failed.{project_id}",
+            owner="skill:runtime_compatibility",
+            expires_at="2099-01-01T00:00:00+00:00",
+            interaction_id=interaction_id,
+            capability_profile={
+                **conversation_interactions.standard_capability_profile("web"),
+                "profile_id": "profile.web.step-up",
+                "capabilities": {
+                    **conversation_interactions.standard_capability_profile("web")[
+                        "capabilities"
+                    ],
+                    "step_up": True,
+                },
+            },
+        )
+    )
+    approval = next(
+        item
+        for item in presentation["presentation"]["actions"]
+        if item["action_id"] == "approve_exact_update"
+    )
+    accepted = conversation_interactions.submit_action_token(
+        approval["token"],
+        actor_id="user:owner",
+        idempotency_key=f"runtime-update:failed:{project_id}",
+    )
+
+    with pytest.raises(update_service.ArtifactSubscriptionUpdateError) as raised:
+        asyncio.run(
+            coordinator.execute_qualified_runtime_update_interaction(
+                interaction_id,
+                accepted["response"]["response_id"],
+            )
+        )
+    duplicate = asyncio.run(
+        coordinator.execute_qualified_runtime_update_interaction(
+            interaction_id,
+            accepted["response"]["response_id"],
+        )
+    )
+    dispatch = conversation_store.get_interaction_dispatch(
+        response_id=accepted["response"]["response_id"]
+    )
+
+    assert raised.value.code == reason_code
+    assert dispatch is not None
+    assert dispatch["status"] == "failed"
+    assert dispatch["outcome"]["reason_code"] == reason_code
+    assert duplicate["duplicate"] is True
+    assert duplicate["ok"] is False
+    assert duplicate["dispatch"]["status"] == "failed"
+    assert len(executions) == 1
