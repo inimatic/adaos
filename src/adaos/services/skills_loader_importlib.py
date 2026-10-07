@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import importlib.util
 import json
@@ -10,7 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterable, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional, Tuple
 
 from adaos.ports.skills_loader import SkillsLoaderPort
 from adaos.services.agent_context import get_ctx
@@ -30,6 +31,13 @@ _LOADED_HANDLER_MISS_CACHE: dict[str, tuple[tuple[int, int, int, int], int]] = {
 _RETIRED_HANDLER_SOURCES: list[dict[str, Any]] = []
 _RETIRED_HANDLER_SOURCES_LIMIT = 128
 _RETIRED_HANDLER_TOTAL = 0
+_REACTIVATION_LOCKS_GUARD = threading.Lock()
+_REACTIVATION_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _reactivation_lock(skill_name: str) -> threading.Lock:
+    with _REACTIVATION_LOCKS_GUARD:
+        return _REACTIVATION_LOCKS.setdefault(str(skill_name), threading.Lock())
 
 
 def _handler_module_name(handler: Path) -> str:
@@ -44,6 +52,99 @@ def _handler_module_name(handler: Path) -> str:
 
 def _source_digest(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _active_runtime_source_digest(
+    environment: SkillRuntimeEnvironment,
+    version: str,
+    slot: str,
+) -> str:
+    if not version or not slot:
+        return ""
+    metadata = environment.read_version_metadata(version)
+    slots = metadata.get("slots") if isinstance(metadata.get("slots"), Mapping) else {}
+    selected = slots.get(slot) if isinstance(slots, Mapping) else None
+    return str(dict(selected or {}).get("source_manifest_digest") or "").strip()
+
+
+def _capture_handler_generation(skill_name: str, handlers: Iterable[Path]) -> dict[str, Any]:
+    target = str(skill_name or "").strip()
+    candidate_modules = {_handler_module_name(Path(handler)) for handler in handlers}
+    source_records = {
+        name: copy.deepcopy(record)
+        for name, record in _LOADED_HANDLER_SOURCES.items()
+        if str(record.get("skill") or "").strip() == target or name in candidate_modules
+    }
+    family_roots = set(source_records) | candidate_modules
+    modules = {
+        name: module
+        for name, module in tuple(sys.modules.items())
+        if any(name == root or name.startswith(f"{root}.") for root in family_roots)
+    }
+    from adaos.services.skill.declarations import runtime_skill_declarations_snapshot
+
+    return {
+        "captured_at": time.time(),
+        "skill": target,
+        "candidate_modules": candidate_modules,
+        "source_records": source_records,
+        "modules": modules,
+        "declaration": runtime_skill_declarations_snapshot(target) or None,
+    }
+
+
+def _restore_handler_generation(snapshot: Mapping[str, Any]) -> None:
+    """Restore every process-local surface owned by one handler generation."""
+
+    global _RETIRED_HANDLER_TOTAL
+    target = str(snapshot.get("skill") or "").strip()
+    source_records = {
+        str(name): copy.deepcopy(record)
+        for name, record in dict(snapshot.get("source_records") or {}).items()
+    }
+    candidate_modules = {str(name) for name in snapshot.get("candidate_modules") or ()}
+    current_names = {
+        name
+        for name, record in tuple(_LOADED_HANDLER_SOURCES.items())
+        if str(record.get("skill") or "").strip() == target or name in candidate_modules
+    }
+    family_roots = current_names | set(source_records) | candidate_modules
+    for name in tuple(sys.modules):
+        if any(name == root or name.startswith(f"{root}.") for root in family_roots):
+            sys.modules.pop(name, None)
+    sys.modules.update(dict(snapshot.get("modules") or {}))
+
+    for name in current_names | candidate_modules:
+        record = _LOADED_HANDLER_SOURCES.pop(name, None)
+        if isinstance(record, Mapping):
+            path_key = os.path.normcase(str(record.get("path") or ""))
+            if _LOADED_HANDLER_PATH_INDEX.get(path_key) == name:
+                _LOADED_HANDLER_PATH_INDEX.pop(path_key, None)
+    for name, record in source_records.items():
+        _LOADED_HANDLER_SOURCES[name] = copy.deepcopy(record)
+        path_key = os.path.normcase(str(record.get("path") or ""))
+        if path_key:
+            _LOADED_HANDLER_PATH_INDEX[path_key] = name
+    _LOADED_HANDLER_MISS_CACHE.clear()
+
+    captured_at = float(snapshot.get("captured_at") or 0.0)
+    retained: list[dict[str, Any]] = []
+    removed = 0
+    for item in _RETIRED_HANDLER_SOURCES:
+        if (
+            str(item.get("skill") or "").strip() == target
+            and float(item.get("retired_at") or 0.0) >= captured_at
+        ):
+            removed += 1
+            continue
+        retained.append(item)
+    if removed:
+        _RETIRED_HANDLER_SOURCES[:] = retained
+        _RETIRED_HANDLER_TOTAL = max(0, _RETIRED_HANDLER_TOTAL - removed)
+
+    from adaos.services.skill.declarations import restore_runtime_skill_declaration
+
+    restore_runtime_skill_declaration(target, snapshot.get("declaration"))
 
 
 def _source_digest_reverify_interval_s() -> float:
@@ -519,12 +620,38 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         *,
         expected_version: str | None = None,
         expected_slot: str | None = None,
+        expected_source_manifest_digest: str | None = None,
+    ) -> dict[str, Any]:
+        """Reload one exact runtime generation under a per-skill process lock."""
+
+        target = str(skill_name or "").strip()
+        if not target:
+            return {"ok": False, "reason": "skill_name_missing", "handlers": []}
+        lock = _reactivation_lock(target)
+        await asyncio.to_thread(lock.acquire)
+        try:
+            return await self._reload_skill_handlers_locked(
+                skills_root,
+                target,
+                expected_version=expected_version,
+                expected_slot=expected_slot,
+                expected_source_manifest_digest=expected_source_manifest_digest,
+            )
+        finally:
+            lock.release()
+
+    async def _reload_skill_handlers_locked(
+        self,
+        skills_root: Any,
+        skill_name: str,
+        *,
+        expected_version: str | None = None,
+        expected_slot: str | None = None,
+        expected_source_manifest_digest: str | None = None,
     ) -> dict[str, Any]:
         root = Path(skills_root() if callable(skills_root) else skills_root)
         self._manifest_cache.clear()
         target = str(skill_name or "").strip()
-        if not target:
-            return {"ok": False, "reason": "skill_name_missing", "handlers": []}
         from adaos.sdk.core.decorators import (
             _registry_snapshot,
             _restore_registry_snapshot,
@@ -552,17 +679,32 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             else ""
         )
         selection = {"version": active_version, "slot": active_slot}
+        active_source_digest = await asyncio.to_thread(
+            _active_runtime_source_digest,
+            environment,
+            active_version,
+            active_slot,
+        )
         required_version = str(expected_version or "").strip()
         required_slot = str(expected_slot or "").strip().upper()
+        required_source_digest = str(expected_source_manifest_digest or "").strip()
         if (required_version and active_version != required_version) or (
             required_slot and active_slot != required_slot
+        ) or (
+            required_source_digest and active_source_digest != required_source_digest
         ):
             return {
                 "ok": False,
-                "reason": "runtime_selection_mismatch",
+                "reason": (
+                    "runtime_source_digest_mismatch"
+                    if required_source_digest and active_source_digest != required_source_digest
+                    else "runtime_selection_mismatch"
+                ),
                 "skill": target,
                 "expected_selection": {"version": required_version, "slot": required_slot},
                 "selection": selection,
+                "expected_source_manifest_digest": required_source_digest or None,
+                "source_manifest_digest": active_source_digest or None,
                 "subscriptions": subscriptions,
                 "handlers": [],
             }
@@ -618,6 +760,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 }
 
         registry_before = _registry_snapshot()
+        generation_before = _capture_handler_generation(target, handlers)
         subscriptions = deactivate_skill_subscriptions({target})
 
         # Fence the selection again after invalidating bus handlers and before
@@ -631,8 +774,19 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             if fenced_version
             else ""
         )
-        if fenced_version != active_version or fenced_slot != active_slot:
+        fenced_source_digest = await asyncio.to_thread(
+            _active_runtime_source_digest,
+            environment,
+            fenced_version,
+            fenced_slot,
+        )
+        if (
+            fenced_version != active_version
+            or fenced_slot != active_slot
+            or fenced_source_digest != active_source_digest
+        ):
             _restore_registry_snapshot(registry_before)
+            _restore_handler_generation(generation_before)
             await register_subscriptions(skill_names={target}, force=True)
             return {
                 "ok": False,
@@ -640,6 +794,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 "skill": target,
                 "preflight_selection": selection,
                 "selection": {"version": fenced_version, "slot": fenced_slot},
+                "preflight_source_manifest_digest": active_source_digest or None,
+                "source_manifest_digest": fenced_source_digest or None,
                 "subscriptions": subscriptions,
                 "preserved_previous_generation": True,
                 "handlers": [],
@@ -674,6 +830,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 _LOG.info("reloaded skill handler skill=%s path=%s", target, handler)
         except Exception as exc:
             _restore_registry_snapshot(registry_before)
+            _restore_handler_generation(generation_before)
             await register_subscriptions(skill_names={target}, force=True)
             return {
                 "ok": False,
@@ -684,13 +841,63 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 "preserved_previous_generation": True,
                 "handlers": [],
             }
+        post_version = str(await asyncio.to_thread(environment.resolve_active_version) or "").strip()
+        post_slot = (
+            str(await asyncio.to_thread(environment.read_active_slot, post_version) or "")
+            .strip()
+            .upper()
+            if post_version
+            else ""
+        )
+        post_source_digest = await asyncio.to_thread(
+            _active_runtime_source_digest,
+            environment,
+            post_version,
+            post_slot,
+        )
+        loaded_modules = {_handler_module_name(Path(handler)) for handler in handlers}
+        source_snapshot = await asyncio.to_thread(skill_handler_source_snapshot)
+        observed = {
+            str(item.get("module") or ""): dict(item)
+            for item in source_snapshot.get("items") or ()
+            if isinstance(item, Mapping) and str(item.get("module") or "") in loaded_modules
+        }
+        postcheck = {
+            "selection_matches": post_version == active_version and post_slot == active_slot,
+            "source_digest_matches": post_source_digest == active_source_digest,
+            "handler_count": len(observed),
+            "expected_handler_count": len(loaded_modules),
+            "handlers_current": len(observed) == len(loaded_modules)
+            and all(not bool(item.get("drift")) for item in observed.values()),
+        }
+        postcheck["ok"] = all(
+            bool(postcheck[key])
+            for key in ("selection_matches", "source_digest_matches", "handlers_current")
+        )
+        if not postcheck["ok"]:
+            _restore_registry_snapshot(registry_before)
+            _restore_handler_generation(generation_before)
+            await register_subscriptions(skill_names={target}, force=True)
+            return {
+                "ok": False,
+                "reason": "reactivation_postcheck_failed",
+                "skill": target,
+                "selection": {"version": post_version, "slot": post_slot},
+                "source_manifest_digest": post_source_digest or None,
+                "subscriptions": subscriptions,
+                "preserved_previous_generation": True,
+                "postcheck": postcheck,
+                "handlers": [],
+            }
         if loaded_handlers:
             await register_subscriptions(skill_names={target}, force=True)
         return {
             "ok": bool(loaded_handlers),
             "skill": target,
             "selection": selection,
+            "source_manifest_digest": active_source_digest or None,
             "subscriptions": subscriptions,
+            "postcheck": postcheck,
             "handlers": loaded_handlers,
         }
 

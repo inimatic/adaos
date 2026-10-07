@@ -894,6 +894,88 @@ def test_reload_rejects_runtime_selection_different_from_activation_receipt(tmp_
     assert receipt["selection"] == {"version": "0.8.28", "slot": "A"}
 
 
+def test_reload_rejects_runtime_source_digest_different_from_admitted_identity(tmp_path: Path) -> None:
+    skill_name = "identity_fenced_skill"
+    runtime_root = tmp_path / ".runtime" / skill_name
+    bucket_root = runtime_root / "v1.0"
+    bucket_root.mkdir(parents=True)
+    (runtime_root / "current_version").write_text("1.0", encoding="utf-8")
+    (bucket_root / "active").write_text("A", encoding="utf-8")
+    (bucket_root / "meta.json").write_text(
+        '{"slots":{"A":{"source_manifest_digest":"sha256:installed"}}}\n',
+        encoding="utf-8",
+    )
+
+    receipt = asyncio.run(
+        ImportlibSkillsLoader().reload_skill_handlers(
+            tmp_path,
+            skill_name,
+            expected_version="1.0",
+            expected_slot="A",
+            expected_source_manifest_digest="sha256:admitted",
+        )
+    )
+
+    assert receipt["ok"] is False
+    assert receipt["reason"] == "runtime_source_digest_mismatch"
+    assert receipt["source_manifest_digest"] == "sha256:installed"
+    assert receipt["expected_source_manifest_digest"] == "sha256:admitted"
+
+
+def test_multi_handler_reload_failure_restores_entire_previous_generation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    skill_name = "atomic_reload_skill"
+    good = tmp_path / "candidate-good" / "handlers" / "main.py"
+    broken = tmp_path / "candidate-broken" / "handlers" / "main.py"
+    good.parent.mkdir(parents=True)
+    broken.parent.mkdir(parents=True)
+    good.write_text(
+        "from adaos.sdk.core.decorators import tool\n"
+        "@tool('candidate_tool', side_effects='none')\n"
+        "def candidate_tool(_payload=None): return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    broken.write_text("raise RuntimeError('second handler failed')\n", encoding="utf-8")
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(
+        loader,
+        "_discover_runtime_handlers",
+        lambda _root: [(good, skill_name), (broken, skill_name)],
+    )
+    monkeypatch.setattr(loader, "_runtime_safety_issues", lambda _path: [])
+    monkeypatch.setattr(loader, "_load_skill_declarations", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        sdk_decorators,
+        "deactivate_skill_subscriptions",
+        lambda names: {"skills": sorted(names), "removed_handlers": 0},
+    )
+
+    async def register(*, skill_names=None, force=False):
+        assert force is True
+
+    monkeypatch.setattr(sdk_decorators, "register_subscriptions", register)
+    registry_before = sdk_decorators._registry_snapshot()
+    good_module = skills_loader_module._handler_module_name(good)
+    broken_module = skills_loader_module._handler_module_name(broken)
+    try:
+        receipt = asyncio.run(loader.reload_skill_handlers(tmp_path, skill_name))
+
+        assert receipt["ok"] is False
+        assert receipt["reason"] == "handler_import_failed"
+        assert receipt["preserved_previous_generation"] is True
+        assert good_module not in sys.modules
+        assert broken_module not in sys.modules
+        assert good_module not in sdk_decorators.tools_registry
+        assert good_module not in skills_loader_module._LOADED_HANDLER_SOURCES
+    finally:
+        for module_name in (good_module, broken_module):
+            sys.modules.pop(module_name, None)
+            skills_loader_module._LOADED_HANDLER_SOURCES.pop(module_name, None)
+        sdk_decorators._restore_registry_snapshot(registry_before)
+
+
 def test_reload_generation_fence_restores_previous_subscriptions_when_selection_changes(
     monkeypatch,
     tmp_path: Path,

@@ -183,10 +183,35 @@ def clear_runtime_skill_declarations(skill_name: str | None = None) -> None:
                     _RUNTIME_DECLARATIONS.pop(key)
 
 
+def restore_runtime_skill_declaration(
+    skill_name: str,
+    record: Mapping[str, Any] | None,
+) -> None:
+    """Restore one process-local declaration during handler rollback.
+
+    Runtime declaration loading is part of one handler generation. A failed
+    multi-handler reload must restore this cache together with modules, tools,
+    and subscriptions rather than leave metadata from the rejected candidate.
+    """
+
+    token = str(skill_name or "").strip()
+    if not token:
+        raise ValueError("skill name is required")
+    key = (_runtime_scope(), token)
+    with _LOCK:
+        if record is None:
+            _RUNTIME_DECLARATIONS.pop(key, None)
+        else:
+            value = dict(record)
+            value["skill"] = token
+            _RUNTIME_DECLARATIONS[key] = value
+
+
 __all__ = [
     "clear_runtime_skill_declarations",
     "load_runtime_skill_declarations",
     "receiver_patterns_from_webui_payload",
+    "restore_runtime_skill_declaration",
     "runtime_service_activation_summary",
     "runtime_skill_declarations_snapshot",
     "runtime_stream_receiver_patterns",
