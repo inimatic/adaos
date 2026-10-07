@@ -36,6 +36,33 @@ def test_ticket_list_can_omit_duplicated_legacy_envelope(tmp_path, monkeypatch):
     assert legacy["items"] == legacy["tickets"]
 
 
+def test_evidence_preview_does_not_load_builder_or_qualify_sources(tmp_path, monkeypatch):
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    result = service.report_stream_receiver_compatibility_finding(
+        skill_id="legacy_skill",
+        admission={"reason": "stream_receiver_policy_missing", "receiver": "foreign.panel"},
+    )
+    ticket_id = result["ticket"]["ticket_id"]
+    original = service.get_ticket(ticket_id)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("evidence preview invoked full Builder/source materialization")
+
+    monkeypatch.setattr(tickets_api, "_ticket_detail", unexpected)
+    client = _client(service)
+    response = client.get(f"/api/development-tickets/{ticket_id}?projection=evidence", headers=_headers())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ticket"] == original
+    assert body["projection"] == "evidence"
+    assert body["evidence"]["evidence_refs"][0]["receiver"] == "foreign.panel"
+    assert body["signals"][0]["signal_id"] == result["signal"]["signal_id"]
+    assert "work_stream" not in body
+    assert service.get_ticket(ticket_id) == original
+    assert client.get("/api/development-tickets/missing?projection=evidence", headers=_headers()).status_code == 404
+    assert client.get(f"/api/development-tickets/{ticket_id}?projection=unknown", headers=_headers()).status_code == 422
+
+
 def test_report_sync_index_never_clones_history_and_returns_detached_links(tmp_path, monkeypatch):
     link = {"report_id": "report.1", "status": "queued"}
     snapshot = {"tickets": {

@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
@@ -2055,10 +2055,18 @@ def get_artifact_content(
 def get_ticket(
     ticket_id: str,
     service: DevelopmentTicketService = Depends(_get_service),
+    projection: Literal["full", "evidence"] = Query(default="full"),
 ) -> dict[str, Any]:
     ticket = service.get_ticket(ticket_id)
     if not ticket:
         raise _not_found(ticket_id)
+    if projection == "evidence":
+        # Preview is a read, not Builder/source qualification. In particular,
+        # do not materialize an entire project or reconcile trials here.
+        signals = [signal for ref in ticket.get("signal_ids") or []
+                   if (signal := service.get_signal(str(ref)))]
+        return {"ok": True, "projection": "evidence", "ticket": ticket,
+                "signals": signals, "evidence": _evidence_view(ticket, signals)}
     return {"ok": True, **_ticket_detail(service, ticket)}
 
 
