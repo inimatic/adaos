@@ -625,6 +625,20 @@ def export(
         items = []
         for tool in tools:
             contract = dict(tool.get("contract") or {})
+            if tool.get("kind") == "sdk_capability_pack":
+                # Mini is an index, not the capability-pack delivery surface.
+                # Keep enough identity for ranking and exact drill-down without
+                # duplicating the lifecycle closure in every Builder prompt.
+                contract = {
+                    key: contract.get(key)
+                    for key in (
+                        "capabilities",
+                        "stability",
+                        "since",
+                        "deprecated",
+                        "digest",
+                    )
+                }
             items.append(
                 {
                     "k": tool.get("kind") or "tool",

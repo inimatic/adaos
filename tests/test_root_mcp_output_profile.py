@@ -9,6 +9,7 @@ from adaos.services.root_mcp.output_profile import (
     audit_search_contracts,
     context_curator_decision,
     context_pressure_stage,
+    evaluate_must_keep_admission,
     evaluate_release_slo,
     evaluate_source_budget_change,
     measure_output,
@@ -348,6 +349,59 @@ def test_context_margin_stages_preserve_reserve() -> None:
     reserve = context_pressure_stage(used_tokens=970, capacity_tokens=1000)
     assert reserve["stage"] == "reserve"
     assert "deny_new_tool_call" in reserve["actions"]
+
+
+@pytest.mark.parametrize(
+    ("used_tokens", "stage", "admitted"),
+    [
+        (7000, "observe", True),
+        (8500, "deterministic_trim", True),
+        (9200, "model_compact", True),
+        (9700, "reserve", False),
+    ],
+)
+def test_human_decision_must_keep_closure_survives_context_pressure(
+    used_tokens: int,
+    stage: str,
+    admitted: bool,
+) -> None:
+    obligations = [
+        "authority",
+        "expiry",
+        "non_mutating_preview",
+        "outcome_semantics",
+        "handler_closure",
+    ]
+
+    receipt = evaluate_must_keep_admission(
+        source_id="adaos.sdk.capability.human_decision.v1",
+        required_obligations=obligations,
+        retained_obligations=obligations,
+        estimated_tokens=400,
+        used_tokens=used_tokens,
+        capacity_tokens=10_000,
+    )
+
+    assert receipt["pressure"]["stage"] == stage
+    assert receipt["missing"] == []
+    assert receipt["retained"] == sorted(obligations)
+    assert receipt["admitted"] is admitted
+    assert receipt["continuation_required"] is (not admitted)
+
+
+def test_must_keep_admission_fails_closed_after_deterministic_trim() -> None:
+    receipt = evaluate_must_keep_admission(
+        source_id="adaos.sdk.capability.human_decision.v1",
+        required_obligations=["authority", "expiry", "handler_closure"],
+        retained_obligations=["authority", "expiry"],
+        estimated_tokens=100,
+        used_tokens=8500,
+        capacity_tokens=10_000,
+    )
+
+    assert receipt["admitted"] is False
+    assert receipt["missing"] == ["handler_closure"]
+    assert receipt["reason"] == "must_keep_obligation_missing"
 
 
 def test_p95_source_budget_changes_require_independent_quality_gate() -> None:

@@ -2249,6 +2249,12 @@ class BuilderAutomationService:
             for item in compilation.get("selected_refs") or []
             if str(item or "").strip()
         }
+        missing_required_refs = sorted(required_refs - selected_refs)
+        if missing_required_refs:
+            raise ValueError(
+                "Builder context compilation lost must-keep references: "
+                + ",".join(missing_required_refs)
+            )
         compaction_receipt = {
             "schema": "adaos.context.compaction_receipt.v1",
             "mode": "deterministic_only",

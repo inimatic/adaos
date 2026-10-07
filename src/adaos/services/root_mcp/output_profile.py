@@ -208,6 +208,68 @@ def context_pressure_stage(*, used_tokens: int, capacity_tokens: int) -> dict[st
     }
 
 
+def evaluate_must_keep_admission(
+    *,
+    source_id: str,
+    required_obligations: Sequence[str],
+    retained_obligations: Sequence[str],
+    estimated_tokens: int,
+    used_tokens: int,
+    capacity_tokens: int,
+) -> dict[str, Any]:
+    """Admit a model-facing slice only when its security closure remains intact.
+
+    Deterministic trimming may remove optional detail, but it cannot silently
+    remove a must-keep obligation.  The 97% reserve is also a hard boundary: a
+    closure that would cross it is deferred to a digest-bound continuation.
+    """
+
+    capacity = max(1, int(capacity_tokens))
+    used = max(0, int(used_tokens))
+    estimated = max(0, int(estimated_tokens))
+    pressure = context_pressure_stage(
+        used_tokens=used,
+        capacity_tokens=capacity,
+    )
+    required = sorted({str(item).strip() for item in required_obligations if str(item).strip()})
+    retained = sorted({str(item).strip() for item in retained_obligations if str(item).strip()})
+    missing = sorted(set(required) - set(retained))
+    reserve_boundary = int(capacity * CONTEXT_PRESSURE_THRESHOLDS["reserve"])
+    available_before_reserve = max(0, reserve_boundary - used)
+    if missing:
+        admitted = False
+        reason = "must_keep_obligation_missing"
+    elif pressure["stage"] == "reserve":
+        admitted = False
+        reason = "reasoning_result_recovery_reserve_active"
+    elif estimated > available_before_reserve:
+        admitted = False
+        reason = "must_keep_closure_cannot_fit"
+    else:
+        admitted = True
+        reason = "must_keep_closure_admitted"
+    closure_payload = json.dumps(
+        required,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "schema": "adaos.context.must_keep_admission.v1",
+        "source_id": str(source_id or "unknown"),
+        "pressure": pressure,
+        "required": required,
+        "retained": retained,
+        "missing": missing,
+        "required_digest": "sha256:" + hashlib.sha256(closure_payload).hexdigest(),
+        "estimated_tokens": estimated,
+        "available_before_reserve_tokens": available_before_reserve,
+        "admitted": admitted,
+        "reason": reason,
+        "continuation_required": not admitted,
+    }
+
+
 def evaluate_source_budget_change(
     *,
     source_id: str,
@@ -440,6 +502,7 @@ __all__ = [
     "audit_search_contracts",
     "context_curator_decision",
     "context_pressure_stage",
+    "evaluate_must_keep_admission",
     "evaluate_release_slo",
     "evaluate_source_budget_change",
     "measure_output",
