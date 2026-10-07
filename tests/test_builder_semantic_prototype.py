@@ -2655,6 +2655,9 @@ def test_generation_guidance_matches_capacity_and_executable_state_contract() ->
     assert set(guidance["state_proofs"]) == set(candidate["$defs"]["stateProof"]["properties"]["kind"]["enum"]) == set(STATE_PROOF_RULES)
     assert "array" in guidance["fixture_values"]["attachments"]
     assert "record.id" in guidance["relationships"]
+    assert "count fixture records satisfying ALL predicates" in guidance["state_rules"]
+    assert "not a repair when that option matches a fixture" in guidance["state_rules"]
+    assert "Do not change query_empty into collection_empty" in guidance["state_rules"]
 
 
 def test_candidate_capacity_is_enforced_after_provider_projection() -> None:
