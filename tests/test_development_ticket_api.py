@@ -25,6 +25,31 @@ def _headers() -> dict[str, str]:
     return {"X-AdaOS-Token": "dev-local-token"}
 
 
+def test_ticket_list_can_omit_duplicated_legacy_envelope(tmp_path, monkeypatch):
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    monkeypatch.setattr(tickets_api, "_schedule_ticket_development_report_sync", lambda *_: None)
+    client = _client(service)
+    payload = client.get("/api/development-tickets?projection=summary&envelope=items", headers=_headers()).json()
+    assert payload["items"] == []
+    assert "tickets" not in payload
+    legacy = client.get("/api/development-tickets?projection=summary", headers=_headers()).json()
+    assert legacy["items"] == legacy["tickets"]
+
+
+def test_report_sync_index_never_clones_history_and_returns_detached_links(tmp_path, monkeypatch):
+    link = {"report_id": "report.1", "status": "queued"}
+    snapshot = {"tickets": {
+        "feedback": {"ticket_id": "feedback", "source": "ui_feedback", "comments": object()},
+        "linked": {"ticket_id": "linked", "metadata": {"development_report": link}, "history": object()},
+        "unrelated": {"ticket_id": "unrelated", "source": "runtime", "evidence": object()},
+    }}
+    monkeypatch.setattr(DevelopmentTicketService, "_read_snapshot", lambda self: snapshot)
+    index = DevelopmentTicketService(state_dir=tmp_path).list_report_sync_candidates()
+    assert [row["ticket_id"] for row in index] == ["feedback", "linked"]
+    index[1]["metadata"]["development_report"]["status"] = "changed"
+    assert link["status"] == "queued"
+
+
 class _FakeAutomationService:
     def __init__(self) -> None:
         self.started: list[dict] = []

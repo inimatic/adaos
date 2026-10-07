@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+import threading
+import time
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +16,67 @@ from adaos.services.component_updates import ComponentUpdateService
 
 
 router = APIRouter(tags=["component-updates"], dependencies=[Depends(require_token)])
+
+
+class _NoticeReconciler:
+    """Repair legacy projections off the read path, with one bounded worker.
+
+    Builder completion and Trial acceptance already write notices synchronously.
+    GET must read that projection, not replay every historical Builder session.
+    Recovery is coalesced per state root/room; archive recovery runs once per
+    root and process, while selected Trial recovery can run every 60 seconds.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.pending: OrderedDict[tuple[str, str], ComponentUpdateService] = OrderedDict()
+        self.next_at: OrderedDict[tuple[str, str], float] = OrderedDict()
+        self.recovered: OrderedDict[str, None] = OrderedDict()
+        self.worker: threading.Thread | None = None
+        self.active: tuple[str, str] | None = None
+
+    def schedule(self, service: ComponentUpdateService, webspace_id: str) -> bool:
+        from adaos.services.runtime_paths import current_state_dir
+
+        key = (str(service.state_dir or current_state_dir()), webspace_id)
+        with self.lock:
+            if time.monotonic() < self.next_at.get(key, 0) or len(self.pending) >= 16:
+                return key in self.pending or self.active == key
+            self.pending[key] = service
+            self.next_at[key] = time.monotonic() + 60.0
+            self.next_at.move_to_end(key)
+            while len(self.next_at) > 64:
+                self.next_at.popitem(last=False)
+            if self.worker is None:
+                self.worker = threading.Thread(
+                    target=self._run, name="adaos-component-update-recovery", daemon=True
+                )
+                self.worker.start()
+            return True
+
+    def _run(self) -> None:
+        while True:
+            with self.lock:
+                if not self.pending:
+                    self.worker = None
+                    return
+                (root, room), service = self.pending.popitem(last=False)
+                self.active = (root, room)
+            try:
+                if root not in self.recovered:
+                    service.reconcile_builder_sessions()
+                    self.recovered[root] = None
+                    while len(self.recovered) > 16:
+                        self.recovered.popitem(last=False)
+                service.reconcile_local_trials(room)
+            except Exception:
+                logging.getLogger(__name__).exception("Component notice recovery deferred")
+            finally:
+                with self.lock:
+                    self.active = None
+
+
+_NOTICE_RECONCILER = _NoticeReconciler()
 
 
 def _get_service() -> ComponentUpdateService:
@@ -108,8 +173,6 @@ def list_component_updates(
     unread_only: bool = Query(default=False),
     service: ComponentUpdateService = Depends(_get_service),
 ) -> dict[str, Any]:
-    service.reconcile_builder_sessions()
-    service.reconcile_local_trials(webspace_id)
     items = service.list_notices(
         component_type=component_type,
         component_id=component_id,
@@ -119,8 +182,10 @@ def list_component_updates(
         webspace_id=webspace_id,
         unread_only=unread_only,
     )
+    recovery_pending = _NOTICE_RECONCILER.schedule(service, webspace_id)
     return {
         "ok": True,
+        "reconciliation_pending": recovery_pending,
         "items": items,
         "total": len(items),
         "unread": sum(1 for item in items if item.get("unread")),

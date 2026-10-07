@@ -103,6 +103,44 @@ def _route_http_lane_index(key: str, workers: int) -> int:
     return int.from_bytes(digest, "big") % worker_total
 
 
+class _RouteHttpLaneScheduler:
+    """Use idle lanes without reordering frames of an in-flight request.
+
+    Static hashing put cheap requests behind long tool calls even when three
+    workers were idle. Pin only outstanding work; once all of a key's frames
+    complete, its next frame can safely use any lane. State is bounded by the
+    dispatch queues plus running workers, not by historical request IDs.
+    Called only from the route event loop.
+    """
+
+    def __init__(self, workers: int) -> None:
+        self.loads = [0] * max(1, workers)
+        self.pending: dict[str, tuple[int, int]] = {}
+
+    def acquire(self, key: str) -> int:
+        current = self.pending.get(key)
+        if current is None:
+            start = _route_http_lane_index(key, len(self.loads))
+            lane = min(
+                range(len(self.loads)),
+                key=lambda index: (self.loads[index], (index - start) % len(self.loads)),
+            )
+            count = 0
+        else:
+            lane, count = current
+        self.pending[key] = (lane, count + 1)
+        self.loads[lane] += 1
+        return lane
+
+    def release(self, key: str) -> None:
+        lane, count = self.pending[key]
+        self.loads[lane] -= 1
+        if count == 1:
+            del self.pending[key]
+        else:
+            self.pending[key] = (lane, count - 1)
+
+
 _T = TypeVar("_T")
 
 
@@ -3294,6 +3332,8 @@ class NatsRouteTunnelRuntime:
                 route_t = "?"
                 route_outcome = "start"
                 route_started = time.monotonic()
+                route_queued_at = float(getattr(msg, "queued_at", route_started))
+                route_queue_wait_ms = max(0.0, (route_started - route_queued_at) * 1000.0)
                 http_method = ""
                 http_path = ""
                 http_kind = ""
@@ -5131,7 +5171,8 @@ class NatsRouteTunnelRuntime:
                     except Exception:
                         pass
                 finally:
-                    took_ms = (time.monotonic() - route_started) * 1000.0
+                    handler_ms = (time.monotonic() - route_started) * 1000.0
+                    took_ms = handler_ms + route_queue_wait_ms
                     if http_path:
                         try:
                             observe_route_e2e(
@@ -5140,6 +5181,8 @@ class NatsRouteTunnelRuntime:
                                     "last_http_reply_path": http_path,
                                     "last_http_reply_method": http_method or "",
                                     "last_http_reply_took_ms": round(took_ms, 1),
+                                    "last_http_reply_queue_wait_ms": round(route_queue_wait_ms, 1),
+                                    "last_http_reply_handler_ms": round(handler_ms, 1),
                                     "last_http_reply_outcome": route_outcome,
                                     "last_http_reply_key_tag": _key_tag(key),
                                 }
@@ -5217,11 +5260,12 @@ class NatsRouteTunnelRuntime:
                     return
 
             class _QueuedRouteMsg:
-                __slots__ = ("subject", "data")
+                __slots__ = ("subject", "data", "queued_at")
 
-                def __init__(service, subject: str, data: bytes) -> None:
+                def __init__(service, subject: str, data: bytes, queued_at: float) -> None:
                     service.subject = subject
                     service.data = data
+                    service.queued_at = queued_at
 
             try:
                 route_handler_queue_max = int(os.getenv("HUB_ROUTE_HANDLER_QUEUE_MAX", "4096") or "4096")
@@ -5240,11 +5284,12 @@ class NatsRouteTunnelRuntime:
             except Exception:
                 route_http_lane_queue_max = max(32, route_handler_queue_max // route_http_worker_count)
             route_http_lane_queue_max = max(32, route_http_lane_queue_max)
-            route_handler_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(maxsize=route_handler_queue_max)
+            route_handler_queue: asyncio.Queue[tuple[str, bytes, float]] = asyncio.Queue(maxsize=route_handler_queue_max)
             route_http_queues = [
                 asyncio.Queue(maxsize=route_http_lane_queue_max)
                 for _index in range(route_http_worker_count)
             ]
+            route_http_scheduler = _RouteHttpLaneScheduler(route_http_worker_count)
             route_diag_state["dispatch_queue_max"] = int(route_handler_queue_max)
             route_diag_state["dispatch_control_queue_max"] = int(route_handler_queue_max)
             route_diag_state["dispatch_http_worker_count"] = int(route_http_worker_count)
@@ -5273,19 +5318,24 @@ class NatsRouteTunnelRuntime:
                 route_diag_state["dispatch_queue_size"] = total_size
 
             async def _route_handler_worker(
-                queue: asyncio.Queue[tuple[str, bytes]],
+                queue: asyncio.Queue[tuple[str, bytes, float]],
                 *,
                 lane: str,
             ) -> None:
                 while True:
-                    subject, raw = await queue.get()
+                    subject, raw, queued_at = await queue.get()
                     started0 = time.monotonic()
+                    queue_wait_ms = max(0.0, (started0 - queued_at) * 1000.0)
                     key0 = _route_key_from_subject(subject)
                     try:
                         _observe_route_dispatch_queues()
                         route_diag_state["last_dispatch_lane"] = lane
                         route_diag_state["last_dispatch_key_tag"] = _key_tag(key0) if key0 else ""
-                        await _route_handle_msg(_QueuedRouteMsg(subject, raw))
+                        route_diag_state["last_dispatch_queue_wait_ms"] = round(queue_wait_ms, 1)
+                        route_diag_state["max_dispatch_queue_wait_ms"] = round(max(
+                            queue_wait_ms, float(route_diag_state.get("max_dispatch_queue_wait_ms") or 0)
+                        ), 1)
+                        await _route_handle_msg(_QueuedRouteMsg(subject, raw, queued_at))
                         route_diag_state["dispatch_handled_total"] = int(route_diag_state.get("dispatch_handled_total") or 0) + 1
                         lane_counter = f"dispatch_{lane}_handled_total"
                         route_diag_state[lane_counter] = int(route_diag_state.get(lane_counter) or 0) + 1
@@ -5302,6 +5352,8 @@ class NatsRouteTunnelRuntime:
                         except Exception:
                             pass
                     finally:
+                        if lane.startswith("http_"):
+                            route_http_scheduler.release(key0)
                         try:
                             took_ms = (time.monotonic() - started0) * 1000.0
                             route_diag_state["last_dispatch_ms"] = round(took_ms, 1)
@@ -5331,19 +5383,21 @@ class NatsRouteTunnelRuntime:
                 key0 = _route_key_from_subject(subject)
                 is_http = bool(key0 and ("--http--" in key0 or "--media--" in key0))
                 if is_http:
-                    lane_index = _route_http_lane_index(key0, route_http_worker_count)
+                    lane_index = route_http_scheduler.acquire(key0)
                     target_queue = route_http_queues[lane_index]
                     lane = f"http_{lane_index}"
                 else:
                     target_queue = route_handler_queue
                     lane = "control"
                 try:
-                    target_queue.put_nowait((subject, raw))
+                    target_queue.put_nowait((subject, raw, time.monotonic()))
                     route_diag_state["dispatch_enqueued_total"] = int(route_diag_state.get("dispatch_enqueued_total") or 0) + 1
                     lane_counter = "dispatch_http_enqueued_total" if is_http else "dispatch_control_enqueued_total"
                     route_diag_state[lane_counter] = int(route_diag_state.get(lane_counter) or 0) + 1
                     _observe_route_dispatch_queues()
                 except asyncio.QueueFull:
+                    if is_http:
+                        route_http_scheduler.release(key0)
                     route_diag_state["dispatch_drop_total"] = int(route_diag_state.get("dispatch_drop_total") or 0) + 1
                     lane_counter = "dispatch_http_drop_total" if is_http else "dispatch_control_drop_total"
                     route_diag_state[lane_counter] = int(route_diag_state.get(lane_counter) or 0) + 1

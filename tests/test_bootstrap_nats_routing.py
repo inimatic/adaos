@@ -71,6 +71,24 @@ def test_nats_url_does_not_need_public_ws_refresh_for_local_or_ws_url() -> None:
     assert _nats_bridge._nats_url_needs_public_ws_refresh("wss://nats.inimatic.com/nats") is False
 
 
+def test_http_scheduler_uses_idle_lane_even_for_colliding_keys():
+    scheduler = _route_tunnel_runtime._RouteHttpLaneScheduler(4)
+    keys = [f"request-{i}" for i in range(100)
+            if _route_tunnel_runtime._route_http_lane_index(f"request-{i}", 4) == 0][:5]
+    lanes = [scheduler.acquire(key) for key in keys[:4]]
+    assert set(lanes) == {0, 1, 2, 3}
+    # Keep a chunked request's frames ordered even when that lane is busy.
+    assert scheduler.acquire(keys[0]) == lanes[0]
+    scheduler.release(keys[0])
+    assert keys[0] in scheduler.pending
+    scheduler.release(keys[1])
+    assert scheduler.acquire(keys[4]) == lanes[1]
+    for key in [keys[0], keys[2], keys[3], keys[4]]:
+        scheduler.release(key)
+    assert scheduler.loads == [0, 0, 0, 0]
+    assert scheduler.pending == {}
+
+
 def test_loop_hang_watchdog_uses_single_explicit_opt_in(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_LOOP_HANG_WATCHDOG", "1")
     monkeypatch.delenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE", raising=False)

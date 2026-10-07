@@ -290,7 +290,7 @@ def test_component_update_keeps_failed_publication_in_beta(tmp_path: Path) -> No
     assert failed["transition"]["failure"]["ticket_id"] == "dticket.failure"
 
 
-def test_component_update_reconciles_builder_session_and_api(tmp_path: Path) -> None:
+def test_component_update_reconciles_builder_session_and_api(tmp_path: Path, monkeypatch) -> None:
     automation_root = tmp_path / "builder" / "automation"
     automation_root.mkdir(parents=True)
     (automation_root / "skill.demo_metrics_skill.json").write_text(
@@ -306,6 +306,8 @@ def test_component_update_reconciles_builder_session_and_api(tmp_path: Path) -> 
         encoding="utf-8",
     )
     service = ComponentUpdateService(state_dir=tmp_path)
+    reconciler = updates_api._NoticeReconciler()
+    monkeypatch.setattr(updates_api, "_NOTICE_RECONCILER", reconciler)
     app = FastAPI()
     app.include_router(updates_api.router, prefix="/api/component-updates")
     app.dependency_overrides[updates_api._get_service] = lambda: service
@@ -319,6 +321,17 @@ def test_component_update_reconciles_builder_session_and_api(tmp_path: Path) -> 
     )
 
     assert response.status_code == 200
+    assert response.json()["reconciliation_pending"] is True
+    with reconciler.lock:
+        worker = reconciler.worker
+    if worker is not None:
+        worker.join(5)
+        assert not worker.is_alive()
+    response = client.get(
+        "/api/component-updates",
+        params={"component_type": "skill", "component_id": "demo_metrics_skill"},
+        headers=headers,
+    )
     payload = response.json()
     assert payload["total"] == 1
     assert payload["items"][0]["ticket_ids"] == ["dticket.demo"]

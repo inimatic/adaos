@@ -6878,6 +6878,18 @@ class DevelopmentTicketService:
             ]
         return [_clone(item) for item in sorted_tickets]
 
+    def list_report_sync_candidates(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        """Internal relay index: never copy evidence, comments or Builder history."""
+        rows = self._read_snapshot()["tickets"].values()
+        relevant = [row for row in rows if row.get("source") in {"client_feedback", "ui_feedback"}
+                    or _mapping(row.get("metadata")).get("development_report")]
+        relevant.sort(key=lambda row: row.get("updated_at") or row.get("created_at") or "", reverse=True)
+        return [
+            {"ticket_id": row.get("ticket_id"), "source": row.get("source"),
+             "metadata": {"development_report": _clone(_mapping(row.get("metadata")).get("development_report") or {})}}
+            for row in relevant[:max(0, min(int(limit), 1000))]
+        ]
+
     def list_core_backlog(
         self,
         *,

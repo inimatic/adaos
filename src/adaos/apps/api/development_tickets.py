@@ -253,7 +253,7 @@ def _sync_ticket_development_reports(service: DevelopmentTicketService) -> None:
         from adaos.services.applications import get_development_report_service
 
         reports = get_development_report_service()
-        tickets = service.list_tickets(limit=1000)
+        tickets = service.list_report_sync_candidates(limit=1000)
         applications = reports.application_store.list_applications()
         for ticket in tickets:
             linked = (
@@ -270,7 +270,7 @@ def _sync_ticket_development_reports(service: DevelopmentTicketService) -> None:
                 )
         reports.flush_outbox(limit=50)
         reports.receive(limit=50)
-        for ticket in service.list_tickets(limit=1000):
+        for ticket in service.list_report_sync_candidates(limit=1000):
             linked = (
                 ticket.get("metadata", {}).get("development_report", {})
                 if isinstance(ticket.get("metadata"), Mapping)
@@ -282,9 +282,15 @@ def _sync_ticket_development_reports(service: DevelopmentTicketService) -> None:
             event = reports.public_status(report_id)
             if not event:
                 continue
+            merged = {**dict(linked), **event}
+            if linked.get("relay_status") == "synced" and all(
+                linked.get(key) == merged.get(key)
+                for key in ("report_id", "application_id", "publisher_ref", "status", "revision")
+            ):
+                continue
             service.link_development_report(
                 str(ticket.get("ticket_id") or ""),
-                report={**dict(linked), **event},
+                report=merged,
                 relay={"local_status": "synced"},
             )
     except Exception as exc:
@@ -1522,6 +1528,7 @@ def list_tickets(
     updated_since: str | None = None,
     search: str | None = None,
     projection: str = Query(default="full", pattern="^(full|summary)$"),
+    envelope: str = Query(default="both", pattern="^(both|items)$"),
     limit: int | None = Query(default=None, ge=0, le=1000),
     service: DevelopmentTicketService = Depends(_get_service),
 ) -> dict[str, Any]:
@@ -1573,13 +1580,15 @@ def list_tickets(
         projection=projection,
     )
     items = tickets
-    return {
+    result = {
         "ok": True,
-        "tickets": items,
         "items": items,
         "count": len(items),
         "projection": projection,
     }
+    if envelope != "items":
+        result["tickets"] = items
+    return result
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
