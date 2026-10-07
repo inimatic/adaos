@@ -494,7 +494,9 @@ def _report_subscription_receiver_policy_missing(
         or payload.get("stream")
         or ""
     ).strip()
-    report_key = f"{skill}:{topic}:stream_receiver_policy_missing:{receiver or '-'}"
+    # The missing policy belongs to the skill. Reconnects may broadcast many
+    # unrelated receivers and both snapshot/subscription events for each one.
+    report_key = f"{skill}:stream_receiver_policy_missing"
     now = time.monotonic()
     interval_s = float(_env_int("ADAOS_DEV_TICKET_RUNTIME_COMPATIBILITY_REPORT_INTERVAL_S", 30, minimum=0))
     with _SUBSCRIPTION_COMPATIBILITY_LOCK:

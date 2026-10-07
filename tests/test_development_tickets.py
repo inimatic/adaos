@@ -893,6 +893,29 @@ def test_receiver_compatibility_finding_creates_signal_ticket_pending_action_and
     Draft202012Validator(_schema("development_signal.v1.schema.json")).validate(duplicate["signal"])
     Draft202012Validator(_schema("dev_ticket.v1.schema.json")).validate(duplicate["ticket"])
 
+    # Broadcasts for another application's receiver expose the same missing
+    # policy; they do not establish that this skill owns that receiver.
+    foreign = service.report_stream_receiver_compatibility_finding(
+        skill_id="legacy_skill",
+        admission={**admission, "receiver": "foreign.messages"},
+        topic="webio.stream.snapshot.requested",
+        publish_pending_action=True,
+    )
+    assert foreign["ticket"]["ticket_id"] == result["ticket"]["ticket_id"]
+    assert len(published) == 1
+    assert "foreign.messages" not in foreign["ticket"]["summary"]
+    assert "Declare only the streams owned" in foreign["ticket"]["summary"]
+
+
+def test_declared_receiver_denials_remain_separate_compatibility_findings(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    findings = [service.report_stream_receiver_compatibility_finding(
+        skill_id="governed_skill",
+        admission={"reason": "stream_receiver_not_declared", "receiver": receiver, "receiver_patterns": ["owned.panel"]},
+    ) for receiver in ("other.a", "other.b")]
+    assert findings[0]["ticket"]["ticket_id"] != findings[1]["ticket"]["ticket_id"]
+    assert all(item["ticket"]["policy"]["blocking"] for item in findings)
+
 
 def test_compatibility_pending_action_response_creates_builder_repair(tmp_path: Path) -> None:
     admission = stream_receiver_event_admission(

@@ -2855,9 +2855,11 @@ class DevelopmentTicketService:
         if not skill:
             raise ValueError("skill_id is required")
         receiver = _text(admission.get("receiver"))
+        missing_policy = reason == "stream_receiver_policy_missing"
         summary = (
-            f"Skill {skill} lacks receiver/data-route declaration"
-            + (f" for {receiver}" if receiver else "")
+            f"Skill {skill} has no stream receiver policy. Declare only the streams owned by this skill."
+            if missing_policy else
+            f"Skill {skill} lacks receiver/data-route declaration" + (f" for {receiver}" if receiver else "")
         )
         context = {
             "code": f"compat.{reason}",
@@ -2866,6 +2868,12 @@ class DevelopmentTicketService:
             "receiver_patterns": list(admission.get("receiver_patterns") or [])[:12],
             "topic": _text(topic) or None,
             "event_type": _text(event_type) or _text(topic) or None,
+            "remediation": (
+                "Inspect the skill handlers and declare their owned stream receivers. "
+                "The observed broadcast receiver is evidence of the missing policy, not proof of ownership. "
+                "Do not add foreign receivers or a wildcard to silence this finding."
+                if missing_policy else "Verify the receiver ownership and data-route contract before retrying."
+            ),
         }
         target = _mapping(target_scope) or {"type": "skill", "id": skill, "source": "installed"}
         return {
@@ -2892,7 +2900,9 @@ class DevelopmentTicketService:
                 design_time_fixable=True,
                 autonomous_repair_eligible=True,
                 source="runtime_guard",
-                dedup_key=_fingerprint("compat.receiver", skill, reason, receiver or _text(topic)),
+                # An absent manifest policy is one defect, not one defect for
+                # every broadcast stream seen by an ungoverned subscriber.
+                dedup_key=_fingerprint("compat.receiver", skill, reason, "policy" if missing_policy else receiver or _text(topic)),
                 publish_pending_action=publish_pending_action,
                 ctx=ctx,
                 webspace_id=webspace_id,

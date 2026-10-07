@@ -587,7 +587,7 @@ def test_receiver_diagnostics_do_not_block_stream_loop_and_coalesce(monkeypatch)
     worker_threads = []
     monkeypatch.setenv("ADAOS_DEV_TICKET_RUNTIME_COMPATIBILITY_REPORT_INTERVAL_S", "0")
     monkeypatch.setattr(decorators, "_SUBSCRIPTION_COMPATIBILITY_REPORT_AT", {})
-    monkeypatch.setattr(decorators, "_SUBSCRIPTION_COMPATIBILITY_MAX_PENDING", 1)
+    monkeypatch.setattr(decorators, "_SUBSCRIPTION_COMPATIBILITY_MAX_PENDING", 2)
 
     def persist(*args):
         worker_threads.append(threading.get_ident())
@@ -610,6 +610,13 @@ def test_receiver_diagnostics_do_not_block_stream_loop_and_coalesce(monkeypatch)
             assert await asyncio.to_thread(entered.wait, 2)
             # Both a duplicate and another receiver at capacity must return immediately.
             assert decorators._report_subscription_receiver_policy_missing("test_skill", "snapshot", event, admission) is None
+            # A different broadcast receiver/topic must coalesce even when the
+            # worker queue has spare capacity (not only when it is full).
+            assert decorators._report_subscription_receiver_policy_missing(
+                "test_skill", "subscription", {**event, "receiver": "foreign"},
+                {**admission, "receiver": "foreign"},
+            ) is None
+            monkeypatch.setattr(decorators, "_SUBSCRIPTION_COMPATIBILITY_MAX_PENDING", 1)
             assert decorators._report_subscription_receiver_policy_missing("other_skill", "snapshot", event, admission) is None
             await asyncio.sleep(0)
             assert not future.done()
