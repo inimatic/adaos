@@ -525,9 +525,14 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         target = str(skill_name or "").strip()
         if not target:
             return {"ok": False, "reason": "skill_name_missing", "handlers": []}
-        from adaos.sdk.core.decorators import deactivate_skill_subscriptions
+        from adaos.sdk.core.decorators import (
+            _registry_snapshot,
+            _restore_registry_snapshot,
+            deactivate_skill_subscriptions,
+            register_subscriptions,
+        )
 
-        subscriptions = deactivate_skill_subscriptions({target})
+        subscriptions = {"skills": [], "removed_handlers": 0, "preflight": True}
         environment = SkillRuntimeEnvironment(skills_root=root, skill_name=target)
         deactivation = await asyncio.to_thread(environment.read_deactivation)
         if bool(deactivation.get("deactivated")):
@@ -575,22 +580,19 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             repo_handlers = await asyncio.to_thread(self._discover_repo_workspace_handlers, root, set())
             handlers = [handler for handler, name in repo_handlers if name == target]
         if not handlers:
-            retired = await asyncio.to_thread(
-                _retire_loaded_skill_sources,
-                target,
-                retired_by="reload:no_in_process_handlers",
-            )
             return {
-                "ok": True,
+                "ok": False,
                 "skipped": True,
-                "reason": "no_in_process_handlers",
+                "reason": "reactivation_preflight_no_in_process_handlers",
                 "skill": target,
                 "subscriptions": subscriptions,
-                "retired": retired,
+                "preserved_previous_generation": True,
                 "handlers": [],
             }
-        loaded_declaration_manifests: set[Path] = set()
-        loaded_handlers: list[str] = []
+
+        # Validate every candidate before invalidating the working generation.
+        # A quarantined candidate must not tear down the handlers that currently
+        # provide service while the lifecycle owner decides how to recover.
         for handler in handlers:
             issues = await asyncio.to_thread(self._runtime_safety_issues, handler)
             if issues:
@@ -600,7 +602,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                     target,
                     handler,
                     issues,
-                    source="reload",
+                    source="reload_preflight",
                 )
                 await self._emit_runtime_safety_quarantine(target, quarantine)
                 return {
@@ -611,35 +613,78 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                     "deactivation": quarantine,
                     "subscriptions": subscriptions,
                     "issues": issues,
+                    "preserved_previous_generation": True,
                     "handlers": [],
                 }
-            declaration_started_at = time.perf_counter()
-            await asyncio.to_thread(
-                self._load_skill_declarations,
-                handler,
-                loaded_declaration_manifests,
-                skill_name=target,
-            )
-            declaration_ms = (time.perf_counter() - declaration_started_at) * 1000.0
-            import_started_at = time.perf_counter()
-            await asyncio.to_thread(self._load_handler, handler, reload=True)
-            import_ms = (time.perf_counter() - import_started_at) * 1000.0
-            self._log_slow_handler_import(
-                self._handler_import_timing(
-                    handler=handler,
-                    skill_name=target,
-                    source="reload",
-                    elapsed_ms=declaration_ms + import_ms,
-                    declaration_ms=declaration_ms,
-                    import_ms=import_ms,
-                    loaded=True,
-                )
-            )
-            loaded_handlers.append(str(handler))
-            _LOG.info("reloaded skill handler skill=%s path=%s", target, handler)
-        if loaded_handlers:
-            from adaos.sdk.core.decorators import register_subscriptions
 
+        registry_before = _registry_snapshot()
+        subscriptions = deactivate_skill_subscriptions({target})
+
+        # Fence the selection again after invalidating bus handlers and before
+        # importing any candidate code. Concurrent activation must not make a
+        # preflight receipt authorize a different version or slot.
+        fenced_version = str(await asyncio.to_thread(environment.resolve_active_version) or "").strip()
+        fenced_slot = (
+            str(await asyncio.to_thread(environment.read_active_slot, fenced_version) or "")
+            .strip()
+            .upper()
+            if fenced_version
+            else ""
+        )
+        if fenced_version != active_version or fenced_slot != active_slot:
+            _restore_registry_snapshot(registry_before)
+            await register_subscriptions(skill_names={target}, force=True)
+            return {
+                "ok": False,
+                "reason": "runtime_selection_changed_during_reactivation",
+                "skill": target,
+                "preflight_selection": selection,
+                "selection": {"version": fenced_version, "slot": fenced_slot},
+                "subscriptions": subscriptions,
+                "preserved_previous_generation": True,
+                "handlers": [],
+            }
+        loaded_declaration_manifests: set[Path] = set()
+        loaded_handlers: list[str] = []
+        try:
+            for handler in handlers:
+                import_started_at = time.perf_counter()
+                await asyncio.to_thread(self._load_handler, handler, reload=True)
+                import_ms = (time.perf_counter() - import_started_at) * 1000.0
+                declaration_started_at = time.perf_counter()
+                await asyncio.to_thread(
+                    self._load_skill_declarations,
+                    handler,
+                    loaded_declaration_manifests,
+                    skill_name=target,
+                )
+                declaration_ms = (time.perf_counter() - declaration_started_at) * 1000.0
+                self._log_slow_handler_import(
+                    self._handler_import_timing(
+                        handler=handler,
+                        skill_name=target,
+                        source="reload",
+                        elapsed_ms=declaration_ms + import_ms,
+                        declaration_ms=declaration_ms,
+                        import_ms=import_ms,
+                        loaded=True,
+                    )
+                )
+                loaded_handlers.append(str(handler))
+                _LOG.info("reloaded skill handler skill=%s path=%s", target, handler)
+        except Exception as exc:
+            _restore_registry_snapshot(registry_before)
+            await register_subscriptions(skill_names={target}, force=True)
+            return {
+                "ok": False,
+                "reason": "handler_import_failed",
+                "skill": target,
+                "error": f"{type(exc).__name__}: {exc}",
+                "subscriptions": subscriptions,
+                "preserved_previous_generation": True,
+                "handlers": [],
+            }
+        if loaded_handlers:
             await register_subscriptions(skill_names={target}, force=True)
         return {
             "ok": bool(loaded_handlers),

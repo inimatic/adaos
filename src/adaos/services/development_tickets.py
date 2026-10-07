@@ -2842,6 +2842,7 @@ class DevelopmentTicketService:
         *,
         skill_id: str,
         admission: Mapping[str, Any],
+        compatibility_snapshot: Mapping[str, Any] | None = None,
         topic: str = "",
         event_type: str = "",
         owner_scope: Mapping[str, Any] | None = None,
@@ -2858,6 +2859,20 @@ class DevelopmentTicketService:
         skill = _text(skill_id)
         if not skill:
             raise ValueError("skill_id is required")
+        from adaos.services.runtime_compatibility import (
+            classify_runtime_compatibility,
+            collect_skill_runtime_compatibility_snapshot,
+        )
+
+        snapshot = (
+            dict(compatibility_snapshot)
+            if isinstance(compatibility_snapshot, Mapping)
+            else collect_skill_runtime_compatibility_snapshot(
+                skill,
+                admission=admission,
+            )
+        )
+        qualification = classify_runtime_compatibility(snapshot)
         receiver = _text(admission.get("receiver"))
         missing_policy = reason == "stream_receiver_policy_missing"
         summary = (
@@ -2872,6 +2887,8 @@ class DevelopmentTicketService:
             "receiver_patterns": list(admission.get("receiver_patterns") or [])[:12],
             "topic": _text(topic) or None,
             "event_type": _text(event_type) or _text(topic) or None,
+            "qualification": qualification,
+            "compatibility_snapshot": snapshot,
             "remediation": (
                 "Inspect the skill handlers and declare their owned stream receivers. "
                 "The observed broadcast receiver is evidence of the missing policy, not proof of ownership. "
@@ -2902,16 +2919,24 @@ class DevelopmentTicketService:
                 blocking=reason == "stream_receiver_not_declared",
                 run_policy="block" if reason == "stream_receiver_not_declared" else "degrade",
                 design_time_fixable=True,
-                autonomous_repair_eligible=True,
+                autonomous_repair_eligible=bool(
+                    qualification.get("automatic_recovery_eligible")
+                ),
                 source="runtime_guard",
                 # An absent manifest policy is one defect, not one defect for
                 # every broadcast stream seen by an ungoverned subscriber.
                 dedup_key=_fingerprint("compat.receiver", skill, reason, "policy" if missing_policy else receiver or _text(topic)),
-                publish_pending_action=publish_pending_action,
+                # A receiver guard observation is diagnostic evidence, not a
+                # user decision. Exact update/reactivation surfaces are owned
+                # by their lifecycle commands and must not be approximated by
+                # this legacy Builder-repair card.
+                publish_pending_action=False,
                 ctx=ctx,
                 webspace_id=webspace_id,
             ),
             "reported": True,
+            "qualification": qualification,
+            "pending_action_suppressed": bool(publish_pending_action),
         }
 
     def publish_compatibility_pending_action(
@@ -2931,6 +2956,28 @@ class DevelopmentTicketService:
         ]
         if existing:
             return {"ok": True, "published": False, "reason": "pending_action_already_linked", "pending_action": existing[-1]}
+
+        qualification = _mapping(
+            _mapping(_mapping(ticket.get("metadata")).get("context")).get(
+                "qualification"
+            )
+        )
+        if not qualification.get("human_decision_required"):
+            return {
+                "ok": True,
+                "published": False,
+                "reason": "compatibility_qualification_does_not_require_user_decision",
+                "qualification": qualification,
+                "ticket": ticket,
+            }
+        if _text(qualification.get("recommended_action")) != "choose_builder_repair_mode":
+            return {
+                "ok": True,
+                "published": False,
+                "reason": "compatibility_recovery_surface_mismatch",
+                "qualification": qualification,
+                "ticket": ticket,
+            }
 
         from adaos.services import pending_actions
 
@@ -3000,7 +3047,25 @@ class DevelopmentTicketService:
                 ticket["ticket_id"],
                 {"kind": "evidence_previewed", "pending_action_id": _text(pending_action_id), "actor": actor},
             )
-            return {"ok": True, "action": action, "ticket": updated, "repair": None}
+            return {
+                "ok": True,
+                "action": action,
+                "ticket": updated,
+                "repair": None,
+                "preview": {
+                    "schema": "adaos.runtime_compatibility.evidence_preview.v1",
+                    "ticket_id": updated["ticket_id"],
+                    "summary": updated.get("summary"),
+                    "qualification": _mapping(
+                        _mapping(_mapping(updated.get("metadata")).get("context")).get(
+                            "qualification"
+                        )
+                    ),
+                    "evidence_refs": list(updated.get("evidence_refs") or []),
+                    "artifact_refs": list(updated.get("artifact_refs") or []),
+                    "builder_refs": list(updated.get("builder_refs") or []),
+                },
+            }
         if action == "postpone":
             updated = self._update_ticket(
                 ticket["ticket_id"],
@@ -3017,6 +3082,19 @@ class DevelopmentTicketService:
             )
             return {"ok": True, "action": action, "ticket": updated, "repair": None}
         if action in {"open_builder", "start_autonomous_repair"}:
+            qualification = _mapping(
+                _mapping(_mapping(ticket.get("metadata")).get("context")).get(
+                    "qualification"
+                )
+            )
+            if _text(qualification.get("code")) != "application_declaration_defect":
+                raise ValueError(
+                    "runtime compatibility finding is not qualified as an application declaration defect"
+                )
+            if not qualification.get("evidence_complete"):
+                raise ValueError(
+                    "runtime compatibility evidence is incomplete; collect exact package identity before repair"
+                )
             mode = "interactive" if action == "open_builder" else "autonomous"
             result = self.handoff_ticket(
                 ticket["ticket_id"],

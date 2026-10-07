@@ -824,6 +824,36 @@ def _bounded_demo_ticket(
     )["ticket"]
 
 
+def _qualified_receiver_snapshot(*, policy_state: str = "absent") -> dict:
+    return {
+        "desired_release": {
+            "admitted": True,
+            "version": "1.0.0",
+            "package_digest": "sha256:current",
+        },
+        "installed_release": {
+            "version": "1.0.0",
+            "package_digest": "sha256:current",
+        },
+        "loaded_runtime": {
+            "module_available": True,
+            "generation": "generation-1",
+            "package_digest": "sha256:current",
+            "source_drift": False,
+            "selection_drift": False,
+        },
+        "receiver_policy": {"state": policy_state, "patterns": []},
+        "observation": {
+            "receiver": "owned.panel",
+            "own_stream": True,
+            "receiver_admitted": False,
+        },
+        "core_contract": {"supported": True},
+        "eligible_update": {},
+        "builder_work": [],
+    }
+
+
 def test_receiver_compatibility_finding_creates_signal_ticket_pending_action_and_dedups(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -864,18 +894,29 @@ def test_receiver_compatibility_finding_creates_signal_ticket_pending_action_and
     assert result["signal"]["metadata"]["code"] == "compat.stream_receiver_policy_missing"
     assert result["ticket"]["schema"] == "adaos.dev_ticket.v1"
     assert result["ticket"]["kind"] == "runtime_compatibility_debt"
-    assert result["ticket"]["status"] == "waiting_for_user"
-    assert result["pending_action_published"] is True
-    assert published[0]["kind"] == COMPATIBILITY_PENDING_ACTION_KIND
-    assert published[0]["response_topic"] == COMPATIBILITY_RESPONSE_TOPIC
-    assert published[0]["domain_ref"]["ticket_id"] == result["ticket"]["ticket_id"]
-    assert {item["id"] for item in published[0]["allowed_actions"]} == {
-        "preview_evidence",
-        "postpone",
-        "open_builder",
-        "start_autonomous_repair",
-        "refuse",
-    }
+    assert result["ticket"]["status"] == "captured"
+    assert result["pending_action_published"] is False
+    assert result["pending_action_suppressed"] is True
+    assert result["qualification"]["evidence_complete"] is False
+    assert result["qualification"]["human_decision_required"] is False
+    assert published == []
+    publication = service.publish_compatibility_pending_action(
+        result["ticket"]["ticket_id"]
+    )
+    assert publication["published"] is False
+    assert publication["reason"] == (
+        "compatibility_qualification_does_not_require_user_decision"
+    )
+
+    preview = service.handle_compatibility_response(
+        ticket_id=result["ticket"]["ticket_id"],
+        response_action_id="preview_evidence",
+        responder={"id": "user:owner"},
+    )
+    assert preview["preview"]["schema"] == (
+        "adaos.runtime_compatibility.evidence_preview.v1"
+    )
+    assert preview["preview"]["qualification"]["evidence_complete"] is False
 
     duplicate = service.report_stream_receiver_compatibility_finding(
         skill_id="legacy_skill",
@@ -888,7 +929,7 @@ def test_receiver_compatibility_finding_creates_signal_ticket_pending_action_and
     assert duplicate["ticket_duplicate"] is True
     assert duplicate["ticket"]["ticket_id"] == result["ticket"]["ticket_id"]
     assert duplicate["ticket"]["occurrence_count"] == 2
-    assert len(published) == 1
+    assert published == []
 
     Draft202012Validator(_schema("development_signal.v1.schema.json")).validate(duplicate["signal"])
     Draft202012Validator(_schema("dev_ticket.v1.schema.json")).validate(duplicate["ticket"])
@@ -902,7 +943,7 @@ def test_receiver_compatibility_finding_creates_signal_ticket_pending_action_and
         publish_pending_action=True,
     )
     assert foreign["ticket"]["ticket_id"] == result["ticket"]["ticket_id"]
-    assert len(published) == 1
+    assert published == []
     assert "foreign.messages" not in foreign["ticket"]["summary"]
     assert "Declare only the streams owned" in foreign["ticket"]["summary"]
 
@@ -928,6 +969,7 @@ def test_compatibility_pending_action_response_creates_builder_repair(tmp_path: 
         skill_id="legacy_skill",
         admission=admission,
         topic="webio.stream.subscription.changed",
+        compatibility_snapshot=_qualified_receiver_snapshot(),
     )
     repair_service = BuilderRepairService(state_dir=tmp_path)
 
@@ -1292,7 +1334,15 @@ def test_ticket_resolution_requires_evidence_and_closes_linked_repair(tmp_path: 
         code="compat.stream_receiver_not_declared",
         summary="Skill legacy_skill lacks receiver declaration for legacy.panel",
         target_scope={"type": "skill", "id": "legacy_skill", "version": "1.0.0"},
-        context={"receiver": "legacy.panel"},
+        context={
+            "receiver": "legacy.panel",
+            "qualification": {
+                "schema": "adaos.runtime_compatibility.classification.v1",
+                "code": "application_declaration_defect",
+                "evidence_complete": True,
+                "recommended_action": "open_scoped_builder_repair",
+            },
+        },
         blocking=True,
     )
     repair_service = BuilderRepairService(state_dir=tmp_path)

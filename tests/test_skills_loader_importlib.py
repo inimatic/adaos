@@ -444,7 +444,7 @@ def test_importlib_loader_quarantines_evolved_blocking_async_skill_before_import
     assert payload["issues"][0]["code"] == "runtime.async_subscription_blocking_call"
 
 
-def test_importlib_loader_reload_quarantines_blocking_async_skill_and_removes_subscriptions(
+def test_importlib_loader_reload_quarantines_blocking_async_skill_before_removing_subscriptions(
     tmp_path, monkeypatch
 ) -> None:
     skill_dir = tmp_path / "blocking_reload_skill"
@@ -478,9 +478,10 @@ def test_importlib_loader_reload_quarantines_blocking_async_skill_and_removes_su
 
     assert result["ok"] is False
     assert result["reason"] == "runtime_safety_validation_failed"
-    assert deactivated == [{"blocking_reload_skill"}]
+    assert deactivated == []
     assert emitted[0][0] == "blocking_reload_skill"
-    assert result["subscriptions"]["removed_handlers"] == 1
+    assert result["subscriptions"]["removed_handlers"] == 0
+    assert result["preserved_previous_generation"] is True
 
 
 def test_importlib_loader_loads_skill_data_projections(tmp_path, monkeypatch) -> None:
@@ -816,7 +817,7 @@ def test_loading_selected_slot_retires_superseded_handler_registries(monkeypatch
         sdk_decorators._restore_registry_snapshot(registry_snapshot)
 
 
-def test_reload_without_handlers_deactivates_and_retires_previous_skill(monkeypatch, tmp_path: Path) -> None:
+def test_reload_without_handlers_preserves_previous_skill_generation(monkeypatch, tmp_path: Path) -> None:
     loader = ImportlibSkillsLoader()
     skill_name = "retired_handler_skill"
     module_name = "adaos_skill_retired_handler_skill_handlers"
@@ -854,14 +855,14 @@ def test_reload_without_handlers_deactivates_and_retires_previous_skill(monkeypa
     try:
         receipt = asyncio.run(loader.reload_skill_handlers(tmp_path, skill_name))
 
-        assert receipt["ok"] is True
-        assert receipt["reason"] == "no_in_process_handlers"
-        assert receipt["retired"]["modules"] == [module_name]
-        assert deactivated == [{skill_name}]
-        assert module_name not in sys.modules
-        assert module_name not in skills_loader_module._LOADED_HANDLER_SOURCES
-        assert module_name not in sdk_decorators.tools_registry
-        assert not any(fn.__module__ == module_name for _topic, fn in sdk_decorators.subscriptions)
+        assert receipt["ok"] is False
+        assert receipt["reason"] == "reactivation_preflight_no_in_process_handlers"
+        assert receipt["preserved_previous_generation"] is True
+        assert deactivated == []
+        assert module_name in sys.modules
+        assert module_name in skills_loader_module._LOADED_HANDLER_SOURCES
+        assert module_name in sdk_decorators.tools_registry
+        assert any(fn.__module__ == module_name for _topic, fn in sdk_decorators.subscriptions)
     finally:
         sys.modules.pop(module_name, None)
         skills_loader_module._LOADED_HANDLER_SOURCES.pop(module_name, None)
@@ -891,6 +892,85 @@ def test_reload_rejects_runtime_selection_different_from_activation_receipt(tmp_
     assert receipt["reason"] == "runtime_selection_mismatch"
     assert receipt["expected_selection"] == {"version": "0.8.29", "slot": "B"}
     assert receipt["selection"] == {"version": "0.8.28", "slot": "A"}
+
+
+def test_reload_generation_fence_restores_previous_subscriptions_when_selection_changes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    skill_name = "fenced_skill"
+    runtime_root = tmp_path / ".runtime" / skill_name
+    bucket_root = runtime_root / "v1.0"
+    handler = bucket_root / "slots" / "A" / "src" / "skills" / skill_name / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    (runtime_root / "current_version").write_text("1.0", encoding="utf-8")
+    (bucket_root / "active").write_text("A", encoding="utf-8")
+    (runtime_root / "v1.1").mkdir(parents=True)
+    (runtime_root / "v1.1" / "active").write_text("B", encoding="utf-8")
+
+    registered: list[set[str]] = []
+
+    def change_selection(names):
+        (runtime_root / "current_version").write_text("1.1", encoding="utf-8")
+        return {"skills": sorted(names), "removed_handlers": 1}
+
+    async def register(*, skill_names=None, force=False):
+        assert force is True
+        registered.append(set(skill_names or ()))
+
+    monkeypatch.setattr(sdk_decorators, "deactivate_skill_subscriptions", change_selection)
+    monkeypatch.setattr(sdk_decorators, "register_subscriptions", register)
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_runtime_safety_issues", lambda _path: [])
+
+    receipt = asyncio.run(loader.reload_skill_handlers(tmp_path, skill_name))
+
+    assert receipt["ok"] is False
+    assert receipt["reason"] == "runtime_selection_changed_during_reactivation"
+    assert receipt["preflight_selection"] == {"version": "1.0", "slot": "A"}
+    assert receipt["selection"] == {"version": "1.1", "slot": "B"}
+    assert receipt["preserved_previous_generation"] is True
+    assert registered == [{skill_name}]
+
+
+def test_reload_import_failure_restores_previous_subscription_generation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    skill_name = "failed_reload_skill"
+    handler = tmp_path / skill_name / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("raise RuntimeError('broken candidate')\n", encoding="utf-8")
+    (handler.parent.parent / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    deactivated: list[set[str]] = []
+    registered: list[set[str]] = []
+
+    async def register(*, skill_names=None, force=False):
+        assert force is True
+        registered.append(set(skill_names or ()))
+
+    monkeypatch.setattr(
+        sdk_decorators,
+        "deactivate_skill_subscriptions",
+        lambda names: deactivated.append(set(names))
+        or {"skills": sorted(names), "removed_handlers": 1},
+    )
+    monkeypatch.setattr(sdk_decorators, "register_subscriptions", register)
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_runtime_safety_issues", lambda _path: [])
+
+    receipt = asyncio.run(loader.reload_skill_handlers(tmp_path, skill_name))
+
+    assert receipt["ok"] is False
+    assert receipt["reason"] == "handler_import_failed"
+    assert "broken candidate" in receipt["error"]
+    assert receipt["preserved_previous_generation"] is True
+    assert deactivated == [{skill_name}]
+    assert registered == [{skill_name}]
 
 
 def test_reloading_same_handler_replaces_registry_and_restores_it_on_import_failure(

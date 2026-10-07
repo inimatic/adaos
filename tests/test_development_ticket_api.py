@@ -527,6 +527,7 @@ def test_development_ticket_api_applies_root_accounted_language_qualification(
                         "effects": ["local_write"],
                         "requires_i18n": False,
                         "requires_access": False,
+                            "requires_human_decision": False,
                         "requires_conversation": False,
                         "requires_lifecycle": False
                     },
