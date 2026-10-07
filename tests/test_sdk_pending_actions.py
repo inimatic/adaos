@@ -26,6 +26,8 @@ def test_expiry_control_is_hidden_from_public_sdk_surface() -> None:
 
 
 def test_canonical_interaction_query_is_public() -> None:
+    assert "get_pending_interaction" in pending_actions.__all__
+    assert "get_pending_interaction" in data.__all__
     assert "list_pending_interactions" in pending_actions.__all__
     assert "list_pending_interactions" in data.__all__
 
@@ -82,3 +84,35 @@ def test_canonical_query_derives_acl_principal_from_verified_ingress(monkeypatch
         "id": "user.1",
         "application_id": "app.1",
     }
+
+
+def test_canonical_projection_derives_acl_principal_from_verified_ingress(monkeypatch) -> None:
+    calls: list[dict] = []
+    monkeypatch.setattr(pending_actions, "require_ctx", lambda _feature: object())
+    monkeypatch.setattr(pending_actions.access, "require", lambda capability: {"action": capability})
+    monkeypatch.setattr(pending_actions.access, "caller", lambda: {"kind": "user", "id": "user.1"})
+    monkeypatch.setattr(
+        pending_actions.access,
+        "application",
+        lambda: {"application_id": "app.1"},
+    )
+    monkeypatch.setattr(
+        "adaos.services.pending_action_projection.project_pending_action_from_store",
+        lambda interaction_id, **kwargs: calls.append(
+            {"interaction_id": interaction_id, **kwargs}
+        )
+        or {"projection_id": interaction_id},
+    )
+
+    pending_actions.get_pending_interaction("interaction.1")
+
+    assert calls == [
+        {
+            "interaction_id": "interaction.1",
+            "principal": {
+                "kind": "user",
+                "id": "user.1",
+                "application_id": "app.1",
+            },
+        }
+    ]

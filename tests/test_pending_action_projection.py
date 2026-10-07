@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-from adaos.services import conversation_interactions
+from adaos.services import conversation_interactions, conversation_store
 from adaos.services.pending_action_projection import (
     PendingActionProjectionError,
     project_pending_action,
+    project_pending_action_from_store,
 )
 
 
@@ -87,6 +88,7 @@ def test_projection_is_a_bounded_typed_view_of_interaction_and_plan() -> None:
     assert projection["interaction_ref"] == {
         "id": "interaction.pa.fixture",
         "generation": 0,
+        "presentation_generation": 0,
         "presentation_id": presentation["presentation_id"],
     }
     assert projection["choices"][0]["assurance"] == {
@@ -94,6 +96,7 @@ def test_projection_is_a_bounded_typed_view_of_interaction_and_plan() -> None:
         "trusted_interface_required": False,
         "step_up_required": False,
     }
+    assert projection["choices"][0]["available"] is True
     assert projection["choices"][1]["assurance"] == {
         "voice_permitted": False,
         "trusted_interface_required": True,
@@ -101,6 +104,78 @@ def test_projection_is_a_bounded_typed_view_of_interaction_and_plan() -> None:
     }
     assert projection["subject_digest"].startswith("sha256:")
     assert projection["plan_digest"].startswith("sha256:")
+
+
+def test_projection_rebuilds_decision_dispatch_and_outcome_without_live_tokens() -> None:
+    interaction = conversation_interactions.create_interaction(
+        interaction_id="interaction.pa.lifecycle",
+        conversation_id="conversation.pa.lifecycle",
+        owner="skill:builder",
+        prompt="Run the reviewed operation?",
+        input_spec={
+            "kind": "choice",
+            "required_fields": [],
+            "choices": [{"value": "run", "label": "Run", "description": None}],
+            "sensitive": False,
+        },
+        actions=[
+            {
+                "action_id": "run",
+                "label": "Run",
+                "command": "operation.run",
+                "value": "run",
+                "risk": "local_reversible",
+                "confirmation_required": True,
+                "principal_scope": ["user"],
+            }
+        ],
+        now="2026-10-07T00:00:00+00:00",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+        now="2026-10-07T00:00:01+00:00",
+    )
+    answered = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:local",
+        idempotency_key="pa-lifecycle:run",
+        now="2026-10-07T00:00:02+00:00",
+    )
+
+    principal = {"kind": "user", "id": "local", "actor_id": "user:local"}
+    pending = project_pending_action_from_store(
+        interaction["interaction_id"],
+        principal=principal,
+    )
+    assert pending["status"] == "dispatch_pending"
+    assert pending["receipts"]["decision"]["response_id"] == answered["response"]["response_id"]
+    assert pending["receipts"]["execution"]["dispatch_id"] == answered["dispatch"]["dispatch_id"]
+    assert pending["choices"][0]["available"] is False
+    assert pending["choices"][0]["action_token"] is None
+    assert pending["interaction_ref"]["generation"] == 1
+    assert pending["interaction_ref"]["presentation_generation"] == 0
+
+    claimed = conversation_store.claim_interaction_dispatch(
+        answered["response"]["response_id"],
+        lease_owner="worker:test",
+        now_epoch=100,
+        now_iso="2026-10-07T00:00:03+00:00",
+    )
+    conversation_store.complete_interaction_dispatch(
+        claimed["dispatch_id"],
+        lease_owner="worker:test",
+        status="succeeded",
+        outcome={"result": "ok"},
+        now_epoch=101,
+        now_iso="2026-10-07T00:00:04+00:00",
+    )
+    completed = project_pending_action_from_store(
+        interaction["interaction_id"],
+        principal=principal,
+    )
+    assert completed["status"] == "succeeded"
+    assert completed["receipts"]["outcome"]["result"] == "ok"
 
 
 def test_projection_rejects_stale_or_unsupported_presentation() -> None:

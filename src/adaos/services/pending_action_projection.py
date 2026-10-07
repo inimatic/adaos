@@ -8,6 +8,8 @@ from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 
+from adaos.services import conversation_store
+
 
 PROJECTION_SCHEMA = "adaos.pending_action.projection.v1"
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "abi" / "pending_action.projection.v1.schema.json"
@@ -91,7 +93,14 @@ def project_pending_action(
     generation = int(semantic.get("generation") or 0)
     if not interaction_id or view.get("interaction_id") != interaction_id:
         raise PendingActionProjectionError("presentation belongs to another interaction")
-    if int(view.get("interaction_generation") or 0) != generation:
+    presentation_generation = int(view.get("interaction_generation") or 0)
+    decision = _mapping(decision_receipt)
+    decision_generation = (
+        int(decision.get("interaction_generation"))
+        if decision.get("interaction_generation") is not None
+        else None
+    )
+    if presentation_generation != generation and presentation_generation != decision_generation:
         raise PendingActionProjectionError("presentation generation is stale")
     if view.get("supported") is not True:
         raise PendingActionProjectionError("unsupported presentation cannot become a Pending Action")
@@ -99,16 +108,18 @@ def project_pending_action(
     if not actions:
         raise PendingActionProjectionError("Pending Action requires at least one presented choice")
     choices: list[dict[str, Any]] = []
+    decision_recorded = bool(decision)
     for action in actions:
         token = str(action.get("token") or "").strip()
         action_id = str(action.get("action_id") or "").strip()
-        if not token or not action_id:
-            raise PendingActionProjectionError("every choice requires an exact action token")
+        if not action_id or (not decision_recorded and not token):
+            raise PendingActionProjectionError("every available choice requires an exact action token")
         choices.append(
             {
                 "id": action_id,
                 "label": str(action.get("label") or "").strip(),
-                "action_token": token,
+                "action_token": None if decision_recorded else token,
+                "available": not decision_recorded,
                 "command": str(action.get("command") or "").strip(),
                 "risk": str(action.get("risk") or "read").strip(),
                 "assurance": _assurance(action),
@@ -118,6 +129,11 @@ def project_pending_action(
     metadata = _mapping(semantic.get("metadata"))
     outcome = _mapping(outcome_receipt)
     status = _STATUS_MAP.get(str(semantic.get("status") or ""), "awaiting_decision")
+    execution_status = str(_mapping(execution_receipt).get("status") or "").strip().lower()
+    if execution_status == "pending":
+        status = "dispatch_pending"
+    elif execution_status in {"dispatching", "dispatched", "running"}:
+        status = "running"
     observed_outcome = str(outcome.get("outcome") or outcome.get("status") or "").strip().lower()
     if observed_outcome in _OUTCOME_STATUSES:
         status = observed_outcome
@@ -152,6 +168,7 @@ def project_pending_action(
         "interaction_ref": {
             "id": interaction_id,
             "generation": generation,
+            "presentation_generation": presentation_generation,
             "presentation_id": str(view.get("presentation_id") or "").strip(),
         },
         "subject_digest": _digest(subject),
@@ -165,7 +182,7 @@ def project_pending_action(
         "deadline": semantic.get("expires_at"),
         "receipts": {
             "delivery": _mapping(delivery_receipt) or None,
-            "decision": _mapping(decision_receipt) or None,
+            "decision": decision or None,
             "execution": _mapping(execution_receipt) or None,
             "outcome": outcome or None,
         },
@@ -179,6 +196,7 @@ def project_pending_action(
             "presentation_schema": str(view.get("schema") or "").strip(),
             "profile_id": str(view.get("profile_id") or "").strip(),
             "profile_version": int(view.get("profile_version") or 0),
+            "current_interaction_generation": generation,
             "presentation_locale": str(_mapping(view.get("metadata")).get("locale") or "").strip() or None,
             "message_catalog_digests": catalog_digests,
         },
@@ -188,4 +206,74 @@ def project_pending_action(
     return _validate(record)
 
 
-__all__ = ["PROJECTION_SCHEMA", "PendingActionProjectionError", "project_pending_action"]
+def project_pending_action_from_store(
+    interaction_id: str,
+    *,
+    principal: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebuild one canonical PA view from durable decision/dispatch state."""
+
+    interaction = conversation_store.get_interaction(str(interaction_id or "").strip())
+    if interaction is None:
+        raise PendingActionProjectionError("interaction is unavailable")
+    from adaos.services.conversation_interactions import principal_can_read_interaction
+
+    if not principal_can_read_interaction(interaction, principal):
+        raise PendingActionProjectionError("interaction principal is not authorized")
+    metadata = _mapping(interaction.get("metadata"))
+    response_id = str(
+        metadata.get("accepted_response_id") or metadata.get("latest_response_id") or ""
+    ).strip()
+    response = conversation_store.get_interaction_response(response_id) if response_id else None
+    presentation_id = str(_mapping(response).get("presentation_id") or "").strip()
+    presentation = (
+        conversation_store.get_interaction_presentation(presentation_id)
+        if presentation_id
+        else conversation_store.latest_interaction_presentation(str(interaction["interaction_id"]))
+    )
+    if presentation is None:
+        raise PendingActionProjectionError("interaction presentation is unavailable")
+    dispatch = (
+        conversation_store.get_interaction_dispatch(response_id=response_id)
+        if response_id
+        else None
+    )
+    decision_receipt = None
+    if response is not None:
+        decision_receipt = {
+            "response_id": response["response_id"],
+            "interaction_generation": int(response["interaction_generation"]),
+            "status": response["status"],
+            "actor_id": response["actor_id"],
+            "created_at": response["created_at"],
+            "assurance_receipt": copy.deepcopy(response.get("assurance_receipt")),
+        }
+    execution_receipt = None
+    outcome_receipt = None
+    if dispatch is not None:
+        execution_receipt = {
+            "dispatch_id": dispatch["dispatch_id"],
+            "status": dispatch["status"],
+            "attempt_count": int(dispatch.get("attempt_count") or 0),
+            "updated_at": dispatch["updated_at"],
+        }
+        if str(dispatch.get("status") or "") in _OUTCOME_STATUSES:
+            outcome_receipt = {
+                "status": dispatch["status"],
+                **_mapping(dispatch.get("outcome")),
+            }
+    return project_pending_action(
+        interaction,
+        presentation,
+        decision_receipt=decision_receipt,
+        execution_receipt=execution_receipt,
+        outcome_receipt=outcome_receipt,
+    )
+
+
+__all__ = [
+    "PROJECTION_SCHEMA",
+    "PendingActionProjectionError",
+    "project_pending_action",
+    "project_pending_action_from_store",
+]

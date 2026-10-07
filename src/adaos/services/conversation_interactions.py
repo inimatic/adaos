@@ -1118,6 +1118,15 @@ def _principal_can_read_interaction(
     return False
 
 
+def principal_can_read_interaction(
+    interaction: Mapping[str, Any],
+    principal: Mapping[str, Any],
+) -> bool:
+    """Evaluate canonical Interaction read scope for a verified principal."""
+
+    return bool(principal) and _principal_can_read_interaction(interaction, principal)
+
+
 def query_interactions(
     *,
     principal: Mapping[str, Any],

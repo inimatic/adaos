@@ -10,10 +10,44 @@ from adaos.sdk.core.contracts import public_contract
 from adaos.sdk.core._ctx import require_ctx
 
 __all__ = [
+    "get_pending_interaction",
     "list_pending_interactions",
     "list_pending_actions",
     "publish_pending_action",
 ]
+
+
+def _verified_principal() -> dict[str, Any]:
+    application = access.application() or {}
+    caller = access.caller() or {}
+    principal = {**caller}
+    if application.get("application_id"):
+        principal["application_id"] = str(application["application_id"])
+    return principal
+
+
+@public_contract(
+    capabilities=("human_decision.read", "conversation.interaction"),
+    permissions=("workspace.read",),
+    effects=("read_only",),
+    errors=("caller_access_denied", "interaction_not_found"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+    runtime_support={"owner": "pending_action_projection", "min_contract": 1},
+)
+def get_pending_interaction(interaction_id: str) -> dict[str, Any]:
+    """Return one canonical decision/execution/outcome projection."""
+
+    require_ctx("sdk.pending_actions.get_interaction")
+    access.require("workspace.read")
+    from adaos.services.pending_action_projection import project_pending_action_from_store
+
+    return project_pending_action_from_store(
+        interaction_id,
+        principal=_verified_principal(),
+    )
 
 
 @public_contract(
@@ -41,11 +75,7 @@ def list_pending_interactions(
 
     require_ctx("sdk.pending_actions.list_interactions")
     access.require("workspace.read")
-    application = access.application() or {}
-    caller = access.caller() or {}
-    principal = {**caller}
-    if application.get("application_id"):
-        principal["application_id"] = str(application["application_id"])
+    principal = _verified_principal()
     from adaos.services.conversation_interactions import query_interactions
 
     return query_interactions(
@@ -171,11 +201,7 @@ def list_pending_actions(
 ) -> dict[str, Any]:
     require_ctx("sdk.pending_actions.list")
     access.require("workspace.read")
-    application = access.application() or {}
-    caller = access.caller() or {}
-    principal = {**caller}
-    if application.get("application_id"):
-        principal["application_id"] = str(application["application_id"])
+    principal = _verified_principal()
     from adaos.services.pending_actions import query_pending_actions as _query_pending
 
     return _query_pending(

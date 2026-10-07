@@ -2520,6 +2520,18 @@ def latest_interaction_presentation(
     return _json_load(row["payload_json"], {}) if row else None
 
 
+def get_interaction_presentation(presentation_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT payload_json FROM conversation_interaction_presentations WHERE presentation_id=?",
+            (str(presentation_id or "").strip(),),
+        ).fetchone()
+    return _json_load(row["payload_json"], {}) if row else None
+
+
 def find_interaction_presentation_by_action_token(token: str) -> dict[str, Any] | None:
     action_token = str(token or "").strip()
     if not action_token or not ensure_schema():

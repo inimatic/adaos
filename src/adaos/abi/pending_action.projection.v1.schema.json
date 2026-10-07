@@ -15,10 +15,11 @@
     "kind": { "$ref": "#/$defs/token" },
     "interaction_ref": {
       "type": "object",
-      "required": ["id", "generation", "presentation_id"],
+      "required": ["id", "generation", "presentation_generation", "presentation_id"],
       "properties": {
         "id": { "$ref": "#/$defs/token" },
         "generation": { "type": "integer", "minimum": 0 },
+        "presentation_generation": { "type": "integer", "minimum": 0 },
         "presentation_id": { "$ref": "#/$defs/token" }
       },
       "additionalProperties": false
@@ -41,11 +42,12 @@
       "maxItems": 100,
       "items": {
         "type": "object",
-        "required": ["id", "label", "action_token", "command", "risk", "assurance", "target_ref"],
+        "required": ["id", "label", "action_token", "available", "command", "risk", "assurance", "target_ref"],
         "properties": {
           "id": { "$ref": "#/$defs/token" },
           "label": { "type": "string", "minLength": 1, "maxLength": 240 },
-          "action_token": { "$ref": "#/$defs/token" },
+          "action_token": { "oneOf": [{ "$ref": "#/$defs/token" }, { "type": "null" }] },
+          "available": { "type": "boolean" },
           "command": { "$ref": "#/$defs/token" },
           "risk": { "$ref": "#/$defs/token" },
           "assurance": {
@@ -89,12 +91,13 @@
     },
     "lineage": {
       "type": "object",
-      "required": ["interaction_schema", "presentation_schema", "profile_id", "profile_version"],
+      "required": ["interaction_schema", "presentation_schema", "profile_id", "profile_version", "current_interaction_generation"],
       "properties": {
         "interaction_schema": { "$ref": "#/$defs/token" },
         "presentation_schema": { "$ref": "#/$defs/token" },
         "profile_id": { "$ref": "#/$defs/token" },
         "profile_version": { "type": "integer", "minimum": 1 },
+        "current_interaction_generation": { "type": "integer", "minimum": 0 },
         "presentation_locale": { "type": ["string", "null"], "minLength": 2, "maxLength": 40 },
         "message_catalog_digests": {
           "type": "array",
