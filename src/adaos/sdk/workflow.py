@@ -23,6 +23,7 @@ from adaos.sdk.core.human_decision_types import (
     SemanticMessage,
     WorkflowDefinitionSpec,
     WorkflowExecutionResult,
+    WorkflowInteractionOutcome,
 )
 
 from adaos.services import conversation_interactions, workflow_persistence
@@ -31,6 +32,7 @@ from adaos.services.governed_workflow import (
     WorkflowResolver,
     compile_definition,
     new_instance,
+    validate_workflow_record,
     verified_workflow_principal,
     workflow_ref,
 )
@@ -285,8 +287,7 @@ def invoke(
             "idempotency_key",
             "durable_dispatch",
             "effect_binding",
-            "effect_assertion",
-            "outcome_receipt",
+            "dispatch_admission",
         ],
     },
 )
@@ -316,11 +317,71 @@ def invoke_interaction_response(
     )
 
 
+@public_contract(
+    capabilities=("human_decision.outcome", "workflow.interaction"),
+    effects=(),
+    errors=("response_unavailable", "principal_denied", "dispatch_unavailable"),
+    boundedness={"kind": "exact_identity_read"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+    runtime_support={"owner": "governed_workflow_runtime", "min_contract": 1},
+    action_closure={
+        "requires": [
+            "exact_response_identity",
+            "principal_scope",
+            "durable_dispatch",
+            "effect_assertion",
+            "terminal_outcome",
+        ],
+    },
+)
+def get_interaction_outcome(
+    response_id: str,
+    *,
+    actor_id: str,
+) -> WorkflowInteractionOutcome:
+    """Read one durable effect outcome without executing or retrying it."""
+
+    response = conversation_interactions.get_response(response_id)
+    if response is None:
+        raise ValueError("interaction response is unavailable")
+    if str(response.get("actor_id") or "") != str(actor_id or "").strip():
+        raise ValueError("interaction response principal is denied")
+    dispatch = conversation_interactions.get_dispatch(response_id=response_id)
+    if dispatch is None:
+        raise ValueError("interaction response dispatch is unavailable")
+    outcome = dict(dispatch.get("outcome") or {})
+    effect_assertion = outcome.get("effect_assertion")
+    terminal_statuses = {
+        "succeeded",
+        "failed",
+        "rejected",
+        "cancelled",
+        "outcome_unknown",
+    }
+    result = {
+        "schema": "adaos.workflow.interaction_outcome.v1",
+        "interaction_id": str(response["interaction_id"]),
+        "response_id": str(response["response_id"]),
+        "dispatch_id": str(dispatch["dispatch_id"]),
+        "status": str(dispatch["status"]),
+        "terminal": str(dispatch["status"]) in terminal_statuses,
+        "reason_code": str(outcome.get("reason_code") or "") or None,
+        "effect_assertion": (
+            dict(effect_assertion) if isinstance(effect_assertion, Mapping) else None
+        ),
+        "outcome": outcome,
+    }
+    return validate_workflow_record("adaos.workflow.interaction_outcome.v1", result)
+
+
 __all__ = [
     "WorkflowExecutorRegistration",
     "create_interaction",
     "describe",
     "ensure_instance",
+    "get_interaction_outcome",
     "invoke",
     "invoke_interaction_response",
     "load_definition",

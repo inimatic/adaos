@@ -13,30 +13,54 @@ class EntityRef(TypedDict, total=False):
     digest: str
 
 
-class LocalizedText(TypedDict, total=False):
-    key: Required[str]
-    params: dict[str, str | int | float | bool | None]
-    fallback: str
+class SemanticParameter(TypedDict, total=False):
+    type: Required[Literal["text", "number", "integer", "boolean", "timestamp", "date", "duration", "amount", "unit", "identifier"]]
+    value: Required[str | int | float | bool]
+    timezone: str
+    unit: str
+    currency: str
+    precision: int
+
+
+class MessageVariant(TypedDict, total=False):
+    visual: Required[str]
+    spoken: Required[str]
+    plural_param: str
+    visual_plural: dict[str, str]
+    spoken_plural: dict[str, str]
+
+
+class MessageCatalogRef(TypedDict):
+    package_id: str
+    package_version: str
+    catalog_digest: str
 
 
 class SemanticMessage(TypedDict, total=False):
-    schema: Required[Literal["adaos.conversation.semantic_message.v1"]]
-    message_key: Required[str]
-    params: dict[str, str | int | float | bool | None]
-    visual: LocalizedText
-    spoken: LocalizedText
+    schema: Literal["adaos.conversation.semantic_message.v1"]
+    key: Required[str]
+    version: int
+    params: dict[str, SemanticParameter]
+    fallback: MessageVariant
+    translations: dict[str, MessageVariant]
+    catalog_ref: MessageCatalogRef | None
+    source_locale: str
     critical: bool
+    fallback_policy: Literal["allow", "require_locale"]
 
 
 class LocaleContext(TypedDict, total=False):
+    locale: str
+    source_locale: str
     request_locale: str
     user_locale: str
     channel_locale: str
     timezone: str
+    user_timezone: str
 
 
 class InteractionChoice(TypedDict, total=False):
-    value: Required[str | int | float | bool]
+    value: Required[str]
     label: Required[str]
     description: str | None
 
@@ -50,10 +74,22 @@ class InteractionInputSpec(TypedDict, total=False):
 
 class InteractionActionSemantics(TypedDict, total=False):
     preset: str
-    effect: Required[str]
-    outcome: Required[str]
-    preview_is_read_only: Required[bool]
-    refusal_is_terminal: Required[bool]
+    effect_class: str
+    operation: str
+    executor: str
+    mutates_domain: bool
+    records_consent: bool
+    terminal: bool
+    effect_ref: EntityRef | None
+    schedule: dict[str, str] | None
+    assertion_required: bool
+
+
+class InteractionAssurance(TypedDict):
+    mode: Literal["voice_permitted", "trusted_interface_required", "step_up_required"]
+    voice_permitted: bool
+    trusted_interface_required: bool
+    step_up_required: bool
 
 
 class InteractionAction(TypedDict, total=False):
@@ -65,7 +101,7 @@ class InteractionAction(TypedDict, total=False):
     expected_generation: int
     risk: Literal["read", "write", "external", "destructive", "irreversible", "privileged", "publication", "release"]
     confirmation_required: bool
-    assurance: Literal["voice_permitted", "trusted_interface_required", "step_up_required"]
+    assurance: InteractionAssurance
     semantics: InteractionActionSemantics
 
 
@@ -106,7 +142,6 @@ class ConversationInteraction(TypedDict, total=False):
     generation: Required[int]
     owner: Required[str]
     prompt: Required[str]
-    semantic_digest: Required[str]
     status: Required[str]
     input_spec: Required[InteractionInputSpec]
     actions: Required[list[InteractionAction]]
@@ -159,15 +194,26 @@ class InteractionResponse(TypedDict, total=False):
     actor_id: Required[str]
     source: Required[str]
     values: Required[InteractionResponseValues]
+    original_text: Required[str | None]
+    action_token: Required[str | None]
+    intent_proposal: Required[dict[str, Any] | None]
     status: Required[str]
-    consumed_command: InteractionAction | None
+    validation: Required[dict[str, Any]]
+    supersedes_response_id: Required[str | None]
+    presentation_id: Required[str | None]
+    target_ref: Required[EntityRef | None]
+    source_message_ref: Required[EntityRef | None]
+    consumed_command: Required[InteractionAction | None]
     assurance_receipt: dict[str, Any] | None
+    rejection_reason: Required[str | None]
+    idempotency_key: Required[str]
+    created_at: Required[str]
 
 
 class HumanDecisionResponseResult(TypedDict, total=False):
     interaction: Required[ConversationInteraction]
     response: Required[InteractionResponse]
-    dispatch: dict[str, Any] | None
+    dispatch: Required[dict[str, Any] | None]
     duplicate: Required[bool]
 
 
@@ -175,9 +221,13 @@ class WorkflowDefinitionSpec(TypedDict, total=False):
     schema: Required[str]
     workflow_type: Required[str]
     definition_version: Required[str]
+    aggregate_type: Required[str]
     initial_state: Required[str]
     states: Required[list[dict[str, Any]]]
     commands: Required[list[dict[str, Any]]]
+    transitions: Required[list[dict[str, Any]]]
+    subworkflows: list[dict[str, Any]]
+    metadata: dict[str, Any]
 
 
 class HumanDecisionContext(TypedDict, total=False):
@@ -196,12 +246,27 @@ class HumanDecisionMetadata(TypedDict, total=False):
 
 
 class WorkflowExecutionResult(TypedDict, total=False):
+    accepted: Required[bool]
+    status: Required[str]
+    reason_code: Required[str | None]
     invocation: Required[dict[str, Any]]
-    instance: Required[dict[str, Any]]
-    dispatch: Required[dict[str, Any]]
+    decision: Required[dict[str, Any] | None]
+    commit: Required[dict[str, Any] | None]
+    responses: Required[list[dict[str, Any]]]
+    dispatch: Required[dict[str, Any] | None]
+    reconciled: bool
+
+
+class WorkflowInteractionOutcome(TypedDict):
+    schema: Literal["adaos.workflow.interaction_outcome.v1"]
+    interaction_id: str
+    response_id: str
+    dispatch_id: str
+    status: str
+    terminal: bool
+    reason_code: str | None
     effect_assertion: dict[str, Any] | None
-    outcome_receipt: Required[dict[str, Any]]
-    duplicate: bool
+    outcome: dict[str, Any]
 
 
 __all__ = [
@@ -223,4 +288,5 @@ __all__ = [
     "SemanticMessage",
     "WorkflowDefinitionSpec",
     "WorkflowExecutionResult",
+    "WorkflowInteractionOutcome",
 ]

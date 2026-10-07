@@ -60,8 +60,17 @@ _HUMAN_DECISION_MEMBERS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "idempotency_key",
             "durable_dispatch",
             "effect_binding",
+            "dispatch_admission",
+        ),
+    ),
+    (
+        "adaos.sdk.workflow.get_interaction_outcome",
+        (
+            "exact_response_identity",
+            "principal_scope",
+            "durable_dispatch",
             "effect_assertion",
-            "outcome_receipt",
+            "terminal_outcome",
         ),
     ),
 )
@@ -108,7 +117,7 @@ _FULL_CYCLE_STAGES: tuple[dict[str, Any], ...] = (
         "retains": ["response_id", "dispatch_id", "assurance_receipt"],
     },
     {
-        "stage": "dispatch_effect_outcome",
+        "stage": "dispatch",
         "api": "adaos.sdk.workflow.invoke_interaction_response",
         "input": {
             "definition": "$workflow_definition",
@@ -117,7 +126,16 @@ _FULL_CYCLE_STAGES: tuple[dict[str, Any], ...] = (
             "actor_id": "user:owner",
             "executor_registrations": "$admitted_executors",
         },
-        "retains": ["effect_assertion", "outcome_receipt"],
+        "retains": ["dispatch_id", "dispatch_status"],
+    },
+    {
+        "stage": "observe_outcome",
+        "api": "adaos.sdk.workflow.get_interaction_outcome",
+        "input": {
+            "response_id": "$verified_answer.response_id",
+            "actor_id": "user:owner",
+        },
+        "retains": ["effect_assertion", "outcome", "terminal"],
     },
 )
 
@@ -187,6 +205,7 @@ def human_decision_capability_pack() -> dict[str, Any]:
             "human_decision.present",
             "human_decision.respond",
             "human_decision.execute",
+            "human_decision.outcome",
         ],
         "permissions": [],
         "effects": ["declared_workflow_effect", "durable_write"],
@@ -239,7 +258,7 @@ def human_decision_capability_pack() -> dict[str, Any]:
         "meta": {
             "stability": "beta",
             "side_effects": "declared_workflow_effect",
-            "pack_version": 1,
+            "pack_version": 2,
         },
         "contract": contract,
         "members": members,

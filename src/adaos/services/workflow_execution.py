@@ -822,20 +822,24 @@ def cross_channel_ingress_conformance(
             }
         )
 
-    for field, code in (
+    for comparison_field, code in (
         ("semantic_digest", "workflow.ingress.semantic_mismatch"),
         ("guard", "workflow.ingress.guard_mismatch"),
         ("executor", "workflow.ingress.executor_mismatch"),
         ("execution", "workflow.ingress.execution_mismatch"),
     ):
-        values = {_digest({"value": item[field]}) for item in comparison}
+        values = {
+            _digest({"value": item[comparison_field]}) for item in comparison
+        }
         if len(values) > 1:
             diagnostics.append(
                 {
                     "code": code,
                     "severity": "error",
-                    "path": f"channels.*.{field}",
-                    "message": f"{field} differs across workflow ingress channels",
+                    "path": f"channels.*.{comparison_field}",
+                    "message": (
+                        f"{comparison_field} differs across workflow ingress channels"
+                    ),
                 }
             )
     report = {
@@ -1027,15 +1031,36 @@ def execute_invocation(
         if dispatch is not None:
             activity_attempt_id = str(dict(commit or {}).get("activity_attempt_id") or "").strip()
             completion_status = "dispatched" if activity_attempt_id else "succeeded"
+            dispatch_outcome: dict[str, Any] = {
+                "attempt_id": activity_attempt_id or None,
+                "workflow_instance_id": str(command["instance_ref"]["id"]),
+                "workflow_generation": int(dict(decision["after"])["generation"]),
+            }
+            action_semantics = dict(dict(dispatch.get("command") or {}).get("semantics") or {})
+            if (
+                not activity_attempt_id
+                and action_semantics.get("assertion_required") is True
+                and str(action_semantics.get("executor") or "") == "core"
+                and action_semantics.get("mutates_domain") is False
+            ):
+                assertion = {
+                    "schema": "adaos.conversation.action_effect_assertion.v1",
+                    "preset": str(action_semantics.get("preset") or "custom"),
+                    "operation": str(action_semantics.get("operation") or ""),
+                    "effect_ref": copy.deepcopy(action_semantics.get("effect_ref")),
+                    "observed": True,
+                    "domain_mutated": False,
+                }
+                if assertion["preset"] == "snooze":
+                    assertion["resume_at"] = str(
+                        dict(action_semantics.get("schedule") or {}).get("resume_at") or ""
+                    )
+                dispatch_outcome["effect_assertion"] = assertion
             dispatch = conversation_store.complete_interaction_dispatch(
                 str(dispatch["dispatch_id"]),
                 lease_owner=dispatch_owner,
                 status=completion_status,
-                outcome={
-                    "attempt_id": activity_attempt_id or None,
-                    "workflow_instance_id": str(command["instance_ref"]["id"]),
-                    "workflow_generation": int(dict(decision["after"])["generation"]),
-                },
+                outcome=dispatch_outcome,
             )
     route_ids = _reply_route_ids(record)
     responses: list[dict[str, Any]] = []

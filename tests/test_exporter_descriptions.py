@@ -240,9 +240,11 @@ def test_human_decision_sdk_contract_is_discoverable_in_english_and_russian():
         "schema",
         "workflow_type",
         "definition_version",
+        "aggregate_type",
         "initial_state",
         "states",
         "commands",
+        "transitions",
     ]
     executor_items = workflow["input_schema"]["properties"]["executor_registrations"]["items"]
     assert executor_items["required"] == ["adapter_id", "contract_digest", "executor_id"]
@@ -260,7 +262,7 @@ def test_human_decision_capability_pack_closes_sdk_lifecycle() -> None:
     assert report["ok"] is True
     assert report["findings"] == []
     assert report["coverage"] == {
-        "members": 4,
+        "members": 5,
         "positive_examples": 1,
         "negative_examples": 5,
     }
@@ -269,7 +271,8 @@ def test_human_decision_capability_pack_closes_sdk_lifecycle() -> None:
         "publish",
         "present",
         "verified_answer",
-        "dispatch_effect_outcome",
+        "dispatch",
+        "observe_outcome",
     ]
 
     search = search_descriptors(

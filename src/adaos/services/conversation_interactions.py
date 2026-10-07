@@ -1022,6 +1022,17 @@ def interaction_from_workflow_description(
     generation = int(snapshot.get("generation") or 0)
     commands = [dict(item) for item in snapshot.get("allowed_commands") or [] if isinstance(item, Mapping)]
     if not commands:
+        reason_codes = sorted(
+            {
+                str(item.get("reason_code") or "").strip()
+                for item in snapshot.get("blocked_commands") or []
+                if isinstance(item, Mapping) and str(item.get("reason_code") or "").strip()
+            }
+        )
+        if reason_codes:
+            raise ConversationInteractionError(
+                f"{','.join(reason_codes)}: workflow description has no presentable commands"
+            )
         raise ConversationInteractionError("workflow description has no allowed commands")
     required: list[str] = []
     optional: list[str] = []
@@ -1941,6 +1952,22 @@ def submit_action_token(
         metadata=metadata,
         now=now,
     )
+
+
+def get_response(response_id: str) -> dict[str, Any] | None:
+    """Return one durable response by exact identity for public SDK projection."""
+
+    value = conversation_store.get_interaction_response(str(response_id or "").strip())
+    return copy.deepcopy(value) if value is not None else None
+
+
+def get_dispatch(*, response_id: str) -> dict[str, Any] | None:
+    """Return one durable dispatch by exact response identity without mutation."""
+
+    value = conversation_store.get_interaction_dispatch(
+        response_id=str(response_id or "").strip()
+    )
+    return copy.deepcopy(value) if value is not None else None
 
 
 def _normalized_action_label(value: Any) -> str:
