@@ -3142,6 +3142,11 @@ class RouterService:
             clean_msg = dict(msg)
             context = _voice_message_dialog_context(webspace_id, clean_msg)
             meta = clean_msg.get("_meta") if isinstance(clean_msg.get("_meta"), dict) else {}
+            voice_output_owner = _voice_chat_stream._compact_voice_output_owner(
+                clean_msg.get("voice_output_owner") or meta.get("voice_output_owner")
+            )
+            if voice_output_owner is not None:
+                clean_msg["voice_output_owner"] = voice_output_owner
             channel_id = str(context.get("channel_id") or GENERAL_DIALOG_CHANNEL_ID)
             conversation_id = str(context.get("conversation_id") or "")
             worker_webspace_id = str(webspace_id or "default").strip() or "default"
@@ -3942,6 +3947,11 @@ class RouterService:
                 voice_profile = meta.get("voice_profile")
             if isinstance(voice_profile, dict):
                 msg["voice_profile"] = dict(voice_profile)
+            voice_output_owner = _voice_chat_stream._compact_voice_output_owner(
+                payload.get("voice_output_owner") or meta.get("voice_output_owner")
+            )
+            if voice_output_owner is not None:
+                msg["voice_output_owner"] = voice_output_owner
             active_agent = payload.get("active_agent") if isinstance(payload.get("active_agent"), dict) else None
             if active_agent is None and isinstance(meta.get("active_agent"), dict):
                 active_agent = meta.get("active_agent")
@@ -4057,6 +4067,11 @@ class RouterService:
                     "lang": lang or "ru-RU",
                     "browser_voice_hint": gender or voice_hint,
                 }
+            voice_output_owner = _voice_chat_stream._compact_voice_output_owner(
+                payload.get("voice_output_owner") or meta.get("voice_output_owner")
+            )
+            if voice_output_owner is not None:
+                item["voice_output_owner"] = voice_output_owner
             if isinstance(payload.get("rate"), (int, float)):
                 item["rate"] = float(payload.get("rate"))
             for ws in await _resolve_webspace_ids(payload):

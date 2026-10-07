@@ -51,6 +51,23 @@ def _compact_voice_chat_stream_action(action: Mapping[str, Any]) -> dict[str, An
     return compact
 
 
+def _compact_voice_output_owner(value: Any) -> dict[str, str] | None:
+    """Return the bounded speech sink identity understood by client surfaces."""
+    if not isinstance(value, Mapping):
+        return None
+    kind = value.get("kind")
+    endpoint_id = value.get("endpoint_id")
+    if not isinstance(kind, str) or not kind.strip():
+        return None
+    compact = {"kind": kind.strip()[:64]}
+    if isinstance(endpoint_id, str) and endpoint_id.strip():
+        compact["endpoint_id"] = endpoint_id.strip()[:256]
+    label = value.get("label")
+    if isinstance(label, str) and label.strip():
+        compact["label"] = label.strip()[:160]
+    return compact
+
+
 def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any]:
     compact: dict[str, Any] = {}
     for key in (
@@ -83,6 +100,9 @@ def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any
         if value is not None and value != "":
             compact[key] = value
     compact["text"] = _truncate_voice_chat_stream_text(item.get("text"))
+    voice_output_owner = _compact_voice_output_owner(item.get("voice_output_owner"))
+    if voice_output_owner is not None:
+        compact["voice_output_owner"] = voice_output_owner
     # Presentation references only: never copy file bytes or arbitrary metadata
     # into the bounded WebIO tail. One message retains one id for all recipients.
     sender = item.get("sender_id")

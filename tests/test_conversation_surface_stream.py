@@ -27,3 +27,25 @@ def test_attachment_metadata_does_not_bypass_stream_budget():
     assert _voice_chat_stream_json_bytes(result) <= 4096
     assert result[0]["id"] == "m1"
     assert result[0]["details_omitted"] is True
+
+
+def test_voice_output_owner_is_bounded_and_survives_compact_projection():
+    result = _compact_voice_chat_stream_message(
+        {
+            "id": "m1",
+            "from": "hub",
+            "text": "Done",
+            "voice_output_owner": {
+                "kind": "browser",
+                "endpoint_id": "browser:page-1",
+                "label": "Chrome",
+                "private": "must-not-leak",
+            },
+        }
+    )
+
+    assert result["voice_output_owner"] == {
+        "kind": "browser",
+        "endpoint_id": "browser:page-1",
+        "label": "Chrome",
+    }

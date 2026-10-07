@@ -200,6 +200,11 @@ async def test_io_out_say_preserves_agent_tts_profile(monkeypatch) -> None:
                     "active_agent_voice": "ru-male",
                     "active_agent_icon": "male-outline",
                     "voice_profile": {"gender": "male", "voice": "ru-male", "lang": "ru-RU"},
+                    "voice_output_owner": {
+                        "kind": "browser",
+                        "endpoint_id": "browser:page-1",
+                        "label": "Chrome",
+                    },
                 },
             },
         )
@@ -214,6 +219,11 @@ async def test_io_out_say_preserves_agent_tts_profile(monkeypatch) -> None:
     assert queue[-1]["active_agent_id"] == "agent:conversation_companions:arseni"
     assert queue[-1]["active_agent_gender"] == "male"
     assert queue[-1]["voice_profile"]["gender"] == "male"
+    assert queue[-1]["voice_output_owner"] == {
+        "kind": "browser",
+        "endpoint_id": "browser:page-1",
+        "label": "Chrome",
+    }
 
 
 async def test_voice_chat_user_ignores_other_target_node(monkeypatch) -> None:
@@ -4472,14 +4482,28 @@ async def test_io_out_chat_append_writes_node_scoped_history_without_crashing(mo
             ts=1.0,
             payload={
                 "text": "hello",
-                "_meta": {"webspace_id": "desktop", "target_node_id": "member-3"},
+                "_meta": {
+                    "webspace_id": "desktop",
+                    "target_node_id": "member-3",
+                    "voice_output_owner": {
+                        "kind": "browser",
+                        "endpoint_id": "browser:page-1",
+                        "label": "Chrome",
+                    },
+                },
             },
         )
     )
     await bus.wait_for_idle(timeout=1.0)
     await _drain_voice_chat_persist(router)
 
-    assert doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["messages"][0]["text"] == "hello"
+    projected = doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["messages"][0]
+    assert projected["text"] == "hello"
+    assert projected["voice_output_owner"] == {
+        "kind": "browser",
+        "endpoint_id": "browser:page-1",
+        "label": "Chrome",
+    }
     assert float(doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["last_refresh_ts"]) > 0
 
 
