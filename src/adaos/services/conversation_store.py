@@ -2576,6 +2576,139 @@ def append_interaction_response(record: Mapping[str, Any]) -> dict[str, Any] | N
     return dict(value)
 
 
+def commit_interaction_response(
+    response: Mapping[str, Any],
+    interaction: Mapping[str, Any],
+    *,
+    expected_generation: int,
+) -> dict[str, Any] | None:
+    """Commit one response and its interaction CAS in a single transaction.
+
+    A response is a decision record, while the interaction generation is the
+    concurrency fence that makes that decision current.  Persisting them in
+    separate transactions can leave an orphan decision after a crash or a
+    losing concurrent response.  This primitive deliberately owns both writes.
+
+    Idempotent retries are compared by the stable request digest rather than by
+    the generated response id.  The returned ``duplicate`` flag therefore also
+    covers a retry that raced the original request into this transaction.
+    """
+
+    response_value = dict(response or {})
+    interaction_value = dict(interaction or {})
+    response_id = str(response_value.get("response_id") or "").strip()
+    interaction_id = str(response_value.get("interaction_id") or "").strip()
+    idempotency_key = str(response_value.get("idempotency_key") or "").strip()
+    if not response_id or not interaction_id or not idempotency_key:
+        raise ValueError("response_id, interaction_id, and idempotency_key are required")
+    if str(interaction_value.get("interaction_id") or "").strip() != interaction_id:
+        raise ValueError("response and interaction ids do not match")
+    if int(interaction_value.get("generation") or 0) != int(expected_generation) + 1:
+        raise ValueError("interaction update must advance generation exactly once")
+    if not ensure_schema():
+        return None
+
+    normalized_response = _json_dump(response_value)
+    response_digest = hashlib.sha256(normalized_response.encode("utf-8")).hexdigest()
+    incoming_request_digest = str(
+        dict(response_value.get("metadata") or {}).get("request_digest") or ""
+    ).strip()
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        existing_response = con.execute(
+            "SELECT payload_json FROM conversation_interaction_responses WHERE interaction_id=? AND idempotency_key=?",
+            (interaction_id, idempotency_key),
+        ).fetchone()
+        if existing_response:
+            stored_response = _json_load(existing_response["payload_json"], {})
+            stored_request_digest = str(
+                dict(stored_response.get("metadata") or {}).get("request_digest") or ""
+            ).strip()
+            if not incoming_request_digest or stored_request_digest != incoming_request_digest:
+                con.rollback()
+                raise ValueError("interaction response idempotency conflict")
+            current = con.execute(
+                "SELECT payload_json FROM conversation_interactions WHERE interaction_id=?",
+                (interaction_id,),
+            ).fetchone()
+            con.rollback()
+            duplicate = dict(stored_response)
+            duplicate["duplicate"] = True
+            return {
+                "interaction": _json_load(current["payload_json"], {}) if current else None,
+                "response": duplicate,
+                "duplicate": True,
+            }
+
+        existing_interaction = con.execute(
+            "SELECT generation FROM conversation_interactions WHERE interaction_id=?",
+            (interaction_id,),
+        ).fetchone()
+        actual_generation = int(existing_interaction["generation"]) if existing_interaction else -1
+        if actual_generation != int(expected_generation):
+            con.rollback()
+            raise ValueError(
+                f"stale interaction generation: expected {expected_generation}, current {actual_generation}"
+            )
+
+        con.execute(
+            """
+            INSERT INTO conversation_interaction_responses(
+                response_id, interaction_id, interaction_generation, actor_id,
+                status, idempotency_key, supersedes_response_id,
+                payload_digest, payload_json, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                response_id,
+                interaction_id,
+                int(response_value.get("interaction_generation") or 0),
+                str(response_value.get("actor_id") or ""),
+                str(response_value.get("status") or ""),
+                idempotency_key,
+                response_value.get("supersedes_response_id"),
+                response_digest,
+                normalized_response,
+                str(response_value.get("created_at") or ""),
+            ),
+        )
+        con.execute(
+            """
+            UPDATE conversation_interactions SET
+                conversation_id=?, thread_id=?, owner=?, status=?, generation=?,
+                task_ref_json=?, workflow_ref_json=?, reply_route_ref_json=?,
+                expires_at=?, payload_json=?, updated_at=?, completed_at=?
+            WHERE interaction_id=? AND generation=?
+            """,
+            (
+                str(interaction_value.get("conversation_id") or ""),
+                interaction_value.get("thread_id"),
+                str(interaction_value.get("owner") or ""),
+                str(interaction_value.get("status") or ""),
+                int(interaction_value.get("generation") or 0),
+                _json_dump(interaction_value.get("task_ref")) if interaction_value.get("task_ref") is not None else None,
+                _json_dump(interaction_value.get("workflow_ref")) if interaction_value.get("workflow_ref") is not None else None,
+                _json_dump(interaction_value.get("reply_route_ref")) if interaction_value.get("reply_route_ref") is not None else None,
+                interaction_value.get("expires_at"),
+                _json_dump(interaction_value),
+                str(interaction_value.get("updated_at") or ""),
+                interaction_value.get("completed_at"),
+                interaction_id,
+                int(expected_generation),
+            ),
+        )
+        if con.total_changes != 2:
+            con.rollback()
+            raise ValueError("interaction response transaction did not close both writes")
+        con.commit()
+    return {
+        "interaction": dict(interaction_value),
+        "response": dict(response_value),
+        "duplicate": False,
+    }
+
+
 def get_interaction_response_by_idempotency(
     interaction_id: str,
     idempotency_key: str,

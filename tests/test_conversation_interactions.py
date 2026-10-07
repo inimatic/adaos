@@ -265,6 +265,47 @@ def test_response_rejects_payload_reuse_and_stale_action() -> None:
         )
 
 
+def test_response_and_generation_are_committed_atomically() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.atomic",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.atomic",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    accepted = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:local",
+        idempotency_key="atomic:first",
+    )
+    losing_response = dict(accepted["response"])
+    losing_response.update(
+        {
+            "response_id": "response.atomic.loser",
+            "idempotency_key": "atomic:loser",
+            "interaction_generation": 0,
+            "metadata": {"request_digest": "sha256:losing-request"},
+        }
+    )
+    losing_interaction = dict(accepted["interaction"])
+
+    with pytest.raises(ValueError, match="stale interaction generation"):
+        conversation_store.commit_interaction_response(
+            losing_response,
+            losing_interaction,
+            expected_generation=0,
+        )
+
+    assert conversation_store.get_interaction_response("response.atomic.loser") is None
+    assert conversation_store.get_interaction("interaction.atomic")["generation"] == 1
+    assert len(conversation_store.list_interaction_responses("interaction.atomic")) == 1
+
+
 def test_action_token_rejects_actor_outside_principal_scope() -> None:
     interaction = conversation_interactions.create_interaction(
         conversation_id="conv.principal",

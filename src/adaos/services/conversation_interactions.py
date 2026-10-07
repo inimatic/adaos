@@ -920,12 +920,6 @@ def submit_response(
             "trace": selected_trace,
         },
     )
-    stored_response = conversation_store.append_interaction_response(response)
-    if stored_response is None:
-        raise ConversationInteractionError("durable conversation store is unavailable")
-    if stored_response.get("duplicate"):
-        return {"interaction": semantic, "response": stored_response, "duplicate": True}
-
     updated = copy.deepcopy(semantic)
     updated["generation"] = int(semantic["generation"]) + 1
     updated["status"] = (
@@ -938,16 +932,20 @@ def submit_response(
         **dict(updated.get("metadata") or {}),
         "latest_response_id": response["response_id"],
     }
-    stored_interaction = conversation_store.save_interaction(
-        updated,
-        expected_generation=int(semantic["generation"]),
-    )
-    if stored_interaction is None:
+    try:
+        committed = conversation_store.commit_interaction_response(
+            response,
+            updated,
+            expected_generation=int(semantic["generation"]),
+        )
+    except ValueError as exc:
+        raise ConversationInteractionError(str(exc)) from exc
+    if committed is None or committed.get("interaction") is None:
         raise ConversationInteractionError("durable conversation store is unavailable")
     return {
-        "interaction": _validate(INTERACTION_SCHEMA, stored_interaction),
-        "response": stored_response,
-        "duplicate": False,
+        "interaction": _validate(INTERACTION_SCHEMA, committed["interaction"]),
+        "response": committed["response"],
+        "duplicate": bool(committed.get("duplicate")),
     }
 
 
