@@ -3187,6 +3187,8 @@ def test_state_repair_context_exposes_exact_typed_options_and_fixtures() -> None
     }
     assert context["fixtures"][0]["values"]["result"] == "issue"
     assert "declared option_value" in plan["task"]
+    assert "option that matches a fixture is not a repair" in plan["task"]
+    assert "never change it into collection_empty" in plan["task"]
     predicate_variants = plan["output_schema"]["$defs"]["statePredicate"]["anyOf"]
     result_predicate = next(
         item
