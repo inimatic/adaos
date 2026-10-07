@@ -764,6 +764,9 @@ def interaction_from_workflow_description(
     conversation_id: str,
     owner: str,
     prompt: str | None = None,
+    prompt_ref: str | None = None,
+    prompt_message: Mapping[str, Any] | None = None,
+    locale_context: Mapping[str, Any] | None = None,
     interaction_id: str | None = None,
     thread_id: str | None = None,
     task_ref: Mapping[str, Any] | None = None,
@@ -775,6 +778,7 @@ def interaction_from_workflow_description(
     turn_trace_id: str | None = None,
     trace: Mapping[str, Any] | None = None,
     action_labels: Mapping[str, str] | None = None,
+    action_semantics: Mapping[str, Mapping[str, Any]] | None = None,
     now: str | None = None,
     persist: bool = True,
 ) -> dict[str, Any]:
@@ -790,6 +794,11 @@ def interaction_from_workflow_description(
     fallbacks: list[str] = []
     actions: list[dict[str, Any]] = []
     labels = {str(key): str(value) for key, value in dict(action_labels or {}).items() if str(value).strip()}
+    declared_semantics = {
+        str(key): copy.deepcopy(dict(value))
+        for key, value in dict(action_semantics or {}).items()
+        if isinstance(value, Mapping)
+    }
     for command in commands:
         if not _workflow_command_executor_ready(command):
             raise ConversationInteractionError(
@@ -807,17 +816,38 @@ def interaction_from_workflow_description(
             fallbacks.append(fallback)
         risk = dict(command.get("risk") or {})
         authority = dict(command.get("authority") or {})
+        command_id = str(command["command"])
+        transition_id = str(command["transition_id"])
+        confirmation_required = str(risk.get("confirmation") or "none") != "none"
+        semantics = copy.deepcopy(
+            declared_semantics.get(command_id)
+            or declared_semantics.get(transition_id)
+            or {
+                "preset": "custom",
+                "effect_class": "workflow",
+                "operation": command_id,
+                "executor": "workflow",
+                "mutates_domain": str(risk.get("class") or "read").lower()
+                not in {"read", "none", "read_only"},
+                "records_consent": confirmation_required,
+                "terminal": True,
+                "effect_ref": None,
+                "assertion_required": False,
+            }
+        )
         actions.append(
             {
-                "action_id": str(command["transition_id"]),
+                "action_id": transition_id,
                 "label": labels.get(
-                    str(command["command"]),
+                    command_id,
                     str(command.get("explanation") or command["command"]),
                 ),
-                "command": str(command["command"]),
-                "value": str(command["command"]),
+                "command": command_id,
+                "value": command_id,
                 "risk": str(risk.get("class") or "read"),
-                "confirmation_required": str(risk.get("confirmation") or "none") != "none",
+                "confirmation_required": confirmation_required,
+                "preset": str(semantics.get("preset") or "custom"),
+                "semantics": semantics,
                 "target_ref": copy.deepcopy(command.get("target_ref") or snapshot.get("target")),
                 "expected_generation": generation,
                 "principal_scope": [str(item) for item in authority.get("actors") or ["user"]],
@@ -834,6 +864,9 @@ def interaction_from_workflow_description(
         thread_id=thread_id,
         owner=owner,
         prompt=prompt or f"State: {snapshot.get('state')}. Choose the next action.",
+        prompt_ref=prompt_ref,
+        prompt_message=prompt_message,
+        locale_context=locale_context,
         input_spec={
             "kind": "choice",
             "required_fields": [],

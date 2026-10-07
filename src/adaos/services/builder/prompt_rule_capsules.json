@@ -118,7 +118,8 @@
       "rules": [
         "Model a human decision as a canonical governed workflow Interaction; Pending Actions are projections, not a second state machine.",
         "Use adaos.sdk.workflow.create_interaction plus adaos.sdk.chat.request, and resume execution only from an admitted response through adaos.sdk.workflow.invoke_interaction_response.",
-        "Declare every choice, principal scope, risk, confirmation policy, exact target and generation, admitted executor, idempotency, expiry, and observable outcome. Topic presence is not handler proof.",
+        "Declare every choice, principal scope, risk, confirmation policy, exact target and generation, admitted executor, idempotency, expiry, semantic digest, durable dispatch, effect assertion, and observable outcome. Topic presence is not handler proof and a successful callback is not an observed outcome.",
+        "Select an explicit standard action preset or declare custom semantics; never infer behavior from a label or command name. Details, Preview, and Open are read-only; Test binds an exact test effect; Snooze is strictly earlier than the unchanged consent deadline; Defer, Refuse, Cancel, and Compensate remain distinct.",
         "Read-only evidence and Preview never authorize the mutation. Voice is allowed only when the per-choice assurance and platform policy permit it; consequential choices require a trusted visual surface."
       ]
     },

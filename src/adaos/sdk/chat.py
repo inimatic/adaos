@@ -104,7 +104,15 @@ def ask(
     since="1.5.0",
     runtime_support={"owner": "conversation_runtime", "min_contract": 1},
     action_closure={
-        "requires": ["exact_action_token", "principal_scope", "generation_cas"],
+        "requires": [
+            "standard_action_preset_or_custom_semantics",
+            "semantic_digest",
+            "expiry",
+            "presentation_bound_action_token",
+            "per_choice_assurance",
+            "principal_scope",
+            "generation_cas",
+        ],
         "execution_api": "adaos.sdk.workflow.invoke_interaction_response",
     },
 )
@@ -294,8 +302,12 @@ def present(
             "presentation_bound_action_token",
             "per_choice_assurance",
             "principal_scope",
+            "verified_session_principal",
+            "semantic_digest",
+            "expiry",
             "generation_cas",
             "idempotency_key",
+            "durable_dispatch",
         ],
     },
 )

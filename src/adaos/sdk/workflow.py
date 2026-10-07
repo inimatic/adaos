@@ -132,7 +132,16 @@ def describe(
     since="1.5.0",
     runtime_support={"owner": "governed_workflow_runtime", "min_contract": 1},
     action_closure={
-        "requires": ["verified_responder", "exact_generation", "executor_readiness", "durable_outcome"],
+        "requires": [
+            "explicit_action_semantics",
+            "semantic_digest",
+            "verified_responder",
+            "exact_generation",
+            "executor_readiness",
+            "durable_dispatch",
+            "effect_assertion",
+            "durable_outcome",
+        ],
         "response_api": "adaos.sdk.workflow.invoke_interaction_response",
     },
 )
@@ -146,8 +155,14 @@ def create_interaction(
     command_context_id: str,
     interaction_id: str | None = None,
     prompt: str | None = None,
+    prompt_ref: str | None = None,
+    prompt_message: Mapping[str, Any] | None = None,
+    locale_context: Mapping[str, Any] | None = None,
     thread_id: str | None = None,
     reply_route_id: str | None = None,
+    expires_at: str | None = None,
+    action_labels: Mapping[str, str] | None = None,
+    action_semantics: Mapping[str, Mapping[str, Any]] | None = None,
     context: Mapping[str, Any] | None = None,
     executor_registrations: Iterable[WorkflowExecutorRegistration] = (),
     metadata: Mapping[str, Any] | None = None,
@@ -170,6 +185,9 @@ def create_interaction(
         interaction_id=interaction_id,
         thread_id=thread_id,
         prompt=prompt,
+        prompt_ref=prompt_ref,
+        prompt_message=prompt_message,
+        locale_context=locale_context,
         workflow_ref=workflow_ref(
             "workflow",
             instance_id,
@@ -181,6 +199,9 @@ def create_interaction(
         reply_route_ref=(
             workflow_ref("reply_route", reply_route_id) if reply_route_id else None
         ),
+        expires_at=expires_at,
+        action_labels=action_labels,
+        action_semantics=action_semantics,
         metadata=dict(metadata or {}),
     )
 
@@ -242,7 +263,16 @@ def invoke(
     since="1.5.0",
     runtime_support={"owner": "governed_workflow_runtime", "min_contract": 1},
     action_closure={
-        "requires": ["accepted_interaction_response", "idempotency_key", "effect_binding", "outcome_receipt"],
+        "requires": [
+            "accepted_interaction_response",
+            "semantic_digest",
+            "exact_generation",
+            "idempotency_key",
+            "durable_dispatch",
+            "effect_binding",
+            "effect_assertion",
+            "outcome_receipt",
+        ],
     },
 )
 def invoke_interaction_response(

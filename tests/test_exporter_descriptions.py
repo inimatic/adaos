@@ -118,7 +118,22 @@ def test_human_decision_sdk_contract_is_discoverable_in_english_and_russian():
     )
     assert "human_decision.present" in request["contract"]["capabilities"]
     assert request["contract"]["runtime_support"]["owner"] == "conversation_runtime"
-    assert "exact_action_token" in request["contract"]["action_closure"]["requires"]
+    closure = request["contract"]["action_closure"]["requires"]
+    assert "standard_action_preset_or_custom_semantics" in closure
+    assert "presentation_bound_action_token" in closure
+    assert "semantic_digest" in closure
+    assert "expiry" in closure
+
+    workflow = next(
+        item
+        for item in english["tools"]
+        if item["name"] == "adaos.sdk.workflow.create_interaction"
+    )
+    workflow_closure = workflow["contract"]["action_closure"]["requires"]
+    assert "executor_readiness" in workflow_closure
+    assert "durable_dispatch" in workflow_closure
+    assert "effect_assertion" in workflow_closure
+    assert "durable_outcome" in workflow_closure
 
 
 def test_sdk_contract_is_generated_from_one_metadata_source() -> None:

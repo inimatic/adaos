@@ -159,17 +159,22 @@ def test_generic_prompt_rules_do_not_retrieve_subject_policies() -> None:
 
 
 def test_human_decision_rule_is_selected_independently_from_conversation() -> None:
-    ids = [
-        item["id"]
-        for item in select_prompt_rules(
-            target_type="skill",
-            evidence="Delete the selected release only after owner approval.",
-            facts={
-                "effects": ["destructive", "human_decision"],
-                "requires_human_decision": True,
-                "requires_conversation": False,
-            },
-        )
-    ]
+    selected = select_prompt_rules(
+        target_type="skill",
+        evidence="Delete the selected release only after owner approval.",
+        facts={
+            "effects": ["destructive", "human_decision"],
+            "requires_human_decision": True,
+            "requires_conversation": False,
+        },
+    )
+    ids = [item["id"] for item in selected]
 
     assert "adaos.skill.human_decision.v1" in ids
+    rules = next(
+        item["rules"]
+        for item in selected
+        if item["id"] == "adaos.skill.human_decision.v1"
+    )
+    assert any("explicit standard action preset" in rule for rule in rules)
+    assert any("successful callback is not an observed outcome" in rule for rule in rules)

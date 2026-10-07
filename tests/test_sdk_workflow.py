@@ -72,7 +72,13 @@ def test_sdk_owns_instance_interaction_and_execution(tmp_path: Path, monkeypatch
         conversation_id="conversation:sdk-workflow",
         owner="skill:test",
         command_context_id="test:sdk-workflow",
+        expires_at="2099-01-01T00:00:00+00:00",
+        action_labels={"complete": "Complete safely"},
     )
+    assert interaction["expires_at"] == "2099-01-01T00:00:00+00:00"
+    assert interaction["actions"][0]["label"] == "Complete safely"
+    assert interaction["actions"][0]["semantics"]["preset"] == "custom"
+    assert interaction["actions"][0]["semantics"]["operation"] == "complete"
     presentation = conversation_interactions.negotiate_presentation(
         interaction,
         conversation_interactions.standard_capability_profile("web"),
