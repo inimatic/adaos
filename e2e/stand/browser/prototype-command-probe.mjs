@@ -85,20 +85,35 @@ try {
       return { record: component?.recordValues, values: component?.values }
     })
     const open = async (widget, modalId, collection, create = false, selectedRow) => {
-      if (create) return host(`open-${widget.id}`).locator('[data-command-id="new"]').click()
+      if (create) {
+        const createAction = widget.actions?.find(item => item.type === 'resourceOperation'
+          && item.params?.operation_id === 'create')
+        const commandId = createAction?.id
+        const owner = commandId && widgets.find(item => item.actions?.some(action =>
+          ['openModal', 'navigate'].includes(action.type)
+          && (!modalId || action.params?.modalId === modalId)
+          && action.on === `click:${commandId}`))
+        if (owner) {
+          return host(owner.id).locator(`[data-command-id=${JSON.stringify(commandId)}]`).first().click()
+        }
+        return host(`open-${widget.id}`).locator('[data-command-id="new"]').click()
+      }
       const row = selectedRow || collectionRows(collection).first()
       await row.click()
       if (!modalId) return
       for (const owner of widgets) {
-        const action = owner.actions?.find(item => ['openModal', 'navigate'].includes(item.type) && item.params?.modalId === modalId
-          && item.on?.startsWith('click:') && item.on !== 'click:new')
-        if (action) {
+        const actions = owner.actions?.filter(item => ['openModal', 'navigate'].includes(item.type) && item.params?.modalId === modalId
+          && item.on?.startsWith('click:') && item.on !== 'click:new') || []
+        for (const action of actions) {
           const id = action.on.startsWith('click:') ? action.on.slice(6) : action.id || action.on
           const scope = ['ui.table', 'ui.list', 'collection.board'].includes(owner.type) ? row : host(owner.id)
-          await scope.locator(`[data-command-id=${JSON.stringify(id)}]`).first().click()
-          break
+          const control = scope.locator(`[data-command-id=${JSON.stringify(id)}]`).first()
+          if (!await control.count() || !await control.isVisible()) continue
+          await control.click()
+          return
         }
       }
+      throw new Error(`No visible row action opens modal ${modalId}`)
     }
     const submit = async (form, action) => {
       const response = page.waitForResponse(item => new URL(item.url()).pathname === '/api/resources/operate')
