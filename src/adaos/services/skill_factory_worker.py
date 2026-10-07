@@ -3511,6 +3511,7 @@ def _selected_prompt_rule_capsules(
                     "effects",
                     "requires_i18n",
                     "requires_access",
+                    "requires_human_decision",
                     "requires_conversation",
                     "requires_lifecycle",
                 )

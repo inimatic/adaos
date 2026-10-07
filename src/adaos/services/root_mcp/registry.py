@@ -315,18 +315,22 @@ _SDK_CONSUMER_CONTRACT_FIELDS: dict[str, frozenset[str]] = {
     "builder": frozenset(
         {
             "permissions",
+            "capabilities",
             "effects",
             "errors",
             "boundedness",
             "pagination",
             "stability",
             "since",
+            "runtime_support",
+            "action_closure",
             "digest",
         }
     ),
     "migration": frozenset(
         {
             "permissions",
+            "capabilities",
             "effects",
             "errors",
             "boundedness",
@@ -337,6 +341,8 @@ _SDK_CONSUMER_CONTRACT_FIELDS: dict[str, frozenset[str]] = {
             "removedIn",
             "replacement",
             "migration_recipe",
+            "runtime_support",
+            "action_closure",
             "authoring_visibility",
             "schema_refs",
             "digest",
@@ -345,11 +351,13 @@ _SDK_CONSUMER_CONTRACT_FIELDS: dict[str, frozenset[str]] = {
     "diagnostics": frozenset(
         {
             "errors",
+            "capabilities",
             "boundedness",
             "pagination",
             "stability",
             "deprecated",
             "schema_refs",
+            "runtime_support",
             "digest",
         }
     ),

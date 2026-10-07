@@ -1,7 +1,7 @@
 {
   "schema": "adaos.builder.prompt_rule_registry.v1",
-  "version": "0.6.0",
-  "published_at": "2026-09-05T15:00:00+00:00",
+  "version": "0.7.0",
+  "published_at": "2026-10-07T00:00:00+00:00",
   "authority_ref": "core:adaos.prompt-rule-registry",
   "items": [
     {
@@ -103,6 +103,23 @@
         "When a manifest references `workflow.json`, treat that admitted file as the workflow-definition authority; do not recreate transitions as independent Python or UI tables.",
         "Preserve the complete TransitionDescriptor contract and validate the definition structurally through the public workflow boundary.",
         "Keep runtime state, transition effects, and presentation projections separate from the immutable workflow definition."
+      ]
+    },
+    {
+      "id": "adaos.skill.human_decision.v1",
+      "title": "Human decision interaction closure",
+      "source": "docs-development/platform/architecture/pending-actions.md",
+      "applicability": {
+        "target_types": ["skill", "scenario"],
+        "effects": ["human_decision"],
+        "requires": ["human_decision"],
+        "match_any": ["human decision", "approval", "confirmation", "consent", "defer", "refuse", "pending action"]
+      },
+      "rules": [
+        "Model a human decision as a canonical governed workflow Interaction; Pending Actions are projections, not a second state machine.",
+        "Use adaos.sdk.workflow.create_interaction plus adaos.sdk.chat.request, and resume execution only from an admitted response through adaos.sdk.workflow.invoke_interaction_response.",
+        "Declare every choice, principal scope, risk, confirmation policy, exact target and generation, admitted executor, idempotency, expiry, and observable outcome. Topic presence is not handler proof.",
+        "Read-only evidence and Preview never authorize the mutation. Voice is allowed only when the per-choice assurance and platform policy permit it; consequential choices require a trusted visual surface."
       ]
     },
     {

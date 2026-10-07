@@ -99,6 +99,28 @@ def test_sdk_export_mini_selects_public_quota_sdk_from_task_language():
     assert len(data["items"]) <= 24
 
 
+def test_human_decision_sdk_contract_is_discoverable_in_english_and_russian():
+    english = sdk_export(level="std", query="human decision approval", limit=12)
+    russian = sdk_export(
+        level="std",
+        query="решение человека и подтверждение",
+        limit=12,
+    )
+    expected = {
+        "adaos.sdk.chat.request",
+        "adaos.sdk.workflow.create_interaction",
+    }
+
+    assert expected.issubset({item["name"] for item in english["tools"]})
+    assert expected.issubset({item["name"] for item in russian["tools"]})
+    request = next(
+        item for item in english["tools"] if item["name"] == "adaos.sdk.chat.request"
+    )
+    assert "human_decision.present" in request["contract"]["capabilities"]
+    assert request["contract"]["runtime_support"]["owner"] == "conversation_runtime"
+    assert "exact_action_token" in request["contract"]["action_closure"]["requires"]
+
+
 def test_sdk_contract_is_generated_from_one_metadata_source() -> None:
     def sample(limit: int = 10, cursor: str | None = None):
         return None

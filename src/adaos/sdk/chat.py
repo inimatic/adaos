@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from adaos.sdk import conversation
+from adaos.sdk.core.contracts import public_contract
 from adaos.services import conversation_response
 from adaos.services import conversation_interactions, conversation_store
 from adaos.services.agent_context import get_ctx
@@ -93,6 +94,20 @@ def ask(
     )
 
 
+@public_contract(
+    capabilities=("human_decision.present", "conversation.interaction"),
+    effects=("durable_write", "conversation_delivery"),
+    errors=("interaction_invalid", "channel_unsupported", "durable_store_unavailable"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+    runtime_support={"owner": "conversation_runtime", "min_contract": 1},
+    action_closure={
+        "requires": ["exact_action_token", "principal_scope", "generation_cas"],
+        "execution_api": "adaos.sdk.workflow.invoke_interaction_response",
+    },
+)
 def request(
     interaction: Mapping[str, Any] | str,
     *,
@@ -120,7 +135,7 @@ def request(
     meta: Mapping[str, Any] | None = None,
     bus: Any | None = None,
 ) -> dict[str, Any]:
-    """Persist a semantic Interaction and materialize a negotiated presentation.
+    """Persist and present a capability-negotiated human decision.
 
     This call never holds a process-local waiter. The returned handle can be
     resumed later through :func:`respond`, including after process restart.
@@ -253,6 +268,19 @@ def present(
     }
 
 
+@public_contract(
+    capabilities=("human_decision.respond", "conversation.interaction"),
+    effects=("durable_write",),
+    errors=("action_token_invalid", "principal_denied", "stale_generation", "interaction_expired"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+    runtime_support={"owner": "conversation_runtime", "min_contract": 1},
+    action_closure={
+        "requires": ["exact_action_token", "principal_scope", "generation_cas", "idempotency_key"],
+    },
+)
 def respond(
     interaction_id: str,
     *,
@@ -394,3 +422,17 @@ def _ctx_bus() -> Any | None:
         return getattr(get_ctx(), "bus", None)
     except Exception:
         return None
+
+
+__all__ = [
+    "accept",
+    "ask",
+    "context",
+    "history",
+    "pending",
+    "present",
+    "request",
+    "respond",
+    "send",
+    "start_thread",
+]

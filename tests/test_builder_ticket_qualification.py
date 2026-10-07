@@ -137,6 +137,7 @@ def _prompt_facts(**overrides) -> dict:
         "effects": ["read_only"],
         "requires_i18n": False,
         "requires_access": False,
+        "requires_human_decision": False,
         "requires_conversation": False,
         "requires_lifecycle": False,
     }
@@ -714,6 +715,7 @@ def test_service_uses_root_accounted_language_qualification_only_after_local_mis
     assert set(facts_contract["boolean_keys"]) == {
         "requires_i18n",
         "requires_access",
+        "requires_human_decision",
         "requires_conversation",
         "requires_lifecycle",
     }

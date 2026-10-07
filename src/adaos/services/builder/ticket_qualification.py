@@ -216,6 +216,7 @@ _PROMPT_EFFECTS = {
     "destructive",
     "publication",
     "llm",
+    "human_decision",
 }
 
 
@@ -276,6 +277,7 @@ def _typed_ticket_features(ticket: Mapping[str, Any]) -> dict[str, Any]:
         "surface_kind": _text(metadata.get("surface_kind")).lower(),
         "requires_i18n": metadata.get("requires_i18n") is True,
         "requires_access": metadata.get("requires_access") is True,
+        "requires_human_decision": metadata.get("requires_human_decision") is True,
         "requires_conversation": metadata.get("requires_conversation") is True,
         "requires_lifecycle": metadata.get("requires_lifecycle") is True,
     }
@@ -406,6 +408,29 @@ def _prompt_facts(
         effects.add("publication")
     if has_prefix("llm", "model", "codex", "prompt"):
         effects.add("llm")
+    requires_human_decision = (
+        bool(proposal.get("requires_human_decision"))
+        or bool(typed.get("requires_human_decision"))
+        or has_prefix(
+            "подтверд",
+            "соглас",
+            "решени",
+            "отлож",
+            "одобр",
+            "отказ",
+            "approval",
+            "approve",
+            "confirmation",
+            "confirm",
+            "consent",
+            "decision",
+            "defer",
+            "refuse",
+            "review",
+        )
+    )
+    if requires_human_decision:
+        effects.add("human_decision")
 
     return {
         "schema": "adaos.builder.prompt_facts.v1",
@@ -420,6 +445,7 @@ def _prompt_facts(
         "requires_access": bool(proposal.get("requires_access"))
         or bool(typed.get("requires_access"))
         or has_prefix("access", "permission", "capability", "role", "auth"),
+        "requires_human_decision": requires_human_decision,
         "requires_conversation": bool(proposal.get("requires_conversation"))
         or bool(typed.get("requires_conversation"))
         or bool(data_planes & {"conversation"}),

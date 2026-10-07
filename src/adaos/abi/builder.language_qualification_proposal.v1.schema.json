@@ -17,6 +17,7 @@
         "effects",
         "requires_i18n",
         "requires_access",
+        "requires_human_decision",
         "requires_conversation",
         "requires_lifecycle"
       ],
@@ -48,12 +49,13 @@
         },
         "effects": {
           "type": "array",
-          "maxItems": 7,
+          "maxItems": 8,
           "uniqueItems": true,
-          "items": {"enum": ["read_only", "local_write", "external_io", "device_control", "destructive", "publication", "llm"]}
+          "items": {"enum": ["read_only", "local_write", "external_io", "device_control", "destructive", "publication", "llm", "human_decision"]}
         },
         "requires_i18n": {"type": "boolean"},
         "requires_access": {"type": "boolean"},
+        "requires_human_decision": {"type": "boolean"},
         "requires_conversation": {"type": "boolean"},
         "requires_lifecycle": {"type": "boolean"}
       }

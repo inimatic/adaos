@@ -29,7 +29,7 @@ def test_prompt_rule_registry_is_versioned_and_selects_by_facets() -> None:
         {key: value for key, value in registry.items() if key != "digest"}
     )
     assert registry["schema"] == "adaos.builder.prompt_rule_registry.v1"
-    assert registry["version"] == "0.6.0"
+    assert registry["version"] == "0.7.0"
     assert registry["digest"].startswith("sha256:")
     assert len({item["id"] for item in registry["items"]}) == len(registry["items"])
     assert [
@@ -156,3 +156,20 @@ def test_generic_prompt_rules_do_not_retrieve_subject_policies() -> None:
 
     assert all("adaos.application." not in item["id"] for item in selected)
     assert all("adaos.research." not in item["id"] for item in selected)
+
+
+def test_human_decision_rule_is_selected_independently_from_conversation() -> None:
+    ids = [
+        item["id"]
+        for item in select_prompt_rules(
+            target_type="skill",
+            evidence="Delete the selected release only after owner approval.",
+            facts={
+                "effects": ["destructive", "human_decision"],
+                "requires_human_decision": True,
+                "requires_conversation": False,
+            },
+        )
+    ]
+
+    assert "adaos.skill.human_decision.v1" in ids

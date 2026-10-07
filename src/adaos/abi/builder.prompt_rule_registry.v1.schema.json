@@ -34,7 +34,7 @@
               "operation_kinds": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
               "data_planes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
               "effects": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-              "requires": {"type": "array", "uniqueItems": true, "items": {"enum": ["i18n", "access", "conversation", "lifecycle"]}}
+              "requires": {"type": "array", "uniqueItems": true, "items": {"enum": ["i18n", "access", "human_decision", "conversation", "lifecycle"]}}
             },
             "additionalProperties": false,
             "anyOf": [

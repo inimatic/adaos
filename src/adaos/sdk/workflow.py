@@ -12,6 +12,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from adaos.sdk.core.contracts import public_contract
+
 from adaos.services import conversation_interactions, workflow_persistence
 from adaos.services.governed_workflow import (
     CompiledWorkflowDefinition,
@@ -120,6 +122,20 @@ def describe(
     )
 
 
+@public_contract(
+    capabilities=("human_decision.publish", "workflow.interaction"),
+    effects=("durable_write",),
+    errors=("definition_invalid", "executor_unavailable", "durable_store_unavailable"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+    runtime_support={"owner": "governed_workflow_runtime", "min_contract": 1},
+    action_closure={
+        "requires": ["verified_responder", "exact_generation", "executor_readiness", "durable_outcome"],
+        "response_api": "adaos.sdk.workflow.invoke_interaction_response",
+    },
+)
 def create_interaction(
     definition: DefinitionInput,
     instance_id: str,
@@ -136,7 +152,7 @@ def create_interaction(
     executor_registrations: Iterable[WorkflowExecutorRegistration] = (),
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Project one authoritative workflow snapshot into an interaction."""
+    """Project one authoritative workflow snapshot into a durable human decision."""
 
     compiled = load_definition(definition)
     description = describe(
@@ -216,6 +232,19 @@ def invoke(
     )
 
 
+@public_contract(
+    capabilities=("human_decision.execute", "workflow.interaction"),
+    effects=("declared_workflow_effect",),
+    errors=("response_invalid", "principal_denied", "stale_generation", "executor_unavailable", "outcome_unknown"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+    runtime_support={"owner": "governed_workflow_runtime", "min_contract": 1},
+    action_closure={
+        "requires": ["accepted_interaction_response", "idempotency_key", "effect_binding", "outcome_receipt"],
+    },
+)
 def invoke_interaction_response(
     definition: DefinitionInput,
     instance_id: str,
@@ -225,6 +254,7 @@ def invoke_interaction_response(
     context: Mapping[str, Any] | None = None,
     executor_registrations: Iterable[WorkflowExecutorRegistration] = (),
 ) -> dict[str, Any]:
+    """Execute an admitted human-decision response and return its durable outcome."""
     compiled = load_definition(definition)
     instance = ensure_instance(compiled, instance_id)
     invocation = prepare_interaction_invocation(response)

@@ -23,6 +23,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.applications",
     "adaos.sdk.automation",
     "adaos.sdk.builder.applications",
+    "adaos.sdk.chat",
     "adaos.sdk.control_plane",
     "adaos.sdk.conversation",
     "adaos.sdk.context",
@@ -51,6 +52,7 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.applications": "Inspect Applications and execute reviewed install, update, removal, and track operations.",
     "adaos.sdk.automation": "Read the secret-free remote automation fleet inventory through the Core-owned Builder identity and the selected AdaOS Root route. Applications never receive bearer tokens, certificate material, SSH keys, MCP tickets, or arbitrary transport URLs. Requires external_provider.use.",
     "adaos.sdk.builder.applications": "Create, preview, publish, and promote Applications through the governed Builder lifecycle.",
+    "adaos.sdk.chat": "Present durable conversations and human decisions through capability-negotiated chat surfaces.",
     "adaos.sdk.control_plane": "Read canonical node, subnet, reliability, quota, and inventory projections.",
     "adaos.sdk.conversation": "Read and update governed conversational threads and Builder topics.",
     "adaos.sdk.context": "Resolve, compile, inspect, and bind governed agent context.",
@@ -106,6 +108,12 @@ _GENERIC_QUERY_TERMS = {
     "публичные",
 }
 _QUERY_TERM_EXPANSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("решен", ("human", "decision", "interaction", "approval")),
+    ("подтвержд", ("confirmation", "decision", "interaction", "approval")),
+    ("соглас", ("consent", "decision", "interaction", "approval")),
+    ("одобр", ("approval", "decision", "interaction")),
+    ("отлож", ("defer", "decision", "interaction")),
+    ("отказ", ("refuse", "decision", "interaction")),
     ("токен", ("token", "quota", "usage")),
     ("расход", ("usage", "quota", "metering")),
     ("использован", ("usage", "used", "quota")),
@@ -232,6 +240,7 @@ def _sdk_contract(public_name: str, fn: Any, meta: dict[str, Any]) -> dict[str, 
         pagination = {"supported": bool(cursor_args), "arguments": cursor_args}
     deprecated = bool(meta.get("deprecated")) or str(meta.get("stability") or "").lower() == "deprecated"
     contract = {
+        "capabilities": sorted({str(value).strip() for value in meta.get("capabilities") or [] if str(value).strip()}),
         "permissions": sorted({str(value).strip() for value in meta.get("permissions") or [] if str(value).strip()}),
         "effects": sorted({str(value).strip() for value in meta.get("effects") or ([meta.get("side_effects")] if meta.get("side_effects") else []) if str(value).strip()}),
         "errors": sorted({str(value).strip() for value in meta.get("errors") or [] if str(value).strip()}),
@@ -243,6 +252,8 @@ def _sdk_contract(public_name: str, fn: Any, meta: dict[str, Any]) -> dict[str, 
         "removedIn": meta.get("removed_in"),
         "replacement": meta.get("replacement"),
         "migration_recipe": meta.get("migration_recipe"),
+        "runtime_support": dict(meta.get("runtime_support") or {}) if isinstance(meta.get("runtime_support"), dict) else {},
+        "action_closure": dict(meta.get("action_closure") or {}) if isinstance(meta.get("action_closure"), dict) else {},
         "authoring_visibility": "migration_only" if deprecated else "default",
         "schema_refs": {
             "input": _schema_digest(input_schema),
@@ -268,6 +279,8 @@ def _public_facade_symbols(level: str) -> list[dict[str, Any]]:
                 continue
             public_name = f"{module_name}.{name}"
             summary = _doc_summary(value.__doc__) or _fallback_summary(str(name))
+            declared_contract = getattr(value, "__adaos_public_contract__", {})
+            declared_contract = dict(declared_contract) if isinstance(declared_contract, dict) else {}
             item: dict[str, Any] = {
                 "kind": "sdk_function",
                 "name": public_name,
@@ -275,7 +288,8 @@ def _public_facade_symbols(level: str) -> list[dict[str, Any]]:
                 "qualname": f"{value.__module__}.{value.__name__}",
                 "summary": summary,
                 "meta": {
-                    "stability": "experimental",
+                    **declared_contract,
+                    "stability": declared_contract.get("stability") or "experimental",
                     "side_effects": "public_sdk_contract",
                 },
             }
