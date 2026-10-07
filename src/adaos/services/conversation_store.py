@@ -3568,11 +3568,23 @@ def claim_interaction_dispatch(
         if status == "dispatching" and not active_lease:
             contract = str(reconciliation_contract or "").strip()
             workflow_ref = record.get("workflow_ref")
-            if (
-                contract != "adaos.governed_workflow.dispatch_replay.v1"
-                or not isinstance(workflow_ref, Mapping)
-                or not str(workflow_ref.get("id") or "").strip()
-            ):
+            command = dict(record.get("command") or {})
+            semantics = dict(command.get("semantics") or {})
+            governed_workflow_replay = (
+                contract == "adaos.governed_workflow.dispatch_replay.v1"
+                and isinstance(workflow_ref, Mapping)
+                and bool(str(workflow_ref.get("id") or "").strip())
+            )
+            artifact_update_replay = (
+                contract == "adaos.artifact_subscription_update.dispatch_replay.v1"
+                and str(semantics.get("executor") or "") == "artifact_subscription_update"
+                and str(command.get("command") or "")
+                == "runtime_compatibility.execute_exact_update"
+                and str(dict(semantics.get("effect_ref") or {}).get("digest") or "").startswith(
+                    "sha256:"
+                )
+            )
+            if not governed_workflow_replay and not artifact_update_replay:
                 con.rollback()
                 raise ValueError(
                     "expired interaction dispatch lease requires an admitted reconciliation contract"

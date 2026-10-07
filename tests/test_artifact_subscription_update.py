@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +10,8 @@ import pytest
 
 from adaos.domain.artifact_release import StableSubscription
 from adaos.services import artifact_subscription_update as update_service
+from adaos.services import conversation_interactions, conversation_store
+from adaos.services.pending_action_projection import project_pending_action_from_store
 from adaos.services.artifact_pipeline import SubscriptionStore
 
 
@@ -445,3 +449,140 @@ def test_qualified_runtime_update_revalidates_command_before_activation(
             "webspace_id": "desktop",
         }
     ]
+
+
+def test_exact_runtime_update_uses_canonical_interaction_and_projects_outcome(
+    monkeypatch,
+    _autocontext,
+) -> None:
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(_autocontext)
+    command = {
+        "schema": update_service.RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA,
+        "kind": "skill",
+        "project_id": "recipe_skill",
+        "from": {"version": "1.0.0", "package_digest": "sha256:installed"},
+        "target": {"version": "2.0.0", "package_digest": "sha256:desired"},
+        "plan_digest": PLAN_DIGEST,
+        "consequences": {
+            "permissions": {"added": ["network.egress"]},
+            "migrations": {"count": 0},
+            "rollback": {"available": True},
+        },
+    }
+    canonical = json.dumps(
+        command, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    command["command_digest"] = "sha256:" + hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
+    executions: list[dict] = []
+
+    async def _plan(*_args, **_kwargs):
+        return dict(command)
+
+    async def _execute(received, **kwargs):
+        executions.append({"command": dict(received), **kwargs})
+        return {
+            "ok": True,
+            "updated": True,
+            "release": "recipe_skill@2.0.0",
+            "release_digest": "sha256:release",
+            "mode": "package_activation",
+            "reviewed_plan_digest": PLAN_DIGEST,
+        }
+
+    monkeypatch.setattr(coordinator, "plan_qualified_runtime_update", _plan)
+    monkeypatch.setattr(coordinator, "execute_qualified_runtime_update", _execute)
+    ordinary_profile = conversation_interactions.standard_capability_profile("web")
+    limited = asyncio.run(
+        coordinator.publish_qualified_runtime_update_interaction(
+            "skill",
+            "recipe_skill",
+            qualification=_qualified_update(),
+            conversation_id="conv.runtime-update-limited",
+            owner="skill:runtime_compatibility",
+            expires_at="2099-01-01T00:00:00+00:00",
+            interaction_id="interaction.runtime-update-limited",
+            capability_profile=ordinary_profile,
+        )
+    )
+    limited_actions = {
+        item["action_id"]: item for item in limited["presentation"]["actions"]
+    }
+    assert limited["presentation"]["supported"] is True
+    assert limited["presentation"]["reason_code"] == "partial_assurance_handoff"
+    assert limited_actions["approve_exact_update"]["enabled"] is False
+    assert limited_actions["approve_exact_update"]["token"] is None
+    assert limited_actions["refuse"]["enabled"] is True
+    limited_projection = project_pending_action_from_store(
+        "interaction.runtime-update-limited",
+        principal={"application_id": "runtime_compatibility"},
+    )
+    projected_choices = {item["id"]: item for item in limited_projection["choices"]}
+    assert projected_choices["approve_exact_update"]["available"] is False
+    assert projected_choices["approve_exact_update"]["unavailable_reason"].startswith(
+        "assurance_handoff_required:"
+    )
+    assert projected_choices["refuse"]["available"] is True
+
+    profile = conversation_interactions.standard_capability_profile("web")
+    profile["profile_id"] = "profile.web.step-up"
+    profile["capabilities"]["step_up"] = True
+
+    published = asyncio.run(
+        coordinator.publish_qualified_runtime_update_interaction(
+            "skill",
+            "recipe_skill",
+            qualification=_qualified_update(),
+            conversation_id="conv.runtime-update",
+            owner="skill:runtime_compatibility",
+            expires_at="2099-01-01T00:00:00+00:00",
+            interaction_id="interaction.runtime-update",
+            capability_profile=profile,
+        )
+    )
+    approval = next(
+        item for item in published["presentation"]["actions"]
+        if item["action_id"] == "approve_exact_update"
+    )
+    accepted = conversation_interactions.submit_action_token(
+        approval["token"],
+        actor_id="user:owner",
+        idempotency_key="runtime-update:approve",
+    )
+    abandoned = conversation_store.claim_interaction_dispatch(
+        accepted["response"]["response_id"],
+        lease_owner="artifact-update:crashed-worker",
+        reconciliation_contract="adaos.artifact_subscription_update.dispatch_replay.v1",
+        lease_seconds=10,
+        now_epoch=100,
+        now_iso="2026-10-07T00:00:00+00:00",
+    )
+    assert abandoned["status"] == "dispatching"
+
+    result = asyncio.run(
+        coordinator.execute_qualified_runtime_update_interaction(
+            "interaction.runtime-update",
+            accepted["response"]["response_id"],
+            webspace_id="desktop",
+        )
+    )
+    duplicate = asyncio.run(
+        coordinator.execute_qualified_runtime_update_interaction(
+            "interaction.runtime-update",
+            accepted["response"]["response_id"],
+            webspace_id="desktop",
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["interaction"]["status"] == "completed"
+    assert result["dispatch"]["status"] == "succeeded"
+    assert result["dispatch"]["attempt_count"] == 2
+    assert result["outcome"]["effect_assertion"]["observed"] is True
+    assert result["outcome"]["effect_assertion"]["effect_ref"]["digest"] == command["command_digest"]
+    assert duplicate["duplicate"] is True
+    assert len(executions) == 1
+    assert executions[0]["command"] == command
+    assert executions[0]["permission_decision"]["response_id"] == accepted["response"]["response_id"]
+    assert conversation_store.get_interaction("interaction.runtime-update")["status"] == "completed"

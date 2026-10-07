@@ -112,18 +112,28 @@ def project_pending_action(
     for action in actions:
         token = str(action.get("token") or "").strip()
         action_id = str(action.get("action_id") or "").strip()
-        if not action_id or (not decision_recorded and not token):
+        if not action_id or (bool(action.get("enabled")) and not token):
             raise PendingActionProjectionError("every available choice requires an exact action token")
+        missing_capabilities = [
+            str(item)
+            for item in _mapping(action.get("assurance_admission")).get("missing_capabilities") or []
+            if str(item)
+        ]
         choices.append(
             {
                 "id": action_id,
                 "label": str(action.get("label") or "").strip(),
-                "action_token": None if decision_recorded else token,
-                "available": not decision_recorded,
+                "action_token": None if decision_recorded or not token else token,
+                "available": not decision_recorded and bool(token),
                 "command": str(action.get("command") or "").strip(),
                 "risk": str(action.get("risk") or "read").strip(),
                 "assurance": _assurance(action),
                 "target_ref": _mapping(action.get("target_ref")) or None,
+                "unavailable_reason": (
+                    "assurance_handoff_required:" + ",".join(missing_capabilities)
+                    if missing_capabilities and not token
+                    else None
+                ),
             }
         )
     metadata = _mapping(semantic.get("metadata"))

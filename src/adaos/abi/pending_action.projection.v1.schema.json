@@ -60,7 +60,8 @@
             },
             "additionalProperties": false
           },
-          "target_ref": { "type": ["object", "null"], "maxProperties": 30 }
+          "target_ref": { "type": ["object", "null"], "maxProperties": 30 },
+          "unavailable_reason": { "type": ["string", "null"], "maxLength": 500 }
         },
         "additionalProperties": false
       }

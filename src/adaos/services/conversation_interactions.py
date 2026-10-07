@@ -1042,9 +1042,13 @@ def negotiate_presentation(
     )
     if actions and assurance_missing and not i18n_missing:
         missing.extend(item for item in assurance_missing if item not in missing)
-        mode = "unsupported"
-        supported = False
-        reason = "assurance_handoff_required"
+        admitted_actions = sum(1 for admission in action_admissions if admission["admitted"])
+        if admitted_actions == 0:
+            mode = "unsupported"
+            supported = False
+            reason = "assurance_handoff_required"
+        elif supported:
+            reason = "partial_assurance_handoff"
 
     prompt = (
         str(prompt_resolution["visual"])

@@ -305,6 +305,308 @@ class ArtifactSubscriptionUpdateCoordinator:
             webspace_id=webspace_id,
         )
 
+    async def publish_qualified_runtime_update_interaction(
+        self,
+        kind: ArtifactKind,
+        project_id: str,
+        *,
+        qualification: Mapping[str, Any],
+        conversation_id: str,
+        owner: str,
+        expires_at: str,
+        interaction_id: str | None = None,
+        thread_id: str | None = None,
+        task_ref: Mapping[str, Any] | None = None,
+        webspace_id: str | None = None,
+        channel_id: str = "general",
+        route_id: str = "dialog",
+        capability_profile: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Present one exact classified update through canonical Interaction."""
+
+        deadline = str(expires_at or "").strip()
+        if not deadline:
+            raise ArtifactSubscriptionUpdateError(
+                "an exact runtime update decision requires an expiry",
+                code="runtime_compatibility_update_expiry_required",
+            )
+        command = await self.plan_qualified_runtime_update(
+            kind,
+            project_id,
+            qualification=qualification,
+        )
+        target = dict(command["target"])
+        current = dict(command["from"])
+        effect_ref = {
+            "kind": "artifact_subscription_update",
+            "id": f"{kind}:{project_id}",
+            "digest": str(command["command_digest"]),
+        }
+        specification = {
+            "interaction_id": str(interaction_id or "").strip() or None,
+            "prompt": (
+                f"Update {kind} {project_id} from {current.get('version')} "
+                f"to {target.get('version')}?"
+            ),
+            "input_spec": {
+                "kind": "choice",
+                "required_fields": [],
+                "choices": [
+                    {
+                        "value": str(command["command_digest"]),
+                        "label": f"Update to {target.get('version')}",
+                        "description": "Apply only the reviewed package digest and plan.",
+                    },
+                    {
+                        "value": "refuse",
+                        "label": "Do not update",
+                        "description": "Keep the current admitted package.",
+                    },
+                ],
+                "sensitive": False,
+            },
+            "actions": [
+                {
+                    "action_id": "approve_exact_update",
+                    "label": f"Update to {target.get('version')}",
+                    "command": "runtime_compatibility.execute_exact_update",
+                    "value": str(command["command_digest"]),
+                    "risk": "registry",
+                    "confirmation_required": True,
+                    "target_ref": effect_ref,
+                    "semantics": {
+                        "preset": "custom",
+                        "effect_class": "artifact_update",
+                        "operation": "execute_exact_runtime_update",
+                        "executor": "artifact_subscription_update",
+                        "mutates_domain": True,
+                        "records_consent": True,
+                        "terminal": True,
+                        "effect_ref": effect_ref,
+                        "assertion_required": True,
+                    },
+                },
+                {
+                    "action_id": "refuse",
+                    "label": "Do not update",
+                    "command": "conversation.interaction.refuse",
+                    "value": "refuse",
+                    "risk": "read",
+                    "confirmation_required": False,
+                    "preset": "refuse",
+                },
+            ],
+            "required_capabilities": ["buttons", "trusted_interface"],
+            "optional_capabilities": ["rich_view", "deep_link", "progress"],
+            "fallbacks": ["unsupported"],
+            "task_ref": dict(task_ref) if isinstance(task_ref, Mapping) else None,
+            "expires_at": deadline,
+            "metadata": {
+                "pending_action_kind": "runtime_compatibility_exact_update",
+                "runtime_update_command": command,
+                "runtime_compatibility_qualification": dict(qualification),
+                "decision_context": {
+                    "kind": kind,
+                    "project_id": str(project_id or "").strip(),
+                    "from": current,
+                    "target": target,
+                    "plan_digest": command["plan_digest"],
+                    "command_digest": command["command_digest"],
+                    "consequences": command["consequences"],
+                },
+            },
+        }
+        from adaos.sdk import chat
+
+        return chat.request(
+            specification,
+            conversation_id=str(conversation_id or "").strip(),
+            owner=str(owner or "").strip(),
+            webspace_id=webspace_id,
+            channel_id=channel_id,
+            route_id=route_id,
+            thread_id=thread_id,
+            capability_profile=capability_profile,
+            bus=getattr(self.ctx, "bus", None),
+        )
+
+    async def execute_qualified_runtime_update_interaction(
+        self,
+        interaction_id: str,
+        response_id: str,
+        *,
+        webspace_id: str | None = None,
+        lease_owner: str = "artifact_subscription_update",
+    ) -> dict[str, Any]:
+        """Consume one durable decision and project the exact update outcome."""
+
+        from adaos.services import conversation_interactions, conversation_store
+
+        identifier = str(interaction_id or "").strip()
+        response_identifier = str(response_id or "").strip()
+        interaction = conversation_store.get_interaction(identifier)
+        response = conversation_store.get_interaction_response(response_identifier)
+        dispatch = conversation_store.get_interaction_dispatch(response_id=response_identifier)
+        if interaction is None or response is None or dispatch is None:
+            raise ArtifactSubscriptionUpdateError(
+                "the exact update decision is unavailable",
+                code="runtime_compatibility_interaction_unavailable",
+            )
+        if str(response.get("interaction_id") or "") != identifier:
+            raise ArtifactSubscriptionUpdateError(
+                "the exact update response belongs to another interaction",
+                code="runtime_compatibility_response_mismatch",
+            )
+        existing_status = str(dispatch.get("status") or "")
+        if existing_status in {"succeeded", "failed", "cancelled", "rejected", "outcome_unknown"}:
+            return {
+                "ok": existing_status == "succeeded",
+                "duplicate": True,
+                "interaction": interaction,
+                "dispatch": dispatch,
+                "outcome": dict(dispatch.get("outcome") or {}),
+            }
+        metadata = dict(interaction.get("metadata") or {})
+        command = dict(metadata.get("runtime_update_command") or {})
+        qualification = dict(metadata.get("runtime_compatibility_qualification") or {})
+        consumed = dict(response.get("consumed_command") or {})
+        action_id = str(consumed.get("action_id") or "").strip()
+        if action_id not in {"approve_exact_update", "refuse"}:
+            raise ArtifactSubscriptionUpdateError(
+                "the exact update response has no admitted action",
+                code="runtime_compatibility_response_action_invalid",
+            )
+        if action_id == "approve_exact_update" and (
+            str(consumed.get("value") or "") != str(command.get("command_digest") or "")
+            or str(consumed.get("command") or "")
+            != "runtime_compatibility.execute_exact_update"
+        ):
+            raise ArtifactSubscriptionUpdateError(
+                "the exact update response changed after presentation",
+                code="runtime_compatibility_response_command_stale",
+            )
+        if str(interaction.get("status") or "") == "answered":
+            interaction = conversation_interactions.accept_response(
+                identifier,
+                response_identifier,
+                expected_generation=int(interaction.get("generation") or 0),
+            )
+        elif str(interaction.get("status") or "") != "accepted":
+            raise ArtifactSubscriptionUpdateError(
+                "the exact update interaction is not executable",
+                code="runtime_compatibility_interaction_state_invalid",
+            )
+        claimed = conversation_store.claim_interaction_dispatch(
+            response_identifier,
+            lease_owner=lease_owner,
+            reconciliation_contract="adaos.artifact_subscription_update.dispatch_replay.v1",
+        )
+        if claimed is None:
+            raise ArtifactSubscriptionUpdateError(
+                "the exact update dispatch is unavailable",
+                code="runtime_compatibility_dispatch_unavailable",
+            )
+        if str(claimed.get("status") or "") != "dispatching":
+            return {
+                "ok": str(claimed.get("status") or "") == "succeeded",
+                "duplicate": True,
+                "interaction": interaction,
+                "dispatch": claimed,
+                "outcome": dict(claimed.get("outcome") or {}),
+            }
+        if action_id == "refuse":
+            completed = conversation_store.complete_interaction_dispatch(
+                str(claimed["dispatch_id"]),
+                lease_owner=lease_owner,
+                status="cancelled",
+                outcome={"reason_code": "user_refused_exact_update"},
+            )
+            interaction = conversation_interactions.transition_interaction(
+                identifier,
+                "cancel",
+                expected_generation=int(interaction.get("generation") or 0),
+                reason="user_refused_exact_update",
+            )
+            return {
+                "ok": False,
+                "refused": True,
+                "interaction": interaction,
+                "dispatch": completed,
+            }
+
+        try:
+            result = await self.execute_qualified_runtime_update(
+                command,
+                qualification=qualification,
+                permission_decision={
+                    "approved": True,
+                    "interaction_id": identifier,
+                    "response_id": response_identifier,
+                    "actor_id": response.get("actor_id"),
+                    "assurance_receipt": dict(response.get("assurance_receipt") or {}),
+                },
+                webspace_id=webspace_id,
+            )
+            safe_result = {
+                key: result.get(key)
+                for key in (
+                    "ok",
+                    "updated",
+                    "release",
+                    "release_digest",
+                    "mode",
+                    "reviewed_plan_digest",
+                )
+                if result.get(key) is not None
+            }
+            result_digest = "sha256:" + hashlib.sha256(
+                json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+            semantics = dict(consumed.get("semantics") or {})
+            outcome = {
+                "result": safe_result,
+                "result_digest": result_digest,
+                "effect_assertion": {
+                    "schema": "adaos.conversation.action_effect_assertion.v1",
+                    "preset": "custom",
+                    "operation": "execute_exact_runtime_update",
+                    "observed": True,
+                    "domain_mutated": True,
+                    "effect_ref": dict(semantics.get("effect_ref") or {}),
+                },
+            }
+            completed = conversation_store.complete_interaction_dispatch(
+                str(claimed["dispatch_id"]),
+                lease_owner=lease_owner,
+                status="succeeded",
+                outcome=outcome,
+            )
+            interaction = conversation_interactions.transition_interaction(
+                identifier,
+                "complete",
+                expected_generation=int(interaction.get("generation") or 0),
+                reason="exact_runtime_update_succeeded",
+            )
+            return {
+                "ok": True,
+                "interaction": interaction,
+                "dispatch": completed,
+                "outcome": outcome,
+            }
+        except Exception as exc:
+            conversation_store.complete_interaction_dispatch(
+                str(claimed["dispatch_id"]),
+                lease_owner=lease_owner,
+                status="failed",
+                outcome={
+                    "reason_code": getattr(exc, "code", "runtime_compatibility_update_failed"),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
+
     async def update(
         self,
         kind: ArtifactKind,
