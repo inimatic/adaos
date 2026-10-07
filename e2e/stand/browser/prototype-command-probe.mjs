@@ -1,6 +1,7 @@
 import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { installSystemOverlayDismissal } from './prototype-navigation.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Command probes require ENV_TYPE=dev')
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT)
@@ -55,11 +56,17 @@ try {
     }, { hub, token, subnet, webspace: preview.webspace_id, locale: checkpoint.context.locale })
     const page = await context.newPage()
     page.setDefaultTimeout(20_000)
-    const sample = { layout, checks: [], fixtureCleanup: [], errors: [] }
+    page.setDefaultNavigationTimeout(60_000)
+    const sample = { layout, checks: [], fixtureCleanup: [], errors: [], resourceOperations: [] }
     const freshRecords = new Map()
     const createdReceipts = []
     report.samples.push(sample)
+    await installSystemOverlayDismissal(page, overlay => sample.checks.push({ task: 'system-overlay-dismissed', overlay, passed: true }))
     page.on('pageerror', error => sample.errors.push(error.message))
+    page.on('request', request => {
+      if (new URL(request.url()).pathname !== '/api/resources/operate') return
+      sample.resourceOperations.push(request.postDataJSON())
+    })
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
     const collectionRows = collection => host(collection.id).locator(collection.type === 'collection.board'
       ? '.board-card__main' : 'tr.row-selectable, .collection-focus-item')
@@ -83,11 +90,12 @@ try {
       await row.click()
       if (!modalId) return
       for (const owner of widgets) {
-        const action = owner.actions?.find(item => item.type === 'openModal' && item.params?.modalId === modalId
+        const action = owner.actions?.find(item => ['openModal', 'navigate'].includes(item.type) && item.params?.modalId === modalId
           && item.on?.startsWith('click:') && item.on !== 'click:new')
         if (action) {
-          const id = owner.type === 'ui.actions' ? action.on.slice(6) : action.id || action.on
-          await host(owner.id).locator(`[data-command-id=${JSON.stringify(id)}]`).click()
+          const id = action.on.startsWith('click:') ? action.on.slice(6) : action.id || action.on
+          const scope = ['ui.table', 'ui.list', 'collection.board'].includes(owner.type) ? row : host(owner.id)
+          await scope.locator(`[data-command-id=${JSON.stringify(id)}]`).first().click()
           break
         }
       }
@@ -124,10 +132,45 @@ try {
         if (!collection) continue
         const fixed = widget.actions.filter(action => action.type === 'resourceOperation' && action.params.operation_id === 'update'
           && Object.values(action.params.payload).every(value => !String(value).startsWith('$')))
+        const protectedUpdates = widget.actions.filter(action => action.type === 'resourceOperation'
+          && action.params.operation_id === 'update' && action.confirmation)
         const create = widget.actions.find(action => action.type === 'resourceOperation' && action.params.operation_id === 'create')
         if (!create) {
-          for (const action of fixed) sample.checks.push({ command: action.id, task: 'select/transition/reopen',
-            status: 'not_exercised', reason: 'No declared create command for a disposable transition record' })
+          const safeCancelActions = [...new Map([...fixed, ...protectedUpdates].map(action => [action.id, action])).values()]
+          for (const action of safeCancelActions) {
+            if (!action.confirmation) {
+              sample.checks.push({ command: action.id, task: 'select/transition/reopen',
+                status: 'not_exercised', reason: 'No declared create command for a disposable transition record' })
+              continue
+            }
+            const rows = collectionRows(collection)
+            let exercised = false
+            for (let index = 0; index < await rows.count(); index += 1) {
+              const row = rows.nth(index)
+              await open(widget, modalId, collection, false, row)
+              const form = host(widget.id)
+              await expect(form).toBeVisible()
+              const button = form.locator(`[data-command-id=${JSON.stringify(action.id)}]`).locator('button')
+              if (!await button.isVisible() || await button.isDisabled()) {
+                if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+                continue
+              }
+              const operationCount = sample.resourceOperations.length
+              await button.click()
+              const alert = page.locator('ion-alert').last()
+              await expect(alert).toBeVisible()
+              await alert.locator('button').first().click()
+              await expect(page.locator('ion-alert')).toHaveCount(0)
+              await page.waitForTimeout(100)
+              if (sample.resourceOperations.length !== operationCount) throw new Error('Cancelled confirmation caused a mutation')
+              sample.checks.push({ command: action.id, task: 'select/confirmation-cancel/no-mutation', passed: true })
+              exercised = true
+              if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+              break
+            }
+            if (!exercised) sample.checks.push({ command: action.id, task: 'select/confirmation-cancel/no-mutation',
+              status: 'not_exercised', reason: 'No fixture enables this protected command' })
+          }
           continue
         }
         if (widget.inputs.fields.some(field => field.required && field.type === 'fileUpload')) {

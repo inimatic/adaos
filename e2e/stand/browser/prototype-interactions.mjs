@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { reviewSeparateCrud } from './prototype-crud-review.mjs'
-import { revealPrototypeWidget } from './prototype-navigation.mjs'
+import { installSystemOverlayDismissal, revealPrototypeWidget } from './prototype-navigation.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Interaction review requires ENV_TYPE=dev')
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT || '')
@@ -60,6 +60,7 @@ try {
     page.setDefaultNavigationTimeout(60_000)
     const sample = { layout, checks: [], errors: [], mutations: [] }
     report.samples.push(sample)
+    await installSystemOverlayDismissal(page, overlay => sample.checks.push({ task: 'system-overlay-dismissed', overlay, status: 'passed' }))
     page.on('pageerror', error => sample.errors.push(error.message))
     page.on('crash', () => sample.errors.push('Browser page crashed'))
     page.on('close', () => { if (!sample.completed) sample.errors.push('Browser page closed before completion') })
@@ -78,11 +79,12 @@ try {
     }
     const editorOpener = (modalId, row) => {
       for (const owner of widgets) {
-        const action = owner.actions?.find(item => item.type === 'openModal' && item.params?.modalId === modalId
+        const action = owner.actions?.find(item => ['openModal', 'navigate'].includes(item.type) && item.params?.modalId === modalId
           && item.on?.startsWith('click:') && item.on !== 'click:new')
         if (!action) continue
-        const id = owner.type === 'ui.actions' ? action.on.slice('click:'.length) : action.id || action.on
-        return host(owner.id).locator(`[data-command-id=${JSON.stringify(id)}]`)
+        const id = action.on.startsWith('click:') ? action.on.slice('click:'.length) : action.id || action.on
+        const scope = ['ui.table', 'ui.list', 'collection.board'].includes(owner.type) ? row : host(owner.id)
+        return scope.locator(`[data-command-id=${JSON.stringify(id)}]`).first()
       }
       return row
     }

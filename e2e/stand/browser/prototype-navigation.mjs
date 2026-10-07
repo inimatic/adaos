@@ -1,5 +1,16 @@
 import { expect } from '@playwright/test'
 
+// Release notices belong to the surrounding Desktop, not to the isolated
+// Prototype under review. They may arrive after first paint and must not make
+// an otherwise deterministic probe depend on a user's notification history.
+export async function installSystemOverlayDismissal(page, onDismiss = () => {}) {
+  await page.addLocatorHandler(page.locator('.component-updates-backdrop'), async () => {
+    const close = page.locator('.component-updates-panel__tools button[aria-label="Close"], .component-updates-panel__tools button').last()
+    await close.click()
+    onDismiss('component-updates')
+  })
+}
+
 // Follow public tab controls, never mutate application state to reveal a fixture.
 export async function revealPrototypeWidget(page, widgets, target) {
   const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
