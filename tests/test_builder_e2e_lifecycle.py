@@ -162,6 +162,36 @@ def test_lifecycle_suite_keeps_automation_brief_out_of_prototype_requests():
     assert declared["trial"]["type"] == "trial.prepare"
 
 
+def test_human_decision_suite_stops_at_exact_review_without_leaking_sdk_names():
+    from pathlib import Path
+    from adaos.e2e.builder import load_builder_e2e_suite
+
+    loaded = load_builder_e2e_suite(
+        Path("e2e/builder/development/human-decisions/suite.yaml")
+    )
+    assert {case["locale"] for case in loaded.cases} == {"en", "ru"}
+    assert loaded.suite["defaults"]["retain_test_projects"] is True
+    forbidden = (
+        "adaos.sdk",
+        "create_interaction",
+        "invoke_interaction_response",
+        "get_interaction_outcome",
+        "human_decision",
+    )
+    for case in loaded.cases:
+        declared = {step["id"]: step for step in case["steps"]}
+        prototype_prompt = " ".join(
+            str(declared[step_id]["input"]["text"])
+            for step_id in ("create", "design")
+        ).lower()
+        assert not any(symbol in prototype_prompt for symbol in forbidden)
+        assert declared["approve"]["type"] == "prototype.accept"
+        assert declared["approve"]["input"]["wait_seconds"] == 0
+        assert declared["implement"]["type"] == "automation.start"
+        assert declared["implementation-result"]["type"] == "automation.wait"
+        assert declared["trial"]["type"] == "trial.prepare"
+
+
 @pytest.mark.parametrize("timeout", [False, True])
 def test_browser_records_scoped_evidence_and_clears_inherited_probe_options(context, tmp_path, monkeypatch, timeout):
     from pathlib import Path

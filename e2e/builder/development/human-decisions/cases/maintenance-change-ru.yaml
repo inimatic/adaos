@@ -1,0 +1,119 @@
+schema: adaos.builder.e2e_case.v1
+case_id: maintenance-change-decision-ru
+title: Решение об изменении обслуживания, русский
+description: Нейтральное бизнес-задание на защищенное решение, просмотр, отказ, срок, прогресс и результат.
+locale: ru
+tags: [visible, held-out, human-decision, lifecycle, ru]
+requirements:
+  primary_jobs:
+    - statement: рассмотреть одно точное изменение обслуживания
+      acceptance: Запрос показывает площадку, оборудование, редакцию плана, инициатора, причину, срок, допустимого ответственного и ожидаемое последствие.
+    - statement: изучить предложение без его запуска
+      acceptance: Просмотр показывает план и свидетельства, но не меняет запрос и состояние обслуживания.
+    - statement: безопасно принять или отклонить актуальный запрос
+      acceptance: Доступен отказ; защищенное принятие требует явного подтверждения в доверенном визуальном интерфейсе и не разрешается свободным голосовым «да».
+    - statement: различать решение, исполнение и результат
+      acceptance: Запись ответа не изображается завершенной работой. Различимы ожидание отправки, выполнение, успех, ошибка и неизвестный результат.
+  representative_states:
+    - statement: актуальный запрос с доступными действиями
+    - statement: просроченный запрос без исполняемых действий
+    - statement: принятое решение с продолжающейся работой
+    - statement: запрос с наблюдаемым конечным результатом
+  channel_rules:
+    - statement: визуальное и голосовое объяснения сохраняют одинаковые существенные условия
+    - statement: голос может объяснить запрос или открыть его, но не подтвердить защищенное изменение
+prohibited_assumptions:
+  - statement: успешный обработчик кнопки доказывает выполнение изменения
+    acceptance: Завершение подтверждается наблюдаемым конечным результатом именно этого решения.
+  - statement: просмотр может исправить, запланировать или иначе изменить план
+    acceptance: Просмотр остается только чтением даже для готового предложения.
+  - statement: подпись роли сама доказывает право ответа
+    acceptance: Видны точный допустимый ответственный и текущая редакция запроса.
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Создай новое приложение «Центр решений по обслуживанию ${case_instance_id}» для операционной команды.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: >-
+        Сделай рабочую первую версию для руководителей, которые рассматривают изменения
+        обслуживания. В запросе нужны точная площадка, оборудование, редакция плана,
+        инициатор, причина, срок, допустимый ответственный и ожидаемое последствие.
+        Руководитель может изучить предложение и свидетельства без запуска работ, явно
+        принять текущую редакцию в доверенном экранном подтверждении или отказаться.
+        Голосом можно попросить объяснение или открыть запрос, но свободное голосовое «да»
+        не должно подтверждать защищенное изменение. Покажи актуальный запрос,
+        просроченный запрос с недоступными действиями, принятую работу в процессе и
+        наблюдаемый конечный результат. Не изображай записанный ответ как уже выполненное
+        обслуживание. Визуальные и краткие голосовые формулировки на русском должны
+        сохранять одинаковые существенные условия и последствия.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.90}
+    expect: {values: {ok: true, passed: true}}
+  - id: browser-commands
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: commands, timeout_seconds: 300}
+    expect: {values: {ok: true}}
+  - id: browser-review
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: review, timeout_seconds: 300}
+    expect: {values: {ok: true}}
+  - id: browser-interactions
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: interactions, timeout_seconds: 300}
+    expect: {values: {ok: true}}
+  - id: browser-capabilities
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: capabilities, timeout_seconds: 240}
+    expect: {values: {ok: true}}
+  - id: approve
+    type: prototype.accept
+    input:
+      object_id: $steps.create.scenario_id
+      review_file: reviews/${case_id}-${repetition}.json
+      wait_seconds: 0
+    expect: {values: {ok: true}}
+  - id: implement
+    type: automation.start
+    input:
+      object_id: $steps.create.scenario_id
+      implementation_brief: |
+        Реализуй принятый «Центр решений по обслуживанию» как небольшое работающее приложение.
+        Сохрани принятую информационную архитектуру и действия, но не превращай примеры Prototype в рабочие записи.
+        Находи и используй только поддерживаемые публичные контракты платформы. Не импортируй внутренние сервисы Core, не создавай второй журнал решений и не выдумывай callback через шину событий при отсутствии нужной возможности.
+        Приложение владеет записями изменений и настоящим исполнителем. Запрос решения связывает точные id и редакцию записи, digest рассмотренного плана, инициатора, допустимого ответственного, срок и требования подтверждения каждого выбора.
+        Просмотр работает только на чтение и подтверждает отсутствие изменения доменных данных. Отказ явный и конечный, исполнитель изменения при нем не вызывается. Защищенное принятие требует доверенного визуального взаимодействия и не принимается из произвольного текста или голоса.
+        Запись ответа создает надежное обязательство отправки. Исполнение идемпотентно для точного решения и эффекта. Интерфейс читает точный надежный результат и различает ожидание ответа, ожидание отправки, выполнение, успех, ошибку, истечение срока и неизвестный результат.
+        Русские визуальные и голосовые сообщения могут отличаться длиной, но сохраняют идентичность, область, последствия, срок и требования подтверждения. Отсутствие критичной формулировки отключает защищенный выбор.
+        Добавь исполняемые позитивные и негативные проверки только через публичные контракты: точное успешное исполнение; отказ; истечение срока; неверный пользователь; устаревшая редакция; отсутствующий исполнитель; повторная доставка; просмотр без изменений; запрет голосового подтверждения; наблюдение результата после перезапуска или потерянного подтверждения доставки.
+        Если публичная поверхность не выражает требование, сообщи точный пробел возможности вместо ослабления поведения.
+    expect: {values: {ok: true}, paths_present: [session.session_id]}
+  - id: implementation-result
+    type: automation.wait
+    input: {object_id: $steps.create.scenario_id, session_id: $steps.implement.session.session_id, timeout_seconds: 1800}
+    expect: {values: {ok: true, status: completed}}
+  - id: trial
+    type: trial.prepare
+    input: {object_id: $steps.create.scenario_id, project_ref: $steps.create.project_ref}
+    expect: {values: {ok: true}, paths_present: [candidate.candidate_id]}
+cleanup: {policy: never, retain_on_failure: true}

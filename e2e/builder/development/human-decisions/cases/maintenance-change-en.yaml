@@ -1,0 +1,118 @@
+schema: adaos.builder.e2e_case.v1
+case_id: maintenance-change-decision-en
+title: Maintenance change decision, English
+description: A neutral business brief for a protected decision with preview, refusal, expiry, progress, and outcome.
+locale: en
+tags: [visible, held-out, human-decision, lifecycle, en]
+requirements:
+  primary_jobs:
+    - statement: review one exact maintenance change
+      acceptance: The request identifies the facility, asset, plan revision, requester, reason, deadline, eligible responder, and expected consequence.
+    - statement: inspect the proposal without starting it
+      acceptance: Preview exposes the reviewed plan and evidence while leaving the request and maintenance state unchanged.
+    - statement: accept or refuse the current request safely
+      acceptance: Refusal is available; the protected accept choice requires an explicit trusted on-screen confirmation and cannot be authorized by a free-form spoken yes.
+    - statement: distinguish decision, execution, and outcome
+      acceptance: Recording a response is not shown as completed work. Pending dispatch, running progress, terminal success, failure, and unknown outcome are distinguishable.
+  representative_states:
+    - statement: a current actionable request
+    - statement: an expired request whose choices cannot execute
+    - statement: an admitted request whose work is still running
+    - statement: a request with a terminal observed outcome
+  channel_rules:
+    - statement: visual and spoken explanations preserve the same material scope
+    - statement: voice may explain or navigate but cannot approve the protected change
+prohibited_assumptions:
+  - statement: a button callback proves the maintenance change happened
+    acceptance: Completion requires an observed terminal outcome for the exact decision.
+  - statement: Preview may repair, schedule, or otherwise mutate the plan
+    acceptance: Preview is read-only even when the proposal is ready.
+  - statement: a generic approver label proves response authority
+    acceptance: The exact eligible responder and current request revision remain visible.
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Create a new application named "Maintenance Decision Desk ${case_instance_id}" for an operations team.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: >-
+        Build a working first version for supervisors who review proposed maintenance
+        changes. A request must show the exact facility, asset, plan revision, requester,
+        reason, deadline, eligible responder, and expected consequence. The supervisor can
+        inspect the proposal and evidence without starting work, explicitly accept the
+        current revision from a trusted on-screen confirmation, or refuse it. A spoken
+        request may explain or navigate, but a free-form spoken yes must not approve the
+        protected change. Show a current request, an expired request with unavailable
+        actions, admitted work in progress, and an observed final outcome. Do not depict a
+        recorded answer as completed maintenance. Use concise English visual and spoken
+        wording that preserves the same scope and consequences.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.90}
+    expect: {values: {ok: true, passed: true}}
+  - id: browser-commands
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: commands, timeout_seconds: 300}
+    expect: {values: {ok: true}}
+  - id: browser-review
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: review, timeout_seconds: 300}
+    expect: {values: {ok: true}}
+  - id: browser-interactions
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: interactions, timeout_seconds: 300}
+    expect: {values: {ok: true}}
+  - id: browser-capabilities
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: capabilities, timeout_seconds: 240}
+    expect: {values: {ok: true}}
+  - id: approve
+    type: prototype.accept
+    input:
+      object_id: $steps.create.scenario_id
+      review_file: reviews/${case_id}-${repetition}.json
+      wait_seconds: 0
+    expect: {values: {ok: true}}
+  - id: implement
+    type: automation.start
+    input:
+      object_id: $steps.create.scenario_id
+      implementation_brief: |
+        Realize the accepted Maintenance Decision Desk as a small working Application.
+        Preserve the accepted information architecture and user-visible actions, but do not treat Prototype fixtures as production records.
+        Discover and use only supported public platform contracts. Do not import internal Core services, write a second decision ledger, or invent an event-bus callback when a required capability is unavailable.
+        The Application owns its maintenance-change records and its actual executor. A decision request binds the exact record id, record revision, reviewed plan digest, requester, eligible responder, expiry, and per-choice assurance.
+        Preview is read-only and must assert that no domain mutation occurred. Refusal is explicit and terminal without calling the maintenance executor. The protected accept choice requires a trusted visual interaction and cannot be accepted by unrestricted text or voice.
+        Recording the answer must create a durable dispatch obligation. Execution is idempotent for the exact decision and effect. The UI reads the exact durable outcome and distinguishes awaiting response, dispatch pending, running, succeeded, failed, expired, and outcome unknown.
+        English visual and spoken messages may differ in length but retain identity, scope, consequence, expiry, and assurance. Missing critical wording disables the protected choice.
+        Add executable positive and negative tests using public contracts only: successful exact execution; refusal; expiry; wrong actor; stale revision; missing executor; duplicate delivery; read-only Preview; protected voice denial; and outcome observation after restart or lost acknowledgement.
+        If the supported public surface cannot express any requirement, report the exact capability gap instead of weakening the behavior.
+    expect: {values: {ok: true}, paths_present: [session.session_id]}
+  - id: implementation-result
+    type: automation.wait
+    input: {object_id: $steps.create.scenario_id, session_id: $steps.implement.session.session_id, timeout_seconds: 1800}
+    expect: {values: {ok: true, status: completed}}
+  - id: trial
+    type: trial.prepare
+    input: {object_id: $steps.create.scenario_id, project_ref: $steps.create.project_ref}
+    expect: {values: {ok: true}, paths_present: [candidate.candidate_id]}
+cleanup: {policy: never, retain_on_failure: true}
