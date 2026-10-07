@@ -256,6 +256,30 @@ def test_canonical_sdk_bundle_excludes_wall_clock_metadata(monkeypatch) -> None:
     assert str(bundle["digest"]).startswith("sha256:")
 
 
+def test_canonical_sdk_bundle_contains_typed_public_facades() -> None:
+    bundle = build_sdk_metadata.build_bundle()
+    authoring = {
+        item["name"]: item
+        for item in bundle["authoring"]["tools"]
+        if isinstance(item, dict) and item.get("name")
+    }
+    migration = {
+        item["name"]: item
+        for item in bundle["migration"]["tools"]
+        if isinstance(item, dict) and item.get("name")
+    }
+
+    request = authoring["adaos.sdk.chat.request"]
+    assert request["input_schema"]["required"] == [
+        "interaction",
+        "conversation_id",
+        "owner",
+    ]
+    assert request["contract"]["schema_refs"]["input"].startswith("sha256:")
+    assert "adaos.sdk.data.pending_actions.publish_pending_action" not in authoring
+    assert "adaos.sdk.data.pending_actions.publish_pending_action" in migration
+
+
 def test_sdk_metadata_mini_is_a_bounded_nonduplicated_mcp_projection():
     descriptor = get_descriptor_set(
         "sdk_metadata",

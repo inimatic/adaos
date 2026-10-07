@@ -590,6 +590,10 @@ def export(
         # at least two corroborating summary terms remain discoverable.
         tools = [item for score, _frequency, item in ranked if score >= 4][:bounded_limit]
     else:
+        # Build artifacts contain the complete public facade contract. Runtime
+        # discovery still uses bounded search/drill-down and mini module cards;
+        # this full branch is the content-addressed source for CI and migration.
+        tools.extend(facade_symbols)
         tools.sort(key=lambda item: (-_usage_frequency(item), str(item.get("name") or "")))
 
     events = [
