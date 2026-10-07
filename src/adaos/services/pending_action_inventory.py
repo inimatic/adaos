@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 _ABI_ROOT = Path(__file__).resolve().parents[1] / "abi"
 _INVENTORY_PATH = _ABI_ROOT / "pending_action.producer_inventory.v1.json"
 _SCHEMA_PATH = _ABI_ROOT / "pending_action.producer_inventory.v1.schema.json"
+_BASELINE_SCHEMA_PATH = _ABI_ROOT / "pending_action.baseline_evidence.v1.schema.json"
 _ACTIVE_STATUSES = frozenset({"pending", "postponed"})
 _TERMINAL_STATUSES = frozenset({"responded", "expired", "cancelled", "superseded"})
 
@@ -24,6 +25,13 @@ def _canonical_bytes(value: Any) -> bytes:
 
 def _clone(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def _bounded_clone(name: str, value: Any, *, max_bytes: int) -> Any:
+    encoded = _canonical_bytes(value)
+    if len(encoded) > max_bytes:
+        raise ValueError(f"{name} exceeds {max_bytes} bytes")
+    return json.loads(encoded.decode("utf-8"))
 
 
 @lru_cache(maxsize=1)
@@ -216,6 +224,8 @@ def build_pending_action_baseline(
     topology: Mapping[str, Any],
     sdk_discovery: Mapping[str, Any],
     sample: Mapping[str, Any],
+    failures: Sequence[Mapping[str, Any]] = (),
+    artifacts: Sequence[Mapping[str, Any]] = (),
     now: float | None = None,
 ) -> dict[str, Any]:
     """Bind a projection audit to the revisions and sampling evidence that produced it."""
@@ -226,16 +236,53 @@ def build_pending_action_baseline(
         raise ValueError(f"missing component revisions: {', '.join(missing)}")
     if int(sample.get("size") or 0) < 1:
         raise ValueError("sample.size must be positive")
+    if len(failures) > 100:
+        raise ValueError("failures exceeds 100 items")
+    if len(artifacts) > 20:
+        raise ValueError("artifacts exceeds 20 items")
+    normalized_failures = [
+        {
+            "stage": str(item.get("stage") or "unknown")[:100],
+            "code": str(item.get("code") or "unknown")[:160],
+            "count": max(1, int(item.get("count") or 1)),
+            "retriable": bool(item.get("retriable")),
+        }
+        for item in failures
+        if isinstance(item, Mapping)
+    ]
+    normalized_artifacts = [
+        {
+            "role": str(item.get("role") or "input")[:100],
+            "digest": str(item.get("digest") or "")[:80],
+            "bytes": max(0, int(item.get("bytes") or 0)),
+            "redaction": str(item.get("redaction") or "content_not_embedded")[:160],
+        }
+        for item in artifacts
+        if isinstance(item, Mapping)
+    ]
     audit = audit_pending_action_projection(snapshot, now=now)
     evidence = {
         "schema": "adaos.pending_action.baseline_evidence.v1",
         "audit": audit,
-        "component_revisions": {key: str(component_revisions[key]) for key in sorted(component_revisions)},
-        "topology": _clone(topology),
-        "sdk_discovery": _clone(sdk_discovery),
-        "sample": _clone(sample),
+        "component_revisions": {
+            key: str(component_revisions[key])[:200] for key in sorted(component_revisions)
+        },
+        "topology": _bounded_clone("topology", topology, max_bytes=32_768),
+        "sdk_discovery": _bounded_clone(
+            "sdk_discovery", sdk_discovery, max_bytes=65_536
+        ),
+        "sample": _bounded_clone("sample", sample, max_bytes=16_384),
+        "failures": normalized_failures,
+        "artifacts": normalized_artifacts,
+        "redaction": (
+            "Input artifact contents and paths are not embedded; Pending Action ids, "
+            "text, payloads, actors, and domain references are excluded."
+        ),
     }
     evidence["digest"] = f"sha256:{hashlib.sha256(_canonical_bytes(evidence)).hexdigest()}"
+    schema = json.loads(_BASELINE_SCHEMA_PATH.read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(evidence)
     return evidence
 
 

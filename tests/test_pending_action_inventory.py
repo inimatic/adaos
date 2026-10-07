@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -125,11 +126,31 @@ def test_baseline_requires_all_revisions_and_positive_sample() -> None:
         topology={"mode": "isolated_fixture", "nodes": 1},
         sdk_discovery={"query": "human decision", "matches": []},
         sample={"size": 1, "failures": 0},
+        failures=[{"stage": "projection", "code": "room_unavailable", "count": 1}],
+        artifacts=[{
+            "role": "snapshot",
+            "digest": "sha256:" + "a" * 64,
+            "bytes": 42,
+            "redaction": "content_not_embedded",
+        }],
         now=100,
     )
 
     assert evidence["component_revisions"] == revisions
+    assert evidence["failures"] == [{
+        "stage": "projection",
+        "code": "room_unavailable",
+        "count": 1,
+        "retriable": False,
+    }]
+    assert evidence["artifacts"][0]["digest"] == "sha256:" + "a" * 64
     assert evidence["digest"].startswith("sha256:")
+    schema = json.loads(
+        (ABI / "pending_action.baseline_evidence.v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    Draft202012Validator(schema).validate(evidence)
 
     with pytest.raises(ValueError, match="missing component revisions: prompt"):
         build_pending_action_baseline(
@@ -139,3 +160,55 @@ def test_baseline_requires_all_revisions_and_positive_sample() -> None:
             sdk_discovery={},
             sample={"size": 1},
         )
+
+
+def test_baseline_harness_writes_only_redacted_artifact_descriptors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tool_path = ROOT / "tools" / "pending_action_baseline.py"
+    spec = importlib.util.spec_from_file_location("pending_action_baseline_tool", tool_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.REPOSITORY_ROOT = tmp_path
+
+    inputs = {
+        "snapshot": {"by_id": {}},
+        "revisions": {
+            "core": "core-r1",
+            "client": "client-r1",
+            "application": "app-r1",
+            "runtime": "runtime-r1",
+            "sdk": "sdk-r1",
+            "prompt": "prompt-r1",
+        },
+        "topology": {"mode": "isolated_fixture", "nodes": 1},
+        "sdk": {"query": "human decision", "matches": []},
+        "sample": {"size": 1, "source": "isolated_fixture"},
+        "failures": [{"stage": "projection", "code": "unavailable", "count": 1}],
+    }
+    paths: dict[str, Path] = {}
+    for name, value in inputs.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        paths[name] = path
+    output = tmp_path / ".tmp" / "baseline.json"
+
+    result = module.main([
+        "--snapshot", str(paths["snapshot"]),
+        "--revisions", str(paths["revisions"]),
+        "--topology", str(paths["topology"]),
+        "--sdk-discovery", str(paths["sdk"]),
+        "--sample", str(paths["sample"]),
+        "--failures", str(paths["failures"]),
+        "--output", str(output),
+    ])
+
+    assert result == 0
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    assert len(evidence["artifacts"]) == 6
+    serialized = json.dumps(evidence)
+    assert str(paths["snapshot"]) not in serialized
+    assert "secret" not in serialized
+    assert json.loads(capsys.readouterr().out)["digest"] == evidence["digest"]
