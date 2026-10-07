@@ -57,6 +57,13 @@ def _validate(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _assurance(action: Mapping[str, Any]) -> dict[str, bool]:
+    declared = _mapping(action.get("assurance"))
+    if declared:
+        return {
+            "voice_permitted": bool(declared.get("voice_permitted")),
+            "trusted_interface_required": bool(declared.get("trusted_interface_required")),
+            "step_up_required": bool(declared.get("step_up_required")),
+        }
     risk = str(action.get("risk") or "read").strip().lower()
     mutating = risk not in {"read", "none", "read_only"}
     step_up = risk in {"external", "destructive", "admin", "privileged", "registry"}

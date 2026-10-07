@@ -25,6 +25,19 @@
     "target_ref": { "type": ["object", "null"] },
     "source_message_ref": { "type": ["object", "null"] },
     "consumed_command": { "type": ["object", "null"] },
+    "assurance_receipt": {
+      "type": ["object", "null"],
+      "properties": {
+        "mode": { "enum": ["voice_permitted", "trusted_interface_required", "step_up_required"] },
+        "profile_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "profile_version": { "type": "integer", "minimum": 1 },
+        "presentation_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "admitted": { "const": true },
+        "capabilities": { "type": "object", "additionalProperties": { "type": "boolean" } }
+      },
+      "required": ["mode", "profile_id", "profile_version", "presentation_id", "admitted", "capabilities"],
+      "additionalProperties": false
+    },
     "rejection_reason": { "type": ["string", "null"], "maxLength": 240 },
     "status": { "enum": ["partial", "answered", "accepted", "rejected", "superseded"] },
     "validation": {

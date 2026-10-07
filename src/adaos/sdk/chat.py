@@ -271,14 +271,27 @@ def present(
 @public_contract(
     capabilities=("human_decision.respond", "conversation.interaction"),
     effects=("durable_write",),
-    errors=("action_token_invalid", "principal_denied", "stale_generation", "interaction_expired"),
+    errors=(
+        "action_token_invalid",
+        "presentation_mismatch",
+        "assurance_not_admitted",
+        "principal_denied",
+        "stale_generation",
+        "interaction_expired",
+    ),
     boundedness={"kind": "single_result"},
     pagination={"supported": False, "arguments": []},
     stability="beta",
     since="1.5.0",
     runtime_support={"owner": "conversation_runtime", "min_contract": 1},
     action_closure={
-        "requires": ["exact_action_token", "principal_scope", "generation_cas", "idempotency_key"],
+        "requires": [
+            "presentation_bound_action_token",
+            "per_choice_assurance",
+            "principal_scope",
+            "generation_cas",
+            "idempotency_key",
+        ],
     },
 )
 def respond(
@@ -290,6 +303,7 @@ def respond(
     values: Mapping[str, Any] | None = None,
     text: str | None = None,
     action_token: str | None = None,
+    presentation_id: str | None = None,
     intent_proposal: Mapping[str, Any] | None = None,
     supersedes_response_id: str | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -302,6 +316,7 @@ def respond(
         values=values,
         original_text=text,
         action_token=action_token,
+        presentation_id=presentation_id,
         intent_proposal=intent_proposal,
         supersedes_response_id=supersedes_response_id,
         metadata=metadata,

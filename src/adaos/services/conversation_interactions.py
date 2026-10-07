@@ -24,6 +24,7 @@ INTERACTION_PRESENTATION_PLAN_SCHEMA = "adaos.conversation.interaction_presentat
 _PENDING_STATUSES = {"created", "projected", "awaiting_input", "partially_answered", "validation_failed"}
 _TERMINAL_STATUSES = {"completed", "expired", "cancelled", "superseded"}
 _NON_MUTATING_RISK_CLASSES = {"read", "none"}
+_STEP_UP_RISK_CLASSES = {"external", "destructive", "admin", "privileged", "registry"}
 
 
 class ConversationInteractionError(ValueError):
@@ -119,6 +120,57 @@ def _workflow_command_executor_ready(command: Mapping[str, Any]) -> bool:
         return True
     executor = command.get("executor")
     return isinstance(executor, Mapping) and executor.get("available") is True
+
+
+def _action_assurance(action: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the effective assurance floor; publishers may only strengthen it."""
+
+    risk = str(action.get("risk") or "read").strip().lower()
+    declared = dict(action.get("assurance") or {})
+    mutating = risk not in {"read", "none", "read_only"}
+    step_up = risk in _STEP_UP_RISK_CLASSES or bool(declared.get("step_up_required"))
+    trusted = (
+        step_up
+        or mutating
+        or bool(action.get("confirmation_required"))
+        or bool(declared.get("trusted_interface_required"))
+    )
+    voice = bool(declared.get("voice_permitted", not trusted)) and not trusted
+    mode = "step_up_required" if step_up else "trusted_interface_required" if trusted else "voice_permitted"
+    return {
+        "mode": mode,
+        "voice_permitted": voice,
+        "trusted_interface_required": trusted,
+        "step_up_required": step_up,
+    }
+
+
+def _assurance_admission(
+    assurance: Mapping[str, Any],
+    capabilities: Mapping[str, Any],
+) -> dict[str, Any]:
+    mode = str(assurance.get("mode") or "trusted_interface_required")
+    if mode == "step_up_required":
+        required = ["trusted_interface", "step_up"]
+    elif mode == "trusted_interface_required":
+        required = ["trusted_interface"]
+    else:
+        required = ["bound_dialog_response"]
+    missing = [name for name in required if capabilities.get(name) is not True]
+    return {
+        "admitted": not missing,
+        "mode": mode,
+        "required_capabilities": required,
+        "missing_capabilities": missing,
+    }
+
+
+def _unsupported_reason(reason: str, missing: Sequence[str]) -> str:
+    if reason == "assurance_handoff_required":
+        return "unsupported:assurance_handoff_required"
+    detail = ",".join(str(item) for item in list(missing)[:3]) or str(reason)
+    value = f"unsupported:{detail}"
+    return value[:160]
 
 
 def interaction_requirements(
@@ -237,6 +289,9 @@ def standard_capability_profile(
             "web_view": True,
             "miniapp": True,
             "pagination": True,
+            "bound_dialog_response": True,
+            "trusted_interface": True,
+            "step_up": False,
         }
         limits = {"actions": 30, "text_chars": 12000, "button_text_chars": 240, "files": 20}
     elif channel == "telegram":
@@ -254,6 +309,9 @@ def standard_capability_profile(
             "web_view": True,
             "miniapp": True,
             "pagination": True,
+            "bound_dialog_response": True,
+            "trusted_interface": True,
+            "step_up": False,
         }
         limits = {"actions": 8, "text_chars": 3500, "button_text_chars": 64, "files": 10}
     else:
@@ -271,6 +329,9 @@ def standard_capability_profile(
             "web_view": False,
             "miniapp": False,
             "pagination": True,
+            "bound_dialog_response": True,
+            "trusted_interface": False,
+            "step_up": False,
         }
         limits = {"actions": 0, "text_chars": 2000, "button_text_chars": 0, "files": 0}
     return channel_capability_profile(
@@ -332,6 +393,7 @@ def create_interaction(
             "value": copy.deepcopy(item.get("value")),
             "risk": str(item.get("risk") or "read").strip(),
             "confirmation_required": bool(item.get("confirmation_required")),
+            "assurance": _action_assurance(item),
             "target_ref": copy.deepcopy(item.get("target_ref")) if isinstance(item.get("target_ref"), Mapping) else copy.deepcopy(dict(workflow_ref)) if workflow_ref is not None else None,
             "expected_generation": max(
                 0,
@@ -515,8 +577,15 @@ def interaction_from_workflow_description(
     )
 
 
-def _action_token(interaction_id: str, generation: int, action_id: str) -> str:
-    digest = hashlib.sha256(f"{interaction_id}:{generation}:{action_id}".encode("utf-8")).hexdigest()[:32]
+def _action_token(
+    interaction_id: str,
+    generation: int,
+    action_id: str,
+    presentation_id: str,
+) -> str:
+    digest = hashlib.sha256(
+        f"{interaction_id}:{generation}:{action_id}:{presentation_id}".encode("utf-8")
+    ).hexdigest()[:32]
     return f"ia:{generation}:{digest}"
 
 
@@ -582,19 +651,24 @@ def negotiate_presentation(
         mode, supported, reason = "deep_link", True, "deep_link_fallback"
         deep_link = f"{deep_link_base.rstrip('/')}?interaction={semantic['interaction_id']}"
 
+    action_admissions = [
+        _assurance_admission(_action_assurance(action), capabilities)
+        for action in actions
+    ]
+    assurance_missing = sorted(
+        {
+            f"assurance:{action['action_id']}:{capability}"
+            for action, admission in zip(actions, action_admissions, strict=True)
+            for capability in admission["missing_capabilities"]
+        }
+    )
+    if actions and assurance_missing:
+        missing.extend(item for item in assurance_missing if item not in missing)
+        mode = "unsupported"
+        supported = False
+        reason = "assurance_handoff_required"
+
     prompt = str(semantic["prompt"])
-    tokens: dict[str, str] = {}
-    projected_actions: list[dict[str, Any]] = []
-    for index, action in enumerate(actions, start=1):
-        token = _action_token(semantic["interaction_id"], int(semantic["generation"]), action["action_id"])
-        tokens[token] = str(action["action_id"])
-        projected_actions.append({**copy.deepcopy(action), "token": token, "index": index})
-    if mode == "numbered_text" and projected_actions:
-        prompt += "\n" + "\n".join(
-            f"{item['index']}. {item['label']}" for item in projected_actions
-        )
-    if mode == "deep_link" and deep_link:
-        prompt += f"\n{deep_link}"
     timestamp = now or _now()
     fallback_used = (
         mode
@@ -618,6 +692,40 @@ def negotiate_presentation(
     presentation_id = "presentation." + hashlib.sha256(
         f"{semantic['interaction_id']}:{semantic['generation']}:{channel['profile_id']}:{channel['version']}:{mode}".encode("utf-8")
     ).hexdigest()[:32]
+    unsupported_reason = _unsupported_reason(reason, missing)
+    tokens: dict[str, str] = {}
+    projected_actions: list[dict[str, Any]] = []
+    for index, (action, admission) in enumerate(
+        zip(actions, action_admissions, strict=True),
+        start=1,
+    ):
+        token = None
+        if supported and admission["admitted"]:
+            token = _action_token(
+                semantic["interaction_id"],
+                int(semantic["generation"]),
+                str(action["action_id"]),
+                presentation_id,
+            )
+            tokens[token] = str(action["action_id"])
+        projected_actions.append(
+            {
+                **copy.deepcopy(action),
+                "assurance": _action_assurance(action),
+                "assurance_admission": copy.deepcopy(admission),
+                "enabled": token is not None,
+                "token": token,
+                "index": index,
+            }
+        )
+    if mode == "numbered_text" and projected_actions:
+        prompt += "\n" + "\n".join(
+            f"{item['index']}. {item['label']}"
+            for item in projected_actions
+            if item["enabled"]
+        )
+    if mode == "deep_link" and deep_link:
+        prompt += f"\n{deep_link}"
     plan = _validate(
         INTERACTION_PRESENTATION_PLAN_SCHEMA,
         {
@@ -630,7 +738,7 @@ def negotiate_presentation(
             "requirements_id": requirements["requirements_id"],
             "selected_mode": mode,
             "supported": supported,
-            "reason_code": reason if supported else f"unsupported:{','.join(missing) or reason}",
+            "reason_code": reason if supported else unsupported_reason,
             "missing_required": missing,
             "fallback_used": fallback_used,
             "semantic_equivalent": semantic_equivalent,
@@ -650,7 +758,7 @@ def negotiate_presentation(
             "plan": plan,
             "mode": mode,
             "supported": supported,
-            "reason_code": reason if supported else f"unsupported:{','.join(missing) or 'no_output_capability'}",
+            "reason_code": reason if supported else unsupported_reason,
             "prompt": prompt,
             "actions": projected_actions,
             "action_tokens": tokens,
@@ -661,6 +769,10 @@ def negotiate_presentation(
                 "transport": channel["transport"],
                 "client": channel["client"],
                 "surface": channel["surface"],
+                "assurance_capabilities": {
+                    name: capabilities.get(name) is True
+                    for name in ("bound_dialog_response", "trusted_interface", "step_up")
+                },
             },
         },
     )
@@ -720,6 +832,7 @@ def submit_response(
     values: Mapping[str, Any] | None = None,
     original_text: str | None = None,
     action_token: str | None = None,
+    presentation_id: str | None = None,
     proposed_action_id: str | None = None,
     intent_proposal: Mapping[str, Any] | None = None,
     supersedes_response_id: str | None = None,
@@ -740,6 +853,7 @@ def submit_response(
                 "values": dict(values or {}),
                 "original_text": original_text,
                 "action_token": action_token,
+                "presentation_id": presentation_id,
                 "proposed_action_id": proposed_action_id,
                 "intent_proposal": dict(intent_proposal) if intent_proposal is not None else None,
                 "supersedes_response_id": supersedes_response_id,
@@ -784,9 +898,11 @@ def submit_response(
 
     response_values = copy.deepcopy(dict(values or {}))
     source = "form" if values else "text"
-    presentation = conversation_store.latest_interaction_presentation(interaction_id)
+    presentation = None
     resolved_action: dict[str, Any] | None = None
+    assurance_receipt: dict[str, Any] | None = None
     if action_token:
+        presentation = conversation_store.find_interaction_presentation_by_action_token(action_token)
         presentation_generation = (
             int(presentation.get("interaction_generation"))
             if presentation is not None and presentation.get("interaction_generation") is not None
@@ -794,13 +910,43 @@ def submit_response(
         )
         if presentation is None or presentation_generation != int(expected_generation):
             raise ConversationInteractionError("action presentation is stale or unavailable")
+        if str(presentation.get("interaction_id") or "") != semantic["interaction_id"]:
+            raise ConversationInteractionError("action presentation belongs to another interaction")
+        if presentation_id and str(presentation.get("presentation_id") or "") != str(presentation_id):
+            raise ConversationInteractionError("action presentation binding does not match")
+        if presentation.get("supported") is not True:
+            raise ConversationInteractionError("action presentation is not admitted")
         action_id = dict(presentation.get("action_tokens") or {}).get(action_token)
         action = next((item for item in semantic["actions"] if item["action_id"] == action_id), None)
         if action is None:
             raise ConversationInteractionError("invalid interaction action token")
+        projected_action = next(
+            (
+                item
+                for item in presentation.get("actions") or []
+                if isinstance(item, Mapping)
+                and item.get("action_id") == action_id
+                and item.get("token") == action_token
+            ),
+            None,
+        )
+        admission = dict((projected_action or {}).get("assurance_admission") or {})
+        if projected_action is None or projected_action.get("enabled") is not True or admission.get("admitted") is not True:
+            raise ConversationInteractionError("interaction action assurance is not admitted")
         if not _principal_in_scope(actor_id, action.get("principal_scope") or []):
             raise ConversationInteractionError("interaction action principal is not authorized")
         resolved_action = dict(action)
+        assurance = _action_assurance(action)
+        assurance_receipt = {
+            "mode": assurance["mode"],
+            "profile_id": str(presentation["profile_id"]),
+            "profile_version": int(presentation["profile_version"]),
+            "presentation_id": str(presentation["presentation_id"]),
+            "admitted": True,
+            "capabilities": copy.deepcopy(
+                dict(dict(presentation.get("metadata") or {}).get("assurance_capabilities") or {})
+            ),
+        }
         response_values.update(
             {
                 "action_id": action["action_id"],
@@ -835,6 +981,8 @@ def submit_response(
             raise ConversationInteractionError("intent proposal action is no longer allowed")
         if not _principal_in_scope(actor_id, action.get("principal_scope") or []):
             raise ConversationInteractionError("interaction action principal is not authorized")
+        if _action_assurance(action)["mode"] != "voice_permitted":
+            raise ConversationInteractionError("interaction action requires a trusted presentation")
         resolved_action = dict(action)
         response_values.update(
             {
@@ -905,10 +1053,12 @@ def submit_response(
                     "expected_generation": int(resolved_action["expected_generation"]),
                     "risk": resolved_action["risk"],
                     "confirmation_required": bool(resolved_action["confirmation_required"]),
+                    "assurance": _action_assurance(resolved_action),
                 }
                 if resolved_action and valid and not missing
                 else None
             ),
+            "assurance_receipt": assurance_receipt,
             "rejection_reason": reason if not valid else None,
             "status": response_status,
             "validation": {"valid": valid, "reason_code": reason, "missing_fields": missing},
@@ -968,6 +1118,7 @@ def submit_action_token(
         idempotency_key=idempotency_key,
         values=values,
         action_token=action_token,
+        presentation_id=str(presentation["presentation_id"]),
         metadata=metadata,
         now=now,
     )

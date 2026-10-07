@@ -48,7 +48,7 @@ def _choice_interaction(conversation_id: str = "conv.builder") -> dict[str, obje
     }
 
 
-def test_capability_negotiation_preserves_semantics_across_web_telegram_and_text() -> None:
+def test_capability_negotiation_preserves_trusted_choices_and_fails_closed_on_text() -> None:
     interaction = conversation_interactions.create_interaction(
         conversation_id="conv.capabilities",
         owner="skill:builder",
@@ -68,11 +68,13 @@ def test_capability_negotiation_preserves_semantics_across_web_telegram_and_text
 
     assert web_view["mode"] == "buttons"
     assert telegram_view["mode"] == "buttons"
-    assert text_view["mode"] == "numbered_text"
-    assert [item["command"] for item in web_view["actions"]] == [
-        item["command"] for item in text_view["actions"]
-    ]
+    assert text_view["mode"] == "unsupported"
+    assert text_view["supported"] is False
+    assert text_view["action_tokens"] == {}
+    assert all(item["enabled"] is False for item in text_view["actions"])
+    assert "assurance" in text_view["reason_code"]
     assert set(web_view["action_tokens"].values()) == {"prototype", "automation"}
+    assert all(item["assurance"]["trusted_interface_required"] for item in web_view["actions"])
     assert telegram["handoff"]["cross_channel"] is True
     assert telegram["acknowledgement"] == "action"
     assert telegram["permission_boundary"] == "separate"
@@ -150,6 +152,8 @@ def test_chat_request_is_durable_materializes_actions_and_resumes_by_token() -> 
     assert answered["response"]["consumed_command"]["action_id"] == "prototype"
     assert answered["response"]["consumed_command"]["label"] == "Prototype first"
     assert answered["response"]["consumed_command"]["value"] == "prototype"
+    assert answered["response"]["assurance_receipt"]["mode"] == "trusted_interface_required"
+    assert answered["response"]["assurance_receipt"]["presentation_id"] == result["presentation"]["presentation_id"]
     assert duplicate["duplicate"] is True
     assert conversation_store.get_interaction("interaction.builder.route")["status"] == "answered"
 
@@ -528,7 +532,13 @@ def test_profile_change_renegotiates_presentation_without_changing_semantics() -
         transport="web",
         client="browser",
         surface="chat",
-        capabilities={"text": True, "buttons": True},
+        capabilities={
+            "text": True,
+            "buttons": True,
+            "bound_dialog_response": True,
+            "trusted_interface": True,
+            "step_up": False,
+        },
         limits={"actions": 10},
     )
     compact = conversation_interactions.channel_capability_profile(
@@ -537,7 +547,13 @@ def test_profile_change_renegotiates_presentation_without_changing_semantics() -
         transport="web",
         client="browser",
         surface="chat",
-        capabilities={"text": True, "buttons": False},
+        capabilities={
+            "text": True,
+            "buttons": False,
+            "bound_dialog_response": True,
+            "trusted_interface": True,
+            "step_up": False,
+        },
         limits={"actions": 0},
     )
 
@@ -547,6 +563,97 @@ def test_profile_change_renegotiates_presentation_without_changing_semantics() -
     assert rich_view["mode"] == "buttons"
     assert compact_view["mode"] == "numbered_text"
     assert rich_view["interaction_generation"] == compact_view["interaction_generation"] == 0
-    assert rich_view["action_tokens"] == compact_view["action_tokens"]
+    assert rich_view["action_tokens"] != compact_view["action_tokens"]
     assert compact_view["plan"]["fallback_used"] == "numbered_text"
     assert compact_view["plan"]["reason_code"] == "numbered_fallback"
+
+
+def test_step_up_choice_requires_step_up_capability() -> None:
+    action = {
+        "action_id": "delete",
+        "label": "Delete permanently",
+        "command": "record.delete",
+        "value": "delete",
+        "risk": "destructive",
+        "confirmation_required": True,
+    }
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.step-up",
+        owner="skill:test",
+        prompt="Delete this record?",
+        input_spec={
+            "kind": "confirmation",
+            "required_fields": [],
+            "choices": [],
+            "sensitive": False,
+        },
+        actions=[action],
+        interaction_id="interaction.step-up",
+    )
+
+    ordinary = conversation_interactions.standard_capability_profile("web")
+    ordinary_view = conversation_interactions.negotiate_presentation(interaction, ordinary)
+    assert ordinary_view["supported"] is False
+    assert ordinary_view["actions"][0]["assurance"]["mode"] == "step_up_required"
+    assert ordinary_view["actions"][0]["token"] is None
+
+    elevated = conversation_interactions.channel_capability_profile(
+        "web:elevated:chat",
+        transport="web",
+        client="browser",
+        surface="chat",
+        capabilities={
+            "text": True,
+            "buttons": True,
+            "bound_dialog_response": True,
+            "trusted_interface": True,
+            "step_up": True,
+        },
+        limits={"actions": 10},
+    )
+    elevated_view = conversation_interactions.negotiate_presentation(interaction, elevated)
+    assert elevated_view["supported"] is True
+    assert elevated_view["actions"][0]["enabled"] is True
+    assert elevated_view["actions"][0]["token"]
+
+
+def test_action_token_is_bound_to_exact_presentation() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.presentation-binding",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.presentation-binding",
+    )
+    first = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web", client="one"),
+    )
+    second = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web", client="two"),
+    )
+    first_token = first["actions"][0]["token"]
+    second_token = second["actions"][0]["token"]
+    assert first_token != second_token
+
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="presentation binding",
+    ):
+        conversation_interactions.submit_response(
+            interaction["interaction_id"],
+            actor_id="user:local",
+            expected_generation=0,
+            idempotency_key="mismatched-presentation",
+            action_token=first_token,
+            presentation_id=second["presentation_id"],
+        )
+
+    accepted = conversation_interactions.submit_action_token(
+        first_token,
+        actor_id="user:local",
+        idempotency_key="exact-presentation",
+    )
+    assert accepted["response"]["presentation_id"] == first["presentation_id"]
