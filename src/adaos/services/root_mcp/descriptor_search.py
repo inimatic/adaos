@@ -578,12 +578,84 @@ def get_descriptor_item(
             )
         if item is None:
             raise KeyError(selected_item_id)
+    item_mapping = dict(item) if isinstance(item, Mapping) else {"value": item}
+    contract = (
+        dict(item_mapping.get("contract") or {})
+        if isinstance(item_mapping.get("contract"), Mapping)
+        else {}
+    )
+    descriptor_metadata = (
+        dict(descriptor.get("metadata") or {})
+        if isinstance(descriptor.get("metadata"), Mapping)
+        else {}
+    )
+    descriptor_payload = (
+        dict(descriptor.get("payload") or {})
+        if isinstance(descriptor.get("payload"), Mapping)
+        else {}
+    )
+    field_mask = descriptor_payload.get("field_mask")
+    item_meta = (
+        dict(item_mapping.get("meta") or {})
+        if isinstance(item_mapping.get("meta"), Mapping)
+        else {}
+    )
+    action_closure = (
+        dict(contract.get("action_closure") or {})
+        if isinstance(contract.get("action_closure"), Mapping)
+        else {}
+    )
+    runtime_support = (
+        dict(contract.get("runtime_support") or {})
+        if isinstance(contract.get("runtime_support"), Mapping)
+        else {}
+    )
+    source_digests = {
+        "item": _fingerprint(item_mapping),
+        "contract": str(contract.get("digest") or "") or None,
+        "input_schema": (
+            _fingerprint(dict(item_mapping["input_schema"]))
+            if isinstance(item_mapping.get("input_schema"), Mapping)
+            else None
+        ),
+        "output_schema": (
+            _fingerprint(dict(item_mapping["output_schema"]))
+            if isinstance(item_mapping.get("output_schema"), Mapping)
+            else None
+        ),
+        "examples": _fingerprint({"examples": item_mapping.get("examples") or []}),
+        "description": _fingerprint({"description": str(item_mapping.get("description") or "")}),
+    }
+    receipt = {
+        "schema": "adaos.descriptor.item_receipt.v1",
+        "descriptor_id": token,
+        "item_id": selected_item_id,
+        "descriptor_etag": str(descriptor.get("etag") or "") or None,
+        "selection_reason": "exact_item_id",
+        "purpose": str(purpose or "authoring"),
+        "consumer": str(consumer or "") or None,
+        "field_mask": dict(field_mask) if isinstance(field_mask, Mapping) else field_mask,
+        "source_digests": source_digests,
+        "coverage": {
+            "capabilities": list(contract.get("capabilities") or []),
+            "action_closure": list(action_closure.get("requires") or []),
+        },
+        "supported_version": {
+            "stability": contract.get("stability")
+            or item_meta.get("stability"),
+            "since": contract.get("since"),
+            "runtime_support": runtime_support,
+        },
+        "provenance": dict(descriptor_metadata.get("provenance") or {}),
+        "integrity": dict(descriptor_metadata.get("integrity") or {}),
+    }
     return {
         "schema": "adaos.descriptor.item.v1",
         "descriptor_id": token,
         "item_id": selected_item_id,
         "level": effective_level,
         "item": item,
+        "receipt": receipt,
     }
 
 

@@ -318,6 +318,12 @@ def test_sdk_descriptor_drilldown_states_quota_contract_boundary():
     description = " ".join(item["description"].split())
     assert "CanonicalObject.to_dict()" in description
     assert "does not return subscription-plan LLM or Codex token usage" in description
+    receipt = detail["receipt"]
+    assert receipt["selection_reason"] == "exact_item_id"
+    assert receipt["source_digests"]["item"].startswith("sha256:")
+    assert receipt["source_digests"]["input_schema"].startswith("sha256:")
+    assert receipt["descriptor_etag"].startswith("sha256:")
+    assert receipt["provenance"]["published_by"] == "root"
 
 
 def test_sdk_resource_and_persistent_data_contracts_are_discoverable():
