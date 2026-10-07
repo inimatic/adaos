@@ -5,6 +5,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 from adaos.sdk.core.exporter import export as sdk_export
 from adaos.sdk.core import exporter as sdk_exporter
 from adaos.services.root_mcp.registry import get_descriptor_set
@@ -123,6 +125,24 @@ def test_human_decision_sdk_contract_is_discoverable_in_english_and_russian():
     assert "presentation_bound_action_token" in closure
     assert "semantic_digest" in closure
     assert "expiry" in closure
+    assert request["input_schema"]["required"] == [
+        "interaction",
+        "conversation_id",
+        "owner",
+    ]
+    assert request["input_schema"]["properties"]["interaction"] == {
+        "anyOf": [
+            {"type": "object", "additionalProperties": True},
+            {"type": "string"},
+        ]
+    }
+    assert request["output_schema"] == {
+        "type": "object",
+        "additionalProperties": True,
+    }
+    assert request["contract"]["schema_refs"]["origin"] == "signature_annotations"
+    Draft202012Validator.check_schema(request["input_schema"])
+    Draft202012Validator.check_schema(request["output_schema"])
 
     workflow = next(
         item

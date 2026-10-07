@@ -11,8 +11,11 @@ import pkgutil
 import re
 import subprocess
 import sys
+import types
+from collections import abc as collections_abc
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Tuple, Union, get_args, get_origin, get_type_hints
 
 from .decorators import emits_map, event_payloads, tools_meta, tools_registry
 
@@ -212,6 +215,124 @@ def _schema_digest(value: Any) -> str | None:
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
+def _annotation_schema(annotation: Any) -> dict[str, Any]:
+    """Translate supported Python annotations into a bounded JSON Schema fragment."""
+
+    if annotation in {inspect.Signature.empty, Any}:
+        return {}
+    if annotation is None or annotation is type(None):
+        return {"type": "null"}
+    if annotation is str:
+        return {"type": "string"}
+    if annotation is bool:
+        return {"type": "boolean"}
+    if annotation is int:
+        return {"type": "integer"}
+    if annotation is float:
+        return {"type": "number"}
+    if annotation is Path:
+        return {"type": "string", "format": "path"}
+    if annotation in {dict, collections_abc.Mapping}:
+        return {"type": "object"}
+    if annotation in {list, tuple, set, frozenset, collections_abc.Sequence}:
+        return {"type": "array"}
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin in {Union, types.UnionType}:
+        variants = [_annotation_schema(item) for item in args]
+        unique: list[dict[str, Any]] = []
+        for variant in variants:
+            if variant not in unique:
+                unique.append(variant)
+        return unique[0] if len(unique) == 1 else {"anyOf": unique}
+    if origin is Literal:
+        values = list(args)
+        schema: dict[str, Any] = {"enum": values}
+        value_types = {type(value) for value in values}
+        if len(value_types) == 1:
+            primitive = _annotation_schema(next(iter(value_types)))
+            if primitive.get("type"):
+                schema["type"] = primitive["type"]
+        return schema
+    if origin in {dict, collections_abc.Mapping}:
+        value_schema = _annotation_schema(args[1]) if len(args) > 1 else {}
+        return {
+            "type": "object",
+            "additionalProperties": value_schema or True,
+        }
+    if origin in {
+        list,
+        set,
+        frozenset,
+        collections_abc.Sequence,
+        collections_abc.Iterable,
+    }:
+        item_schema = _annotation_schema(args[0]) if args else {}
+        return {"type": "array", **({"items": item_schema} if item_schema else {})}
+    if origin is tuple:
+        if len(args) == 2 and args[1] is Ellipsis:
+            item_schema = _annotation_schema(args[0])
+            return {"type": "array", **({"items": item_schema} if item_schema else {})}
+        prefix = [_annotation_schema(item) for item in args]
+        return {
+            "type": "array",
+            "prefixItems": prefix,
+            "minItems": len(prefix),
+            "maxItems": len(prefix),
+        }
+    return {"x-python-type": str(annotation)}
+
+
+def _signature_schemas(fn: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Generate stable input/output schemas from the callable's resolved annotations."""
+
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return {}, {}
+    try:
+        hints = get_type_hints(fn)
+    except Exception:
+        hints = {}
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    additional_properties = False
+    for name, parameter in signature.parameters.items():
+        annotation = hints.get(name, parameter.annotation)
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            additional_properties = True
+            continue
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            item_schema = _annotation_schema(annotation)
+            properties[name] = {
+                "type": "array",
+                **({"items": item_schema} if item_schema else {}),
+            }
+            continue
+        schema = _annotation_schema(annotation)
+        properties[name] = schema
+        if parameter.default is inspect.Parameter.empty:
+            required.append(name)
+        elif parameter.default is None:
+            properties[name] = (
+                {"anyOf": [schema, {"type": "null"}]}
+                if schema and schema != {"type": "null"}
+                else {"type": "null"}
+            )
+        elif isinstance(parameter.default, (str, int, float, bool)):
+            properties[name] = {**schema, "default": parameter.default}
+    input_schema = {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": additional_properties,
+    }
+    return_annotation = hints.get("return", signature.return_annotation)
+    output_schema = _annotation_schema(return_annotation)
+    return input_schema, output_schema
+
+
 def _sdk_contract(public_name: str, fn: Any, meta: dict[str, Any]) -> dict[str, Any]:
     try:
         parameter_names = list(inspect.signature(fn).parameters)
@@ -259,6 +380,7 @@ def _sdk_contract(public_name: str, fn: Any, meta: dict[str, Any]) -> dict[str, 
         "schema_refs": {
             "input": _schema_digest(input_schema),
             "output": _schema_digest(meta.get("output_schema")),
+            "origin": str(meta.get("schema_origin") or "declared"),
         },
     }
     contract["digest"] = "sha256:" + hashlib.sha256(
@@ -282,6 +404,16 @@ def _public_facade_symbols(level: str) -> list[dict[str, Any]]:
             summary = _doc_summary(value.__doc__) or _fallback_summary(str(name))
             declared_contract = getattr(value, "__adaos_public_contract__", {})
             declared_contract = dict(declared_contract) if isinstance(declared_contract, dict) else {}
+            generated_input, generated_output = _signature_schemas(value)
+            source_contract = getattr(value, "__adaos_public_contract__", {})
+            source_contract = dict(source_contract) if isinstance(source_contract, dict) else {}
+            if not isinstance(declared_contract.get("input_schema"), dict):
+                declared_contract["input_schema"] = generated_input
+            if not isinstance(declared_contract.get("output_schema"), dict):
+                declared_contract["output_schema"] = generated_output
+            declared_contract["schema_origin"] = (
+                "declared" if source_contract.get("input_schema") else "signature_annotations"
+            )
             item: dict[str, Any] = {
                 "kind": "sdk_function",
                 "name": public_name,
@@ -295,6 +427,8 @@ def _public_facade_symbols(level: str) -> list[dict[str, Any]]:
                 },
             }
             item["contract"] = _sdk_contract(public_name, value, item["meta"])
+            item["input_schema"] = declared_contract["input_schema"]
+            item["output_schema"] = declared_contract["output_schema"]
             if level in {"std", "rich"}:
                 item["description"] = inspect.getdoc(value) or summary
                 try:
@@ -578,7 +712,6 @@ def compatibility_report(
             breaking.append(
                 {"symbol": name, "kind": "permissions_expanded", "permissions": permissions_added}
             )
-        old_bounded = dict(old_contract.get("boundedness") or {})
         new_bounded = dict(new_contract.get("boundedness") or {})
         old_page = dict(old_contract.get("pagination") or {})
         new_page = dict(new_contract.get("pagination") or {})
