@@ -2134,6 +2134,9 @@ async def _runtime_context(app: FastAPI):
                 reconcile_workflow_interaction_dispatches,
             )
             from adaos.services.conversation_store import apply_interaction_retention
+            from adaos.services.artifact_subscription_update import (
+                reconcile_qualified_runtime_update_interaction_dispatches,
+            )
 
             with _StartupTimer("reconcile_conversation_interactions"):
                 result = await asyncio.to_thread(reconcile_interactions_after_restart)
@@ -2143,6 +2146,13 @@ async def _runtime_context(app: FastAPI):
                 retention_result = await asyncio.to_thread(
                     apply_interaction_retention,
                     limit=1000,
+                )
+                await _wait_for_runtime_boot_task()
+                artifact_dispatch_result = (
+                    await reconcile_qualified_runtime_update_interaction_dispatches(
+                        get_ctx(),
+                        limit=100,
+                    )
                 )
             if not result.get("complete"):
                 logging.getLogger("adaos.conversation.interactions").warning(
@@ -2163,6 +2173,20 @@ async def _runtime_context(app: FastAPI):
                 logging.getLogger("adaos.conversation.interactions").info(
                     "interaction retention preserved %s active or effect-ambiguous obligations",
                     retention_result.get("preserved_active"),
+                )
+            if (
+                not artifact_dispatch_result.get("complete")
+                or artifact_dispatch_result.get("errors")
+            ):
+                logging.getLogger("adaos.conversation.interactions").warning(
+                    "artifact update dispatch reconciliation remains incomplete: %s",
+                    {
+                        "complete": artifact_dispatch_result.get("complete"),
+                        "errors": artifact_dispatch_result.get("errors"),
+                        "waiting": artifact_dispatch_result.get(
+                            "waiting_dispatch_ids"
+                        ),
+                    },
                 )
         except Exception:
             logging.getLogger("adaos.conversation.interactions").warning(

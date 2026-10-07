@@ -4610,6 +4610,74 @@ def test_interaction_dispatch_rehydrates_the_digest_protected_records(monkeypatc
         router_service_module._rehydrate_durable_interaction_event(event_payload)
 
 
+async def test_runtime_update_interaction_dispatches_to_exact_executor(monkeypatch) -> None:
+    from adaos.services import artifact_subscription_update
+
+    calls: list[dict] = []
+
+    class _Coordinator:
+        def __init__(self, ctx):
+            calls.append({"ctx": ctx})
+
+        async def execute_qualified_runtime_update_interaction(
+            self,
+            interaction_id,
+            response_id,
+            **kwargs,
+        ):
+            calls.append(
+                {
+                    "interaction_id": interaction_id,
+                    "response_id": response_id,
+                    **kwargs,
+                }
+            )
+            return {"ok": True}
+
+    context = SimpleNamespace(name="runtime-context")
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: context)
+    monkeypatch.setattr(
+        artifact_subscription_update,
+        "ArtifactSubscriptionUpdateCoordinator",
+        _Coordinator,
+    )
+    owned = await router_service_module._dispatch_runtime_compatibility_interaction(
+        {
+            "interaction": {
+                "interaction_id": "interaction.update",
+                "metadata": {
+                    "pending_action_kind": "runtime_compatibility_exact_update"
+                },
+            },
+            "response": {
+                "response_id": "response.update",
+                "metadata": {"webspace_id": "desktop-dev"},
+            },
+        }
+    )
+    unrelated = await router_service_module._dispatch_runtime_compatibility_interaction(
+        {
+            "interaction": {
+                "interaction_id": "interaction.other",
+                "metadata": {"pending_action_kind": "another_kind"},
+            },
+            "response": {"response_id": "response.other"},
+        }
+    )
+
+    assert owned is True
+    assert unrelated is False
+    assert calls == [
+        {"ctx": context},
+        {
+            "interaction_id": "interaction.update",
+            "response_id": "response.update",
+            "webspace_id": "desktop-dev",
+            "lease_owner": "router:artifact-subscription-update",
+        },
+    ]
+
+
 async def test_builder_interaction_response_dispatches_to_authoritative_dev_runtime(monkeypatch) -> None:
     bus = LocalEventBus()
     calls: list[tuple[str, str, dict]] = []

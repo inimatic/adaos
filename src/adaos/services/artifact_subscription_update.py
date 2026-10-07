@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import time
 from typing import Any, Literal
 
 from packaging.version import InvalidVersion, Version
@@ -884,10 +885,82 @@ class ArtifactSubscriptionUpdateCoordinator:
             )
 
 
+async def reconcile_qualified_runtime_update_interaction_dispatches(
+    ctx: AgentContext,
+    *,
+    now_epoch: float | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Resume only exact update dispatches with an admitted replay contract."""
+
+    from adaos.services import conversation_store
+
+    observed_epoch = float(time.time() if now_epoch is None else now_epoch)
+    safe_limit = max(1, min(int(limit or 100), 500))
+    records = conversation_store.list_interaction_dispatches(
+        statuses=("pending", "dispatching"),
+        limit=safe_limit + 1,
+    )
+    has_more = len(records) > safe_limit
+    coordinator = ArtifactSubscriptionUpdateCoordinator(ctx)
+    executed: list[str] = []
+    waiting: list[str] = []
+    errors: list[dict[str, str]] = []
+    for dispatch in records[:safe_limit]:
+        command = dict(dispatch.get("command") or {})
+        semantics = dict(command.get("semantics") or {})
+        if (
+            str(semantics.get("executor") or "") != "artifact_subscription_update"
+            or str(command.get("command") or "")
+            != "runtime_compatibility.execute_exact_update"
+        ):
+            continue
+        dispatch_id = str(dispatch.get("dispatch_id") or "").strip()
+        if (
+            str(dispatch.get("status") or "") == "dispatching"
+            and float(dispatch.get("lease_until") or 0.0) > observed_epoch
+        ):
+            waiting.append(dispatch_id)
+            continue
+        interaction_id = str(dispatch.get("interaction_id") or "").strip()
+        response_id = str(dispatch.get("response_id") or "").strip()
+        response = conversation_store.get_interaction_response(response_id) or {}
+        response_meta = dict(response.get("metadata") or {})
+        try:
+            await coordinator.execute_qualified_runtime_update_interaction(
+                interaction_id,
+                response_id,
+                webspace_id=str(response_meta.get("webspace_id") or "").strip() or None,
+                lease_owner="reconciler:artifact-subscription-update",
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "dispatch_id": dispatch_id,
+                    "reason_code": getattr(
+                        exc, "code", "artifact_subscription_update_reconciliation_failed"
+                    ),
+                    "detail": f"{type(exc).__name__}: {exc}"[:500],
+                }
+            )
+            continue
+        executed.append(dispatch_id)
+    return {
+        "schema": "adaos.artifact_subscription_update.dispatch_reconciliation.v1",
+        "observed_epoch": observed_epoch,
+        "scanned_total": min(len(records), safe_limit),
+        "executed_dispatch_ids": executed,
+        "waiting_dispatch_ids": waiting,
+        "errors": errors,
+        "complete": not has_more,
+    }
+
+
 __all__ = [
     "ARTIFACT_UPDATE_ROUTE_SCHEMA",
     "RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA",
     "ArtifactSubscriptionUpdateCoordinator",
     "ArtifactSubscriptionUpdateError",
     "ArtifactUpdateRoute",
+    "reconcile_qualified_runtime_update_interaction_dispatches",
 ]

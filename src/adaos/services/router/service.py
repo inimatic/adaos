@@ -199,6 +199,30 @@ def _rehydrate_durable_interaction_event(payload: Mapping[str, Any]) -> dict[str
     return event_payload
 
 
+async def _dispatch_runtime_compatibility_interaction(
+    payload: Mapping[str, Any],
+) -> bool:
+    """Execute a canonical exact-update response; return whether it was owned."""
+
+    interaction = payload.get("interaction") if isinstance(payload.get("interaction"), Mapping) else {}
+    response = payload.get("response") if isinstance(payload.get("response"), Mapping) else {}
+    metadata = interaction.get("metadata") if isinstance(interaction.get("metadata"), Mapping) else {}
+    if str(metadata.get("pending_action_kind") or "").strip() != "runtime_compatibility_exact_update":
+        return False
+    from adaos.services.artifact_subscription_update import (
+        ArtifactSubscriptionUpdateCoordinator,
+    )
+
+    response_meta = response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+    await ArtifactSubscriptionUpdateCoordinator(get_ctx()).execute_qualified_runtime_update_interaction(
+        str(interaction.get("interaction_id") or "").strip(),
+        str(response.get("response_id") or "").strip(),
+        webspace_id=str(response_meta.get("webspace_id") or "").strip() or None,
+        lease_owner="router:artifact-subscription-update",
+    )
+    return True
+
+
 def _builder_transport_integrity_error(*args: Any, **kwargs: Any) -> Any:
     return _call_dialog_registry_helper("_builder_transport_integrity_error", *args, **kwargs)
 
@@ -1430,7 +1454,6 @@ class RouterService:
                 "agent": agent,
                 "channel": channel,
             }
-
         def _active_voice_chat_selection(webspace_id: str) -> tuple[str, str]:
             ws = str(webspace_id or "default").strip() or "default"
             try:
@@ -4701,6 +4724,17 @@ class RouterService:
                     response.get("response_id"),
                     exc_info=True,
                 )
+            try:
+                if await _dispatch_runtime_compatibility_interaction(payload):
+                    return
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "runtime compatibility interaction dispatch failed interaction_id=%s response_id=%s",
+                    interaction.get("interaction_id"),
+                    response.get("response_id"),
+                    exc_info=True,
+                )
+                return
             interaction_meta = interaction.get("metadata") if isinstance(interaction.get("metadata"), Mapping) else {}
             if str(interaction_meta.get("domain") or "").strip() != "builder":
                 return

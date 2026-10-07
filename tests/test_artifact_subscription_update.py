@@ -586,3 +586,85 @@ def test_exact_runtime_update_uses_canonical_interaction_and_projects_outcome(
     assert executions[0]["command"] == command
     assert executions[0]["permission_decision"]["response_id"] == accepted["response"]["response_id"]
     assert conversation_store.get_interaction("interaction.runtime-update")["status"] == "completed"
+
+
+def test_exact_runtime_update_reconciler_resumes_only_owned_dispatches(
+    monkeypatch,
+    _autocontext,
+) -> None:
+    command_digest = "sha256:" + "a" * 64
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(_autocontext)
+    command = {
+        "schema": update_service.RUNTIME_COMPATIBILITY_UPDATE_COMMAND_SCHEMA,
+        "kind": "skill",
+        "project_id": "example",
+        "from": {"version": "1.0.0", "package_digest": "sha256:old"},
+        "target": {"version": "2.0.0", "package_digest": "sha256:new"},
+        "plan_digest": PLAN_DIGEST,
+        "command_digest": command_digest,
+        "consequences": {},
+    }
+
+    async def _plan(*_args, **_kwargs):
+        return dict(command)
+
+    monkeypatch.setattr(coordinator, "plan_qualified_runtime_update", _plan)
+    profile = conversation_interactions.standard_capability_profile("web")
+    profile["profile_id"] = "profile.web.step-up"
+    profile["capabilities"]["step_up"] = True
+    presentation = asyncio.run(
+        coordinator.publish_qualified_runtime_update_interaction(
+            "skill",
+            "example",
+            qualification=_qualified_update(),
+            conversation_id="conv.runtime-update-reconcile",
+            owner="skill:runtime_compatibility",
+            expires_at="2099-01-01T00:00:00+00:00",
+            interaction_id="interaction.runtime-update-reconcile",
+            capability_profile=profile,
+        )
+    )
+    token = presentation["presentation"]["actions"][0]["token"]
+    accepted = conversation_interactions.submit_action_token(
+        token,
+        actor_id="user:owner",
+        idempotency_key="reconcile:exact-update",
+        metadata={"webspace_id": "desktop-dev"},
+    )
+    calls: list[dict] = []
+
+    async def _execute(self, interaction_id, response_id, **kwargs):
+        calls.append(
+            {
+                "interaction_id": interaction_id,
+                "response_id": response_id,
+                **kwargs,
+            }
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        update_service.ArtifactSubscriptionUpdateCoordinator,
+        "execute_qualified_runtime_update_interaction",
+        _execute,
+    )
+
+    result = asyncio.run(
+        update_service.reconcile_qualified_runtime_update_interaction_dispatches(
+            _autocontext,
+            limit=20,
+        )
+    )
+
+    assert result["errors"] == []
+    assert result["executed_dispatch_ids"] == [
+        accepted["dispatch"]["dispatch_id"]
+    ]
+    assert calls == [
+        {
+            "interaction_id": "interaction.runtime-update-reconcile",
+            "response_id": accepted["response"]["response_id"],
+            "webspace_id": "desktop-dev",
+            "lease_owner": "reconciler:artifact-subscription-update",
+        }
+    ]
