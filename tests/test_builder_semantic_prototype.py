@@ -4024,6 +4024,29 @@ def test_semantic_v2_normalizes_command_placement_for_declared_kind(
     )
 
 
+def test_semantic_v2_removes_empty_optional_localized_field_text() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    field = candidate["resources"][0]["fields"][0]
+    field["placeholder"] = {"en": "", "ru": ""}
+    field["help_text"] = {"en": "", "ru": ""}
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    compiled_field = result["semantic_document"]["resources"][0]["fields"][0]
+    assert compiled_field.get("placeholder") is None
+    assert compiled_field.get("help_text") is None
+    changed = [
+        item
+        for item in result["normalizations"]
+        if item["kind"] == "empty_optional_localized_text"
+    ]
+    assert {item["target"].rsplit(".", 1)[-1] for item in changed} == {
+        "help_text",
+        "placeholder",
+    }
+
+
 def test_delete_editor_requires_explicit_toolbar_action_instead_of_row_activation() -> None:
     _, semantic = _multi_resource_fixture()
     editor = next(item for item in semantic["views"] if item["role"] == "editor")

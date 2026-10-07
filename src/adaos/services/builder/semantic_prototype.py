@@ -2844,11 +2844,34 @@ def _canonicalize_semantic_prototype_candidate_v2(
     }
     for relationship in candidate.get("relationships") or []:
         relationship.setdefault("label_field_refs", [])
-    for resource in candidate.get("resources") or []:
+    for resource_index, resource in enumerate(candidate.get("resources") or []):
         resource.setdefault("read_only_when", None)
-        for field in resource.get("fields") or []:
+        for field_index, field in enumerate(resource.get("fields") or []):
             field.setdefault("help_text", None)
             field.setdefault("placeholder", None)
+            for property_name in ("help_text", "placeholder"):
+                localized = field.get(property_name)
+                if not isinstance(localized, dict):
+                    continue
+                if any(str(text or "").strip() for text in localized.values()):
+                    continue
+                field[property_name] = None
+                normalizations.append(
+                    {
+                        "kind": "empty_optional_localized_text",
+                        "from": json.dumps(
+                            localized,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        "to": "None",
+                        "target": (
+                            f"$.resources[{resource_index}].fields[{field_index}]"
+                            f".{property_name}"
+                        ),
+                    }
+                )
     for view_index, view in enumerate(candidate.get("views") or []):
         if isinstance(view, dict):
             # Legacy flow has exactly one main region.  The newer explicit
