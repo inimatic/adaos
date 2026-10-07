@@ -12,7 +12,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.conversation_action_semantics import validate_effect_assertion
 
 
-_CONVERSATION_SCHEMA_VERSION = 1
+_CONVERSATION_SCHEMA_VERSION = 2
 
 
 def _publish_interaction_projection_invalidation(kind: str) -> None:
@@ -467,6 +467,37 @@ _SCHEMA = (
     ON conversation_interaction_dispatches(status, updated_at);
     """,
     """
+    CREATE TABLE IF NOT EXISTS conversation_interaction_retention (
+        interaction_id TEXT PRIMARY KEY,
+        content_retention_until REAL,
+        audit_retention_until REAL,
+        content_state TEXT NOT NULL DEFAULT 'active',
+        redaction_receipt_id TEXT,
+        updated_at REAL NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_interaction_retention_due
+    ON conversation_interaction_retention(content_state, content_retention_until, audit_retention_until);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_interaction_redaction_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        interaction_id TEXT NOT NULL,
+        policy_version INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        actor_id TEXT,
+        before_digest TEXT NOT NULL,
+        after_digest TEXT NOT NULL,
+        counts_json TEXT NOT NULL,
+        created_at REAL NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_interaction_redaction_receipts
+    ON conversation_interaction_redaction_receipts(interaction_id, created_at);
+    """,
+    """
     CREATE TABLE IF NOT EXISTS conversation_intent_proposals (
         proposal_id TEXT PRIMARY KEY,
         conversation_id TEXT NOT NULL,
@@ -537,6 +568,17 @@ def _json_load(value: Any, fallback: Any) -> Any:
         return json.loads(value)
     except Exception:
         return fallback
+
+
+def _json_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _ensure_columns(con: sqlite3.Connection, table: str, columns: tuple[tuple[str, str], ...]) -> None:
@@ -2381,11 +2423,19 @@ def save_interaction(
     *,
     expected_generation: int | None = None,
     create_only: bool = False,
+    content_retention_until: float | None = None,
+    audit_retention_until: float | None = None,
 ) -> dict[str, Any] | None:
     value = dict(record or {})
     interaction_id = str(value.get("interaction_id") or "").strip()
     if not interaction_id:
         raise ValueError("interaction_id is required")
+    if (
+        content_retention_until is not None
+        and audit_retention_until is not None
+        and float(content_retention_until) > float(audit_retention_until)
+    ):
+        raise ValueError("content retention cannot outlive audit retention")
     if not ensure_schema():
         return None
     created = False
@@ -2446,6 +2496,25 @@ def save_interaction(
                 value.get("completed_at"),
             ),
         )
+        if content_retention_until is not None or audit_retention_until is not None:
+            con.execute(
+                """
+                INSERT INTO conversation_interaction_retention(
+                    interaction_id, content_retention_until, audit_retention_until,
+                    content_state, redaction_receipt_id, updated_at
+                ) VALUES(?,?,?,'active',NULL,?)
+                ON CONFLICT(interaction_id) DO UPDATE SET
+                    content_retention_until=excluded.content_retention_until,
+                    audit_retention_until=excluded.audit_retention_until,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    interaction_id,
+                    float(content_retention_until) if content_retention_until is not None else None,
+                    float(audit_retention_until) if audit_retention_until is not None else None,
+                    time.time(),
+                ),
+            )
         con.commit()
     stored = get_interaction(interaction_id)
     _publish_interaction_projection_invalidation(
@@ -2607,6 +2676,416 @@ def list_interactions(
             tuple(params),
         ).fetchall()
     return [_json_load(row["payload_json"], {}) for row in rows]
+
+
+def configure_interaction_retention(
+    interaction_id: str,
+    *,
+    content_retention_until: float | None,
+    audit_retention_until: float | None,
+    now_epoch: float | None = None,
+) -> dict[str, Any]:
+    """Set independent content/audit deadlines without weakening redaction."""
+
+    identifier = str(interaction_id or "").strip()
+    if not identifier:
+        raise ValueError("interaction_id is required")
+    content_until = (
+        float(content_retention_until) if content_retention_until is not None else None
+    )
+    audit_until = float(audit_retention_until) if audit_retention_until is not None else None
+    if content_until is None and audit_until is None:
+        raise ValueError("at least one interaction retention deadline is required")
+    if content_until is not None and audit_until is not None and content_until > audit_until:
+        raise ValueError("content retention cannot outlive audit retention")
+    if not ensure_schema():
+        raise ValueError("durable conversation store is unavailable")
+    timestamp = float(now_epoch if now_epoch is not None else time.time())
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        if con.execute(
+            "SELECT 1 FROM conversation_interactions WHERE interaction_id=?",
+            (identifier,),
+        ).fetchone() is None:
+            con.rollback()
+            raise ValueError(f"interaction not found: {identifier}")
+        con.execute(
+            """
+            INSERT INTO conversation_interaction_retention(
+                interaction_id, content_retention_until, audit_retention_until,
+                content_state, redaction_receipt_id, updated_at
+            ) VALUES(?,?,?,'active',NULL,?)
+            ON CONFLICT(interaction_id) DO UPDATE SET
+                content_retention_until=excluded.content_retention_until,
+                audit_retention_until=excluded.audit_retention_until,
+                updated_at=excluded.updated_at
+            """,
+            (identifier, content_until, audit_until, timestamp),
+        )
+        con.commit()
+    return get_interaction_retention(identifier) or {}
+
+
+def get_interaction_retention(interaction_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT * FROM conversation_interaction_retention WHERE interaction_id=?",
+            (str(interaction_id or "").strip(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_interaction_redaction_receipts(
+    interaction_id: str,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    if not ensure_schema():
+        return []
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            """
+            SELECT * FROM conversation_interaction_redaction_receipts
+            WHERE interaction_id=? ORDER BY created_at DESC LIMIT ?
+            """,
+            (str(interaction_id or "").strip(), max(1, min(int(limit), 1000))),
+        ).fetchall()
+    return [
+        {
+            **dict(row),
+            "counts": _json_load(row["counts_json"], {}),
+        }
+        for row in rows
+    ]
+
+
+def _interaction_retention_is_terminal(
+    con: sqlite3.Connection,
+    interaction: Mapping[str, Any],
+) -> bool:
+    status = str(interaction.get("status") or "").strip()
+    rows = con.execute(
+        "SELECT status FROM conversation_interaction_dispatches WHERE interaction_id=?",
+        (str(interaction.get("interaction_id") or ""),),
+    ).fetchall()
+    dispatch_statuses = {str(row["status"] or "").strip() for row in rows}
+    if dispatch_statuses.intersection({"pending", "dispatching", "dispatched", "running"}):
+        return False
+    if status in {"completed", "expired", "cancelled", "superseded"}:
+        return True
+    return bool(dispatch_statuses) and dispatch_statuses.issubset(
+        {"succeeded", "failed", "rejected", "cancelled", "outcome_unknown"}
+    )
+
+
+def _interaction_retention_payloads(
+    con: sqlite3.Connection,
+    interaction_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    tables = {
+        "interactions": ("conversation_interactions", "created_at"),
+        "presentations": ("conversation_interaction_presentations", "created_at"),
+        "responses": ("conversation_interaction_responses", "created_at"),
+        "dispatches": ("conversation_interaction_dispatches", "created_at"),
+    }
+    result: dict[str, list[dict[str, Any]]] = {}
+    for key, (table, order) in tables.items():
+        rows = con.execute(
+            f"SELECT payload_json FROM {table} WHERE interaction_id=? ORDER BY {order}",
+            (interaction_id,),
+        ).fetchall()
+        result[key] = [_json_load(row["payload_json"], {}) for row in rows]
+    return result
+
+
+def _redact_interaction_content_with_connection(
+    con: sqlite3.Connection,
+    interaction: Mapping[str, Any],
+    *,
+    actor_id: str | None,
+    reason: str,
+    now_epoch: float,
+) -> dict[str, Any]:
+    interaction_id = str(interaction.get("interaction_id") or "").strip()
+    payloads = _interaction_retention_payloads(con, interaction_id)
+    before_digest = _json_digest(payloads)
+    receipt_id = f"interaction-redaction.{uuid.uuid4().hex}"
+    redaction = {
+        "state": "redacted",
+        "receipt_id": receipt_id,
+        "policy_version": 1,
+        "redacted_at": now_epoch,
+    }
+    metadata = dict(interaction.get("metadata") or {})
+    safe_metadata = {
+        key: metadata.get(key)
+        for key in (
+            "semantic_digest",
+            "accepted_response_id",
+            "latest_response_id",
+            "supersedes_interaction_id",
+            "supersedes_semantic_digest",
+            "superseded_by",
+            "superseded_by_semantic_digest",
+        )
+        if metadata.get(key) is not None
+    }
+    safe_interaction = {
+        key: interaction.get(key)
+        for key in (
+            "schema",
+            "interaction_id",
+            "conversation_id",
+            "thread_id",
+            "owner",
+            "status",
+            "generation",
+            "task_ref",
+            "workflow_ref",
+            "reply_route_ref",
+            "expires_at",
+            "created_at",
+            "updated_at",
+            "completed_at",
+        )
+        if interaction.get(key) is not None
+    }
+    safe_interaction["metadata"] = safe_metadata
+    safe_interaction["content_redaction"] = redaction
+    con.execute(
+        "UPDATE conversation_interactions SET payload_json=? WHERE interaction_id=?",
+        (_json_dump(safe_interaction), interaction_id),
+    )
+
+    for presentation in payloads["presentations"]:
+        safe = {
+            key: presentation.get(key)
+            for key in (
+                "schema",
+                "presentation_id",
+                "interaction_id",
+                "interaction_generation",
+                "profile_id",
+                "profile_version",
+                "mode",
+                "supported",
+                "created_at",
+            )
+            if presentation.get(key) is not None
+        }
+        safe["plan_digest"] = _json_digest(presentation.get("plan") or {})
+        safe["content_redaction"] = redaction
+        con.execute(
+            "UPDATE conversation_interaction_presentations SET payload_json=? WHERE presentation_id=?",
+            (_json_dump(safe), str(presentation.get("presentation_id") or "")),
+        )
+
+    for response in payloads["responses"]:
+        safe = {
+            key: response.get(key)
+            for key in (
+                "schema",
+                "response_id",
+                "interaction_id",
+                "interaction_generation",
+                "actor_id",
+                "status",
+                "presentation_id",
+                "created_at",
+            )
+            if response.get(key) is not None
+        }
+        safe["response_content_digest"] = _json_digest(
+            {
+                "values": response.get("values"),
+                "original_text": response.get("original_text"),
+                "consumed_command": response.get("consumed_command"),
+            }
+        )
+        safe["assurance_receipt"] = response.get("assurance_receipt")
+        safe["content_redaction"] = redaction
+        con.execute(
+            "UPDATE conversation_interaction_responses SET payload_json=? WHERE response_id=?",
+            (_json_dump(safe), str(response.get("response_id") or "")),
+        )
+
+    for dispatch in payloads["dispatches"]:
+        safe = {
+            key: dispatch.get(key)
+            for key in (
+                "schema",
+                "dispatch_id",
+                "interaction_id",
+                "interaction_generation",
+                "response_id",
+                "status",
+                "command_digest",
+                "attempt_count",
+                "created_at",
+                "updated_at",
+            )
+            if dispatch.get(key) is not None
+        }
+        safe["effect_assertion_digest"] = _json_digest(dispatch.get("effect_assertion") or {})
+        safe["outcome_digest"] = _json_digest(dispatch.get("outcome") or {})
+        safe["content_redaction"] = redaction
+        con.execute(
+            "UPDATE conversation_interaction_dispatches SET payload_json=? WHERE dispatch_id=?",
+            (_json_dump(safe), str(dispatch.get("dispatch_id") or "")),
+        )
+
+    after_payloads = _interaction_retention_payloads(con, interaction_id)
+    after_digest = _json_digest(after_payloads)
+    counts = {key: len(value) for key, value in payloads.items()}
+    con.execute(
+        """
+        INSERT INTO conversation_interaction_redaction_receipts(
+            receipt_id, interaction_id, policy_version, reason, actor_id,
+            before_digest, after_digest, counts_json, created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            receipt_id,
+            interaction_id,
+            1,
+            str(reason or "content_retention_expired").strip() or "content_retention_expired",
+            str(actor_id or "").strip() or None,
+            before_digest,
+            after_digest,
+            _json_dump(counts),
+            now_epoch,
+        ),
+    )
+    con.execute(
+        """
+        UPDATE conversation_interaction_retention
+        SET content_state='redacted', redaction_receipt_id=?, updated_at=?
+        WHERE interaction_id=?
+        """,
+        (receipt_id, now_epoch, interaction_id),
+    )
+    return {
+        "receipt_id": receipt_id,
+        "interaction_id": interaction_id,
+        "before_digest": before_digest,
+        "after_digest": after_digest,
+        "counts": counts,
+    }
+
+
+def apply_interaction_retention(
+    *,
+    now_epoch: float | None = None,
+    limit: int = 100,
+    actor_id: str | None = "system:interaction-retention",
+) -> dict[str, Any]:
+    """Apply bounded PA content redaction and later audit erasure.
+
+    Active or effect-ambiguous obligations are never redacted or deleted, even
+    when a deadline is due. The scanner reports them for a later retry.
+    """
+
+    if not ensure_schema():
+        raise ValueError("durable conversation store is unavailable")
+    timestamp = float(now_epoch if now_epoch is not None else time.time())
+    page_size = max(1, min(int(limit), 1000))
+    report: dict[str, Any] = {
+        "schema": "adaos.conversation.interaction_retention_report.v1",
+        "observed_at": timestamp,
+        "scanned": 0,
+        "redacted": 0,
+        "purged": 0,
+        "preserved_active": 0,
+        "redaction_receipts": [],
+    }
+    changed = False
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        policies = con.execute(
+            """
+            SELECT * FROM conversation_interaction_retention
+            WHERE (audit_retention_until IS NOT NULL AND audit_retention_until<=?)
+               OR (content_state='active' AND content_retention_until IS NOT NULL
+                   AND content_retention_until<=?)
+            ORDER BY updated_at, interaction_id
+            LIMIT ?
+            """,
+            (timestamp, timestamp, page_size),
+        ).fetchall()
+        report["scanned"] = len(policies)
+        for policy in policies:
+            interaction_id = str(policy["interaction_id"] or "")
+            row = con.execute(
+                "SELECT payload_json FROM conversation_interactions WHERE interaction_id=?",
+                (interaction_id,),
+            ).fetchone()
+            if row is None:
+                con.execute(
+                    "DELETE FROM conversation_interaction_redaction_receipts WHERE interaction_id=?",
+                    (interaction_id,),
+                )
+                con.execute(
+                    "DELETE FROM conversation_interaction_retention WHERE interaction_id=?",
+                    (interaction_id,),
+                )
+                continue
+            interaction = _json_load(row["payload_json"], {})
+            if not _interaction_retention_is_terminal(con, interaction):
+                report["preserved_active"] += 1
+                con.execute(
+                    "UPDATE conversation_interaction_retention SET updated_at=? WHERE interaction_id=?",
+                    (timestamp, interaction_id),
+                )
+                continue
+            audit_due = (
+                policy["audit_retention_until"] is not None
+                and float(policy["audit_retention_until"]) <= timestamp
+            )
+            if audit_due:
+                for table in (
+                    "conversation_interaction_presentations",
+                    "conversation_interaction_responses",
+                    "conversation_interaction_dispatches",
+                    "conversation_interaction_redaction_receipts",
+                ):
+                    con.execute(f"DELETE FROM {table} WHERE interaction_id=?", (interaction_id,))
+                con.execute(
+                    "DELETE FROM conversation_interaction_retention WHERE interaction_id=?",
+                    (interaction_id,),
+                )
+                con.execute(
+                    "DELETE FROM conversation_interactions WHERE interaction_id=?",
+                    (interaction_id,),
+                )
+                report["purged"] += 1
+                changed = True
+                continue
+            content_due = (
+                str(policy["content_state"] or "active") == "active"
+                and policy["content_retention_until"] is not None
+                and float(policy["content_retention_until"]) <= timestamp
+            )
+            if content_due:
+                receipt = _redact_interaction_content_with_connection(
+                    con,
+                    interaction,
+                    actor_id=actor_id,
+                    reason="content_retention_expired",
+                    now_epoch=timestamp,
+                )
+                report["redacted"] += 1
+                report["redaction_receipts"].append(receipt)
+                changed = True
+        con.commit()
+    if changed:
+        _publish_interaction_projection_invalidation("conversation.interaction.changed")
+    return report
 
 
 def append_interaction_presentation(record: Mapping[str, Any]) -> dict[str, Any] | None:

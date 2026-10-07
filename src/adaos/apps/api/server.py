@@ -2133,11 +2133,16 @@ async def _runtime_context(app: FastAPI):
             from adaos.services.workflow_execution import (
                 reconcile_workflow_interaction_dispatches,
             )
+            from adaos.services.conversation_store import apply_interaction_retention
 
             with _StartupTimer("reconcile_conversation_interactions"):
                 result = await asyncio.to_thread(reconcile_interactions_after_restart)
                 dispatch_result = await asyncio.to_thread(
                     reconcile_workflow_interaction_dispatches
+                )
+                retention_result = await asyncio.to_thread(
+                    apply_interaction_retention,
+                    limit=1000,
                 )
             if not result.get("complete"):
                 logging.getLogger("adaos.conversation.interactions").warning(
@@ -2153,6 +2158,11 @@ async def _runtime_context(app: FastAPI):
                             "reconciliation_required"
                         ),
                     },
+                )
+            if retention_result.get("preserved_active"):
+                logging.getLogger("adaos.conversation.interactions").info(
+                    "interaction retention preserved %s active or effect-ambiguous obligations",
+                    retention_result.get("preserved_active"),
                 )
         except Exception:
             logging.getLogger("adaos.conversation.interactions").warning(

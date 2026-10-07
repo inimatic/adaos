@@ -161,6 +161,8 @@ def create_interaction(
     thread_id: str | None = None,
     reply_route_id: str | None = None,
     expires_at: str | None = None,
+    content_retention_until_epoch: float | None = None,
+    audit_retention_until_epoch: float | None = None,
     action_labels: Mapping[str, str] | None = None,
     action_semantics: Mapping[str, Mapping[str, Any]] | None = None,
     context: Mapping[str, Any] | None = None,
@@ -200,6 +202,8 @@ def create_interaction(
             workflow_ref("reply_route", reply_route_id) if reply_route_id else None
         ),
         expires_at=expires_at,
+        content_retention_until_epoch=content_retention_until_epoch,
+        audit_retention_until_epoch=audit_retention_until_epoch,
         action_labels=action_labels,
         action_semantics=action_semantics,
         metadata=dict(metadata or {}),

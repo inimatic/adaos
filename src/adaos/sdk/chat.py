@@ -134,6 +134,8 @@ def request(
     workflow_ref: Mapping[str, Any] | None = None,
     reply_route_ref: Mapping[str, Any] | None = None,
     expires_at: str | None = None,
+    content_retention_until_epoch: float | None = None,
+    audit_retention_until_epoch: float | None = None,
     capability_profile: Mapping[str, Any] | None = None,
     deep_link_base: str | None = None,
     actor_id: str | None = None,
@@ -177,6 +179,16 @@ def request(
         workflow_ref=specification.get("workflow_ref") if isinstance(specification.get("workflow_ref"), Mapping) else workflow_ref,
         reply_route_ref=specification.get("reply_route_ref") if isinstance(specification.get("reply_route_ref"), Mapping) else reply_route_ref,
         expires_at=str(specification.get("expires_at") or expires_at or "").strip() or None,
+        content_retention_until_epoch=(
+            float(specification["content_retention_until_epoch"])
+            if specification.get("content_retention_until_epoch") is not None
+            else content_retention_until_epoch
+        ),
+        audit_retention_until_epoch=(
+            float(specification["audit_retention_until_epoch"])
+            if specification.get("audit_retention_until_epoch") is not None
+            else audit_retention_until_epoch
+        ),
         metadata={**dict(specification.get("metadata") or {}), **dict(meta or {})},
     )
     return present(

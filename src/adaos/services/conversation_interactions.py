@@ -628,6 +628,8 @@ def create_interaction(
     workflow_ref: Mapping[str, Any] | None = None,
     reply_route_ref: Mapping[str, Any] | None = None,
     expires_at: str | None = None,
+    content_retention_until_epoch: float | None = None,
+    audit_retention_until_epoch: float | None = None,
     metadata: Mapping[str, Any] | None = None,
     turn_trace_id: str | None = None,
     trace: Mapping[str, Any] | None = None,
@@ -635,6 +637,12 @@ def create_interaction(
     persist: bool = True,
 ) -> dict[str, Any]:
     timestamp = now or _now()
+    if (
+        content_retention_until_epoch is not None
+        and audit_retention_until_epoch is not None
+        and float(content_retention_until_epoch) > float(audit_retention_until_epoch)
+    ):
+        raise ConversationInteractionError("content retention cannot outlive audit retention")
     spec = {
         "kind": "text",
         "required_fields": [],
@@ -752,7 +760,12 @@ def create_interaction(
     record = _validate(INTERACTION_SCHEMA, record)
     if not persist:
         return record
-    stored = conversation_store.save_interaction(record, create_only=True)
+    stored = conversation_store.save_interaction(
+        record,
+        create_only=True,
+        content_retention_until=content_retention_until_epoch,
+        audit_retention_until=audit_retention_until_epoch,
+    )
     if stored is None:
         raise ConversationInteractionError("durable conversation store is unavailable")
     return _validate(INTERACTION_SCHEMA, stored)
@@ -774,6 +787,8 @@ def interaction_from_workflow_description(
     command_context_ref: Mapping[str, Any] | None = None,
     reply_route_ref: Mapping[str, Any] | None = None,
     expires_at: str | None = None,
+    content_retention_until_epoch: float | None = None,
+    audit_retention_until_epoch: float | None = None,
     metadata: Mapping[str, Any] | None = None,
     turn_trace_id: str | None = None,
     trace: Mapping[str, Any] | None = None,
@@ -884,6 +899,8 @@ def interaction_from_workflow_description(
         workflow_ref=workflow_ref,
         reply_route_ref=reply_route_ref,
         expires_at=expires_at,
+        content_retention_until_epoch=content_retention_until_epoch,
+        audit_retention_until_epoch=audit_retention_until_epoch,
         metadata={
             "source": "workflow_description",
             "workflow_type": snapshot.get("workflow_type"),

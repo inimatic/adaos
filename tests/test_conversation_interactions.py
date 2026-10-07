@@ -423,6 +423,104 @@ def test_canonical_interaction_writes_publish_content_free_invalidations() -> No
     )
 
 
+def test_interaction_retention_redacts_content_preserves_active_work_and_expires_audit() -> None:
+    active = conversation_interactions.create_interaction(
+        conversation_id="conv.retention",
+        owner="skill:test",
+        prompt="Do not lose this unresolved request",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.retention.active",
+        content_retention_until_epoch=100,
+        audit_retention_until_epoch=200,
+    )
+    completed = conversation_interactions.create_interaction(
+        conversation_id="conv.retention",
+        owner="skill:test",
+        prompt="Sensitive completed request",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.retention.completed",
+        content_retention_until_epoch=100,
+        audit_retention_until_epoch=200,
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        completed,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    accepted = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:retention",
+        idempotency_key="retention:response",
+    )
+    dispatch = conversation_store.claim_interaction_dispatch(
+        accepted["response"]["response_id"],
+        lease_owner="worker:retention",
+    )
+    conversation_store.complete_interaction_dispatch(
+        dispatch["dispatch_id"],
+        lease_owner="worker:retention",
+        status="succeeded",
+        outcome={"private_result": "must be removed"},
+    )
+    first = conversation_store.apply_interaction_retention(now_epoch=150, limit=10)
+
+    assert first["scanned"] == 2
+    assert first["preserved_active"] == 1
+    assert first["redacted"] == 1
+    assert first["purged"] == 0
+    assert conversation_store.get_interaction(active["interaction_id"])["prompt"].startswith("Do not lose")
+    redacted = conversation_store.get_interaction(completed["interaction_id"])
+    assert "prompt" not in redacted
+    assert "actions" not in redacted
+    assert redacted["content_redaction"]["state"] == "redacted"
+    stored_presentation = conversation_store.get_interaction_presentation(
+        presentation["presentation_id"]
+    )
+    stored_response = conversation_store.get_interaction_response(
+        accepted["response"]["response_id"]
+    )
+    stored_dispatch = conversation_store.get_interaction_dispatch(
+        dispatch_id=dispatch["dispatch_id"]
+    )
+    assert "prompt" not in stored_presentation and "actions" not in stored_presentation
+    assert "values" not in stored_response and "consumed_command" not in stored_response
+    assert "command" not in stored_dispatch and "outcome" not in stored_dispatch
+    assert stored_response["response_content_digest"].startswith("sha256:")
+    assert stored_dispatch["outcome_digest"].startswith("sha256:")
+    receipts = conversation_store.list_interaction_redaction_receipts(
+        completed["interaction_id"]
+    )
+    assert len(receipts) == 1
+    assert receipts[0]["before_digest"] != receipts[0]["after_digest"]
+    assert receipts[0]["counts"] == {
+        "interactions": 1,
+        "presentations": 1,
+        "responses": 1,
+        "dispatches": 1,
+    }
+    audit_page = conversation_interactions.query_interactions(
+        principal={"application_id": "test"},
+        conversation_id="conv.retention",
+        statuses=["answered"],
+        active_only=False,
+        field_mask="audit",
+    )
+    assert audit_page["items"][0]["interaction_id"] == completed["interaction_id"]
+    assert "prompt" not in audit_page["items"][0]
+
+    repeated = conversation_store.apply_interaction_retention(now_epoch=150, limit=10)
+    assert repeated["redacted"] == 0
+    assert len(conversation_store.list_interaction_redaction_receipts(completed["interaction_id"])) == 1
+
+    final = conversation_store.apply_interaction_retention(now_epoch=250, limit=10)
+    assert final["purged"] == 1
+    assert final["preserved_active"] == 1
+    assert conversation_store.get_interaction(completed["interaction_id"]) is None
+    assert conversation_store.list_interaction_redaction_receipts(completed["interaction_id"]) == []
+    assert conversation_store.get_interaction(active["interaction_id"]) is not None
+
+
 def test_governed_workflow_dispatch_lease_can_recover_before_effect_and_close_once() -> None:
     interaction = conversation_interactions.create_interaction(
         conversation_id="conv.workflow-dispatch-lease",
