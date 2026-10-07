@@ -314,7 +314,22 @@ try {
         kind: element.tagName, src: element.currentSrc || element.getAttribute('src'),
         naturalWidth: element.naturalWidth, readyState: element.readyState,
       })),
+      tableActionButtons: Array.from(document.querySelectorAll(
+        'ada-table-widget td.actions ion-button, ada-table-widget td.button-cell ion-button',
+      )).flatMap(element => {
+        const style = getComputedStyle(element)
+        const rect = element.getBoundingClientRect()
+        const text = String(element.textContent || '').replace(/\s+/g, ' ').trim()
+        if (!text || !rect.width || !rect.height || style.display === 'none' || style.visibility === 'hidden') return []
+        return [{ text, width: Math.round(rect.width), height: Math.round(rect.height) }]
+      }),
     }))
+    if (layout === 'compact') {
+      const unreadable = geometry.tableActionButtons.filter(button => button.text.length >= 8 && button.width < 96)
+      if (unreadable.length && !failure) {
+        failure = `Compact table action labels are too narrow to read: ${JSON.stringify(unreadable.slice(0, 5))}`
+      }
+    }
     await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })
     const scrollSurfaces = await page.evaluate(() => {
       const elements = []
