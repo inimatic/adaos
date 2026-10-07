@@ -13,6 +13,17 @@ from pathlib import Path
 from typing import Any
 
 from adaos.sdk.core.contracts import public_contract
+from adaos.sdk.core.human_decision_types import (
+    ConversationInteraction,
+    HumanDecisionContext,
+    HumanDecisionMetadata,
+    InteractionActionSemantics,
+    InteractionResponse,
+    LocaleContext,
+    SemanticMessage,
+    WorkflowDefinitionSpec,
+    WorkflowExecutionResult,
+)
 
 from adaos.services import conversation_interactions, workflow_persistence
 from adaos.services.governed_workflow import (
@@ -34,7 +45,7 @@ from adaos.services.workflow_execution import (
 from adaos.services.workflow_registry import platform_workflow_adapter_registry
 
 
-DefinitionInput = CompiledWorkflowDefinition | Mapping[str, Any] | Path | str
+DefinitionInput = CompiledWorkflowDefinition | WorkflowDefinitionSpec | Path | str
 
 
 def load_definition(value: DefinitionInput) -> CompiledWorkflowDefinition:
@@ -156,19 +167,19 @@ def create_interaction(
     interaction_id: str | None = None,
     prompt: str | None = None,
     prompt_ref: str | None = None,
-    prompt_message: Mapping[str, Any] | None = None,
-    locale_context: Mapping[str, Any] | None = None,
+    prompt_message: SemanticMessage | None = None,
+    locale_context: LocaleContext | None = None,
     thread_id: str | None = None,
     reply_route_id: str | None = None,
     expires_at: str | None = None,
     content_retention_until_epoch: float | None = None,
     audit_retention_until_epoch: float | None = None,
     action_labels: Mapping[str, str] | None = None,
-    action_semantics: Mapping[str, Mapping[str, Any]] | None = None,
-    context: Mapping[str, Any] | None = None,
+    action_semantics: Mapping[str, InteractionActionSemantics] | None = None,
+    context: HumanDecisionContext | None = None,
     executor_registrations: Iterable[WorkflowExecutorRegistration] = (),
-    metadata: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+    metadata: HumanDecisionMetadata | None = None,
+) -> ConversationInteraction:
     """Project one authoritative workflow snapshot into a durable human decision."""
 
     compiled = load_definition(definition)
@@ -282,12 +293,12 @@ def invoke(
 def invoke_interaction_response(
     definition: DefinitionInput,
     instance_id: str,
-    response: Mapping[str, Any],
+    response: InteractionResponse,
     *,
     actor_id: str,
-    context: Mapping[str, Any] | None = None,
+    context: HumanDecisionContext | None = None,
     executor_registrations: Iterable[WorkflowExecutorRegistration] = (),
-) -> dict[str, Any]:
+) -> WorkflowExecutionResult:
     """Execute an admitted human-decision response and return its durable outcome."""
     compiled = load_definition(definition)
     instance = ensure_instance(compiled, instance_id)

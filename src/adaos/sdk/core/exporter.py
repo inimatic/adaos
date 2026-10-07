@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import dataclasses
 import hashlib
 import inspect
 import json
@@ -15,7 +16,7 @@ import types
 from collections import abc as collections_abc
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Tuple, Union, get_args, get_origin, get_type_hints
+from typing import Any, Dict, List, Literal, Tuple, Union, get_args, get_origin, get_type_hints, is_typeddict
 
 from .capability_packs import human_decision_capability_pack
 from .decorators import emits_map, event_payloads, tools_meta, tools_registry
@@ -238,8 +239,50 @@ def _annotation_schema(annotation: Any) -> dict[str, Any]:
     if annotation in {list, tuple, set, frozenset, collections_abc.Sequence}:
         return {"type": "array"}
 
+    if is_typeddict(annotation):
+        try:
+            hints = get_type_hints(annotation, include_extras=True)
+        except Exception:
+            hints = dict(getattr(annotation, "__annotations__", {}))
+        required_keys = set(getattr(annotation, "__required_keys__", ()))
+        required_keys.update(
+            name
+            for name, value in hints.items()
+            if str(get_origin(value)) == "typing.Required"
+        )
+        properties = {
+            str(name): _annotation_schema(value)
+            for name, value in hints.items()
+        }
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": [name for name in properties if name in required_keys],
+            "additionalProperties": False,
+        }
+
+    if inspect.isclass(annotation) and dataclasses.is_dataclass(annotation):
+        try:
+            hints = get_type_hints(annotation, include_extras=True)
+        except Exception:
+            hints = {}
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        for item in dataclasses.fields(annotation):
+            properties[item.name] = _annotation_schema(hints.get(item.name, item.type))
+            if item.default is dataclasses.MISSING and item.default_factory is dataclasses.MISSING:
+                required.append(item.name)
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": False,
+        }
+
     origin = get_origin(annotation)
     args = get_args(annotation)
+    if str(origin) in {"typing.Required", "typing.NotRequired"}:
+        return _annotation_schema(args[0]) if args else {}
     if origin in {Union, types.UnionType}:
         variants = [_annotation_schema(item) for item in args]
         unique: list[dict[str, Any]] = []

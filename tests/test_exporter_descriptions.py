@@ -134,16 +134,20 @@ def test_human_decision_sdk_contract_is_discoverable_in_english_and_russian():
         "conversation_id",
         "owner",
     ]
-    assert request["input_schema"]["properties"]["interaction"] == {
-        "anyOf": [
-            {"type": "object", "additionalProperties": True},
-            {"type": "string"},
-        ]
-    }
-    assert request["output_schema"] == {
-        "type": "object",
-        "additionalProperties": True,
-    }
+    interaction_variants = request["input_schema"]["properties"]["interaction"]["anyOf"]
+    typed_variants = [item for item in interaction_variants if item.get("type") == "object"]
+    assert len(typed_variants) == 2
+    assert all(item["additionalProperties"] is False for item in typed_variants)
+    assert "prompt" in typed_variants[0]["properties"]
+    assert "interaction_id" in typed_variants[1]["properties"]
+    assert request["output_schema"]["additionalProperties"] is False
+    assert request["output_schema"]["required"] == [
+        "ok",
+        "handle",
+        "interaction",
+        "presentation",
+        "materialization",
+    ]
     assert request["contract"]["schema_refs"]["origin"] == "signature_annotations"
     Draft202012Validator.check_schema(request["input_schema"])
     Draft202012Validator.check_schema(request["output_schema"])
@@ -158,6 +162,24 @@ def test_human_decision_sdk_contract_is_discoverable_in_english_and_russian():
     assert "durable_dispatch" in workflow_closure
     assert "effect_assertion" in workflow_closure
     assert "durable_outcome" in workflow_closure
+    definition = workflow["input_schema"]["properties"]["definition"]
+    typed_definition = next(
+        item
+        for item in definition["anyOf"]
+        if item.get("type") == "object" and "schema" in item.get("properties", {})
+    )
+    assert typed_definition["additionalProperties"] is False
+    assert typed_definition["required"] == [
+        "schema",
+        "workflow_type",
+        "definition_version",
+        "initial_state",
+        "states",
+        "commands",
+    ]
+    executor_items = workflow["input_schema"]["properties"]["executor_registrations"]["items"]
+    assert executor_items["required"] == ["adapter_id", "contract_digest", "executor_id"]
+    assert executor_items["additionalProperties"] is False
 
 
 def test_human_decision_capability_pack_closes_sdk_lifecycle() -> None:

@@ -4,6 +4,19 @@ from typing import Any, Mapping
 
 from adaos.sdk import conversation
 from adaos.sdk.core.contracts import public_contract
+from adaos.sdk.core.human_decision_types import (
+    ChannelCapabilityProfile,
+    ConversationInteraction,
+    EntityRef,
+    HumanDecisionMetadata,
+    HumanDecisionRequestResult,
+    HumanDecisionResponseResult,
+    InteractionAction,
+    InteractionInputSpec,
+    InteractionResponseValues,
+    InteractionSpecification,
+    IntentProposalReference,
+)
 from adaos.services import conversation_response
 from adaos.services import conversation_interactions, conversation_store
 from adaos.services.agent_context import get_ctx
@@ -117,7 +130,7 @@ def ask(
     },
 )
 def request(
-    interaction: Mapping[str, Any] | str,
+    interaction: InteractionSpecification | ConversationInteraction | str,
     *,
     conversation_id: str,
     owner: str,
@@ -125,26 +138,26 @@ def request(
     channel_id: str = "general",
     route_id: str = "dialog",
     thread_id: str | None = None,
-    input_spec: Mapping[str, Any] | None = None,
-    actions: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
+    input_spec: InteractionInputSpec | None = None,
+    actions: tuple[InteractionAction, ...] | list[InteractionAction] = (),
     required_capabilities: tuple[str, ...] | list[str] = (),
     optional_capabilities: tuple[str, ...] | list[str] = (),
     fallbacks: tuple[str, ...] | list[str] = ("numbered_text", "plain_text", "unsupported"),
-    task_ref: Mapping[str, Any] | None = None,
-    workflow_ref: Mapping[str, Any] | None = None,
-    reply_route_ref: Mapping[str, Any] | None = None,
+    task_ref: EntityRef | None = None,
+    workflow_ref: EntityRef | None = None,
+    reply_route_ref: EntityRef | None = None,
     expires_at: str | None = None,
     content_retention_until_epoch: float | None = None,
     audit_retention_until_epoch: float | None = None,
-    capability_profile: Mapping[str, Any] | None = None,
+    capability_profile: ChannelCapabilityProfile | None = None,
     deep_link_base: str | None = None,
     actor_id: str | None = None,
     actor_label: str | None = None,
     request_id: str | None = None,
     turn_trace_id: str | None = None,
-    meta: Mapping[str, Any] | None = None,
+    meta: HumanDecisionMetadata | None = None,
     bus: Any | None = None,
-) -> dict[str, Any]:
+) -> HumanDecisionRequestResult:
     """Persist and present a capability-negotiated human decision.
 
     This call never holds a process-local waiter. The returned handle can be
@@ -329,14 +342,14 @@ def respond(
     actor_id: str,
     expected_generation: int,
     idempotency_key: str,
-    values: Mapping[str, Any] | None = None,
+    values: InteractionResponseValues | None = None,
     text: str | None = None,
     action_token: str | None = None,
     presentation_id: str | None = None,
-    intent_proposal: Mapping[str, Any] | None = None,
+    intent_proposal: IntentProposalReference | None = None,
     supersedes_response_id: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+    metadata: HumanDecisionMetadata | None = None,
+) -> HumanDecisionResponseResult:
     return conversation_interactions.submit_response(
         interaction_id,
         actor_id=actor_id,
