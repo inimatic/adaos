@@ -62,6 +62,73 @@ def test_sdk_compatibility_report_rejects_removal_and_required_input() -> None:
     }
 
 
+def test_sdk_compatibility_report_checks_nested_input_and_output_contracts() -> None:
+    previous = {
+        "tools": [
+            {
+                "name": "adaos.sdk.example.decide",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "request": {
+                            "type": "object",
+                            "properties": {
+                                "mode": {"type": "string", "enum": ["safe", "fast"]},
+                                "note": {"type": "string"},
+                            },
+                            "required": ["mode"],
+                            "additionalProperties": True,
+                        }
+                    },
+                    "required": ["request"],
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"status": {"type": "string", "enum": ["ok"]}},
+                },
+                "contract": {},
+            }
+        ]
+    }
+    current = {
+        "tools": [
+            {
+                "name": "adaos.sdk.example.decide",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "request": {
+                            "type": "object",
+                            "properties": {
+                                "mode": {"type": "string", "enum": ["safe"]},
+                                "reason": {"type": "string"},
+                            },
+                            "required": ["mode", "reason"],
+                            "additionalProperties": False,
+                        }
+                    },
+                    "required": ["request"],
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"status": {"type": "string", "enum": ["ok", "partial"]}},
+                },
+                "contract": {},
+            }
+        ]
+    }
+
+    report = sdk_exporter.compatibility_report(previous, current)
+
+    assert report["compatible"] is False
+    findings = {(item["kind"], item.get("path")) for item in report["breaking"]}
+    assert ("input_schema_enum_incompatible", "$.request.mode") in findings
+    assert ("input_schema_property_removed", "$.request.note") in findings
+    assert ("input_schema_required_added", "$.request") in findings
+    assert ("input_schema_closed", "$.request") in findings
+    assert ("output_schema_enum_incompatible", "$.status") in findings
+
+
 def test_sdk_descriptor_applies_consumer_field_masks() -> None:
     builder = get_descriptor_set(
         "sdk_metadata",

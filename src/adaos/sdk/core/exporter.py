@@ -734,6 +734,117 @@ def _export_items(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _schema_types(value: dict[str, Any]) -> set[str]:
+    raw = value.get("type")
+    if isinstance(raw, str):
+        return {raw}
+    if isinstance(raw, list):
+        return {str(item) for item in raw}
+    variants = value.get("anyOf") if isinstance(value.get("anyOf"), list) else []
+    return {
+        item_type
+        for item in variants
+        if isinstance(item, dict)
+        for item_type in _schema_types(item)
+    }
+
+
+def _nested_schema_breaks(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+    *,
+    direction: str,
+    path: str = "$",
+) -> list[dict[str, Any]]:
+    """Return bounded structural compatibility findings for one JSON Schema.
+
+    Inputs must continue to accept every old value. Outputs must not introduce
+    values outside the old consumer contract. Top-level newly-required inputs
+    retain the historical compatibility-report reason code and are handled by
+    the caller.
+    """
+
+    findings: list[dict[str, Any]] = []
+    old_types = _schema_types(previous)
+    new_types = _schema_types(current)
+    incompatible_types = (
+        old_types - new_types if direction == "input" else new_types - old_types
+    )
+    if old_types and new_types and incompatible_types:
+        findings.append(
+            {
+                "kind": f"{direction}_schema_type_narrowed",
+                "path": path,
+                "types": sorted(incompatible_types),
+            }
+        )
+
+    old_enum = set(previous.get("enum") or [])
+    new_enum = set(current.get("enum") or [])
+    incompatible_enum = old_enum - new_enum if direction == "input" else new_enum - old_enum
+    if old_enum and new_enum and incompatible_enum:
+        findings.append(
+            {
+                "kind": f"{direction}_schema_enum_incompatible",
+                "path": path,
+                "values": sorted(incompatible_enum, key=lambda item: str(item)),
+            }
+        )
+
+    old_properties = (
+        previous.get("properties") if isinstance(previous.get("properties"), dict) else {}
+    )
+    new_properties = (
+        current.get("properties") if isinstance(current.get("properties"), dict) else {}
+    )
+    for name in sorted(set(old_properties) - set(new_properties)):
+        findings.append(
+            {"kind": f"{direction}_schema_property_removed", "path": f"{path}.{name}"}
+        )
+    if direction == "input" and path != "$":
+        required_added = sorted(
+            {str(item) for item in current.get("required") or []}
+            - {str(item) for item in previous.get("required") or []}
+        )
+        if required_added:
+            findings.append(
+                {
+                    "kind": "input_schema_required_added",
+                    "path": path,
+                    "fields": required_added,
+                }
+            )
+    if (
+        direction == "input"
+        and previous.get("additionalProperties") is not False
+        and current.get("additionalProperties") is False
+    ):
+        findings.append({"kind": "input_schema_closed", "path": path})
+    for name in sorted(set(old_properties) & set(new_properties)):
+        old_child = old_properties[name] if isinstance(old_properties[name], dict) else {}
+        new_child = new_properties[name] if isinstance(new_properties[name], dict) else {}
+        findings.extend(
+            _nested_schema_breaks(
+                dict(old_child),
+                dict(new_child),
+                direction=direction,
+                path=f"{path}.{name}",
+            )
+        )
+    old_items = previous.get("items") if isinstance(previous.get("items"), dict) else None
+    new_items = current.get("items") if isinstance(current.get("items"), dict) else None
+    if old_items is not None and new_items is not None:
+        findings.extend(
+            _nested_schema_breaks(
+                dict(old_items),
+                dict(new_items),
+                direction=direction,
+                path=f"{path}[]",
+            )
+        )
+    return findings
+
+
 def compatibility_report(
     previous: dict[str, Any], current: dict[str, Any]
 ) -> dict[str, Any]:
@@ -768,6 +879,16 @@ def compatibility_report(
             breaking.append(
                 {"symbol": name, "kind": "required_inputs_added", "fields": required_added}
             )
+        for finding in _nested_schema_breaks(
+            dict(old_schema), dict(new_schema), direction="input"
+        ):
+            breaking.append({"symbol": name, **finding})
+        old_output = old.get("output_schema") if isinstance(old.get("output_schema"), dict) else {}
+        new_output = new.get("output_schema") if isinstance(new.get("output_schema"), dict) else {}
+        for finding in _nested_schema_breaks(
+            dict(old_output), dict(new_output), direction="output"
+        ):
+            breaking.append({"symbol": name, **finding})
         old_permissions = {str(item) for item in old_contract.get("permissions") or []}
         new_permissions = {str(item) for item in new_contract.get("permissions") or []}
         permissions_added = sorted(new_permissions - old_permissions)
