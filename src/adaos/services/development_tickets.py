@@ -2870,6 +2870,7 @@ class DevelopmentTicketService:
             else collect_skill_runtime_compatibility_snapshot(
                 skill,
                 admission=admission,
+                ctx=ctx,
             )
         )
         qualification = classify_runtime_compatibility(snapshot)
@@ -3028,6 +3029,137 @@ class DevelopmentTicketService:
             },
         )
         return {"ticket": updated, "cancelled": cancelled, "failures": failures}
+
+    async def execute_qualified_runtime_recovery(
+        self,
+        ticket_id: str,
+        *,
+        skill_id: str,
+        qualification: Mapping[str, Any],
+        compatibility_snapshot: Mapping[str, Any],
+        ctx: Any,
+    ) -> dict[str, Any]:
+        """Apply only an exact classifier-admitted automatic reactivation."""
+
+        qualified = _mapping(qualification)
+        if qualified.get("automatic_recovery_eligible") is not True:
+            return {
+                "ok": True,
+                "executed": False,
+                "reason": "automatic_recovery_not_eligible",
+            }
+        snapshot = _mapping(compatibility_snapshot)
+        desired = _mapping(snapshot.get("desired_release"))
+        installed = _mapping(snapshot.get("installed_release"))
+        version = _text(desired.get("version") or installed.get("version"))
+        slot = _text(installed.get("slot")).upper()
+        package_digest = _text(desired.get("package_digest"))
+        source_manifest_digest = _text(desired.get("manifest_digest"))
+        if (
+            not version
+            or slot not in {"A", "B"}
+            or not package_digest
+            or not source_manifest_digest
+            or package_digest != _text(installed.get("package_digest"))
+            or source_manifest_digest != _text(installed.get("manifest_digest"))
+        ):
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "exact_runtime_identity_incomplete",
+            }
+
+        from adaos.services.runtime_reactivation import (
+            reactivate_exact_admitted_package,
+        )
+
+        receipt = await reactivate_exact_admitted_package(
+            ctx,
+            skill_id=_text(skill_id),
+            expected_version=version,
+            expected_slot=slot,
+            expected_package_digest=package_digest,
+            expected_source_manifest_digest=source_manifest_digest,
+            classification=qualified,
+        )
+        safe_receipt = {
+            key: receipt.get(key)
+            for key in (
+                "schema",
+                "ok",
+                "admitted",
+                "reason",
+                "operation_id",
+                "skill_id",
+                "expected_version",
+                "expected_slot",
+                "package_digest",
+                "source_manifest_digest",
+                "attempt_count",
+                "attempt_number",
+                "started_at",
+                "completed_at",
+                "duplicate",
+            )
+            if receipt.get(key) is not None
+        }
+        receipt_digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                receipt,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        if receipt.get("ok") is not True:
+            ticket = self._append_ticket_history(
+                ticket_id,
+                {
+                    "kind": "runtime_reactivation_attempted",
+                    "actor": "runtime_compatibility",
+                    "receipt": safe_receipt,
+                    "receipt_digest": receipt_digest,
+                },
+            )
+            return {
+                "ok": False,
+                "executed": True,
+                "receipt": safe_receipt,
+                "receipt_digest": receipt_digest,
+                "ticket": ticket,
+            }
+
+        verified = self._update_ticket(
+            ticket_id,
+            status="verified",
+            history_item={
+                "kind": "runtime_reactivation_verified",
+                "actor": "runtime_compatibility",
+                "receipt": safe_receipt,
+                "receipt_digest": receipt_digest,
+            },
+        )
+        closed = self._close_ticket(
+            verified["ticket_id"],
+            reason="verified",
+            actor="runtime_compatibility",
+            evidence_refs=[
+                {
+                    "type": "runtime_reactivation_receipt",
+                    "operation_id": receipt.get("operation_id"),
+                    "digest": receipt_digest,
+                }
+            ],
+            expected_revision=int(verified.get("revision") or 0),
+        )
+        return {
+            "ok": True,
+            "executed": True,
+            "receipt": safe_receipt,
+            "receipt_digest": receipt_digest,
+            "ticket": closed,
+        }
 
     def publish_compatibility_pending_action(
         self,

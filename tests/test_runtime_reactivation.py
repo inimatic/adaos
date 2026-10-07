@@ -11,8 +11,12 @@ from adaos.services.runtime_reactivation import (
 )
 
 
-def _classification(digest: str = "sha256:exact") -> dict[str, object]:
-    return {
+def _classification(
+    digest: str = "sha256:exact",
+    *,
+    manifest_digest: str | None = None,
+) -> dict[str, object]:
+    result: dict[str, object] = {
         "schema": "adaos.runtime_compatibility.classification.v1",
         "code": "stale_runtime_memory",
         "evidence_complete": True,
@@ -20,6 +24,10 @@ def _classification(digest: str = "sha256:exact") -> dict[str, object]:
         "desired_package_digest": digest,
         "installed_package_digest": digest,
     }
+    if manifest_digest:
+        result["desired_manifest_digest"] = manifest_digest
+        result["installed_manifest_digest"] = manifest_digest
+    return result
 
 
 class _Loader:
@@ -48,7 +56,8 @@ def test_exact_reactivation_is_durable_bounded_and_idempotent(_autocontext) -> N
         "expected_version": "1.2.3",
         "expected_slot": "A",
         "expected_package_digest": "sha256:exact",
-        "classification": _classification(),
+        "expected_source_manifest_digest": "sha256:manifest",
+        "classification": _classification(manifest_digest="sha256:manifest"),
         "loader": loader,
         "now": 100.0,
     }
@@ -60,7 +69,7 @@ def test_exact_reactivation_is_durable_bounded_and_idempotent(_autocontext) -> N
     assert first["attempt_count"] == 1
     assert duplicate["duplicate"] is True
     assert len(loader.calls) == 1
-    assert loader.calls[0]["expected_source_manifest_digest"] == "sha256:exact"
+    assert loader.calls[0]["expected_source_manifest_digest"] == "sha256:manifest"
     attempts = list_reactivation_attempts(_autocontext, skill_id="example_skill")
     assert [(item["attempt_number"], item["status"]) for item in attempts] == [(1, "succeeded")]
 

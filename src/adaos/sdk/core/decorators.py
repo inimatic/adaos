@@ -558,7 +558,8 @@ def _record_subscription_receiver_policy_missing(
             ctx = None
         from adaos.services.development_tickets import DevelopmentTicketService
 
-        DevelopmentTicketService().report_stream_receiver_compatibility_finding(
+        service = DevelopmentTicketService()
+        result = service.report_stream_receiver_compatibility_finding(
             skill_id=skill,
             admission=admission,
             topic=topic,
@@ -567,6 +568,32 @@ def _record_subscription_receiver_policy_missing(
             ctx=ctx,
             webspace_id=webspace_id,
         )
+        qualification = result.get("qualification") if isinstance(result, dict) else None
+        # The report result intentionally exposes the classifier separately;
+        # retrieve the authoritative snapshot from the ticket context instead
+        # of trusting an event copy.
+        ticket = result.get("ticket") if isinstance(result, dict) else None
+        ticket_context = (
+            dict(dict(ticket.get("metadata") or {}).get("context") or {})
+            if isinstance(ticket, dict)
+            else {}
+        )
+        snapshot = dict(ticket_context.get("compatibility_snapshot") or {})
+        if (
+            ctx is not None
+            and isinstance(qualification, dict)
+            and qualification.get("automatic_recovery_eligible") is True
+            and isinstance(ticket, dict)
+        ):
+            asyncio.run(
+                service.execute_qualified_runtime_recovery(
+                    str(ticket.get("ticket_id") or ""),
+                    skill_id=skill,
+                    qualification=qualification,
+                    compatibility_snapshot=snapshot,
+                    ctx=ctx,
+                )
+            )
     except Exception:
         _LOG.warning(
             "failed to record receiver compatibility development ticket skill=%s topic=%s receiver=%s",

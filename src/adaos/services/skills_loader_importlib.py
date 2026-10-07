@@ -169,20 +169,42 @@ def _runtime_selection_from_handler(path: Path) -> dict[str, str]:
     loaded_slot = str(parts[runtime_idx + 4]).upper()
     try:
         env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill_name)
+        loaded_versions = [
+            version
+            for version in env.list_versions()
+            if env.runtime_bucket(version) == loaded_bucket
+        ]
+        loaded_version = loaded_versions[0] if len(loaded_versions) == 1 else ""
+        loaded_source_manifest_digest = _active_runtime_source_digest(
+            env,
+            loaded_version,
+            loaded_slot,
+        )
         selected_version = str(env.resolve_active_version() or "").strip()
         selected_bucket = env.runtime_bucket(selected_version) if selected_version else ""
         selected_slot = env.read_active_slot(selected_version) if selected_version else ""
+        selected_source_manifest_digest = _active_runtime_source_digest(
+            env,
+            selected_version,
+            str(selected_slot or "").upper(),
+        )
     except Exception:
+        loaded_version = ""
+        loaded_source_manifest_digest = ""
         selected_version = ""
         selected_bucket = ""
         selected_slot = ""
+        selected_source_manifest_digest = ""
     return {
         "skill": skill_name,
         "loaded_bucket": loaded_bucket,
         "loaded_slot": loaded_slot,
+        "loaded_version": loaded_version,
+        "loaded_source_manifest_digest": loaded_source_manifest_digest,
         "selected_version": selected_version,
         "selected_bucket": selected_bucket,
         "selected_slot": str(selected_slot or "").upper(),
+        "selected_source_manifest_digest": selected_source_manifest_digest,
     }
 
 

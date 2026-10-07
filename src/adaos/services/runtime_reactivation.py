@@ -26,6 +26,7 @@ _SCHEMA = (
         recovery_key TEXT PRIMARY KEY,
         skill_id TEXT NOT NULL,
         package_digest TEXT NOT NULL,
+        source_manifest_digest TEXT NOT NULL,
         expected_version TEXT NOT NULL,
         expected_slot TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -61,11 +62,24 @@ def _ensure_schema(ctx: AgentContext) -> None:
     with ctx.sql.connect() as con:
         for statement in _SCHEMA:
             con.execute(statement)
+        columns = {
+            str(row[1])
+            for row in con.execute("PRAGMA table_info(runtime_reactivation_state)").fetchall()
+        }
+        if "source_manifest_digest" not in columns:
+            con.execute(
+                "ALTER TABLE runtime_reactivation_state "
+                "ADD COLUMN source_manifest_digest TEXT NOT NULL DEFAULT ''"
+            )
         con.commit()
 
 
-def _recovery_key(skill_id: str, package_digest: str) -> str:
-    raw = f"{skill_id}\n{package_digest}".encode("utf-8")
+def _recovery_key(
+    skill_id: str,
+    package_digest: str,
+    source_manifest_digest: str,
+) -> str:
+    raw = f"{skill_id}\n{package_digest}\n{source_manifest_digest}".encode("utf-8")
     return "reactivation:" + hashlib.sha256(raw).hexdigest()
 
 
@@ -73,6 +87,7 @@ def _classification_admits(
     classification: Mapping[str, Any],
     *,
     package_digest: str,
+    source_manifest_digest: str,
 ) -> None:
     value = dict(classification or {})
     if value.get("schema") != "adaos.runtime_compatibility.classification.v1":
@@ -87,6 +102,17 @@ def _classification_admits(
     installed = str(value.get("installed_package_digest") or "").strip()
     if not package_digest or desired != package_digest or installed != package_digest:
         raise RuntimeReactivationError("classification package identity does not match the requested digest")
+    desired_manifest = str(value.get("desired_manifest_digest") or "").strip()
+    installed_manifest = str(value.get("installed_manifest_digest") or "").strip()
+    if desired_manifest or installed_manifest:
+        if (
+            not source_manifest_digest
+            or desired_manifest != source_manifest_digest
+            or installed_manifest != source_manifest_digest
+        ):
+            raise RuntimeReactivationError(
+                "classification source manifest identity does not match the requested digest"
+            )
 
 
 def _json(value: Any) -> str:
@@ -120,6 +146,7 @@ async def reactivate_exact_admitted_package(
     expected_version: str,
     expected_slot: str,
     expected_package_digest: str,
+    expected_source_manifest_digest: str | None = None,
     classification: Mapping[str, Any],
     attempt_budget: int = 3,
     cooldown_s: float = 300.0,
@@ -139,16 +166,31 @@ async def reactivate_exact_admitted_package(
     version = str(expected_version or "").strip()
     slot = str(expected_slot or "").strip().upper()
     package_digest = str(expected_package_digest or "").strip()
-    if not skill or not version or slot not in {"A", "B"} or not package_digest:
-        raise RuntimeReactivationError("exact skill, version, slot, and package digest are required")
+    source_manifest_digest = str(
+        expected_source_manifest_digest or expected_package_digest or ""
+    ).strip()
+    if (
+        not skill
+        or not version
+        or slot not in {"A", "B"}
+        or not package_digest
+        or not source_manifest_digest
+    ):
+        raise RuntimeReactivationError(
+            "exact skill, version, slot, package digest, and source manifest digest are required"
+        )
     budget = max(1, min(int(attempt_budget), 10))
     cooldown = max(1.0, min(float(cooldown_s), 86400.0))
     running_lease = max(1.0, min(float(running_lease_s), 3600.0))
     drain_timeout = max(0.0, min(float(in_flight_drain_timeout_s), 3600.0))
-    _classification_admits(classification, package_digest=package_digest)
+    _classification_admits(
+        classification,
+        package_digest=package_digest,
+        source_manifest_digest=source_manifest_digest,
+    )
     _ensure_schema(ctx)
     timestamp = float(time.time() if now is None else now)
-    recovery_key = _recovery_key(skill, package_digest)
+    recovery_key = _recovery_key(skill, package_digest, source_manifest_digest)
 
     with ctx.sql.connect() as con:
         con.row_factory = sqlite3.Row
@@ -196,13 +238,14 @@ async def reactivate_exact_admitted_package(
         con.execute(
             """
             INSERT INTO runtime_reactivation_state(
-                recovery_key, skill_id, package_digest, expected_version,
+                recovery_key, skill_id, package_digest, source_manifest_digest, expected_version,
                 expected_slot, status, attempt_count, operation_id, started_at,
                 completed_at, cooldown_until, receipt_json, updated_at
-            ) VALUES(?,?,?,?,?,'running',?,?,?,NULL,NULL,NULL,?)
+            ) VALUES(?,?,?,?,?,?,'running',?,?,?,NULL,NULL,NULL,?)
             ON CONFLICT(recovery_key) DO UPDATE SET
                 expected_version=excluded.expected_version,
                 expected_slot=excluded.expected_slot,
+                source_manifest_digest=excluded.source_manifest_digest,
                 status='running', attempt_count=excluded.attempt_count,
                 operation_id=excluded.operation_id, started_at=excluded.started_at,
                 completed_at=NULL, cooldown_until=NULL, receipt_json=NULL,
@@ -212,6 +255,7 @@ async def reactivate_exact_admitted_package(
                 recovery_key,
                 skill,
                 package_digest,
+                source_manifest_digest,
                 version,
                 slot,
                 attempt_count,
@@ -237,7 +281,7 @@ async def reactivate_exact_admitted_package(
             skill,
             expected_version=version,
             expected_slot=slot,
-            expected_source_manifest_digest=package_digest,
+            expected_source_manifest_digest=source_manifest_digest,
             drain_timeout_s=drain_timeout,
         )
     except Exception as exc:
@@ -261,6 +305,7 @@ async def reactivate_exact_admitted_package(
         "expected_version": version,
         "expected_slot": slot,
         "package_digest": package_digest,
+        "source_manifest_digest": source_manifest_digest,
         "attempt_count": attempt_count,
         "attempt_number": attempt_number,
         "started_at": timestamp,

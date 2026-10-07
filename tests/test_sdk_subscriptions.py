@@ -580,6 +580,72 @@ def test_stream_subscription_reports_missing_receiver_policy(tmp_path: Path, mon
     assert ticket_calls[0]["webspace_id"] == "desktop"
 
 
+def test_receiver_diagnostic_executes_only_classifier_admitted_recovery(
+    monkeypatch,
+) -> None:
+    context = SimpleNamespace(name="runtime-context")
+    recoveries: list[dict] = []
+    snapshot = {
+        "desired_release": {
+            "version": "2.0.0",
+            "package_digest": "sha256:admitted",
+        },
+        "installed_release": {
+            "version": "2.0.0",
+            "slot": "A",
+            "package_digest": "sha256:admitted",
+        },
+    }
+    qualification = {
+        "schema": "adaos.runtime_compatibility.classification.v1",
+        "automatic_recovery_eligible": True,
+    }
+
+    class _Service:
+        def report_stream_receiver_compatibility_finding(self, **_kwargs):
+            return {
+                "qualification": qualification,
+                "ticket": {
+                    "ticket_id": "dticket.reactivation",
+                    "metadata": {
+                        "context": {"compatibility_snapshot": snapshot}
+                    },
+                },
+            }
+
+        async def execute_qualified_runtime_recovery(self, ticket_id, **kwargs):
+            recoveries.append({"ticket_id": ticket_id, **kwargs})
+            return {"ok": True, "executed": True}
+
+    monkeypatch.setattr(decorators, "require_ctx", lambda _reason: context)
+    monkeypatch.setattr(
+        "adaos.services.development_tickets.DevelopmentTicketService",
+        _Service,
+    )
+
+    decorators._record_subscription_receiver_policy_missing(
+        "example_skill",
+        "webio.stream.snapshot.requested",
+        "example_skill.panel",
+        {
+            "reason": "stream_receiver_not_declared",
+            "receiver": "example_skill.panel",
+        },
+        "webio.stream.snapshot.requested",
+        "desktop",
+    )
+
+    assert recoveries == [
+        {
+            "ticket_id": "dticket.reactivation",
+            "skill_id": "example_skill",
+            "qualification": qualification,
+            "compatibility_snapshot": snapshot,
+            "ctx": context,
+        }
+    ]
+
+
 def test_receiver_diagnostics_do_not_block_stream_loop_and_coalesce(monkeypatch) -> None:
     entered = threading.Event()
     release = threading.Event()

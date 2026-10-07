@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from adaos.services import runtime_compatibility
 from adaos.services.runtime_compatibility import classify_runtime_compatibility
 
 
@@ -164,3 +167,80 @@ def test_classifier_fails_closed_when_package_identity_is_unknown() -> None:
         "desired_release.package_digest",
         "installed_release.package_digest",
     ]
+
+
+def test_collector_binds_workspace_lock_to_selected_and_loaded_runtime(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from adaos.services import artifact_pipeline, skills_loader_importlib
+    from adaos.services.skill import declarations
+
+    monkeypatch.setattr(
+        declarations,
+        "runtime_skill_declarations_snapshot",
+        lambda _skill: {"receiver_patterns": ["owned.panel"]},
+    )
+    monkeypatch.setattr(
+        skills_loader_importlib,
+        "skill_handler_source_snapshot",
+        lambda: {
+            "items": [
+                {
+                    "skill": "example_skill",
+                    "module": "example.handlers",
+                    "loaded_at": 20.0,
+                    "selected_version": "2.0.0",
+                    "selected_slot": "B",
+                    "selected_source_manifest_digest": "sha256:manifest",
+                    "loaded_source_manifest_digest": "sha256:previous-manifest",
+                    "source_drift": False,
+                    "selection_drift": True,
+                    "current_exists": True,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        artifact_pipeline,
+        "load_workspace_lock",
+        lambda _path: SimpleNamespace(
+            lock_revision=7,
+            components=(
+                SimpleNamespace(
+                    kind="skill",
+                    artifact_id="example_skill",
+                    version="2.0.0",
+                    digest="sha256:admitted",
+                    manifest_digest="sha256:manifest",
+                ),
+            ),
+        ),
+    )
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: tmp_path))
+
+    snapshot = runtime_compatibility.collect_skill_runtime_compatibility_snapshot(
+        "example_skill",
+        admission={
+            "reason": "stream_receiver_not_declared",
+            "receiver": "owned.panel",
+            "allowed": False,
+        },
+        ctx=ctx,
+    )
+    classified = classify_runtime_compatibility(snapshot)
+
+    assert snapshot["desired_release"] == {
+        "admitted": True,
+        "version": "2.0.0",
+        "package_digest": "sha256:admitted",
+        "manifest_digest": "sha256:manifest",
+        "lock_revision": 7,
+    }
+    assert snapshot["installed_release"]["slot"] == "B"
+    assert snapshot["installed_release"]["package_digest"] == "sha256:admitted"
+    assert snapshot["installed_release"]["manifest_digest"] == "sha256:manifest"
+    assert snapshot["loaded_runtime"]["package_digest"] is None
+    assert snapshot["loaded_runtime"]["manifest_digest"] == "sha256:previous-manifest"
+    assert classified["code"] == "stale_runtime_memory"
+    assert classified["automatic_recovery_eligible"] is True

@@ -51,6 +51,9 @@ def classify_runtime_compatibility(snapshot: Mapping[str, Any]) -> dict[str, Any
     desired_digest = _text(desired.get("package_digest"))
     installed_digest = _text(installed.get("package_digest"))
     loaded_digest = _text(loaded.get("package_digest"))
+    desired_manifest_digest = _text(desired.get("manifest_digest"))
+    installed_manifest_digest = _text(installed.get("manifest_digest"))
+    loaded_manifest_digest = _text(loaded.get("manifest_digest"))
     desired_admitted = desired.get("admitted") is True
     module_available = _boolean(loaded.get("module_available"))
     source_drift = bool(loaded.get("source_drift"))
@@ -184,6 +187,9 @@ def classify_runtime_compatibility(snapshot: Mapping[str, Any]) -> dict[str, Any
         "desired_package_digest": desired_digest or None,
         "installed_package_digest": installed_digest or None,
         "loaded_package_digest": loaded_digest or None,
+        "desired_manifest_digest": desired_manifest_digest or None,
+        "installed_manifest_digest": installed_manifest_digest or None,
+        "loaded_manifest_digest": loaded_manifest_digest or None,
         "eligible_update_version": _text(update.get("version")) or None,
         "eligible_update_package_digest": _text(update.get("package_digest")) or None,
         "eligible_update_from_package_digest": _text(update.get("from_package_digest")) or None,
@@ -196,6 +202,7 @@ def collect_skill_runtime_compatibility_snapshot(
     *,
     admission: Mapping[str, Any],
     builder_work: Sequence[Mapping[str, Any]] = (),
+    ctx: Any = None,
 ) -> dict[str, Any]:
     """Collect bounded process-local evidence for a receiver guard finding.
 
@@ -216,7 +223,49 @@ def collect_skill_runtime_compatibility_snapshot(
         if isinstance(item, Mapping) and _text(item.get("skill")) == skill
     ][:20]
     selected_versions = sorted({_text(item.get("selected_version")) for item in handlers if _text(item.get("selected_version"))})
+    selected_slots = sorted({_text(item.get("selected_slot")).upper() for item in handlers if _text(item.get("selected_slot"))})
+    selected_source_digests = sorted(
+        {
+            _text(item.get("selected_source_manifest_digest"))
+            for item in handlers
+            if _text(item.get("selected_source_manifest_digest"))
+        }
+    )
+    loaded_source_digests = sorted(
+        {
+            _text(item.get("loaded_source_manifest_digest"))
+            for item in handlers
+            if _text(item.get("loaded_source_manifest_digest"))
+        }
+    )
     generations = [float(item.get("loaded_at") or 0.0) for item in handlers]
+    admitted_component: dict[str, Any] = {}
+    try:
+        from pathlib import Path
+
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.artifact_pipeline import load_workspace_lock
+
+        context = ctx or get_ctx()
+        workspace_root = Path(context.paths.workspace_dir())
+        lock = load_workspace_lock(workspace_root / ".adaos" / "workspace.lock.json")
+        component = next(
+            (
+                item
+                for item in (lock.components if lock is not None else ())
+                if item.kind == "skill" and item.artifact_id == skill
+            ),
+            None,
+        )
+        if component is not None:
+            admitted_component = {
+                "version": component.version,
+                "package_digest": component.digest,
+                "manifest_digest": component.manifest_digest,
+                "lock_revision": lock.lock_revision,
+            }
+    except Exception:
+        admitted_component = {}
     policy_reason = _text(admission.get("reason"))
     policy_state = "absent" if policy_reason == "stream_receiver_policy_missing" else "valid"
     if policy_reason == "stream_receiver_not_declared":
@@ -225,18 +274,44 @@ def collect_skill_runtime_compatibility_snapshot(
         "schema": SNAPSHOT_SCHEMA,
         "skill_id": skill,
         "desired_release": {
-            "admitted": bool(handlers),
-            "version": selected_versions[0] if len(selected_versions) == 1 else None,
-            "package_digest": None,
+            "admitted": bool(admitted_component),
+            "version": admitted_component.get("version"),
+            "package_digest": admitted_component.get("package_digest"),
+            "manifest_digest": admitted_component.get("manifest_digest"),
+            "lock_revision": admitted_component.get("lock_revision"),
         },
         "installed_release": {
             "version": selected_versions[0] if len(selected_versions) == 1 else None,
-            "package_digest": None,
+            "slot": selected_slots[0] if len(selected_slots) == 1 else None,
+            "package_digest": (
+                admitted_component.get("package_digest")
+                if len(selected_source_digests) == 1
+                and selected_source_digests[0]
+                == admitted_component.get("manifest_digest")
+                else None
+            ),
+            "manifest_digest": (
+                selected_source_digests[0]
+                if len(selected_source_digests) == 1
+                else None
+            ),
         },
         "loaded_runtime": {
             "module_available": bool(handlers),
             "generation": str(max(generations)) if generations else None,
-            "package_digest": None,
+            "package_digest": (
+                admitted_component.get("package_digest")
+                if len(loaded_source_digests) == 1
+                and loaded_source_digests[0]
+                == admitted_component.get("manifest_digest")
+                else None
+            ),
+            "manifest_digest": (
+                loaded_source_digests[0]
+                if len(loaded_source_digests) == 1
+                else None
+            ),
+            "selected_slot": selected_slots[0] if len(selected_slots) == 1 else None,
             "handler_count": len(handlers),
             "source_drift": any(bool(item.get("source_drift")) for item in handlers),
             "selection_drift": any(bool(item.get("selection_drift")) for item in handlers),

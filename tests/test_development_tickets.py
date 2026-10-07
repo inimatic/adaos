@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -12,7 +13,6 @@ from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services import development_tickets as development_tickets_module
 from adaos.services.development_tickets import (
     COMPATIBILITY_PENDING_ACTION_KIND,
-    COMPATIBILITY_RESPONSE_TOPIC,
     DevelopmentTicketService,
     PUBLICATION_PERMISSION_PENDING_ACTION_KIND,
     development_source_options,
@@ -1009,6 +1009,103 @@ def test_runtime_requalification_cancels_obsolete_compatibility_card(
     assert result["ticket"]["history"][-1]["kind"] == (
         "compatibility_pending_actions_reconciled"
     )
+
+
+def test_qualified_runtime_reactivation_closes_ticket_with_safe_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.services import runtime_reactivation
+
+    snapshot = {
+        "schema": "adaos.runtime_compatibility.snapshot.v1",
+        "skill_id": "legacy_skill",
+        "desired_release": {
+            "admitted": True,
+            "version": "2.0.0",
+            "package_digest": "sha256:admitted",
+            "manifest_digest": "sha256:manifest",
+        },
+        "installed_release": {
+            "version": "2.0.0",
+            "slot": "B",
+            "package_digest": "sha256:admitted",
+            "manifest_digest": "sha256:manifest",
+        },
+        "loaded_runtime": {
+            "module_available": True,
+            "generation": "10",
+            "package_digest": "sha256:previous",
+            "manifest_digest": "sha256:previous-manifest",
+            "source_drift": False,
+            "selection_drift": True,
+        },
+        "receiver_policy": {"state": "valid", "patterns": ["legacy.owned"]},
+        "observation": {
+            "own_stream": True,
+            "receiver_admitted": False,
+        },
+        "core_contract": {"supported": True},
+        "eligible_update": {},
+        "builder_work": [],
+    }
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    report = service.report_stream_receiver_compatibility_finding(
+        skill_id="legacy_skill",
+        admission={
+            "reason": "stream_receiver_not_declared",
+            "receiver": "legacy.owned",
+            "receiver_patterns": ["legacy.owned"],
+        },
+        compatibility_snapshot=snapshot,
+    )
+    calls: list[dict] = []
+
+    async def _reactivate(ctx, **kwargs):
+        calls.append({"ctx": ctx, **kwargs})
+        return {
+            "schema": "adaos.runtime_reactivation.receipt.v1",
+            "ok": True,
+            "admitted": True,
+            "reason": "reactivation_succeeded",
+            "operation_id": "reactivation.test",
+            "skill_id": "legacy_skill",
+            "expected_version": "2.0.0",
+            "expected_slot": "B",
+            "package_digest": "sha256:admitted",
+            "attempt_count": 1,
+            "attempt_number": 1,
+            "reload": {"private_path": "must-not-enter-ticket"},
+        }
+
+    monkeypatch.setattr(
+        runtime_reactivation,
+        "reactivate_exact_admitted_package",
+        _reactivate,
+    )
+    context = object()
+    result = asyncio.run(
+        service.execute_qualified_runtime_recovery(
+            report["ticket"]["ticket_id"],
+            skill_id="legacy_skill",
+            qualification=report["qualification"],
+            compatibility_snapshot=snapshot,
+            ctx=context,
+        )
+    )
+
+    assert report["qualification"]["automatic_recovery_eligible"] is True
+    assert result["ok"] is True
+    assert result["executed"] is True
+    assert result["ticket"]["status"] == "closed"
+    assert result["ticket"]["closure"]["reason"] == "verified"
+    assert result["receipt"]["operation_id"] == "reactivation.test"
+    assert "reload" not in result["receipt"]
+    assert calls[0]["expected_version"] == "2.0.0"
+    assert calls[0]["expected_slot"] == "B"
+    assert calls[0]["expected_package_digest"] == "sha256:admitted"
+    assert calls[0]["expected_source_manifest_digest"] == "sha256:manifest"
+    assert calls[0]["ctx"] is context
 
 
 def test_compatibility_pending_action_response_creates_builder_repair(tmp_path: Path) -> None:
