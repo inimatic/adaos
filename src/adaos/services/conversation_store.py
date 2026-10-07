@@ -2977,6 +2977,42 @@ def get_interaction_dispatch(
     return _json_load(row["payload_json"], {}) if row else None
 
 
+def list_interaction_dispatches(
+    *,
+    statuses: Sequence[str] = (),
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return a bounded dispatch work set for deterministic reconciliation."""
+
+    if not ensure_schema():
+        return []
+    selected_statuses = list(
+        dict.fromkeys(str(item or "").strip() for item in statuses if str(item or "").strip())
+    )
+    if len(selected_statuses) > 16:
+        raise ValueError("interaction dispatch status filter is too broad")
+    safe_limit = max(1, min(int(limit or 200), 1000))
+    where = ""
+    params: list[Any] = []
+    if selected_statuses:
+        placeholders = ",".join("?" for _ in selected_statuses)
+        where = f"WHERE status IN ({placeholders})"
+        params.extend(selected_statuses)
+    params.append(safe_limit)
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT payload_json FROM conversation_interaction_dispatches
+            {where}
+            ORDER BY updated_at, dispatch_id
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [_json_load(row["payload_json"], {}) for row in rows]
+
+
 def claim_interaction_dispatch(
     response_id: str,
     *,

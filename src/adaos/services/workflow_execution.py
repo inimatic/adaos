@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
@@ -266,6 +267,127 @@ class WorkflowActivityRunner:
                 **common,
             )
         return completed
+
+
+def reconcile_workflow_interaction_dispatches(
+    *,
+    now_epoch: float | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Reconcile bounded GWR dispatch state without guessing provider outcomes.
+
+    A terminal durable activity is authoritative and can close the matching
+    dispatch after a process crash.  An abandoned pre-effect GWR claim is safe
+    to resume through the exact replay contract, but this scanner does not
+    execute it.  Generic abandoned claims and started/unknown effects are only
+    reported for provider reconciliation.
+    """
+
+    observed_epoch = float(time.time() if now_epoch is None else now_epoch)
+    safe_limit = max(1, min(int(limit or 200), 500))
+    records = conversation_store.list_interaction_dispatches(
+        statuses=("dispatching", "dispatched", "outcome_unknown"),
+        limit=safe_limit + 1,
+    )
+    has_more = len(records) > safe_limit
+    reconciled: list[str] = []
+    safe_resume: list[str] = []
+    waiting: list[str] = []
+    reconciliation_required: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    terminal_attempt_statuses = {
+        "succeeded",
+        "failed",
+        "input_required",
+        "cancelled",
+        "outcome_unknown",
+    }
+    for dispatch in records[:safe_limit]:
+        dispatch_id = str(dispatch.get("dispatch_id") or "").strip()
+        status = str(dispatch.get("status") or "").strip()
+        workflow_ref_value = dispatch.get("workflow_ref")
+        workflow_bound = (
+            isinstance(workflow_ref_value, Mapping)
+            and bool(str(workflow_ref_value.get("id") or "").strip())
+        )
+        if status == "dispatching":
+            lease_until = float(dispatch.get("lease_until") or 0)
+            if lease_until > observed_epoch:
+                waiting.append(dispatch_id)
+            elif workflow_bound:
+                safe_resume.append(dispatch_id)
+            else:
+                reconciliation_required.append(
+                    {"dispatch_id": dispatch_id, "reason_code": "provider_replay_contract_missing"}
+                )
+            continue
+        if status == "outcome_unknown":
+            reconciliation_required.append(
+                {"dispatch_id": dispatch_id, "reason_code": "effect_outcome_unknown"}
+            )
+            continue
+        if status != "dispatched" or not workflow_bound:
+            continue
+        attempt_id = str(dict(dispatch.get("outcome") or {}).get("attempt_id") or "").strip()
+        if not attempt_id:
+            errors.append(
+                {"dispatch_id": dispatch_id, "reason_code": "activity_attempt_ref_missing"}
+            )
+            continue
+        try:
+            attempt = workflow_persistence.get_activity_attempt(attempt_id)
+        except Exception:
+            errors.append(
+                {"dispatch_id": dispatch_id, "reason_code": "activity_attempt_missing"}
+            )
+            continue
+        attempt_status = str(attempt.get("status") or "").strip()
+        if attempt_status not in terminal_attempt_statuses:
+            if bool(attempt.get("effect_started")):
+                reconciliation_required.append(
+                    {"dispatch_id": dispatch_id, "reason_code": "activity_effect_in_flight"}
+                )
+            else:
+                waiting.append(dispatch_id)
+            continue
+        attempt_outcome = copy.deepcopy(dict(attempt.get("outcome") or {}))
+        outcome = {
+            "attempt_id": attempt_id,
+            "result": attempt_outcome,
+            "evidence_refs": list(attempt.get("evidence_refs") or []),
+        }
+        assertion = attempt_outcome.get("effect_assertion")
+        if isinstance(assertion, Mapping):
+            outcome["effect_assertion"] = copy.deepcopy(dict(assertion))
+        try:
+            conversation_store.complete_interaction_dispatch(
+                dispatch_id,
+                lease_owner="reconciler:governed-workflow",
+                status=attempt_status,
+                outcome=outcome,
+                now_epoch=observed_epoch,
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "dispatch_id": dispatch_id,
+                    "reason_code": "dispatch_reconciliation_failed",
+                    "detail": str(exc)[:300],
+                }
+            )
+            continue
+        reconciled.append(dispatch_id)
+    return {
+        "schema": "adaos.conversation.interaction_dispatch_reconciliation.v1",
+        "observed_epoch": observed_epoch,
+        "scanned_total": min(len(records), safe_limit),
+        "reconciled_dispatch_ids": reconciled,
+        "safe_resume_dispatch_ids": safe_resume,
+        "waiting_dispatch_ids": waiting,
+        "reconciliation_required": reconciliation_required,
+        "errors": errors,
+        "complete": not has_more,
+    }
 
 
 def description_with_executor_readiness(

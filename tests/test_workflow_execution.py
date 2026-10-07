@@ -22,6 +22,7 @@ from adaos.services.workflow_execution import (
     execute_invocation,
     prepare_interaction_invocation,
     prepare_sdk_invocation,
+    reconcile_workflow_interaction_dispatches,
 )
 from adaos.services.workflow_registry import platform_workflow_adapter_registry
 
@@ -540,6 +541,54 @@ def test_activity_runner_marks_post_effect_exception_unknown_and_never_retries()
     assert [item["attempt_id"] for item in recovery["reconciliation_required"]] == [
         completed["attempt_id"]
     ]
+
+
+def test_restart_reconciler_projects_terminal_activity_to_dispatch() -> None:
+    instance = new_instance(compiled_builder_change_definition(), "change:dispatch-reconcile")
+    instance["state"] = "automation_ready"
+    invocations, definition, adapters = _cross_channel_invocations(
+        instance,
+        suffix=":dispatch-reconcile",
+    )
+    contract = adapters.get("activity", "builder.codex.run")
+    executors = WorkflowExecutorRegistry(
+        adapters,
+        (
+            WorkflowExecutorRegistration(
+                adapter_id="builder.codex.run",
+                contract_digest=contract["contract_digest"],
+                executor_id="builder.codex.worker.reconcile",
+            ),
+        ),
+    )
+    admitted = execute_invocation(
+        invocations["web"],
+        definition,
+        instance,
+        principal=_principal(),
+        adapters=adapters,
+        executors=executors,
+    )
+    dispatch = admitted["dispatch"]
+    attempt_id = str(dispatch["outcome"]["attempt_id"])
+    workflow_persistence.claim_activity(attempt_id)
+    workflow_persistence.mark_effect_started(attempt_id)
+    workflow_persistence.complete_activity(
+        attempt_id,
+        "succeeded",
+        result={"task_id": "task:reconciled"},
+        evidence_refs=("evidence:reconciled",),
+    )
+
+    report = reconcile_workflow_interaction_dispatches(now_epoch=1_800_000_000)
+
+    assert dispatch["dispatch_id"] in report["reconciled_dispatch_ids"]
+    reconciled = conversation_store.get_interaction_dispatch(
+        dispatch_id=dispatch["dispatch_id"]
+    )
+    assert reconciled["status"] == "succeeded"
+    assert reconciled["outcome"]["result"]["task_id"] == "task:reconciled"
+    assert reconciled["outcome"]["evidence_refs"] == ["evidence:reconciled"]
 
 
 def _digest_target(value: object) -> str:

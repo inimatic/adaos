@@ -2130,12 +2130,29 @@ async def _runtime_context(app: FastAPI):
             from adaos.services.conversation_interactions import (
                 reconcile_interactions_after_restart,
             )
+            from adaos.services.workflow_execution import (
+                reconcile_workflow_interaction_dispatches,
+            )
 
             with _StartupTimer("reconcile_conversation_interactions"):
                 result = await asyncio.to_thread(reconcile_interactions_after_restart)
+                dispatch_result = await asyncio.to_thread(
+                    reconcile_workflow_interaction_dispatches
+                )
             if not result.get("complete"):
                 logging.getLogger("adaos.conversation.interactions").warning(
                     "interaction restart reconciliation reached its bounded scan limit"
+                )
+            if not dispatch_result.get("complete") or dispatch_result.get("errors"):
+                logging.getLogger("adaos.conversation.interactions").warning(
+                    "interaction dispatch reconciliation remains incomplete: %s",
+                    {
+                        "complete": dispatch_result.get("complete"),
+                        "errors": dispatch_result.get("errors"),
+                        "reconciliation_required": dispatch_result.get(
+                            "reconciliation_required"
+                        ),
+                    },
                 )
         except Exception:
             logging.getLogger("adaos.conversation.interactions").warning(
