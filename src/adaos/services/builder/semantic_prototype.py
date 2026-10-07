@@ -2924,7 +2924,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 view["selection_filter"].setdefault("source_field_ref", None)
                 view["selection_filter"].setdefault("effect", "filter")
                 view["selection_filter"].setdefault("empty_selection", "show_all")
-    for command in candidate.get("commands") or []:
+    for command_index, command in enumerate(candidate.get("commands") or []):
         if not isinstance(command, dict):
             continue
         kind = str(command.get("kind") or "")
@@ -2935,6 +2935,27 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 "presentation": "button" if kind == "create" else "icon",
             },
         )
+        exposure = command.get("exposure")
+        if isinstance(exposure, dict):
+            placement = str(exposure.get("placement") or "")
+            canonical_placement = (
+                "collection_header"
+                if kind == "create"
+                else "row_action"
+                if placement == "collection_header"
+                or (placement == "editor_danger" and kind != "delete")
+                else placement
+            )
+            if canonical_placement != placement:
+                exposure["placement"] = canonical_placement
+                normalizations.append(
+                    {
+                        "kind": "command_exposure_for_kind",
+                        "from": placement,
+                        "to": canonical_placement,
+                        "target": f"$.commands[{command_index}].exposure.placement",
+                    }
+                )
     try:
         Draft202012Validator(
             semantic_prototype_provider_contract(version="v2", locales=_text_locales(candidate["title"]), _view_variants=False)
@@ -3759,7 +3780,11 @@ def _semantic_v2_model_findings(
                     "code": "semantic.resource_collection_missing",
                     "path": f"$.resources[{resource_index}]",
                     "semantic_refs": [f"resource:{resource_id}"],
-                    "detail": f"resource {resource_id!r} requires a collection view",
+                    "detail": (
+                        f"resource {resource_id!r} requires a collection view; "
+                        "add role='collection' for this resource or remove the "
+                        "resource when it is not part of the requested UI"
+                    ),
                 }
             )
         fields = {
@@ -3978,7 +4003,17 @@ def _semantic_v2_model_findings(
             elif predicate["operator"] in {"lt", "lte", "gt", "gte"} and field["value_type"] not in {"date", "number"}:
                 detail = "range predicate requires a date or number field"
             elif not other and not _field_value_is_valid(field, predicate.get("value")):
-                detail = "predicate literal must match the field type and exact option.value"
+                if field["value_type"] == "choice":
+                    allowed = [option["value"] for option in field.get("options") or []]
+                    detail = (
+                        "predicate literal must match an exact option.value; "
+                        f"allowed values are {allowed!r}"
+                    )
+                else:
+                    detail = (
+                        "predicate literal must match the field type and exact "
+                        "option.value"
+                    )
             if detail:
                 findings.append({
                     "code": "semantic.state_predicate_invalid",

@@ -3592,6 +3592,7 @@ def test_all_invalid_state_predicates_are_reported_before_repair_scope() -> None
         compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
     invalid = [item for item in caught.value.findings if item["code"] == "semantic.state_predicate_invalid"]
     assert len(invalid) == 2
+    assert all("allowed values are" in item["detail"] for item in invalid)
 
 
 @pytest.mark.parametrize("persisted_snapshot", [False, True])
@@ -3988,6 +3989,39 @@ def test_delete_can_share_record_editor_danger_zone_without_a_page_action() -> N
     danger = next(button for button in form["inputs"]["buttons"] if button["id"] == owned[1]["id"])
     assert danger["kind"] == "danger"
     assert not any(widget["type"] == "ui.actions" for widget in application["desktop"]["pageSchema"]["widgets"])
+
+
+@pytest.mark.parametrize(
+    ("kind", "invalid", "expected"),
+    [
+        ("create", "row_action", "collection_header"),
+        ("update", "collection_header", "row_action"),
+        ("transition", "editor_danger", "row_action"),
+    ],
+)
+def test_semantic_v2_normalizes_command_placement_for_declared_kind(
+    kind, invalid, expected
+) -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    command = candidate["commands"][0]
+    command["kind"] = kind
+    command["exposure"] = {"placement": invalid, "presentation": "button"}
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    compiled = next(
+        item
+        for item in result["semantic_document"]["commands"]
+        if item["id"] == command["id"]
+    )
+    assert compiled["exposure"]["placement"] == expected
+    assert any(
+        item["kind"] == "command_exposure_for_kind"
+        and item["from"] == invalid
+        and item["to"] == expected
+        for item in result["normalizations"]
+    )
 
 
 def test_delete_editor_requires_explicit_toolbar_action_instead_of_row_activation() -> None:
