@@ -2125,6 +2125,32 @@ async def _runtime_context(app: FastAPI):
             pass
         return task
 
+    async def _reconcile_conversation_interactions_logged() -> None:
+        try:
+            from adaos.services.conversation_interactions import (
+                reconcile_interactions_after_restart,
+            )
+
+            with _StartupTimer("reconcile_conversation_interactions"):
+                result = await asyncio.to_thread(reconcile_interactions_after_restart)
+            if not result.get("complete"):
+                logging.getLogger("adaos.conversation.interactions").warning(
+                    "interaction restart reconciliation reached its bounded scan limit"
+                )
+        except Exception:
+            logging.getLogger("adaos.conversation.interactions").warning(
+                "interaction restart reconciliation failed",
+                exc_info=True,
+            )
+
+    # Expiry is authoritative on the server. Keep reconciliation off the cold
+    # bootstrap critical path while ensuring stale buttons cannot survive a
+    # process restart merely because no user submits them immediately.
+    _schedule_startup_tail(
+        _reconcile_conversation_interactions_logged(),
+        name="runtime-reconcile-conversation-interactions",
+    )
+
     # Keep the local capacity projection in sync with optional native deps
     # (vosk/pyttsx3), so other components can see IO availability without importing native libs.
     async def _refresh_native_io_capacity_logged(*, wait_for_boot: bool = False) -> None:

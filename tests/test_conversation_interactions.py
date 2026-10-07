@@ -546,6 +546,92 @@ def test_declared_test_requires_exact_effect_and_completion_assertion() -> None:
     assert completed["command"]["semantics"]["preset"] == "test"
 
 
+def test_semantic_change_atomically_supersedes_pending_dispatch() -> None:
+    original = conversation_interactions.create_interaction(
+        conversation_id="conv.supersession",
+        owner="skill:test",
+        prompt="Apply revision A?",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.supersession.a",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        original,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    answered = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:local",
+        idempotency_key="supersession:answer-a",
+    )
+    replacement = conversation_interactions.create_interaction(
+        conversation_id="conv.supersession",
+        owner="skill:test",
+        prompt="Apply revision B?",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.supersession.b",
+        persist=False,
+    )
+
+    result = conversation_interactions.supersede_interaction(
+        original["interaction_id"],
+        replacement,
+        expected_generation=1,
+        reason="subject_revision_changed",
+        now="2026-10-07T01:00:00+00:00",
+    )
+
+    assert result["superseded"] is True
+    assert result["interaction"]["status"] == "superseded"
+    assert result["replacement"]["status"] == "created"
+    assert result["replacement"]["metadata"]["supersedes_interaction_id"] == original["interaction_id"]
+    dispatch = conversation_store.get_interaction_dispatch(
+        response_id=answered["response"]["response_id"]
+    )
+    assert dispatch["status"] == "rejected"
+    assert dispatch["outcome"]["reason_code"] == "interaction_superseded"
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="terminal|stale",
+    ):
+        conversation_interactions.submit_action_token(
+            presentation["actions"][1]["token"],
+            actor_id="user:local",
+            idempotency_key="supersession:stale-button",
+        )
+
+
+def test_identical_semantics_do_not_rotate_interaction() -> None:
+    current = conversation_interactions.create_interaction(
+        conversation_id="conv.same-semantics",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.same-semantics.a",
+    )
+    replacement = conversation_interactions.create_interaction(
+        conversation_id="conv.same-semantics",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.same-semantics.b",
+        persist=False,
+    )
+
+    result = conversation_interactions.supersede_interaction(
+        current["interaction_id"],
+        replacement,
+        expected_generation=0,
+        reason="producer_refresh",
+    )
+
+    assert result["superseded"] is False
+    assert conversation_store.get_interaction(replacement["interaction_id"]) is None
+
+
 def test_interaction_lifecycle_accepts_completes_cancels_and_expires() -> None:
     interaction = conversation_interactions.create_interaction(
         conversation_id="conv.lifecycle",

@@ -122,6 +122,58 @@ def _canonical_digest(value: Any) -> str:
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
+def interaction_semantic_digest(interaction: Mapping[str, Any]) -> str:
+    """Digest the material a person reviews, excluding delivery/runtime state."""
+
+    metadata = dict(interaction.get("metadata") or {})
+    decision_context = {
+        key: copy.deepcopy(metadata.get(key))
+        for key in (
+            "decision_context", "subject_ref", "domain_ref", "policy_ref",
+            "validity_conditions",
+        )
+        if metadata.get(key) is not None
+    }
+    actions = []
+    for item in interaction.get("actions") or []:
+        if not isinstance(item, Mapping):
+            continue
+        actions.append(
+            {
+                key: copy.deepcopy(item.get(key))
+                for key in (
+                    "action_id", "command", "value", "risk",
+                    "confirmation_required", "assurance", "semantics",
+                    "target_ref", "expected_generation", "principal_scope",
+                    "command_context_ref",
+                )
+            }
+        )
+    return _canonical_digest(
+        {
+            "conversation_id": interaction.get("conversation_id"),
+            "owner": interaction.get("owner"),
+            "prompt": interaction.get("prompt"),
+            "prompt_ref": interaction.get("prompt_ref"),
+            "prompt_message": interaction.get("prompt_message"),
+            "input_spec": interaction.get("input_spec"),
+            "actions": actions,
+            "requirements": {
+                key: copy.deepcopy(dict(interaction.get("requirements") or {}).get(key))
+                for key in (
+                    "version", "required", "optional", "limits", "fallbacks",
+                    "fail_closed", "semantic_equivalence_required",
+                    "permission_boundary", "business_availability_boundary",
+                )
+            },
+            "task_ref": interaction.get("task_ref"),
+            "workflow_ref": interaction.get("workflow_ref"),
+            "expires_at": interaction.get("expires_at"),
+            "decision_context": decision_context,
+        }
+    )
+
+
 def _schema(name: str) -> dict[str, Any]:
     filename = name.removeprefix("adaos.")
     path = Path(__file__).resolve().parents[1] / "abi" / f"{filename}.schema.json"
@@ -680,6 +732,11 @@ def create_interaction(
             ),
         },
     )
+    record["metadata"] = {
+        **dict(record.get("metadata") or {}),
+        "semantic_digest": interaction_semantic_digest(record),
+    }
+    record = _validate(INTERACTION_SCHEMA, record)
     if not persist:
         return record
     stored = conversation_store.save_interaction(record, create_only=True)
@@ -1710,7 +1767,7 @@ def transition_interaction(
         "resume": ({"partially_answered", "validation_failed", "projected"}, "awaiting_input"),
         "complete": ({"accepted"}, "completed"),
         "cancel": (_PENDING_STATUSES | {"answered", "accepted"}, "cancelled"),
-        "expire": (_PENDING_STATUSES, "expired"),
+        "expire": (_PENDING_STATUSES | {"answered", "accepted"}, "expired"),
         "supersede": (_PENDING_STATUSES | {"answered", "accepted"}, "superseded"),
     }
     if command not in allowed:
@@ -1741,28 +1798,151 @@ def transition_interaction(
     return _validate(INTERACTION_SCHEMA, stored)
 
 
+def supersede_interaction(
+    interaction_id: str,
+    replacement: Mapping[str, Any],
+    *,
+    expected_generation: int,
+    reason: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Atomically replace materially changed decision semantics."""
+
+    current_value = conversation_store.get_interaction(interaction_id)
+    if current_value is None:
+        raise ConversationInteractionError(f"interaction not found: {interaction_id}")
+    current = _validate(INTERACTION_SCHEMA, current_value)
+    candidate = _validate(INTERACTION_SCHEMA, replacement)
+    if int(current["generation"]) != int(expected_generation):
+        raise ConversationInteractionError(
+            f"stale interaction generation: expected {expected_generation}, current {current['generation']}"
+        )
+    if current["status"] in _TERMINAL_STATUSES:
+        raise ConversationInteractionError(f"interaction is terminal: {current['status']}")
+    if str(candidate["interaction_id"]) == str(current["interaction_id"]):
+        raise ConversationInteractionError("superseding interaction requires a new interaction_id")
+    if str(candidate["conversation_id"]) != str(current["conversation_id"]):
+        raise ConversationInteractionError("superseding interaction must remain in the same conversation")
+    current_digest = str(dict(current.get("metadata") or {}).get("semantic_digest") or "")
+    if not current_digest:
+        current_digest = interaction_semantic_digest(current)
+    candidate_digest = interaction_semantic_digest(candidate)
+    if current_digest == candidate_digest:
+        return {
+            "superseded": False,
+            "reason_code": "semantic_digest_unchanged",
+            "interaction": current,
+            "replacement": None,
+        }
+    timestamp = now or _now()
+    updated = copy.deepcopy(current)
+    updated["status"] = "superseded"
+    updated["generation"] = int(current["generation"]) + 1
+    updated["updated_at"] = timestamp
+    updated["completed_at"] = timestamp
+    updated["metadata"] = {
+        **dict(updated.get("metadata") or {}),
+        "last_transition": "supersede",
+        "last_transition_reason": str(reason or "semantic_change").strip(),
+        "superseded_by": str(candidate["interaction_id"]),
+        "superseded_by_semantic_digest": candidate_digest,
+    }
+    candidate = copy.deepcopy(candidate)
+    candidate["metadata"] = {
+        **dict(candidate.get("metadata") or {}),
+        "semantic_digest": candidate_digest,
+        "supersedes_interaction_id": str(current["interaction_id"]),
+        "supersedes_semantic_digest": current_digest,
+    }
+    try:
+        committed = conversation_store.commit_interaction_supersession(
+            updated,
+            candidate,
+            expected_generation=int(current["generation"]),
+            expected_current=current,
+        )
+    except ValueError as exc:
+        raise ConversationInteractionError(str(exc)) from exc
+    return {
+        "superseded": True,
+        "reason_code": "semantic_digest_changed",
+        "interaction": _validate(INTERACTION_SCHEMA, committed["interaction"]),
+        "replacement": _validate(INTERACTION_SCHEMA, committed["replacement"]),
+    }
+
+
 def expire_due_interactions(*, now: str | None = None, limit: int = 1000) -> list[dict[str, Any]]:
     timestamp = now or _now()
     expired: list[dict[str, Any]] = []
     for interaction in conversation_store.list_interactions(
-        statuses=sorted(_PENDING_STATUSES),
+        statuses=sorted(_PENDING_STATUSES | {"answered", "accepted"}),
+        due_before=timestamp,
         limit=limit,
     ):
         if not _is_expired(interaction.get("expires_at"), now=timestamp):
             continue
+        response_id = str(dict(interaction.get("metadata") or {}).get("latest_response_id") or "")
+        dispatch = (
+            conversation_store.get_interaction_dispatch(response_id=response_id)
+            if response_id
+            else None
+        )
+        if dispatch is not None and str(dispatch.get("status") or "") not in {"pending", "rejected"}:
+            # Work that may already have crossed the effect boundary is not
+            # relabelled as expired. Its executor/reconciler owns the outcome.
+            continue
         try:
-            expired.append(
-                transition_interaction(
-                    str(interaction["interaction_id"]),
-                    "expire",
-                    expected_generation=int(interaction["generation"]),
-                    reason="deadline_reached",
-                    now=timestamp,
-                )
+            expired_record = transition_interaction(
+                str(interaction["interaction_id"]),
+                "expire",
+                expected_generation=int(interaction["generation"]),
+                reason="deadline_reached",
+                now=timestamp,
             )
+            expired.append(expired_record)
+            if response_id:
+                conversation_store.reject_interaction_dispatch_if_pending(
+                    response_id,
+                    reason_code="interaction_expired",
+                    now_iso=timestamp,
+                )
         except ConversationInteractionError:
             continue
     return expired
+
+
+def reconcile_interactions_after_restart(
+    *,
+    now: str | None = None,
+    batch_size: int = 250,
+    max_batches: int = 40,
+) -> dict[str, Any]:
+    """Bounded restart reconciliation for expired canonical decisions."""
+
+    timestamp = now or _now()
+    size = max(1, min(int(batch_size), 1000))
+    batches = max(1, min(int(max_batches), 100))
+    expired_ids: list[str] = []
+    for _ in range(batches):
+        batch = expire_due_interactions(now=timestamp, limit=size)
+        expired_ids.extend(str(item["interaction_id"]) for item in batch)
+        if len(batch) < size:
+            break
+    remaining_due = any(
+        _is_expired(item.get("expires_at"), now=timestamp)
+        for item in conversation_store.list_interactions(
+            statuses=sorted(_PENDING_STATUSES | {"answered", "accepted"}),
+            due_before=timestamp,
+            limit=1,
+        )
+    )
+    return {
+        "schema": "adaos.conversation.interaction_reconciliation.v1",
+        "observed_at": timestamp,
+        "expired_total": len(expired_ids),
+        "expired_interaction_ids": expired_ids,
+        "complete": not remaining_due,
+    }
 
 
 def resolve_unbound_text(

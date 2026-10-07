@@ -339,6 +339,27 @@ def prepare_interaction_invocation(
     """Convert any channel's durable response into one WorkflowCommand."""
 
     interaction, stored_response = _authoritative_interaction_response(response)
+    from adaos.services.conversation_interactions import interaction_semantic_digest
+
+    expected_semantic_digest = str(
+        dict(interaction.get("metadata") or {}).get("semantic_digest") or ""
+    )
+    observed_semantic_digest = interaction_semantic_digest(interaction)
+    if expected_semantic_digest and expected_semantic_digest != observed_semantic_digest:
+        raise WorkflowExecutionError("interaction semantic material changed before execution")
+    interaction_status = str(interaction.get("status") or "")
+    if interaction_status in {"expired", "cancelled", "superseded"}:
+        raise WorkflowExecutionError(f"interaction is terminal: {interaction_status}")
+    expires_at = str(interaction.get("expires_at") or "").strip()
+    reference_time = str(now or _now())
+    if expires_at:
+        try:
+            deadline = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            observed = datetime.fromisoformat(reference_time.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise WorkflowExecutionError("interaction expiry is invalid") from exc
+        if deadline <= observed:
+            raise WorkflowExecutionError("interaction expired before workflow execution")
     if str(stored_response.get("status") or "") not in {"answered", "accepted"}:
         raise WorkflowExecutionError("only an answered interaction response may be invoked")
     consumed = dict(stored_response.get("consumed_command") or {})

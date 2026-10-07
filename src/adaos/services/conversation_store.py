@@ -2419,6 +2419,115 @@ def save_interaction(
     return get_interaction(interaction_id)
 
 
+def commit_interaction_supersession(
+    interaction: Mapping[str, Any],
+    replacement: Mapping[str, Any],
+    *,
+    expected_generation: int,
+    expected_current: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Atomically supersede one decision and create its semantic replacement."""
+
+    current = dict(interaction or {})
+    candidate = dict(replacement or {})
+    current_id = str(current.get("interaction_id") or "").strip()
+    candidate_id = str(candidate.get("interaction_id") or "").strip()
+    if not current_id or not candidate_id or current_id == candidate_id:
+        raise ValueError("distinct interaction and replacement ids are required")
+    if not ensure_schema():
+        raise ValueError("durable conversation store is unavailable")
+
+    def _params(value: Mapping[str, Any]) -> tuple[Any, ...]:
+        return (
+            str(value.get("interaction_id") or ""),
+            str(value.get("conversation_id") or ""),
+            value.get("thread_id"),
+            str(value.get("owner") or ""),
+            str(value.get("status") or ""),
+            int(value.get("generation") or 0),
+            _json_dump(value.get("task_ref")) if value.get("task_ref") is not None else None,
+            _json_dump(value.get("workflow_ref")) if value.get("workflow_ref") is not None else None,
+            _json_dump(value.get("reply_route_ref")) if value.get("reply_route_ref") is not None else None,
+            value.get("expires_at"),
+            _json_dump(value),
+            str(value.get("created_at") or ""),
+            str(value.get("updated_at") or ""),
+            value.get("completed_at"),
+        )
+
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute(
+            "SELECT generation, payload_json FROM conversation_interactions WHERE interaction_id=?",
+            (current_id,),
+        ).fetchone()
+        if row is None:
+            con.rollback()
+            raise ValueError("interaction disappeared before supersession")
+        actual = int(row["generation"])
+        if actual != int(expected_generation):
+            con.rollback()
+            raise ValueError(
+                f"stale interaction generation: expected {expected_generation}, current {actual}"
+            )
+        if _json_load(row["payload_json"], {}) != dict(expected_current):
+            con.rollback()
+            raise ValueError("interaction changed before semantic supersession")
+        if con.execute(
+            "SELECT 1 FROM conversation_interactions WHERE interaction_id=?",
+            (candidate_id,),
+        ).fetchone() is not None:
+            con.rollback()
+            raise ValueError("replacement interaction_id already exists")
+        active_dispatches = con.execute(
+            "SELECT payload_json FROM conversation_interaction_dispatches WHERE interaction_id=?",
+            (current_id,),
+        ).fetchall()
+        for dispatch_row in active_dispatches:
+            dispatch = _json_load(dispatch_row["payload_json"], {})
+            if str(dispatch.get("status") or "") in {"dispatching", "dispatched", "succeeded"}:
+                con.rollback()
+                raise ValueError("interaction effect is already active and cannot be superseded")
+        con.execute(
+            """
+            UPDATE conversation_interactions SET
+                conversation_id=?, thread_id=?, owner=?, status=?, generation=?,
+                task_ref_json=?, workflow_ref_json=?, reply_route_ref_json=?,
+                expires_at=?, payload_json=?, created_at=?, updated_at=?, completed_at=?
+            WHERE interaction_id=?
+            """,
+            (*_params(current)[1:], current_id),
+        )
+        con.execute(
+            """
+            INSERT INTO conversation_interactions(
+                interaction_id, conversation_id, thread_id, owner, status,
+                generation, task_ref_json, workflow_ref_json,
+                reply_route_ref_json, expires_at, payload_json, created_at,
+                updated_at, completed_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            _params(candidate),
+        )
+        for dispatch_row in active_dispatches:
+            dispatch = _json_load(dispatch_row["payload_json"], {})
+            if str(dispatch.get("status") or "") != "pending":
+                continue
+            dispatch["status"] = "rejected"
+            dispatch["outcome"] = {"reason_code": "interaction_superseded"}
+            dispatch["updated_at"] = str(current.get("updated_at") or "")
+            con.execute(
+                """
+                UPDATE conversation_interaction_dispatches
+                SET status='rejected', payload_json=?, updated_at=? WHERE dispatch_id=?
+                """,
+                (_json_dump(dispatch), dispatch["updated_at"], dispatch["dispatch_id"]),
+            )
+        con.commit()
+    return {"interaction": current, "replacement": candidate}
+
+
 def get_interaction(interaction_id: str) -> dict[str, Any] | None:
     if not ensure_schema():
         return None
@@ -2435,6 +2544,7 @@ def list_interactions(
     *,
     conversation_id: str | None = None,
     statuses: Sequence[str] | None = None,
+    due_before: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     if not ensure_schema():
@@ -2448,12 +2558,16 @@ def list_interactions(
     if clean_statuses:
         clauses.append(f"status IN ({','.join('?' for _ in clean_statuses)})")
         params.extend(clean_statuses)
+    if str(due_before or "").strip():
+        clauses.append("expires_at IS NOT NULL AND julianday(expires_at)<=julianday(?)")
+        params.append(str(due_before).strip())
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.append(max(1, min(int(limit), 1000)))
     with _sql().connect() as con:  # type: ignore[union-attr]
         con.row_factory = sqlite3.Row
+        order = "expires_at ASC, updated_at ASC" if due_before else "updated_at DESC"
         rows = con.execute(
-            f"SELECT payload_json FROM conversation_interactions {where} ORDER BY updated_at DESC LIMIT ?",
+            f"SELECT payload_json FROM conversation_interactions {where} ORDER BY {order} LIMIT ?",
             tuple(params),
         ).fetchall()
     return [_json_load(row["payload_json"], {}) for row in rows]
@@ -3006,6 +3120,58 @@ def complete_interaction_dispatch(
             """,
             (selected_status, _json_dump(record), timestamp, identifier),
         )
+        con.commit()
+    return record
+
+
+def reject_interaction_dispatch_if_pending(
+    response_id: str,
+    *,
+    reason_code: str,
+    now_iso: str,
+) -> dict[str, Any] | None:
+    """Terminally reject only an unclaimed dispatch during reconciliation."""
+
+    response = str(response_id or "").strip()
+    reason = str(reason_code or "").strip()
+    if not response or not reason:
+        raise ValueError("response_id and reason_code are required")
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute(
+            "SELECT * FROM conversation_interaction_dispatches WHERE response_id=?",
+            (response,),
+        ).fetchone()
+        if row is None:
+            con.rollback()
+            return None
+        record = _json_load(row["payload_json"], {})
+        if str(record.get("status") or "") != "pending":
+            con.rollback()
+            return record
+        record.update(
+            {
+                "status": "rejected",
+                "lease_owner": None,
+                "lease_until": None,
+                "outcome": {"reason_code": reason},
+                "updated_at": str(now_iso),
+            }
+        )
+        con.execute(
+            """
+            UPDATE conversation_interaction_dispatches
+            SET status='rejected', payload_json=?, lease_owner=NULL,
+                lease_until=NULL, updated_at=? WHERE response_id=? AND status='pending'
+            """,
+            (_json_dump(record), str(now_iso), response),
+        )
+        if con.total_changes != 1:
+            con.rollback()
+            return get_interaction_dispatch(response_id=response)
         con.commit()
     return record
 

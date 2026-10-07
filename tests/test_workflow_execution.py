@@ -171,6 +171,96 @@ def test_web_interaction_and_sdk_share_one_invocation_and_durable_reply_boundary
     assert workflow_persistence.get_instance(instance["instance_id"])["generation"] == 1
 
 
+def test_expired_interaction_response_cannot_become_workflow_invocation() -> None:
+    definition = compiled_builder_change_definition()
+    instance = new_instance(definition, "change:expired-interaction")
+    instance["state"] = "prototype_editing"
+    description = description_with_executor_readiness(
+        _description(instance),
+        definition,
+        WorkflowExecutorRegistry(platform_workflow_adapter_registry()),
+    )
+    interaction = conversation_interactions.interaction_from_workflow_description(
+        description,
+        conversation_id="conversation:expired-interaction",
+        owner="skill:builder_skill",
+        interaction_id="interaction:expired-interaction",
+        workflow_ref=workflow_ref(
+            "workflow",
+            instance["instance_id"],
+            version=definition.definition_version,
+            generation=instance["generation"],
+        ),
+        expires_at="2026-10-07T02:00:00+00:00",
+        now="2026-10-07T01:00:00+00:00",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+        now="2026-10-07T01:01:00+00:00",
+    )
+    action = next(item for item in presentation["actions"] if item["command"] == "accept_prototype")
+    response = conversation_interactions.submit_action_token(
+        action["token"],
+        actor_id="user:local",
+        idempotency_key="expired-interaction:answer",
+        values={"confirmed": True},
+        now="2026-10-07T01:02:00+00:00",
+    )["response"]
+
+    with pytest.raises(WorkflowExecutionError, match="expired before workflow execution"):
+        prepare_interaction_invocation(response, now="2026-10-07T02:00:01+00:00")
+    expired = conversation_interactions.expire_due_interactions(
+        now="2026-10-07T02:00:01+00:00"
+    )
+    assert [item["interaction_id"] for item in expired] == [interaction["interaction_id"]]
+    dispatch = conversation_store.get_interaction_dispatch(response_id=response["response_id"])
+    assert dispatch["status"] == "rejected"
+    assert dispatch["outcome"]["reason_code"] == "interaction_expired"
+    with pytest.raises(WorkflowExecutionError, match="terminal: expired"):
+        prepare_interaction_invocation(response, now="2026-10-07T02:00:02+00:00")
+
+
+def test_changed_semantic_material_requires_supersession_before_execution() -> None:
+    definition = compiled_builder_change_definition()
+    instance = new_instance(definition, "change:semantic-drift")
+    instance["state"] = "prototype_editing"
+    description = description_with_executor_readiness(
+        _description(instance),
+        definition,
+        WorkflowExecutorRegistry(platform_workflow_adapter_registry()),
+    )
+    interaction = conversation_interactions.interaction_from_workflow_description(
+        description,
+        conversation_id="conversation:semantic-drift",
+        owner="skill:builder_skill",
+        interaction_id="interaction:semantic-drift",
+        workflow_ref=workflow_ref(
+            "workflow",
+            instance["instance_id"],
+            version=definition.definition_version,
+            generation=instance["generation"],
+        ),
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    action = next(item for item in presentation["actions"] if item["command"] == "accept_prototype")
+    response = conversation_interactions.submit_action_token(
+        action["token"],
+        actor_id="user:local",
+        idempotency_key="semantic-drift:answer",
+        values={"confirmed": True},
+    )["response"]
+    changed = conversation_store.get_interaction(interaction["interaction_id"])
+    changed["prompt"] = "A different subject is now being approved"
+    conversation_store.save_interaction(changed, expected_generation=1)
+
+    with pytest.raises(WorkflowExecutionError, match="semantic material changed"):
+        prepare_interaction_invocation(response)
+
+
 def _cross_channel_invocations(
     instance: dict[str, object],
     *,
