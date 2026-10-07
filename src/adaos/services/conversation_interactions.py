@@ -294,6 +294,74 @@ def _assurance_admission(
     }
 
 
+def _admit_voice_intent_binding(
+    proposal: Mapping[str, Any],
+    *,
+    interaction_id: str,
+    interaction_generation: int,
+    action_id: str,
+    actor_id: str,
+    now: str,
+) -> dict[str, Any] | None:
+    if str(proposal.get("modality") or "text").strip().lower() != "voice":
+        return None
+    binding = proposal.get("dialog_binding")
+    if not isinstance(binding, Mapping):
+        raise ConversationInteractionError("voice response requires an exact dialog binding")
+    if (
+        str(binding.get("schema") or "") != "adaos.conversation.dialog_binding.v1"
+        or str(binding.get("interaction_id") or "") != interaction_id
+        or binding.get("interaction_generation") != interaction_generation
+    ):
+        raise ConversationInteractionError("voice dialog binding is stale or belongs to another interaction")
+    participant = binding.get("participant_ref")
+    session = binding.get("session_ref")
+    if (
+        not isinstance(participant, Mapping)
+        or str(participant.get("id") or "") != str(actor_id or "")
+        or not isinstance(session, Mapping)
+        or not str(session.get("id") or "").strip()
+    ):
+        raise ConversationInteractionError("voice dialog participant or session binding does not match")
+    try:
+        opened = datetime.fromisoformat(str(binding.get("opened_at") or "").replace("Z", "+00:00"))
+        observed = datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ConversationInteractionError("voice dialog binding time is invalid") from exc
+    if opened.tzinfo is None or observed.tzinfo is None or opened > observed:
+        raise ConversationInteractionError("voice dialog binding is not active")
+    if _is_expired(str(binding.get("expires_at") or ""), now=now):
+        raise ConversationInteractionError("voice dialog binding expired")
+    presentation = conversation_store.get_interaction_presentation(
+        str(binding.get("presentation_id") or "")
+    )
+    if presentation is None or (
+        str(presentation.get("interaction_id") or "") != interaction_id
+        or presentation.get("interaction_generation") != interaction_generation
+        or presentation.get("supported") is not True
+    ):
+        raise ConversationInteractionError("voice dialog presentation is stale or unavailable")
+    metadata = dict(presentation.get("metadata") or {})
+    capabilities = dict(metadata.get("assurance_capabilities") or {})
+    if (
+        str(metadata.get("transport") or "") != "voice"
+        or capabilities.get("bound_dialog_response") is not True
+    ):
+        raise ConversationInteractionError("voice dialog presentation is not admitted")
+    projected = next(
+        (
+            item
+            for item in presentation.get("actions") or []
+            if isinstance(item, Mapping) and str(item.get("action_id") or "") == action_id
+        ),
+        None,
+    )
+    admission = dict((projected or {}).get("assurance_admission") or {})
+    if projected is None or projected.get("enabled") is not True or admission.get("admitted") is not True:
+        raise ConversationInteractionError("voice dialog action is not admitted")
+    return presentation
+
+
 def _unsupported_reason(reason: str, missing: Sequence[str]) -> str:
     if reason in {"assurance_handoff_required", "localized_material_unavailable"}:
         return f"unsupported:{reason}"
@@ -1553,6 +1621,30 @@ def submit_response(
             raise ConversationInteractionError("interaction action principal is not authorized")
         if _action_assurance(action)["mode"] != "voice_permitted":
             raise ConversationInteractionError("interaction action requires a trusted presentation")
+        voice_presentation = _admit_voice_intent_binding(
+            intent_proposal,
+            interaction_id=semantic["interaction_id"],
+            interaction_generation=int(expected_generation),
+            action_id=str(action["action_id"]),
+            actor_id=actor_id,
+            now=timestamp,
+        )
+        if voice_presentation is not None:
+            presentation = voice_presentation
+            capabilities = dict(
+                dict(voice_presentation.get("metadata") or {}).get(
+                    "assurance_capabilities"
+                )
+                or {}
+            )
+            assurance_receipt = {
+                "mode": "voice_permitted",
+                "profile_id": str(voice_presentation["profile_id"]),
+                "profile_version": int(voice_presentation["profile_version"]),
+                "presentation_id": str(voice_presentation["presentation_id"]),
+                "admitted": True,
+                "capabilities": capabilities,
+            }
         resolved_action = dict(action)
         response_values.update(
             {

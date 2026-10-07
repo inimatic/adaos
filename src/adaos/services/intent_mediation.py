@@ -74,6 +74,91 @@ def _pending(conversation_id: str, explicit_interaction_id: str | None) -> list[
     return records
 
 
+def _timestamp(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise IntentMediationError("dialog binding timestamp is invalid") from exc
+    if parsed.tzinfo is None:
+        raise IntentMediationError("dialog binding timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _voice_dialog_binding_reason(
+    binding: Mapping[str, Any] | None,
+    acts: Sequence[Mapping[str, Any]],
+    *,
+    source_message_id: str,
+    now: str,
+    actor_id: str | None = None,
+) -> str | None:
+    governed = [
+        item
+        for item in acts
+        if str(item.get("kind") or "") in {"interaction_answer", "workflow_command"}
+    ]
+    if len(governed) != 1:
+        return "voice_dialog_focus_ambiguous"
+    if not isinstance(binding, Mapping):
+        return "voice_dialog_binding_required"
+    expected = governed[0]
+    if str(binding.get("schema") or "") != "adaos.conversation.dialog_binding.v1":
+        return "voice_dialog_binding_invalid"
+    if str(binding.get("source_message_id") or "") != str(source_message_id or ""):
+        return "voice_dialog_source_mismatch"
+    if str(binding.get("interaction_id") or "") != str(expected.get("interaction_id") or ""):
+        return "voice_dialog_interaction_mismatch"
+    expected_generation = int(dict(expected.get("arguments") or {}).get("interaction_generation") or 0)
+    binding_generation = binding.get("interaction_generation")
+    if not isinstance(binding_generation, int) or binding_generation != expected_generation:
+        return "voice_dialog_generation_mismatch"
+    opened_at = _timestamp(str(binding.get("opened_at") or ""))
+    expires_at = _timestamp(str(binding.get("expires_at") or ""))
+    observed_at = _timestamp(now)
+    if opened_at > observed_at:
+        return "voice_dialog_not_open"
+    if expires_at <= observed_at or expires_at <= opened_at:
+        return "voice_dialog_expired"
+    participant = binding.get("participant_ref")
+    session = binding.get("session_ref")
+    if not isinstance(participant, Mapping) or not str(participant.get("id") or "").strip():
+        return "voice_dialog_participant_missing"
+    if not isinstance(session, Mapping) or not str(session.get("id") or "").strip():
+        return "voice_dialog_session_missing"
+    if actor_id is not None and str(participant.get("id") or "") != str(actor_id or ""):
+        return "voice_dialog_participant_mismatch"
+    presentation = conversation_store.get_interaction_presentation(
+        str(binding.get("presentation_id") or "")
+    )
+    if presentation is None:
+        return "voice_dialog_presentation_unavailable"
+    if (
+        str(presentation.get("interaction_id") or "") != str(binding.get("interaction_id") or "")
+        or presentation.get("interaction_generation") != binding_generation
+    ):
+        return "voice_dialog_presentation_mismatch"
+    metadata = dict(presentation.get("metadata") or {})
+    capabilities = dict(metadata.get("assurance_capabilities") or {})
+    if (
+        str(metadata.get("transport") or "") != "voice"
+        or capabilities.get("bound_dialog_response") is not True
+        or presentation.get("supported") is not True
+    ):
+        return "voice_dialog_presentation_not_admitted"
+    action_id = str(dict(expected.get("arguments") or {}).get("action_id") or "")
+    projected = next(
+        (
+            item
+            for item in presentation.get("actions") or []
+            if isinstance(item, Mapping) and str(item.get("action_id") or "") == action_id
+        ),
+        None,
+    )
+    if projected is None or projected.get("enabled") is not True:
+        return "voice_dialog_action_not_admitted"
+    return None
+
+
 def _snapshot(interactions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -201,6 +286,7 @@ def propose_intent(
     principal_ref: Mapping[str, Any] | None = None,
     reply_route_ref: Mapping[str, Any] | None = None,
     context_ref: Mapping[str, Any] | None = None,
+    dialog_binding: Mapping[str, Any] | None = None,
     package_ref: Mapping[str, Any] | None = None,
     package_digest: str | None = None,
     prompt_digest: str | None = None,
@@ -292,6 +378,26 @@ def propose_intent(
         protected.setdefault("prompt", None)
         protected.setdefault("candidates", [])
         disposition, clarification = "clarification_required", protected
+    elif str(modality or "").strip().lower() == "voice" and mutating:
+        binding_reason = _voice_dialog_binding_reason(
+            dialog_binding,
+            mutating,
+            source_message_id=message_id,
+            now=timestamp,
+        )
+        if binding_reason:
+            disposition = "clarification_required"
+            clarification = {
+                "reason_code": binding_reason,
+                "prompt": None,
+                "candidates": [
+                    {
+                        "interaction_id": item.get("interaction_id"),
+                        "action_id": dict(item.get("arguments") or {}).get("action_id"),
+                    }
+                    for item in mutating[:20]
+                ],
+            }
     elif not mutating:
         disposition = "proposed"
     digest_input = json.dumps(
@@ -317,6 +423,11 @@ def propose_intent(
                 "reply_route_ref": copy.deepcopy(dict(reply_route_ref)) if isinstance(reply_route_ref, Mapping) else None,
                 "context_ref": copy.deepcopy(dict(context_ref)) if isinstance(context_ref, Mapping) else None,
             },
+            "dialog_binding": (
+                copy.deepcopy(dict(dialog_binding))
+                if isinstance(dialog_binding, Mapping)
+                else None
+            ),
             "semantic_acts": acts,
             "alternatives": alternatives,
             "allowed_command_snapshot": _snapshot(interactions),
@@ -388,6 +499,17 @@ def commit_proposal(
             raise IntentMediationError("proposed command is no longer allowed")
         if bool(action.get("confirmation_required")) or str(action.get("risk")) in _PROTECTED_RISKS:
             raise IntentMediationError("protected action requires an explicit control")
+    modality = str(dict(proposal.get("input_context") or {}).get("modality") or "text")
+    if modality == "voice":
+        binding_reason = _voice_dialog_binding_reason(
+            proposal.get("dialog_binding"),
+            [act],
+            source_message_id=str(proposal.get("source_message_id") or ""),
+            now=now or _now(),
+            actor_id=actor_id,
+        )
+        if binding_reason:
+            raise IntentMediationError(binding_reason)
     result = conversation_interactions.submit_response(
         interaction_id,
         actor_id=actor_id,
@@ -400,6 +522,8 @@ def commit_proposal(
             "proposal_id": proposal["proposal_id"],
             "act_id": act["act_id"],
             "model": proposal["model"],
+            "modality": modality,
+            "dialog_binding": copy.deepcopy(proposal.get("dialog_binding")),
         },
         now=now,
     )

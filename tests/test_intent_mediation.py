@@ -13,7 +13,7 @@ def _choice(
     conversation_id: str,
     interaction_id: str,
     *,
-    risk: str = "local_reversible",
+    risk: str = "read",
     confirmation_required: bool = False,
 ) -> dict[str, object]:
     return conversation_interactions.create_interaction(
@@ -46,7 +46,7 @@ def _choice(
                 "label": "Implement directly",
                 "command": "builder.route.automation",
                 "value": "automation",
-                "risk": "local_reversible",
+                "risk": "read",
                 "confirmation_required": False,
                 "expected_generation": 7,
                 "target_ref": {"kind": "workflow", "id": "change.1", "generation": 7},
@@ -191,6 +191,107 @@ def test_protected_action_requires_explicit_control() -> None:
 
     assert proposal["disposition"] == "clarification_required"
     assert proposal["clarification"]["reason_code"] == "protected_action_requires_explicit_control"
+
+
+def test_voice_answer_requires_exact_live_dialog_binding() -> None:
+    interaction = _choice("conv.voice.bound", "interaction.voice.bound")
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("voice"),
+        now="2026-10-07T10:00:00+00:00",
+    )
+    missing = intent_mediation.propose_intent(
+        interaction["conversation_id"],
+        "message.voice.missing",
+        "first",
+        modality="voice",
+        explicit_interaction_id=interaction["interaction_id"],
+        now="2026-10-07T10:00:01+00:00",
+    )
+    binding = {
+        "schema": "adaos.conversation.dialog_binding.v1",
+        "interaction_id": interaction["interaction_id"],
+        "interaction_generation": 0,
+        "presentation_id": presentation["presentation_id"],
+        "session_ref": {"kind": "voice_session", "id": "voice-session-1"},
+        "participant_ref": {"kind": "user", "id": "user:local"},
+        "source_message_id": "message.voice.bound",
+        "opened_at": "2026-10-07T10:00:00+00:00",
+        "expires_at": "2026-10-07T10:00:30+00:00",
+    }
+    proposal = intent_mediation.propose_intent(
+        interaction["conversation_id"],
+        "message.voice.bound",
+        "first",
+        modality="voice",
+        explicit_interaction_id=interaction["interaction_id"],
+        dialog_binding=binding,
+        now="2026-10-07T10:00:01+00:00",
+    )
+    result = intent_mediation.commit_proposal(
+        proposal["proposal_id"],
+        actor_id="user:local",
+        idempotency_key="voice:bound:first",
+        now="2026-10-07T10:00:02+00:00",
+    )
+
+    assert missing["disposition"] == "clarification_required"
+    assert missing["clarification"]["reason_code"] == "voice_dialog_binding_required"
+    assert proposal["disposition"] == "proposed"
+    assert result["response"]["assurance_receipt"]["mode"] == "voice_permitted"
+    assert result["response"]["assurance_receipt"]["presentation_id"] == presentation[
+        "presentation_id"
+    ]
+
+
+def test_voice_dialog_binding_rejects_wrong_participant_and_expiry() -> None:
+    interaction = _choice("conv.voice.guard", "interaction.voice.guard")
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("voice"),
+        now="2026-10-07T11:00:00+00:00",
+    )
+    binding = {
+        "schema": "adaos.conversation.dialog_binding.v1",
+        "interaction_id": interaction["interaction_id"],
+        "interaction_generation": 0,
+        "presentation_id": presentation["presentation_id"],
+        "session_ref": {"kind": "voice_session", "id": "voice-session-2"},
+        "participant_ref": {"kind": "user", "id": "user:expected"},
+        "source_message_id": "message.voice.guard",
+        "opened_at": "2026-10-07T11:00:00+00:00",
+        "expires_at": "2026-10-07T11:00:10+00:00",
+    }
+    proposal = intent_mediation.propose_intent(
+        interaction["conversation_id"],
+        "message.voice.guard",
+        "first",
+        modality="voice",
+        explicit_interaction_id=interaction["interaction_id"],
+        dialog_binding=binding,
+        now="2026-10-07T11:00:01+00:00",
+    )
+
+    with pytest.raises(
+        intent_mediation.IntentMediationError,
+        match="voice_dialog_participant_mismatch",
+    ):
+        intent_mediation.commit_proposal(
+            proposal["proposal_id"],
+            actor_id="user:other",
+            idempotency_key="voice:wrong-participant",
+            now="2026-10-07T11:00:02+00:00",
+        )
+    with pytest.raises(
+        intent_mediation.IntentMediationError,
+        match="voice_dialog_expired",
+    ):
+        intent_mediation.commit_proposal(
+            proposal["proposal_id"],
+            actor_id="user:expected",
+            idempotency_key="voice:expired",
+            now="2026-10-07T11:00:11+00:00",
+        )
 
 
 def test_utf8_persistence_correction_and_rates() -> None:
