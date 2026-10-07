@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 from typing import Any, Mapping
 
 
@@ -137,6 +138,7 @@ def normalize_action_semantics(action: Mapping[str, Any]) -> dict[str, Any]:
             "records_consent": bool(declared.get("records_consent", confirmation)),
             "terminal": bool(declared.get("terminal", True)),
             "effect_ref": _exact_effect_ref(declared.get("effect_ref")),
+            "schedule": copy.deepcopy(dict(declared.get("schedule") or {})) or None,
             "assertion_required": bool(declared.get("assertion_required", False)),
         }
         if not result["effect_class"] or not result["operation"] or not result["executor"]:
@@ -159,11 +161,40 @@ def normalize_action_semantics(action: Mapping[str, Any]) -> dict[str, Any]:
     effect_ref = _exact_effect_ref(declared.get("effect_ref"))
     if policy.pop("effect_ref_required") and effect_ref is None:
         raise ActionSemanticsError(f"{preset} action requires an exact effect_ref")
+    schedule = None
+    if preset == "snooze":
+        declared_schedule = dict(declared.get("schedule") or {})
+        resume_at = str(declared_schedule.get("resume_at") or "").strip()
+        consent_deadline = str(action.get("_interaction_expires_at") or "").strip()
+        observed_at = str(action.get("_now") or "").strip()
+        if not resume_at or not consent_deadline or not observed_at:
+            raise ActionSemanticsError(
+                "snooze action requires resume_at and an expiring interaction"
+            )
+        try:
+            resume = datetime.fromisoformat(resume_at.replace("Z", "+00:00"))
+            deadline = datetime.fromisoformat(consent_deadline.replace("Z", "+00:00"))
+            observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ActionSemanticsError("snooze schedule timestamps are invalid") from exc
+        if resume.tzinfo is None or deadline.tzinfo is None or observed.tzinfo is None:
+            raise ActionSemanticsError("snooze schedule timestamps must include a timezone")
+        if resume <= observed:
+            raise ActionSemanticsError("snooze resume_at must be in the future")
+        if resume >= deadline:
+            raise ActionSemanticsError("snooze cannot reach or extend the consent deadline")
+        schedule = {
+            "resume_at": resume_at,
+            "consent_deadline": consent_deadline,
+        }
+    elif declared.get("schedule") is not None:
+        raise ActionSemanticsError(f"{preset} action cannot declare a snooze schedule")
     return {
         "schema": ACTION_SEMANTICS_SCHEMA,
         "preset": preset,
         **policy,
         "effect_ref": effect_ref,
+        "schedule": schedule,
         "assertion_required": True,
     }
 
@@ -199,6 +230,10 @@ def validate_effect_assertion(
     }.get(preset)
     if required_flag and value.get(required_flag) is not True:
         raise ActionSemanticsError(f"{preset} effect assertion requires {required_flag}=true")
+    if preset == "snooze":
+        expected_resume = str(dict(semantics.get("schedule") or {}).get("resume_at") or "")
+        if str(value.get("resume_at") or "") != expected_resume:
+            raise ActionSemanticsError("snooze effect assertion resume_at does not match")
     return value
 
 

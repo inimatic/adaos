@@ -446,6 +446,7 @@ def test_standard_action_presets_are_semantic_contracts_not_labels() -> None:
         "records_consent": False,
         "terminal": False,
         "effect_ref": None,
+        "schedule": None,
         "assertion_required": True,
     }
 
@@ -544,6 +545,151 @@ def test_declared_test_requires_exact_effect_and_completion_assertion() -> None:
     )
     assert completed["status"] == "succeeded"
     assert completed["command"]["semantics"]["preset"] == "test"
+
+
+def test_snooze_is_bounded_by_the_existing_consent_deadline() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.snooze",
+        owner="skill:test",
+        prompt="Remind me later",
+        input_spec={
+            "kind": "choice",
+            "required_fields": [],
+            "choices": [{"value": "later", "label": "In one hour", "description": None}],
+            "sensitive": False,
+        },
+        actions=[
+            {
+                "action_id": "later",
+                "label": "In one hour",
+                "command": "interaction.snooze",
+                "value": "later",
+                "risk": "read",
+                "confirmation_required": False,
+                "preset": "snooze",
+                "semantics": {"schedule": {"resume_at": "2026-10-07T11:00:00+00:00"}},
+            }
+        ],
+        interaction_id="interaction.snooze",
+        expires_at="2026-10-07T12:00:00+00:00",
+        now="2026-10-07T10:00:00+00:00",
+    )
+
+    assert interaction["actions"][0]["semantics"]["schedule"] == {
+        "resume_at": "2026-10-07T11:00:00+00:00",
+        "consent_deadline": "2026-10-07T12:00:00+00:00",
+    }
+
+    for resume_at in ("2026-10-07T12:00:00+00:00", "2026-10-07T13:00:00+00:00"):
+        with pytest.raises(
+            conversation_interactions.ConversationInteractionError,
+            match="cannot reach or extend the consent deadline",
+        ):
+            conversation_interactions.create_interaction(
+                conversation_id=f"conv.snooze.invalid.{resume_at}",
+                owner="skill:test",
+                prompt="Remind me later",
+                actions=[
+                    {
+                        "action_id": "later",
+                        "label": "Later",
+                        "command": "interaction.snooze",
+                        "value": "later",
+                        "risk": "read",
+                        "confirmation_required": False,
+                        "preset": "snooze",
+                        "semantics": {"schedule": {"resume_at": resume_at}},
+                    }
+                ],
+                interaction_id=f"interaction.snooze.invalid.{resume_at}",
+                expires_at="2026-10-07T12:00:00+00:00",
+                now="2026-10-07T10:00:00+00:00",
+            )
+
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="requires resume_at and an expiring interaction",
+    ):
+        conversation_interactions.create_interaction(
+            conversation_id="conv.snooze.no-deadline",
+            owner="skill:test",
+            prompt="Remind me later",
+            actions=[
+                {
+                    "action_id": "later",
+                    "label": "Later",
+                    "command": "interaction.snooze",
+                    "value": "later",
+                    "risk": "read",
+                    "confirmation_required": False,
+                    "preset": "snooze",
+                    "semantics": {"schedule": {"resume_at": "2026-10-07T11:00:00+00:00"}},
+                }
+            ],
+            interaction_id="interaction.snooze.no-deadline",
+            now="2026-10-07T10:00:00+00:00",
+        )
+
+
+def test_snooze_completion_asserts_the_exact_resume_time() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.snooze.assertion",
+        owner="skill:test",
+        prompt="Remind me later",
+        input_spec={
+            "kind": "choice",
+            "required_fields": [],
+            "choices": [{"value": "later", "label": "Later", "description": None}],
+            "sensitive": False,
+        },
+        actions=[
+            {
+                "action_id": "later",
+                "label": "Later",
+                "command": "interaction.snooze",
+                "value": "later",
+                "risk": "read",
+                "confirmation_required": False,
+                "preset": "snooze",
+                "semantics": {"schedule": {"resume_at": "2026-10-07T11:00:00+00:00"}},
+            }
+        ],
+        interaction_id="interaction.snooze.assertion",
+        expires_at="2026-10-07T12:00:00+00:00",
+        now="2026-10-07T10:00:00+00:00",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+        now="2026-10-07T10:01:00+00:00",
+    )
+    accepted = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:local",
+        idempotency_key="snooze:assertion",
+        now="2026-10-07T10:02:00+00:00",
+    )
+    dispatch = conversation_store.claim_interaction_dispatch(
+        accepted["response"]["response_id"],
+        lease_owner="worker:snooze",
+    )
+    with pytest.raises(ValueError, match="resume_at does not match"):
+        conversation_store.complete_interaction_dispatch(
+            dispatch["dispatch_id"],
+            lease_owner="worker:snooze",
+            status="succeeded",
+            outcome={
+                "effect_assertion": {
+                    "schema": "adaos.conversation.action_effect_assertion.v1",
+                    "preset": "snooze",
+                    "operation": "snooze_interaction",
+                    "effect_ref": None,
+                    "observed": True,
+                    "domain_mutated": False,
+                    "resume_at": "2026-10-07T11:30:00+00:00",
+                }
+            },
+        )
 
 
 def test_semantic_change_atomically_supersedes_pending_dispatch() -> None:

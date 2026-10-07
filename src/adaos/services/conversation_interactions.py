@@ -206,6 +206,12 @@ def _validate(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
         for action in record.get("actions") or []:
             if isinstance(action, dict) and "semantics" not in action:
                 action["semantics"] = normalize_action_semantics(action)
+            elif isinstance(action, dict) and isinstance(action.get("semantics"), dict):
+                # ``schedule`` was added to the v1 action-semantics envelope
+                # after the other fields had already shipped.  Preserve
+                # readability of those persisted records without inferring a
+                # snooze policy that the producer never declared.
+                action["semantics"].setdefault("schedule", None)
     elif name == INTERACTION_PRESENTATION_SCHEMA and "plan" not in record:
         record["plan"] = {
             "schema": INTERACTION_PRESENTATION_PLAN_SCHEMA,
@@ -671,7 +677,14 @@ def create_interaction(
             "command_context_ref": copy.deepcopy(item.get("command_context_ref")) if isinstance(item.get("command_context_ref"), Mapping) else None,
         }
         try:
-            action["semantics"] = normalize_action_semantics({**dict(item), **action})
+            action["semantics"] = normalize_action_semantics(
+                {
+                    **dict(item),
+                    **action,
+                    "_interaction_expires_at": expires_at,
+                    "_now": timestamp,
+                }
+            )
         except ActionSemanticsError as exc:
             raise ConversationInteractionError(str(exc)) from exc
         normalized_actions.append(action)

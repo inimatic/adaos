@@ -56,7 +56,7 @@
           "confirmation_required": { "type": "boolean" },
           "semantics": {
             "type": "object",
-            "required": ["schema", "preset", "effect_class", "operation", "executor", "mutates_domain", "records_consent", "terminal", "effect_ref", "assertion_required"],
+            "required": ["schema", "preset", "effect_class", "operation", "executor", "mutates_domain", "records_consent", "terminal", "effect_ref", "schedule", "assertion_required"],
             "properties": {
               "schema": { "const": "adaos.conversation.action_semantics.v1" },
               "preset": { "enum": ["details", "preview", "open", "test", "snooze", "defer", "refuse", "cancel", "compensate", "custom"] },
@@ -73,6 +73,15 @@
                   "kind": { "type": "string", "minLength": 1, "maxLength": 80 },
                   "id": { "type": "string", "minLength": 1, "maxLength": 240 },
                   "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+                },
+                "additionalProperties": false
+              },
+              "schedule": {
+                "type": ["object", "null"],
+                "required": ["resume_at", "consent_deadline"],
+                "properties": {
+                  "resume_at": { "type": "string", "format": "date-time" },
+                  "consent_deadline": { "type": "string", "format": "date-time" }
                 },
                 "additionalProperties": false
               },
