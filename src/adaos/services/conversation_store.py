@@ -417,6 +417,26 @@ _SCHEMA = (
     ON conversation_interaction_responses(interaction_id, created_at);
     """,
     """
+    CREATE TABLE IF NOT EXISTS conversation_interaction_dispatches (
+        dispatch_id TEXT PRIMARY KEY,
+        interaction_id TEXT NOT NULL,
+        interaction_generation INTEGER NOT NULL,
+        response_id TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        command_digest TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        lease_owner TEXT,
+        lease_until REAL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_dispatches_status
+    ON conversation_interaction_dispatches(status, updated_at);
+    """,
+    """
     CREATE TABLE IF NOT EXISTS conversation_intent_proposals (
         proposal_id TEXT PRIMARY KEY,
         conversation_id TEXT NOT NULL,
@@ -2610,6 +2630,35 @@ def commit_interaction_response(
 
     normalized_response = _json_dump(response_value)
     response_digest = hashlib.sha256(normalized_response.encode("utf-8")).hexdigest()
+    consumed_command = response_value.get("consumed_command")
+    dispatch_value: dict[str, Any] | None = None
+    if isinstance(consumed_command, Mapping) and consumed_command:
+        normalized_command = json.dumps(
+            consumed_command,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        dispatch_value = {
+            "schema": "adaos.conversation.interaction_dispatch.v1",
+            "dispatch_id": f"dispatch:{response_id}",
+            "interaction_id": interaction_id,
+            "interaction_generation": int(response_value.get("interaction_generation") or 0),
+            "response_id": response_id,
+            "status": "pending",
+            "command": dict(consumed_command),
+            "command_digest": "sha256:" + hashlib.sha256(normalized_command.encode("utf-8")).hexdigest(),
+            "workflow_ref": interaction_value.get("workflow_ref"),
+            "actor_id": str(response_value.get("actor_id") or ""),
+            "idempotency_key": f"dispatch:{response_id}",
+            "assurance_receipt": response_value.get("assurance_receipt"),
+            "attempt_count": 0,
+            "lease_owner": None,
+            "lease_until": None,
+            "outcome": None,
+            "created_at": str(response_value.get("created_at") or ""),
+            "updated_at": str(response_value.get("created_at") or ""),
+        }
     incoming_request_digest = str(
         dict(response_value.get("metadata") or {}).get("request_digest") or ""
     ).strip()
@@ -2635,9 +2684,14 @@ def commit_interaction_response(
             con.rollback()
             duplicate = dict(stored_response)
             duplicate["duplicate"] = True
+            stored_dispatch = con.execute(
+                "SELECT payload_json FROM conversation_interaction_dispatches WHERE response_id=?",
+                (str(stored_response.get("response_id") or ""),),
+            ).fetchone()
             return {
                 "interaction": _json_load(current["payload_json"], {}) if current else None,
                 "response": duplicate,
+                "dispatch": _json_load(stored_dispatch["payload_json"], {}) if stored_dispatch else None,
                 "duplicate": True,
             }
 
@@ -2673,6 +2727,30 @@ def commit_interaction_response(
                 str(response_value.get("created_at") or ""),
             ),
         )
+        if dispatch_value is not None:
+            con.execute(
+                """
+                INSERT INTO conversation_interaction_dispatches(
+                    dispatch_id, interaction_id, interaction_generation,
+                    response_id, status, command_digest, payload_json,
+                    lease_owner, lease_until, attempt_count, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    dispatch_value["dispatch_id"],
+                    interaction_id,
+                    dispatch_value["interaction_generation"],
+                    response_id,
+                    dispatch_value["status"],
+                    dispatch_value["command_digest"],
+                    _json_dump(dispatch_value),
+                    None,
+                    None,
+                    0,
+                    dispatch_value["created_at"],
+                    dispatch_value["updated_at"],
+                ),
+            )
         con.execute(
             """
             UPDATE conversation_interactions SET
@@ -2698,13 +2776,15 @@ def commit_interaction_response(
                 int(expected_generation),
             ),
         )
-        if con.total_changes != 2:
+        expected_changes = 3 if dispatch_value is not None else 2
+        if con.total_changes != expected_changes:
             con.rollback()
-            raise ValueError("interaction response transaction did not close both writes")
+            raise ValueError("interaction response transaction did not close every required write")
         con.commit()
     return {
         "interaction": dict(interaction_value),
         "response": dict(response_value),
+        "dispatch": dict(dispatch_value) if dispatch_value is not None else None,
         "duplicate": False,
     }
 
@@ -2746,6 +2826,170 @@ def list_interaction_responses(interaction_id: str) -> list[dict[str, Any]]:
             (str(interaction_id or "").strip(),),
         ).fetchall()
     return [_json_load(row["payload_json"], {}) for row in rows]
+
+
+def get_interaction_dispatch(
+    *,
+    dispatch_id: str | None = None,
+    response_id: str | None = None,
+) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    if str(dispatch_id or "").strip():
+        field, value = "dispatch_id", str(dispatch_id).strip()
+    elif str(response_id or "").strip():
+        field, value = "response_id", str(response_id).strip()
+    else:
+        raise ValueError("dispatch_id or response_id is required")
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            f"SELECT payload_json FROM conversation_interaction_dispatches WHERE {field}=?",
+            (value,),
+        ).fetchone()
+    return _json_load(row["payload_json"], {}) if row else None
+
+
+def claim_interaction_dispatch(
+    response_id: str,
+    *,
+    lease_owner: str,
+    lease_seconds: float = 30.0,
+    now_epoch: float | None = None,
+    now_iso: str | None = None,
+) -> dict[str, Any] | None:
+    response_key = str(response_id or "").strip()
+    owner = str(lease_owner or "").strip()
+    if not response_key or not owner:
+        raise ValueError("response_id and lease_owner are required")
+    if not ensure_schema():
+        return None
+    current_epoch = float(time.time() if now_epoch is None else now_epoch)
+    timestamp = str(now_iso or time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_epoch)))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute(
+            "SELECT * FROM conversation_interaction_dispatches WHERE response_id=?",
+            (response_key,),
+        ).fetchone()
+        if row is None:
+            con.rollback()
+            return None
+        record = _json_load(row["payload_json"], {})
+        status = str(record.get("status") or "")
+        if status not in {"pending", "dispatching"}:
+            con.rollback()
+            return record
+        active_lease = float(row["lease_until"] or 0) > current_epoch
+        if status == "dispatching" and active_lease:
+            con.rollback()
+            raise ValueError("interaction dispatch already has an active executor lease")
+        if int(record.get("attempt_count") or 0) >= 5:
+            con.rollback()
+            raise ValueError("interaction dispatch attempt budget is exhausted")
+        record.update(
+            {
+                "status": "dispatching",
+                "lease_owner": owner,
+                "lease_until": current_epoch + max(1.0, float(lease_seconds)),
+                "attempt_count": int(record.get("attempt_count") or 0) + 1,
+                "updated_at": timestamp,
+            }
+        )
+        con.execute(
+            """
+            UPDATE conversation_interaction_dispatches
+            SET status=?, payload_json=?, lease_owner=?, lease_until=?,
+                attempt_count=?, updated_at=?
+            WHERE dispatch_id=?
+            """,
+            (
+                record["status"],
+                _json_dump(record),
+                owner,
+                record["lease_until"],
+                record["attempt_count"],
+                timestamp,
+                record["dispatch_id"],
+            ),
+        )
+        con.commit()
+    return record
+
+
+def complete_interaction_dispatch(
+    dispatch_id: str,
+    *,
+    lease_owner: str,
+    status: str,
+    outcome: Mapping[str, Any] | None = None,
+    now_epoch: float | None = None,
+    now_iso: str | None = None,
+) -> dict[str, Any] | None:
+    allowed = {
+        "dispatched", "succeeded", "failed", "rejected", "input_required",
+        "outcome_unknown", "cancelled",
+    }
+    selected_status = str(status or "").strip()
+    if selected_status not in allowed:
+        raise ValueError("invalid interaction dispatch completion status")
+    identifier = str(dispatch_id or "").strip()
+    owner = str(lease_owner or "").strip()
+    if not identifier or not owner:
+        raise ValueError("dispatch_id and lease_owner are required")
+    if not ensure_schema():
+        return None
+    current_epoch = float(time.time() if now_epoch is None else now_epoch)
+    timestamp = str(now_iso or time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(current_epoch)))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute(
+            "SELECT * FROM conversation_interaction_dispatches WHERE dispatch_id=?",
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            con.rollback()
+            return None
+        record = _json_load(row["payload_json"], {})
+        existing_status = str(record.get("status") or "")
+        if existing_status == "pending":
+            con.rollback()
+            raise ValueError("interaction dispatch must be claimed before completion")
+        if existing_status == "dispatched" and selected_status != "dispatched":
+            expected_attempt = str(dict(record.get("outcome") or {}).get("attempt_id") or "")
+            supplied_attempt = str(dict(outcome or {}).get("attempt_id") or "")
+            if not expected_attempt or supplied_attempt != expected_attempt:
+                con.rollback()
+                raise ValueError("interaction dispatch outcome does not match activity attempt")
+        elif existing_status not in {"pending", "dispatching"}:
+            con.rollback()
+            if existing_status != selected_status:
+                raise ValueError("interaction dispatch already has another outcome")
+            return record
+        if existing_status == "dispatching" and str(row["lease_owner"] or "") != owner:
+            con.rollback()
+            raise ValueError("interaction dispatch completion owner does not match lease")
+        record.update(
+            {
+                "status": selected_status,
+                "lease_owner": None,
+                "lease_until": None,
+                "outcome": dict(outcome or {}),
+                "updated_at": timestamp,
+            }
+        )
+        con.execute(
+            """
+            UPDATE conversation_interaction_dispatches
+            SET status=?, payload_json=?, lease_owner=NULL, lease_until=NULL,
+                updated_at=? WHERE dispatch_id=?
+            """,
+            (selected_status, _json_dump(record), timestamp, identifier),
+        )
+        con.commit()
+    return record
 
 
 def save_intent_proposal(record: Mapping[str, Any], *, create_only: bool = False) -> dict[str, Any] | None:

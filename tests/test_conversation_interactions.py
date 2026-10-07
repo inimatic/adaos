@@ -155,6 +155,9 @@ def test_chat_request_is_durable_materializes_actions_and_resumes_by_token() -> 
     assert answered["response"]["assurance_receipt"]["mode"] == "trusted_interface_required"
     assert answered["response"]["assurance_receipt"]["presentation_id"] == result["presentation"]["presentation_id"]
     assert duplicate["duplicate"] is True
+    assert answered["dispatch"]["status"] == "pending"
+    assert answered["dispatch"]["command"] == answered["response"]["consumed_command"]
+    assert duplicate["dispatch"]["dispatch_id"] == answered["dispatch"]["dispatch_id"]
     assert conversation_store.get_interaction("interaction.builder.route")["status"] == "answered"
 
 
@@ -306,8 +309,80 @@ def test_response_and_generation_are_committed_atomically() -> None:
         )
 
     assert conversation_store.get_interaction_response("response.atomic.loser") is None
+    assert conversation_store.get_interaction_dispatch(response_id="response.atomic.loser") is None
+    assert conversation_store.get_interaction_dispatch(
+        response_id=str(accepted["response"]["response_id"])
+    )["status"] == "pending"
     assert conversation_store.get_interaction("interaction.atomic")["generation"] == 1
     assert len(conversation_store.list_interaction_responses("interaction.atomic")) == 1
+
+
+def test_dispatch_obligation_lease_recovers_before_effect_and_closes_once() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.dispatch-lease",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.dispatch-lease",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    accepted = conversation_interactions.submit_action_token(
+        presentation["actions"][0]["token"],
+        actor_id="user:local",
+        idempotency_key="dispatch-lease:first",
+    )
+    response_id = str(accepted["response"]["response_id"])
+    first = conversation_store.claim_interaction_dispatch(
+        response_id,
+        lease_owner="worker:one",
+        lease_seconds=10,
+        now_epoch=100,
+        now_iso="2026-10-07T00:00:00+00:00",
+    )
+    assert first["status"] == "dispatching"
+    assert first["attempt_count"] == 1
+    with pytest.raises(ValueError, match="active executor lease"):
+        conversation_store.claim_interaction_dispatch(
+            response_id,
+            lease_owner="worker:two",
+            now_epoch=105,
+        )
+    recovered = conversation_store.claim_interaction_dispatch(
+        response_id,
+        lease_owner="worker:two",
+        now_epoch=111,
+        now_iso="2026-10-07T00:00:11+00:00",
+    )
+    assert recovered["attempt_count"] == 2
+    completed = conversation_store.complete_interaction_dispatch(
+        recovered["dispatch_id"],
+        lease_owner="worker:two",
+        status="succeeded",
+        outcome={"result": "ok"},
+        now_epoch=112,
+        now_iso="2026-10-07T00:00:12+00:00",
+    )
+    assert completed["status"] == "succeeded"
+    replay = conversation_store.complete_interaction_dispatch(
+        recovered["dispatch_id"],
+        lease_owner="worker:two",
+        status="succeeded",
+        outcome={"result": "ignored-idempotent-replay"},
+        now_epoch=113,
+    )
+    assert replay == completed
+    with pytest.raises(ValueError, match="another outcome"):
+        conversation_store.complete_interaction_dispatch(
+            recovered["dispatch_id"],
+            lease_owner="worker:two",
+            status="failed",
+            outcome={"reason": "late"},
+            now_epoch=114,
+        )
 
 
 def test_action_token_rejects_actor_outside_principal_scope() -> None:

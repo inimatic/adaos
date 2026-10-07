@@ -198,6 +198,17 @@ class WorkflowActivityRunner:
                 "outcome_unknown",
                 result={"reason_code": "handler_exception_after_effect_start", "error": str(exc)[:1000]},
             )
+            dispatch_id = str(binding.get("interaction_dispatch_id") or "").strip()
+            if dispatch_id:
+                conversation_store.complete_interaction_dispatch(
+                    dispatch_id,
+                    lease_owner=self.executor_id,
+                    status="outcome_unknown",
+                    outcome={
+                        "attempt_id": attempt["attempt_id"],
+                        "reason_code": "handler_exception_after_effect_start",
+                    },
+                )
             if conversation_id:
                 durable_delivery.enqueue_response(
                     conversation_id,
@@ -221,6 +232,18 @@ class WorkflowActivityRunner:
             result=dict(result.get("data") or result),
             evidence_refs=tuple(str(item) for item in result.get("evidence_refs") or []),
         )
+        dispatch_id = str(binding.get("interaction_dispatch_id") or "").strip()
+        if dispatch_id:
+            conversation_store.complete_interaction_dispatch(
+                dispatch_id,
+                lease_owner=self.executor_id,
+                status=outcome,
+                outcome={
+                    "attempt_id": attempt["attempt_id"],
+                    "result": copy.deepcopy(dict(result.get("data") or result)),
+                    "evidence_refs": list(result.get("evidence_refs") or []),
+                },
+            )
         if conversation_id:
             category = "input_required" if outcome == "input_required" else "terminal"
             durable_delivery.enqueue_response(
@@ -321,6 +344,13 @@ def prepare_interaction_invocation(
     consumed = dict(stored_response.get("consumed_command") or {})
     if not consumed:
         raise WorkflowExecutionError("interaction response does not contain a consumed command")
+    dispatch = conversation_store.get_interaction_dispatch(
+        response_id=str(stored_response["response_id"])
+    )
+    if dispatch is None:
+        raise WorkflowExecutionError("interaction response has no durable dispatch obligation")
+    if str(dispatch.get("command_digest") or "") != _digest(consumed):
+        raise WorkflowExecutionError("interaction dispatch command digest does not match response")
     workflow = _ref(interaction.get("workflow_ref"), fallback_kind="workflow")
     if workflow is None or not workflow.get("version"):
         raise WorkflowExecutionError("interaction is not bound to an exact workflow definition")
@@ -420,6 +450,7 @@ def prepare_interaction_invocation(
         "trace": selected_trace,
         "metadata": {
             "presentation_id": stored_response.get("presentation_id"),
+            "interaction_dispatch_id": dispatch["dispatch_id"],
             "source_message_ref": copy.deepcopy(stored_response.get("source_message_ref")),
             "turn_trace_id": selected_turn_trace_id,
             "trace": selected_trace,
@@ -688,6 +719,47 @@ def execute_invocation(
 
     record = validate_workflow_record(WORKFLOW_INVOCATION_SCHEMA, invocation)
     command = dict(record["command"])
+    dispatch: dict[str, Any] | None = None
+    dispatch_owner = f"workflow:{record['invocation_id']}"
+    response_ref = dict(record.get("response_ref") or {})
+    if persist and str(response_ref.get("id") or "").strip():
+        stored_response = conversation_store.get_interaction_response(str(response_ref["id"]))
+        if stored_response is None:
+            raise WorkflowExecutionError("interaction invocation response disappeared")
+        dispatch = conversation_store.get_interaction_dispatch(
+            response_id=str(response_ref["id"])
+        )
+        if dispatch is None:
+            raise WorkflowExecutionError("interaction invocation has no durable dispatch obligation")
+        if str(dict(record.get("metadata") or {}).get("interaction_dispatch_id") or "") != str(dispatch["dispatch_id"]):
+            raise WorkflowExecutionError("interaction invocation dispatch binding changed")
+        if str(dispatch.get("command_digest") or "") != _digest(
+            dict(stored_response.get("consumed_command") or {})
+        ):
+            raise WorkflowExecutionError("interaction dispatch command binding changed")
+        expected_invocation = prepare_interaction_invocation(
+            stored_response,
+            source=str(record["source"]),
+            now=str(record["created_at"]),
+        )
+        for field in ("command", "target_ref", "risk", "confirmation_required"):
+            if _digest(record.get(field)) != _digest(expected_invocation.get(field)):
+                raise WorkflowExecutionError(
+                    f"interaction invocation {field} differs from durable dispatch"
+                )
+        if str(dispatch.get("status") or "") not in {"pending", "dispatching"}:
+            outcome = dict(dispatch.get("outcome") or {})
+            return {
+                "accepted": str(dispatch.get("status")) in {"dispatched", "succeeded"},
+                "status": str(dispatch.get("status")),
+                "reason_code": outcome.get("reason_code"),
+                "invocation": record,
+                "decision": None,
+                "commit": None,
+                "responses": [],
+                "dispatch": dispatch,
+                "reconciled": True,
+            }
     compiled = definition if isinstance(definition, CompiledWorkflowDefinition) else compile_definition(definition)
     adapters.bind(compiled)
     if command["workflow_type"] != compiled.workflow_type:
@@ -714,7 +786,15 @@ def execute_invocation(
                 "decision": None,
                 "commit": None,
                 "responses": [],
+                "dispatch": dispatch,
             }
+    if dispatch is not None:
+        dispatch = conversation_store.claim_interaction_dispatch(
+            str(response_ref["id"]),
+            lease_owner=dispatch_owner,
+        )
+        if dispatch is None:
+            raise WorkflowExecutionError("interaction dispatch disappeared before execution")
     decision = apply_workflow_command(
         compiled,
         current,
@@ -730,6 +810,13 @@ def execute_invocation(
             event["trace"] = copy.deepcopy(dict(record.get("trace") or {}))
             validate_workflow_record("adaos.workflow.event.v1", event)
     if not decision["accepted"]:
+        if dispatch is not None:
+            dispatch = conversation_store.complete_interaction_dispatch(
+                str(dispatch["dispatch_id"]),
+                lease_owner=dispatch_owner,
+                status="rejected",
+                outcome={"reason_code": decision["reason_code"]},
+            )
         return {
             "accepted": False,
             "status": "rejected",
@@ -738,6 +825,7 @@ def execute_invocation(
             "decision": decision,
             "commit": None,
             "responses": [],
+            "dispatch": dispatch,
         }
     commit: dict[str, Any] | None = None
     if decision["status"] == "accepted" and persist:
@@ -757,6 +845,9 @@ def execute_invocation(
                 "reply_route_ids": _reply_route_ids(record),
                 "turn_trace_id": record.get("turn_trace_id"),
                 "trace": copy.deepcopy(dict(record.get("trace") or {})),
+                "interaction_dispatch_id": (
+                    str(dispatch["dispatch_id"]) if dispatch is not None else None
+                ),
             }
         target = dict(record.get("target_ref") or {})
         target_digest = str(target.get("digest") or "").strip() or None
@@ -778,6 +869,19 @@ def execute_invocation(
             ),
             effect_binding=effect_binding,
         )
+        if dispatch is not None:
+            activity_attempt_id = str(dict(commit or {}).get("activity_attempt_id") or "").strip()
+            completion_status = "dispatched" if activity_attempt_id else "succeeded"
+            dispatch = conversation_store.complete_interaction_dispatch(
+                str(dispatch["dispatch_id"]),
+                lease_owner=dispatch_owner,
+                status=completion_status,
+                outcome={
+                    "attempt_id": activity_attempt_id or None,
+                    "workflow_instance_id": str(command["instance_ref"]["id"]),
+                    "workflow_generation": int(dict(decision["after"])["generation"]),
+                },
+            )
     route_ids = _reply_route_ids(record)
     responses: list[dict[str, Any]] = []
     async_reply = dict(decision.get("async_reply") or {})
@@ -823,6 +927,7 @@ def execute_invocation(
         "decision": decision,
         "commit": commit,
         "responses": responses,
+        "dispatch": dispatch,
     }
 
 

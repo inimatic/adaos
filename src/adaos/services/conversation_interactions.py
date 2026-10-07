@@ -23,6 +23,7 @@ INTERACTION_REQUIREMENTS_SCHEMA = "adaos.conversation.interaction_requirements.v
 INTERACTION_PRESENTATION_SCHEMA = "adaos.conversation.interaction_presentation.v1"
 INTERACTION_PRESENTATION_PLAN_SCHEMA = "adaos.conversation.interaction_presentation_plan.v1"
 SEMANTIC_MESSAGE_SCHEMA = "adaos.conversation.semantic_message.v1"
+INTERACTION_DISPATCH_SCHEMA = "adaos.conversation.interaction_dispatch.v1"
 _PENDING_STATUSES = {"created", "projected", "awaiting_input", "partially_answered", "validation_failed"}
 _TERMINAL_STATUSES = {"completed", "expired", "cancelled", "superseded"}
 _NON_MUTATING_RISK_CLASSES = {"read", "none"}
@@ -1282,7 +1283,19 @@ def submit_response(
             raise ConversationInteractionError("interaction response idempotency conflict")
         duplicate = copy.deepcopy(existing_response)
         duplicate["duplicate"] = True
-        return {"interaction": semantic, "response": duplicate, "duplicate": True}
+        existing_dispatch = conversation_store.get_interaction_dispatch(
+            response_id=str(existing_response["response_id"])
+        )
+        return {
+            "interaction": semantic,
+            "response": duplicate,
+            "dispatch": (
+                _validate(INTERACTION_DISPATCH_SCHEMA, existing_dispatch)
+                if existing_dispatch is not None
+                else None
+            ),
+            "duplicate": True,
+        }
     if _is_expired(semantic.get("expires_at"), now=timestamp):
         expired = copy.deepcopy(semantic)
         expired["status"] = "expired"
@@ -1504,6 +1517,11 @@ def submit_response(
     return {
         "interaction": _validate(INTERACTION_SCHEMA, committed["interaction"]),
         "response": committed["response"],
+        "dispatch": (
+            _validate(INTERACTION_DISPATCH_SCHEMA, committed["dispatch"])
+            if committed.get("dispatch") is not None
+            else None
+        ),
         "duplicate": bool(committed.get("duplicate")),
     }
 

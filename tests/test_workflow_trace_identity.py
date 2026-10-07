@@ -347,16 +347,19 @@ def test_trace_spine_propagates_through_interaction_activity_and_delivery() -> N
         turn_trace_id=turn_trace_id,
         trace=trace,
     )
-    response = conversation_interactions.submit_response(
-        interaction["interaction_id"],
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+    presented_action = next(
+        item for item in presentation["actions"] if item["command"] == "start_automation"
+    )
+    response = conversation_interactions.submit_action_token(
+        presented_action["token"],
         actor_id="user:local",
-        expected_generation=0,
         idempotency_key="trace-spine:start-automation",
         values={"confirmed": True},
-        original_text="start automation",
-        proposed_action_id=action["action_id"],
-        intent_proposal=proposal,
-        metadata={"io_type": "text"},
+        metadata={"io_type": "web"},
     )["response"]
     invocation = prepare_interaction_invocation(response)
     result = execute_invocation(

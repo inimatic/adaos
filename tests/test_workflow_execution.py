@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from adaos.services import conversation_interactions, durable_delivery, workflow_persistence
+import copy
+
+import pytest
+
+from adaos.services import conversation_interactions, conversation_store, durable_delivery, workflow_persistence
 from adaos.services.builder.governed import compiled_builder_change_definition
 from adaos.services.governed_workflow import (
     WorkflowResolver,
@@ -9,6 +13,7 @@ from adaos.services.governed_workflow import (
     workflow_ref,
 )
 from adaos.services.workflow_execution import (
+    WorkflowExecutionError,
     WorkflowActivityRunner,
     WorkflowExecutorRegistration,
     WorkflowExecutorRegistry,
@@ -18,7 +23,6 @@ from adaos.services.workflow_execution import (
     prepare_interaction_invocation,
     prepare_sdk_invocation,
 )
-from adaos.services.conversational_runtime import build_workflow_intent_proposal
 from adaos.services.workflow_registry import platform_workflow_adapter_registry
 
 
@@ -205,47 +209,36 @@ def _cross_channel_invocations(
             workflow_ref=workflow,
             command_context_ref=workflow_ref("command_context", "builder:ingress"),
         )
-        presentation = conversation_interactions.negotiate_presentation(
-            interaction,
-            conversation_interactions.standard_capability_profile(channel),
+        profile = (
+            conversation_interactions.channel_capability_profile(
+                f"text:trusted-terminal:{suffix or 'default'}",
+                transport="text",
+                client="trusted-terminal",
+                surface="workflow",
+                capabilities={
+                    "text": True,
+                    "buttons": False,
+                    "bound_dialog_response": True,
+                    "trusted_interface": True,
+                    "step_up": False,
+                },
+                limits={"actions": 0},
+            )
+            if channel == "text"
+            else conversation_interactions.standard_capability_profile(channel)
         )
+        presentation = conversation_interactions.negotiate_presentation(interaction, profile)
         action = next(
             item for item in presentation["actions"] if item["command"] == "start_automation"
         )
         selected_target = action["target_ref"]
-        if channel == "text":
-            proposal = build_workflow_intent_proposal(
-                conversation_id=interaction["conversation_id"],
-                source_message_id=f"message:ingress:text{suffix}",
-                source_text="start automation",
-                workflow_type=definition.workflow_type,
-                command_id="start_automation",
-                instance_ref=workflow,
-                target_ref=selected_target,
-                interaction_id=interaction["interaction_id"],
-                action_id=action["action_id"],
-                risk="isolated_write",
-                channel="text",
-            )
-            response = conversation_interactions.submit_response(
-                interaction["interaction_id"],
-                actor_id="user:local",
-                expected_generation=0,
-                idempotency_key=f"text:start-automation{suffix}",
-                original_text="start automation",
-                values={"confirmed": True},
-                proposed_action_id=action["action_id"],
-                intent_proposal=proposal,
-                metadata={"io_type": "text"},
-            )["response"]
-        else:
-            response = conversation_interactions.submit_action_token(
-                action["token"],
-                actor_id="user:local",
-                idempotency_key=f"{channel}:start-automation{suffix}",
-                values={"confirmed": True},
-                metadata={"io_type": channel},
-            )["response"]
+        response = conversation_interactions.submit_action_token(
+            action["token"],
+            actor_id="user:local",
+            idempotency_key=f"{channel}:start-automation{suffix}",
+            values={"confirmed": True},
+            metadata={"io_type": channel},
+        )["response"]
         invocations[channel] = prepare_interaction_invocation(response)
     invocations["sdk"] = prepare_sdk_invocation(
         workflow_type=definition.workflow_type,
@@ -289,6 +282,35 @@ def test_cross_channel_ingress_harness_proves_same_guard_target_and_executor_fai
     assert {item["execution"]["reason_code"] for item in report["channels"]} == {
         "executor_unavailable"
     }
+
+
+def test_interaction_dispatch_rejects_tampered_invocation_input() -> None:
+    instance = new_instance(compiled_builder_change_definition(), "change:dispatch-tamper")
+    instance["state"] = "automation_ready"
+    invocations, definition, adapters = _cross_channel_invocations(instance, suffix=":tamper")
+    contract = adapters.get("activity", "builder.codex.run")
+    executors = WorkflowExecutorRegistry(
+        adapters,
+        (
+            WorkflowExecutorRegistration(
+                adapter_id="builder.codex.run",
+                contract_digest=contract["contract_digest"],
+                executor_id="builder.codex.worker",
+            ),
+        ),
+    )
+    tampered = copy.deepcopy(invocations["web"])
+    tampered["command"]["input"]["unexpected"] = "injected"
+
+    with pytest.raises(WorkflowExecutionError, match="differs from durable dispatch"):
+        execute_invocation(
+            tampered,
+            definition,
+            instance,
+            principal=_principal(),
+            adapters=adapters,
+            executors=executors,
+        )
 
 
 def test_activity_runner_persists_started_and_terminal_without_reexecuting_effect() -> None:
@@ -338,6 +360,11 @@ def test_activity_runner_persists_started_and_terminal_without_reexecuting_effec
     assert completed["evidence_refs"] == ["evidence:codex:accepted"]
     assert executed[0]["effect_binding"]["command_input"]["confirmed"] is True
     assert runner.run_once() is None
+    dispatch = conversation_store.get_interaction_dispatch(
+        dispatch_id=invocations["web"]["metadata"]["interaction_dispatch_id"]
+    )
+    assert dispatch["status"] == "succeeded"
+    assert dispatch["outcome"]["attempt_id"] == completed["attempt_id"]
     assert durable_delivery.get_envelope(
         f"response:{completed['attempt_id']}:started"
     )["category"] == "started"
@@ -382,6 +409,11 @@ def test_activity_runner_marks_post_effect_exception_unknown_and_never_retries()
 
     assert completed and completed["status"] == "outcome_unknown"
     assert runner.run_once() is None
+    dispatch = conversation_store.get_interaction_dispatch(
+        dispatch_id=invocations["web"]["metadata"]["interaction_dispatch_id"]
+    )
+    assert dispatch["status"] == "outcome_unknown"
+    assert dispatch["outcome"]["attempt_id"] == completed["attempt_id"]
     recovery = workflow_persistence.recovery_report(instance["instance_id"])
     assert recovery["safe_resume"] == []
     assert [item["attempt_id"] for item in recovery["reconciliation_required"]] == [

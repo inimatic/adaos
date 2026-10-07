@@ -91,4 +91,13 @@ def test_sdk_owns_instance_interaction_and_execution(tmp_path: Path, monkeypatch
     )
 
     assert result["accepted"] is True
+    assert result["dispatch"]["status"] == "succeeded"
+    replay = sdk_workflow.invoke_interaction_response(
+        definition,
+        "sdk-workflow:1",
+        response,
+        actor_id="user:local",
+    )
+    assert replay["reconciled"] is True
+    assert replay["dispatch"]["status"] == "succeeded"
     assert sdk_workflow.ensure_instance(definition, "sdk-workflow:1")["state"] == "done"

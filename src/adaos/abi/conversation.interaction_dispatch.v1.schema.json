@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.interaction_dispatch.v1",
+  "title": "AdaOS Interaction Dispatch Obligation",
+  "type": "object",
+  "required": [
+    "schema", "dispatch_id", "interaction_id", "interaction_generation",
+    "response_id", "status", "command", "command_digest", "workflow_ref",
+    "actor_id", "idempotency_key", "assurance_receipt", "attempt_count",
+    "lease_owner", "lease_until", "outcome", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.interaction_dispatch.v1" },
+    "dispatch_id": { "type": "string", "minLength": 1, "maxLength": 260 },
+    "interaction_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "interaction_generation": { "type": "integer", "minimum": 0 },
+    "response_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "status": { "enum": ["pending", "dispatching", "dispatched", "succeeded", "failed", "rejected", "input_required", "outcome_unknown", "cancelled"] },
+    "command": { "type": "object" },
+    "command_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "workflow_ref": { "type": ["object", "null"] },
+    "actor_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "assurance_receipt": { "type": ["object", "null"] },
+    "attempt_count": { "type": "integer", "minimum": 0 },
+    "lease_owner": { "type": ["string", "null"], "maxLength": 240 },
+    "lease_until": { "type": ["number", "null"] },
+    "outcome": { "type": ["object", "null"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}
