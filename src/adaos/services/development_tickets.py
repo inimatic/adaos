@@ -1483,6 +1483,56 @@ def _autonomous_repair_qualification(ticket: Mapping[str, Any]) -> dict[str, Any
     return qualification
 
 
+def _builder_execution_started(ticket: Mapping[str, Any]) -> bool:
+    """Distinguish a created repair placeholder from Builder execution.
+
+    A handoff creates the repair record and sets ``in_builder`` before local
+    qualification can run. That placeholder must remain requalifiable; once an
+    Automation session/task or a non-planning work state exists, changing the
+    envelope would race active work and remains forbidden.
+    """
+
+    refs = _sequence_of_mappings(ticket.get("builder_refs") or [])
+    if not refs:
+        return True
+    current_repair_id = next(
+        (
+            _text(ref.get("repair_id"))
+            for ref in reversed(refs)
+            if _text(ref.get("repair_id"))
+        ),
+        "",
+    )
+    current_refs = (
+        [ref for ref in refs if _text(ref.get("repair_id")) == current_repair_id]
+        if current_repair_id
+        else refs[-1:]
+    )
+    planning_states = {"", "open", "planned", "queued", "qualification_required"}
+    for ref in current_refs:
+        automation = _mapping(ref.get("automation"))
+        if any(
+            _text(value)
+            for value in (
+                ref.get("automation_session_id"),
+                ref.get("automation_task_id"),
+                automation.get("session_id"),
+                automation.get("task_id"),
+            )
+        ):
+            return True
+        if automation.get("busy") is True:
+            return True
+        state = _text(
+            ref.get("work_status")
+            or ref.get("automation_status")
+            or ref.get("status")
+        ).lower()
+        if state not in planning_states:
+            return True
+    return False
+
+
 def _builder_package_execution_route(
     *,
     target: Mapping[str, Any],
@@ -6787,7 +6837,7 @@ class DevelopmentTicketService:
             ticket_status = _text(ticket.get("status"))
             if ticket_status in {*TERMINAL_TICKET_STATES, "resolved", "verified"}:
                 raise ValueError("completed Dev Ticket cannot be requalified")
-            if ticket_status == "in_builder":
+            if ticket_status == "in_builder" and _builder_execution_started(ticket):
                 raise ValueError("Dev Ticket cannot be requalified while Builder is running")
             expected = _text(expected_updated_at)
             if expected and expected != _text(ticket.get("updated_at")):

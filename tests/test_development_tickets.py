@@ -2200,6 +2200,90 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
         )
 
 
+def test_planned_builder_handoff_can_be_qualified_before_execution(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    signal = service.capture_signal(
+        kind="development_request",
+        summary="Declare the exact owned stream receivers.",
+        target_scope={"type": "skill", "id": "demo_skill", "source": "dev"},
+        source="runtime_guard",
+        owner_area="skill",
+    )["signal"]
+    ticket = service.ensure_ticket_for_signal(
+        signal,
+        kind="runtime_compatibility_debt",
+        status="ready_for_builder",
+    )["ticket"]
+    planned = service._update_ticket(
+        ticket["ticket_id"],
+        status="in_builder",
+        builder_refs=[
+            {
+                "type": "builder_repair_task",
+                "repair_id": "repair.previous",
+                "mode": "autonomous",
+                "status": "resolved",
+                "automation_session_id": "session.previous",
+                "automation_task_id": "task.previous",
+            },
+            {
+                "type": "builder_repair_task",
+                "repair_id": "repair.planned",
+                "mode": "interactive",
+                "status": "open",
+            }
+        ],
+    )
+    repair = {
+        "profile": "surgical_data",
+        "change_summary": "Validate the exact owned stream receiver policy.",
+        "target_object_type": "skill",
+        "target_object_id": "demo_skill",
+        "target_files": ["skills/demo_skill/skill.yaml"],
+        "target_refs": ["sdk:skill.data_routes"],
+        "acceptance_checks": ["Only receivers owned by demo_skill are declared."],
+        "max_changed_files": 1,
+        "requires_root_mcp": False,
+    }
+
+    qualified = service.requalify_builder_repair(
+        ticket["ticket_id"],
+        builder_repair=repair,
+        actor="builder:qualifier",
+        reason="deterministic pre-execution qualification",
+        expected_revision=planned["revision"],
+    )
+
+    assert qualified["status"] == "in_builder"
+    assert qualified["metadata"]["builder_repair"]["target_files"] == [
+        "skills/demo_skill/skill.yaml"
+    ]
+
+    running = service._update_ticket(
+        ticket["ticket_id"],
+        builder_refs=[
+            {
+                "type": "builder_repair_task",
+                "repair_id": "repair.planned",
+                "mode": "autonomous",
+                "status": "in_progress",
+                "automation_session_id": "session.running",
+                "automation_task_id": "task.running",
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="while Builder is running"):
+        service.requalify_builder_repair(
+            ticket["ticket_id"],
+            builder_repair={**repair, "change_summary": "A racing change."},
+            actor="builder:qualifier",
+            reason="must remain fenced",
+            expected_revision=running["revision"],
+        )
+
+
 def test_qualified_modal_ticket_targets_its_owner_skill(tmp_path: Path) -> None:
     service = DevelopmentTicketService(state_dir=tmp_path)
     repair_service = BuilderRepairService(state_dir=tmp_path)
