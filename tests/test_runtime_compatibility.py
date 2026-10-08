@@ -326,9 +326,11 @@ def test_provenance_reconciler_is_bounded_and_uses_verified_manager_adoption(
     result = runtime_compatibility.reconcile_active_runtime_package_provenance(
         ctx=_autocontext,
         limit=1,
+        skill_ids=["legacy_skill"],
     )
 
     assert result["complete"] is True
     assert result["scanned"] == 1
     assert result["adopted"] == 1
+    assert result["requested_skill_ids"] == ["legacy_skill"]
     assert result["errors"] == []

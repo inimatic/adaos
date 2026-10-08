@@ -399,6 +399,7 @@ def reconcile_active_runtime_package_provenance(
     *,
     ctx: Any = None,
     limit: int = 100,
+    skill_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Backfill pre-provenance active slots from their verified immutable bytes.
 
@@ -428,6 +429,13 @@ def reconcile_active_runtime_package_provenance(
         ),
         key=lambda item: item.artifact_id,
     )
+    requested_skill_ids = {
+        str(item or "").strip() for item in (skill_ids or ()) if str(item or "").strip()
+    }
+    if skill_ids is not None:
+        components = [
+            item for item in components if item.artifact_id in requested_skill_ids
+        ]
     manager = SkillManager(
         repo=context.skills_repo,
         registry=SqliteSkillRegistry(context.sql),
@@ -499,6 +507,7 @@ def reconcile_active_runtime_package_provenance(
     return {
         "schema": "adaos.runtime_compatibility.provenance_reconciliation.v1",
         "limit": bounded_limit,
+        "requested_skill_ids": sorted(requested_skill_ids),
         "scanned": min(len(components), bounded_limit),
         "complete": len(components) <= bounded_limit,
         "adopted": sum(1 for item in results if item.get("adopted") is True),

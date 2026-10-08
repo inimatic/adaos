@@ -3094,8 +3094,7 @@ class DevelopmentTicketService:
             try:
                 from adaos.services import pending_actions
 
-                pending_snapshot = await asyncio.to_thread(
-                    pending_actions.list_pending_actions,
+                pending_snapshot = await pending_actions.list_pending_actions_async(
                     webspace_id=webspace_id,
                     include_terminal=False,
                 )

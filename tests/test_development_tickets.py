@@ -1286,10 +1286,13 @@ def test_legacy_compatibility_cohort_routes_missing_identity_evidence_to_core(
             "action": {"id": action_id, "status": "cancelled"},
         },
     )
+    async def _list_pending_actions(**_kwargs):
+        return {"active": ["pa.legacy.incomplete"]}
+
     monkeypatch.setattr(
         pending_actions,
-        "list_pending_actions",
-        lambda **_kwargs: {"active": ["pa.legacy.incomplete"]},
+        "list_pending_actions_async",
+        _list_pending_actions,
     )
     qualification = {
         "schema": "adaos.runtime_compatibility.classification.v1",
