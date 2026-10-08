@@ -1325,6 +1325,35 @@ def test_legacy_compatibility_cohort_routes_missing_identity_evidence_to_core(
         "compatibility_reconciliation_evidence_required"
     )
 
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    complete_qualification = {
+        **qualification,
+        "evidence_complete": True,
+        "missing_evidence": [],
+    }
+    refreshed = asyncio.run(
+        service.reconcile_legacy_compatibility_pending_action_cohort(
+            limit=20,
+            apply=True,
+            snapshot_collector=lambda *_args, **_kwargs: {
+                "schema": "adaos.runtime_compatibility.snapshot.v1",
+                "skill_id": "incomplete_skill",
+                "installed_release": {
+                    "package_digest": "sha256:package",
+                    "manifest_digest": "sha256:manifest",
+                },
+            },
+            classifier=lambda _snapshot: complete_qualification,
+            repair_service=repair_service,
+        )
+    )
+
+    assert refreshed["candidate_count"] == 1
+    assert refreshed["groups"][0]["outcome"] == "scoped_builder_repair_created"
+    current = service.get_ticket(ticket["ticket_id"])
+    assert current["status"] == "in_builder"
+    assert len(repair_service.list(project_id="incomplete_skill")) == 1
+
 
 def test_legacy_compatibility_cohort_replaces_generic_card_with_exact_update(
     tmp_path: Path,

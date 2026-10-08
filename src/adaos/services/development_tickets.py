@@ -3131,13 +3131,23 @@ class DevelopmentTicketService:
             )
             return skill_id, reason, receiver_key
 
+        def _requires_runtime_evidence_refresh(ticket: Mapping[str, Any]) -> bool:
+            if _text(ticket.get("status")) != "waiting_for_core":
+                return False
+            context = _mapping(_mapping(ticket.get("metadata")).get("context"))
+            qualification = _mapping(context.get("qualification"))
+            return (
+                qualification.get("evidence_complete") is False
+                and bool(qualification.get("missing_evidence"))
+            )
+
         seed_group_keys: set[tuple[str, str, str]] = set()
         for ticket in recent:
             key = _group_key(ticket)
             if key is None:
                 continue
             refs = _sequence_of_mappings(ticket.get("pending_action_refs") or [])
-            if any(
+            has_active_legacy_action = any(
                 ref.get("kind") == COMPATIBILITY_PENDING_ACTION_KIND
                 and _text(ref.get("id"))
                 and (
@@ -3145,7 +3155,8 @@ class DevelopmentTicketService:
                     or _text(ref.get("id")) in live_active_action_ids
                 )
                 for ref in refs
-            ):
+            )
+            if has_active_legacy_action or _requires_runtime_evidence_refresh(ticket):
                 seed_group_keys.add(key)
 
         candidates: list[dict[str, Any]] = []
@@ -3244,6 +3255,33 @@ class DevelopmentTicketService:
             }
             group_results.append(result)
             if not apply:
+                continue
+
+            previous_reconciliation = _mapping(
+                _mapping(canonical.get("metadata")).get(
+                    "compatibility_reconciliation"
+                )
+            )
+            group_has_active_legacy_action = any(
+                ref.get("kind") == COMPATIBILITY_PENDING_ACTION_KIND
+                and _text(ref.get("id"))
+                and (
+                    _text(ref.get("status") or "pending")
+                    in {"pending", "postponed"}
+                    or _text(ref.get("id")) in live_active_action_ids
+                )
+                for item in tickets
+                for ref in _sequence_of_mappings(
+                    item.get("pending_action_refs") or []
+                )
+            )
+            if (
+                not group_has_active_legacy_action
+                and _text(previous_reconciliation.get("cohort_digest"))
+                == cohort_digest
+            ):
+                result["applied"] = True
+                result["outcome"] = "runtime_identity_evidence_unchanged"
                 continue
 
             reconciliation_failures: list[dict[str, str]] = []
