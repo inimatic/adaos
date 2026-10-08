@@ -13,6 +13,7 @@ const client = env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/'
 const spaceKind = env.ADAOS_E2E_SPACE_KIND || 'development'
 const expectedRuntimeSource = env.ADAOS_E2E_EXPECTED_RUNTIME_SOURCE || null
 const requireHistory = env.ADAOS_E2E_REQUIRE_COLLABORATION_HISTORY === '1'
+const requireHomeTile = env.ADAOS_E2E_REQUIRE_HOME_TILE === '1'
 const output = path.resolve(env.ADAOS_E2E_OUTPUT)
 const validImage = path.resolve(env.ADAOS_E2E_IMAGE)
 
@@ -62,6 +63,7 @@ await context.addInitScript(({ hub, token, subnet, webspace }) => {
 }, { hub, token, subnet, webspace })
 
 const pages = new Set()
+let enforcePageRuntimeSource = true
 const instrument = page => {
   pages.add(page)
   page.setDefaultTimeout(30_000)
@@ -87,7 +89,8 @@ const instrument = page => {
       runtimeSource,
       releaseDigest: response.headers()['x-adaos-release-digest'] || null,
     })
-    if (expectedRuntimeSource && response.ok() && runtimeSource !== expectedRuntimeSource) {
+    if (enforcePageRuntimeSource && expectedRuntimeSource && response.ok()
+      && runtimeSource !== expectedRuntimeSource) {
       report.errors.push({
         kind: 'runtime-source',
         message: `Expected ${expectedRuntimeSource}, received ${runtimeSource || 'none'}`,
@@ -497,6 +500,51 @@ try {
   await compact.screenshot({ path: path.join(output, 'compact-final.png'), fullPage: true, animations: 'disabled' })
   record('compact-collaboration-surfaces', compactGeometry)
   await compact.close()
+
+  if (requireHomeTile) {
+    enforcePageRuntimeSource = false
+    await page.locator('ion-button.home-logo-btn').click()
+    await page.waitForFunction(() => {
+      const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+      return sync?.providerSynced && sync?.materializationReady
+        && sync.materialization.currentScenario === 'web_desktop'
+    }, null, { timeout: 90_000 })
+    const desktopIcons = page.locator('[data-webui-widget-id="desktop-icons"]').last()
+    const tile = desktopIcons.locator('article.tile').filter({ hasText: /Site Studio/ }).first()
+    await expect(tile).toBeVisible({ timeout: 30_000 })
+    await expect(tile.locator('.release-review-badge')).toHaveText('BETA')
+    await page.screenshot({
+      path: path.join(output, 'management-home.png'),
+      fullPage: true,
+      animations: 'disabled',
+    })
+    record('management-home-beta-tile-visible', { text: await tile.innerText() })
+
+    await tile.click()
+    await page.waitForFunction(id => {
+      const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+      return sync?.providerSynced && sync?.materializationReady
+        && sync.materialization.currentScenario === id
+    }, scenario, { timeout: 90_000 })
+    record('management-home-beta-tile-opens-site-studio')
+
+    await page.locator('ion-button.home-logo-btn').click()
+    await page.waitForFunction(() => {
+      const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+      return sync?.providerSynced && sync?.materializationReady
+        && sync.materialization.currentScenario === 'web_desktop'
+    }, null, { timeout: 90_000 })
+    const restoredTile = page.locator('[data-webui-widget-id="desktop-icons"]').last()
+      .locator('article.tile').filter({ hasText: /Site Studio/ }).first()
+    await expect(restoredTile).toBeVisible({ timeout: 30_000 })
+    await expect(restoredTile.locator('.release-review-badge')).toHaveText('BETA')
+    await page.screenshot({
+      path: path.join(output, 'management-home-after-return.png'),
+      fullPage: true,
+      animations: 'disabled',
+    })
+    record('management-home-beta-tile-survives-return')
+  }
 
   report.status = 'passed'
 } catch (error) {

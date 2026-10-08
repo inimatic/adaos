@@ -69,6 +69,15 @@ def _trial_selection_fingerprint(state_dir: Path) -> tuple[tuple[str, int, int],
     return tuple(rows)
 
 
+def runtime_authority_fingerprint(state_dir: Path) -> str:
+    """Fingerprint mutable Application selections used by UI materialization."""
+
+    rows = _trial_selection_fingerprint(Path(state_dir))
+    return hashlib.sha256(
+        json.dumps(rows, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class InstalledApplicationAuthority:
     """Exact stable installation authority for one materialized component."""

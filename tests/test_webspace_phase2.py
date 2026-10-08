@@ -4121,7 +4121,7 @@ def test_prepare_materialization_external_sources_tolerates_legacy_resolution(mo
     monkeypatch.setattr(
         runtime,
         "_list_desktop_scenarios",
-        lambda *, space: [("web_desktop", "Desktop", "desktop")],
+        lambda *, space, webspace_id=None: [("web_desktop", "Desktop", "desktop")],
     )
 
     declarations, fingerprint, desktop_scenarios, external_inputs = (
@@ -4138,6 +4138,94 @@ def test_prepare_materialization_external_sources_tolerates_legacy_resolution(mo
     assert fingerprint == "fp-prewarmed"
     assert desktop_scenarios == [("web_desktop", "Desktop", "desktop")]
     assert external_inputs == {}
+
+
+def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from adaos.services import application_registry_projection
+    from adaos.services.applications import store as application_store_module
+
+    scenarios = tmp_path / "scenarios"
+    scenarios.mkdir()
+    selections = [
+        SimpleNamespace(
+            webspace_id="desktop",
+            application_id="site_studio",
+            source="local_trial",
+            release_digest="sha256:trial",
+            revision=1,
+        )
+    ]
+    application = SimpleNamespace(
+        entrypoints=(
+            {
+                "entrypoint_id": "main",
+                "presentation_ref": "scenario:site_studio",
+            },
+        )
+    )
+    release = SimpleNamespace(
+        application_id="site_studio",
+        project_release=SimpleNamespace(
+            catalog={"title": "Site Studio", "icon": "color-wand-outline"}
+        ),
+    )
+
+    class FakeApplicationStore:
+        def __init__(self, _root: Path) -> None:
+            pass
+
+        def list_installations(self):
+            return ()
+
+        def list_runtime_selections(self):
+            return tuple(selections)
+
+        def get_release(self, application_id: str, release_digest: str):
+            assert (application_id, release_digest) == (
+                "site_studio",
+                "sha256:trial",
+            )
+            return release
+
+        def get_application(self, application_id: str):
+            assert application_id == "site_studio"
+            return application
+
+    projection = SimpleNamespace(
+        list_workspace_projects=lambda **_kwargs: [],
+        list_development_projects=lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        application_store_module, "ApplicationStore", FakeApplicationStore
+    )
+    monkeypatch.setattr(
+        application_registry_projection,
+        "ApplicationRegistryProjection",
+        lambda _root: projection,
+    )
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(
+        SimpleNamespace(
+            paths=SimpleNamespace(
+                scenarios_dir=lambda: scenarios,
+                state_dir=lambda: tmp_path / "state",
+            )
+        )
+    )
+    webspace_runtime_module._RUNTIME.cache.clear_desktop_scenarios()
+
+    assert runtime._list_desktop_scenarios("workspace", webspace_id="desktop") == [
+        ("site_studio", "Site Studio", "color-wand-outline")
+    ]
+    assert (
+        runtime._list_desktop_scenarios("workspace", webspace_id="another-desktop")
+        == []
+    )
+
+    selections.clear()
+    assert runtime._list_desktop_scenarios("workspace", webspace_id="desktop") == []
 
 
 def test_collect_resolver_inputs_tolerates_legacy_resolution_signature(monkeypatch) -> None:
@@ -5317,7 +5405,7 @@ def test_phase4_collect_resolver_inputs_does_not_refresh_projection_registry(mon
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace(projections=_Projections()))
     monkeypatch.setattr(runtime, "_collect_skill_decls", lambda mode="mixed": [])
-    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed": [])
+    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed", webspace_id=None: [])
 
     fake_doc = _FakeDoc(
         {
@@ -5407,7 +5495,7 @@ def test_collect_resolver_inputs_detaches_nested_doc_values_before_worker(monkey
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     monkeypatch.setattr(runtime, "_collect_skill_decls", lambda mode="mixed": [])
-    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed": [])
+    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed", webspace_id=None: [])
     monkeypatch.setattr(webspace_runtime_module, "_preserve_live_state_on_rebuild_enabled", lambda: True)
     monkeypatch.setattr(
         webspace_runtime_module.scenarios_loader,
@@ -5444,7 +5532,7 @@ def test_collect_resolver_inputs_detaches_nested_doc_values_before_worker(monkey
 def test_phase_pointer_collect_resolver_inputs_prefers_loader_payload_over_legacy_yjs(monkeypatch) -> None:
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     monkeypatch.setattr(runtime, "_collect_skill_decls", lambda mode="mixed": [])
-    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed": [])
+    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed", webspace_id=None: [])
     monkeypatch.setattr(
         webspace_runtime_module.scenarios_loader,
         "read_content",
@@ -5501,7 +5589,7 @@ def test_phase_pointer_collect_resolver_inputs_falls_back_to_legacy_yjs_when_loa
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")
     monkeypatch.setattr(runtime, "_collect_skill_decls", lambda mode="mixed": [])
-    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed": [])
+    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed", webspace_id=None: [])
     monkeypatch.setattr(webspace_runtime_module.scenarios_loader, "read_content", lambda scenario_id, space="workspace": {})
 
     fake_doc = _FakeDoc(
@@ -5555,7 +5643,7 @@ def test_phase_pointer_collect_resolver_inputs_reads_node_scoped_legacy_yjs_when
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "hub")
     monkeypatch.setattr(runtime, "_collect_skill_decls", lambda mode="mixed": [])
-    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed": [])
+    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed", webspace_id=None: [])
     monkeypatch.setattr(webspace_runtime_module.scenarios_loader, "read_content", lambda scenario_id, space="workspace": {})
 
     fake_doc = _FakeDoc(
@@ -5633,7 +5721,7 @@ def test_phase5_collect_resolver_inputs_prefers_persistent_overlay(monkeypatch) 
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     monkeypatch.setattr(runtime, "_collect_skill_decls", lambda mode="mixed": [])
-    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed": [])
+    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed", webspace_id=None: [])
 
     fake_doc = _FakeDoc(
         {
@@ -6498,7 +6586,7 @@ def test_phase4_rebuild_from_sources_succeeds_without_materialized_yjs_scenario_
     monkeypatch.setattr(webspace_runtime_module, "async_get_ydoc", lambda _webspace_id: _FakeAsyncDoc(fake_state))
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_collect_skill_decls", lambda self, mode="mixed": [])
-    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_list_desktop_scenarios", lambda self, space: [])
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_list_desktop_scenarios", lambda self, space, webspace_id=None: [])
     monkeypatch.setattr(
         webspace_runtime_module.scenarios_loader,
         "read_content",
@@ -7517,7 +7605,7 @@ def test_phase4_rebuild_status_exposes_legacy_resolver_fallback(monkeypatch) -> 
     monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "hub")
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_collect_skill_decls", lambda self, mode="mixed": [])
-    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_list_desktop_scenarios", lambda self, space: [])
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_list_desktop_scenarios", lambda self, space, webspace_id=None: [])
     monkeypatch.setattr(
         webspace_runtime_module.scenarios_loader,
         "read_content",

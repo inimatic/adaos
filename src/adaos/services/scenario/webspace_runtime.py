@@ -353,6 +353,7 @@ def canonical_materialization_identity(
     user_id: str | None = None,
     roles: Any = None,
     policy_fingerprint: str | None = None,
+    dependencies_fingerprint: str | None = None,
     application_id: str | None = None,
     application_release_digest: str | None = None,
 ) -> dict[str, Any]:
@@ -378,6 +379,7 @@ def canonical_materialization_identity(
     if revision_token and source_token:
         version_token = f"{revision_token}.{source_token[:12]}"
     policy_token = _normalize_materialization_token(policy_fingerprint, fallback="")
+    dependencies_token = _normalize_materialization_token(dependencies_fingerprint, fallback="")
     application_token = str(application_id or "").strip()
     application_release_token = str(application_release_digest or "").strip()
     if bool(application_token) != bool(application_release_token):
@@ -387,6 +389,8 @@ def canonical_materialization_identity(
     key = f"{webspace_token}:{scenario_token}:{version_token}:{user_token}:roles-{roles_hash}"
     if policy_token:
         key = f"{key}:policy-{policy_token[:12]}"
+    if dependencies_token:
+        key = f"{key}:dependencies-{dependencies_token[:12]}"
     if application_token:
         application_hash = hashlib.sha1(
             f"{application_token}:{application_release_token}".encode("utf-8")
@@ -406,6 +410,7 @@ def canonical_materialization_identity(
         "roles": role_list,
         "roles_hash": roles_hash,
         "policy_fingerprint": policy_token or None,
+        "dependencies_fingerprint": dependencies_token or None,
         **(
             {
                 "application_id": application_token,
@@ -3998,7 +4003,24 @@ def _scenario_switch_materialization_identity(
     if is_dev_source:
         selected = None
         application = None
+        dependencies_fingerprint = None
     else:
+        from adaos.services.applications.runtime_selection import runtime_authority_fingerprint
+
+        phase_started = time.perf_counter()
+        desktop_scenarios = WebspaceScenarioRuntime(ctx)._list_desktop_scenarios(
+            space=source_mode,
+            webspace_id=target_webspace,
+        )
+        dependencies_fingerprint = _fingerprint_json_like(
+            {
+                "desktop_scenarios": desktop_scenarios,
+                "runtime_authority": runtime_authority_fingerprint(
+                    Path(ctx.paths.state_dir())
+                ),
+            }
+        )
+        phases_ms["desktop_catalog"] = _elapsed_ms(phase_started)
         phase_started = time.perf_counter()
         application = selected_application(
             ctx,
@@ -4042,6 +4064,7 @@ def _scenario_switch_materialization_identity(
         scenario_id=target_scenario,
         source_fingerprint=source_fingerprint,
         policy_fingerprint=f"skills:{skill_fingerprint}" if skill_fingerprint else None,
+        dependencies_fingerprint=dependencies_fingerprint,
         revision=selected.candidate_id if selected is not None else None,
         application_id=application_id,
         application_release_digest=application_release_digest,
@@ -5410,7 +5433,12 @@ class WebspaceScenarioRuntime:
 
     # --- scenario helpers -------------------------------------------------
 
-    def _list_desktop_scenarios(self, space: str) -> List[Tuple[str, ...]]:
+    def _list_desktop_scenarios(
+        self,
+        space: str,
+        *,
+        webspace_id: str | None = None,
+    ) -> List[Tuple[str, ...]]:
         """
         Discover scenarios with ``type: desktop`` under the workspace
         scenarios directory. Returns ``(scenario_id, title, icon)`` tuples.
@@ -5427,49 +5455,71 @@ class WebspaceScenarioRuntime:
         try:
             root = self.ctx.paths.scenarios_dir()
             now = time.monotonic()
-            cache_key = f"{space}:{root}"
-            cached = _RUNTIME.cache.get_desktop_scenarios(cache_key)
-            if cached is not None and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S:
-                return list(cached[2])
+            target_webspace = str(webspace_id or "").strip()
+            cache_key = f"{space}:{root}:{target_webspace or '*'}"
             children = [child for child in root.iterdir() if child.is_dir()]
-            stamp = tuple(
-                sorted(
-                    (
-                        str(child),
-                        int((child / "scenario.yaml").stat().st_mtime_ns if (child / "scenario.yaml").exists() else 0),
-                        int((child / "scenario.json").stat().st_mtime_ns if (child / "scenario.json").exists() else 0),
-                    )
-                    for child in children
+            stamp_rows = [
+                (
+                    str(child),
+                    int(
+                        (child / "scenario.yaml").stat().st_mtime_ns
+                        if (child / "scenario.yaml").exists()
+                        else 0
+                    ),
+                    int(
+                        (child / "scenario.json").stat().st_mtime_ns
+                        if (child / "scenario.json").exists()
+                        else 0
+                    ),
                 )
-            )
+                for child in children
+            ]
             project_rows: list[tuple[int, dict[str, Any]]] = []
-            # Stable Applications may be installed from immutable archives and
-            # therefore have no workspace project manifest. Their accepted
-            # ApplicationRelease is the presentation authority; otherwise the
-            # desktop silently falls back to the generic apps icon while the
-            # Applications catalog shows the correct release icon.
+            immutable_scenarios: set[str] = set()
+            # Stable Applications and selected local Trials may live only in
+            # immutable archives. Their ApplicationRelease is the launcher
+            # authority; materializing Home must not require copying Beta code
+            # into the mutable Workspace.
             try:
                 from adaos.services.applications.store import ApplicationStore
 
                 application_store = ApplicationStore(Path(self.ctx.paths.state_dir()))
-                for installation in application_store.list_installations():
-                    if installation.status != "active":
-                        continue
+                installations = application_store.list_installations()
+                runtime_selections = application_store.list_runtime_selections()
+            except Exception:
+                installations = ()
+                runtime_selections = ()
+                application_store = None
+                _log.debug(
+                    "failed to list selected Application desktop metadata",
+                    exc_info=True,
+                )
+
+            def append_release(
+                application_id: str,
+                release_digest: str,
+                *,
+                source_priority: int,
+            ) -> None:
+                if application_store is None:
+                    return
+                try:
                     release = application_store.get_release(
-                        installation.application_id,
-                        installation.installed_release_digest,
+                        application_id,
+                        release_digest,
                     )
                     catalog = dict(release.project_release.catalog or {})
                     for entrypoint in application_store.get_application(
-                        installation.application_id
+                        application_id
                     ).entrypoints:
                         kind, separator, component_id = str(
                             entrypoint.get("presentation_ref") or ""
                         ).partition(":")
                         if separator and kind == "scenario" and component_id:
+                            immutable_scenarios.add(component_id)
                             project_rows.append(
                                 (
-                                    2,
+                                    source_priority,
                                     {
                                         "primary_ref": f"scenario:{component_id}",
                                         "title": str(
@@ -5481,11 +5531,57 @@ class WebspaceScenarioRuntime:
                                     },
                                 )
                             )
-            except (OSError, RuntimeError, ValueError, FileNotFoundError):
-                _log.debug(
-                    "failed to resolve installed Application desktop metadata",
-                    exc_info=True,
+                except Exception:
+                    _log.debug(
+                        "failed to resolve Application release desktop metadata "
+                        "application=%s release=%s",
+                        application_id,
+                        release_digest,
+                        exc_info=True,
+                    )
+
+            for installation in installations:
+                if installation.status != "active":
+                    continue
+                stamp_rows.append(
+                    (
+                        f"installation:{installation.application_id}:{installation.installed_release_digest}",
+                        int(installation.revision),
+                        0,
+                    )
                 )
+                append_release(
+                    installation.application_id,
+                    installation.installed_release_digest,
+                    source_priority=2,
+                )
+            for selection in runtime_selections:
+                if target_webspace and selection.webspace_id != target_webspace:
+                    continue
+                if selection.source not in {"local_trial", "stable_installation"}:
+                    continue
+                stamp_rows.append(
+                    (
+                        "runtime:"
+                        f"{selection.webspace_id}:{selection.application_id}:"
+                        f"{selection.source}:{selection.release_digest}",
+                        int(selection.revision),
+                        0,
+                    )
+                )
+                append_release(
+                    selection.application_id,
+                    selection.release_digest,
+                    source_priority=3 if selection.source == "local_trial" else 2,
+                )
+            stamp = tuple(sorted(stamp_rows))
+            cached = _RUNTIME.cache.get_desktop_scenarios(cache_key)
+            if (
+                cached is not None
+                and cached[1] == stamp
+                and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S
+            ):
+                return list(cached[2])
             try:
                 from adaos.services.application_registry_projection import ApplicationRegistryProjection
 
@@ -5499,7 +5595,7 @@ class WebspaceScenarioRuntime:
                         (1, project)
                         for project in projection.list_development_projects(limit=5000)
                     )
-            except (OSError, RuntimeError, ValueError):
+            except Exception:
                 _log.debug("failed to resolve desktop Application metadata", exc_info=True)
             application_by_scenario: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
             for source_priority, project in project_rows:
@@ -5516,20 +5612,27 @@ class WebspaceScenarioRuntime:
                     if current is None or rank > current[0]:
                         application_by_scenario[component_id] = (rank, project)
 
-            for child in children:
-                scenario_id = child.name
+            children_by_id = {child.name: child for child in children}
+            scenario_ids = sorted(set(children_by_id) | immutable_scenarios)
+            for scenario_id in scenario_ids:
                 if scenario_id == "web_desktop":
                     continue
-                if space == "dev":
-                    manifest = scenarios_loader.read_manifest(scenario_id, space="dev")
+                manifest: Mapping[str, Any] = {}
+                if scenario_id in children_by_id:
+                    if space == "dev":
+                        manifest = scenarios_loader.read_manifest(scenario_id, space="dev")
+                        if not isinstance(manifest, dict) or not manifest:
+                            manifest = scenarios_loader.read_manifest(
+                                scenario_id, space="workspace"
+                            )
+                    else:
+                        manifest = scenarios_loader.read_manifest(
+                            scenario_id, space="workspace"
+                        )
                     if not isinstance(manifest, dict) or not manifest:
-                        manifest = scenarios_loader.read_manifest(scenario_id, space="workspace")
-                else:
-                    manifest = scenarios_loader.read_manifest(scenario_id, space="workspace")
-                if not isinstance(manifest, dict) or not manifest:
-                    continue
-                if manifest.get("type") != "desktop":
-                    continue
+                        continue
+                    if manifest.get("type") != "desktop":
+                        continue
                 selected_project = application_by_scenario.get(scenario_id)
                 project = selected_project[1] if selected_project is not None else {}
                 title = str(

@@ -434,7 +434,10 @@ class WebspaceResolutionService:
         desktop_scenarios = (
             [tuple(item) for item in desktop_scenarios_override]
             if desktop_scenarios_override is not None
-            else runtime._list_desktop_scenarios(space=mode)
+            else runtime._list_desktop_scenarios(
+                space=mode,
+                webspace_id=webspace_id,
+            )
         )
         operations.record_timing(collect_timings, "collect_inputs_desktop_scenarios", stage_started)
         runtime._last_collect_inputs_timings_ms = collect_timings

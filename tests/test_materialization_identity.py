@@ -75,6 +75,70 @@ def test_canonical_materialization_identity_pins_application_release() -> None:
     assert first["key_hash"] != second["key_hash"]
 
 
+def test_canonical_materialization_identity_pins_external_dependencies() -> None:
+    first = canonical_materialization_identity(
+        webspace_id="desktop",
+        scenario_id="web_desktop",
+        dependencies_fingerprint="catalog:first",
+    )
+    second = canonical_materialization_identity(
+        webspace_id="desktop",
+        scenario_id="web_desktop",
+        dependencies_fingerprint="catalog:second",
+    )
+
+    assert first["dependencies_fingerprint"] == "catalog_first"
+    assert first["key"] != second["key"]
+    assert first["key_hash"] != second["key_hash"]
+
+
+def test_workspace_materialization_identity_tracks_launcher_authority(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    authority = ["first"]
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+    monkeypatch.setattr(webspace_runtime, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(
+        webspace_runtime,
+        "_scenario_source_fingerprint_for_materialization",
+        lambda *_args, **_kwargs: "workspace:home",
+    )
+    monkeypatch.setattr(
+        webspace_runtime,
+        "_skill_sources_fingerprint_for_materialization",
+        lambda *_args, **_kwargs: "skills",
+    )
+    monkeypatch.setattr(runtime_selection, "selected_application", lambda *_args: None)
+    monkeypatch.setattr(runtime_selection, "selected_trial", lambda *_args: None)
+    monkeypatch.setattr(
+        runtime_selection,
+        "runtime_authority_fingerprint",
+        lambda _state_dir: authority[0],
+    )
+    monkeypatch.setattr(
+        webspace_runtime.WebspaceScenarioRuntime,
+        "_list_desktop_scenarios",
+        lambda *_args, **_kwargs: [("site_studio", "Site Studio", "color-wand")],
+    )
+
+    first = webspace_runtime._scenario_switch_materialization_identity(
+        webspace_id="desktop",
+        scenario_id="web_desktop",
+        source_mode="workspace",
+    )
+    authority[0] = "second"
+    second = webspace_runtime._scenario_switch_materialization_identity(
+        webspace_id="desktop",
+        scenario_id="web_desktop",
+        source_mode="workspace",
+    )
+
+    assert first is not None and second is not None
+    assert first["dependencies_fingerprint"] != second["dependencies_fingerprint"]
+    assert first["key_hash"] != second["key_hash"]
+
+
 @pytest.mark.parametrize(
     ("application_id", "application_release_digest"),
     [("mail_focus_reader", None), (None, "sha256:first")],
