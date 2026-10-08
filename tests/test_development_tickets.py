@@ -988,7 +988,8 @@ def test_runtime_requalification_cancels_obsolete_compatibility_card(
     monkeypatch.setattr(
         pending_actions,
         "cancel_pending_action",
-        lambda action_id, **kwargs: cancelled.append({"id": action_id, **kwargs}) or {"duplicate": False},
+        lambda action_id, **kwargs: cancelled.append({"id": action_id, **kwargs})
+        or {"duplicate": False, "action": {"id": action_id, "status": "cancelled"}},
     )
     qualification = {
         "schema": "adaos.runtime_compatibility.classification.v1",
@@ -1009,6 +1010,56 @@ def test_runtime_requalification_cancels_obsolete_compatibility_card(
     assert result["ticket"]["history"][-1]["kind"] == (
         "compatibility_pending_actions_reconciled"
     )
+
+
+def test_runtime_requalification_does_not_treat_missing_action_as_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    report = service.report_compatibility_finding(
+        code="compat.stream_receiver_policy_missing",
+        summary="Legacy compatibility finding",
+        target_scope={"type": "skill", "id": "legacy_skill"},
+        context={"receiver": "legacy.panel"},
+    )
+    ticket = service._update_ticket(
+        report["ticket"]["ticket_id"],
+        status="waiting_for_user",
+        pending_action_refs=[
+            {
+                "id": "pa.legacy.missing",
+                "kind": COMPATIBILITY_PENDING_ACTION_KIND,
+                "status": "pending",
+            }
+        ],
+    )
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(
+        pending_actions,
+        "cancel_pending_action",
+        lambda action_id, **_kwargs: {
+            "duplicate": True,
+            "action": {"id": action_id, "status": "cancelled", "stale": True},
+        },
+    )
+
+    result = service.reconcile_compatibility_pending_actions(
+        ticket["ticket_id"],
+        qualification={"code": "application_declaration_defect"},
+    )
+
+    assert result["cancelled"] == []
+    assert result["failures"] == [
+        {
+            "pending_action_id": "pa.legacy.missing",
+            "error": "pending_action_not_found",
+        }
+    ]
+    current = service.get_ticket(ticket["ticket_id"])
+    assert current["status"] == "waiting_for_user"
+    assert current["pending_action_refs"][0]["status"] == "pending"
 
 
 def test_legacy_compatibility_cohort_is_grouped_requalified_and_repaired_once(
@@ -1075,7 +1126,7 @@ def test_legacy_compatibility_cohort_is_grouped_requalified_and_repaired_once(
         else:
             cancellation_loop_states.append(True)
         cancelled.append({"id": action_id, **kwargs})
-        return {"duplicate": False}
+        return {"duplicate": False, "action": {"id": action_id, "status": "cancelled"}}
 
     monkeypatch.setattr(
         pending_actions,
@@ -1221,7 +1272,7 @@ def test_legacy_compatibility_cohort_routes_missing_identity_evidence_to_core(
             {
                 "id": "pa.legacy.incomplete",
                 "kind": COMPATIBILITY_PENDING_ACTION_KIND,
-                "status": "pending",
+                "status": "cancelled",
             }
         ],
     )
@@ -1230,7 +1281,15 @@ def test_legacy_compatibility_cohort_routes_missing_identity_evidence_to_core(
     monkeypatch.setattr(
         pending_actions,
         "cancel_pending_action",
-        lambda *_args, **_kwargs: {"duplicate": False},
+        lambda action_id, **_kwargs: {
+            "duplicate": False,
+            "action": {"id": action_id, "status": "cancelled"},
+        },
+    )
+    monkeypatch.setattr(
+        pending_actions,
+        "list_pending_actions",
+        lambda **_kwargs: {"active": ["pa.legacy.incomplete"]},
     )
     qualification = {
         "schema": "adaos.runtime_compatibility.classification.v1",
@@ -1247,6 +1306,7 @@ def test_legacy_compatibility_cohort_routes_missing_identity_evidence_to_core(
         service.reconcile_legacy_compatibility_pending_action_cohort(
             limit=20,
             apply=True,
+            webspace_id="desktop",
             snapshot_collector=lambda *_args, **_kwargs: {
                 "schema": "adaos.runtime_compatibility.snapshot.v1",
                 "skill_id": "incomplete_skill",
@@ -1303,7 +1363,10 @@ def test_legacy_compatibility_cohort_replaces_generic_card_with_exact_update(
     monkeypatch.setattr(
         pending_actions,
         "cancel_pending_action",
-        lambda *_args, **_kwargs: {"duplicate": False},
+        lambda action_id, **_kwargs: {
+            "duplicate": False,
+            "action": {"id": action_id, "status": "cancelled"},
+        },
     )
     qualification = {
         "schema": "adaos.runtime_compatibility.classification.v1",

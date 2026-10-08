@@ -2959,6 +2959,7 @@ class DevelopmentTicketService:
         qualification: Mapping[str, Any],
         ctx: Any = None,
         webspace_id: str | None = None,
+        active_action_ids: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Cancel obsolete legacy compatibility cards after requalification.
 
@@ -2972,11 +2973,15 @@ class DevelopmentTicketService:
         if not ticket:
             raise KeyError(ticket_id)
         refs = _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+        live_active_ids = {_text(item) for item in active_action_ids or () if _text(item)}
         active = [
             ref
             for ref in refs
             if ref.get("kind") == COMPATIBILITY_PENDING_ACTION_KIND
-            and _text(ref.get("status") or "pending") in {"pending", "postponed"}
+            and (
+                _text(ref.get("status") or "pending") in {"pending", "postponed"}
+                or _text(ref.get("id")) in live_active_ids
+            )
             and _text(ref.get("id"))
         ]
         if not active:
@@ -2991,7 +2996,7 @@ class DevelopmentTicketService:
         for ref in active:
             action_id = _text(ref.get("id"))
             try:
-                pending_actions.cancel_pending_action(
+                cancellation = pending_actions.cancel_pending_action(
                     action_id,
                     reason=reason,
                     ctx=ctx,
@@ -3006,10 +3011,28 @@ class DevelopmentTicketService:
                     }
                 )
                 continue
+            action = _mapping(_mapping(cancellation).get("action"))
+            terminal_status = _text(action.get("status"))
+            if action.get("stale") is True or terminal_status not in {
+                "cancelled",
+                "responded",
+                "expired",
+            }:
+                failures.append(
+                    {
+                        "pending_action_id": action_id,
+                        "error": (
+                            "pending_action_not_found"
+                            if action.get("stale") is True
+                            else f"pending_action_not_terminal:{terminal_status or 'unknown'}"
+                        ),
+                    }
+                )
+                continue
             updated_refs = _with_pending_action_ref_status(
                 updated_refs,
                 action_id=action_id,
-                status="cancelled",
+                status=terminal_status,
                 reason=reason,
             )
             cancelled.append(action_id)
@@ -3065,26 +3088,69 @@ class DevelopmentTicketService:
 
         bounded_limit = max(1, min(int(limit), 100))
         scan_limit = min(400, max(bounded_limit + 1, bounded_limit * 4))
+        errors: list[dict[str, str]] = []
+        live_active_action_ids: set[str] = set()
+        if webspace_id:
+            try:
+                from adaos.services import pending_actions
+
+                pending_snapshot = await asyncio.to_thread(
+                    pending_actions.list_pending_actions,
+                    webspace_id=webspace_id,
+                    include_terminal=False,
+                )
+                live_active_action_ids = {
+                    _text(item)
+                    for item in pending_snapshot.get("active") or ()
+                    if _text(item)
+                }
+            except Exception as exc:
+                errors.append(
+                    {
+                        "scope": "pending_action_inventory",
+                        "error": f"{type(exc).__name__}: {exc}"[:500],
+                    }
+                )
         recent = self.list_tickets(
             status_group="open",
             kind="runtime_compatibility_debt",
             limit=scan_limit,
         )
-        candidates: list[dict[str, Any]] = []
-        for ticket in reversed(recent):
-            refs = _sequence_of_mappings(ticket.get("pending_action_refs") or [])
-            if not any(
-                ref.get("kind") == COMPATIBILITY_PENDING_ACTION_KIND
-                and _text(ref.get("status") or "pending") in {"pending", "postponed"}
-                and _text(ref.get("id"))
-                for ref in refs
-            ):
-                continue
+
+        def _group_key(ticket: Mapping[str, Any]) -> tuple[str, str, str] | None:
             context = _mapping(_mapping(ticket.get("metadata")).get("context"))
             reason = _text(context.get("reason"))
             target = _mapping(ticket.get("target_scope"))
             skill_id = _text(target.get("id"))
             if reason not in RECEIVER_COMPATIBILITY_REASONS or not skill_id:
+                return None
+            receiver_key = (
+                "policy"
+                if reason == "stream_receiver_policy_missing"
+                else _text(context.get("receiver")) or "unknown"
+            )
+            return skill_id, reason, receiver_key
+
+        seed_group_keys: set[tuple[str, str, str]] = set()
+        for ticket in recent:
+            key = _group_key(ticket)
+            if key is None:
+                continue
+            refs = _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+            if any(
+                ref.get("kind") == COMPATIBILITY_PENDING_ACTION_KIND
+                and _text(ref.get("id"))
+                and (
+                    _text(ref.get("status") or "pending") in {"pending", "postponed"}
+                    or _text(ref.get("id")) in live_active_action_ids
+                )
+                for ref in refs
+            ):
+                seed_group_keys.add(key)
+
+        candidates: list[dict[str, Any]] = []
+        for ticket in reversed(recent):
+            if _group_key(ticket) not in seed_group_keys:
                 continue
             candidates.append(ticket)
             if len(candidates) >= bounded_limit:
@@ -3105,7 +3171,6 @@ class DevelopmentTicketService:
         collect = snapshot_collector or collect_skill_runtime_compatibility_snapshot
         classify = classifier or classify_runtime_compatibility
         group_results: list[dict[str, Any]] = []
-        errors: list[dict[str, str]] = []
         for group_key in sorted(grouped):
             skill_id, reason, receiver_key = group_key
             tickets = grouped[group_key]
@@ -3223,6 +3288,7 @@ class DevelopmentTicketService:
                     qualification=qualification,
                     ctx=ctx,
                     webspace_id=webspace_id,
+                    active_action_ids=live_active_action_ids,
                 )
                 result["cancelled_pending_action_ids"].extend(
                     reconciled["cancelled"]
