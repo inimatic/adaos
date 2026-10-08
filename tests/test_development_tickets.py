@@ -1011,6 +1011,273 @@ def test_runtime_requalification_cancels_obsolete_compatibility_card(
     )
 
 
+def test_legacy_compatibility_cohort_is_grouped_requalified_and_repaired_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    receivers = (
+        "adaos_drive.preview",
+        "voice_chat.messages",
+        "notebook_skill.latest",
+        "slideshow_skill.session",
+        "notebook_skill.latest",
+    )
+    tickets: list[dict] = []
+    for index, receiver in enumerate(receivers):
+        dedup_receiver = "policy" if index == len(receivers) - 1 else receiver
+        report = service.report_compatibility_finding(
+            code="compat.stream_receiver_policy_missing",
+            summary=(
+                "Skill web_desktop_runtime_skill has no stream receiver policy."
+            ),
+            target_scope={
+                "type": "skill",
+                "id": "web_desktop_runtime_skill",
+                "source": "installed",
+            },
+            context={
+                "reason": "stream_receiver_policy_missing",
+                "receiver": receiver,
+                "receiver_patterns": [],
+            },
+            blocking=False,
+            run_policy="degrade",
+            dedup_key=development_tickets_module._fingerprint(
+                "compat.receiver",
+                "web_desktop_runtime_skill",
+                "stream_receiver_policy_missing",
+                dedup_receiver,
+            ),
+        )
+        ticket = service._update_ticket(
+            report["ticket"]["ticket_id"],
+            status="waiting_for_user",
+            pending_action_refs=[
+                {
+                    "id": f"pa.legacy.{index}",
+                    "kind": COMPATIBILITY_PENDING_ACTION_KIND,
+                    "status": "pending",
+                }
+            ],
+        )
+        tickets.append(ticket)
+
+    cancelled: list[dict] = []
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(
+        pending_actions,
+        "cancel_pending_action",
+        lambda action_id, **kwargs: cancelled.append(
+            {"id": action_id, **kwargs}
+        )
+        or {"duplicate": False},
+    )
+    snapshots: list[dict] = []
+
+    def _collect(skill_id, **kwargs):
+        snapshots.append({"skill_id": skill_id, **kwargs})
+        return {
+            "schema": "adaos.runtime_compatibility.snapshot.v1",
+            "skill_id": skill_id,
+            "desired_release": {
+                "admitted": True,
+                "version": "1.0.0",
+                "package_digest": "sha256:package",
+                "manifest_digest": "sha256:manifest",
+            },
+            "installed_release": {
+                "version": "1.0.0",
+                "slot": "A",
+                "package_digest": "sha256:package",
+                "manifest_digest": "sha256:manifest",
+            },
+            "loaded_runtime": {
+                "module_available": True,
+                "generation": "generation-1",
+                "package_digest": "sha256:package",
+                "manifest_digest": "sha256:manifest",
+                "source_drift": False,
+                "selection_drift": False,
+            },
+            "receiver_policy": {"state": "absent", "patterns": []},
+            "observation": {
+                "receiver": kwargs["admission"]["receiver"],
+                "own_stream": None,
+                "receiver_admitted": False,
+            },
+            "core_contract": {"supported": True},
+            "eligible_update": {},
+            "builder_work": [],
+        }
+
+    audit = asyncio.run(
+        service.reconcile_legacy_compatibility_pending_action_cohort(
+            limit=20,
+            apply=False,
+            snapshot_collector=_collect,
+        )
+    )
+
+    canonical_id = tickets[-1]["ticket_id"]
+    assert audit["candidate_count"] == 5
+    assert audit["group_count"] == 1
+    assert audit["groups"][0]["canonical_ticket_id"] == canonical_id
+    assert audit["groups"][0]["qualification"]["code"] == (
+        "application_declaration_defect"
+    )
+    assert cancelled == []
+    assert all(service.get_ticket(item["ticket_id"])["status"] == "waiting_for_user" for item in tickets)
+
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    applied = asyncio.run(
+        service.reconcile_legacy_compatibility_pending_action_cohort(
+            limit=20,
+            apply=True,
+            snapshot_collector=_collect,
+            repair_service=repair_service,
+        )
+    )
+
+    group = applied["groups"][0]
+    assert applied["complete"] is True
+    assert applied["errors"] == []
+    assert group["applied"] is True
+    assert group["outcome"] == "scoped_builder_repair_created"
+    assert group["cancelled_pending_action_ids"] == [
+        f"pa.legacy.{index}" for index in range(5)
+    ]
+    assert sorted(group["superseded_ticket_ids"]) == sorted(
+        item["ticket_id"] for item in tickets[:-1]
+    )
+    assert len(cancelled) == 5
+    assert all(
+        item["reason"]
+        == "compatibility_requalified:application_declaration_defect"
+        for item in cancelled
+    )
+    assert len(snapshots) == 2
+    assert all(
+        service.get_ticket(item["ticket_id"])["status"] == "superseded"
+        for item in tickets[:-1]
+    )
+    canonical = service.get_ticket(canonical_id)
+    assert canonical["status"] == "in_builder"
+    assert canonical["metadata"]["context"]["qualification"]["code"] == (
+        "application_declaration_defect"
+    )
+    assert canonical["pending_action_refs"][0]["status"] == "cancelled"
+    assert len(repair_service.list(project_id="web_desktop_runtime_skill")) == 1
+
+    duplicate = asyncio.run(
+        service.reconcile_legacy_compatibility_pending_action_cohort(
+            limit=20,
+            apply=True,
+            snapshot_collector=_collect,
+            repair_service=repair_service,
+        )
+    )
+    assert duplicate["candidate_count"] == 0
+    assert duplicate["groups"] == []
+    assert len(cancelled) == 5
+    assert len(repair_service.list(project_id="web_desktop_runtime_skill")) == 1
+
+
+def test_legacy_compatibility_cohort_replaces_generic_card_with_exact_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    report = service.report_compatibility_finding(
+        code="compat.stream_receiver_policy_missing",
+        summary="Skill update_skill has no stream receiver policy.",
+        target_scope={"type": "skill", "id": "update_skill"},
+        context={
+            "reason": "stream_receiver_policy_missing",
+            "receiver": "update_skill.owned",
+            "receiver_patterns": [],
+        },
+        dedup_key=development_tickets_module._fingerprint(
+            "compat.receiver",
+            "update_skill",
+            "stream_receiver_policy_missing",
+            "policy",
+        ),
+    )
+    service._update_ticket(
+        report["ticket"]["ticket_id"],
+        status="waiting_for_user",
+        pending_action_refs=[
+            {
+                "id": "pa.legacy.update",
+                "kind": COMPATIBILITY_PENDING_ACTION_KIND,
+                "status": "pending",
+            }
+        ],
+    )
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(
+        pending_actions,
+        "cancel_pending_action",
+        lambda *_args, **_kwargs: {"duplicate": False},
+    )
+    qualification = {
+        "schema": "adaos.runtime_compatibility.classification.v1",
+        "code": "eligible_exact_update",
+        "owner": "artifact_authority",
+        "evidence_complete": True,
+        "recommended_action": "offer_exact_update",
+        "automatic_recovery_eligible": False,
+        "human_decision_required": True,
+        "desired_package_digest": "sha256:new",
+        "installed_package_digest": "sha256:old",
+        "eligible_update_package_digest": "sha256:new",
+        "eligible_update_from_package_digest": "sha256:old",
+        "eligible_update_version": "2.0.0",
+    }
+    publisher_calls: list[dict] = []
+
+    async def _publish(**kwargs):
+        publisher_calls.append(dict(kwargs))
+        return {
+            "interaction": {
+                "interaction_id": "interaction.runtime-compatibility.update",
+                "created_at": "2026-10-08T00:00:00+00:00",
+            }
+        }
+
+    result = asyncio.run(
+        service.reconcile_legacy_compatibility_pending_action_cohort(
+            ctx=object(),
+            webspace_id="desktop",
+            limit=10,
+            apply=True,
+            execute_recovery=True,
+            snapshot_collector=lambda *_args, **_kwargs: {"snapshot": "exact"},
+            classifier=lambda _snapshot: qualification,
+            exact_update_publisher=_publish,
+        )
+    )
+
+    group = result["groups"][0]
+    assert group["outcome"] == "exact_update_decision_published"
+    assert group["interaction_id"] == "interaction.runtime-compatibility.update"
+    assert len(publisher_calls) == 1
+    assert publisher_calls[0]["skill_id"] == "update_skill"
+    assert publisher_calls[0]["webspace_id"] == "desktop"
+    ticket = service.get_ticket(report["ticket"]["ticket_id"])
+    assert ticket["status"] == "waiting_for_user"
+    assert [ref["status"] for ref in ticket["pending_action_refs"]] == [
+        "cancelled",
+        "pending",
+    ]
+    assert ticket["pending_action_refs"][1]["kind"] == (
+        "runtime_compatibility_exact_update"
+    )
+
+
 def test_qualified_runtime_reactivation_closes_ticket_with_safe_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

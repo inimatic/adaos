@@ -7,7 +7,7 @@ import logging
 import re
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -3029,6 +3029,441 @@ class DevelopmentTicketService:
             },
         )
         return {"ticket": updated, "cancelled": cancelled, "failures": failures}
+
+    async def reconcile_legacy_compatibility_pending_action_cohort(
+        self,
+        *,
+        ctx: Any = None,
+        webspace_id: str | None = None,
+        limit: int = 100,
+        apply: bool = False,
+        execute_recovery: bool = True,
+        create_builder_handoff: bool = True,
+        snapshot_collector: Callable[..., Mapping[str, Any]] | None = None,
+        classifier: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        repair_service: BuilderRepairService | None = None,
+        exact_update_publisher: Callable[..., Any] | None = None,
+    ) -> dict[str, Any]:
+        """Requalify and retire bounded cohorts of legacy compatibility cards.
+
+        A missing receiver policy used to be deduplicated by the receiver that
+        happened to expose it. That produced several user decisions for one
+        application defect. The current contract treats those broadcasts as
+        evidence, classifies the exact runtime identity once per cohort, and
+        terminally reconciles every generic card before choosing a typed
+        recovery surface.
+
+        ``apply=False`` is a read-only audit. Startup callers must opt into
+        mutation explicitly. Both the scan and the returned evidence are
+        bounded so an old state file cannot make restart work unbounded.
+        """
+
+        from adaos.services.runtime_compatibility import (
+            classify_runtime_compatibility,
+            collect_skill_runtime_compatibility_snapshot,
+        )
+
+        bounded_limit = max(1, min(int(limit), 100))
+        scan_limit = min(400, max(bounded_limit + 1, bounded_limit * 4))
+        recent = self.list_tickets(
+            status_group="open",
+            kind="runtime_compatibility_debt",
+            limit=scan_limit,
+        )
+        candidates: list[dict[str, Any]] = []
+        for ticket in reversed(recent):
+            refs = _sequence_of_mappings(ticket.get("pending_action_refs") or [])
+            if not any(
+                ref.get("kind") == COMPATIBILITY_PENDING_ACTION_KIND
+                and _text(ref.get("status") or "pending") in {"pending", "postponed"}
+                and _text(ref.get("id"))
+                for ref in refs
+            ):
+                continue
+            context = _mapping(_mapping(ticket.get("metadata")).get("context"))
+            reason = _text(context.get("reason"))
+            target = _mapping(ticket.get("target_scope"))
+            skill_id = _text(target.get("id"))
+            if reason not in RECEIVER_COMPATIBILITY_REASONS or not skill_id:
+                continue
+            candidates.append(ticket)
+            if len(candidates) >= bounded_limit:
+                break
+
+        grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for ticket in candidates:
+            context = _mapping(_mapping(ticket.get("metadata")).get("context"))
+            reason = _text(context.get("reason"))
+            skill_id = _text(_mapping(ticket.get("target_scope")).get("id"))
+            receiver_key = (
+                "policy"
+                if reason == "stream_receiver_policy_missing"
+                else _text(context.get("receiver")) or "unknown"
+            )
+            grouped.setdefault((skill_id, reason, receiver_key), []).append(ticket)
+
+        collect = snapshot_collector or collect_skill_runtime_compatibility_snapshot
+        classify = classifier or classify_runtime_compatibility
+        group_results: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for group_key in sorted(grouped):
+            skill_id, reason, receiver_key = group_key
+            tickets = grouped[group_key]
+            expected_dedup = _fingerprint(
+                "compat.receiver",
+                skill_id,
+                reason,
+                receiver_key,
+            )
+            canonical = max(
+                tickets,
+                key=lambda item: (
+                    _text(item.get("dedup_key")) == expected_dedup,
+                    _text(item.get("created_at")),
+                    _text(item.get("ticket_id")),
+                ),
+            )
+            canonical_context = _mapping(
+                _mapping(canonical.get("metadata")).get("context")
+            )
+            admission = {
+                "reason": reason,
+                "receiver": _text(canonical_context.get("receiver")) or None,
+                "receiver_patterns": list(
+                    canonical_context.get("receiver_patterns") or ()
+                )[:12],
+                "allowed": False,
+            }
+            try:
+                snapshot = dict(
+                    collect(
+                        skill_id,
+                        admission=admission,
+                        builder_work=_sequence_of_mappings(
+                            canonical.get("builder_refs") or []
+                        ),
+                        ctx=ctx,
+                    )
+                )
+                qualification = dict(classify(snapshot))
+            except Exception as exc:
+                errors.append(
+                    {
+                        "skill_id": skill_id,
+                        "reason": reason,
+                        "error": f"{type(exc).__name__}: {exc}"[:500],
+                    }
+                )
+                continue
+
+            cohort_digest = _fingerprint(
+                "compat.reconciliation",
+                sorted(_text(item.get("ticket_id")) for item in tickets),
+                snapshot,
+                qualification,
+            )
+            result: dict[str, Any] = {
+                "skill_id": skill_id,
+                "reason": reason,
+                "receiver_key": receiver_key,
+                "canonical_ticket_id": canonical["ticket_id"],
+                "ticket_ids": sorted(
+                    _text(item.get("ticket_id")) for item in tickets
+                ),
+                "cohort_digest": cohort_digest,
+                "qualification": qualification,
+                "applied": False,
+                "cancelled_pending_action_ids": [],
+                "superseded_ticket_ids": [],
+                "outcome": "audit_only",
+            }
+            group_results.append(result)
+            if not apply:
+                continue
+
+            reconciliation_failures: list[dict[str, str]] = []
+            for item in tickets:
+                ticket_id = _text(item.get("ticket_id"))
+                current = self.get_ticket(ticket_id)
+                if not current:
+                    reconciliation_failures.append(
+                        {"ticket_id": ticket_id, "error": "ticket_not_found"}
+                    )
+                    continue
+                metadata = _mapping(current.get("metadata"))
+                context = _mapping(metadata.get("context"))
+                context["compatibility_snapshot"] = snapshot
+                context["qualification"] = qualification
+                metadata["context"] = context
+                metadata["compatibility_reconciliation"] = {
+                    "schema": "adaos.runtime_compatibility.reconciliation.v1",
+                    "cohort_digest": cohort_digest,
+                    "canonical_ticket_id": canonical["ticket_id"],
+                    "recorded_at": _now(),
+                }
+                self._update_ticket(
+                    ticket_id,
+                    metadata=metadata,
+                    history_item={
+                        "kind": "compatibility_requalified",
+                        "qualification_code": _text(qualification.get("code")),
+                        "cohort_digest": cohort_digest,
+                        "canonical_ticket_id": canonical["ticket_id"],
+                    },
+                )
+                reconciled = self.reconcile_compatibility_pending_actions(
+                    ticket_id,
+                    qualification=qualification,
+                    ctx=ctx,
+                    webspace_id=webspace_id,
+                )
+                result["cancelled_pending_action_ids"].extend(
+                    reconciled["cancelled"]
+                )
+                reconciliation_failures.extend(
+                    {
+                        "ticket_id": ticket_id,
+                        **dict(failure),
+                    }
+                    for failure in reconciled["failures"]
+                )
+
+            if reconciliation_failures:
+                result["failures"] = reconciliation_failures
+                result["outcome"] = "pending_action_reconciliation_failed"
+                errors.extend(reconciliation_failures)
+                continue
+
+            for item in tickets:
+                ticket_id = _text(item.get("ticket_id"))
+                if ticket_id == canonical["ticket_id"]:
+                    continue
+                current = self.get_ticket(ticket_id)
+                if not current or _text(current.get("status")) in TERMINAL_TICKET_STATES:
+                    continue
+                self.duplicate_ticket(
+                    ticket_id,
+                    duplicate_of=canonical["ticket_id"],
+                    actor="runtime_compatibility",
+                    expected_revision=int(current.get("revision") or 0),
+                )
+                result["superseded_ticket_ids"].append(ticket_id)
+
+            canonical_ticket = self.get_ticket(canonical["ticket_id"])
+            if not canonical_ticket:
+                result["outcome"] = "canonical_ticket_not_found"
+                errors.append(
+                    {
+                        "ticket_id": canonical["ticket_id"],
+                        "error": "canonical_ticket_not_found",
+                    }
+                )
+                continue
+
+            code = _text(qualification.get("code"))
+            if qualification.get("automatic_recovery_eligible") is True and execute_recovery:
+                recovery = await self.execute_qualified_runtime_recovery(
+                    canonical_ticket["ticket_id"],
+                    skill_id=skill_id,
+                    qualification=qualification,
+                    compatibility_snapshot=snapshot,
+                    ctx=ctx,
+                )
+                result["recovery"] = recovery
+                result["outcome"] = (
+                    "automatic_recovery_verified"
+                    if recovery.get("ok") is True and recovery.get("executed") is True
+                    else _text(recovery.get("reason")) or "automatic_recovery_failed"
+                )
+            elif (
+                code in {"application_declaration_defect", "application_source_drift"}
+                and qualification.get("evidence_complete") is True
+                and create_builder_handoff
+            ):
+                active_builder = [
+                    ref
+                    for ref in _sequence_of_mappings(
+                        canonical_ticket.get("builder_refs") or []
+                    )
+                    if _text(ref.get("status")).lower()
+                    not in {"closed", "cancelled", "failed", "rejected", "superseded", "verified"}
+                ]
+                if active_builder:
+                    result["outcome"] = "existing_builder_work"
+                    result["builder_ref"] = active_builder[0]
+                else:
+                    handoff = self.handoff_ticket(
+                        canonical_ticket["ticket_id"],
+                        mode="interactive",
+                        repair_service=repair_service,
+                        actor="runtime_compatibility",
+                    )
+                    result["outcome"] = "scoped_builder_repair_created"
+                    result["builder_ref"] = handoff["repair"]
+            elif code == "eligible_exact_update" and (
+                exact_update_publisher is not None or ctx is not None
+            ):
+                publisher = (
+                    exact_update_publisher
+                    if exact_update_publisher is not None
+                    else self.publish_qualified_runtime_update_decision
+                )
+                published = publisher(
+                    ticket=canonical_ticket,
+                    skill_id=skill_id,
+                    qualification=qualification,
+                    cohort_digest=cohort_digest,
+                    ctx=ctx,
+                    webspace_id=webspace_id,
+                )
+                if asyncio.iscoroutine(published):
+                    published = await published
+                interaction = _mapping(_mapping(published).get("interaction"))
+                interaction_id = _text(interaction.get("interaction_id"))
+                if not interaction_id:
+                    raise ValueError(
+                        "exact update publisher returned no interaction identity"
+                    )
+                current = self.get_ticket(canonical_ticket["ticket_id"]) or canonical_ticket
+                updated_refs = _merge_refs(
+                    current.get("pending_action_refs") or [],
+                    [
+                        {
+                            "id": interaction_id,
+                            "kind": "runtime_compatibility_exact_update",
+                            "status": "pending",
+                            "created_at": interaction.get("created_at"),
+                        }
+                    ],
+                )
+                self._update_ticket(
+                    current["ticket_id"],
+                    pending_action_refs=updated_refs,
+                    status="waiting_for_user",
+                    history_item={
+                        "kind": "runtime_compatibility_exact_update_published",
+                        "interaction_id": interaction_id,
+                        "cohort_digest": cohort_digest,
+                    },
+                )
+                result["outcome"] = "exact_update_decision_published"
+                result["interaction_id"] = interaction_id
+            elif code in {"compatible", "foreign_stream_observation"}:
+                verified = self._update_ticket(
+                    canonical_ticket["ticket_id"],
+                    status="verified",
+                    history_item={
+                        "kind": "compatibility_reconciliation_verified",
+                        "qualification_code": code,
+                        "cohort_digest": cohort_digest,
+                    },
+                )
+                self._close_ticket(
+                    verified["ticket_id"],
+                    reason="verified",
+                    actor="runtime_compatibility",
+                    evidence_refs=[
+                        {
+                            "type": "runtime_compatibility_reconciliation",
+                            "digest": cohort_digest,
+                            "status": "passed",
+                        }
+                    ],
+                    expected_revision=int(verified.get("revision") or 0),
+                )
+                result["outcome"] = "diagnostic_closed"
+            else:
+                next_status = (
+                    "waiting_for_core"
+                    if _text(qualification.get("owner")) == "core"
+                    else "accepted"
+                )
+                self._update_ticket(
+                    canonical_ticket["ticket_id"],
+                    status=next_status,
+                    history_item={
+                        "kind": "compatibility_reconciliation_routed",
+                        "qualification_code": code,
+                        "recommended_action": _text(
+                            qualification.get("recommended_action")
+                        ),
+                        "owner": _text(qualification.get("owner")),
+                        "cohort_digest": cohort_digest,
+                    },
+                )
+                result["outcome"] = (
+                    "typed_update_publisher_required"
+                    if code == "eligible_exact_update"
+                    else "routed_without_user_decision"
+                )
+            result["cancelled_pending_action_ids"] = sorted(
+                result["cancelled_pending_action_ids"]
+            )
+            result["superseded_ticket_ids"] = sorted(
+                result["superseded_ticket_ids"]
+            )
+            result["applied"] = True
+
+        return {
+            "schema": "adaos.runtime_compatibility.cohort_reconciliation.v1",
+            "applied": bool(apply),
+            "limit": bounded_limit,
+            "scanned": len(recent),
+            "candidate_count": len(candidates),
+            "group_count": len(group_results),
+            "complete": len(recent) < scan_limit and len(candidates) < bounded_limit,
+            "groups": group_results,
+            "errors": errors,
+        }
+
+    async def publish_qualified_runtime_update_decision(
+        self,
+        *,
+        ticket: Mapping[str, Any],
+        skill_id: str,
+        qualification: Mapping[str, Any],
+        cohort_digest: str,
+        ctx: Any,
+        webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Publish the one typed decision admitted by an exact update plan."""
+
+        from adaos.services.artifact_subscription_update import (
+            ArtifactSubscriptionUpdateCoordinator,
+        )
+        from adaos.services.conversation_interactions import (
+            standard_capability_profile,
+        )
+        from adaos.services.yjs.webspace import default_webspace_id
+
+        ws = _text(webspace_id) or default_webspace_id()
+        profile = standard_capability_profile("web")
+        profile["profile_id"] = "profile.web.runtime-compatibility-step-up"
+        profile.setdefault("capabilities", {})["step_up"] = True
+        digest_token = _text(cohort_digest).split(":")[-1]
+        interaction_id = f"interaction.runtime-compatibility.{digest_token}"
+        expiry = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(
+            timespec="seconds"
+        )
+        return await ArtifactSubscriptionUpdateCoordinator(
+            ctx
+        ).publish_qualified_runtime_update_interaction(
+            "skill",
+            skill_id,
+            qualification=qualification,
+            conversation_id=f"conv.core.general.{ws}",
+            owner="skill:runtime_compatibility",
+            expires_at=expiry,
+            interaction_id=interaction_id,
+            task_ref={
+                "kind": "development_ticket",
+                "id": _text(ticket.get("ticket_id")),
+            },
+            webspace_id=ws,
+            channel_id="general",
+            route_id="dialog",
+            capability_profile=profile,
+        )
 
     async def execute_qualified_runtime_recovery(
         self,

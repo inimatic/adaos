@@ -2202,6 +2202,59 @@ async def _runtime_context(app: FastAPI):
         name="runtime-reconcile-conversation-interactions",
     )
 
+    async def _reconcile_legacy_compatibility_actions_logged() -> None:
+        """Retire obsolete generic compatibility decisions after boot.
+
+        Receiver ownership and exact package identity are unavailable before
+        runtime handlers have loaded. Keep this bounded migration outside the
+        cold-start path and wait for the boot task before collecting evidence.
+        """
+
+        await _wait_for_runtime_boot_task()
+        try:
+            from adaos.services.development_tickets import (
+                DevelopmentTicketService,
+            )
+            from adaos.services.yjs.webspace import default_webspace_id
+
+            with _StartupTimer("reconcile_legacy_compatibility_actions"):
+                result = await DevelopmentTicketService().reconcile_legacy_compatibility_pending_action_cohort(
+                    ctx=get_ctx(),
+                    webspace_id=default_webspace_id(),
+                    limit=100,
+                    apply=True,
+                    execute_recovery=True,
+                    create_builder_handoff=True,
+                )
+            app.state.runtime_compatibility_reconciliation = result
+            logger = logging.getLogger("adaos.runtime_compatibility")
+            if result.get("errors") or not result.get("complete"):
+                logger.warning(
+                    "legacy compatibility reconciliation remains incomplete: %s",
+                    {
+                        "complete": result.get("complete"),
+                        "candidate_count": result.get("candidate_count"),
+                        "group_count": result.get("group_count"),
+                        "errors": result.get("errors"),
+                    },
+                )
+            elif result.get("candidate_count"):
+                logger.info(
+                    "legacy compatibility reconciliation completed candidates=%s groups=%s",
+                    result.get("candidate_count"),
+                    result.get("group_count"),
+                )
+        except Exception:
+            logging.getLogger("adaos.runtime_compatibility").warning(
+                "legacy compatibility reconciliation failed",
+                exc_info=True,
+            )
+
+    _schedule_startup_tail(
+        _reconcile_legacy_compatibility_actions_logged(),
+        name="runtime-reconcile-legacy-compatibility-actions",
+    )
+
     # Keep the local capacity projection in sync with optional native deps
     # (vosk/pyttsx3), so other components can see IO availability without importing native libs.
     async def _refresh_native_io_capacity_logged(*, wait_for_boot: bool = False) -> None:
