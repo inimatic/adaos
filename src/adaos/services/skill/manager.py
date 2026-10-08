@@ -2233,6 +2233,8 @@ class SkillManager:
         preferred_slot: str | None = None,
         allow_deactivated: bool = False,
         source_manifest_digest: str | None = None,
+        package_digest: str | None = None,
+        package_manifest_digest: str | None = None,
     ) -> RuntimeInstallResult:
         skills_root = self.ctx.paths.skills_dir()
         skill_dir = Path(path).resolve() if path is not None else (skills_root / name)
@@ -2358,6 +2360,11 @@ class SkillManager:
             "tests": {name: result.status for name, result in tests.items()},
         }
 
+        if source_manifest_digest is None:
+            source_manifest_digest = source_tree_digest(
+                skill_dir,
+                excluded_dirs=frozenset({".runtime"}),
+            )
         metadata = env.read_version_metadata(version)
         slots_meta = metadata.setdefault("slots", {})
         slots_meta[slot_name] = {
@@ -2365,6 +2372,8 @@ class SkillManager:
             "runtime_bucket": env.runtime_bucket(version),
             "resolved_manifest": str(slot.resolved_manifest),
             "source_manifest_digest": source_manifest_digest,
+            "package_digest": package_digest,
+            "package_manifest_digest": package_manifest_digest,
             "preparation_identity": _runtime_preparation_identity(),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "tests": {name: result.status for name, result in tests.items()},
@@ -2405,6 +2414,24 @@ class SkillManager:
         digest = str(slot_meta.get("source_manifest_digest") or "").strip()
         return digest or None
 
+    def active_runtime_package_identity(self, name: str) -> dict[str, str | None]:
+        env = self._runtime_env(name)
+        version = str(env.resolve_active_version() or "").strip()
+        slot = str(env.read_active_slot(version) or "").strip().upper() if version else ""
+        metadata = env.read_version_metadata(version) if version else {}
+        slot_meta = dict(metadata.get("slots", {}).get(slot, {}) or {})
+        return {
+            "version": version or None,
+            "slot": slot or None,
+            "package_digest": str(slot_meta.get("package_digest") or "").strip() or None,
+            "package_manifest_digest": (
+                str(slot_meta.get("package_manifest_digest") or "").strip() or None
+            ),
+            "source_manifest_digest": (
+                str(slot_meta.get("source_manifest_digest") or "").strip() or None
+            ),
+        }
+
     def activate_runtime(
         self,
         name: str,
@@ -2412,6 +2439,8 @@ class SkillManager:
         version: str | None = None,
         slot: str | None = None,
         source_manifest_digest: str | None = None,
+        package_digest: str | None = None,
+        package_manifest_digest: str | None = None,
     ) -> str:
         env = self._runtime_env(name)
         source_path: Path | None = None
@@ -2459,6 +2488,17 @@ class SkillManager:
         prepared_source_digest = str(slot_meta.get("source_manifest_digest") or "").strip()
         if source_manifest_digest is not None and source_manifest_digest != prepared_source_digest:
             needs_prepare = True
+        prepared_package_digest = str(slot_meta.get("package_digest") or "").strip()
+        if package_digest is not None and package_digest != prepared_package_digest:
+            needs_prepare = True
+        prepared_package_manifest_digest = str(
+            slot_meta.get("package_manifest_digest") or ""
+        ).strip()
+        if (
+            package_manifest_digest is not None
+            and package_manifest_digest != prepared_package_manifest_digest
+        ):
+            needs_prepare = True
         if slot_meta.get("preparation_identity") != _runtime_preparation_identity():
             needs_prepare = True
         if (
@@ -2494,6 +2534,8 @@ class SkillManager:
                         or _is_explicit_reinstall_deactivation(previous_deactivation)
                     ),
                     source_manifest_digest=source_manifest_digest,
+                    package_digest=package_digest,
+                    package_manifest_digest=package_manifest_digest,
                 )
             except SkillCoreCompatibilityError as exc:
                 raise RuntimeError("skill_runtime_core_incompatible") from exc
@@ -3149,6 +3191,8 @@ class SkillManager:
             "active_slot": active_slot,
             "resolved_manifest": str(resolved_path),
             "source_manifest_digest": slot_meta.get("source_manifest_digest"),
+            "package_digest": slot_meta.get("package_digest"),
+            "package_manifest_digest": slot_meta.get("package_manifest_digest"),
             "ready": ready,
             "active_selection_valid": bool(active_selection["valid"]),
             "active_selection_reason": active_selection["reason"],
@@ -3229,6 +3273,8 @@ class SkillManager:
             "active_slot": active_slot,
             "resolved_manifest": str(resolved_path),
             "source_manifest_digest": slot_meta.get("source_manifest_digest"),
+            "package_digest": slot_meta.get("package_digest"),
+            "package_manifest_digest": slot_meta.get("package_manifest_digest"),
             "ready": ready,
             "active_selection_valid": bool(active_selection["valid"]),
             "active_selection_reason": active_selection["reason"],

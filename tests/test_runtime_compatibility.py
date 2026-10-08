@@ -169,6 +169,26 @@ def test_classifier_fails_closed_when_package_identity_is_unknown() -> None:
     ]
 
 
+def test_classifier_rejects_inconsistent_package_manifest_identity() -> None:
+    result = classify_runtime_compatibility(
+        _snapshot(
+            desired_release={
+                "admitted": True,
+                "package_digest": "sha256:desired",
+                "manifest_digest": "sha256:desired-manifest",
+            },
+            installed_release={
+                "package_digest": "sha256:desired",
+                "manifest_digest": "sha256:other-manifest",
+            },
+        )
+    )
+
+    assert result["code"] == "installed_release_identity_inconsistent"
+    assert result["automatic_recovery_eligible"] is False
+    assert result["human_decision_required"] is False
+
+
 def test_collector_binds_workspace_lock_to_selected_and_loaded_runtime(
     tmp_path,
     monkeypatch,
@@ -192,7 +212,11 @@ def test_collector_binds_workspace_lock_to_selected_and_loaded_runtime(
                     "loaded_at": 20.0,
                     "selected_version": "2.0.0",
                     "selected_slot": "B",
+                    "selected_package_digest": "sha256:admitted",
+                    "selected_package_manifest_digest": "sha256:manifest",
                     "selected_source_manifest_digest": "sha256:manifest",
+                    "loaded_package_digest": "sha256:previous",
+                    "loaded_package_manifest_digest": "sha256:previous-manifest",
                     "loaded_source_manifest_digest": "sha256:previous-manifest",
                     "source_drift": False,
                     "selection_drift": True,
@@ -240,7 +264,8 @@ def test_collector_binds_workspace_lock_to_selected_and_loaded_runtime(
     assert snapshot["installed_release"]["slot"] == "B"
     assert snapshot["installed_release"]["package_digest"] == "sha256:admitted"
     assert snapshot["installed_release"]["manifest_digest"] == "sha256:manifest"
-    assert snapshot["loaded_runtime"]["package_digest"] is None
+    assert snapshot["installed_release"]["source_manifest_digest"] == "sha256:manifest"
+    assert snapshot["loaded_runtime"]["package_digest"] == "sha256:previous"
     assert snapshot["loaded_runtime"]["manifest_digest"] == "sha256:previous-manifest"
     assert classified["code"] == "stale_runtime_memory"
     assert classified["automatic_recovery_eligible"] is True

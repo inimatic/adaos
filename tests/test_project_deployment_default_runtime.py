@@ -148,10 +148,12 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
             component_id: str,
             *,
             version: str,
-            source_manifest_digest: str | None = None,
+            package_digest: str | None = None,
+            package_manifest_digest: str | None = None,
         ) -> str:
             events.append(("slot", f"{component_id}:{version}"))
-            assert source_manifest_digest == manifest_digest
+            assert package_digest == "sha256:" + "b" * 64
+            assert package_manifest_digest == manifest_digest
             return "B"
 
     monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
@@ -259,9 +261,11 @@ def test_skill_component_activation_fails_when_live_handlers_do_not_activate(mon
             _component_id: str,
             *,
             version: str,
-            source_manifest_digest: str | None = None,
+            package_digest: str | None = None,
+            package_manifest_digest: str | None = None,
         ) -> str:
-            assert source_manifest_digest is None
+            assert package_digest is None
+            assert package_manifest_digest is None
             return "A"
 
     monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
@@ -573,9 +577,12 @@ def test_skill_health_requires_exact_activated_package_manifest(monkeypatch) -> 
     expected = "sha256:" + "a" * 64
 
     class Manager:
-        def active_runtime_source_manifest_digest(self, component_id: str) -> str:
+        def active_runtime_package_identity(self, component_id: str) -> dict[str, str]:
             assert component_id == "media_library_agent"
-            return "sha256:" + "b" * 64
+            return {
+                "package_digest": "sha256:" + "c" * 64,
+                "package_manifest_digest": "sha256:" + "b" * 64,
+            }
 
     hooks = AdaOSComponentLifecycleHooks(SimpleNamespace())
     monkeypatch.setattr(

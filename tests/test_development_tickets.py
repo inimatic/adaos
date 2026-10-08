@@ -1443,6 +1443,7 @@ def test_qualified_runtime_reactivation_closes_ticket_with_safe_receipt(
             "slot": "B",
             "package_digest": "sha256:admitted",
             "manifest_digest": "sha256:manifest",
+            "source_manifest_digest": "sha256:source",
         },
         "loaded_runtime": {
             "module_available": True,
@@ -1516,7 +1517,8 @@ def test_qualified_runtime_reactivation_closes_ticket_with_safe_receipt(
     assert calls[0]["expected_version"] == "2.0.0"
     assert calls[0]["expected_slot"] == "B"
     assert calls[0]["expected_package_digest"] == "sha256:admitted"
-    assert calls[0]["expected_source_manifest_digest"] == "sha256:manifest"
+    assert calls[0]["expected_package_manifest_digest"] == "sha256:manifest"
+    assert calls[0]["expected_source_manifest_digest"] == "sha256:source"
     assert calls[0]["ctx"] is context
 
 

@@ -56,6 +56,7 @@ def test_exact_reactivation_is_durable_bounded_and_idempotent(_autocontext) -> N
         "expected_version": "1.2.3",
         "expected_slot": "A",
         "expected_package_digest": "sha256:exact",
+        "expected_package_manifest_digest": "sha256:manifest",
         "expected_source_manifest_digest": "sha256:manifest",
         "classification": _classification(manifest_digest="sha256:manifest"),
         "loader": loader,
@@ -70,6 +71,8 @@ def test_exact_reactivation_is_durable_bounded_and_idempotent(_autocontext) -> N
     assert duplicate["duplicate"] is True
     assert len(loader.calls) == 1
     assert loader.calls[0]["expected_source_manifest_digest"] == "sha256:manifest"
+    assert loader.calls[0]["expected_package_digest"] == "sha256:exact"
+    assert loader.calls[0]["expected_package_manifest_digest"] == "sha256:manifest"
     attempts = list_reactivation_attempts(_autocontext, skill_id="example_skill")
     assert [(item["attempt_number"], item["status"]) for item in attempts] == [(1, "succeeded")]
 

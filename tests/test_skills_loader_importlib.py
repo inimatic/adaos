@@ -977,6 +977,38 @@ def test_reload_rejects_runtime_source_digest_different_from_admitted_identity(t
     assert receipt["expected_source_manifest_digest"] == "sha256:admitted"
 
 
+def test_reload_rejects_runtime_package_identity_different_from_admitted_release(
+    tmp_path: Path,
+) -> None:
+    skill_name = "package_fenced_skill"
+    runtime_root = tmp_path / ".runtime" / skill_name
+    bucket_root = runtime_root / "v1.0"
+    bucket_root.mkdir(parents=True)
+    (runtime_root / "current_version").write_text("1.0", encoding="utf-8")
+    (bucket_root / "active").write_text("A", encoding="utf-8")
+    (bucket_root / "meta.json").write_text(
+        '{"slots":{"A":{"package_digest":"sha256:installed",'
+        '"package_manifest_digest":"sha256:installed-manifest"}}}\n',
+        encoding="utf-8",
+    )
+
+    receipt = asyncio.run(
+        ImportlibSkillsLoader().reload_skill_handlers(
+            tmp_path,
+            skill_name,
+            expected_version="1.0",
+            expected_slot="A",
+            expected_package_digest="sha256:admitted",
+            expected_package_manifest_digest="sha256:admitted-manifest",
+        )
+    )
+
+    assert receipt["ok"] is False
+    assert receipt["reason"] == "runtime_package_identity_mismatch"
+    assert receipt["package_digest"] == "sha256:installed"
+    assert receipt["expected_package_digest"] == "sha256:admitted"
+
+
 def test_multi_handler_reload_failure_restores_entire_previous_generation(
     monkeypatch,
     tmp_path: Path,

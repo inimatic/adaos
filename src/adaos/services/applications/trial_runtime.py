@@ -191,9 +191,20 @@ class NativeTrialRuntime:
                     if package.kind != "skill":
                         continue
                     source = self.verified_source(package)
-                    manager.prepare_runtime(package.artifact_id, path=source,
-                                            version_override=package.version, run_tests=True)
-                    manager.activate_runtime(package.artifact_id, version=package.version)
+                    manager.prepare_runtime(
+                        package.artifact_id,
+                        path=source,
+                        version_override=package.version,
+                        run_tests=True,
+                        package_digest=package.digest,
+                        package_manifest_digest=package.manifest_digest,
+                    )
+                    manager.activate_runtime(
+                        package.artifact_id,
+                        version=package.version,
+                        package_digest=package.digest,
+                        package_manifest_digest=package.manifest_digest,
+                    )
             return manager
 
     def ready_manager(self, skill: str):

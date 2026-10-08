@@ -522,7 +522,8 @@ class AdaOSComponentLifecycleHooks:
                     slot = self._skill_manager().activate_runtime(
                         component_id,
                         version=version,
-                        source_manifest_digest=manifest_digest,
+                        package_digest=package_digest,
+                        package_manifest_digest=manifest_digest,
                     )
                 except Exception as exc:
                     cause_code = normalized_error_code(
@@ -586,15 +587,21 @@ class AdaOSComponentLifecycleHooks:
     ) -> Mapping[str, Any]:
         if kind == "skill":
             observed = str(resolve_active_version(component_id, ctx=self.ctx) or "")
-            observed_manifest_digest = (
-                self._skill_manager().active_runtime_source_manifest_digest(component_id)
+            observed_identity = self._skill_manager().active_runtime_package_identity(
+                component_id
             )
-            exact_runtime = manifest_digest is None or observed_manifest_digest == manifest_digest
+            observed_package_digest = observed_identity.get("package_digest")
+            observed_manifest_digest = observed_identity.get("package_manifest_digest")
+            exact_runtime = (
+                (package_digest is None or observed_package_digest == package_digest)
+                and (manifest_digest is None or observed_manifest_digest == manifest_digest)
+            )
             service = self._service_activation_status(component_id)
             return {
                 "ready": observed == version and exact_runtime and service.get("ready") is True,
                 "version": observed,
                 "package_digest": package_digest,
+                "observed_package_digest": observed_package_digest,
                 "expected_manifest_digest": manifest_digest,
                 "observed_manifest_digest": observed_manifest_digest,
                 "exact_runtime": exact_runtime,

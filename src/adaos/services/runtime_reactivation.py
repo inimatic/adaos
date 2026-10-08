@@ -87,6 +87,7 @@ def _classification_admits(
     classification: Mapping[str, Any],
     *,
     package_digest: str,
+    package_manifest_digest: str,
     source_manifest_digest: str,
 ) -> None:
     value = dict(classification or {})
@@ -106,13 +107,15 @@ def _classification_admits(
     installed_manifest = str(value.get("installed_manifest_digest") or "").strip()
     if desired_manifest or installed_manifest:
         if (
-            not source_manifest_digest
-            or desired_manifest != source_manifest_digest
-            or installed_manifest != source_manifest_digest
+            not package_manifest_digest
+            or desired_manifest != package_manifest_digest
+            or installed_manifest != package_manifest_digest
         ):
             raise RuntimeReactivationError(
-                "classification source manifest identity does not match the requested digest"
+                "classification package manifest identity does not match the requested digest"
             )
+    if not source_manifest_digest:
+        raise RuntimeReactivationError("runtime source manifest identity is required")
 
 
 def _json(value: Any) -> str:
@@ -146,6 +149,7 @@ async def reactivate_exact_admitted_package(
     expected_version: str,
     expected_slot: str,
     expected_package_digest: str,
+    expected_package_manifest_digest: str | None = None,
     expected_source_manifest_digest: str | None = None,
     classification: Mapping[str, Any],
     attempt_budget: int = 3,
@@ -166,6 +170,11 @@ async def reactivate_exact_admitted_package(
     version = str(expected_version or "").strip()
     slot = str(expected_slot or "").strip().upper()
     package_digest = str(expected_package_digest or "").strip()
+    package_manifest_digest = str(
+        expected_package_manifest_digest
+        or classification.get("desired_manifest_digest")
+        or ""
+    ).strip()
     source_manifest_digest = str(
         expected_source_manifest_digest or expected_package_digest or ""
     ).strip()
@@ -186,6 +195,7 @@ async def reactivate_exact_admitted_package(
     _classification_admits(
         classification,
         package_digest=package_digest,
+        package_manifest_digest=package_manifest_digest,
         source_manifest_digest=source_manifest_digest,
     )
     _ensure_schema(ctx)
@@ -282,6 +292,8 @@ async def reactivate_exact_admitted_package(
             expected_version=version,
             expected_slot=slot,
             expected_source_manifest_digest=source_manifest_digest,
+            expected_package_digest=package_digest,
+            expected_package_manifest_digest=package_manifest_digest,
             drain_timeout_s=drain_timeout,
         )
     except Exception as exc:
@@ -305,6 +317,7 @@ async def reactivate_exact_admitted_package(
         "expected_version": version,
         "expected_slot": slot,
         "package_digest": package_digest,
+        "package_manifest_digest": package_manifest_digest or None,
         "source_manifest_digest": source_manifest_digest,
         "attempt_count": attempt_count,
         "attempt_number": attempt_number,

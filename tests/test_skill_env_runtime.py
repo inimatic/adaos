@@ -2060,12 +2060,16 @@ def test_activate_runtime_reprepares_same_version_after_project_removal(monkeypa
         run_tests=False,
         preferred_slot="A",
         source_manifest_digest="sha256:" + "a" * 64,
+        package_digest="sha256:" + "1" * 64,
+        package_manifest_digest="sha256:" + "2" * 64,
     )
     mgr.activate_runtime(
         skill_name,
         version=initial.version,
         slot=initial.slot,
         source_manifest_digest="sha256:" + "a" * 64,
+        package_digest="sha256:" + "1" * 64,
+        package_manifest_digest="sha256:" + "2" * 64,
     )
     mgr.deactivate_runtime(
         skill_name,
@@ -2079,12 +2083,21 @@ def test_activate_runtime_reprepares_same_version_after_project_removal(monkeypa
         skill_name,
         version="1.0.0",
         source_manifest_digest="sha256:" + "b" * 64,
+        package_digest="sha256:" + "3" * 64,
+        package_manifest_digest="sha256:" + "4" * 64,
     )
 
     assert selected == "B"
     status = mgr.runtime_status(skill_name)
     assert status["deactivated"] is False
     assert mgr.active_runtime_source_manifest_digest(skill_name) == "sha256:" + "b" * 64
+    assert mgr.active_runtime_package_identity(skill_name) == {
+        "version": "1.0.0",
+        "slot": "B",
+        "package_digest": "sha256:" + "3" * 64,
+        "package_manifest_digest": "sha256:" + "4" * 64,
+        "source_manifest_digest": "sha256:" + "b" * 64,
+    }
 
 
 def test_activate_runtime_does_not_switch_slot_before_smoke_import(monkeypatch) -> None:

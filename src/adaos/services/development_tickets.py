@@ -3582,14 +3582,16 @@ class DevelopmentTicketService:
         version = _text(desired.get("version") or installed.get("version"))
         slot = _text(installed.get("slot")).upper()
         package_digest = _text(desired.get("package_digest"))
-        source_manifest_digest = _text(desired.get("manifest_digest"))
+        package_manifest_digest = _text(desired.get("manifest_digest"))
+        source_manifest_digest = _text(installed.get("source_manifest_digest"))
         if (
             not version
             or slot not in {"A", "B"}
             or not package_digest
+            or not package_manifest_digest
             or not source_manifest_digest
             or package_digest != _text(installed.get("package_digest"))
-            or source_manifest_digest != _text(installed.get("manifest_digest"))
+            or package_manifest_digest != _text(installed.get("manifest_digest"))
         ):
             return {
                 "ok": False,
@@ -3607,6 +3609,7 @@ class DevelopmentTicketService:
             expected_version=version,
             expected_slot=slot,
             expected_package_digest=package_digest,
+            expected_package_manifest_digest=package_manifest_digest,
             expected_source_manifest_digest=source_manifest_digest,
             classification=qualified,
         )
@@ -3622,6 +3625,7 @@ class DevelopmentTicketService:
                 "expected_version",
                 "expected_slot",
                 "package_digest",
+                "package_manifest_digest",
                 "source_manifest_digest",
                 "attempt_count",
                 "attempt_number",

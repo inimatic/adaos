@@ -55,6 +55,11 @@ def classify_runtime_compatibility(snapshot: Mapping[str, Any]) -> dict[str, Any
     installed_manifest_digest = _text(installed.get("manifest_digest"))
     loaded_manifest_digest = _text(loaded.get("manifest_digest"))
     desired_admitted = desired.get("admitted") is True
+    installed_manifest_matches = (
+        not desired_manifest_digest
+        or not installed_manifest_digest
+        or desired_manifest_digest == installed_manifest_digest
+    )
     module_available = _boolean(loaded.get("module_available"))
     source_drift = bool(loaded.get("source_drift"))
     selection_drift = bool(loaded.get("selection_drift"))
@@ -103,11 +108,25 @@ def classify_runtime_compatibility(snapshot: Mapping[str, Any]) -> dict[str, Any
         owner = "runtime"
         recommended_action = "record_diagnostic_only"
         explanation = "The observed broadcast is owned by another component and must not expand this skill's policy."
+    elif (
+        desired_digest
+        and desired_digest == installed_digest
+        and not installed_manifest_matches
+    ):
+        code = "installed_release_identity_inconsistent"
+        owner = "runtime"
+        recommended_action = "restore_exact_admitted_package"
+        explanation = "The installed runtime reports the admitted package digest with a different package manifest identity."
     elif module_available is False:
         code = "unavailable_module"
         owner = "runtime"
         recommended_action = "restore_exact_admitted_package"
-        automatic_recovery_eligible = bool(desired_admitted and desired_digest and desired_digest == installed_digest)
+        automatic_recovery_eligible = bool(
+            desired_admitted
+            and desired_digest
+            and desired_digest == installed_digest
+            and installed_manifest_matches
+        )
         explanation = "The exact admitted package is installed, but its runtime module is unavailable."
     elif selection_drift or (
         desired_digest
@@ -121,6 +140,7 @@ def classify_runtime_compatibility(snapshot: Mapping[str, Any]) -> dict[str, Any
         automatic_recovery_eligible = bool(
             desired_admitted
             and desired_digest == installed_digest
+            and installed_manifest_matches
             and not source_drift
         )
         explanation = "The selected admitted package differs from the handlers currently held in memory."
@@ -238,6 +258,34 @@ def collect_skill_runtime_compatibility_snapshot(
             if _text(item.get("loaded_source_manifest_digest"))
         }
     )
+    selected_package_digests = sorted(
+        {
+            _text(item.get("selected_package_digest"))
+            for item in handlers
+            if _text(item.get("selected_package_digest"))
+        }
+    )
+    selected_package_manifest_digests = sorted(
+        {
+            _text(item.get("selected_package_manifest_digest"))
+            for item in handlers
+            if _text(item.get("selected_package_manifest_digest"))
+        }
+    )
+    loaded_package_digests = sorted(
+        {
+            _text(item.get("loaded_package_digest"))
+            for item in handlers
+            if _text(item.get("loaded_package_digest"))
+        }
+    )
+    loaded_package_manifest_digests = sorted(
+        {
+            _text(item.get("loaded_package_manifest_digest"))
+            for item in handlers
+            if _text(item.get("loaded_package_manifest_digest"))
+        }
+    )
     generations = [float(item.get("loaded_at") or 0.0) for item in handlers]
     admitted_component: dict[str, Any] = {}
     try:
@@ -284,32 +332,32 @@ def collect_skill_runtime_compatibility_snapshot(
             "version": selected_versions[0] if len(selected_versions) == 1 else None,
             "slot": selected_slots[0] if len(selected_slots) == 1 else None,
             "package_digest": (
-                admitted_component.get("package_digest")
-                if len(selected_source_digests) == 1
-                and selected_source_digests[0]
-                == admitted_component.get("manifest_digest")
+                selected_package_digests[0]
+                if len(selected_package_digests) == 1
                 else None
             ),
             "manifest_digest": (
-                selected_source_digests[0]
-                if len(selected_source_digests) == 1
+                selected_package_manifest_digests[0]
+                if len(selected_package_manifest_digests) == 1
                 else None
+            ),
+            "source_manifest_digest": (
+                selected_source_digests[0] if len(selected_source_digests) == 1 else None
             ),
         },
         "loaded_runtime": {
             "module_available": bool(handlers),
             "generation": str(max(generations)) if generations else None,
             "package_digest": (
-                admitted_component.get("package_digest")
-                if len(loaded_source_digests) == 1
-                and loaded_source_digests[0]
-                == admitted_component.get("manifest_digest")
-                else None
+                loaded_package_digests[0] if len(loaded_package_digests) == 1 else None
             ),
             "manifest_digest": (
-                loaded_source_digests[0]
-                if len(loaded_source_digests) == 1
+                loaded_package_manifest_digests[0]
+                if len(loaded_package_manifest_digests) == 1
                 else None
+            ),
+            "source_manifest_digest": (
+                loaded_source_digests[0] if len(loaded_source_digests) == 1 else None
             ),
             "selected_slot": selected_slots[0] if len(selected_slots) == 1 else None,
             "handler_count": len(handlers),
@@ -322,6 +370,8 @@ def collect_skill_runtime_compatibility_snapshot(
                     "loaded_slot": item.get("loaded_slot"),
                     "selected_bucket": item.get("selected_bucket"),
                     "selected_slot": item.get("selected_slot"),
+                    "loaded_package_digest": item.get("loaded_package_digest"),
+                    "selected_package_digest": item.get("selected_package_digest"),
                     "current_exists": item.get("current_exists"),
                     "source_drift": item.get("source_drift"),
                     "selection_drift": item.get("selection_drift"),

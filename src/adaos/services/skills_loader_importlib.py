@@ -54,17 +54,28 @@ def _source_digest(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _runtime_slot_metadata(
+    environment: SkillRuntimeEnvironment,
+    version: str,
+    slot: str,
+) -> dict[str, Any]:
+    if not version or not slot:
+        return {}
+    metadata = environment.read_version_metadata(version)
+    slots = metadata.get("slots") if isinstance(metadata.get("slots"), Mapping) else {}
+    selected = slots.get(slot) if isinstance(slots, Mapping) else None
+    return dict(selected or {})
+
+
 def _active_runtime_source_digest(
     environment: SkillRuntimeEnvironment,
     version: str,
     slot: str,
 ) -> str:
-    if not version or not slot:
-        return ""
-    metadata = environment.read_version_metadata(version)
-    slots = metadata.get("slots") if isinstance(metadata.get("slots"), Mapping) else {}
-    selected = slots.get(slot) if isinstance(slots, Mapping) else None
-    return str(dict(selected or {}).get("source_manifest_digest") or "").strip()
+    return str(
+        _runtime_slot_metadata(environment, version, slot).get("source_manifest_digest")
+        or ""
+    ).strip()
 
 
 def _capture_handler_generation(skill_name: str, handlers: Iterable[Path]) -> dict[str, Any]:
@@ -175,36 +186,54 @@ def _runtime_selection_from_handler(path: Path) -> dict[str, str]:
             if env.runtime_bucket(version) == loaded_bucket
         ]
         loaded_version = loaded_versions[0] if len(loaded_versions) == 1 else ""
-        loaded_source_manifest_digest = _active_runtime_source_digest(
-            env,
-            loaded_version,
-            loaded_slot,
-        )
+        loaded_metadata = _runtime_slot_metadata(env, loaded_version, loaded_slot)
+        loaded_source_manifest_digest = str(
+            loaded_metadata.get("source_manifest_digest") or ""
+        ).strip()
+        loaded_package_digest = str(loaded_metadata.get("package_digest") or "").strip()
+        loaded_package_manifest_digest = str(
+            loaded_metadata.get("package_manifest_digest") or ""
+        ).strip()
         selected_version = str(env.resolve_active_version() or "").strip()
         selected_bucket = env.runtime_bucket(selected_version) if selected_version else ""
         selected_slot = env.read_active_slot(selected_version) if selected_version else ""
-        selected_source_manifest_digest = _active_runtime_source_digest(
-            env,
-            selected_version,
-            str(selected_slot or "").upper(),
+        selected_metadata = _runtime_slot_metadata(
+            env, selected_version, str(selected_slot or "").upper()
         )
+        selected_source_manifest_digest = str(
+            selected_metadata.get("source_manifest_digest") or ""
+        ).strip()
+        selected_package_digest = str(
+            selected_metadata.get("package_digest") or ""
+        ).strip()
+        selected_package_manifest_digest = str(
+            selected_metadata.get("package_manifest_digest") or ""
+        ).strip()
     except Exception:
         loaded_version = ""
         loaded_source_manifest_digest = ""
+        loaded_package_digest = ""
+        loaded_package_manifest_digest = ""
         selected_version = ""
         selected_bucket = ""
         selected_slot = ""
         selected_source_manifest_digest = ""
+        selected_package_digest = ""
+        selected_package_manifest_digest = ""
     return {
         "skill": skill_name,
         "loaded_bucket": loaded_bucket,
         "loaded_slot": loaded_slot,
         "loaded_version": loaded_version,
         "loaded_source_manifest_digest": loaded_source_manifest_digest,
+        "loaded_package_digest": loaded_package_digest,
+        "loaded_package_manifest_digest": loaded_package_manifest_digest,
         "selected_version": selected_version,
         "selected_bucket": selected_bucket,
         "selected_slot": str(selected_slot or "").upper(),
         "selected_source_manifest_digest": selected_source_manifest_digest,
+        "selected_package_digest": selected_package_digest,
+        "selected_package_manifest_digest": selected_package_manifest_digest,
     }
 
 
@@ -643,6 +672,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         expected_version: str | None = None,
         expected_slot: str | None = None,
         expected_source_manifest_digest: str | None = None,
+        expected_package_digest: str | None = None,
+        expected_package_manifest_digest: str | None = None,
         drain_timeout_s: float = 10.0,
     ) -> dict[str, Any]:
         """Reload one exact runtime generation under a per-skill process lock."""
@@ -659,6 +690,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 expected_version=expected_version,
                 expected_slot=expected_slot,
                 expected_source_manifest_digest=expected_source_manifest_digest,
+                expected_package_digest=expected_package_digest,
+                expected_package_manifest_digest=expected_package_manifest_digest,
                 drain_timeout_s=drain_timeout_s,
             )
         finally:
@@ -672,6 +705,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         expected_version: str | None = None,
         expected_slot: str | None = None,
         expected_source_manifest_digest: str | None = None,
+        expected_package_digest: str | None = None,
+        expected_package_manifest_digest: str | None = None,
         drain_timeout_s: float = 10.0,
     ) -> dict[str, Any]:
         root = Path(skills_root() if callable(skills_root) else skills_root)
@@ -704,32 +739,62 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             else ""
         )
         selection = {"version": active_version, "slot": active_slot}
-        active_source_digest = await asyncio.to_thread(
-            _active_runtime_source_digest,
-            environment,
-            active_version,
-            active_slot,
+        active_metadata = await asyncio.to_thread(
+            _runtime_slot_metadata, environment, active_version, active_slot
         )
+        active_source_digest = str(
+            active_metadata.get("source_manifest_digest") or ""
+        ).strip()
+        active_package_digest = str(active_metadata.get("package_digest") or "").strip()
+        active_package_manifest_digest = str(
+            active_metadata.get("package_manifest_digest") or ""
+        ).strip()
         required_version = str(expected_version or "").strip()
         required_slot = str(expected_slot or "").strip().upper()
         required_source_digest = str(expected_source_manifest_digest or "").strip()
+        required_package_digest = str(expected_package_digest or "").strip()
+        required_package_manifest_digest = str(
+            expected_package_manifest_digest or ""
+        ).strip()
         if (required_version and active_version != required_version) or (
             required_slot and active_slot != required_slot
         ) or (
             required_source_digest and active_source_digest != required_source_digest
+        ) or (
+            required_package_digest and active_package_digest != required_package_digest
+        ) or (
+            required_package_manifest_digest
+            and active_package_manifest_digest != required_package_manifest_digest
         ):
+            identity_mismatch = (
+                required_package_digest and active_package_digest != required_package_digest
+            ) or (
+                required_package_manifest_digest
+                and active_package_manifest_digest != required_package_manifest_digest
+            )
             return {
                 "ok": False,
                 "reason": (
-                    "runtime_source_digest_mismatch"
-                    if required_source_digest and active_source_digest != required_source_digest
-                    else "runtime_selection_mismatch"
+                    "runtime_package_identity_mismatch"
+                    if identity_mismatch
+                    else (
+                        "runtime_source_digest_mismatch"
+                        if required_source_digest
+                        and active_source_digest != required_source_digest
+                        else "runtime_selection_mismatch"
+                    )
                 ),
                 "skill": target,
                 "expected_selection": {"version": required_version, "slot": required_slot},
                 "selection": selection,
                 "expected_source_manifest_digest": required_source_digest or None,
                 "source_manifest_digest": active_source_digest or None,
+                "expected_package_digest": required_package_digest or None,
+                "package_digest": active_package_digest or None,
+                "expected_package_manifest_digest": (
+                    required_package_manifest_digest or None
+                ),
+                "package_manifest_digest": active_package_manifest_digest or None,
                 "subscriptions": subscriptions,
                 "handlers": [],
             }
