@@ -2862,9 +2862,19 @@ class BuilderAutomationService:
         workflow_before = self._workflow().describe(kind, project_id)
         if workflow_before.get("archived"):
             raise ValueError("archived projects cannot start automation")
-        prototype_acceptance = self._workflow().require_current_prototype_acceptance(
-            kind,
-            project_id,
+        validation_only_ticket = (
+            _brief_is_bounded_dev_ticket_repair(brief)
+            and _brief_deterministic_strategy(brief) == "validation_only"
+            and bool(str(external_links.get("development_ticket_id") or "").strip())
+            and bool(str(external_links.get("builder_repair_id") or "").strip())
+        )
+        prototype_acceptance = (
+            None
+            if validation_only_ticket
+            else self._workflow().require_current_prototype_acceptance(
+                kind,
+                project_id,
+            )
         )
         # Compile and register the accepted semantic revision before any
         # implementation task is admitted. This is package-neutral evidence;

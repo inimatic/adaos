@@ -38,12 +38,18 @@ def test_qualified_data_repair_never_bypasses_existing_gates(blocked):
     current = {"generation": 3, "prototype": {}}
     qualification = {"ready": True, "profile": "surgical_data", "target_files": ["handlers/main.py"],
                      "acceptance_checks": ["Explicit folder consent required."]}
-    if blocked == "not_ready": qualification["ready"] = False
-    if blocked == "ui": qualification["profile"] = "surgical_ui"
-    if blocked == "prototype": current["prototype"]["head_revision"] = "001"
-    if blocked == "acceptance": current["prototype"]["acceptance_required"] = True
-    if blocked == "change": current["change_set"] = {"status": "open", "gate": "prototype"}
-    if blocked == "archived": current["archived"] = True
+    if blocked == "not_ready":
+        qualification["ready"] = False
+    if blocked == "ui":
+        qualification["profile"] = "surgical_ui"
+    if blocked == "prototype":
+        current["prototype"]["head_revision"] = "001"
+    if blocked == "acceptance":
+        current["prototype"]["acceptance_required"] = True
+    if blocked == "change":
+        current["change_set"] = {"status": "open", "gate": "prototype"}
+    if blocked == "archived":
+        current["archived"] = True
     workflow = SimpleNamespace(describe=lambda *args: current, transition=lambda *args, **kwargs: calls.append(kwargs))
     service = SimpleNamespace(_project_ref=lambda *args: args, _workflow=lambda: workflow)
     BuilderAutomationService.prepare_qualified_data_repair(service, object_type="scenario", object_id="drive",
@@ -2731,6 +2737,62 @@ def test_validation_only_context_projection_keeps_hash_guard_without_prompt_payl
         )
         == "Do more work."
     )
+
+
+def test_qualified_validation_only_ticket_does_not_require_prototype_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    source = service.dev_scenarios_root / "recipes" / "webui.json"
+    content = source.read_bytes()
+    brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+            "ticket_id": "dticket.validation-direct",
+            "summary": "Validate the already repaired source snapshot.",
+            "repair_hints": {
+                "profile": "surgical_ui",
+                "validation_only": True,
+                "target_files": ["scenarios/recipes/webui.json"],
+                "target_refs": ["file:scenarios/recipes/webui.json"],
+                "acceptance_checks": ["The guarded source passes validation."],
+                "source_preconditions": [
+                    {
+                        "path": "scenarios/recipes/webui.json",
+                        "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
+                        "size": len(content),
+                    }
+                ],
+                "requires_root_mcp": False,
+            },
+        },
+        sort_keys=True,
+    )
+
+    def reject_prototype(*_args, **_kwargs):
+        raise AssertionError("validation-only Dev Ticket must not request Prototype acceptance")
+
+    monkeypatch.setattr(
+        type(service._workflow()),
+        "require_current_prototype_acceptance",
+        reject_prototype,
+    )
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=brief,
+        links={
+            "development_ticket_id": "dticket.validation-direct",
+            "builder_repair_id": "repair.validation-direct",
+        },
+    )
+
+    task = service.factory.read_task(started["session"]["current_task_id"])
+    assert task["result"]["execution_strategy"] == "validation_only"
+    assert task["result"]["no_source_change"] is True
+    assert started["session"]["prototype_acceptance"] is None
 
 
 def test_followup_does_not_replay_one_shot_structured_repair_constraints(
