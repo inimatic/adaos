@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -212,3 +213,108 @@ def test_baseline_harness_writes_only_redacted_artifact_descriptors(
     assert str(paths["snapshot"]) not in serialized
     assert "secret" not in serialized
     assert json.loads(capsys.readouterr().out)["digest"] == evidence["digest"]
+
+
+def test_baseline_harness_reads_bounded_authenticated_snapshot_without_leaking_source(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool_path = ROOT / "tools" / "pending_action_baseline.py"
+    spec = importlib.util.spec_from_file_location("pending_action_baseline_url_tool", tool_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.REPOSITORY_ROOT = tmp_path
+
+    raw_snapshot = json.dumps({"value": {"by_id": {}}}).encode("utf-8")
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return raw_snapshot
+
+    captured: dict[str, object] = {}
+
+    def _urlopen(request, *, timeout):
+        captured["url"] = request.full_url
+        captured["token"] = request.get_header("X-adaos-token")
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(module, "urlopen", _urlopen)
+    monkeypatch.setenv("PA_BASELINE_TOKEN", "secret-token")
+    values = {
+        "revisions": {
+            "core": "core-r1",
+            "client": "client-r1",
+            "application": "app-r1",
+            "runtime": "runtime-r1",
+            "sdk": "sdk-r1",
+            "prompt": "prompt-r1",
+        },
+        "topology": {"mode": "read_only", "nodes": 1},
+        "sdk": {"query": "human decision", "matches": []},
+        "sample": {"size": 1, "source": "live_read_only"},
+    }
+    paths: dict[str, Path] = {}
+    for name, value in values.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        paths[name] = path
+    output = tmp_path / ".tmp" / "baseline-url.json"
+
+    result = module.main([
+        "--snapshot-url",
+        "http://127.0.0.1:8777/api/snapshot",
+        "--token-env",
+        "PA_BASELINE_TOKEN",
+        "--revisions",
+        str(paths["revisions"]),
+        "--topology",
+        str(paths["topology"]),
+        "--sdk-discovery",
+        str(paths["sdk"]),
+        "--sample",
+        str(paths["sample"]),
+        "--output",
+        str(output),
+    ])
+
+    assert result == 0
+    assert captured == {
+        "url": "http://127.0.0.1:8777/api/snapshot",
+        "token": "secret-token",
+        "timeout": 30.0,
+    }
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    serialized = json.dumps(evidence)
+    assert "secret-token" not in serialized
+    assert "127.0.0.1" not in serialized
+    assert evidence["artifacts"][0] == {
+        "role": "snapshot",
+        "digest": "sha256:" + hashlib.sha256(raw_snapshot).hexdigest(),
+        "bytes": len(raw_snapshot),
+        "redaction": "content_and_source_url_not_embedded",
+    }
+    assert json.loads(capsys.readouterr().out)["digest"] == evidence["digest"]
+
+
+def test_baseline_harness_rejects_plain_http_remote_snapshot() -> None:
+    tool_path = ROOT / "tools" / "pending_action_baseline.py"
+    spec = importlib.util.spec_from_file_location("pending_action_baseline_http_tool", tool_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with pytest.raises(ValueError, match="plain HTTP snapshot capture is limited to loopback"):
+        module._snapshot_from_url(
+            "http://example.com/snapshot",
+            token_env="PA_BASELINE_TOKEN",
+            token_header="X-AdaOS-Token",
+        )
