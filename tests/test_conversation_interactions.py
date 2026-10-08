@@ -5,6 +5,11 @@ import pytest
 from adaos.domain import Event
 from adaos.sdk import chat
 from adaos.services import conversation_interactions, conversation_store
+from adaos.services.conversation_action_semantics import (
+    ActionSemanticsError,
+    normalize_action_semantics,
+    validate_effect_assertion,
+)
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.router.service import _compact_voice_chat_stream_message, _telegram_output_projection
@@ -674,6 +679,74 @@ def test_standard_action_presets_are_semantic_contracts_not_labels() -> None:
     legacy["actions"] = [dict(interaction["actions"][0])]
     legacy["actions"][0].pop("semantics")
     assert conversation_interactions.interaction_handle(legacy).interaction_id == interaction["interaction_id"]
+
+
+@pytest.mark.parametrize(
+    ("preset", "risk", "mutates", "terminal", "executor", "required_flag"),
+    [
+        ("details", "read", False, False, "client", None),
+        ("preview", "read", False, False, "client", None),
+        ("open", "read", False, False, "client", None),
+        ("test", "read", False, False, "workflow", "test_executed"),
+        ("snooze", "read", False, False, "core", None),
+        ("defer", "read", False, True, "core", None),
+        ("refuse", "read", False, True, "core", None),
+        ("cancel", "write", True, True, "workflow", "cancelled"),
+        ("compensate", "write", True, True, "workflow", "compensation_applied"),
+    ],
+)
+def test_every_standard_action_preset_has_exact_semantics_and_effect_proof(
+    preset: str,
+    risk: str,
+    mutates: bool,
+    terminal: bool,
+    executor: str,
+    required_flag: str | None,
+) -> None:
+    effect_ref = (
+        {"kind": "effect", "id": f"effect:{preset}", "digest": "sha256:" + "a" * 64}
+        if preset in {"test", "cancel", "compensate"}
+        else None
+    )
+    declared: dict[str, object] = {"effect_ref": effect_ref}
+    action: dict[str, object] = {
+        "preset": preset,
+        "risk": risk,
+        "confirmation_required": mutates,
+        "command": f"action.{preset}",
+        "semantics": declared,
+        "_now": "2026-10-08T10:00:00+00:00",
+        "_interaction_expires_at": "2026-10-08T12:00:00+00:00",
+    }
+    if preset == "snooze":
+        declared["schedule"] = {"resume_at": "2026-10-08T11:00:00+00:00"}
+
+    semantics = normalize_action_semantics(action)
+
+    assert semantics["preset"] == preset
+    assert semantics["executor"] == executor
+    assert semantics["mutates_domain"] is mutates
+    assert semantics["records_consent"] is mutates
+    assert semantics["terminal"] is terminal
+    assert semantics["assertion_required"] is True
+    assertion: dict[str, object] = {
+        "schema": "adaos.conversation.action_effect_assertion.v1",
+        "preset": preset,
+        "operation": semantics["operation"],
+        "effect_ref": effect_ref,
+        "observed": True,
+        "domain_mutated": mutates,
+    }
+    if required_flag:
+        assertion[required_flag] = True
+    if preset == "snooze":
+        assertion["resume_at"] = "2026-10-08T11:00:00+00:00"
+    assert validate_effect_assertion(semantics, {"effect_assertion": assertion}) == assertion
+
+    broken = dict(assertion)
+    broken["observed"] = False
+    with pytest.raises(ActionSemanticsError, match="was not observed"):
+        validate_effect_assertion(semantics, {"effect_assertion": broken})
 
 
 def test_declared_test_requires_exact_effect_and_completion_assertion() -> None:
@@ -1704,3 +1777,89 @@ def test_interaction_query_cursor_rejects_changed_snapshot() -> None:
             limit=1,
             cursor=first["next_cursor"],
         )
+
+
+def test_active_set_and_retention_remain_complete_beyond_one_page() -> None:
+    principal = {"kind": "user", "id": "local", "actor_id": "user:local"}
+    total_per_state = 101
+    for index in range(total_per_state):
+        active = conversation_interactions.create_interaction(
+            conversation_id="conv.scale-retention",
+            owner="skill:publisher",
+            prompt=f"Active decision {index}",
+            actions=[
+                {
+                    "action_id": "inspect",
+                    "label": "Inspect",
+                    "command": "record.inspect",
+                    "value": index,
+                    "risk": "read",
+                    "confirmation_required": False,
+                    "principal_scope": ["user"],
+                }
+            ],
+            interaction_id=f"interaction.scale.active.{index:03d}",
+            content_retention_until_epoch=100,
+            audit_retention_until_epoch=300,
+            now=f"2026-10-08T00:{index // 60:02d}:{index % 60:02d}+00:00",
+        )
+        terminal = conversation_interactions.create_interaction(
+            conversation_id="conv.scale-retention",
+            owner="skill:publisher",
+            prompt=f"Terminal decision {index}",
+            actions=[],
+            interaction_id=f"interaction.scale.terminal.{index:03d}",
+            content_retention_until_epoch=100,
+            audit_retention_until_epoch=300,
+            now=f"2026-10-08T02:{index // 60:02d}:{index % 60:02d}+00:00",
+        )
+        assert active["status"] == "created"
+        conversation_interactions.transition_interaction(
+            terminal["interaction_id"],
+            "cancel",
+            expected_generation=0,
+            reason="scale_fixture",
+            now="2026-10-08T04:00:00+00:00",
+        )
+
+    first = conversation_interactions.query_interactions(
+        principal=principal,
+        conversation_id="conv.scale-retention",
+        active_only=True,
+        limit=100,
+        field_mask="summary",
+    )
+    second = conversation_interactions.query_interactions(
+        principal=principal,
+        conversation_id="conv.scale-retention",
+        active_only=True,
+        limit=100,
+        field_mask="summary",
+        cursor=first["next_cursor"],
+    )
+
+    assert len(first["items"]) == 100
+    assert len(second["items"]) == 1
+    assert first["has_more"] is True
+    assert second["has_more"] is False
+    assert len({item["interaction_id"] for item in first["items"] + second["items"]}) == total_per_state
+
+    totals = {"redacted": 0, "preserved_active": 0}
+    for _ in range(20):
+        report = conversation_store.apply_interaction_retention(now_epoch=150, limit=25)
+        totals["redacted"] += report["redacted"]
+        totals["preserved_active"] += report["preserved_active"]
+        if report["scanned"] == 0:
+            break
+    assert totals["redacted"] == total_per_state
+    assert totals["preserved_active"] >= total_per_state
+    assert all(
+        conversation_store.get_interaction(f"interaction.scale.active.{index:03d}") is not None
+        for index in range(total_per_state)
+    )
+    assert all(
+        "prompt" not in conversation_store.get_interaction(
+            f"interaction.scale.terminal.{index:03d}"
+        )
+        for index in range(total_per_state)
+    )

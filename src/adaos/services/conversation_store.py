@@ -3009,11 +3009,24 @@ def apply_interaction_retention(
         con.execute("BEGIN IMMEDIATE")
         policies = con.execute(
             """
-            SELECT * FROM conversation_interaction_retention
-            WHERE (audit_retention_until IS NOT NULL AND audit_retention_until<=?)
-               OR (content_state='active' AND content_retention_until IS NOT NULL
-                   AND content_retention_until<=?)
-            ORDER BY updated_at, interaction_id
+            SELECT retention.*
+            FROM conversation_interaction_retention AS retention
+            JOIN conversation_interactions AS interaction
+              ON interaction.interaction_id=retention.interaction_id
+            WHERE (retention.audit_retention_until IS NOT NULL
+                   AND retention.audit_retention_until<=?)
+               OR (retention.content_state='active'
+                   AND retention.content_retention_until IS NOT NULL
+                   AND retention.content_retention_until<=?)
+            ORDER BY
+              CASE
+                WHEN json_extract(interaction.payload_json, '$.status')
+                     IN ('completed', 'expired', 'cancelled', 'superseded')
+                  THEN 0
+                ELSE 1
+              END,
+              retention.updated_at,
+              retention.interaction_id
             LIMIT ?
             """,
             (timestamp, timestamp, page_size),
@@ -3040,7 +3053,7 @@ def apply_interaction_retention(
                 report["preserved_active"] += 1
                 con.execute(
                     "UPDATE conversation_interaction_retention SET updated_at=? WHERE interaction_id=?",
-                    (timestamp, interaction_id),
+                    (max(timestamp, time.time()), interaction_id),
                 )
                 continue
             audit_due = (
