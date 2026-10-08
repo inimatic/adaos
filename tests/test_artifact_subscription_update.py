@@ -350,6 +350,56 @@ def test_qualified_runtime_update_is_bound_to_exact_from_target_and_plan(
     assert command["command_digest"].startswith("sha256:")
 
 
+def test_qualified_runtime_update_rejects_downgrade_before_human_choice(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ctx = _context(tmp_path, "skill", "recipe_skill", "1.0.0")
+
+    class _DowngradeRoot(_Root):
+        def inspect_artifact_subscription_update(self, project_id: str):
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "available": True,
+                "update_plan": {
+                    "plan_digest": PLAN_DIGEST,
+                    "activation": {
+                        "observed_components": [
+                            {
+                                "key": "skill:recipe_skill",
+                                "version": "2.0.0",
+                                "package_digest": "sha256:installed",
+                            }
+                        ],
+                        "target_components": [
+                            {
+                                "key": "skill:recipe_skill",
+                                "version": "1.0.0",
+                                "package_digest": "sha256:desired",
+                            }
+                        ],
+                    },
+                },
+            }
+
+    qualification = _qualified_update()
+    qualification["eligible_update_version"] = "1.0.0"
+    monkeypatch.setattr(update_service, "RootDeveloperService", _DowngradeRoot)
+    coordinator = update_service.ArtifactSubscriptionUpdateCoordinator(ctx)
+
+    with pytest.raises(update_service.ArtifactSubscriptionUpdateError) as raised:
+        asyncio.run(
+            coordinator.plan_qualified_runtime_update(
+                "skill",
+                "recipe_skill",
+                qualification=qualification,
+            )
+        )
+
+    assert raised.value.code == "runtime_compatibility_downgrade_rejected"
+
+
 def test_qualified_runtime_update_rejects_identity_drift_before_user_choice(
     monkeypatch,
     tmp_path,

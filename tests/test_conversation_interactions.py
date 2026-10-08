@@ -1008,6 +1008,12 @@ def test_semantic_change_atomically_supersedes_pending_dispatch() -> None:
     )
     assert dispatch["status"] == "rejected"
     assert dispatch["outcome"]["reason_code"] == "interaction_superseded"
+    retained = conversation_store.get_interaction(original["interaction_id"])
+    assert retained is not None
+    assert retained["status"] == "superseded"
+    assert conversation_store.get_interaction_response(
+        answered["response"]["response_id"]
+    )["interaction_id"] == original["interaction_id"]
     with pytest.raises(
         conversation_interactions.ConversationInteractionError,
         match="terminal|stale",
