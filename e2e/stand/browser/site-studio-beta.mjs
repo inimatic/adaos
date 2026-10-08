@@ -177,6 +177,9 @@ let targetRestored = false
 let createdSectionId = ''
 let createdSectionKey = ''
 let createdAssetId = ''
+let headerOriginal = null
+let headerNeedsRestore = false
+let initialBrandState = null
 try {
   await waitReady(page)
   await page.waitForFunction(() => {
@@ -190,6 +193,25 @@ try {
   expect(preview.phase).toBe('ready')
   expect(preview.digest).toMatch(/^sha256:[a-f0-9]{64}$/)
   record('preview-verified', { projectionDigest: preview.digest })
+
+  const publicPreview = host(page, 'site_preview').locator('iframe').contentFrame()
+  await expect(publicPreview.locator('ada-site-header-widget')).toBeVisible({ timeout: 30_000 })
+  initialBrandState = await publicPreview.locator('.site-brand').evaluate(brand => ({
+    logoSrc: brand.querySelector('.site-brand-logo')?.getAttribute('src') || null,
+    mark: brand.querySelector('.site-brand-mark')?.textContent?.trim() || null,
+  }))
+  expect(Boolean(initialBrandState.logoSrc || initialBrandState.mark)).toBe(true)
+  expect(await host(page, 'site_preview').locator('ada-site-preview-widget').count()).toBe(1)
+  expect(await publicPreview.locator('ada-site-preview-widget, ada-chat-widget').count()).toBe(0)
+  const publicWidgetTypes = await publicPreview.locator('[data-webui-widget-type]').evaluateAll(elements =>
+    elements.map(element => element.getAttribute('data-webui-widget-type')))
+  expect(publicWidgetTypes.length).toBeGreaterThan(0)
+  expect(publicWidgetTypes.every(type => type?.startsWith('site.'))).toBe(true)
+  record('non-recursive-public-preview')
+
+  const header = await callTool('query_sections', { resource: 'sections', id: 'header' }, 'header-before-logo')
+  headerOriginal = header.result.item || header.result.items?.[0]
+  expect(headerOriginal?.id).toBe('header')
 
   const stalePage = instrument(await context.newPage())
   await waitReady(stalePage)
@@ -314,14 +336,75 @@ try {
   const assetRow = host(page, 'v_assets').locator(
     `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
   await expect(assetRow).toBeVisible({ timeout: 30_000 })
-  await assetRow.click()
+
+  await host(page, 'prototype-sections').locator('[data-command-id="inspector_tabs"]').click()
+  await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="header"]').click()
+  await expect(field(page, 'e_section', 'heading')).toHaveValue(headerOriginal.heading, { timeout: 30_000 })
+  const mediaSelect = field(page, 'e_section', 'media_ref', 'select')
+  const mediaLabel = `${asset.result.item.alt} / ${asset.result.item.ref}`
+  await expect(mediaSelect.locator('option').filter({ hasText: mediaLabel })).toHaveCount(1, { timeout: 30_000 })
+  await mediaSelect.selectOption({ label: mediaLabel })
+  const logoAssigned = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_section').locator('[data-command-id="cmd_section_update"]').click())
+  expect(logoAssigned.result.ok).toBe(true)
+  expect(logoAssigned.result.item.media_ref).toBe(createdAssetId)
+  headerNeedsRestore = true
+
+  await page.waitForFunction(({ id, digest }) => {
+    const element = document.querySelector(`[data-webui-widget-id="${id}"] ada-site-preview-widget`)
+    const component = window.ng?.getComponent?.(element)
+    return component?.phase === 'ready' && component?.bundle?.projection_digest !== digest
+  }, { id: 'site_preview', digest: preview.digest }, { timeout: 90_000 })
+  const logo = publicPreview.locator('.site-brand-logo')
+  await expect(logo).toBeVisible({ timeout: 30_000 })
+  const logoState = await logo.evaluate(image => ({
+    src: image.getAttribute('src'),
+    currentSrc: image.currentSrc,
+    naturalWidth: image.naturalWidth,
+    naturalHeight: image.naturalHeight,
+  }))
+  expect(logoState.src).toMatch(/^data:image\/png;base64,/)
+  expect(logoState.src).not.toBe(initialBrandState.logoSrc)
+  expect(logoState.currentSrc).toBeTruthy()
+  expect(logoState.naturalWidth).toBeGreaterThan(0)
+  expect(logoState.naturalHeight).toBeGreaterThan(0)
+  record('owned-image-header-logo-preview', { asset: createdAssetId, naturalWidth: logoState.naturalWidth })
+
+  const restoredHeader = await callTool('mutate_records', {
+    resource: 'sections', operation: 'update', id: 'header',
+    expected_revision: logoAssigned.result.item.revision,
+    payload: Object.fromEntries(['eyebrow', 'heading', 'body', 'primary_label', 'primary_target', 'media_ref']
+      .map(key => [key, headerOriginal[key] ?? ''])),
+  }, 'header-restore-logo')
+  expect(restoredHeader.result.ok).toBe(true)
+  headerNeedsRestore = false
+
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await page.waitForFunction(() => {
+    const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
+    return window.ng?.getComponent?.(element)?.phase === 'ready'
+  }, null, { timeout: 90_000 })
+  const restoredPreview = host(page, 'site_preview').locator('iframe').contentFrame()
+  if (initialBrandState.logoSrc) {
+    await expect(restoredPreview.locator('.site-brand-logo')).toHaveAttribute('src', initialBrandState.logoSrc, { timeout: 30_000 })
+  } else {
+    await expect(restoredPreview.locator('.site-brand-mark')).toHaveText(initialBrandState.mark, { timeout: 30_000 })
+    await expect(restoredPreview.locator('.site-brand-logo')).toHaveCount(0)
+  }
+
+  await host(page, 'prototype-sections').locator('[data-command-id="inspector_assets"]').click()
+  const restoredAssetRow = host(page, 'v_assets').locator(
+    `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
+  await expect(restoredAssetRow).toBeVisible({ timeout: 30_000 })
+  await restoredAssetRow.click()
   const assetDeleted = await toolResponse(page, 'mutate_records', async () => {
     await host(page, 'e_assets').locator('[data-command-id="cmd_asset_delete"]').click()
     await page.locator('ion-alert').last().getByRole('button', { name: 'Delete asset', exact: true }).click()
   })
   expect(assetDeleted.result.ok).toBe(true)
   createdAssetId = ''
-  record('owned-image-create-and-confirmed-delete')
+  record('owned-image-restored-and-confirmed-delete')
 
   await host(page, 'authoring_tabs').locator('[data-command-id="discussion"]').click()
   const chat = host(page, 'site_discussion')
@@ -373,6 +456,17 @@ try {
   } else {
     record('discussion-surface-ready')
   }
+
+  await host(page, 'authoring_tabs').locator('[data-command-id="discussion"]').click()
+  await expect(chat.getByRole('button', { name: 'Float conversation', exact: true })).toBeVisible()
+  await chat.getByRole('button', { name: 'Float conversation', exact: true }).click()
+  await expect(chat.getByText('Conversation is floating', { exact: true })).toBeVisible()
+  const floatingConversation = page.locator('ada-floating-conversation-host .floating-conversation')
+  await expect(floatingConversation).toBeVisible()
+  await expect(floatingConversation.locator('ada-chat-widget ion-textarea textarea')).toBeVisible()
+  await floatingConversation.getByRole('button', { name: 'Dock conversation', exact: true }).click()
+  await expect(chat.locator('ion-textarea textarea')).toBeVisible()
+  record('shared-conversation-floating-and-docked')
 
   await host(page, 'prototype-sections').locator('[data-command-id="inspector_tabs"]').click()
   await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="hero"]').click()
@@ -437,6 +531,17 @@ try {
   }
   if (createdAssetId) {
     try {
+      if (headerNeedsRestore && headerOriginal) {
+        const currentHeader = await callTool('query_sections', { resource: 'sections', id: 'header' }, 'cleanup-header-read')
+        const item = currentHeader.result.item || currentHeader.result.items?.[0]
+        if (item) await callTool('mutate_records', {
+          resource: 'sections', operation: 'update', id: 'header', expected_revision: item.revision,
+          payload: Object.fromEntries(['eyebrow', 'heading', 'body', 'primary_label', 'primary_target', 'media_ref']
+            .map(key => [key, headerOriginal[key] ?? ''])),
+        }, 'cleanup-header-restore')
+        report.cleanup.push({ header: 'restored' })
+        headerNeedsRestore = false
+      }
       const current = await callTool('query_assets', { resource: 'assets', id: createdAssetId }, 'cleanup-asset-read')
       const item = current.result.item || current.result.items?.[0]
       if (item) await callTool('mutate_records', {
