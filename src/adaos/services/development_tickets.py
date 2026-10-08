@@ -3211,7 +3211,14 @@ class DevelopmentTicketService:
                         "canonical_ticket_id": canonical["ticket_id"],
                     },
                 )
-                reconciled = self.reconcile_compatibility_pending_actions(
+                # The cohort reconciler runs in the API startup event loop,
+                # while the legacy Pending Actions store still exposes a
+                # synchronous governed-Yjs write.  Keep that write off the
+                # loop; otherwise the evidence is persisted but every card
+                # remains pending because the sync document guard rejects the
+                # nested event-loop access.
+                reconciled = await asyncio.to_thread(
+                    self.reconcile_compatibility_pending_actions,
                     ticket_id,
                     qualification=qualification,
                     ctx=ctx,
@@ -3348,6 +3355,26 @@ class DevelopmentTicketService:
                 )
                 result["outcome"] = "exact_update_decision_published"
                 result["interaction_id"] = interaction_id
+            elif qualification.get("evidence_complete") is not True:
+                missing_evidence = sorted(
+                    {
+                        _text(item)
+                        for item in qualification.get("missing_evidence") or ()
+                        if _text(item)
+                    }
+                )
+                self._update_ticket(
+                    canonical_ticket["ticket_id"],
+                    status="waiting_for_core",
+                    history_item={
+                        "kind": "compatibility_reconciliation_evidence_required",
+                        "qualification_code": code,
+                        "missing_evidence": missing_evidence,
+                        "cohort_digest": cohort_digest,
+                    },
+                )
+                result["outcome"] = "runtime_identity_evidence_required"
+                result["missing_evidence"] = missing_evidence
             elif code in {"compatible", "foreign_stream_observation"}:
                 verified = self._update_ticket(
                     canonical_ticket["ticket_id"],

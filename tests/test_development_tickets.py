@@ -1064,15 +1064,23 @@ def test_legacy_compatibility_cohort_is_grouped_requalified_and_repaired_once(
         tickets.append(ticket)
 
     cancelled: list[dict] = []
+    cancellation_loop_states: list[bool] = []
     import adaos.services.pending_actions as pending_actions
+
+    def _cancel_from_worker(action_id, **kwargs):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            cancellation_loop_states.append(False)
+        else:
+            cancellation_loop_states.append(True)
+        cancelled.append({"id": action_id, **kwargs})
+        return {"duplicate": False}
 
     monkeypatch.setattr(
         pending_actions,
         "cancel_pending_action",
-        lambda action_id, **kwargs: cancelled.append(
-            {"id": action_id, **kwargs}
-        )
-        or {"duplicate": False},
+        _cancel_from_worker,
     )
     snapshots: list[dict] = []
 
@@ -1152,6 +1160,7 @@ def test_legacy_compatibility_cohort_is_grouped_requalified_and_repaired_once(
         item["ticket_id"] for item in tickets[:-1]
     )
     assert len(cancelled) == 5
+    assert cancellation_loop_states == [False] * 5
     assert all(
         item["reason"]
         == "compatibility_requalified:application_declaration_defect"
@@ -1182,6 +1191,79 @@ def test_legacy_compatibility_cohort_is_grouped_requalified_and_repaired_once(
     assert duplicate["groups"] == []
     assert len(cancelled) == 5
     assert len(repair_service.list(project_id="web_desktop_runtime_skill")) == 1
+
+
+def test_legacy_compatibility_cohort_routes_missing_identity_evidence_to_core(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    report = service.report_compatibility_finding(
+        code="compat.stream_receiver_policy_missing",
+        summary="Skill incomplete_skill has no stream receiver policy.",
+        target_scope={"type": "skill", "id": "incomplete_skill"},
+        context={
+            "reason": "stream_receiver_policy_missing",
+            "receiver": "incomplete_skill.owned",
+            "receiver_patterns": [],
+        },
+        dedup_key=development_tickets_module._fingerprint(
+            "compat.receiver",
+            "incomplete_skill",
+            "stream_receiver_policy_missing",
+            "policy",
+        ),
+    )
+    ticket = service._update_ticket(
+        report["ticket"]["ticket_id"],
+        status="waiting_for_user",
+        pending_action_refs=[
+            {
+                "id": "pa.legacy.incomplete",
+                "kind": COMPATIBILITY_PENDING_ACTION_KIND,
+                "status": "pending",
+            }
+        ],
+    )
+    import adaos.services.pending_actions as pending_actions
+
+    monkeypatch.setattr(
+        pending_actions,
+        "cancel_pending_action",
+        lambda *_args, **_kwargs: {"duplicate": False},
+    )
+    qualification = {
+        "schema": "adaos.runtime_compatibility.classification.v1",
+        "code": "application_declaration_defect",
+        "owner": "application",
+        "evidence_complete": False,
+        "missing_evidence": ["installed_release.package_digest"],
+        "recommended_action": "open_scoped_builder_repair",
+        "automatic_recovery_eligible": False,
+        "human_decision_required": False,
+    }
+
+    applied = asyncio.run(
+        service.reconcile_legacy_compatibility_pending_action_cohort(
+            limit=20,
+            apply=True,
+            snapshot_collector=lambda *_args, **_kwargs: {
+                "schema": "adaos.runtime_compatibility.snapshot.v1",
+                "skill_id": "incomplete_skill",
+            },
+            classifier=lambda _snapshot: qualification,
+        )
+    )
+
+    group = applied["groups"][0]
+    assert group["outcome"] == "runtime_identity_evidence_required"
+    assert group["missing_evidence"] == ["installed_release.package_digest"]
+    current = service.get_ticket(ticket["ticket_id"])
+    assert current["status"] == "waiting_for_core"
+    assert current["pending_action_refs"][0]["status"] == "cancelled"
+    assert current["history"][-1]["kind"] == (
+        "compatibility_reconciliation_evidence_required"
+    )
 
 
 def test_legacy_compatibility_cohort_replaces_generic_card_with_exact_update(
