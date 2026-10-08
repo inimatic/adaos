@@ -64,6 +64,65 @@ data_routes:
     return root
 
 
+def _stream_policy_source_tree(root: Path, *, declare_routes: bool = True) -> Path:
+    root.mkdir(parents=True)
+    (root / "handlers").mkdir()
+    (root / "tests").mkdir()
+    routes = """
+data_routes:
+- surface: system-hardware
+  route: stream
+  owner: demo_skill
+  receiver: demo.system.hardware
+  first_paint: loading
+  recovery: snapshot on subscribe
+  update_source: selected-node subscription
+  guard_visibility: unavailable telemetry remains visible
+  budget:
+    max_payload_bytes: 8192
+- surface: system-bootstrap
+  route: stream
+  owner: demo_skill
+  receiver: demo.system.bootstrap
+  first_paint: loading
+  recovery: snapshot on subscribe
+  update_source: root subscription changes
+  guard_visibility: unavailable state remains visible
+  budget:
+    max_payload_bytes: 16384
+""" if declare_routes else "\ndata_routes: []\n"
+    (root / "skill.yaml").write_text(
+        "name: demo_skill\nversion: 0.1.0\n" + routes,
+        encoding="utf-8",
+    )
+    (root / "handlers" / "hardware_stream.py").write_text(
+        """from adaos.sdk.data import StreamReceiver
+
+RECEIVER = "demo.system.hardware"
+RECEIVERS = [StreamReceiver(RECEIVER, build=lambda _context: {})]
+""",
+        encoding="utf-8",
+    )
+    (root / "handlers" / "bootstrap_stream.py").write_text(
+        """from adaos.sdk.data import StreamReceiver
+
+RECEIVER = "demo.system.bootstrap"
+RECEIVERS = [StreamReceiver(RECEIVER, build=lambda _context: {})]
+""",
+        encoding="utf-8",
+    )
+    (root / "tests" / "test_streams.py").write_text(
+        """def test_manifest_declares_only_owned_stream_receivers():
+    assert True
+
+def test_stream_routes_declare_positive_payload_budgets():
+    assert True
+""",
+        encoding="utf-8",
+    )
+    return root
+
+
 def _scenario_source_tree(root: Path) -> Path:
     root.mkdir(parents=True)
     (root / "ui_revisions").mkdir()
@@ -397,6 +456,87 @@ def test_validation_gate_qualification_targets_exact_manifest_with_structured_ed
     assert operation["path"] == "skills/demo_skill/skill.yaml"
     assert "max_payload_bytes: 65536" in operation["new"]
     assert "max_payload_bytes" not in operation["old"]
+
+
+def test_receiver_policy_qualification_uses_owned_handlers_and_validation_only_source(
+    tmp_path: Path,
+) -> None:
+    source = _stream_policy_source_tree(tmp_path / "demo_skill")
+    ticket = {
+        "ticket_id": "dticket.receiver-policy",
+        "summary": "Skill demo_skill has no stream receiver policy.",
+        "component_ref": "skill:demo_skill",
+        "target_scope": {"type": "skill", "id": "demo_skill"},
+        "metadata": {
+            "code": "compat.stream_receiver_policy_missing",
+            "context": {
+                "reason": "stream_receiver_policy_missing",
+                "receiver": "foreign_skill.latest",
+            },
+        },
+        "evidence_refs": [
+            {
+                "type": "runtime_guard",
+                "code": "compat.stream_receiver_policy_missing",
+                "receiver": "another_foreign.stream",
+            }
+        ],
+    }
+
+    result = prepare_repair_qualification(
+        ticket,
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="skill",
+        object_id="demo_skill",
+    )
+
+    assert result["ready"] is True
+    assert result["confidence"] == "high"
+    assert result["model_call_expected"] is False
+    assert result["estimated_model_tokens"] == 0
+    assert result["owned_receivers"] == [
+        "demo.system.bootstrap",
+        "demo.system.hardware",
+    ]
+    assert result["declared_receivers"] == result["owned_receivers"]
+    repair = result["builder_repair"]
+    assert repair["validation_only"] is True
+    assert set(repair["target_files"]) == {
+        "skills/demo_skill/skill.yaml",
+        "skills/demo_skill/handlers/bootstrap_stream.py",
+        "skills/demo_skill/handlers/hardware_stream.py",
+        "skills/demo_skill/tests/test_streams.py",
+    }
+    assert "receiver:foreign_skill.latest" not in repair["target_refs"]
+    assert "receiver:another_foreign.stream" not in repair["target_refs"]
+    assert len(repair["source_preconditions"]) == len(repair["target_files"])
+
+
+def test_receiver_policy_qualification_requires_patch_when_dev_manifest_is_not_fixed(
+    tmp_path: Path,
+) -> None:
+    source = _stream_policy_source_tree(tmp_path / "demo_skill", declare_routes=False)
+    ticket = {
+        "ticket_id": "dticket.receiver-policy-missing",
+        "summary": "Skill demo_skill has no stream receiver policy.",
+        "component_ref": "skill:demo_skill",
+        "target_scope": {"type": "skill", "id": "demo_skill"},
+        "metadata": {"code": "compat.stream_receiver_policy_missing"},
+        "evidence_refs": [],
+    }
+
+    result = prepare_repair_qualification(
+        ticket,
+        development_source={"status": "source_available", "dev_source_path": str(source)},
+        object_type="skill",
+        object_id="demo_skill",
+    )
+
+    assert result["ready"] is True
+    assert result["confidence"] == "high"
+    assert result["model_call_expected"] is True
+    assert result["declared_receivers"] == []
+    assert "validation_only" not in result["builder_repair"]
 
 
 def test_webui_tool_validation_qualification_includes_manifest_ui_and_handler(

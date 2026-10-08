@@ -665,6 +665,198 @@ def _validation_findings(ticket: Mapping[str, Any]) -> list[dict[str, Any]]:
     return findings
 
 
+def _is_stream_receiver_policy_ticket(ticket: Mapping[str, Any]) -> bool:
+    metadata = ticket.get("metadata") if isinstance(ticket.get("metadata"), Mapping) else {}
+    context = metadata.get("context") if isinstance(metadata.get("context"), Mapping) else {}
+    codes = {
+        _text(metadata.get("code")),
+        _text(context.get("code")),
+        _text(context.get("reason")),
+        *{
+            _text(item.get("code"))
+            for item in ticket.get("evidence_refs") or []
+            if isinstance(item, Mapping)
+        },
+    }
+    return bool(
+        codes
+        & {
+            "compat.stream_receiver_policy_missing",
+            "stream_receiver_policy_missing",
+        }
+    )
+
+
+def _stream_receiver_policy_qualification(
+    ticket: Mapping[str, Any],
+    *,
+    source_root: Path,
+    source_index: Mapping[str, Any],
+    entries: list[Mapping[str, Any]],
+    object_type: str,
+    object_id: str,
+) -> dict[str, Any] | None:
+    """Qualify an exact skill-owned receiver repair without using foreign evidence.
+
+    The receiver that happened to expose a missing policy is not an ownership
+    declaration. Ownership is derived only from the selected skill's handlers;
+    an already-correct DEV manifest can therefore take the zero-model
+    validation path before it is packaged and released.
+    """
+
+    if object_type != "skill" or not _is_stream_receiver_policy_ticket(ticket):
+        return None
+
+    by_relative = {_text(item.get("relative_path")): item for item in entries}
+    manifest = by_relative.get("skill.yaml") or by_relative.get("skill.yml")
+    if manifest is None:
+        return {
+            "schema": QUALIFICATION_CANDIDATE_SCHEMA,
+            "status": "unavailable",
+            "ready": False,
+            "confidence": "high",
+            "model_call_expected": False,
+            "recommended_next": "repair_development_source_index",
+            "reason": "the selected skill source has no indexed manifest",
+            "source_index": _compact_source_index(source_index, entries),
+        }
+
+    receiver_pattern = re.compile(
+        r"(?m)^\s*RECEIVER\s*=\s*['\"](?P<receiver>[A-Za-z0-9_.:-]{1,240})['\"]"
+    )
+    owner_entries: list[Mapping[str, Any]] = []
+    owned_receivers: set[str] = set()
+    for entry in entries:
+        relative = _text(entry.get("relative_path"))
+        if not relative.startswith("handlers/") or not relative.endswith(".py"):
+            continue
+        try:
+            text = (source_root / relative).read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "StreamReceiver(" not in text:
+            continue
+        receivers = {
+            _text(match.group("receiver"))
+            for match in receiver_pattern.finditer(text)
+            if _text(match.group("receiver"))
+        }
+        if receivers:
+            owner_entries.append(entry)
+            owned_receivers.update(receivers)
+
+    if not owned_receivers:
+        return {
+            "schema": QUALIFICATION_CANDIDATE_SCHEMA,
+            "status": "needs_clarification",
+            "ready": False,
+            "confidence": "high",
+            "model_call_expected": False,
+            "recommended_next": "inspect_receiver_ownership",
+            "reason": "no exact StreamReceiver ownership declaration was found in the selected skill handlers",
+            "source_index": _compact_source_index(source_index, [manifest, *owner_entries]),
+        }
+
+    test_entry = next(
+        (
+            entry
+            for entry in entries
+            if _text(entry.get("role")) == "test"
+            and any(
+                "owned_stream_receivers" in _text(ref)
+                or "stream_routes_declare" in _text(ref)
+                for ref in entry.get("semantic_refs") or []
+            )
+        ),
+        None,
+    )
+    selected = [manifest, *owner_entries, *([test_entry] if test_entry else [])]
+    target_files = [_text(item.get("workspace_path")) for item in selected]
+    concepts = {"data", "validation"}
+    declared_receivers: set[str] = set()
+    route_contract_complete = False
+    try:
+        document = yaml.safe_load((source_root / _text(manifest.get("relative_path"))).read_text(encoding="utf-8-sig"))
+        routes = document.get("data_routes") if isinstance(document, Mapping) else []
+        stream_routes = [
+            route
+            for route in routes or []
+            if isinstance(route, Mapping) and _text(route.get("route")) == "stream"
+        ]
+        declared_receivers = {
+            _text(route.get("receiver"))
+            for route in stream_routes
+            if _text(route.get("receiver"))
+        }
+        route_contract_complete = (
+            declared_receivers == owned_receivers
+            and all(
+                isinstance(route.get("budget"), Mapping)
+                and isinstance(route["budget"].get("max_payload_bytes"), int)
+                and not isinstance(route["budget"].get("max_payload_bytes"), bool)
+                and int(route["budget"]["max_payload_bytes"]) > 0
+                for route in stream_routes
+            )
+        )
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        route_contract_complete = False
+
+    acceptance_checks = [
+        "Validate the selected skill manifest and packaged tests.",
+        "Declare exactly the StreamReceiver names owned by this skill; do not admit the broadcast receiver that exposed the defect or a wildcard.",
+        "Verify every owned stream route has a positive payload budget and rejects foreign receivers before handler dispatch.",
+    ]
+    if test_entry is not None:
+        acceptance_checks.append(
+            f"Run focused test file: {_text(test_entry.get('workspace_path'))}"
+        )
+    repair = {
+        "profile": _profile_for(concepts),
+        "concepts": sorted(concepts),
+        "prompt_facts": _prompt_facts(ticket, concepts=concepts, selected=selected),
+        "change_summary": _text(ticket.get("summary"))[:1000],
+        "target_files": target_files,
+        "target_refs": [
+            "sdk:skill.data_routes",
+            *[f"receiver:{receiver}" for receiver in sorted(owned_receivers)],
+            *[f"file:{path}" for path in target_files],
+        ],
+        "acceptance_checks": acceptance_checks,
+        "max_changed_files": len(target_files),
+        "requires_root_mcp": False,
+        "target_object_type": object_type,
+        "target_object_id": object_id,
+        "source_preconditions": [
+            {
+                "path": _text(item.get("workspace_path")),
+                "sha256": _text(item.get("sha256")),
+                "size": int(item.get("size") or 0),
+            }
+            for item in selected
+        ],
+    }
+    if route_contract_complete:
+        repair["validation_only"] = True
+    return {
+        "schema": QUALIFICATION_CANDIDATE_SCHEMA,
+        "status": "ready",
+        "ready": True,
+        "confidence": "high",
+        "model_call_expected": not route_contract_complete,
+        "estimated_model_tokens": 0 if route_contract_complete else None,
+        "recommended_next": "apply_local_qualification",
+        "reason": (
+            "the authoritative DEV source already declares exactly the receivers owned by its handlers"
+            if route_contract_complete
+            else "the authoritative handlers identify an exact bounded receiver-policy repair surface"
+        ),
+        "owned_receivers": sorted(owned_receivers),
+        "declared_receivers": sorted(declared_receivers),
+        "builder_repair": repair,
+        "source_index": _compact_source_index(source_index, selected),
+    }
+
+
 def _bounded_route_budget_edit(
     *,
     source_root: Path,
@@ -1261,6 +1453,17 @@ def prepare_repair_qualification(
     )
     if validation_qualification is not None:
         return validation_qualification
+
+    receiver_policy_qualification = _stream_receiver_policy_qualification(
+        ticket,
+        source_root=Path(source_root_text).expanduser().resolve(),
+        source_index=source_index,
+        entries=entries,
+        object_type=object_type,
+        object_id=object_id,
+    )
+    if receiver_policy_qualification is not None:
+        return receiver_policy_qualification
 
     ui_text_rename = _ui_text_rename_qualification(
         ticket,
