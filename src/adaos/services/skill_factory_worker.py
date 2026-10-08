@@ -13241,10 +13241,21 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         )
         target_kind = str(target.get("type") or "").strip().lower().rstrip("s")
         target_id = str(target.get("id") or "").strip()
+        application_scenario_ids = [
+            token
+            for value in artifacts.get("application_scenario_ids") or []
+            if (token := str(value or "").strip())
+            and Path(token).name == token
+            and (workspace / "scenarios" / token).is_dir()
+        ]
         if target_id and Path(target_id).name == target_id:
             target_roots = [workspace / f"{target_kind}s" / target_id]
             if target_kind == "scenario":
                 target_roots.append(workspace / "projects" / target_id)
+            target_roots.extend(
+                workspace / "scenarios" / scenario_id
+                for scenario_id in application_scenario_ids
+            )
             result.update(
                 path.relative_to(workspace).as_posix()
                 for root in target_roots
@@ -13281,6 +13292,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 owned_test_roots.add(workspace / "skills" / target_id / "tests")
             elif target_kind == "scenario":
                 owned_test_roots.add(workspace / "scenarios" / target_id / "tests")
+        owned_test_roots.update(
+            workspace / "scenarios" / scenario_id / "tests"
+            for scenario_id in application_scenario_ids
+        )
         owned_test_roots.update(companion_test_roots)
         for tests_root in owned_test_roots:
             if not tests_root.is_dir():

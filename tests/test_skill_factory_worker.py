@@ -11136,6 +11136,44 @@ def test_worker_revalidates_owned_tests_for_unchanged_retry(tmp_path: Path) -> N
     }
 
 
+def test_worker_reseals_owner_application_contracts_for_skill_repair(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill_tests = workspace / "skills" / "desktop_runtime" / "tests"
+    scenario_tests = workspace / "scenarios" / "desktop" / "tests"
+    skill_tests.mkdir(parents=True)
+    scenario_tests.mkdir(parents=True)
+    (workspace / "skills" / "desktop_runtime" / "skill.yaml").write_text(
+        "name: desktop_runtime\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    for path in (
+        skill_tests / "test_stream_receivers.py",
+        scenario_tests / "test_application_contract.py",
+        scenario_tests / "test_behavior_contract.py",
+    ):
+        path.write_text("def test_contract():\n    assert True\n", encoding="utf-8")
+    request = {
+        "target": {"type": "skill", "id": "desktop_runtime"},
+        "artifacts": {
+            "validation_scope": "owned_artifacts",
+            "application_project_ref": "project:desktop",
+            "application_scenario_ids": ["desktop"],
+        },
+    }
+
+    selected = LocalSkillFactoryWorker._contract_test_paths(
+        request, workspace, changed_paths=set()
+    )
+
+    assert selected == {
+        "skills/desktop_runtime/skill.yaml",
+        "skills/desktop_runtime/tests/test_stream_receivers.py",
+        "scenarios/desktop/tests/test_application_contract.py",
+        "scenarios/desktop/tests/test_behavior_contract.py",
+    }
+
+
 def test_worker_reseals_named_release_contracts_for_narrow_continuation(
     tmp_path: Path,
 ) -> None:

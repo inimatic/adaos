@@ -4325,6 +4325,66 @@ class BuilderAutomationService:
             if skill_id and self._is_mutable_companion_skill(skill_id)
         ]
 
+    def _resolve_project_application_scenario_ids(
+        self,
+        *,
+        project_id: str,
+        component_ref: str,
+    ) -> list[str]:
+        """Return existing application scenarios from one validated owner Project.
+
+        A skill-only Automation task still needs the owning application's
+        release-contract tests before it can enter Trial.  These scenarios are
+        captured as validation inputs, not added to the task's editable sparse
+        paths, so project closure cannot widen the skill repair authority.
+        """
+
+        project_token = _safe_token(project_id, fallback="")
+        component_token = str(component_ref or "").strip()
+        if not project_token or component_token.count(":") != 1:
+            return []
+        from adaos.sdk.developer.compositions import ProjectCompositionError, validate
+
+        manifest_path = (
+            self.dev_scenarios_root.parent
+            / "projects"
+            / project_token
+            / "project.yaml"
+        )
+        try:
+            value = yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+            manifest = validate(value)
+        except (OSError, ValueError, yaml.YAMLError, ProjectCompositionError):
+            return []
+        if str(manifest.get("id") or "").strip() != project_token:
+            return []
+        owned = manifest.get("components", {}).get("owned", [])
+        owned_refs = {
+            str(item.get("ref") or "").strip()
+            for item in owned
+            if isinstance(item, Mapping)
+        }
+        if component_token not in owned_refs:
+            return []
+        result: list[str] = []
+        for item in owned:
+            if not isinstance(item, Mapping):
+                continue
+            ref = str(item.get("ref") or "").strip()
+            if not ref.startswith("scenario:") or not (
+                str(item.get("exposure") or "").strip() == "application"
+                or str(item.get("role") or "").strip() == "primary"
+            ):
+                continue
+            scenario_id = _safe_token(ref.split(":", 1)[1], fallback="")
+            if (
+                scenario_id
+                and (self.dev_scenarios_root / scenario_id).is_dir()
+                and scenario_id not in result
+            ):
+                result.append(scenario_id)
+        return result
+
     @staticmethod
     def _session_companion_skill_ids(session: Mapping[str, Any]) -> list[str]:
         values = session.get("companion_skill_ids")
@@ -10482,11 +10542,22 @@ class BuilderAutomationService:
             if application_project_id
             else None
         )
+        application_scenario_ids: list[str] = []
         if application_project_root is not None and application_project_root.is_dir():
             sparse_paths.append(f"projects/{application_project_id}/")
             source_artifacts.append(
                 ("project", application_project_id, application_project_root)
             )
+            application_scenario_ids = self._resolve_project_application_scenario_ids(
+                project_id=application_project_id,
+                component_ref=f"{kind}:{project_id}",
+            )
+            for scenario_id in application_scenario_ids:
+                if kind == "scenario" and scenario_id == project_id:
+                    continue
+                source_artifacts.append(
+                    ("scenario", scenario_id, self.dev_scenarios_root / scenario_id)
+                )
         if kind == "scenario":
             for skill_id in companions:
                 sparse_paths.append(f"skills/{skill_id}/")
@@ -10945,6 +11016,8 @@ class BuilderAutomationService:
                 "base_implementation_brief": session.get("implementation_brief"),
                 "base_implementation_brief_path": session.get("brief_path"),
                 "companion_skill_ids": companions,
+                "application_project_ref": application_project_ref or None,
+                "application_scenario_ids": application_scenario_ids,
                 "iteration_instruction": iteration_instruction,
                 # An unchanged retry is still a fresh release-evidence run.
                 # Its Git diff is intentionally empty, so the Worker cannot

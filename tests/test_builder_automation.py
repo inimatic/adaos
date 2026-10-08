@@ -6973,6 +6973,29 @@ def test_scenario_automation_ignores_unowned_snapshot_companions(
     assert companions == []
 
 
+def test_project_owned_skill_resolves_application_scenario_as_validation_input(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    skill_root = service.dev_skills_root / "recipes_skill"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        "name: recipes_skill\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    _write_project_manifest(tmp_path / "dev", skill_ids=("recipes_skill",))
+
+    scenarios = service._resolve_project_application_scenario_ids(
+        project_id="recipes",
+        component_ref="skill:recipes_skill",
+    )
+
+    assert scenarios == ["recipes"]
+    assert service._resolve_project_application_scenario_ids(
+        project_id="recipes",
+        component_ref="skill:foreign_skill",
+    ) == []
+
+
 def test_scenario_automation_keeps_published_companions_outside_project_envelope(
     tmp_path: Path,
 ) -> None:
