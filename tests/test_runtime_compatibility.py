@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 from adaos.services import runtime_compatibility
@@ -269,3 +270,65 @@ def test_collector_binds_workspace_lock_to_selected_and_loaded_runtime(
     assert snapshot["loaded_runtime"]["manifest_digest"] == "sha256:previous-manifest"
     assert classified["code"] == "stale_runtime_memory"
     assert classified["automatic_recovery_eligible"] is True
+
+
+def test_provenance_reconciler_is_bounded_and_uses_verified_manager_adoption(
+    _autocontext,
+    monkeypatch,
+) -> None:
+    from adaos.services import artifact_pipeline
+    from adaos.services.skill import manager as skill_manager
+    from adaos.services.skill import runtime_migration_worker
+
+    package = SimpleNamespace(
+        kind="skill",
+        artifact_id="legacy_skill",
+        version="1.0.0",
+        digest="sha256:package",
+        manifest_digest="sha256:manifest",
+        to_dict=lambda: {
+            "kind": "skill",
+            "artifact_id": "legacy_skill",
+            "version": "1.0.0",
+            "digest": "sha256:package",
+            "manifest_digest": "sha256:manifest",
+        },
+    )
+    monkeypatch.setattr(
+        artifact_pipeline,
+        "load_workspace_lock",
+        lambda _path: SimpleNamespace(components=(package,)),
+    )
+
+    class _Manager:
+        def active_runtime_package_identity(self, _skill):
+            return {"version": "1.0.0", "slot": "B"}
+
+        def adopt_active_runtime_package_identity(self, skill, *, package):
+            assert skill == "legacy_skill"
+            assert package["digest"] == "sha256:package"
+            return {
+                "adopted": True,
+                "reason": "exact_package_rebuilt",
+                "version": "1.0.0",
+                "slot": "B",
+                "package_digest": "sha256:package",
+                "package_manifest_digest": "sha256:manifest",
+                "source_manifest_digest": "sha256:source",
+            }
+
+    monkeypatch.setattr(skill_manager, "SkillManager", lambda **_kwargs: _Manager())
+    monkeypatch.setattr(
+        runtime_migration_worker,
+        "runtime_mutation_lease",
+        lambda *_args, **_kwargs: nullcontext(),
+    )
+    result = runtime_compatibility.reconcile_active_runtime_package_provenance(
+        ctx=_autocontext,
+        limit=1,
+    )
+
+    assert result["complete"] is True
+    assert result["scanned"] == 1
+    assert result["adopted"] == 1
+    assert result["errors"] == []

@@ -2432,6 +2432,121 @@ class SkillManager:
             ),
         }
 
+    def adopt_active_runtime_package_identity(
+        self,
+        name: str,
+        *,
+        package: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Adopt missing legacy slot provenance only after exact package rebuild.
+
+        Older prepared slots did not persist PackageRef identity.  Copying the
+        current Workspace lock into those records would turn mutable desired
+        state into false installed evidence.  Rebuild the immutable package from
+        the active slot instead and persist provenance only when both the
+        package archive and package-manifest digests match the admitted ref.
+        """
+
+        from adaos.domain.artifact_release import ArtifactPackageRef
+        from adaos.services.artifact_pipeline.packages import build_artifact_package
+
+        expected = ArtifactPackageRef.from_mapping(package)
+        if expected.kind != "skill" or expected.artifact_id != name:
+            raise ValueError("active runtime package identity does not match skill")
+        env = self._runtime_env(name)
+        version = str(env.resolve_active_version() or "").strip()
+        slot = str(env.read_active_slot(version) or "").strip().upper() if version else ""
+        if version != expected.version or slot not in {"A", "B"}:
+            raise ValueError("active runtime version or slot does not match admitted package")
+
+        metadata = env.read_version_metadata(version)
+        slot_meta = dict(metadata.get("slots", {}).get(slot, {}) or {})
+        existing = {
+            "package_digest": str(slot_meta.get("package_digest") or "").strip(),
+            "package_manifest_digest": str(
+                slot_meta.get("package_manifest_digest") or ""
+            ).strip(),
+        }
+        expected_identity = {
+            "package_digest": expected.digest,
+            "package_manifest_digest": expected.manifest_digest,
+        }
+        for field, value in existing.items():
+            if value and value != expected_identity[field]:
+                raise ValueError(f"active runtime {field} conflicts with admitted package")
+        if existing == expected_identity and str(
+            slot_meta.get("source_manifest_digest") or ""
+        ).strip():
+            return {
+                "schema": "adaos.skill_runtime.provenance_adoption.v1",
+                "ok": True,
+                "adopted": False,
+                "reason": "already_exact",
+                "skill_id": name,
+                "version": version,
+                "slot": slot,
+                **expected_identity,
+                "source_manifest_digest": str(
+                    slot_meta.get("source_manifest_digest") or ""
+                ).strip(),
+            }
+
+        slot_paths = env.build_slot_paths(version, slot)
+        source_root = slot_paths.src_dir / "skills" / name
+        if not source_root.is_dir():
+            raise ValueError("active runtime source is unavailable")
+        rebuilt = build_artifact_package(
+            source_root,
+            kind="skill",
+            source_ref=expected.source_ref,
+        )
+        if (
+            rebuilt.ref.digest != expected.digest
+            or rebuilt.ref.manifest_digest != expected.manifest_digest
+        ):
+            raise ValueError("active runtime bytes do not match admitted package")
+        source_manifest_digest = source_tree_digest(
+            source_root,
+            excluded_dirs=frozenset({".runtime"}),
+        )
+
+        # Re-read after the potentially expensive rebuild so a concurrent slot
+        # switch cannot receive provenance for the previous active bytes.
+        if (
+            str(env.resolve_active_version() or "").strip() != version
+            or str(env.read_active_slot(version) or "").strip().upper() != slot
+        ):
+            raise ValueError("active runtime changed during provenance verification")
+        metadata = env.read_version_metadata(version)
+        slots_meta = metadata.setdefault("slots", {})
+        current = dict(slots_meta.get(slot, {}) or {})
+        for field, expected_value in expected_identity.items():
+            current_value = str(current.get(field) or "").strip()
+            if current_value and current_value != expected_value:
+                raise ValueError(f"active runtime {field} changed during provenance verification")
+            current[field] = expected_value
+        # Legacy source digests describe the pre-staging source tree, while the
+        # package is rebuilt from the normalized active slot. Preserve that
+        # independently useful evidence when present; exact package and
+        # package-manifest equality above authorizes the provenance adoption.
+        current_source_digest = str(current.get("source_manifest_digest") or "").strip()
+        adopted_source_digest = current_source_digest or source_manifest_digest
+        current["source_manifest_digest"] = adopted_source_digest
+        current["provenance_adopted_at"] = datetime.now(timezone.utc).isoformat()
+        slots_meta[slot] = current
+        env.write_version_metadata(version, metadata)
+        return {
+            "schema": "adaos.skill_runtime.provenance_adoption.v1",
+            "ok": True,
+            "adopted": True,
+            "reason": "exact_package_rebuilt",
+            "skill_id": name,
+            "version": version,
+            "slot": slot,
+            **expected_identity,
+            "source_manifest_digest": adopted_source_digest,
+        }
+
     def activate_runtime(
         self,
         name: str,

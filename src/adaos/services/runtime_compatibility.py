@@ -395,9 +395,122 @@ def collect_skill_runtime_compatibility_snapshot(
     }
 
 
+def reconcile_active_runtime_package_provenance(
+    *,
+    ctx: Any = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Backfill pre-provenance active slots from their verified immutable bytes.
+
+    The Workspace lock is desired-state input, not proof of installed identity.
+    ``SkillManager`` therefore rebuilds each active slot and adopts provenance
+    only when both package and package-manifest digests match the admitted ref.
+    """
+
+    from pathlib import Path
+
+    from adaos.adapters.db import SqliteSkillRegistry
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.artifact_pipeline import load_workspace_lock
+    from adaos.services.skill.manager import SkillManager
+    from adaos.services.skill.runtime_migration_worker import runtime_mutation_lease
+
+    bounded_limit = max(1, min(int(limit), 100))
+    context = ctx or get_ctx()
+    lock = load_workspace_lock(
+        Path(context.paths.workspace_dir()) / ".adaos" / "workspace.lock.json"
+    )
+    components = sorted(
+        (
+            item
+            for item in (lock.components if lock is not None else ())
+            if item.kind == "skill"
+        ),
+        key=lambda item: item.artifact_id,
+    )
+    manager = SkillManager(
+        repo=context.skills_repo,
+        registry=SqliteSkillRegistry(context.sql),
+        git=context.git,
+        paths=context.paths,
+        bus=getattr(context, "bus", None),
+        caps=context.caps,
+        settings=context.settings,
+    )
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for component in components[:bounded_limit]:
+        identity = manager.active_runtime_package_identity(component.artifact_id)
+        if not identity.get("version") or not identity.get("slot"):
+            results.append(
+                {
+                    "skill_id": component.artifact_id,
+                    "adopted": False,
+                    "reason": "active_runtime_absent",
+                }
+            )
+            continue
+        if (
+            identity.get("package_digest") == component.digest
+            and identity.get("package_manifest_digest") == component.manifest_digest
+            and identity.get("source_manifest_digest")
+        ):
+            results.append(
+                {
+                    "skill_id": component.artifact_id,
+                    "adopted": False,
+                    "reason": "already_exact",
+                }
+            )
+            continue
+        try:
+            with runtime_mutation_lease(
+                context,
+                operation_id=f"runtime-provenance-adoption:{component.artifact_id}",
+                timeout_s=30.0,
+            ):
+                receipt = manager.adopt_active_runtime_package_identity(
+                    component.artifact_id,
+                    package=component.to_dict(),
+                )
+            results.append(
+                {
+                    "skill_id": component.artifact_id,
+                    "adopted": receipt.get("adopted") is True,
+                    "reason": receipt.get("reason"),
+                    "version": receipt.get("version"),
+                    "slot": receipt.get("slot"),
+                    "package_digest": receipt.get("package_digest"),
+                    "package_manifest_digest": receipt.get(
+                        "package_manifest_digest"
+                    ),
+                    "source_manifest_digest": receipt.get(
+                        "source_manifest_digest"
+                    ),
+                }
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "skill_id": component.artifact_id,
+                    "error": str(exc)[:300],
+                }
+            )
+    return {
+        "schema": "adaos.runtime_compatibility.provenance_reconciliation.v1",
+        "limit": bounded_limit,
+        "scanned": min(len(components), bounded_limit),
+        "complete": len(components) <= bounded_limit,
+        "adopted": sum(1 for item in results if item.get("adopted") is True),
+        "results": results,
+        "errors": errors,
+    }
+
+
 __all__ = [
     "CLASSIFICATION_SCHEMA",
     "SNAPSHOT_SCHEMA",
     "classify_runtime_compatibility",
     "collect_skill_runtime_compatibility_snapshot",
+    "reconcile_active_runtime_package_provenance",
 ]

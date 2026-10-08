@@ -2215,8 +2215,29 @@ async def _runtime_context(app: FastAPI):
             from adaos.services.development_tickets import (
                 DevelopmentTicketService,
             )
+            from adaos.services.runtime_compatibility import (
+                reconcile_active_runtime_package_provenance,
+            )
             from adaos.services.yjs.webspace import default_webspace_id
 
+            with _StartupTimer("reconcile_runtime_package_provenance"):
+                provenance = await asyncio.to_thread(
+                    reconcile_active_runtime_package_provenance,
+                    ctx=get_ctx(),
+                    limit=100,
+                )
+            app.state.runtime_package_provenance_reconciliation = provenance
+            logger = logging.getLogger("adaos.runtime_compatibility")
+            if provenance.get("errors") or not provenance.get("complete"):
+                logger.warning(
+                    "runtime package provenance reconciliation remains incomplete: %s",
+                    {
+                        "complete": provenance.get("complete"),
+                        "scanned": provenance.get("scanned"),
+                        "adopted": provenance.get("adopted"),
+                        "errors": provenance.get("errors"),
+                    },
+                )
             with _StartupTimer("reconcile_legacy_compatibility_actions"):
                 result = await DevelopmentTicketService().reconcile_legacy_compatibility_pending_action_cohort(
                     ctx=get_ctx(),
@@ -2227,7 +2248,6 @@ async def _runtime_context(app: FastAPI):
                     create_builder_handoff=True,
                 )
             app.state.runtime_compatibility_reconciliation = result
-            logger = logging.getLogger("adaos.runtime_compatibility")
             if result.get("errors") or not result.get("complete"):
                 logger.warning(
                     "legacy compatibility reconciliation remains incomplete: %s",

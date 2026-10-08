@@ -28,10 +28,12 @@ from adaos.sdk.skill_env import (
     skill_data_root_path,
     skill_env_path,
 )
+from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.agent_context import get_ctx
+from adaos.services.artifact_pipeline.packages import build_artifact_package
 from adaos.services.skill import manager as skill_manager_module
-from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.declarations import runtime_stream_receiver_patterns
+from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
@@ -2098,6 +2100,149 @@ def test_activate_runtime_reprepares_same_version_after_project_removal(monkeypa
         "package_manifest_digest": "sha256:" + "4" * 64,
         "source_manifest_digest": "sha256:" + "b" * 64,
     }
+
+
+def test_active_runtime_adopts_legacy_provenance_only_from_exact_slot_bytes(
+    monkeypatch,
+) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "legacy_provenance_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text(
+        "def handle(payload=None):\n    return payload or {}\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "name: legacy_provenance_skill\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    source_ref = ArtifactSourceRef(
+        forge="test",
+        repository="tests/runtime-provenance",
+        revision="sha256:" + "a" * 64,
+        path_scope=(f"skills/{skill_name}/",),
+    )
+    monkeypatch.setattr(
+        mgr,
+        "_prepare_runtime_environment",
+        lambda **kwargs: (Path("python"), []),
+    )
+    monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+    monkeypatch.setattr(
+        skill_manager_module,
+        "install_skill_in_capacity",
+        lambda *args, **kwargs: None,
+    )
+
+    prepared = mgr.prepare_runtime(
+        skill_name,
+        run_tests=False,
+        preferred_slot="A",
+    )
+    mgr.activate_runtime(
+        skill_name,
+        version=prepared.version,
+        slot=prepared.slot,
+    )
+    assert mgr.active_runtime_package_identity(skill_name)["package_digest"] is None
+    active_root = (
+        SkillRuntimeEnvironment(
+            skills_root=Path(ctx.paths.skills_dir()),
+            skill_name=skill_name,
+        ).build_slot_paths("1.0.0", "A").src_dir
+        / "skills"
+        / skill_name
+    )
+    expected = build_artifact_package(
+        active_root,
+        kind="skill",
+        source_ref=source_ref,
+    ).ref
+
+    receipt = mgr.adopt_active_runtime_package_identity(
+        skill_name,
+        package=expected.to_dict(),
+    )
+
+    assert receipt["adopted"] is True
+    assert mgr.active_runtime_package_identity(skill_name) == {
+        "version": "1.0.0",
+        "slot": "A",
+        "package_digest": expected.digest,
+        "package_manifest_digest": expected.manifest_digest,
+        "source_manifest_digest": receipt["source_manifest_digest"],
+    }
+
+
+def test_active_runtime_provenance_adoption_rejects_drifted_slot_bytes(
+    monkeypatch,
+) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "drifted_provenance_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text(
+        "def handle(payload=None):\n    return payload or {}\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "name: drifted_provenance_skill\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    source_ref = ArtifactSourceRef(
+        forge="test",
+        repository="tests/runtime-provenance",
+        revision="sha256:" + "b" * 64,
+        path_scope=(f"skills/{skill_name}/",),
+    )
+    monkeypatch.setattr(
+        mgr,
+        "_prepare_runtime_environment",
+        lambda **kwargs: (Path("python"), []),
+    )
+    monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+    monkeypatch.setattr(
+        skill_manager_module,
+        "install_skill_in_capacity",
+        lambda *args, **kwargs: None,
+    )
+    prepared = mgr.prepare_runtime(
+        skill_name,
+        run_tests=False,
+        preferred_slot="A",
+    )
+    mgr.activate_runtime(
+        skill_name,
+        version=prepared.version,
+        slot=prepared.slot,
+    )
+    active_root = (
+        SkillRuntimeEnvironment(
+            skills_root=Path(ctx.paths.skills_dir()),
+            skill_name=skill_name,
+        ).build_slot_paths("1.0.0", "A").src_dir
+        / "skills"
+        / skill_name
+    )
+    expected = build_artifact_package(
+        active_root,
+        kind="skill",
+        source_ref=source_ref,
+    ).ref
+    active_source = active_root / "handlers" / "main.py"
+    active_source.write_text(
+        "def handle(payload=None):\n    return {'drifted': True}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="bytes do not match"):
+        mgr.adopt_active_runtime_package_identity(
+            skill_name,
+            package=expected.to_dict(),
+        )
 
 
 def test_activate_runtime_does_not_switch_slot_before_smoke_import(monkeypatch) -> None:
