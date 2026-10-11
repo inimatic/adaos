@@ -46,6 +46,7 @@ def source_fingerprints(repo):
         "src/adaos/integrations/adaos-client/src/assets/i18n/en.json",
         "src/adaos/integrations/adaos-client/src/assets/i18n/ru.json",
         "src/adaos/integrations/adaos-client/src/app/y/ydoc.service.ts",
+        "src/adaos/integrations/adaos-client/src/app/runtime/i18n.service.ts",
         "src/adaos/integrations/adaos-client/src/app/core/adaos/adaos-client.service.ts",
         "src/adaos/services/builder/prototype_pipeline.py",
         "src/adaos/services/builder/prototype_task_context.py", "src/adaos/e2e/request_budget.py",

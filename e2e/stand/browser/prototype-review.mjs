@@ -370,7 +370,9 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-bottom.png`), fullPage: true })
     }
     await Promise.allSettled(responseTasks)
-    samples.push({ layout, viewport, locale, selectWidget, geometry, usability, mediaChecks, emptyChecks, scrollSurfaces,
+    const effectiveClientLocale = await page.evaluate(() => document.documentElement.lang || null)
+    samples.push({ layout, viewport, locale, requestedDictionaryLocale: locale, effectiveClientLocale,
+      selectWidget, geometry, usability, mediaChecks, emptyChecks, scrollSurfaces,
       dismissedSystemOverlays, failure, errors, requestFailures, text })
     await context.close()
   }

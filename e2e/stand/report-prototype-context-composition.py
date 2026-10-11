@@ -14,6 +14,7 @@ from adaos.e2e.prototype_context_ablation import acceptance, read
 from adaos.e2e.prototype_task_acceptance import task_mutation_contract
 from adaos.e2e.prototype_mcp_eval import mcp_trace
 from adaos.e2e.request_budget import RequestBudget
+from adaos.e2e.dollar_budget import DollarBudget
 from adaos.e2e.composition_metrics import RATES, execution_seconds, qualification_outcome, reconcile_probe_rechecks, retrieval_behavior, sum_execution_seconds, usage_record
 from adaos.services.builder.prototype_mcp import library_snapshot
 
@@ -186,26 +187,57 @@ for (model,arm),items in groups.items():
         'posthoc_rechecked_functional_pass':sum(i['posthoc_rechecked_functional_pass'] is True for i in items),
         'attempts':sum(i['attempted_requests'] for i in items),'mcp_calls':sum(i['mcp_calls'] for i in items),
         'final_task_contract_pass':sum(i['final_task_contract_pass'] for i in items),
-        'mcp_errors':sum(i['mcp_errors'] for i in items),'mean_root_execution_seconds':mean([i['root_execution_seconds'] for i in items if i['root_execution_seconds'] is not None]) if any(i['root_execution_seconds'] is not None for i in items) else None,
+        'mcp_errors':sum(i['mcp_errors'] for i in items),
+        'mcp_primary_calls':sum(i['mcp_primary_calls'] or 0 for i in items),
+        'mcp_repair_calls':sum(i['mcp_calls']-(i['mcp_primary_calls'] or 0) for i in items),
+        'mean_root_execution_seconds':mean([i['root_execution_seconds'] for i in items if i['root_execution_seconds'] is not None]) if any(i['root_execution_seconds'] is not None for i in items) else None,
         'mean_root_primary_execution_seconds':mean([i['root_primary_execution_seconds'] for i in items if i['root_primary_execution_seconds'] is not None]) if any(i['root_primary_execution_seconds'] is not None for i in items) else None,
         'mean_generator_seconds':mean([i['generator_wall_seconds'] for i in items if i['generator_wall_seconds'] is not None]) if any(i['generator_wall_seconds'] is not None for i in items) else None,
         'usd_per_observed_functional_success_including_failures':totals['usd_standard_estimate_without_unreported_cache_writes']/successes if successes else None})
 judges=[]
 for terminal in sorted((run/'blind-ux').glob('*/terminal.json')):
     envelope=read(terminal); value=usage_record(envelope,'gpt-6-astra')
-    judges.append({'job_id':envelope.get('job_id'),'usage':value})
+    if envelope.get('job_id') in jobs:raise ValueError('Duplicate judge job would double count cost')
+    jobs.add(envelope.get('job_id'))
+    if value is None:unknown.append(envelope.get('job_id'))
+    actual=envelope.get('response') or {}
+    if envelope.get('status')=='succeeded' and (not str(actual.get('model')).startswith('gpt-6-astra')
+            or actual.get('reasoning',{}).get('effort')!='high' or envelope.get('telemetry',{}).get('provider_attempts')!=1):
+        raise ValueError('Blind judge provider controls differ from registration')
+    judges.append({'job_id':envelope.get('job_id'),'usage':value,'actual_model':actual.get('model'),
+        'actual_reasoning':actual.get('reasoning'),'actual_service_tier':actual.get('service_tier')})
+supplemental=[]
+for terminal in sorted(run.glob('posthoc-functional-repair*/*/*/terminal.json')):
+    directory=terminal.parent;configuration=read(directory/'configuration.json');envelope=read(terminal)
+    if envelope.get('job_id') in jobs:raise ValueError('Duplicate supplemental job would double count cost')
+    jobs.add(envelope.get('job_id'));value=usage_record(envelope,configuration['model'])
+    if value is None:unknown.append(envelope.get('job_id'))
+    qualification=[]
+    result_path=directory/'generation-result.json'
+    if result_path.exists():
+        import hashlib
+        candidate_hash=hashlib.sha256(result_path.read_bytes()).hexdigest()
+        for retained in sorted(run.glob('posthoc-functional-qualification-*/configuration.json')):
+            if read(retained).get('retained_answer_sha256')==candidate_hash and (retained.parent/'result.json').exists():
+                qualification.append({'artifact':str(retained.parent.relative_to(run)),'result':read(retained.parent/'result.json')})
+    supplemental.append({'artifact':str(directory.relative_to(run)),'job_id':envelope.get('job_id'),
+        'model':configuration['model'],'context_arm':configuration['context_arm'],'usage':value,
+        'mcp_trace':mcp_trace(envelope),
+        'native_result':read(directory/'result.json') if (directory/'result.json').exists() else None,
+        'free_qualification':qualification,'primary_series_unchanged':True})
 ledger=RequestBudget(run/'paid-request-budget.sqlite').snapshot()
 amendments={name:read(run/name) for name in ('transport-amendment.json','delivery-amendment-02.json','uniform-replay-amendment.json') if (run/name).exists()}
 if amendment_path.exists():amendments[amendment_path.name]=uniform
 for name in ('context-routing-amendment-01.json', 'probe-selector-amendment-01.json', 'client-focus-amendment-01.json',
              'probe-composition-amendment-01.json', 'probe-choice-amendment-02.json', 'runtime-recovery-amendment-03.json',
              'probe-public-acceptance-amendment-04.json', 'probe-composition-taxonomy-amendment-05.json',
-             'probe-uniform-supplier-comparison-amendment-06.json'):
+             'probe-uniform-supplier-comparison-amendment-06.json', 'blind-transport-amendment.json',
+             'post-series-runtime-amendment.json'):
     if (run/name).exists(): amendments[name] = read(run/name)
 judge_results=read(run/'blind-ux/results.json') if (run/'blind-ux/results.json').exists() else None
 phase_values=defaultdict(list)
 for row in rows:
-    for key in ('revision_and_resource_seconds','preview_publication_seconds','warm_navigation_to_visible_seconds','publish_to_visible_seconds','functional_probes_seconds'):
+    for key in ('revision_and_resource_seconds','preview_publication_seconds','receipt_to_visible_seconds','warm_navigation_to_visible_seconds','publish_to_visible_seconds','functional_probes_seconds'):
         value=row['delivery_timings'].get(key)
         if value is not None:phase_values[key].append(value)
     for key in ('root_primary_execution_seconds','root_repair_execution_seconds','non_root_generator_overhead_seconds'):
@@ -236,6 +268,26 @@ report={'schema':'adaos.e2e.context_composition_report.v1','registration':regist
     'inference_caveats':[f"n={registration.get('repetitions',1)} per cell; no significance, no general architecture ranking.",'Compare first-pass, final functionality, output/reasoning and ALL attempted cost separately.',
         'Oracle is a frozen sufficient-fragment hypothesis, not established task sufficiency.','Blind model UX judge is an uncalibrated proxy; no human approval or human-alignment claim.',
         'Usability floors check public-control names, compact targets and page overflow; NOT complete accessibility or human usability proof.']}
+supplemental_cost=sum((item['usage'] or {}).get('usd_standard_estimate_without_unreported_cache_writes',0) for item in supplemental)
+report.update(supplemental_functional_repairs=supplemental,usd_supplemental_repair_estimate=round(supplemental_cost,6))
+reported_total=round(report['usd_generation_and_repair_estimate']+report['usd_judge_estimate']+supplemental_cost,6)
+report['usd_all_observed_calls_estimate']=reported_total
+locale_diagnostic=run/'i18n-runtime-before.json'
+if locale_diagnostic.exists():
+    report['effective_locale_diagnostic']={'artifact':locale_diagnostic.name,'result':read(locale_diagnostic),
+        'scope':'One free owned retained fixture. Requested dictionary locale is not authoritative Client locale; real user profile may override local initialization. No user preferences changed, no all-locale release proof.'}
+if registration.get('additional_usd_limit'):
+    dollars=DollarBudget(run/'dollar-budget.sqlite',limit_usd=registration['additional_usd_limit']).snapshot()
+    observed=sum(item['observed_usd'] for item in dollars['reservations'] if item['observed_usd'] is not None)
+    unresolved=sum(item['reserved_usd'] for item in dollars['reservations'] if item['observed_usd'] is None)
+    report['dollar_budget']=dollars
+    report['cost_reconciliation']={'all_observed_receipts_usd':reported_total,'ledger_observed_usd':round(observed,6),
+        'unresolved_reserved_usd':round(unresolved,6),'within_user_ceiling':dollars['committed_estimated_usd']<=dollars['limit_usd'],
+        'matched_candidate_costs_exclude_supplemental_and_judges':True,
+        'scope':'All native attempts, supplemental repair and judges reconciled; unresolved attempts retain reserves, never zero cost.'}
+    if not args.partial and (abs(reported_total-observed)>0.000002 or unresolved or unknown):
+        raise ValueError('Unreconciled or unknown paid costs; preserve receipts and recover, never silently ignore or resubmit')
+    _write_json(run/'dollar-budget.json',dollars)
 _write_json(run/'report.json',report); _write_json(run/'paid-request-budget.json',ledger)
 for item in summary:
     print(json.dumps({**{key:item[key] for key in ('model', 'arm', 'n', 'first_pass_compile', 'first_pass_structural',

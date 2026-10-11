@@ -189,6 +189,8 @@ jobs:
             tests/test_builder_prototype_context_ablation.py \
             tests/test_e2e_composition_metrics.py \
             tests/test_e2e_dollar_budget.py \
+            tests/test_llm_client.py \
+            tests/test_llm_wait_phase_timing.py \
             tests/test_e2e_blind_ux.py \
             tests/test_e2e_png_transport.py \
             tests/test_materialization_runtime.py \

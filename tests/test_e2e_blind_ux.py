@@ -76,4 +76,3 @@ def test_oversized_single_pair_is_rejected_not_cropped_or_omitted():
     from adaos.e2e.blind_ux import bounded_pair_batches
     with pytest.raises(ValueError, match='complete blinded pair'):
         bounded_pair_batches([1, 2], lambda rows: 2 not in rows)
-

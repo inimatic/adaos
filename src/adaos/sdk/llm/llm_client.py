@@ -1215,6 +1215,15 @@ def _wait_response_job_loop(
     poll_error_count = 0
     consecutive_poll_errors = 0
     last_progress_seq = -1
+    poll_wall_s = poll_max_s = callback_wall_s = callback_max_s = sleep_wall_s = sleep_max_s = 0.0
+
+    def pause(seconds: float) -> None:
+        nonlocal sleep_wall_s, sleep_max_s
+        pause_started = time.monotonic()
+        time.sleep(seconds)
+        duration = time.monotonic() - pause_started
+        sleep_wall_s += duration
+        sleep_max_s = max(sleep_max_s, duration)
 
     def observation(now: float) -> dict[str, Any]:
         progress = last.get("progress") if isinstance(last.get("progress"), Mapping) else {}
@@ -1224,6 +1233,13 @@ def _wait_response_job_loop(
             "root_status": str(last.get("status") or "unknown"),
             "reason": "connection_unavailable" if consecutive_poll_errors else "wait_budget_exhausted",
             "elapsed_ms": round((now - started) * 1000),
+            "phase_wall_ms": {
+                "poll_total": round(poll_wall_s * 1000), "poll_max": round(poll_max_s * 1000),
+                "progress_callback_total": round(callback_wall_s * 1000), "progress_callback_max": round(callback_max_s * 1000),
+                "sleep_total": round(sleep_wall_s * 1000), "sleep_max": round(sleep_max_s * 1000),
+                "unattributed_loop": round(max(0, now - started - poll_wall_s - callback_wall_s - sleep_wall_s) * 1000),
+            },
+            "phase_timing_scope": "Disjoint local monotonic wall spans; poll includes HTTP/auth/decode/scheduling, not pure network or model time.",
             "budget_s": float(timeout_s),
             "poll_count": poll_count,
             "poll_error_count": poll_error_count,
@@ -1246,13 +1262,19 @@ def _wait_response_job_loop(
     while True:
         poll_count += 1
         try:
-            last = get_response_job(
-                job_id,
-                base_url=base_url,
-                timeout=request_timeout or min(15, interval + 5),
-                _poll_http=_poll_http,
-                _poll_cfg=_poll_cfg,
-            )
+            poll_started = time.monotonic()
+            try:
+                last = get_response_job(
+                    job_id,
+                    base_url=base_url,
+                    timeout=request_timeout or min(15, interval + 5),
+                    _poll_http=_poll_http,
+                    _poll_cfg=_poll_cfg,
+                )
+            finally:
+                poll_duration = time.monotonic() - poll_started
+                poll_wall_s += poll_duration
+                poll_max_s = max(poll_max_s, poll_duration)
         except Exception as exc:
             if not _retryable_llm_job_poll_error(exc):
                 _LOG.warning(
@@ -1281,7 +1303,7 @@ def _wait_response_job_loop(
                 _root_llm_poll_error_label(exc),
                 exc,
             )
-            time.sleep(min(interval, max(0.0, deadline - now)))
+            pause(min(interval, max(0.0, deadline - now)))
             continue
         now = time.monotonic()
         consecutive_poll_errors = 0
@@ -1292,6 +1314,7 @@ def _wait_response_job_loop(
         except (TypeError, ValueError):
             progress_seq = 0
         if progress_callback is not None and progress_seq != last_progress_seq:
+            callback_started = time.monotonic()
             try:
                 progress_callback(dict(progress))
             except Exception:
@@ -1301,7 +1324,12 @@ def _wait_response_job_loop(
                     progress_seq,
                     exc_info=True,
                 )
+            finally:
+                callback_duration = time.monotonic() - callback_started
+                callback_wall_s += callback_duration
+                callback_max_s = max(callback_max_s, callback_duration)
             last_progress_seq = progress_seq
+        now = time.monotonic()
         if status in {"succeeded", "failed", "cancelled", "canceled"}:
             _LOG.debug(
                 "root LLM job wait completed job_id=%s base_url=%s status=%s polls=%d elapsed_ms=%.1f",
@@ -1330,7 +1358,7 @@ def _wait_response_job_loop(
             last_status = status
         if time.monotonic() >= deadline:
             raise LlmJobWaitTimeout(observation(time.monotonic()))
-        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+        pause(min(interval, max(0.0, deadline - time.monotonic())))
 
 
 def wait_response_job(
@@ -1343,13 +1371,15 @@ def wait_response_job(
     log_interval_s: float = 30,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> Dict[str, Any]:
+    wrapper_started = time.monotonic()
     interval = max(0.25, float(poll_interval_s))
     effective_request_timeout = request_timeout or min(15, interval + 5)
     with _response_job_poll_session(
         base_url,
         timeout=effective_request_timeout,
     ) as (poll_http, poll_cfg):
-        return _wait_response_job_loop(
+        setup_ms = round((time.monotonic() - wrapper_started) * 1000)
+        result = _wait_response_job_loop(
             job_id,
             base_url=base_url,
             timeout_s=timeout_s,
@@ -1360,6 +1390,10 @@ def wait_response_job(
             _poll_http=poll_http,
             _poll_cfg=poll_cfg,
         )
+    observed = result.setdefault("_client", {}).setdefault("wait_observation", {})
+    observed["session_setup_wall_ms"] = setup_ms
+    observed["wrapper_elapsed_ms"] = round((time.monotonic() - wrapper_started) * 1000)
+    return result
 
 
 def _load_prompt(template_path: Path, substitutions: Mapping[str, str]) -> str:
