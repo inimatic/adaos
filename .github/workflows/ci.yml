@@ -201,6 +201,7 @@ jobs:
             tests/test_sqlite_readonly_snapshot.py \
             tests/test_sqlite_store.py \
             tests/test_prototype_task_acceptance.py \
+            tests/test_retained_context_qualification.py \
             tests/test_webspace_phase2.py::test_prepare_materialization_external_sources_tolerates_legacy_resolution \
             tests/test_webspace_phase2.py::test_desktop_launcher_includes_only_trials_selected_for_target_webspace \
             tests/test_webspace_phase2.py::test_phase5_derived_readiness_includes_sequential_catalog_preparation
