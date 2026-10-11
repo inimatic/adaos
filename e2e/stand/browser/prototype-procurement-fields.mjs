@@ -1,21 +1,22 @@
 // A one-item request is a legitimate alternative to a request-header/line
 // resource pair. Qualification must not force an extra application concept.
-import { directedRelationships } from './prototype-relationship-links.mjs'
+import { directedRelationships, typedSelectionParent } from './prototype-relationship-links.mjs'
+import { fieldSemanticText } from './prototype-field-semantics.mjs'
 export function directRequestCompositionFields(form, action, semantic) {
   const submitted = field => !field.readOnly && action?.params?.payload?.[field.id] === `$event.values.${field.id}`
   const fields = (form?.inputs?.fields || []).filter(submitted)
   const quantity = fields.find(field => ['number', 'integer'].includes(field.type)
-    && /quantity|qty|amount|кол[ -]?во|количеств/i.test(`${field.id} ${field.label || ''}`))
+    && /quantity|qty|amount|кол[ -]?во|количеств/i.test(fieldSemanticText(field)))
   const offer = fields.find(field => {
     const type = field.optionsDataSource?.resourceType || ''
     const resource = semantic.resources.find(item => type.endsWith(`.${item.id}`))
     if (!resource) return false
-    const names = resource.fields.map(item => `${item.id} ${item.label || ''}`).join(' ')
+    const names = resource.fields.map(fieldSemanticText).join(' ')
     return /price|cost|цена|стоимост/i.test(names) && /delivery|lead|days|срок|дн[еи]/i.test(names)
   })
   if (quantity && offer) return { quantity, offer }
   if (!quantity) return null
-  const matches = (field, pattern) => pattern.test(`${field.id} ${field.label || ''}`)
+  const matches = (field, pattern) => pattern.test(fieldSemanticText(field))
   const price = fields.find(field => ['number', 'integer'].includes(field.type) && matches(field, /price|cost|цена|стоимость/i))
   const lead = fields.find(field => ['number', 'integer'].includes(field.type) && matches(field, /delivery|lead|days|срок|дн[еи]/i))
   const currency = fields.find(field => matches(field, /currency|валют/i))
@@ -46,17 +47,20 @@ export function directRequestCompositionFields(form, action, semantic) {
     const view = (semantic.views || []).find(view => view.role === 'collection' && view.resource_ref === resource.id
       && [quoteFields.price, quoteFields.lead, quoteFields.currency, quoteFields.supplier].every(field => view.field_refs.includes(field))
       && view.selection_filter?.field_ref === itemLink.from_field_ref
-      && !view.selection_filter.source_field_ref
+      && (view.selection_filter.source_field_ref || 'id') === (itemLink.to_field_ref || 'id')
       && semantic.views.some(source => source.id === view.selection_filter.source_view_ref && source.resource_ref === itemLink.to_resource_ref))
     const firstQuote = resource.records[0]
+    const selectedParent = view && view.selection_filter.source_field_ref
+      ? typedSelectionParent(semantic, resource.id, view.selection_filter, firstQuote[itemLink.from_field_ref]) : null
     const comparisonQuotes = resource.records.filter(record => record[itemLink.from_field_ref] === firstQuote[itemLink.from_field_ref]
       && Number.isFinite(record[quoteFields.price]) && Number.isFinite(record[quoteFields.lead])
       && record[quoteFields.currency] && record[quoteFields.supplier])
-    const comparison = view && typeof firstQuote[itemLink.from_field_ref] === 'string'
+    const comparison = view && (!view.selection_filter.source_field_ref || selectedParent)
+      && typeof firstQuote[itemLink.from_field_ref] === 'string'
       && new Set(comparisonQuotes.map(record => record[quoteFields.supplier])).size >= 2
       ? { resource, view, parentField: itemLink.from_field_ref, fields: quoteFields,
           quoteIds: comparisonQuotes.map(record => record.id), sourceViewId: view.selection_filter.source_view_ref,
-          selectionId: firstQuote[itemLink.from_field_ref], filterValue: firstQuote[itemLink.from_field_ref],
+          selectionId: selectedParent?.record.id || firstQuote[itemLink.from_field_ref], filterValue: firstQuote[itemLink.from_field_ref],
           itemId: firstQuote[itemLink.from_field_ref] } : null
     return { quantity, manual: { price, lead, currency, supplier, item, resource, comparison,
       quoteFields } }
@@ -78,7 +82,7 @@ function linkedItemComposition(action, semantic, fields, quantity) {
     const parent = directedRelationships(semantic, resource.id).find(link => link.from_resource_ref === resource.id
       && link.to_resource_ref === request.id && link.to_field_ref === 'id')
     if (!parent) continue
-    const match = pattern => resource.fields.find(field => pattern.test(`${field.id} ${JSON.stringify(field.label || '')}`))?.id
+    const match = pattern => resource.fields.find(field => pattern.test(fieldSemanticText(field)))?.id
     const price = match(/price|cost|цена|стоимость/i)
     const lead = match(/delivery|lead|days|срок|дн[еи]/i)
     const supplier = match(/supplier|vendor|поставщик/i)

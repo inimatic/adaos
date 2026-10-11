@@ -53,6 +53,9 @@ def source_fingerprints(repo):
         "src/adaos/services/scenario/webspace_components/materialization.py",
         "src/adaos/services/scenario/webspace_components/materialization_runtime.py",
         "src/adaos/services/pending_action_projection.py",
+        "src/adaos/services/conversation_store.py",
+        "src/adaos/services/conversation_interactions.py",
+        "src/adaos/services/yjs/bootstrap.py",
         "src/adaos/services/yjs/gateway_ws.py",
         "src/adaos/integrations/adaos-client/src/app/renderer/widgets/table.widget.component.ts",
         "src/adaos/integrations/adaos-backend/backend/root-llm-stream-timing.ts",
@@ -73,7 +76,9 @@ def source_fingerprints(repo):
         "e2e/stand/browser/prototype-usability.mjs",
         *[f"e2e/stand/browser/{name}.mjs" for name in ("prototype-client-health", "prototype-navigation", "prototype-review",
             "prototype-capabilities", "prototype-interactions", "prototype-interaction-fields", "prototype-procurement",
-            "prototype-procurement-lines", "prototype-procurement-composition", "prototype-procurement-fields")]]
+            "prototype-procurement-lines", "prototype-procurement-composition", "prototype-procurement-fields",
+            "prototype-procurement-basic", "prototype-relationship-links", "prototype-field-semantics",
+            "prototype-validation-guard", "prototype-crud-review")]]
     return {file: "sha256:" + hashlib.sha256((repo / file).read_bytes()).hexdigest() for file in files}
 
 

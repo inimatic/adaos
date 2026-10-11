@@ -62,6 +62,50 @@ test('Parent-to-children typed links qualify the same complete public supplier c
   }
 })
 
+test('Typed business-key selection resolves the real public row, not a guessed row id', () => {
+  const semantic = comparisonFixture()
+  semantic.resources[1].fields.push({ id: 'sku' })
+  semantic.resources[1].records[0].sku = 'SKU-001'
+  semantic.resources[2].records.forEach(record => { record.line_ref = 'SKU-001' })
+  semantic.relationships[0].to_field_ref = 'sku'
+  semantic.views[2].selection_filter.source_field_ref = 'sku'
+  const result = supplierComparisonMetadata(semantic)
+  assert.equal(result.filterValue, 'SKU-001')
+  assert.equal(result.selectionId, 'line-one')
+  assert.deepEqual(result.selections, [{ viewId: 'requests-list', recordId: 'request-one' }, { viewId: 'lines-list', recordId: 'line-one' }])
+  const duplicate = structuredClone(semantic)
+  duplicate.resources[1].records.push({ id: 'line-two', sku: 'SKU-001' })
+  assert.equal(supplierComparisonMetadata(duplicate), null)
+  semantic.relationships[0].to_field_ref = 'unverified'
+  assert.equal(supplierComparisonMetadata(semantic), null)
+})
+
+test('A declared numeric business key including zero retains its typed filter value', () => {
+  const semantic = comparisonFixture()
+  semantic.resources[1].fields.push({ id: 'sku' })
+  semantic.resources[1].records[0].sku = 0
+  semantic.resources[2].records.forEach(record => { record.line_ref = 0 })
+  semantic.relationships[0].to_field_ref = 'sku'
+  semantic.views[2].selection_filter.source_field_ref = 'sku'
+  const result = supplierComparisonMetadata(semantic)
+  assert.equal(result.filterValue, 0)
+  assert.equal(result.selectionId, 'line-one')
+})
+
+test('A supplier-named resource namespace does not make every field a supplier field', () => {
+  const semantic = comparisonFixture()
+  const quotes = semantic.resources[2]
+  const prefix = 'supplier_offer.'
+  quotes.fields = quotes.fields.map(field => ({ ...field, id: prefix+field.id }))
+  quotes.records = quotes.records.map(record => Object.fromEntries(Object.entries(record).map(([key,value]) => [key==='id'?key:prefix+key,value])))
+  semantic.views[2].field_refs = semantic.views[2].field_refs.map(key=>prefix+key)
+  semantic.views[2].selection_filter.field_ref = prefix+'line_ref'
+  semantic.relationships[0].from_field_ref = prefix+'line_ref'
+  const result = supplierComparisonMetadata(semantic)
+  assert.equal(result.fields.supplier, prefix+'supplier')
+  assert.deepEqual(result.quoteIds, ['quote-a','quote-b'])
+})
+
 test('quote checks address exact visible price and lead cells, not concatenated adjacent numbers', async () => {
   const browser = await chromium.launch({ headless: true })
   try {

@@ -153,6 +153,19 @@ for (const intervention of ['one-supplier', 'different-items', 'hidden-lead', 'i
   })
 }
 
+test('Manual quote copying supports a declared unique business-key item relationship', () => {
+  const { form, action, semantic } = manualComparisonFixture()
+  semantic.resources.push({ id: 'items', fields: [{ id: 'sku' }], records: [{ id: 'item-one', sku: 'SKU-001' }] })
+  semantic.relationships[0].to_field_ref = 'sku'
+  semantic.views[1].selection_filter.source_field_ref = 'sku'
+  semantic.resources[0].records.forEach(record => { record.offer_item_ref = 'SKU-001' })
+  const result = directRequestCompositionFields(form, action, semantic).manual.comparison
+  assert.equal(result.filterValue, 'SKU-001')
+  assert.equal(result.selectionId, 'item-one')
+  semantic.resources[1].records.push({ id: 'item-two', sku: 'SKU-001' })
+  assert.equal(directRequestCompositionFields(form, action, semantic).manual.comparison, null)
+})
+
 test('manual supplier text and resource-prefixed quote fields retain typed item and durable quote provenance', () => {
   const fields = [{ id: 'request_qty', type: 'number' }, { id: 'request_unit_price', type: 'number' },
     { id: 'request_currency', type: 'singleChoice' }, { id: 'request_supplier', type: 'shortText' },
