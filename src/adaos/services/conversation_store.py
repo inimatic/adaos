@@ -2645,7 +2645,7 @@ def read_interaction_projection_inputs(interaction_ids: Sequence[str]) -> dict[s
         raise ValueError("projection input page exceeds 100 identities")
     if not ids or not ensure_schema():
         return {}
-    with _sql().connect() as con:  # type: ignore[union-attr]
+    with _sql().connect(read_only=True) as con:  # type: ignore[union-attr]
         con.row_factory = sqlite3.Row
         con.execute("BEGIN")
 

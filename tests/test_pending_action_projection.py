@@ -208,9 +208,10 @@ def test_bounded_projection_inputs_use_one_connection_and_constant_queries(monke
     connections, statements = [], []
 
     @contextmanager
-    def traced_connect():
+    def traced_connect(**kwargs):
         connections.append(True)
-        with original_connect() as con:
+        assert kwargs == {"read_only": True}
+        with original_connect(**kwargs) as con:
             con.set_trace_callback(statements.append)
             try:
                 yield con

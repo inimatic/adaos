@@ -11,6 +11,7 @@ from pathlib import Path
 from statistics import mean, median
 from adaos.e2e.builder import _write_json
 from adaos.e2e.prototype_context_ablation import acceptance, read
+from adaos.e2e.prototype_task_acceptance import task_mutation_contract
 from adaos.e2e.prototype_mcp_eval import mcp_trace
 from adaos.e2e.request_budget import RequestBudget
 from adaos.e2e.composition_metrics import RATES, execution_seconds, qualification_outcome, reconcile_probe_rechecks, retrieval_behavior, sum_execution_seconds, usage_record
@@ -68,6 +69,7 @@ for cohort in registration['cohorts']:
         replay_path=run/('compiler-replay-'+args.compiler_label)/cohort['id']/sample_id/'generation-result.json'
         if args.compiler_label and replay_path.exists():candidate=read(replay_path)
         structural=acceptance(candidate,brief,task=plan['task'])
+        task_contract=task_mutation_contract(candidate.get('semantic_document') or {},brief,task=plan['task'])
         timings=[]; traces=[]; usage=[]; attempted=len(list(sample.glob('call-*-request.json')))
         retained=[]
         for terminal in sorted(sample.glob('call-*-terminal.json')):
@@ -136,6 +138,8 @@ for cohort in registration['cohorts']:
             'posthoc_rechecked_functional_pass': rechecked_verdict,
             'qualification_pending':outcome['qualification_pending'],
             'qualification_infrastructure_error':outcome['qualification_infrastructure_error'],
+            'task_mutation_contract':task_contract,
+            'final_task_contract_pass':task_contract['ok'],
             'repair_attempted':attempted>1,'repair_budget_censored':(sample/'repair-budget-censored.json').exists(),
             'attempted_requests':attempted,'usage':totals,'usage_primary':primary_usage,'usage_repair':repair_usage,'usage_complete':len(usage)==attempted,
             'generator_wall_seconds':None if censored_time else total_wall,'timing_censored_by_interruption':censored_time,
@@ -181,6 +185,7 @@ for (model,arm),items in groups.items():
         'usage':totals,'usage_primary':primary_totals,'usage_repair':repair_totals,'usage_complete':all(i['usage_complete'] for i in items),
         'posthoc_rechecked_functional_pass':sum(i['posthoc_rechecked_functional_pass'] is True for i in items),
         'attempts':sum(i['attempted_requests'] for i in items),'mcp_calls':sum(i['mcp_calls'] for i in items),
+        'final_task_contract_pass':sum(i['final_task_contract_pass'] for i in items),
         'mcp_errors':sum(i['mcp_errors'] for i in items),'mean_root_execution_seconds':mean([i['root_execution_seconds'] for i in items if i['root_execution_seconds'] is not None]) if any(i['root_execution_seconds'] is not None for i in items) else None,
         'mean_root_primary_execution_seconds':mean([i['root_primary_execution_seconds'] for i in items if i['root_primary_execution_seconds'] is not None]) if any(i['root_primary_execution_seconds'] is not None for i in items) else None,
         'mean_generator_seconds':mean([i['generator_wall_seconds'] for i in items if i['generator_wall_seconds'] is not None]) if any(i['generator_wall_seconds'] is not None for i in items) else None,

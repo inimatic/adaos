@@ -1,4 +1,15 @@
 // Inspect a declared typed join, without inventing an inferred relationship.
+export function selectionPresentationExpectation(view, records, selectedValue) {
+  const link = view.selection_filter
+  const effect = link?.effect || 'filter'
+  if (!link?.field_ref || !['filter', 'emphasize'].includes(effect)) {
+    throw new Error('Only an explicit supported selection effect may be qualified')
+  }
+  const scoped = records.filter(item => (view.scope_filters || []).every(filter => item[filter.field_ref] === filter.value))
+  const related = scoped.filter(item => item[link.field_ref] === selectedValue).map(item => item.id).sort()
+  return { effect, related, records: effect === 'filter' ? related : scoped.map(item => item.id).sort() }
+}
+
 export function directedRelationships(semantic, resourceId) {
   return (semantic.relationships || []).flatMap(link => {
     if (link.from_resource_ref === resourceId) return [link]

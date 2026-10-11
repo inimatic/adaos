@@ -120,7 +120,8 @@ try {
         else if (['dropdown', 'singleChoice'].includes(field.type)) {
           const select = container.locator('select')
           if (await select.count()) {
-            await expect.poll(() => select.locator('option').count()).toBeGreaterThan(1)
+            await expect.poll(() => select.locator('option').count(), { timeout: 15_000,
+              message: `Public reference options must load for ${field.id}` }).toBeGreaterThan(1)
             await select.selectOption({ index: 1 })
           } else await container.locator('input[type=radio]').first().check()
         } else throw new Error(`Probe cannot qualify create field type ${field.type}`)
@@ -260,7 +261,7 @@ try {
       }
       await expect(host(transitionForm.id)).toBeVisible()
       await expect.poll(() => host(transitionForm.id).evaluate(element => window.ng?.getComponent(element.querySelector('ada-form-widget'))?.recordValues?.id),
-        { message: 'Refusing to transition until the editor loads the request created by this probe' }).toBe(recordId)
+        { timeout: 15_000, message: 'Refusing to transition until the editor loads the request created by this probe' }).toBe(recordId)
       await operate(transitionForm, transitionAction)
       if (sample.mutations.at(-1)?.record_id !== recordId) throw new Error('Approval targeted the wrong request')
       const response = await context.request.post(`${hub}/api/resources/query`, {
@@ -277,6 +278,12 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-complete.png`), fullPage: true })
     } catch (error) {
       sample.failure = error.message
+      sample.delivery_diagnostics = await page.evaluate(() => {
+        const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+        return { ready: sync?.materializationReady ?? null, providerSynced: sync?.providerSynced ?? null,
+          readinessState: sync?.materializationReadinessState ?? null,
+          materialization: sync?.materialization ?? null }
+      }).catch(() => null)
       sample.text = await page.locator('body').innerText({ timeout: 2000 }).catch(() => '')
       await page.screenshot({ path: path.join(output, `${layout}-failure.png`), fullPage: true, timeout: 5000 }).catch(() => {})
     } finally {

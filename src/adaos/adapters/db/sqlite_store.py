@@ -640,19 +640,26 @@ class SQLite(SQL):
                 if "locked" not in str(exc).lower():
                     raise
 
-    def connect(self) -> sqlite3.Connection:
-        con = self._connect_raw()
+    def connect(self, *, read_only: bool = False) -> sqlite3.Connection:
+        """Open a normal connection or an engine-enforced read-only WAL reader.
+
+        Read-only BEGIN establishes a consistent snapshot without acquiring the
+        runtime writer gate. SQLite mode=ro also prevents writes via raw cursors
+        or after disabling query_only; this is not merely an advisory flag.
+        """
+        con = self._connect_raw(read_only=read_only)
         _configure_connection(con, foreign_keys=True)
         _register_connection(con, caller=_connection_caller(2))
         return con
 
-    def _connect_raw(self) -> _ClosingConnection:
+    def _connect_raw(self, *, read_only: bool = False) -> _ClosingConnection:
         con = sqlite3.connect(
-            self._db_path,
+            self._db_path.resolve().as_uri() + "?mode=ro" if read_only else self._db_path,
             timeout=_sqlite_timeout_s(),
             factory=_ClosingConnection,
+            uri=read_only,
         )
-        con._adaos_write_gate = self._write_gate
+        con._adaos_write_gate = None if read_only else self._write_gate
         return con
 
 

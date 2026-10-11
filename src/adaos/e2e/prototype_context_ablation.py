@@ -34,6 +34,8 @@ def read(path):
 
 def source_fingerprints(repo):
     files = ["src/adaos/services/builder/semantic_prototype.py", "src/adaos/services/builder_intent.py",
+        "src/adaos/adapters/db/sqlite_store.py", "src/adaos/ports/contracts.py",
+        "src/adaos/e2e/prototype_task_acceptance.py",
         "src/adaos/services/builder/prototype_context.py", "src/adaos/services/builder/semantic_bindings.py",
         "src/adaos/sdk/llm/llm_client.py", "src/adaos/services/builder/model_controls.py",
         "src/adaos/sdk/builder/prototype.py", "src/adaos/services/builder/prototype_mcp.py",
@@ -42,6 +44,8 @@ def source_fingerprints(repo):
         "src/adaos/abi/builder.cbs_compilation.v1.schema.json",
         "src/adaos/integrations/adaos-client/src/assets/i18n/en.json",
         "src/adaos/integrations/adaos-client/src/assets/i18n/ru.json",
+        "src/adaos/integrations/adaos-client/src/app/y/ydoc.service.ts",
+        "src/adaos/integrations/adaos-client/src/app/core/adaos/adaos-client.service.ts",
         "src/adaos/services/builder/prototype_pipeline.py",
         "src/adaos/services/builder/prototype_task_context.py", "src/adaos/e2e/request_budget.py",
         "e2e/stand/run-prototype-context-composition.py",

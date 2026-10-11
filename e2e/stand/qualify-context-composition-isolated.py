@@ -11,6 +11,7 @@ from unittest.mock import patch
 from dotenv import load_dotenv
 from adaos.e2e.builder import _write_json
 from adaos.e2e.prototype_context_ablation import acceptance, browser_review, native_builder, read, remap, source_fingerprints
+from adaos.e2e.prototype_task_acceptance import task_mutation_contract
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--run',type=Path,required=True)
@@ -100,12 +101,17 @@ with patch.object(llm_client,'submit_response_job',side_effect=AssertionError('Q
     before_webui=baseline,prototype_brief=brief,project_ref=session['project_ref'],output_mode='semantic_v2')
    if fresh['semantic_document']!=candidate['semantic_document']:raise ValueError('Fresh namespace changed model semantics')
    _write_json(target/'structural-acceptance.json',acceptance(fresh,brief,task=plan['task']))
+   task_contract=task_mutation_contract(fresh['semantic_document'],brief,task=plan['task'])
+   _write_json(target/'task-mutation-contract.json',task_contract)
    probes=['prototype-review','prototype-capabilities','prototype-interactions'] if plan['task']=='support-desk-ru' else None
    try:
     checked=browser_review(builder,session,fresh,target,created,Path(ctx.paths.dev_dir()).name,run.name,
      host=host,selected_probes=probes,observe_delivery=True)
    except Exception as error:checked={'ok':False,'error':type(error).__name__,'detail':str(error)}
   record={'sample':sample,'arm':row['arm'],**checked,'qualification_seconds':round(time.perf_counter()-started,3)}
+  if candidate.get('ok'):
+   record['task_mutation_contract']=task_contract
+   record['ok']=record.get('ok') is True and task_contract['ok']
   _write_json(target/'result.json',record);rows.append(record)
   _write_json(output/'results.json',{'complete':False,'samples':rows,'new_llm_calls':0})
   print(json.dumps({'cohort':cohort['id'],**record},ensure_ascii=False),flush=True)

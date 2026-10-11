@@ -2,6 +2,7 @@ import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { installSystemOverlayDismissal, revealPrototypeWidget, selectPrototypeRow } from './prototype-navigation.mjs'
+import { selectionPresentationExpectation } from './prototype-relationship-links.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Requires ENV_TYPE=dev')
 const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))
@@ -151,12 +152,16 @@ try {
               const target = widgets.find(item => item.id === view.id)
               await reveal(target)
               const sourceField = view.selection_filter.source_field_ref || 'id'
-              const expected = recordsFor(view.resource_ref)
-                .filter(item => item[view.selection_filter.field_ref] === available[index][sourceField]
-                  && (view.scope_filters || []).every(filter => item[filter.field_ref] === filter.value)).map(item => item.id).sort()
+              const expectation = selectionPresentationExpectation(view, recordsFor(view.resource_ref), available[index][sourceField])
+              const expected = expectation.records
               await expect.poll(() => collectionIds(target), { timeout: 20_000 }).toEqual(expected)
+              if (expectation.effect === 'emphasize') {
+                if (target.type !== 'ui.table') throw new Error('Emphasis requires the supported table presentation')
+                await expect.poll(() => host(target.id).locator('tr.row-related').evaluateAll(elements =>
+                  elements.map(element => element.getAttribute('data-record-id')).sort()), { timeout: 20_000 }).toEqual(expectation.related)
+              }
               sample.checks.push({ kind: 'collection-related-selection', source: widget.id, sourceType: widget.type, target: target.id,
-                selected: available[index].id, sourceField, records: expected })
+                selected: available[index].id, sourceField, records: expected, effect: expectation.effect, related: expectation.related })
               if (index > 0 && expected.length && target.type === 'ui.table'
                 && semantic.views.some(item => item.selection_filter?.source_view_ref === target.id)) {
                 const action = target.actions.find(item => item.on === 'select' && item.type === 'updateState')

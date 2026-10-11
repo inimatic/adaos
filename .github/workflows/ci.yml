@@ -197,6 +197,9 @@ jobs:
             tests/test_yjs_bootstrap.py \
             tests/test_pending_action_projection.py \
             tests/test_pending_action_websocket_offload.py \
+            tests/test_sqlite_readonly_snapshot.py \
+            tests/test_sqlite_store.py \
+            tests/test_prototype_task_acceptance.py \
             tests/test_webspace_phase2.py::test_prepare_materialization_external_sources_tolerates_legacy_resolution \
             tests/test_webspace_phase2.py::test_desktop_launcher_includes_only_trials_selected_for_target_webspace \
             tests/test_webspace_phase2.py::test_phase5_derived_readiness_includes_sequential_catalog_preparation
@@ -211,6 +214,7 @@ jobs:
           e2e/stand/browser/prototype-validation-guard.test.mjs
           e2e/stand/browser/prototype-procurement-fields.test.mjs
           e2e/stand/browser/prototype-procurement-basic.test.mjs
+          e2e/stand/browser/prototype-selection-effect.test.mjs
       - name: Upload contract receipts
         if: always()
         uses: actions/upload-artifact@v4
