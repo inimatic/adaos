@@ -7489,6 +7489,33 @@ def test_phase5_derive_phase_timings_uses_semantic_phase_breakdown() -> None:
     assert phase_timings["time_to_full_hydration"] == 12.0
 
 
+def test_phase5_derived_readiness_includes_sequential_catalog_preparation() -> None:
+    phase_timings = webspace_runtime_module._derive_phase_timings(
+        semantic_rebuild_timings_ms={
+            "open_operational_doc": 1.0,
+            "prepare_skill_decls": 200.0,
+            "prepare_catalog_sources": 3000.0,
+            "prepare_external_sources": 100.0,
+            "collect_inputs": 50.0,
+            "resolve": 900.0,
+            "build_materialized_payload": 75.0,
+            "apply_structure": 5.0,
+            "apply_interactive": 10.0,
+            "prepare_catalog_sources.function_wall": 2990.0,
+            "prepare_catalog_sources.queue_wait": 8.0,
+            "prepare_catalog_sources.loop_resume_delay": 2.0,
+            "resolve_payload.dispatch_wall": 980.0,
+            "resolve_payload.function_wall": 975.0,
+            "resolve_payload.queue_wait": 3.0,
+            "resolve_payload.loop_resume_delay": 2.0,
+            "total": 4350.0,
+        },
+    )
+    assert phase_timings["time_to_first_structure"] == 4336.0
+    assert phase_timings["time_to_interactive_focus"] == 4346.0
+    assert phase_timings["time_to_full_hydration"] == 4350.0
+
+
 def test_phase5_atomic_commit_reports_selector_visible_at_full_hydration() -> None:
     phase_timings = webspace_runtime_module._derive_phase_timings(
         switch_timings_ms={

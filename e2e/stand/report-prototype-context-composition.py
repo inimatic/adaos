@@ -170,8 +170,8 @@ for (model,arm),items in groups.items():
     successes=sum(i['functional_e2e_pass'] is True for i in items)
     summary.append({'model':model,'arm':arm,'n':len(items),'first_pass_compile':sum(i['first_pass_compile'] for i in items),
         'first_pass_structural':sum(i['first_pass_structural'] for i in items),'final_compile':sum(i['final_compile'] for i in items),
-        'corrected_first_pass_compile':sum(i['corrected_first_pass_compile'] is True for i in items),
-        'corrected_first_pass_structural':sum(i['corrected_first_pass_structural'] is True for i in items),
+        'corrected_first_pass_compile':sum(i['corrected_first_pass_compile'] is True for i in items) if any(i['corrected_first_pass_compile'] is not None for i in items) else None,
+        'corrected_first_pass_structural':sum(i['corrected_first_pass_structural'] is True for i in items) if any(i['corrected_first_pass_structural'] is not None for i in items) else None,
         'functional_e2e_pass':successes,'functional_e2e_evaluated':sum(i['functional_e2e_pass'] is not None for i in items),
         'usability_floor_pass':sum(i['usability_floor_pass'] is True for i in items),
         'usability_floor_evaluated':sum(i['usability_floor_pass'] is not None for i in items),
@@ -229,8 +229,8 @@ report={'schema':'adaos.e2e.context_composition_report.v1','registration':regist
         'Usability floors check public-control names, compact targets and page overflow; NOT complete accessibility or human usability proof.']}
 _write_json(run/'report.json',report); _write_json(run/'paid-request-budget.json',ledger)
 for item in summary:
-    print(json.dumps({**{key:item[key] for key in ('model', 'arm', 'n', 'corrected_first_pass_compile',
-        'final_compile', 'functional_e2e_pass', 'functional_e2e_evaluated', 'posthoc_rechecked_functional_pass', 'mcp_calls')},
+    print(json.dumps({**{key:item[key] for key in ('model', 'arm', 'n', 'first_pass_compile', 'first_pass_structural',
+        'final_compile', 'functional_e2e_pass', 'functional_e2e_evaluated', 'usability_floor_pass', 'usability_floor_evaluated', 'mcp_calls')},
         'usd_generation_and_repair_estimate': round(item['usage']['usd_standard_estimate_without_unreported_cache_writes'], 6)}))
 if not args.partial and not report['complete']:
     parser.error('Browser execution completed but functionality remains unevaluated after an infrastructure error; see report.json')

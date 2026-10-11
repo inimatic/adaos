@@ -5117,16 +5117,33 @@ def _derive_phase_timings(
         "sync_listing",
         "projection_refresh",
     )
+    readiness_timings = dict(semantic_rebuild_timings_ms) if isinstance(semantic_rebuild_timings_ms, Mapping) else None
+    # CPU dispatch contains resolve + serialization + queue/resume overhead.
+    # Count this parent interval once, never again through its nested metrics.
+    resolve_dispatch = _sum_timing_values(readiness_timings, "resolve_payload.dispatch_wall")
+    if readiness_timings is not None and resolve_dispatch is not None:
+        readiness_timings["resolve"] = resolve_dispatch
+        readiness_timings["build_materialized_payload"] = 0.0
     semantic_time_to_first_structure = _sum_timing_values(
-        semantic_rebuild_timings_ms,
+        readiness_timings,
+        "open_operational_doc",
+        "prepare_skill_decls",
+        "prepare_catalog_sources",
+        "prepare_external_sources",
         "collect_inputs",
         "resolve",
+        "build_materialized_payload",
         "apply_structure",
     )
     semantic_time_to_interactive = _sum_timing_values(
-        semantic_rebuild_timings_ms,
+        readiness_timings,
+        "open_operational_doc",
+        "prepare_skill_decls",
+        "prepare_catalog_sources",
+        "prepare_external_sources",
         "collect_inputs",
         "resolve",
+        "build_materialized_payload",
         "apply_structure",
         "apply_interactive",
     )

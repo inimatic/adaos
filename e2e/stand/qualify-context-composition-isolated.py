@@ -4,7 +4,8 @@ Retained model text and Brief never change. Each candidate gets a fresh scenario
 namespace, preventing old browser mutations from contaminating a later arm.
 The user's existing Builder/Preview is never selected or rewritten here.
 """
-import argparse, asyncio, hashlib, json, logging, os, subprocess, time
+import argparse, hashlib, json, logging, os, subprocess, time
+import requests
 from pathlib import Path
 from unittest.mock import patch
 from dotenv import load_dotenv
@@ -27,7 +28,7 @@ load_dotenv();logging.disable(logging.INFO)
 if os.getenv('ENV_TYPE')!='dev':parser.error('DEV only')
 from adaos.apps.cli.app import Settings,init_ctx
 from adaos.services.agent_context import get_ctx
-from adaos.services.scenario.webspace_runtime import WebspaceService
+from adaos.apps.cli.active_control import resolve_control_token
 from adaos.sdk.developer import compositions,projects
 from adaos.sdk.builder import preview,workflow
 from adaos.sdk.llm import llm_client
@@ -36,18 +37,23 @@ os.environ['ADAOS_CONTROL_URL']='http://127.0.0.1:8777'
 os.environ['ADAOS_BUILDER_PROTOTYPE_MCP_ENABLED']='0'
 directory=run/cohort['id']; output=directory/('browser-posthoc-'+args.label);output.mkdir(exist_ok=True)
 plan=read(directory/'plan.json');brief=read(directory/'source-brief.json');results=read(directory/'results.json')
-assert results['complete'] and len(results['samples'])==5
+expected_samples=len(plan['order'])
+assert results['complete'] and len(results['samples'])==expected_samples
 handler=Path(ctx.paths.dev_skills_dir())/'builder_skill/handlers/main.py'
 if 'sha256:'+hashlib.sha256(handler.read_bytes()).hexdigest()!=plan['native_builder_sha256']:raise ValueError('Native Builder drift')
 builder=native_builder(handler)
 host='test_ctxqual_'+hashlib.sha256((str(run)+cohort['id']+args.label).encode()).hexdigest()[:14]
 host_receipt=output/'owned-host.json'
-service=WebspaceService();existing={str(item.id) for item in service.list(mode='mixed')}
+owner=requests.Session();owner.trust_env=False
+owner.headers['Authorization']='Bearer '+resolve_control_token(base_url='http://127.0.0.1:8777')
+listed=owner.get('http://127.0.0.1:8777/api/node/yjs/webspaces',timeout=30)
+listed.raise_for_status();existing={str(item['id']) for item in listed.json()['items']}
 if host in existing and not host_receipt.exists():raise ValueError('Unowned existing qualification host')
 if host not in existing:
- info=asyncio.run(service.create(host,'TEST context qualification '+cohort['id'],scenario_id='web_desktop'))
- assert info.id==host
- _write_json(host_receipt,{'host':host,'test':True,'existing_user_preview_untouched':True})
+ created_host=owner.post('http://127.0.0.1:8777/api/node/yjs/webspaces',json={'id':host,
+  'title':'[TEST] Context qualification '+cohort['id'],'scenario_id':'builder','dev':False},timeout=150)
+ created_host.raise_for_status();assert created_host.json().get('ok')
+ _write_json(host_receipt,{'host':host,'test':True,'creation_via_hub_owner':True,'existing_user_preview_untouched':True})
 preview.ensure(host,runtime_scenario_id='web_desktop',wait_for_rebuild=True)
 health=subprocess.run(['node','e2e/stand/browser/prototype-client-health.mjs'],capture_output=True,text=True,encoding='utf-8',timeout=60,check=True)
 _write_json(output/'client-health.json',json.loads(health.stdout))
@@ -56,7 +62,7 @@ _write_json(output/'configuration.json',{'label':args.label,'compiler_label':ame
 rows=[]
 with patch.object(llm_client,'submit_response_job',side_effect=AssertionError('Qualification may never submit a model')):
  for row in results['samples']:
-  if source_fingerprints(Path.cwd())!=fingerprints:raise ValueError('Source drift during uniform qualification')
+  if source_fingerprints(Path.cwd())!=fingerprints or any('sha256:'+hashlib.sha256(Path(p).read_bytes()).hexdigest()!=sha for p,sha in amendment['extra_sources'].items()):raise ValueError('Source drift during uniform qualification')
   sample=f"{row['order']:02d}-{row['arm']}";target=output/sample;target.mkdir(exist_ok=True)
   if (target/'result.json').exists():rows.append(read(target/'result.json'));continue
   started=time.perf_counter()
@@ -100,5 +106,5 @@ with patch.object(llm_client,'submit_response_job',side_effect=AssertionError('Q
   _write_json(target/'result.json',record);rows.append(record)
   _write_json(output/'results.json',{'complete':False,'samples':rows,'new_llm_calls':0})
   print(json.dumps({'cohort':cohort['id'],**record},ensure_ascii=False),flush=True)
-_write_json(output/'results.json',{'complete':len(rows)==5,'samples':rows,'new_llm_calls':0,'fresh_fixtures':True,
+_write_json(output/'results.json',{'complete':len(rows)==expected_samples,'samples':rows,'new_llm_calls':0,'fresh_fixtures':True,
  'protected_user_preview_never_selected':True,'retention':'Owned unapproved test scenarios and hosts retained for reproducibility'})

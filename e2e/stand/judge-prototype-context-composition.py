@@ -22,8 +22,8 @@ args=parser.parse_args(); run=args.run.resolve()
 if not run.is_relative_to(Path.cwd()/'e2e/artifacts/builder'):parser.error('Owned E2E required')
 registration=read(run/'preregistration.json'); output=run/'blind-ux'; output.mkdir(exist_ok=True)
 compact=registration.get('profile')=='compact-pair'
-qualification={'browser_label':'prospective-compact'} if compact else read(run/'uniform-replay-amendment.json')
-browser_directory='browser-requalification-mcp' if compact else 'browser-posthoc-'+qualification['browser_label']
+qualification=read(run/'uniform-replay-amendment.json') if (run/'uniform-replay-amendment.json').exists() else {'browser_label':'prospective-compact'}
+browser_directory='browser-posthoc-'+qualification['browser_label'] if (run/'uniform-replay-amendment.json').exists() else 'browser-requalification-mcp'
 budget=RequestBudget(run/'paid-request-budget.sqlite')
 dollars=DollarBudget(run/'dollar-budget.sqlite',limit_usd=registration['additional_usd_limit']) if registration.get('additional_usd_limit') else None
 load_dotenv(); logging.disable(logging.INFO)
