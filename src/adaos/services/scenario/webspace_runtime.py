@@ -70,6 +70,7 @@ from .webspace_components import (
     WebspaceEventOperations,
 )
 from .workflow_runtime import ScenarioWorkflowRuntime
+from .webspace_components.materialization import capture_cpu_timings
 
 _log = logging.getLogger("adaos.scenario.webspace_runtime")
 _WS_ID_RE = re.compile(r"[^a-zA-Z0-9-_]+")
@@ -4326,6 +4327,11 @@ async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) 
 atexit.register(_shutdown_materialization_cpu_executor)
 
 
+async def _run_observed_materialization_cpu(timings, stage, function, /, *args, **kwargs):
+    with capture_cpu_timings(timings, stage):
+        return await _run_materialization_cpu(function, *args, **kwargs)
+
+
 def _materialization_worker_timeout_s() -> float:
     raw = os.getenv("ADAOS_MATERIALIZATION_WORKER_TIMEOUT_S")
     try:
@@ -5475,6 +5481,7 @@ class WebspaceScenarioRuntime:
                 for child in children
             ]
             project_rows: list[tuple[int, dict[str, Any]]] = []
+            selected_releases: list[tuple[str, str, int]] = []
             immutable_scenarios: set[str] = set()
             # Stable Applications and selected local Trials may live only in
             # immutable archives. Their ApplicationRelease is the launcher
@@ -5550,11 +5557,7 @@ class WebspaceScenarioRuntime:
                         0,
                     )
                 )
-                append_release(
-                    installation.application_id,
-                    installation.installed_release_digest,
-                    source_priority=2,
-                )
+                selected_releases.append((installation.application_id, installation.installed_release_digest, 2))
             for selection in runtime_selections:
                 if target_webspace and selection.webspace_id != target_webspace:
                     continue
@@ -5569,11 +5572,8 @@ class WebspaceScenarioRuntime:
                         0,
                     )
                 )
-                append_release(
-                    selection.application_id,
-                    selection.release_digest,
-                    source_priority=3 if selection.source == "local_trial" else 2,
-                )
+                selected_releases.append((selection.application_id, selection.release_digest,
+                    3 if selection.source == "local_trial" else 2))
             stamp = tuple(sorted(stamp_rows))
             cached = _RUNTIME.cache.get_desktop_scenarios(cache_key)
             if (
@@ -5582,6 +5582,10 @@ class WebspaceScenarioRuntime:
                 and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S
             ):
                 return list(cached[2])
+            # Immutable release archives can be large. Resolve them only after
+            # metadata revisions/TTL reject the launcher cache, not on every hit.
+            for application_id, release_digest, priority in dict.fromkeys(selected_releases):
+                append_release(application_id, release_digest, source_priority=priority)
             try:
                 from adaos.services.application_registry_projection import ApplicationRegistryProjection
 
@@ -6068,19 +6072,18 @@ class WebspaceScenarioRuntime:
             str(ui_map.get("current_scenario") or "web_desktop").strip()
             or "web_desktop"
         )
-        (
-            prepared_skill_decls,
-            prepared_skill_fingerprint,
-            desktop_scenarios,
-            external_inputs,
-        ) = (
-            await _run_materialization_cpu(
+        with capture_cpu_timings(timings, "prepare_catalog_sources"):
+            (
+                prepared_skill_decls,
+                prepared_skill_fingerprint,
+                desktop_scenarios,
+                external_inputs,
+            ) = await _run_materialization_cpu(
                 self._prepare_materialization_catalog_sources_sync,
                 webspace_id,
                 scenario_id,
                 materialization_identity,
             )
-        )
         _record_timing(timings, "prepare_catalog_sources", stage_started)
 
         _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
@@ -6098,10 +6101,11 @@ class WebspaceScenarioRuntime:
         timings.update(_copy_timing_map(self._last_collect_inputs_timings_ms) or {})
 
         _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
-        resolved, payload, worker_timings = await _run_materialization_cpu(
-            self._resolve_materialized_payload_from_inputs_sync,
-            inputs,
-        )
+        with capture_cpu_timings(timings, "resolve_payload"):
+            resolved, payload, worker_timings = await _run_materialization_cpu(
+                self._resolve_materialized_payload_from_inputs_sync,
+                inputs,
+            )
         timings.update(worker_timings)
 
         _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
@@ -6206,7 +6210,7 @@ class WebspaceScenarioRuntime:
             dict(item) for item in declarations if isinstance(item, Mapping)
         ]
         prepared_fingerprint = str(fingerprint or "").strip()
-        desktop_scenarios = self._list_desktop_scenarios(space=source_mode)
+        desktop_scenarios = self._list_desktop_scenarios(space=source_mode, webspace_id=webspace_id)
         prepare_external_inputs = getattr(_RUNTIME.resolution, "prepare_external_inputs", None)
         if not callable(prepare_external_inputs):
             if not prepared_fingerprint:
@@ -6261,8 +6265,8 @@ class WebspaceScenarioRuntime:
         self._last_worker_diagnostics = None
 
         if materialization_identity is None and scenario_content_override is None:
-            selected = await _run_materialization_cpu(
-                _selected_preview_inputs, webspace_id, scenario_id,
+            selected = await _run_observed_materialization_cpu(
+                timings, "selected_preview_inputs", _selected_preview_inputs, webspace_id, scenario_id,
             )
             if selected:
                 scenario_id = selected["scenario_id"]
@@ -6287,8 +6291,8 @@ class WebspaceScenarioRuntime:
                 prepared_skill_fingerprint,
                 desktop_scenarios,
                 external_inputs,
-            ) = await _run_materialization_cpu(
-                self._prepare_materialization_catalog_sources_sync,
+            ) = await _run_observed_materialization_cpu(
+                timings, "prepare_catalog_sources", self._prepare_materialization_catalog_sources_sync,
                 webspace_id,
                 prepared_scenario_id,
                 materialization_identity,
@@ -6302,8 +6306,8 @@ class WebspaceScenarioRuntime:
                 prepared_skill_fingerprint,
                 desktop_scenarios,
                 external_inputs,
-            ) = await _run_materialization_cpu(
-                self._prepare_materialization_external_sources_sync,
+            ) = await _run_observed_materialization_cpu(
+                timings, "prepare_external_sources", self._prepare_materialization_external_sources_sync,
                 webspace_id,
                 prepared_scenario_id,
                 prepared_skill_decls,
@@ -6330,8 +6334,8 @@ class WebspaceScenarioRuntime:
         timings.update(_copy_timing_map(self._last_collect_inputs_timings_ms) or {})
 
         _raise_if_rebuild_request_superseded(webspace_id, request_id)
-        resolved, payload, worker_timings = await _run_materialization_cpu(
-            self._resolve_materialized_payload_from_inputs_sync,
+        resolved, payload, worker_timings = await _run_observed_materialization_cpu(
+            timings, "resolve_payload", self._resolve_materialized_payload_from_inputs_sync,
             inputs,
         )
         timings.update(worker_timings)

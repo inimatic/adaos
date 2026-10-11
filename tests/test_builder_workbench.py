@@ -287,6 +287,27 @@ async def test_ensure_dev_webspace_creates_explicit_prompt_ide_binding(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_ensure_preview_topology_does_not_materialize_unpinned_current_content(monkeypatch, tmp_path: Path) -> None:
+    created = []
+
+    class Webspaces:
+        def list(self, **_kwargs):
+            return []
+
+        async def create(self, requested_id, title, *, scenario_id, dev):
+            created.append((requested_id, scenario_id, dev))
+            return SimpleNamespace(id=requested_id, title=title, kind="dev", source_mode="dev", home_scenario=scenario_id)
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state", webspace_service=Webspaces())
+    monkeypatch.setattr(type(service.reconciler), "request", lambda self, **_kwargs: pytest.fail("Exact revision selection must not first reconcile the mutable head"))
+    result = await service.ensure_dev_webspace("desktop", runtime_scenario_id="test_exact", prepare_runtime=False)
+    assert created == [("desktop-dev", "test_exact", True)]
+    assert result["created"] is True
+    assert result["preview_webspace_id"] == "desktop-dev"
+    assert result["runtime"] == {}
+
+
+@pytest.mark.asyncio
 async def test_ensure_dev_webspace_switches_current_without_reloading_ready_skip(monkeypatch, tmp_path: Path) -> None:
     class _Webspaces:
         def __init__(self) -> None:

@@ -19,7 +19,7 @@ KERNEL = frozenset({
     "layout_regions", "coverage", "state_rules", "state_proofs",
     "field_validation", "fixture_values",
 })
-STRATEGIES = ("full", "hybrid", "hybrid-focused", "core-indexed", "task-aware", "oracle")
+STRATEGIES = ("full", "hybrid", "hybrid-focused", "core-indexed", "task-aware", "task-aware-compact", "oracle")
 
 
 def _focused_candidate(candidate: dict, scope: dict, contract: str) -> dict | None:
@@ -176,7 +176,7 @@ def compile_messages(messages, *, strategy: str | None = None, retrieval_availab
             if invariants != semantic_generation_guidance() or not available:
                 receipt["fallbacks"].append({"message": index, "reason": "unknown_guidance_or_retrieval_unavailable"})
                 continue
-            if strategy in {"core-indexed", "task-aware", "oracle"}:
+            if strategy in {"core-indexed", "task-aware", "task-aware-compact", "oracle"}:
                 from adaos.services.builder.prototype_task_context import project_task_guidance
                 try:
                     projected, retrieval, accents, selection = project_task_guidance(invariants, source,
@@ -201,7 +201,7 @@ def compile_messages(messages, *, strategy: str | None = None, retrieval_availab
             stable["prototype_retrieval"] = retrieval
             changed = True
         repair = body.get("semantic_repair")
-        if strategy in {"hybrid-focused", "core-indexed", "task-aware", "oracle"} and isinstance(repair, dict):
+        if strategy in {"hybrid-focused", "core-indexed", "task-aware", "task-aware-compact", "oracle"} and isinstance(repair, dict):
             candidate, scope = repair.get("candidate"), repair.get("repair_scope")
             if isinstance(candidate, dict) and isinstance(scope, dict):
                 contract = stable.get("output_contract", "") if isinstance(stable, dict) else ""

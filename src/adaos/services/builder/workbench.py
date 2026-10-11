@@ -983,6 +983,7 @@ class BuilderWorkbenchService:
         preview_state: Mapping[str, Any] | None = None,
         wait_for_rebuild: bool = True,
         force_runtime_reload: bool = False,
+        prepare_runtime: bool = True,
     ) -> dict[str, Any]:
         # Relationship and binding persistence use the process-wide SQLite
         # write gate. Keep those synchronous calls off the API event loop so a
@@ -1033,7 +1034,7 @@ class BuilderWorkbenchService:
                 if kind and kind != "dev":
                     raise ValueError(f"paired webspace {dev_id!r} exists but is not a dev webspace")
             info_payload = _info_to_dict(existing)
-            if runtime_scenario and self.webspace_service is None:
+            if prepare_runtime and runtime_scenario and self.webspace_service is None:
                 try:
                     from adaos.services.scenario.webspace_runtime import (
                         apply_builder_revision_materialization,
@@ -1160,7 +1161,7 @@ class BuilderWorkbenchService:
                         "error": "dev_runtime_reload_failed",
                         "detail": f"{type(exc).__name__}: {exc}",
                     }
-            elif runtime_scenario:
+            elif prepare_runtime and runtime_scenario:
                 _requested, coalesced = self.reconciler.request(
                     source_webspace_id=source_id,
                     preview_webspace_id=dev_id,

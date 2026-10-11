@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from adaos.e2e.builder import _write_json
 from adaos.sdk.llm import llm_client
 from adaos.services.builder import prototype_mcp as mcp
-from adaos.services.root.client import RootHttpClient
+from adaos.services.root.client import RootHttpClient, RootHttpError
 from adaos.services.root_mcp.client import RootMcpClient, RootMcpClientConfig
 
 
@@ -92,6 +92,12 @@ def run_root(http, cfg, phase, result, untrusted_cert=None):
               "Native fragment matches pinned SDK content")
         result["exact_fragment_verified"] = True
 
+        repeated = record("native_warm_fragment_read", client.post(public_url.path, headers=authorized,
+            json=rpc("tools/call", params={"name": mcp.OPENAI_TOOLS[1], "arguments": read_args})), 200).json()
+        check(repeated["result"] == payload["result"], "Native public content is byte-stable across cache hits")
+        check("_cache" not in content, "Volatile cache metadata excluded from native provider content")
+        result["native_cache_content_stable"] = True
+
         scoped = RootHttpClient(base_url=http.base_url, verify=http.verify, cert=None,
                                 default_headers=authorized)
         configured = RootMcpClientConfig(root_url=http.base_url, access_token=descriptor["authorization"])
@@ -101,6 +107,20 @@ def run_root(http, cfg, phase, result, untrusted_cert=None):
               "RootMcpClient read compatibility")
         result["root_mcp_client_bearer_compatible"] = True
         read_body = {"tool_id": mcp.READ_TOOL, "arguments": read_args}
+        cache_receipts = []
+        for _ in range(2):
+            cached = mcp._result(record("rest_platform_cache_read", client.post(http.base_url + "/v1/root/mcp/call",
+                headers=authorized, json=read_body), 200).json())
+            metadata = cached.get("_cache", {})
+            check(metadata.get("scope") == "platform" and metadata.get("storage") == "process"
+                  and metadata.get("hit") is True and metadata.get("ttl_seconds") == 3600
+                  and metadata.get("stale") is False, "Root public guidance cache policy and warm hit")
+            cache_receipts.append(metadata)
+            check(cached["fragment"] == fragment, "Cached fragment matches SDK authority")
+        result["cache_receipts"] = cache_receipts
+        record("warm_cache_rejects_old_digest", client.post(http.base_url + "/v1/root/mcp/call",
+            headers=authorized, json={"tool_id": mcp.READ_TOOL, "arguments": {**read_args,
+                "expected_digest": "0" * 64}}), 409)
         received = record("sdk_mtls_without_bearer", sdk.client.post("/v1/root/mcp/call",
                           headers={**headers, **identity}, json=read_body), 200).json()
         check(mcp._result(received)["fragment"] == fragment, "SDK mTLS fragment read")

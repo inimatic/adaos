@@ -91,9 +91,12 @@ def test_revision_selection_persists_actual_target_and_keeps_project_identity(mo
     assert workflows == [("scenario", "screen" if kind == "project" else "app")]
     assert selections[0][0] == (kind, "app")
     assert selections[0][1]["publish_event"] is False
+    assert selections[0][1]["prepare_runtime"] is False
     assert len(renders) == 1
     assert renders[0]["revision"] == revision
     assert renders[0]["scenario_id"] == workflows[0][1]
+    assert result["delivery_timings_ms"]["materialize_requested_revision"] >= 0
+    assert result["delivery_timings_ms"]["total"] >= result["delivery_timings_ms"]["select_project_topology"]
     assert service.target["object_type"] == kind
     assert service.target["object_id"] == "app"
     assert service.target["stage"] == stage

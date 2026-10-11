@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from adaos.services.scenario.webspace_components import (
     WebspaceCacheState,
     WebspaceTaskState,
 )
+from adaos.services.scenario.webspace_components.materialization import capture_cpu_timings
 
 
 def test_webspace_state_owners_are_isolated() -> None:
@@ -148,6 +150,104 @@ async def test_materialization_executor_owner_runs_cpu_work_in_both_modes() -> N
     assert await owner.run_cpu(lambda value: value * 2, 4, max_workers=1, oneshot=False) == 8
 
     owner.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_materialization_cpu_timings_separate_queue_and_work() -> None:
+    owner = MaterializationExecutorOwner()
+    entered = threading.Event()
+    release = threading.Event()
+    timings: dict[str, float] = {}
+
+    def blocked():
+        entered.set()
+        assert release.wait(5)
+
+    first = asyncio.create_task(owner.run_cpu(blocked, max_workers=1, oneshot=False))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+
+        async def queued():
+            with capture_cpu_timings(timings, "catalog"):
+                return await owner.run_cpu(lambda: 42, max_workers=1, oneshot=False)
+
+        second = asyncio.create_task(queued())
+        await asyncio.sleep(0.025)
+        release.set()
+        assert await second == 42
+        await first
+        assert timings["catalog.queue_wait"] >= 10
+        assert timings["catalog.function_wall"] < timings["catalog.queue_wait"]
+        assert timings["catalog.loop_resume_delay"] >= 0
+        parts = sum(timings[f"catalog.{part}"] for part in ("queue_wait", "function_wall", "loop_resume_delay"))
+        assert parts == pytest.approx(timings["catalog.dispatch_wall"], abs=0.01)
+    finally:
+        release.set()
+        await first
+        owner.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_materialization_cpu_timings_isolate_tasks_and_preserve_errors() -> None:
+    owner = MaterializationExecutorOwner()
+    sinks = [{}, {}]
+
+    async def observed(index):
+        with capture_cpu_timings(sinks[index], str(index)):
+            assert await owner.run_cpu(lambda: index, max_workers=1, oneshot=False) == index
+
+    try:
+        await asyncio.gather(observed(0), observed(1))
+        assert all(key.startswith("0.") for key in sinks[0])
+        assert all(key.startswith("1.") for key in sinks[1])
+        timings = {}
+
+        def fails():
+            raise ValueError("expected")
+
+        with capture_cpu_timings(timings, "oneshot"):
+            with pytest.raises(ValueError, match="expected"):
+                await owner.run_cpu(fails, max_workers=1, oneshot=True)
+        assert timings["oneshot.queue_wait"] == timings["oneshot.loop_resume_delay"] == 0
+        assert timings["oneshot.function_wall"] >= 0
+        before = dict(timings)
+        await owner.run_cpu(lambda: None, max_workers=1, oneshot=True)
+        assert timings == before  # Scope reset even on an exception.
+    finally:
+        owner.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_materialization_cpu_cancellation_does_not_write_late_timings() -> None:
+    owner = MaterializationExecutorOwner()
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    timings = {}
+
+    def blocked():
+        entered.set()
+        try:
+            assert release.wait(5)
+        finally:
+            finished.set()
+
+    async def observed():
+        with capture_cpu_timings(timings, "cancelled"):
+            await owner.run_cpu(blocked, max_workers=1, oneshot=False)
+
+    task = asyncio.create_task(observed())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert "cancelled.function_wall" not in timings
+        captured = dict(timings)
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 5)
+        assert captured == timings
+    finally:
+        release.set()
+        owner.shutdown()
 
 
 @pytest.mark.asyncio

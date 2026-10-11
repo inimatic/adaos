@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -196,6 +197,7 @@ def select_project(
     ensure_ready: bool = True,
     wait_for_rebuild: bool = False,
     publish_event: bool = True,
+    prepare_runtime: bool = True,
 ) -> dict[str, Any]:
     """Persist Builder context and request scenario preview reconciliation."""
 
@@ -278,6 +280,7 @@ def select_project(
                     runtime_scenario_id=preview_scenario_id,
                     preview_state=preview_state,
                     wait_for_rebuild=effective_wait,
+                    **({"prepare_runtime": False} if not prepare_runtime else {}),
                 )
             )
             ensured = (
@@ -395,6 +398,7 @@ def select_project(
                     runtime_scenario_id=preview_scenario_id,
                     preview_state=preview_state,
                     wait_for_rebuild=effective_wait,
+                    **({"prepare_runtime": False} if not prepare_runtime else {}),
                 )
             )
             ensured = (
@@ -499,6 +503,7 @@ def select_project(
                 active_draft_id=None,
                 runtime_scenario_id=project_id,
                 wait_for_rebuild=effective_wait,
+                **({"prepare_runtime": False} if not prepare_runtime else {}),
             )
         )
         ensured = (
@@ -605,6 +610,8 @@ def select_target(
 ) -> dict[str, Any]:
     """Materialize an explicit Lifecycle snapshot without changing its active phase."""
 
+    delivery_started = time.perf_counter()
+    delivery_timings = {}
     kind = str(object_type or "").strip().lower().rstrip("s")
     project_id = str(object_id or "").strip()
     if kind not in {"project", "scenario"}:
@@ -673,6 +680,8 @@ def select_target(
             raise ValueError("only the current Automation result can be shown in Preview")
         target_revision = current_automation
         display_revision = current_automation_version or "current"
+    delivery_timings["resolve_identity"] = round((time.perf_counter() - delivery_started) * 1000, 3)
+    stage_started = time.perf_counter()
     selected = select_project(
         kind,
         project_id,
@@ -680,7 +689,9 @@ def select_target(
         ensure_ready=True,
         wait_for_rebuild=True,
         publish_event=False,
+        prepare_runtime=False,
     )
+    delivery_timings["select_project_topology"] = round((time.perf_counter() - stage_started) * 1000, 3)
     if selected.get("ok") is False:
         return selected
     # ``select_target`` materializes the requested snapshot itself, so it must
@@ -714,6 +725,7 @@ def select_target(
     }[stage_token]
     label = f"{prefix}: {project_id} · {display_revision or target_revision or 'current'}"
     materializer = materialize_revision_via_owner if via_owner else materialize_revision
+    stage_started = time.perf_counter()
     materialized = materializer(
         webspace_id=preview_id,
         scenario_id=scenario_id,
@@ -727,6 +739,7 @@ def select_target(
             "preview_revision": target_revision or None,
         },
     )
+    delivery_timings["materialize_requested_revision"] = round((time.perf_counter() - stage_started) * 1000, 3)
     if materialized.get("ok") is False or materialized.get("accepted") is False:
         return {"ok": False, "materialization": materialized, "preview_webspace_id": preview_id}
     target = {
@@ -739,13 +752,17 @@ def select_target(
         "label": label,
         "follow_active": bool(follow_active),
     }
+    stage_started = time.perf_counter()
     binding = _plain(_service().set_preview_target(source_webspace_id=source, target=target))
+    delivery_timings["persist_target"] = round((time.perf_counter() - stage_started) * 1000, 3)
+    delivery_timings["total"] = round((time.perf_counter() - delivery_started) * 1000, 3)
     return {
         "ok": bool(materialized.get("ok", True)),
         "target": target,
         "materialization": materialized,
         "binding": binding,
         "preview_webspace_id": preview_id,
+        "delivery_timings_ms": delivery_timings,
     }
 
 

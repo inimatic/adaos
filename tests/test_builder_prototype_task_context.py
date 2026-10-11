@@ -123,3 +123,53 @@ def test_brief_known_value_markers_do_not_create_a_fake_state_feature():
     evidence["requests"][0]["prototype_brief"]["operations"] = [{"kind": "create", "statement": "New record"}]
     selected, _ = select_task_fragments(evidence)
     assert "field_validation" in selected
+
+
+@pytest.mark.parametrize("instruction", [
+    "Display a static catalog",
+    "Search and filter linked customer history; edit fields, attachments, mobile tabs, no results",
+    "Поиск, фильтры, связанные записи, редактирование, пустые состояния и вкладки на телефоне",
+])
+def test_compact_context_has_bounded_exact_fragments_and_complete_decision_index(instruction):
+    from adaos.services.builder.prototype_task_context import COMPACT_INLINE_CHAR_BUDGET, COMPACT_KERNEL
+    from adaos.services.builder.prototype_mcp import library_snapshot
+    from adaos.services.builder_context import canonical
+    original = messages(instruction)
+    delivered, receipt = compile_messages(original, strategy="task-aware-compact", retrieval_available=True)
+    assert delivered[0] == original[0] and delivered[2] == original[2]
+    stable = json.loads(delivered[1]["content"])["stable_builder_context"]
+    exact, projected = semantic_generation_guidance(), stable["semantic_invariants"]
+    assert len(canonical(projected)) <= COMPACT_INLINE_CHAR_BUDGET
+    assert all(projected[key] == exact[key] for key in COMPACT_KERNEL)
+    # Do not drop bounds under the mistaken assumption strict provider schemas
+    # still carry assertions stripped by semantic_prototype_provider_contract.
+    assert projected["authoring_constraints"] == exact["authoring_constraints"]
+    for key, value in projected.items():
+        if key == "ux_recommendations":
+            assert all(value[child] == exact[key][child] for child in value)
+        else:
+            assert value == exact[key]
+    selection = receipt["task_selections"][0]
+    inline = set(selection["inline_fragment_ids"])
+    indexed = [identity for group in stable["prototype_retrieval"]["dimensions"] for identity in group["ids"]]
+    assert not inline & set(indexed)
+    assert len(indexed) == len(set(indexed))
+    assert inline | set(indexed) == {part["id"] for part in library_snapshot()["fragments"]}
+    assert all(group["read_when"] and group["keywords"] for group in stable["prototype_retrieval"]["dimensions"])
+    if "query_filters" in inline:
+        assert {"state_rules", "state_proofs"} <= inline
+    assert selection["compact_delivery_chars"] < len(canonical(exact)) * 0.66
+    assert stable["output_contract"] == {"schema": "candidate"}
+
+
+@pytest.mark.parametrize("problem", ["retrieval_unavailable", "unknown_authority", "task_missing"])
+def test_compact_context_falls_back_without_losing_task_or_authority(problem):
+    source = messages()
+    if problem == "unknown_authority":
+        body = json.loads(source[1]["content"])
+        body["stable_builder_context"]["semantic_invariants"]["new_rule"] = "must retain"
+        source[1]["content"] = json.dumps(body)
+    elif problem == "task_missing":
+        source.pop()
+    result, receipt = compile_messages(source, strategy="task-aware-compact", retrieval_available=problem != "retrieval_unavailable")
+    assert result == source and receipt["fallbacks"]

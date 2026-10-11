@@ -7,6 +7,7 @@ import sys
 import threading
 import types
 from types import SimpleNamespace
+import pytest
 
 if "y_py" not in sys.modules:
     try:
@@ -673,6 +674,23 @@ def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None
     assert captured[0]["preview_label"] == "Exact Trial"
     assert captured[0]["event_payload"]["source_webspace_id"] == "desktop"
     assert captured[0]["event_payload"]["_meta"]["cmd_id"] == "builder.ui.applications.027"
+
+
+def test_builder_materialization_unavailable_revision_is_conflict_not_server_error(monkeypatch) -> None:
+    from fastapi import HTTPException
+
+    async def unavailable(*_args, **_kwargs):
+        raise ValueError("Builder prototype revision is unavailable: 001")
+
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(node_api_module, "apply_builder_revision_materialization", unavailable)
+    request = SimpleNamespace(url=SimpleNamespace(path="/api/node/yjs/webspaces/test_owned-dev/builder-materialize"),
+        headers={}, client=SimpleNamespace(host="127.0.0.1", port=1))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(node_api_module.node_yjs_builder_materialize("test_owned-dev",
+            node_api_module.BuilderRevisionMaterializationRequest(scenario_id="test_owned", revision="001"), request))
+    assert error.value.status_code == 409
+    assert error.value.detail == "Builder prototype revision is unavailable: 001"
 
 
 def test_node_yjs_go_home_endpoint_uses_helper(monkeypatch) -> None:

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict
+from .materialization import capture_cpu_timings
 
 
 @asynccontextmanager
@@ -64,6 +65,11 @@ class WebspaceMaterializationService:
         """Resolve a materialized payload without mutating an intermediate YDoc."""
         materialize_started = time.perf_counter()
         timings: Dict[str, float] = {}
+
+        async def run_observed_cpu(stage, function, *args, **kwargs):
+            with capture_cpu_timings(timings, stage):
+                return await operations.run_materialization_cpu(function, *args, **kwargs)
+
         ydoc_timings: Dict[str, float] = {"payload_only": 0.0}
         runtime._last_resolver_debug = None
         runtime._last_collect_inputs_timings_ms = None
@@ -222,8 +228,8 @@ class WebspaceMaterializationService:
                     prepared_skill_fingerprint,
                     desktop_scenarios,
                     external_inputs,
-                ) = await operations.run_materialization_cpu(
-                    runtime._prepare_materialization_catalog_sources_sync,
+                ) = await run_observed_cpu(
+                    "prepare_catalog_sources", runtime._prepare_materialization_catalog_sources_sync,
                     webspace_id,
                     prepared_scenario_id,
                     materialization_identity,
@@ -236,8 +242,8 @@ class WebspaceMaterializationService:
                     prepared_skill_fingerprint,
                     desktop_scenarios,
                     external_inputs,
-                ) = await operations.run_materialization_cpu(
-                    runtime._prepare_materialization_external_sources_sync,
+                ) = await run_observed_cpu(
+                    "prepare_external_sources", runtime._prepare_materialization_external_sources_sync,
                     webspace_id,
                     prepared_scenario_id,
                     prepared_skill_decls,
@@ -263,8 +269,8 @@ class WebspaceMaterializationService:
             collect_phase_timings = operations.copy_timing_map(runtime._last_collect_inputs_timings_ms) or {}
             timings.update(collect_phase_timings)
 
-            resolved, payload, worker_timings = await operations.run_materialization_cpu(
-                runtime._resolve_materialized_payload_from_inputs_sync,
+            resolved, payload, worker_timings = await run_observed_cpu(
+                "resolve_payload", runtime._resolve_materialized_payload_from_inputs_sync,
                 inputs,
             )
             timings.update(worker_timings)

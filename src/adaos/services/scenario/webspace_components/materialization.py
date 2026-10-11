@@ -10,10 +10,27 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import partial
 from pathlib import Path
 from collections.abc import Callable, Mapping
 from typing import Any
+
+
+_CPU_TIMING_SCOPE: ContextVar[tuple[dict[str, float], str] | None] = ContextVar(
+    "materialization_cpu_timing_scope", default=None,
+)
+
+
+@contextmanager
+def capture_cpu_timings(timings: dict[str, float], stage: str):
+    """Observe one task without changing function arguments or YDoc ownership."""
+    token = _CPU_TIMING_SCOPE.set((timings, stage))
+    try:
+        yield
+    finally:
+        _CPU_TIMING_SCOPE.reset(token)
 
 
 class MaterializationExecutorOwner:
@@ -53,11 +70,40 @@ class MaterializationExecutorOwner:
         oneshot: bool,
         **kwargs: Any,
     ) -> Any:
-        if oneshot:
-            return function(*args, **kwargs)
-        loop = asyncio.get_running_loop()
         call = partial(function, *args, **kwargs)
-        return await loop.run_in_executor(self.get(max_workers=max_workers), call)
+        scope = _CPU_TIMING_SCOPE.get()
+        if scope is None:
+            if oneshot:
+                return call()
+            return await asyncio.get_running_loop().run_in_executor(self.get(max_workers=max_workers), call)
+
+        submitted = time.perf_counter()
+        # Only monotonic timestamps cross threads; the sink is written on the
+        # caller/owner thread after awaiting. No live YDoc moves to a new thread.
+        stamps: list[float] = []
+
+        def measured_call():
+            stamps.append(time.perf_counter())
+            try:
+                return call()
+            finally:
+                stamps.append(time.perf_counter())
+
+        try:
+            if oneshot:
+                return measured_call()
+            return await asyncio.get_running_loop().run_in_executor(self.get(max_workers=max_workers), measured_call)
+        finally:
+            resumed = time.perf_counter()
+            sink, stage = scope
+            sink[f"{stage}.dispatch_wall"] = round((resumed - submitted) * 1000, 3)
+            if stamps:
+                sink[f"{stage}.queue_wait"] = 0.0 if oneshot else round((stamps[0] - submitted) * 1000, 3)
+            if len(stamps) == 2:
+                sink[f"{stage}.function_wall"] = round((stamps[1] - stamps[0]) * 1000, 3)
+                sink[f"{stage}.loop_resume_delay"] = 0.0 if oneshot else round((resumed - stamps[1]) * 1000, 3)
+            # Cancellation before completion deliberately emits no fabricated
+            # function duration; the still-running worker cannot mutate the sink.
 
     @staticmethod
     def _elapsed_ms(started_at: float) -> float:

@@ -29,13 +29,15 @@ def main():
     parser.add_argument('--stage', choices=('plan', 'generate', 'repair'), required=True)
     parser.add_argument('--cohort')
     parser.add_argument('--samples', nargs='+')
+    parser.add_argument('--profile', choices=('five-arm', 'compact-pair'), default='five-arm')
     args = parser.parse_args()
     repo, run = Path.cwd().resolve(), args.run.resolve()
     if not run.is_relative_to(repo / 'e2e/artifacts/builder'):
         parser.error('Owned E2E artifacts required')
     run.mkdir(parents=True, exist_ok=True)
-    arms = ['full-no-mcp', 'full-mcp', 'core-indexed', 'task-aware', 'oracle']
-    orders = [arms, list(reversed(arms)), [*arms[3:], *arms[:3]], [arms[2], arms[4], arms[0], arms[3], arms[1]]]
+    compact = args.profile == 'compact-pair'
+    arms = ['full-mcp', 'task-aware-compact'] if compact else ['full-no-mcp', 'full-mcp', 'core-indexed', 'task-aware', 'oracle']
+    orders = [arms, list(reversed(arms)), arms, list(reversed(arms))] if compact else [arms, list(reversed(arms)), [*arms[3:], *arms[:3]], [arms[2], arms[4], arms[0], arms[3], arms[1]]]
     cohorts = [{'id': prefix + '-' + task, 'model': model, 'task': task, 'arms': orders[i]}
         for i, (prefix, model, task) in enumerate([
             ('gpt55', 'gpt-5.5', 'inventory'), ('sol56', 'gpt-5.6-sol', 'inventory'),
@@ -44,8 +46,8 @@ def main():
     dollars = DollarBudget(run / 'dollar-budget.sqlite', limit_usd=15)
     registration_path = run / 'preregistration.json'
     registration = {'schema': 'adaos.e2e.context_composition_model_extension.v1', 'cohorts': cohorts,
-        'host': 'desktop-codex-navigation', 'reasoning_effort': 'high', 'additional_usd_limit': 15,
-        'maximum_primary_attempts': 20, 'maximum_repair_attempts': 4, 'judge_requests': 0,
+        'host': 'test_ctxcompact_builder_20261011' if compact else 'desktop-codex-navigation', 'reasoning_effort': 'high', 'additional_usd_limit': 15,
+        'maximum_primary_attempts': 16 if compact else 20, 'maximum_repair_attempts': 4, 'judge_requests': 4 if compact else 0,
         'root_base_url': 'https://ru.api.inimatic.com', 'provider_worker': 'https://api.inimatic.com',
         'provider_max_attempts': 1, 'provider_timeout_s': 900, 'max_output_tokens': 128000,
         'max_tool_calls': 40, 'parallel_cohorts': 2, 'service_tier': 'default',
@@ -58,18 +60,29 @@ def main():
         'runtime_source_fingerprints': source_fingerprints(repo),
         'extra_sources': {p: 'sha256:' + hashlib.sha256((repo / p).read_bytes()).hexdigest()
             for p in ('e2e/stand/run-prototype-model-extension.py', 'src/adaos/e2e/composition_metrics.py', 'src/adaos/e2e/dollar_budget.py')}}
+    if compact:
+        registration.update(profile=args.profile, repetitions=2,
+            baseline='Contemporaneous full+MCP only; same task, model, effort, provider schema, native compiler and MCP library.',
+            context_comparison='Whole-fragment bounded task-aware projection with a complete decision-oriented index.',
+            endpoints=['first native compiler + frozen Brief gates', 'same desktop/mobile functional and usability probes',
+                'all attempted input/cached/output/reasoning tokens, USD and MCP calls', 'provider vs system phase timings',
+                'blind screenshots (proxy only), position-swapped if budget permits'],
+            limitations=['Two tasks, two repetitions per model/arm; diagnostic pilot, not broad generalization',
+                'Standard rate estimate, not Root invoice; unknown charges remain reserved',
+                'Automated usability checks and screenshot judge are not human usability calibration'])
     if registration_path.exists():
         if read(registration_path) != registration:
             raise ValueError('Prospective extension source/configuration drift')
     elif args.stage != 'plan':
         parser.error('Plan before paid requests')
     else:
-        ledger.reallocate({'primary': 20, 'repair': 4, 'judge': 0}, reason='Prospective $15 model extension; no paid judges')
+        ledger.reallocate({'primary': 16 if compact else 20, 'repair': 4, 'judge': 4 if compact else 0},
+            reason='Prospective $15 compact paired series' if compact else 'Prospective $15 model extension; no paid judges')
         _write_json(registration_path, registration)
 
     def execute(cohort):
         log = run / (cohort['id'] + '-' + args.stage + '.log')
-        command = [sys.executable, __file__, '--run', str(run), '--stage', args.stage, '--cohort', cohort['id']]
+        command = [sys.executable, __file__, '--run', str(run), '--stage', args.stage, '--cohort', cohort['id'], '--profile', args.profile]
         with log.open('a', encoding='utf-8') as sink:
             result = subprocess.run(command, stdout=sink, stderr=subprocess.STDOUT)
         print(json.dumps({'cohort': cohort['id'], 'stage': args.stage, 'exit_code': result.returncode, 'log': str(log.relative_to(repo))}), flush=True)
@@ -115,11 +128,12 @@ def main():
     else:
         script = 'e2e/stand/run-prototype-context-ablation.py'
         arguments = ['--source-run', 'e2e/artifacts/builder/prototype-pipeline-confirmation-20261010-01/gpt5-inventory',
-            '--output', str(directory), '--model', cohort['model'], '--reasoning-effort', 'high', '--repetitions', '1',
+            '--output', str(directory), '--model', cohort['model'], '--reasoning-effort', 'high', '--repetitions', '2' if compact else '1',
             '--mcp', 'on', '--context-mode', 'composition', '--arms', *cohort['arms'],
-            '--oracle-file', 'e2e/builder/development/context-ablation/prototype-guidance-oracles.json',
             '--request-budget-db', str(ledger.path), '--root-base-url', registration['root_base_url'],
             '--defer-browser', '--host', registration['host']]
+        if not compact:
+            arguments += ['--oracle-file', 'e2e/builder/development/context-ablation/prototype-guidance-oracles.json']
         if cohort['task'] == 'support':
             arguments += ['--task-file', 'e2e/builder/development/context-ablation/support-desk-ru.json']
         if args.stage == 'plan':

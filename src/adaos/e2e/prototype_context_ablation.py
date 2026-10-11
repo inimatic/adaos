@@ -38,6 +38,7 @@ def source_fingerprints(repo):
         "src/adaos/sdk/llm/llm_client.py", "src/adaos/services/builder/model_controls.py",
         "src/adaos/sdk/builder/prototype.py", "src/adaos/services/builder/prototype_mcp.py",
         "src/adaos/sdk/builder/preview.py", "src/adaos/services/builder/cbs.py",
+        "src/adaos/services/builder/workbench.py",
         "src/adaos/abi/builder.cbs_compilation.v1.schema.json",
         "src/adaos/integrations/adaos-client/src/assets/i18n/en.json",
         "src/adaos/integrations/adaos-client/src/assets/i18n/ru.json",
@@ -48,6 +49,9 @@ def source_fingerprints(repo):
         "e2e/builder/development/context-ablation/prototype-guidance-oracles.json",
         "src/adaos/services/root/service.py",
         "src/adaos/services/workspace_registry.py",
+        "src/adaos/services/scenario/webspace_runtime.py",
+        "src/adaos/services/scenario/webspace_components/materialization.py",
+        "src/adaos/services/scenario/webspace_components/materialization_runtime.py",
         "src/adaos/services/pending_action_projection.py",
         "src/adaos/services/yjs/gateway_ws.py",
         "src/adaos/integrations/adaos-client/src/app/renderer/widgets/table.widget.component.ts",
@@ -56,6 +60,7 @@ def source_fingerprints(repo):
         "src/adaos/e2e/prototype_context_ablation.py", "e2e/stand/repair-prototype-pipeline-cohort.py",
         "src/adaos/e2e/prototype_mcp_eval.py", "e2e/stand/qualify-prototype-context-ablation.py",
         "src/adaos/integrations/adaos-backend/backend/prototype-context-library.ts",
+        "src/adaos/integrations/adaos-backend/backend/prototype-guidance-cache.ts",
         "src/adaos/integrations/adaos-backend/backend/app.ts",
         "src/adaos/integrations/adaos-backend/backend/prototype-context-library.json",
         "src/adaos/integrations/adaos-client/src/app/runtime/page-modal.service.ts",
@@ -65,6 +70,7 @@ def source_fingerprints(repo):
           for extension in ("ts", "html", "scss")],
         "src/adaos/integrations/adaos-client/src/app/app.component.html",
         "src/adaos/integrations/adaos-client/src/app/app.component.scss",
+        "e2e/stand/browser/prototype-usability.mjs",
         *[f"e2e/stand/browser/{name}.mjs" for name in ("prototype-client-health", "prototype-navigation", "prototype-review",
             "prototype-capabilities", "prototype-interactions", "prototype-interaction-fields", "prototype-procurement",
             "prototype-procurement-lines", "prototype-procurement-composition", "prototype-procurement-fields")]]
@@ -76,7 +82,7 @@ def compile_experiment_messages(messages, *, strategy, generation_options, conte
     if context_mode == "composition":
         from adaos.services.builder.prototype_pipeline import compile_messages
         from adaos.services.builder.prototype_mcp import library_snapshot
-        if strategy not in {"full-no-mcp", "full-mcp", "core-indexed", "task-aware", "oracle"}:
+        if strategy not in {"full-no-mcp", "full-mcp", "core-indexed", "task-aware", "task-aware-compact", "oracle"}:
             raise ValueError("Unknown composition arm")
         source = copy.deepcopy(messages)
         snapshot = library_snapshot()
@@ -594,9 +600,15 @@ def main():
             parser.error("Requires the frozen support-desk held-out task")
     oracle_ids = read(args.oracle_file)["tasks"][task] if args.oracle_file else None
     composition_arms = {"full-no-mcp", "full-mcp", "core-indexed", "task-aware", "oracle"}
-    if args.context_mode == "composition" and (not args.arms or set(args.arms) != composition_arms
-            or len(args.arms) != 5 or not oracle_ids or not args.request_budget_db or not args.root_base_url):
-        parser.error("Composition requires all five unique arms, pinned oracle, global budget and Root route")
+    compact_pair = {"full-mcp", "task-aware-compact"}
+    if args.context_mode == "composition":
+        if (not args.arms or set(args.arms) not in (composition_arms, compact_pair)
+                or len(args.arms) != len(set(args.arms)) or not args.request_budget_db or not args.root_base_url):
+            parser.error("Composition requires five canonical arms or the two compact paired arms, a global budget and Root route")
+        if set(args.arms) == composition_arms and not oracle_ids:
+            parser.error("The five-arm composition requires a pinned oracle")
+        if set(args.arms) == compact_pair and args.mcp != "on":
+            parser.error("The compact comparison requires working MCP in both arms")
     if args.context_mode != "composition" and args.arms:
         parser.error("Explicit arms require composition mode")
     if args.primary_only and args.context_mode != "pipeline":
@@ -642,7 +654,7 @@ def main():
         "model": args.model, "effort": args.reasoning_effort, "max_output_tokens": 128000,
         "mcp": args.mcp, "context_mode": args.context_mode, "library_digest": retrieval_index(available=False)["library_digest"],
         "max_attempts": 1 if args.primary_only else 2 if args.context_mode in {"pipeline", "composition"} else 3, "hint_budget_tokens": 512, "repetitions": args.repetitions,
-        "order": list(arms) if args.context_mode == "composition" else ["full", "adaptive"] if args.repetitions == 1 else ["full", "adaptive", "adaptive", "full"],
+        "order": [arm for repetition in range(args.repetitions) for arm in (arms if repetition % 2 == 0 else list(reversed(arms)))] if args.context_mode == "composition" else ["full", "adaptive"] if args.repetitions == 1 else ["full", "adaptive", "adaptive", "full"],
         "instruction_sha256": digest(instruction), "brief_sha256": digest(brief), "provider_schema_sha256": digest(schema),
         "initial_webui_sha256": digest(initial), "protected_source_sha256": protected,
         "native_builder_sha256": "sha256:" + hashlib.sha256(handler.read_bytes()).hexdigest(),
@@ -656,7 +668,7 @@ def main():
         "acceptance": ["native compiler and exact Brief coverage", "task-grounded structural gates v2", "desktop/mobile tabs, filters, linked records and public compact panels", "desktop/mobile create request, reopen, submit for approval and independent persisted status", "desktop/mobile procurement line, supplier offer and exact independently persisted quantity", "generated generic update commands, if present: validation, edit, cancel and reload", "independent screenshot review"],
         "existing_apps": "read-only; only new test_ applications and their owned DEV previews may be written"}
     if args.context_mode == "composition":
-        plan.update(oracle_fragment_ids=oracle_ids, oracle_source_sha256=digest(read(args.oracle_file)),
+        plan.update(oracle_fragment_ids=oracle_ids, oracle_source_sha256=digest(read(args.oracle_file)) if args.oracle_file else None,
             request_budget_db=str(args.request_budget_db.resolve()), root_base_url=args.root_base_url,
             provider_max_attempts=1, repairs="deferred single native repair; global repair budget=8")
     if task == "support-desk-ru":

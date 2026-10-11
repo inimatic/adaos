@@ -6889,18 +6889,23 @@ async def node_yjs_builder_materialize(
         meta["cmd_id"] = str(payload.request_id)
         meta["trace_id"] = str(payload.request_id)
     event_payload["_meta"] = meta
-    result = await apply_builder_revision_materialization(
-        target_webspace_id,
-        scenario_id=scenario_id,
-        preview_stage=payload.preview_stage,
-        preview_label=payload.preview_label,
-        revision=str(payload.revision or "").strip() or None,
-        source_fingerprint=str(payload.source_fingerprint or "").strip() or None,
-        user_id=str(payload.user_id or "guest").strip() or "guest",
-        roles=[str(role) for role in payload.roles if str(role).strip()],
-        policy_fingerprint=str(payload.policy_fingerprint or "").strip() or None,
-        event_payload=event_payload,
-    )
+    try:
+        result = await apply_builder_revision_materialization(
+            target_webspace_id,
+            scenario_id=scenario_id,
+            preview_stage=payload.preview_stage,
+            preview_label=payload.preview_label,
+            revision=str(payload.revision or "").strip() or None,
+            source_fingerprint=str(payload.source_fingerprint or "").strip() or None,
+            user_id=str(payload.user_id or "guest").strip() or "guest",
+            roles=[str(role) for role in payload.roles if str(role).strip()],
+            policy_fingerprint=str(payload.policy_fingerprint or "").strip() or None,
+            event_payload=event_payload,
+        )
+    except ValueError as exc:
+        # An unavailable/invalid pinned revision is an admission conflict,
+        # not an internal server failure or permission to use another revision.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     response = dict(result) if isinstance(result, Mapping) else {}
     response.setdefault("ok", True)
     response["accepted"] = bool(response.get("ok"))

@@ -4118,10 +4118,16 @@ def test_prepare_materialization_external_sources_tolerates_legacy_resolution(mo
         type(webspace_runtime_module._RUNTIME.resolution),
         "prepare_external_inputs",
     )
+    requested_scopes = []
+
+    def scoped_scenarios(*, space, webspace_id=None):
+        requested_scopes.append((space, webspace_id))
+        return [("web_desktop", "Desktop", "desktop")]
+
     monkeypatch.setattr(
         runtime,
         "_list_desktop_scenarios",
-        lambda *, space, webspace_id=None: [("web_desktop", "Desktop", "desktop")],
+        scoped_scenarios,
     )
 
     declarations, fingerprint, desktop_scenarios, external_inputs = (
@@ -4138,6 +4144,7 @@ def test_prepare_materialization_external_sources_tolerates_legacy_resolution(mo
     assert fingerprint == "fp-prewarmed"
     assert desktop_scenarios == [("web_desktop", "Desktop", "desktop")]
     assert external_inputs == {}
+    assert requested_scopes == [("workspace", "desktop")]
 
 
 def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
@@ -4173,6 +4180,8 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
         ),
     )
 
+    release_reads = []
+
     class FakeApplicationStore:
         def __init__(self, _root: Path) -> None:
             pass
@@ -4184,6 +4193,7 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
             return tuple(selections)
 
         def get_release(self, application_id: str, release_digest: str):
+            release_reads.append((application_id, release_digest))
             assert (application_id, release_digest) == (
                 "site_studio",
                 "sha256:trial",
@@ -4219,6 +4229,14 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
     assert runtime._list_desktop_scenarios("workspace", webspace_id="desktop") == [
         ("site_studio", "Site Studio", "color-wand-outline")
     ]
+    assert len(release_reads) == 1
+    assert runtime._list_desktop_scenarios("workspace", webspace_id="desktop") == [
+        ("site_studio", "Site Studio", "color-wand-outline")
+    ]
+    assert len(release_reads) == 1, "Warm launcher cache must not reopen release archives"
+    selections[0].revision = 2
+    runtime._list_desktop_scenarios("workspace", webspace_id="desktop")
+    assert len(release_reads) == 2, "Runtime selection revisions must invalidate cache"
     assert (
         runtime._list_desktop_scenarios("workspace", webspace_id="another-desktop")
         == []

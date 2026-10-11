@@ -4,6 +4,7 @@ import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { dismissSystemOverlays, installSystemOverlayDismissal } from './prototype-navigation.mjs'
 import { canonicalRenderedWidgetSources, canonicalWidgetSources } from './widget-source-parity.mjs'
+import { observeUsability } from './prototype-usability.mjs'
 
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
 const webspace = process.env.ADAOS_E2E_WEBSPACE_ID
@@ -271,6 +272,8 @@ try {
       }
     } catch (error) { failure = error.message }
     const text = await page.locator('body').innerText()
+    const usability = await observeUsability(page, { compact: layout === 'compact' })
+    if (!usability.ok && !failure) failure = `Usability floor failed: ${JSON.stringify(usability.gates)}`
     const geometry = await page.evaluate(() => ({
       viewportWidth: innerWidth,
       documentWidth: document.documentElement.scrollWidth,
@@ -367,7 +370,7 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-bottom.png`), fullPage: true })
     }
     await Promise.allSettled(responseTasks)
-    samples.push({ layout, viewport, locale, selectWidget, geometry, mediaChecks, emptyChecks, scrollSurfaces,
+    samples.push({ layout, viewport, locale, selectWidget, geometry, usability, mediaChecks, emptyChecks, scrollSurfaces,
       dismissedSystemOverlays, failure, errors, requestFailures, text })
     await context.close()
   }
