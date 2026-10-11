@@ -3,7 +3,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { reviewSeparateCrud } from './prototype-crud-review.mjs'
-import { installSystemOverlayDismissal, revealPrototypeWidget } from './prototype-navigation.mjs'
+import { installSystemOverlayDismissal, prototypeRowCommand, prototypeRowSelector, recordEditorOpener, revealPrototypeWidget, selectPrototypeRow, selectPrototypeRowForCommand } from './prototype-navigation.mjs'
+import { pickEditableInteractionField } from './prototype-interaction-fields.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Interaction review requires ENV_TYPE=dev')
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT || '')
@@ -51,7 +52,7 @@ try {
       window.__ADAOS_DEBUG__ = true
       window.__ADAOS_BASE__ = hub
       window.__ADAOS_TOKEN__ = token
-      for (const [key, value] of Object.entries({ adaos_device_id: 'e2e-interactions', adaos_webspace_id: webspace,
+      for (const [key, value] of Object.entries({ adaos_device_id: `e2e-interactions:${webspace}`, adaos_webspace_id: webspace,
         adaos_hub_base: hub, adaos_local_hub_base: hub, adaos_try_local_hub: '1', adaos_hub_token: token,
         adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: locale })) localStorage.setItem(key, value)
     }, { hub, token, subnet, webspace: preview.webspace_id, locale: checkpoint.context.locale })
@@ -77,16 +78,11 @@ try {
       void pending.catch(() => {})
       return pending
     }
-    const editorOpener = (modalId, row) => {
-      for (const owner of widgets) {
-        const action = owner.actions?.find(item => ['openModal', 'navigate'].includes(item.type) && item.params?.modalId === modalId
-          && item.on?.startsWith('click:') && item.on !== 'click:new')
-        if (!action) continue
-        const id = action.on.startsWith('click:') ? action.on.slice('click:'.length) : action.id || action.on
-        const scope = ['ui.table', 'ui.list', 'collection.board'].includes(owner.type) ? row : host(owner.id)
-        return scope.locator(`[data-command-id=${JSON.stringify(id)}]`).first()
-      }
-      return row
+    const editorOpener = (modalId, row, selectedStateKey) => {
+      const opener = recordEditorOpener(widgets, modalId, selectedStateKey)
+      if (!opener) return row
+      return opener.collection ? prototypeRowCommand(row, opener.commandId)
+        : host(opener.owner.id).locator(`[data-command-id=${JSON.stringify(opener.commandId)}]`).first()
     }
     try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
@@ -128,13 +124,8 @@ try {
       })
       for (const { widget, modalId } of forms) {
         const update = widget.actions?.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'update')
-        const editableField = field => update?.params?.payload?.[field.id] === `$event.values.${field.id}` && !field.visibleIf && !field.readOnly
-        const field = requestedFieldId
-          ? widget.inputs.fields?.find(field => field.id === requestedFieldId && editableField(field))
-          : requestedFieldType
-          ? widget.inputs.fields?.find(field => field.type === requestedFieldType && editableField(field))
-          : widget.inputs.fields?.find(field => ['shortText', 'longText'].includes(field.type) && editableField(field))
-            || widget.inputs.fields?.find(field => ['date', 'time', 'number', 'integer', 'dropdown', 'singleChoice'].includes(field.type) && editableField(field))
+        const field = pickEditableInteractionField(widget.inputs.fields || [], update,
+          { fieldId: requestedFieldId, fieldType: requestedFieldType })
         const numeric = field && ['number', 'integer'].includes(field.type)
         const choice = field && ['dropdown', 'singleChoice'].includes(field.type)
         let choiceTarget
@@ -142,7 +133,7 @@ try {
           : field?.type === 'time' ? (purpose === 'cancel' ? '11:20' : '12:30')
             : numeric ? (purpose === 'cancel' ? '17' : '23') : `${purpose}-${checkpoint.run_id}-${layout}`
         const collection = widgets.find(item => ['ui.table', 'ui.list', 'collection.board'].includes(item.type) && item.dataSource?.resourceType === update?.target)
-        const rowSelector = collection?.type === 'collection.board' ? '.board-card__main' : 'tr.row-selectable, .collection-focus-item'
+        const rowSelector = collection ? prototypeRowSelector(collection) : ''
         if (process.env.ADAOS_E2E_READONLY === '1') {
           if (!update || !collection || !widget.inputs.readOnlyIf) continue
           await revealPrototypeWidget(page, widgets, collection)
@@ -151,9 +142,10 @@ try {
           let checked = false
           for (let index = 0; index < await rows.count(); index++) {
             const row = rows.nth(index)
-            await row.click()
-            const opener = editorOpener(modalId, row)
-            if (modalId && opener !== row) await opener.click()
+            await selectPrototypeRowForCommand(page, widgets, collection, row)
+            const opener = editorOpener(modalId, row, widget.inputs.selectedStateKey)
+            if (opener !== row) await opener.click()
+            if (!modalId) await revealPrototypeWidget(page, widgets, widget)
             const form = host(widget.id)
             const state = () => form.evaluate(element => {
               const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
@@ -178,7 +170,7 @@ try {
               checked = true
               await page.screenshot({ path: path.join(output, `${layout}-${widget.id}-readonly.png`), fullPage: true })
             }
-            if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+            if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /^(?:Close|Закрыть)$/, exact: true }).click()
             if (checked) break
           }
           if (!checked) throw new Error(`No reachable locked fixture for ${widget.id}`)
@@ -188,13 +180,33 @@ try {
           sample.checks.push({ editor: widget.id, status: 'not_exercised', reason: 'No supported scalar update and matching collection' })
           continue
         }
-        const row = host(collection.id).locator(rowSelector).first()
         await revealPrototypeWidget(page, widgets, collection)
-        await expect(row).toBeVisible({ timeout: 30_000 })
-        await row.click()
+        const rows = host(collection.id).locator(rowSelector)
+        await expect(rows.first()).toBeVisible({ timeout: 30_000 })
         const form = host(widget.id)
-        const opener = editorOpener(modalId, row)
-        if (modalId && opener !== row) await opener.click()
+        let row
+        // Awaiting/approved records can legitimately be locked. Exercise an
+        // editable fixture, not an arbitrary first row, through public controls.
+        for (let index = 0; index < await rows.count(); index++) {
+          const candidateRow = rows.nth(index)
+          await revealPrototypeWidget(page, widgets, collection)
+          await selectPrototypeRowForCommand(page, widgets, collection, candidateRow)
+          const candidateOpener = editorOpener(modalId, candidateRow, widget.inputs.selectedStateKey)
+          if (candidateOpener !== candidateRow) await candidateOpener.click()
+          if (!modalId) await revealPrototypeWidget(page, widgets, widget)
+          await expect(form).toBeVisible({ timeout: 15_000 })
+          const state = () => form.evaluate(element => {
+            const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
+            return { loaded: component?.recordLoaded, locked: component?.recordReadOnly, id: component?.recordValues?.id }
+          })
+          await expect.poll(async () => (await state()).loaded).toBe(true)
+          const selected = await state()
+          if (!selected.locked) { row = candidateRow; break }
+          sample.checks.push({ editor: widget.id, status: 'not_exercised', reason: 'Read-only fixture', record: selected.id })
+          if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /^(?:Close|Закрыть)$/, exact: true }).click()
+        }
+        if (!row) throw new Error(`No publicly reachable editable fixture for ${widget.id}`)
+        const opener = editorOpener(modalId, row, widget.inputs.selectedStateKey)
         const container = form.locator(`[data-webui-field-id=${JSON.stringify(field.id)}]`)
         const input = choice ? container.locator('select,input[type=radio]').first()
           : form.locator(`[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`).locator('input, textarea').or(form.locator(`input[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}], textarea[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`)).first()
@@ -246,7 +258,7 @@ try {
           const count = sample.mutations.length
           await setValue(probeValue('cancel'))
           await opener.evaluate(element => { window.__E2E_FOCUS_ORIGIN__ = element })
-          await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+          await page.locator('ion-modal').last().getByRole('button', { name: /^(?:Close|Закрыть)$/, exact: true }).click()
           await expect(form).toHaveCount(0)
           sample.dismissFocus = await opener.evaluate(element => ({
             sameElement: element === window.__E2E_FOCUS_ORIGIN__, originConnected: window.__E2E_FOCUS_ORIGIN__?.isConnected,
@@ -325,7 +337,13 @@ try {
         // Re-open and verify the persisted value, not merely the edited DOM.
         if (!modalId) {
           await page.waitForFunction(expected => window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario === expected, scenario, { timeout: 60_000 })
-          await row.click()
+          // A reload restores the initial section; replay public navigation
+          // before looking for a row in a different tab or compact panel.
+          await revealPrototypeWidget(page, widgets, collection)
+          await expect(row).toBeVisible({ timeout: 30_000 })
+          await selectPrototypeRowForCommand(page, widgets, collection, row)
+          if (opener !== row) await opener.click()
+          await revealPrototypeWidget(page, widgets, widget)
         }
         await expectValue(marker)
         sample.checks.push({ editor: widget.id, resource: update.target, field: field.id, fieldType: field.type, status: 'passed', task: 'select/edit/save/reopen', surface: modalId ? 'overlay' : 'inline' })
@@ -375,7 +393,7 @@ try {
         if (!restored.ok() || (await restored.json()).ok === false) throw new Error('Could not restore fixture')
         sample.checks.push({ editor: widget.id, status: 'passed', task: 'fixture-restore', evidenceKind: 'stand_cleanup' })
         }
-        if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+        if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /^(?:Close|Закрыть)$/, exact: true }).click()
         const create = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'create')
         const remove = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'delete')
         const supportedTypes = ['shortText', 'longText', 'number', 'integer', 'date', 'singleChoice', 'boolean', 'toggle']
@@ -415,13 +433,14 @@ try {
         if (!createdId || createdResult.result?.record?.id !== createdId) throw new Error('Create did not return a consistent record identity')
         if (modalId) await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
         // The new record must be discoverable through the collection before deletion.
-        const rows = host(collection.id).locator('tr.row-selectable, .collection-focus-item')
-        const createdRowIndex = () => rows.evaluateAll((elements, id) => elements.findIndex(element =>
+        const createdRows = host(collection.id).locator(rowSelector)
+        const createdRowIndex = () => createdRows.evaluateAll((elements, id) => elements.findIndex(element =>
           window.ng?.getContext(element)?.$implicit?.id === id), createdId)
         await expect.poll(createdRowIndex).toBeGreaterThanOrEqual(0)
-        const newRow = rows.nth(await createdRowIndex())
-        await newRow.click()
-        if (modalId && opener !== row) await opener.click()
+        const newRow = createdRows.nth(await createdRowIndex())
+        await selectPrototypeRow(newRow)
+        const createdOpener = editorOpener(modalId, newRow, widget.inputs.selectedStateKey)
+        if (createdOpener !== newRow) await createdOpener.click()
         await expectValue(createdMarker)
         const selected = await form.evaluate(element => window.ng?.getComponent(element.querySelector('ada-form-widget'))?.recordValues)
         if (selected?.[field.id] !== expectedCreatedValue || selected.id !== createdId || selected.id === sample.conditionDebug.record.id) throw new Error('Refusing to delete a record not created by this probe')

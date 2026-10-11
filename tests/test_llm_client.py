@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+
+def test_provider_execution_budget_is_root_metadata_not_http_timeout():
+    from adaos.sdk.llm.llm_client import _llm_root_payload
+    payload, _ = _llm_root_payload([{"role": "user", "content": "test"}], provider_timeout_s=900)
+    assert payload["provider_timeout_ms"] == 900000
+    assert "timeout" not in payload and "provider_timeout_s" not in payload
+
+
+def test_provider_budget_rejects_unbounded_values():
+    import pytest
+    from adaos.sdk.llm.llm_client import _llm_root_payload
+    for value in (True, "900", 0, 901, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            _llm_root_payload([], provider_timeout_s=value)
+
 from types import SimpleNamespace
 
 import pytest
@@ -467,7 +482,8 @@ def test_response_job_submit_does_not_healthcheck_preferred_global_root(monkeypa
     ]
 
 
-def test_response_job_submit_recovers_primary_job_after_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize('pinned', [False, True])
+def test_response_job_submit_recovers_primary_job_after_timeout(monkeypatch: pytest.MonkeyPatch, pinned: bool) -> None:
     from adaos.sdk.llm import llm_client as llm
 
     _clear_llm_env(monkeypatch)
@@ -510,6 +526,9 @@ def test_response_job_submit_recovers_primary_job_after_timeout(monkeypatch: pyt
     monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
     monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
 
+    if pinned:
+        monkeypatch.setattr(llm, '_root_llm_base_urls', lambda *_args, **_kwargs: ['https://ru.api.inimatic.com'])
+
     submitted = llm.submit_response_job(
         [{"role": "user", "content": "Return ok."}],
         request_id="req.async",
@@ -519,8 +538,7 @@ def test_response_job_submit_recovers_primary_job_after_timeout(monkeypatch: pyt
     assert submitted["job_id"] == "llm_job_recovered"
     assert submitted["_client"]["base_url"] == "https://ru.api.inimatic.com"
     assert submitted["_client"]["recovered_after_submit_error"] is True
-    assert [f"{call['base_url']} {call['method']} {call['path']}" for call in calls] == [
-        "https://ru.api.inimatic.com GET /v1/health",
+    assert [f"{call['base_url']} {call['method']} {call['path']}" for call in calls] == ([] if pinned else ["https://ru.api.inimatic.com GET /v1/health"]) + [
         "https://ru.api.inimatic.com POST /v1/llm/jobs",
         "https://ru.api.inimatic.com POST /v1/llm/jobs/lookup",
     ]
@@ -860,3 +878,10 @@ def test_response_job_submit_uses_short_default_health_probe(monkeypatch: pytest
 
     assert submitted["job_id"] == "llm_job_global"
     assert calls[0]["kwargs"]["timeout"] == 1.0
+def test_provider_retry_cap_is_validated_as_transport_metadata():
+    from adaos.sdk.llm.llm_client import _llm_root_payload
+    payload, _ = _llm_root_payload([{"role": "user", "content": "Test"}], provider_max_attempts=1)
+    assert payload["provider_max_attempts"] == 1
+    for value in (True, "1", 0, 5, 1.5):
+        with pytest.raises(ValueError, match="provider_max_attempts"):
+            _llm_root_payload([], provider_max_attempts=value)

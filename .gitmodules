@@ -22,3 +22,7 @@
 	path = src/adaos/integrations/automaion
 	url = https://github.com/inimatic/automaion.git
 	branch = main
+[submodule "src/adaos/integrations/adaosd"]
+	path = src/adaos/integrations/adaosd
+	url = https://github.com/inimatic/adaosd.git
+	branch = main

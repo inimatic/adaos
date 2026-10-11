@@ -975,7 +975,9 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
         "task_context",
         "model_projection",
     }
-    assert receipt["tool_boundary_count"] == 1
+    # A fake executor produced no observed tool events; task count is not tool
+    # use, and missing telemetry must not be presented as a successful read.
+    assert receipt["tool_boundary_count"] == 0
     project_capsules = service._contexts().list_capsules(
         subject_ref="project:recipe_suite"
     )

@@ -20,7 +20,7 @@ from .workflow import BuilderWorkflowError
 
 
 BUILDER_CBS_COMPILATION_SCHEMA = "adaos.builder.cbs_compilation.v1"
-BUILDER_CBS_COMPILER_VERSION = "1.3.0"
+BUILDER_CBS_COMPILER_VERSION = "1.3.1"
 BUILDER_CBS_COMPILER_VIEW_SCHEMA = "adaos.builder.cbs_compiler_view.v1"
 
 
@@ -301,13 +301,22 @@ def compile_prototype_cbs(
             )
 
     obligations: list[dict[str, Any]] = []
-    for index, item in enumerate(admitted.get("automation_requirements") or []):
+    pending = admitted.get("automation_requirements") or []
+    source_counts: dict[str, int] = {}
+    for item in pending:
+        ref = str(item.get("requirement_ref") or "")
+        source_counts[ref] = source_counts.get(ref, 0) + 1
+    for index, item in enumerate(pending):
         source_ref = str(item.get("requirement_ref") or f"automation-{index + 1}")
         identity_digest = canonical_payload_digest(
             {
                 "source_requirement_ref": source_ref,
                 "brief_ref": str(item.get("brief_ref") or ""),
                 "brief_digest": str(item.get("brief_digest") or ""),
+                # Preserve legacy identities for single obligations. Multiple
+                # authority boundaries were previously rejected by Core; their
+                # new identities must be distinct and independent of order.
+                **({"reason": str(item.get("reason") or "")} if source_counts.get(source_ref, 0) > 1 else {}),
             }
         )
         short = identity_digest.removeprefix("sha256:")[:16]

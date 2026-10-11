@@ -1,0 +1,23 @@
+{
+  "schema": "adaos.e2e.context_tasks.v1",
+  "tasks": [
+    {
+      "id": "durable_notes",
+      "brief": "Implement save_note(note_id, text) and list_notes() in this skill. Save returns {ok:true,id:note_id}; listing returns {items:[{id,text}]} ordered by id. A fresh installation is empty, a second save replaces the same id, and Unicode survives module reload. Use the public owner-scoped AdaOS storage boundary; never persist records inside the package or reconstruct a runtime directory. These internal helpers are called after caller authorization; do not expose a new public tool or implement identity/grants. Preserve existing helper signatures and manifest release metadata. Add focused package tests.",
+      "facts": {"concepts": ["resource_crud"], "data_planes": ["local"], "requires_lifecycle": true},
+      "source": "def save_note(note_id, text):\n    raise NotImplementedError\n\ndef list_notes():\n    raise NotImplementedError\n"
+    },
+    {
+      "id": "operational_read_model",
+      "brief": "Implement subnet_status(webspace_id=None) as an internal read-only adapter. Read the admitted public system operational snapshot, requesting only summary and passing webspace_id with limit=10. From snapshot.subnet return exactly {available:bool,subnet_id:string-or-null,display_name:string-or-null}. If unavailable, absent or the SDK raises RuntimeError, return {available:false,subnet_id:null,display_name:null}. Do not guess node identity, use another provider, perform network IO, persist provider data or expose a public tool. Preserve the signature and release metadata. Add focused tests for present, unavailable and failure paths.",
+      "facts": {"concepts": ["system", "subnet"], "effects": ["read_only"], "data_planes": ["subnet"]},
+      "source": "def subnet_status(webspace_id=None):\n    raise NotImplementedError\n"
+    },
+    {
+      "id": "locale_identity",
+      "brief": "Implement action_items(locale='en') returning [{id:'save',label:translated_save},{id:'cancel',label:translated_cancel}]. English labels are Save and Cancel; Russian labels are Сохранить and Отмена. Resolve labels from packaged i18n/en.json and i18n/ru.json, not hardcoded handler strings. ru-RU and ru_RU select Russian; unsupported or empty locale falls back to English. Localized labels must never become routing identities. This pure adapter must not mutate catalogs, use runtime storage or make network requests. Preserve the signature and release metadata. Add focused package tests.",
+      "facts": {"requires_i18n": true, "concepts": ["ui"], "effects": ["read_only"]},
+      "source": "def action_items(locale='en'):\n    raise NotImplementedError\n"
+    }
+  ]
+}

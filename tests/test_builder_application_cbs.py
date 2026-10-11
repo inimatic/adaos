@@ -299,6 +299,26 @@ def test_project_compiler_keeps_logical_presentation_out_of_application_identity
     ]
 
 
+def test_same_brief_requirement_keeps_distinct_automation_boundaries() -> None:
+    value=_acceptance()
+    value['automation_requirements'][0]['reason']='business_rule'
+    second=copy.deepcopy(value['automation_requirements'][0])
+    second['reason']='external_integration'
+    second['acceptance']='An integration failure keeps the previous record.'
+    value['automation_requirements'].append(second)
+    unsigned=copy.deepcopy(value);unsigned.pop('digest',None)
+    value['digest']=canonical_payload_digest(unsigned)
+    result=compile_prototype_cbs(value)
+    obligations=result['automation_obligations']
+    assert len({item['requirement_ref'] for item in obligations})==2
+    assert all(item['status']=='unresolved' for item in obligations)
+    value['automation_requirements'].reverse()
+    unsigned=copy.deepcopy(value);unsigned.pop('digest',None)
+    value['digest']=canonical_payload_digest(unsigned)
+    replay=compile_prototype_cbs(value)
+    assert {item['requirement_ref'] for item in replay['automation_obligations']} == {item['requirement_ref'] for item in obligations}
+
+
 def test_compiler_rejects_tampered_acceptance() -> None:
     acceptance = _acceptance()
     acceptance["revision"] = "18"

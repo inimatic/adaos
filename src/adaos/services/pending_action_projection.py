@@ -281,9 +281,35 @@ def project_pending_action_from_store(
     )
 
 
+def project_pending_action_page_from_store(
+    *, principal: Mapping[str, Any], conversation_id: str | None = None,
+    limit: int = 50, cursor: str | None = None,
+) -> dict[str, Any]:
+    """Read a bounded ACL-checked page without touching a live Yjs document.
+
+    This synchronous durable-store work must run off the websocket owner loop.
+    Pagination and per-item authorization remain the store's authority.
+    """
+    from adaos.services.conversation_interactions import query_interactions
+    page = query_interactions(principal=principal, conversation_id=conversation_id,
+        statuses=("created", "projected", "awaiting_input", "partially_answered",
+            "validation_failed", "answered", "accepted", "completed", "expired", "cancelled", "superseded"),
+        active_only=False, field_mask="summary", limit=max(1, min(int(limit), 100)), cursor=cursor)
+    items, skipped = [], []
+    for item in page.get("items") or []:
+        interaction_id = str(item.get("interaction_id") or "").strip()
+        try:
+            items.append(project_pending_action_from_store(interaction_id, principal=principal))
+        except Exception as error:
+            skipped.append({"interaction_id": interaction_id, "reason_code": type(error).__name__})
+    return {"schema": "adaos.pending_action.projection_page.v1", "items": items,
+        "next_cursor": page.get("next_cursor"), "skipped": skipped}
+
+
 __all__ = [
     "PROJECTION_SCHEMA",
     "PendingActionProjectionError",
     "project_pending_action",
     "project_pending_action_from_store",
+    "project_pending_action_page_from_store",
 ]

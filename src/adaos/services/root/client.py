@@ -34,8 +34,9 @@ _ROOT_HTTP_LOG = logging.getLogger("adaos.root-http")
 # Loading the Windows certificate stores is CPU-heavy and holds the GIL for a
 # noticeable amount of time. Root heartbeats and NATS credential refreshes
 # construct short-lived clients, so rebuilding the same default context on
-# every call can stall unrelated API work for seconds. SSLContext is immutable
-# for our use after construction and safe to share between httpx transports.
+# every call can stall unrelated API work for seconds. HTTPX loads client
+# certificates into SSLContext, so cached contexts must be partitioned by that
+# credential, including a separate certificate-free context for scoped Bearers.
 _SSL_CONTEXT_CACHE: dict[tuple[Any, ...], ssl.SSLContext] = {}
 _SSL_CONTEXT_CACHE_LOCK = threading.Lock()
 
@@ -291,7 +292,7 @@ class RootHttpClient:
     def session(self, *, timeout: float | None = None) -> Iterator[Any]:
         """Reuse one HTTP connection pool for a bounded sequence of requests."""
 
-        effective_verify = self._effective_verify(self.verify)
+        effective_verify = self._effective_verify(self.verify, cert=self.cert)
         with httpx.Client(
             base_url=self.base_url,
             timeout=timeout or self.timeout,
@@ -303,6 +304,8 @@ class RootHttpClient:
     @staticmethod
     def _effective_verify(
         verify: str | bool | ssl.SSLContext,
+        *,
+        cert: tuple[str, str] | None = None,
     ) -> str | bool | ssl.SSLContext:
         if isinstance(verify, ssl.SSLContext) or verify is False:
             return verify
@@ -328,6 +331,18 @@ class RootHttpClient:
                         cache_key = None
         if cache_key is None:
             return effective_verify
+        if cert is not None:
+            try:
+                credential_key = []
+                for filename in cert:
+                    credential_path = Path(filename).resolve()
+                    credential_stat = credential_path.stat()
+                    credential_key.append((str(credential_path), credential_stat.st_mtime_ns, credential_stat.st_size))
+                cache_key += ("client_certificate", tuple(credential_key))
+            except OSError:
+                # Leave invalid/missing credentials to HTTPX, using a fresh
+                # context rather than contaminating the certificate-free cache.
+                return effective_verify
         with _SSL_CONTEXT_CACHE_LOCK:
             cached = _SSL_CONTEXT_CACHE.get(cache_key)
             if cached is not None:
@@ -360,7 +375,7 @@ class RootHttpClient:
         if headers:
             request_headers = {str(k): str(v) for k, v in headers.items()}
         effective_verify = self._effective_verify(
-            self.verify if verify is None else verify
+            self.verify if verify is None else verify, cert=cert
         )
         try:
             if client is not None:

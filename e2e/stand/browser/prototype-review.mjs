@@ -2,7 +2,7 @@ import { chromium } from 'playwright'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { installSystemOverlayDismissal } from './prototype-navigation.mjs'
+import { dismissSystemOverlays, installSystemOverlayDismissal } from './prototype-navigation.mjs'
 import { canonicalRenderedWidgetSources, canonicalWidgetSources } from './widget-source-parity.mjs'
 
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
@@ -79,7 +79,7 @@ try {
       window.__ADAOS_BASE__ = hub
       window.__ADAOS_TOKEN__ = token
       for (const [key, value] of Object.entries({
-        adaos_device_id: 'e2e-prototype-review', adaos_webspace_id: webspace,
+        adaos_device_id: `e2e-review:${webspace}`, adaos_webspace_id: webspace,
         adaos_hub_base: hub, adaos_local_hub_base: hub, adaos_try_local_hub: '1',
         adaos_hub_token: token, adaos_local_subnet_id: subnet,
         adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: locale,
@@ -160,7 +160,9 @@ try {
           )
         }, expectedTrialIdentity, { timeout: 15_000 })
       }
-      if (reviewStage !== 'prototype' && !expectTrialUnavailable) {
+      // Prototype resource queries also load after materialization. A loader is
+      // not usable screenshot evidence of the frozen application's content.
+      if (!expectTrialUnavailable) {
         await page.waitForFunction(() => {
           const dynamicKinds = new Set(['api', 'mcp', 'resource', 'resourceQuery', 'skill'])
           const visibleDynamicHosts = [...document.querySelectorAll('ada-page-widget-host')]
@@ -296,6 +298,12 @@ try {
           hasValue: component?.dataSourceStatus?.hasValue,
         }]
       }),
+      shellLauncher: (() => {
+        const launcher = document.querySelector('.pending-actions-fab')
+        const outlet = document.querySelector('ion-app > ion-router-outlet')
+        if (!launcher?.getClientRects().length || !outlet?.getClientRects().length) return null
+        return { contentBottom: outlet.getBoundingClientRect().bottom, launcherTop: launcher.getBoundingClientRect().top }
+      })(),
       tables: document.querySelectorAll('ada-table-widget').length,
       language: document.documentElement.lang,
       dictionary: (() => {
@@ -330,6 +338,10 @@ try {
         failure = `Compact table action labels are too narrow to read: ${JSON.stringify(unreadable.slice(0, 5))}`
       }
     }
+    if (geometry.shellLauncher && geometry.shellLauncher.contentBottom > geometry.shellLauncher.launcherTop + 1 && !failure) {
+      failure = `System launcher overlaps application content: ${JSON.stringify(geometry.shellLauncher)}`
+    }
+    await dismissSystemOverlays(page)
     await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })
     const scrollSurfaces = await page.evaluate(() => {
       const elements = []

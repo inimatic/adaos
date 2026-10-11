@@ -78,6 +78,70 @@ def test_scoped_session_reuses_one_httpx_client(monkeypatch) -> None:
     assert lifecycle == {"created": 1, "entered": 1, "exited": 1, "requests": 2}
 
 
+def test_ssl_context_cache_isolates_client_credentials_and_rotation(tmp_path) -> None:
+    root_client_module._SSL_CONTEXT_CACHE.clear()
+    certificate = tmp_path / "client.pem"
+    key = tmp_path / "client.key"
+    certificate.write_text("fixture certificate", encoding="utf-8")
+    key.write_text("fixture key", encoding="utf-8")
+    credential = (str(certificate), str(key))
+    public = RootHttpClient._effective_verify(True)
+    private = RootHttpClient._effective_verify(True, cert=credential)
+    assert private is not public
+    assert RootHttpClient._effective_verify(True, cert=credential) is private
+    assert RootHttpClient._effective_verify(True) is public
+    key.write_text("rotated fixture key, different material", encoding="utf-8")
+    rotated = RootHttpClient._effective_verify(True, cert=credential)
+    assert rotated is not private
+    assert rotated is not public
+
+
+@pytest.mark.parametrize("pooled", [False, True])
+def test_mtls_httpx_mutation_does_not_authenticate_certificate_free_clients(monkeypatch, tmp_path, pooled) -> None:
+    root_client_module._SSL_CONTEXT_CACHE.clear()
+    certificate = tmp_path / "client.pem"
+    key = tmp_path / "client.key"
+    certificate.write_text("fixture certificate", encoding="utf-8")
+    key.write_text("fixture key", encoding="utf-8")
+    identity_by_context = {}
+    seen = []
+
+    class Response:
+        status_code = 200
+        content = b'{"ok": true}'
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    class Client:
+        def __init__(self, *, verify, cert, **kwargs):
+            if cert:
+                # HTTPX's create_ssl_context calls load_cert_chain on verify.
+                identity_by_context[id(verify)] = cert
+            seen.append(identity_by_context.get(id(verify)))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def request(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(root_client_module.httpx, "Client", Client)
+    credential = (str(certificate), str(key))
+    for cert in (None, credential, None):
+        http = RootHttpClient(base_url="https://api.example.test", cert=cert)
+        if pooled:
+            with http.session() as session:
+                assert session.request("GET", "/probe") == {"ok": True}
+        else:
+            assert http.request("GET", "/probe") == {"ok": True}
+    assert seen == [None, credential, None]
+
+
 def test_routine_control_report_success_is_aggregated(monkeypatch) -> None:
     class _Response:
         status_code = 202

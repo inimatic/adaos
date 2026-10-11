@@ -1119,6 +1119,55 @@ def test_provider_record_views_cannot_claim_collection_presentations(role) -> No
         validator.validate(view)
 
 
+@pytest.mark.parametrize("role", ["collection", "editor"])
+def test_provider_activation_is_details_only(role):
+    import jsonschema
+    _, semantic = _multi_resource_fixture()
+    contract = semantic_prototype_provider_contract(version="v2")
+    validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
+    view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == role))
+    view.update(surface="inline", media=None, compact_presentation=None, presentation_options=None,
+                field_display=[], section=None, scope_filters=[], selection=None, selection_filter=None)
+    validator.validate(view)
+    view["activation_source_view_ref"] = "work-list"
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(view)
+
+
+def test_provider_record_roles_cannot_contain_collection_query_controls():
+    import jsonschema
+    _, semantic = _multi_resource_fixture()
+    contract = semantic_prototype_provider_contract(version="v2")
+    validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
+    view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == "editor"))
+    view.update(surface="modal", media=None, compact_presentation=None, presentation_options=None,
+                field_display=[], section=None, scope_filters=[], selection=None, selection_filter=None)
+    validator.validate(view)
+    view["query_controls"] = [None]
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(view)
+
+
+def test_modal_primary_record_commands_get_a_nonmutating_record_opener():
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    editor = next(view for view in candidate["views"] if view["role"] == "editor")
+    editor["surface"] = "modal"
+    for command in candidate["commands"]:
+        command["exposure"] = {"placement": "editor_primary", "presentation": "button"}
+    create = copy.deepcopy(candidate["commands"][0])
+    create.update(id="create-item", kind="create", guard=None, fixed_values=[],
+                  exposure={"placement": "collection_header", "presentation": "button"})
+    candidate["commands"].append(create)
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    application = result["webui"]["ui"]["application"]
+    collection = next(widget for widget in application["desktop"]["pageSchema"]["widgets"] if widget["id"] == "work-list")
+    actions = [action for action in collection["actions"] if action["on"] == f"click:open-record-{editor['id']}"]
+    assert {action["type"] for action in actions} == {"updateState", "openModal"}
+    assert "$event.id" in next(action["params"] for action in actions if action["type"] == "updateState").values()
+    assert len(result["semantic_document"]["commands"]) == len(candidate["commands"])
+
+
 def test_provider_collection_requires_a_presentation_and_inline_surface() -> None:
     import jsonschema
 
@@ -2416,6 +2465,61 @@ def test_semantic_layout_maps_to_runtime_abi(
     assert layout["regions"][1]["role"] == "detail"
 
 
+@pytest.mark.parametrize(("primary_role", "context_role", "recipe"), [
+    ("main", "inspector", "workbench"),
+    ("collection", "detail", "collection-detail"),
+    ("collection", "inspector", "workbench"),
+])
+def test_focus_detail_preserves_explicit_regions_and_selects_compatible_recipe(
+    primary_role: str, context_role: str, recipe: str,
+) -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["layout"] = {
+        "pattern": "focus_detail", "density": "comfortable", "content_width": "fluid", "scroll": "regions",
+        "regions": [
+            {"id": "workspace", "role": primary_role, "priority": 100, "scroll": "page", "wide": "pane",
+             "compact": "stack", "min_px": 480, "preferred_px": 760, "max_px": None, "grow": 1},
+            {"id": "context", "role": context_role, "priority": 70, "scroll": "region", "wide": "pane",
+             "compact": "sheet", "min_px": 320, "preferred_px": 420, "max_px": 560, "grow": 0},
+        ],
+    }
+    for view in semantic["views"]:
+        view["region_role"] = "workspace" if view["role"] == "collection" else "context"
+    before = copy.deepcopy(semantic)
+    result = compile_semantic_prototype(semantic, brief=brief)
+    assert semantic == before
+    assert validate_semantic_prototype(semantic, brief=brief)["layout"] == before["layout"]
+    layout = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]
+    assert layout["pattern"] == recipe
+    assert [(region["id"], region["role"]) for region in layout["regions"]] == [
+        ("workspace", primary_role), ("context", context_role),
+    ]
+    assert layout["regions"][1]["size"] == {"minPx": 320, "preferredPx": 420, "maxPx": 560, "grow": 0}
+
+
+def test_focus_detail_without_supporting_content_does_not_invent_a_detail_region() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["layout"]["pattern"] = "focus_detail"
+    for view in semantic["views"]:
+        view["region_role"] = "primary"
+    result = compile_semantic_prototype(semantic, brief=brief)
+    layout = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]
+    assert layout["pattern"] == "collection"
+    assert [(region["id"], region["role"]) for region in layout["regions"]] == [("primary", "collection")]
+
+
+def test_implicit_unknown_region_is_rejected_with_actionable_semantic_finding() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["views"][1]["region_role"] = "secondary"
+    with pytest.raises(SemanticPrototypeValidationError) as caught:
+        validate_semantic_prototype(semantic, brief=brief)
+    assert caught.value.findings == [{
+        "code": "semantic.layout_region_unknown", "path": "$.views[1].region_role",
+        "detail": f"views {semantic['views'][1]['id']!r} targets unknown layout region 'secondary'; without explicit regions use primary, supporting or actions",
+        "semantic_refs": [f"view:{semantic['views'][1]['id']}"],
+    }]
+
+
 def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() -> None:
     _brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)
@@ -2596,6 +2700,20 @@ def test_semantic_prototype_requires_a_primary_view_region() -> None:
         view["region_role"] = "supporting"
 
     with pytest.raises(BuilderWorkflowError, match="view in the primary region"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_explicit_layout_rejects_two_primary_regions_before_runtime_compilation() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["layout"] = {
+        "pattern": "workbench", "density": "comfortable", "content_width": "fluid", "scroll": "regions",
+        "regions": [{"id": name, "role": "main", "priority": 100, "scroll": "region", "wide": "pane",
+            "compact": "stack", "min_px": 200, "preferred_px": 400, "max_px": 800, "grow": 1}
+            for name in ("first", "second")],
+    }
+    for view in semantic["views"]:
+        view["region_role"] = "first"
+    with pytest.raises(BuilderWorkflowError, match="exactly one main"):
         validate_semantic_prototype(semantic, brief=brief)
 
 
@@ -4377,7 +4495,7 @@ def test_semantic_v2_merges_compatible_duplicate_automation_requirements() -> No
     )
 
 
-def test_semantic_v2_rejects_duplicate_automation_reason_conflict() -> None:
+def test_semantic_v2_preserves_distinct_automation_authority_boundaries() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)
     ref = brief["principal_jobs"][0]["id"]
@@ -4386,5 +4504,10 @@ def test_semantic_v2_rejects_duplicate_automation_reason_conflict() -> None:
     second["reason"] = "external_integration"
     candidate["automation_requirements"] = [first, second]
 
-    with pytest.raises(BuilderWorkflowError, match="conflicting reason classes"):
-        compile_semantic_prototype_candidate(candidate, brief=brief)
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert {item['reason'] for item in result['automation_requirements']} == {'business_rule','external_integration'}
+    assert all(item['status']=='pending_automation' and item['requirement_ref']==ref
+        for item in result['automation_requirements'])
+    replay=compile_semantic_prototype(result['semantic_document'])
+    assert len(replay['automation_requirements'])==2
+    assert all(item['status']=='pending_automation' for item in replay['automation_requirements'])

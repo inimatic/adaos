@@ -11,6 +11,29 @@ from adaos.services.builder_intent import (
 from adaos.services.ui_capabilities import selected_ui_capabilities
 
 
+@pytest.mark.parametrize("statement", [
+    "Открывать историю движения, собирать заявку на закупку, сравнивать цены и отправлять заявку на согласование.",
+    "Открывать историю движения, составить заявку на закупку и отправлять заявку на согласование.",
+])
+def test_procurement_compound_clause_keeps_create_distinct_from_read(statement):
+    brief = compile_prototype_brief(statement)
+    create = next(operation for operation in brief["operations"] if operation["kind"] == "create")
+    assert "заявк" in create["statement"]
+    assert create["effect_scope"] == "prototype" and create["authority"] == "unknown"
+    assert any(operation["kind"] == "transition" for operation in brief["operations"])
+    for operation in brief["operations"]:
+        start, end = map(int, operation["evidence"][0].split("=")[1].split(":"))
+        assert statement[start:end] == operation["statement"]
+        if operation["effect_scope"] == "read":
+            assert "собир" not in operation["statement"] and "состав" not in operation["statement"]
+
+
+def test_realistic_fixture_data_is_not_a_business_create_operation():
+    brief = compile_prototype_brief("Добавь реалистичные данные, валюту и единицы измерения, пустой список дефицита.")
+    assert not any(operation["kind"] == "create" for operation in brief["operations"])
+    assert any("реалистичные данные" in requirement["statement"] for requirement in brief["residual_requirements"])
+
+
 def _workspace_interface_context() -> dict:
     return {
         "schema": "adaos.builder.interface_context.v1",

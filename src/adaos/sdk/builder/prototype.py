@@ -264,6 +264,30 @@ def semantic_generation_guidance() -> dict[str, Any]:
     return semantic_prototype_generation_guidance()
 
 
+def mcp_generation_options() -> dict[str, Any]:
+    """Return opt-in, least-privilege native Root MCP generation controls."""
+    from adaos.services.builder.prototype_mcp import generation_options
+    return generation_options()
+
+
+def mcp_retrieval_index() -> dict[str, Any] | None:
+    """Expose the public, digest-pinned guide index only when tools are enabled."""
+    from adaos.services.builder.prototype_mcp import enabled, retrieval_index
+    return retrieval_index() if enabled() else None
+
+
+def redact_generation_credentials(value: Any) -> Any:
+    """Keep private MCP authentication out of model journals and public receipts."""
+    from adaos.services.builder.prototype_mcp import redact_credentials
+    return redact_credentials(value)
+
+
+def compile_generation_messages(messages, *, strategy: str | None = None):
+    """Deliver an opt-in exact platform kernel and digest-bound repair context."""
+    from adaos.services.builder.prototype_pipeline import compile_messages
+    return compile_messages(messages, strategy=strategy)
+
+
 def start_data_runtime(definition: Mapping[str, Any]):
     from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
@@ -354,6 +378,10 @@ __all__ = [
     "semantic_candidate_contract",
     "semantic_contract",
     "semantic_generation_guidance",
+    "mcp_generation_options",
+    "mcp_retrieval_index",
+    "redact_generation_credentials",
+    "compile_generation_messages",
     "semantic_provider_contract",
     "start_data_runtime",
     "submit_request",

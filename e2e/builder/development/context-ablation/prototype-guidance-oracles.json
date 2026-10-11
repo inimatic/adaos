@@ -1,0 +1,8 @@
+{
+  "schema": "adaos.e2e.prototype_guidance_oracles.v1",
+  "purpose": "Diagnostic sufficient-rule hypotheses frozen before generation; not generated from model outputs or promoted as production routing.",
+  "tasks": {
+    "inventory-procurement-ru": ["modeling", "coverage", "fixture_values", "view_roles", "layout_regions", "relationships", "selection_links", "command_ownership", "field_validation", "interactions", "query_filters", "state_rules", "state_proofs", "command_guards", "deferred_computations", "ux.query_scope", "ux.sections", "ux.layout", "ux.collection_presentations", "ux.editor_surface", "ux.editor_inputs"],
+    "support-desk-ru": ["modeling", "coverage", "fixture_values", "view_roles", "layout_regions", "relationships", "selection_links", "command_ownership", "field_validation", "interactions", "query_filters", "state_rules", "state_proofs", "command_guards", "ux.layout", "ux.collection_presentations", "ux.editor_surface", "ux.editor_inputs"]
+  }
+}

@@ -36,6 +36,7 @@ from adaos.services.builder.workflow import (
     ui_spatial_target_refs,
 )
 from adaos.services.context_control import ContextControlService
+from adaos.services.builder_context import automation_core_projection, context_strategy
 from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
@@ -1935,6 +1936,22 @@ class BuilderAutomationService:
                 component_ref=component_ref,
                 source_snapshot_digest=source_snapshot_digest,
             )
+        optional_facets: dict[str, Any] = {}
+        if not execution_strategy and context_strategy(os.getenv("ADAOS_BUILDER_CONTEXT_STRATEGY")) != "full":
+            full_projection = copy.deepcopy(projection)
+            project_projection = automation_core_projection(project_projection)
+            projection = automation_core_projection(projection)
+            for key, value in dict(full_projection.get("facets") or {}).items():
+                if value != dict(projection.get("facets") or {}).get(key):
+                    optional_facets[key] = value
+            # Share identical project-generation facts instead of including
+            # them in both the required project and task capsules.
+            for key in list(projection):
+                if key != "facets" and key in project_projection and projection[key] == project_projection[key]:
+                    projection.pop(key)
+            projection["canonical_packet"] = {
+                "ref": packet_artifact["ref"], "digest": packet_artifact["digest"],
+            }
         project_context_digest = _canonical_digest(project_projection)
         project: dict[str, Any] | None = None
         try:
@@ -2085,6 +2102,22 @@ class BuilderAutomationService:
                 "required": True,
             }
         )
+        for facet_key, facet in sorted(optional_facets.items()):
+            optional = service.register_capsule({
+                "kind": "contract", "subject_refs": [run_ref, f"facet:{facet_key}"],
+                "authority_ref": change_ref, "trust_class": "validated",
+                "sensitivity": "workspace", "license": "internal",
+                "retention_class": "episodic_run", "valid_from": now, "recorded_at": now,
+                "summary": f"Exact optional {facet_key} drill-down; not new execution authority.",
+                "index": [{"facet": facet_key, "packet_ref": packet_artifact["ref"],
+                           "packet_digest": packet_artifact["digest"]}],
+                "content": {"facet": facet_key, "contract": facet},
+                "metadata": {"utility": 1.0, "cache_class": "contract_drilldown"},
+            }, bind=False)
+            service.add_relationship({
+                "from_capsule_id": task["capsule_id"], "to_capsule_id": optional["capsule_id"],
+                "relation_type": "uses", "required": False,
+            })
         if development_session_capsule is not None:
             service.add_relationship(
                 {
@@ -9287,11 +9320,28 @@ class BuilderAutomationService:
             control.get("development_session_ref") or ""
         ).strip()
         zero_model = self._zero_model_execution(current, task_id)
+        result = dict(current.get("last_result") or {})
+        provenance = dict(result.get("provenance") or {})
+        context_use = dict(provenance.get("context_use") or result.get("context_use") or {})
+        final_input_budget = dict(provenance.get("final_input_budget") or result.get("final_input_budget") or {})
+        local_path = str(dict(current.get("local_run") or {}).get("path") or "")
+        if local_path:
+            for name, destination in (("context-use-summary.json", context_use),
+                                      ("final-input-budget.json", final_input_budget)):
+                if destination:
+                    continue
+                try:
+                    retained = json.loads((Path(local_path) / "runtime" / name).read_text(encoding="utf-8"))
+                    if isinstance(retained, Mapping):
+                        destination.update(retained)
+                except (OSError, ValueError):
+                    pass
         try:
             receipt = self._contexts().record_receipt(
                 {
                     "run_ref": run_ref,
                     "plan_ref": plan_ref,
+                    "logical_task_ref": f"change:{current['change_set_id']}" if current.get("change_set_id") else None,
                     "subject_refs": [
                         run_ref,
                         *([development_session_ref] if development_session_ref else []),
@@ -9319,7 +9369,10 @@ class BuilderAutomationService:
                         ),
                         "model_tokens": int(usage_value.get("model_tokens") or 0),
                     },
-                    "tool_boundary_count": 1,
+                    "tool_boundary_count": int(context_use.get("tool_boundary_count") or 0),
+                    "context_use": context_use,
+                    "context_misses": context_use.get("context_misses") or [],
+                    "final_input_budget": final_input_budget,
                     "source_slice_coverage": self._source_slice_coverage(current),
                     "execution_route": (
                         f"skill_factory.{zero_model['strategy']}"

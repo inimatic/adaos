@@ -1000,9 +1000,13 @@ def materialize_revision_via_owner(
     roles: list[str] | None = None,
     policy_fingerprint: str | None = None,
     event_payload: Mapping[str, Any] | None = None,
-    timeout_s: float = 30.0,
+    timeout_s: float = 90.0,
 ) -> dict[str, Any]:
-    """Materialize through the running owner runtime from a one-shot tool process."""
+    """Materialize through the owner; allow bounded cold-workspace setup time.
+
+    A client timeout does not cancel owner materialization. Do not blindly
+    resubmit on timeout: inspect the pinned target/revision first.
+    """
 
     import requests
 

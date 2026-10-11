@@ -12,6 +12,8 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.services.webio_snapshot_demand import clear_snapshot_demand_for_tests
 
 try:
@@ -6811,6 +6813,30 @@ def test_forward_ws_bus_event_delivers_core_update_status(monkeypatch) -> None:
             "ts": 321.0,
         }
     ]
+
+
+@pytest.mark.parametrize("disconnect_type", [gateway_module.WebSocketDisconnect, RuntimeError])
+def test_ws_event_send_queue_consumes_disconnect_and_does_not_count_delivery(monkeypatch, disconnect_type) -> None:
+    class ClosingWebSocket:
+        async def send_text(self, message):
+            raise disconnect_type()
+
+    websocket = ClosingWebSocket()
+    monkeypatch.setattr(gateway_module, "_WS_EVENT_SEND_STATES", {})
+    monkeypatch.setattr(gateway_module, "_WS_EVENT_SUBSCRIBERS", {id(websocket): {"topics": set()}})
+    monkeypatch.setattr(gateway_module, "_WS_EVENT_SEND_DIAG", {**gateway_module._WS_EVENT_SEND_DIAG, "sent_total": 0})
+
+    async def run():
+        gateway_module._enqueue_ws_event_message(websocket, {"kind": "node.status", "payload": {"seq": 1}})
+        gateway_module._enqueue_ws_event_message(websocket, {"kind": "node.status", "payload": {"seq": 2}})
+        task = gateway_module._WS_EVENT_SEND_STATES[id(websocket)]["task"]
+        await task
+        assert task.exception() is None
+
+    asyncio.run(run())
+    assert id(websocket) not in gateway_module._WS_EVENT_SEND_STATES
+    assert id(websocket) not in gateway_module._WS_EVENT_SUBSCRIBERS
+    assert gateway_module._WS_EVENT_SEND_DIAG["sent_total"] == 0
 
 
 def test_ws_event_send_queue_coalesces_hot_events(monkeypatch) -> None:

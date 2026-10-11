@@ -176,6 +176,26 @@ def test_context_preserves_coordinated_operation_context_without_guessing_target
     assert operations[0]["target"]["state"] == "unknown"
 
 
+def test_residual_and_state_with_identical_text_keep_distinct_proof_obligations() -> None:
+    brief = intent.compile_brief("Добавь реалистичные данные и пустой список дефицита.")
+    context = prototype.model_context(brief, compact=True)
+    required = {item["id"]: item for item in context["required_references"]}
+    assert "residual:01" in required
+    assert "representative_state:01" in required
+    assert required["residual:01"]["kind"] == "residual"
+    assert required["representative_state:01"]["kind"] == "representative_state"
+
+
+def test_compound_procurement_states_are_visible_to_the_model_before_validation() -> None:
+    text = "Собирать заявку на закупку. Добавь реалистичные данные, валюту и единицы измерения, пустой список дефицита и состояние ожидания решения."
+    brief = intent.compile_brief(text)
+    assert brief["representative_states"]["value"] == ["пустой список дефицита", "состояние ожидания решения"]
+    context = prototype.model_context(brief, compact=True)
+    state_refs = {item["id"] for item in context["required_references"] if item["kind"] == "representative_state"}
+    assert state_refs == {"representative_state:01", "representative_state:02"}
+    assert state_refs.issubset(_brief_requirement_ids(brief))
+
+
 def test_compact_context_preserves_exact_inventory_without_repeated_statements() -> None:
     brief = intent.compile_brief("Assign or remove a person from a shift. Search records.")
     full = prototype.model_context(brief)

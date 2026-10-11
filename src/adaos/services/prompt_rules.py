@@ -109,14 +109,6 @@ def select_prompt_rules(
         for key, value in normalized_facts.items()
         if key.startswith("requires_") and value is True
     }
-    has_structured_routing = bool(
-        profile
-        or target_paths
-        or target_refs
-        or facet_keys
-        or requirements
-        or any(fact_sets.values())
-    )
     for raw_item in registry["items"]:
         item = deepcopy(dict(raw_item))
         applicability = dict(item.get("applicability") or {})
@@ -168,9 +160,26 @@ def select_prompt_rules(
             for value in applicability.get("requires") or []
             if str(value).strip()
         }
+        # Absence in one dimension is not a negative fact in another. A known
+        # profile must not suppress an independently needed human-decision rule.
+        relevant = {
+            "profile": profiles, "target_files": path_globs,
+            "target_refs": ref_prefixes, "facet_keys": required_facets,
+            **{key: applicability.get(key) or [] for key in fact_sets},
+        }
+        unknown_dimensions = [key for key, values in relevant.items()
+                              if values and normalized_facts.get(key) is None]
+        capability_unknown = any(normalized_facts.get(f"requires_{key}") is None
+                                 for key in required_capabilities)
+        capability_denied = bool(required_capabilities) and all(
+            normalized_facts.get(f"requires_{key}") is False for key in required_capabilities
+        )
+        marker_matches = [marker for marker in markers if marker in normalized_evidence]
+        text_fallback = bool(marker_matches) and not capability_denied and (
+            bool(unknown_dimensions) or capability_unknown or not relevant_matches(applicability)
+        )
         matches = [
-            not has_structured_routing
-            and any(marker in normalized_evidence for marker in markers),
+            text_fallback,
             bool(profile and profile in profiles),
             any(
                 fnmatch(path, pattern)
@@ -188,8 +197,26 @@ def select_prompt_rules(
             continue
         item["registry_version"] = registry["version"]
         item["registry_digest"] = registry["digest"]
+        names = ["text_fallback", "profile", "target_path", "target_ref", "facet",
+                 "requirement", *fact_sets]
+        item["selection_reason"] = (
+            ["mandatory"] if applicability.get("always") is True else
+            [name for name, matched in zip(names, matches, strict=True) if matched]
+        )
+        item["search_hooks"] = list(dict.fromkeys([
+            item["id"], *sorted(required_facets), *sorted(required_capabilities),
+            *markers,
+        ]))[:16]
         selected.append(item)
     return selected
+
+
+def relevant_matches(applicability: Mapping[str, Any]) -> bool:
+    """Whether a rule has typed dimensions (as opposed to legacy text only)."""
+    return any(applicability.get(key) for key in (
+        "profiles", "target_path_globs", "target_ref_prefixes", "facet_keys", "requires",
+        "concepts", "surface_kinds", "operation_kinds", "data_planes", "effects",
+    ))
 
 
 def context_capsule_request(rule: Mapping[str, Any]) -> dict[str, Any]:

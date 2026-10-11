@@ -54,6 +54,14 @@ from adaos.services.prompt_rules import (
     select_prompt_rules,
 )
 from adaos.services.context_control import ContextControlService
+from adaos.services.builder_context import (
+    ContextBudgetExceeded,
+    ContextSection,
+    compile_sections,
+    compile_automation_prompt,
+    context_strategy,
+    context_use_receipt,
+)
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_mcp import task_scope_enabled_tools
 from adaos.services.skill_factory_sources import (
@@ -3340,6 +3348,7 @@ def _approved_brief_prompt(approved: str, current: str) -> str:
 
 def _descriptor_working_set_prompt_projection(
     value: Mapping[str, Any] | None,
+    *, compact: bool = False,
 ) -> dict[str, Any]:
     """Expose discovery evidence without embedding the complete descriptor body."""
 
@@ -3350,7 +3359,7 @@ def _descriptor_working_set_prompt_projection(
             continue
         headers.append(
             {
-                key: copy.deepcopy(item.get(key))
+                key: (str(item.get(key))[:160] if compact and key == "summary" else copy.deepcopy(item.get(key)))
                 for key in (
                     "descriptor_id",
                     "item_id",
@@ -3376,7 +3385,7 @@ def _descriptor_working_set_prompt_projection(
                     ("item_id", item.get("item_id")),
                     ("level", item.get("level")),
                     ("title", body.get("title")),
-                    ("summary", body.get("summary")),
+                    ("summary", None if compact else body.get("summary")),
                     ("tool_ids", body.get("tool_ids")),
                     ("capabilities", body.get("capabilities")),
                 )
@@ -3390,8 +3399,11 @@ def _descriptor_working_set_prompt_projection(
             ("digest", working_set.get("digest")),
             ("query_digest", working_set.get("query_digest")),
             ("headers", headers),
-            ("details", details),
-            ("evidence", working_set.get("evidence")),
+            ("details", [] if compact else details),
+            ("evidence", {
+                key: copy.deepcopy(item) for key, item in dict(working_set.get("evidence") or {}).items()
+                if key in {"server", "bound_target_id", "result_digest", "status"}
+            } if compact else working_set.get("evidence")),
         )
         if candidate not in (None, "", [], {})
     }
@@ -3464,30 +3476,41 @@ def _selected_prompt_rule_capsules(
         if str(value).strip()
     )
     packet_facets = dict(context_packet.get("facets") or {})
-    required_facets.update(
-        str(key)
-        for key, value in packet_facets.items()
-        if isinstance(value, Mapping)
-        and str(value.get("status") or "").strip() == "present"
-    )
-    relevant_facets = {
-        key: packet_facets[key]
-        for key in sorted(required_facets)
-        if key in packet_facets
-    }
-    evidence = json.dumps(
-        {
+    workflow_facet = dict(packet_facets.get("workflow_definition") or {})
+    definition_path = str(dict(workflow_facet.get("authoring") or {}).get("definition_path") or "")
+    active_change = dict(context_packet.get("change") or {})
+    change_evidence = json.dumps({
+        "intent": active_change.get("intent"),
+        "issues": [item for item in active_change.get("issues") or []
+                   if isinstance(item, Mapping) and item.get("status") not in
+                   {"resolved", "verified", "closed", "accepted", "rejected", "superseded"}],
+    }, ensure_ascii=False).lower()
+    if (definition_path and definition_path.lower() in change_evidence
+            and workflow_facet.get("status") == "present"):
+        required_facets.add("workflow_definition")
+    evidence_values = {
             "target_type": target_type,
+            "evidence_text": repair_hints.get("evidence_text"),
             "profile": repair_hints.get("profile"),
             "target_files": repair_hints.get("target_files"),
             "target_refs": repair_hints.get("target_refs"),
             "acceptance_checks": repair_hints.get("acceptance_checks"),
             "prompt_facts": prompt_facts,
-            "facets": relevant_facets,
-        },
-        ensure_ascii=True,
-        sort_keys=True,
-    ).lower()
+        }
+    def evidence_strings(value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, Mapping):
+            return [text for item in value.values() for text in evidence_strings(item)]
+        if isinstance(value, (list, tuple)):
+            return [text for item in value for text in evidence_strings(item)]
+        return []
+    # Route on task facts and requirement text, never generic contract prose.
+    # A permission authoring guide mentioning approval/model use is not proof
+    # that this task needs human decisions or LLM jobs. Facet identities still
+    # participate independently in typed routing below.
+    # Field names such as prompt_facts/requires_i18n are not positive evidence.
+    evidence = "\n".join(evidence_strings(evidence_values)).lower()
     facet_keys = sorted(required_facets)
     selected = select_prompt_rules(
         target_type=target_type,
@@ -3528,6 +3551,8 @@ def _selected_prompt_rule_capsules(
                 "rules",
                 "registry_version",
                 "registry_digest",
+                "selection_reason",
+                "search_hooks",
             )
         }
         if context_service is not None:
@@ -3728,18 +3753,26 @@ def _contract_domain_pack_ids(checklist: Mapping[str, Any]) -> list[str]:
     )
 
 
-def _prompt_rule_capsules_markdown(capsules: Sequence[Mapping[str, Any]]) -> str:
+def _prompt_rule_capsules_markdown(
+    capsules: Sequence[Mapping[str, Any]], *, compact_accents: bool = False
+) -> str:
+    from adaos.services.platform_accents import platform_accent
+
     lines = ["## Selected AdaOS rule capsules", ""]
     for capsule in capsules:
         lines.append(
             f"### {str(capsule.get('id') or '').strip()} "
             f"({str(capsule.get('source') or '').strip()})"
         )
-        lines.extend(
-            f"- {str(rule).strip()}"
-            for rule in capsule.get("rules") or []
-            if str(rule).strip()
-        )
+        accent = platform_accent(str(capsule.get("id") or "")) if compact_accents else None
+        if accent and "mandatory" not in (capsule.get("selection_reason") or []):
+            lines.append(accent)
+            lines.append("Search hooks (not authority): " + ", ".join(capsule.get("search_hooks") or []))
+            lines.append(f"Selected by: {','.join(capsule.get('selection_reason') or [])}; "
+                         f"exact rule: packet.json prompt_rule_capsules[{capsule.get('id')}]; "
+                         f"{capsule.get('context_ref')} ({capsule.get('context_digest')}).")
+        else:
+            lines.extend(f"- {str(rule).strip()}" for rule in capsule.get("rules") or [] if str(rule).strip())
         lines.append("")
     return "\n".join(lines).strip()
 
@@ -6649,6 +6682,9 @@ class LocalSkillFactoryWorker:
                     ),
                 },
             }
+            provenance.update(self._context_run_evidence(
+                runtime_dir, {"task_status": "completed", "independent_validation": "passed"}
+            ))
             _write_json(evidence_root / "provenance.json", provenance)
             result_summary = final_message
             if origin_validation_feedback:
@@ -7610,6 +7646,9 @@ class LocalSkillFactoryWorker:
                 "validation_only": validation_only or None,
                 "created_at": _now_iso(),
             }
+            provenance.update(self._context_run_evidence(
+                runtime_dir, {"task_status": "completed", "independent_validation": "passed"}
+            ))
             _write_json(evidence_root / "provenance.json", provenance)
             result_manifest = {
                 "schema": "adaos.skill_factory.dev_result.v1",
@@ -7761,6 +7800,10 @@ class LocalSkillFactoryWorker:
                 "classification": classification,
                 "checkpoint": checkpoint,
             }
+            failure.update(self._context_run_evidence(
+                runtime_dir, {"task_status": "failed", "independent_validation": "not_passed",
+                              "failure_stage": failure_stage}
+            ))
             _log.exception(
                 "Builder local worker failed task=%s stage=%s",
                 task_id,
@@ -8125,6 +8168,25 @@ class LocalSkillFactoryWorker:
         root_mcp: Mapping[str, Any] | None = None,
     ) -> CodexRunResult:
         prompt = OUTCOME_INSTRUCTION + "\n" + prompt
+        # This is the last admission boundary: repairs and continuations already
+        # exist here, unlike the earlier capsule plan and packet projection.
+        artifacts = dict(dict((assignment or {}).get("realize_request") or {}).get("artifacts") or {})
+        budget = dict(artifacts.get("execution_budget") or {})
+        capacity = int(budget.get("max_context_tokens") or 64_000)
+        selection_path = output_dir.parent / "input" / "context-selection.json"
+        selection = _read_json(selection_path) if selection_path.is_file() else {}
+        try:
+            prompt, final_budget = compile_sections(
+                [ContextSection("submitted_prompt", prompt)],
+                capacity_tokens=capacity, reserve_tokens=min(8_192, capacity // 4),
+                target_tokens=int(budget.get("target_context_tokens") or 8_000),
+                strategy=str(selection.get("strategy") or "full"),
+                overhead_text=json.dumps(OUTCOME_SCHEMA, ensure_ascii=False, sort_keys=True),
+                provider_overhead_tokens=CODEX_LIVE_PROVIDER_BASELINE_TOKENS,
+            )
+        except ContextBudgetExceeded as exc:
+            _write_json(output_dir.parent / "runtime" / "final-input-budget.json", exc.receipt)
+            raise
         input_root = output_dir.parent / "input" / "model-attempts"
         input_root.mkdir(parents=True, exist_ok=True)
         attempt = len(list(input_root.glob("*.prompt.md"))) + 1
@@ -8144,8 +8206,10 @@ class LocalSkillFactoryWorker:
                 "attempt": attempt,
                 "prompt_bytes": len(raw_prompt),
                 "prompt_sha256": hashlib.sha256(raw_prompt).hexdigest(),
+                "final_input_budget": final_budget,
             },
         )
+        _write_json(output_dir.parent / "runtime" / "final-input-budget.json", final_budget)
         if isinstance(self.executor, SubprocessCodexExecutor):
             profile = dict(agent_profile or {})
             provider = str(profile.get("provider") or "openai-codex-cli").strip()
@@ -8261,10 +8325,41 @@ class LocalSkillFactoryWorker:
             _write_json(
                 runtime_dir / f"codex-token-budget{suffix}.json", result.token_budget
             )
+        selection_path = runtime_dir.parent / "input" / "context-selection.json"
+        selection = _read_json(selection_path) if selection_path.is_file() else {}
+        use = context_use_receipt(
+            result.events,
+            selected=selection.get("sources") or [],
+            final_message=result.final_message,
+            outcome={"executor_returncode": result.returncode, "independent_validation": "pending"},
+            feedback=[*parse_development_feedback(result.final_message),
+                      *parse_development_escalations(result.final_message)],
+        )
+        if use["context_misses"]:
+            from adaos.build_info import BUILD_INFO
+            for miss in use["context_misses"]:
+                miss["scope"] = {"platform_version": BUILD_INFO.version,
+                                 "sdk_commit": dict(result.sdk_snapshot or {}).get("commit")}
+        _write_json(runtime_dir / f"context-use{suffix}.json", use)
         _write_json(
             runtime_dir / f"candidate-checks{suffix}.json",
             _candidate_check_report(result.events, attempt=attempt),
         )
+
+    @staticmethod
+    def _context_run_evidence(runtime_dir: Path, outcome: Mapping[str, Any]) -> dict[str, Any]:
+        attempts = [_read_json(path) for path in sorted(runtime_dir.glob("context-use*.json"))
+                    if path.name != "context-use-summary.json"]
+        use = {
+            "schema": "adaos.builder.context_use.v1", "attempts": attempts,
+            "tool_boundary_count": sum(int(item.get("tool_boundary_count") or 0) for item in attempts),
+            "context_misses": [miss for item in attempts for miss in item.get("context_misses") or []],
+            "causal_use": "not_established", "outcome": dict(outcome),
+        }
+        _write_json(runtime_dir / "context-use-summary.json", use)
+        budget_path = runtime_dir / "final-input-budget.json"
+        return {"context_use": use,
+                "final_input_budget": _read_json(budget_path) if budget_path.is_file() else {}}
 
     def _progress(self, task_id: str, status: str, message: str) -> None:
         self.factory.report_progress(
@@ -10164,6 +10259,9 @@ class LocalSkillFactoryWorker:
         companion = companions[0] if companions else ""
         source = dict(request.get("source") or {})
         artifacts = dict(request.get("artifacts") or {})
+        strategy = context_strategy(
+            artifacts.get("context_strategy") or os.getenv("ADAOS_BUILDER_CONTEXT_STRATEGY")
+        )
         brief = str(
             artifacts.get("implementation_brief") or source.get("text") or ""
         ).strip()
@@ -10303,6 +10401,7 @@ class LocalSkillFactoryWorker:
             _prototype_prompt_facts(context_packet),
             existing_prompt_facts,
         )
+        capsule_repair_hints["evidence_text"] = brief + "\n" + iteration
         prompt_rule_capsules = _selected_prompt_rule_capsules(
             target_type=target_type,
             repair_hints=capsule_repair_hints,
@@ -10991,7 +11090,7 @@ bookkeeping.
         )
         if descriptor_working_set:
             descriptor_prompt_projection = _descriptor_working_set_prompt_projection(
-                descriptor_working_set
+                descriptor_working_set, compact=strategy == "adaptive"
             )
             root_mcp_section = f"""## Prefetched descriptor working set
 
@@ -11032,8 +11131,18 @@ Root outage. Never inspect bearer-token environment values.
 """
         else:
             root_mcp_section = ""
+        if descriptor_working_set and root_mcp:
+            # Descriptor prefetch replaces discovery, never route authority.
+            route_authority = {key: value for key, value in prompt_root_mcp.items()
+                               if key in {"enabled", "server_name", "bound_target_id", "required", "enabled_tools"}}
+            root_mcp_section += (
+                "\n## Task-scoped Root MCP route\n\n"
+                + json.dumps(route_authority, ensure_ascii=False, separators=(",", ":"))
+                + "\nOnly this bound_target_id is authorized; never substitute the Application/component ID. "
+                "Discovery evidence grants no additional target or write authority.\n"
+            )
         prompt_rule_capsules_section = _prompt_rule_capsules_markdown(
-            prompt_rule_capsules
+            prompt_rule_capsules, compact_accents=strategy in {"accents", "adaptive"}
         )
         if bounded_repair:
             bounded_prompt_title = (
@@ -11256,6 +11365,27 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             + json.dumps(context_files, ensure_ascii=False, separators=(",", ":"))
             + "\n```\n"
         )
+        strategy = context_strategy(
+            artifacts.get("context_strategy") or os.getenv("ADAOS_BUILDER_CONTEXT_STRATEGY")
+        )
+        execution_budget = dict(artifacts.get("execution_budget") or {})
+        capacity = int(execution_budget.get("max_context_tokens") or 64_000)
+        reserve = min(8_192, max(1_024, capacity // 4))
+        prompt, selection = compile_automation_prompt(
+            prompt, projection=context_projection,
+            packet_ref=(input_dir / "packet.json").resolve().as_posix(),
+            strategy=strategy, capacity_tokens=capacity, reserve_tokens=reserve,
+            target_tokens=int(execution_budget.get("target_context_tokens") or 8_000),
+            # Includes the result schema actually submitted with Codex exec.
+            overhead_text=json.dumps(OUTCOME_SCHEMA, ensure_ascii=False, sort_keys=True),
+            provider_overhead_tokens=CODEX_LIVE_PROVIDER_BASELINE_TOKENS,
+        )
+        selection["sources"] = [*context_files, *compiler_context_files]
+        selection["provider_system_and_tools"] = {
+            "status": "provider_managed_not_observable_before_execution",
+            "estimated_tokens": CODEX_LIVE_PROVIDER_BASELINE_TOKENS,
+        }
+        _write_json(input_dir / "context-selection.json", selection)
         (input_dir / "task.md").write_text(prompt, encoding="utf-8")
         return packet
 

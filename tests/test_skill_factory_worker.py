@@ -3668,6 +3668,7 @@ def test_prompt_rule_capsules_are_selected_from_task_facets() -> None:
         "adaos.skill.webui_tool_contract.v2",
         "adaos.ui.declarative_state.v1",
         "adaos.ui.interaction_resources.v1",
+        "adaos.skill.human_decision.v1",
         "adaos.skill.data_route_receiver.v1",
         "adaos.skill.receiver_snapshot.v1",
         "adaos.skill.resource_storage.v1",
@@ -7219,7 +7220,9 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(
     }
     prompt_path = tmp_path / "input/model-attempts/001.prompt.md"
     assert prompt_path.read_text(encoding="utf-8") == actual_prompt
-    assert actual_prompt.endswith("bounded task")
+    # The final context compiler uses one canonical terminating newline; the
+    # archived prompt must still be exactly the bytes submitted to the model.
+    assert actual_prompt.endswith("bounded task\n")
     assert "needs_input" in actual_prompt
     receipt = json.loads(prompt_path.with_suffix(".json").read_text(encoding="utf-8"))
     assert (

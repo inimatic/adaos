@@ -62,11 +62,15 @@ def close_bindings(document: dict, brief: Mapping | None) -> list[dict]:
     commands = {f"command:{item['id']}": item for item in document["commands"]}
     collections = {item["id"]: item for item in (brief or {}).get("collection_requirements", [])}
     operations = {item["id"]: item for item in (brief or {}).get("operations", [])}
+    states = {f"state:{item['id']}": item for item in document.get("representative_states", [])}
     normalizations = []
     for binding in document["requirement_bindings"]:
         explicit = set(binding["semantic_refs"])
         refs = set(explicit)
         for ref in explicit:
+            state = states.get(ref)
+            if state is not None and f"view:{state.get('view_ref')}" in views:
+                refs.add(f"view:{state['view_ref']}")
             if ref in commands:
                 refs.add(f"view:{commands[ref]['view_ref']}")
         for ref in list(refs):

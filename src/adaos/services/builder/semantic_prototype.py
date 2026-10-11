@@ -915,14 +915,22 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             collection = copy.deepcopy(contract["$defs"]["view"])
             collection["properties"]["role"] = {"type": "string", "enum": ["collection"]}
             collection["properties"]["surface"] = {"type": "string", "enum": ["inline"]}
+            collection["properties"]["activation_source_view_ref"] = {"type": "null"}
             collection["properties"]["presentation"] = copy.deepcopy(
                 collection["properties"]["presentation"]["anyOf"][0]
             )
             record = copy.deepcopy(contract["$defs"]["view"])
-            record["properties"]["role"] = {"type": "string", "enum": ["details", "editor"]}
             for name in ("presentation", "compact_presentation", "presentation_options", "selection", "initial_selection_id", "selection_filter", "filter", "empty_state"):
                 record["properties"][name] = {"type": "null"}
-            contract["$defs"]["view"] = {"anyOf": [collection, record]}
+            for name in ("query_controls", "field_display", "scope_filters"):
+                record["properties"][name] = {"type": "array", "items": {"type": "null"}, "maxItems": 0}
+            details = copy.deepcopy(record)
+            details["properties"]["role"] = {"type": "string", "enum": ["details"]}
+            details["properties"]["surface"] = {"type": "string", "enum": ["inline"]}
+            editor = copy.deepcopy(record)
+            editor["properties"]["role"] = {"type": "string", "enum": ["editor"]}
+            editor["properties"]["activation_source_view_ref"] = {"type": "null"}
+            contract["$defs"]["view"] = {"anyOf": [collection, details, editor]}
         if brief is not None:
             inventory = prototype_requirement_inventory(brief)
             capacity = contract["properties"]["requirement_bindings"]["maxItems"]
@@ -951,6 +959,8 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     def project(node: Any) -> None:
         if isinstance(node, dict):
             for keyword in _PROVIDER_OMITTED_ASSERTIONS:
+                if keyword == "maxItems" and node.get(keyword) == 0:
+                    continue
                 node.pop(keyword, None)
             if "$ref" in node:
                 # Provider references cannot carry JSON Schema annotations.
@@ -1010,7 +1020,16 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "record_order": "values follow fields order exactly; include each field once",
         },
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
-        "layout_regions": "A string layout (flow, focus_detail, etc.) uses region_role=primary for its main content, not main; supporting is secondary. With an explicit layout object, region_role references an exact declared region.id, not its role. At least one main/collection region must be populated. Do not change layout or activation links when repairing an unrelated validation error.",
+        "layout_regions": {
+            "legacy_string": {"allowed_view_region_roles": sorted(_LEGACY_REGION_ROLES),
+                "main_content": "primary", "secondary_content": "supporting"},
+            "explicit_object": {
+                "view_region_role": "Exact declared layout.regions[].id, NOT its role. IDs and roles are different namespaces.",
+                "allowed_region_roles": copy.deepcopy(contract["$defs"]["layoutRegion"]["properties"]["role"]["enum"]),
+                "primary_region": "Exactly ONE region whose role is main OR collection; it must contain a view or surface. Other regions use non-primary roles from allowed_region_roles; secondary is not a role.",
+            },
+            "repair_preservation": "Do not change layout or activation links when repairing an unrelated validation error.",
+        },
         "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
         "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
@@ -1833,6 +1852,16 @@ def _runtime_layout_v2(
             for view in views
         )
         has_context = any(region["role"] in {"detail", "inspector", "utility"} for region in runtime_regions)
+        # A semantic focus/detail preference need not declare the runtime
+        # collection/detail recipe. Preserve authored region roles and choose
+        # a compatible recipe instead of manufacturing or renaming panes.
+        explicit_roles = {region["role"] for region in runtime_regions}
+        if runtime_pattern == "collection-detail" and not {"collection", "detail"}.issubset(explicit_roles):
+            runtime_pattern = (
+                "workbench" if len(runtime_regions) > 1
+                else "collection" if "collection" in explicit_roles
+                else "document"
+            )
         return {
             "version": 2,
             "pattern": runtime_pattern,
@@ -1854,6 +1883,8 @@ def _runtime_layout_v2(
         runtime_pattern = "collection-detail"
     elif not has_primary:
         runtime_pattern = "workbench" if len(region_roles) > 1 else "document"
+    elif runtime_pattern == "collection-detail" and "supporting" not in region_roles:
+        runtime_pattern = "collection" if primary_is_collection else "document"
     primary_role = "collection" if runtime_pattern in {"collection", "collection-detail"} else "main"
     role_map = {
         "primary": primary_role,
@@ -2759,35 +2790,28 @@ def _normalize_relationship_identity_literals(
 def _merge_candidate_automation_requirements(
     candidate: dict[str, Any],
 ) -> list[dict[str, str]]:
-    """Merge compatible repeated authoring declarations into one obligation.
+    """Merge repetitions only within an explicitly declared authority boundary.
 
-    The canonical semantic document still requires one Automation obligation per
-    accepted requirement. Model authoring may repeat the same requirement while
-    describing distinct disclosure or acceptance details. Joining those details
-    is lossless and produces the stricter conjunction; conflicting reason classes
-    remain an error because Core cannot infer which authority boundary applies.
+    A Brief requirement can contain both a business rule and an integration.
+    Preserve those as distinct pending obligations; Core must not choose one
+    or collapse their acceptance checks. Same-pair detail merging is lossless.
     """
 
     merged: list[dict[str, Any]] = []
-    by_requirement: dict[str, tuple[int, dict[str, Any]]] = {}
+    by_requirement: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
     normalizations: list[dict[str, str]] = []
     for source_index, raw_item in enumerate(candidate.get("automation_requirements") or []):
         item = copy.deepcopy(dict(raw_item))
         requirement_ref = str(item["requirement_ref"])
-        existing_entry = by_requirement.get(requirement_ref)
+        identity = (requirement_ref, str(item["reason"]))
+        existing_entry = by_requirement.get(identity)
         if existing_entry is None:
             target_index = len(merged)
             merged.append(item)
-            by_requirement[requirement_ref] = (target_index, item)
+            by_requirement[identity] = (target_index, item)
             continue
 
         target_index, existing = existing_entry
-        if str(existing["reason"]) != str(item["reason"]):
-            _fail(
-                f"duplicate automation requirement {requirement_ref!r} has "
-                "conflicting reason classes"
-            )
-
         for locale, text in item["disclosure"].items():
             previous = str(existing["disclosure"].get(locale) or "").strip()
             addition = str(text).strip()
@@ -4174,6 +4198,9 @@ def _validate_semantic_prototype_v2(
                 for item in [*views.values(), *surfaces.values()]
             )
         }
+        primary_regions = [region_id for region_id, region in regions.items() if region["role"] in {"main", "collection"}]
+        if len(primary_regions) != 1:
+            _fail("explicit semantic layout requires exactly one main or collection region")
         if not occupied_primary_regions:
             _fail("explicit semantic layout requires a populated main or collection region")
         for region_id, region in regions.items():
@@ -4193,6 +4220,24 @@ def _validate_semantic_prototype_v2(
         for item in [*views.values(), *surfaces.values()]
     ):
         _fail("semantic Prototype requires at least one view in the primary region")
+    if not declared_regions:
+        findings = [
+            {
+                "code": "semantic.layout_region_unknown",
+                "path": f"$.{group}[{index}].region_role",
+                "detail": (
+                    f"{group} {item['id']!r} targets unknown layout region "
+                    f"{item['region_role']!r}; without explicit regions use "
+                    "primary, supporting or actions"
+                ),
+                "semantic_refs": [f"{'view' if group == 'views' else 'surface'}:{item['id']}"],
+            }
+            for group in ("views", "capability_surfaces")
+            for index, item in enumerate(document[group])
+            if str(item["region_role"]) not in {"primary", "supporting", "actions"}
+        ]
+        if findings:
+            raise SemanticPrototypeValidationError(findings)
 
     views_by_resource: dict[str, list[dict[str, Any]]] = {
         resource_id: [] for resource_id in resources
@@ -4372,12 +4417,13 @@ def _validate_semantic_prototype_v2(
         if unknown_refs:
             _fail(f"requirement {requirement_ref!r} has unresolved refs {unknown_refs}")
         bindings[requirement_ref] = semantic_refs
-    pending_refs: set[str] = set()
+    pending_refs: set[tuple[str, str]] = set()
     for item in document.get("automation_requirements") or []:
         requirement_ref = str(item["requirement_ref"])
-        if requirement_ref in pending_refs:
+        identity = (requirement_ref, str(item["reason"]))
+        if identity in pending_refs:
             _fail(f"duplicate automation requirement {requirement_ref!r}")
-        pending_refs.add(requirement_ref)
+        pending_refs.add(identity)
         if not requirement_ref.startswith(("job:", "residual:")):
             _fail("automation requirements may only defer jobs or residual requirements, not UI contracts")
         if not any(ref.startswith(("view:", "state:")) for ref in bindings.get(requirement_ref, set())):
@@ -4634,6 +4680,7 @@ def _compile_declared_editor_exposure(
         if isinstance(button, Mapping)
     }
     external_openers = 0
+    record_openers = 0
     for command in commands:
         command_id = str(command["id"])
         kind = str(command["kind"])
@@ -4701,9 +4748,34 @@ def _compile_declared_editor_exposure(
             f"ui.application.desktop.pageSchema.widgets.@{collection['id']}.inputs.{input_key}.@{command_id}"
         )
         external_openers += 1
+        record_openers += placement == "row_action"
+    if surface != "inline" and any(command["kind"] != "create" for command in commands) and not record_openers and collection_widgets:
+        # Create clears selection and cannot expose record-bound primary actions.
+        # This entry point only selects/opens; it is not a resource mutation.
+        collection = collection_widgets[0]
+        opener_id = f"open-record-{view['id']}"
+        collection.setdefault("inputs", {}).setdefault("buttons", []).append({
+            "id": opener_id, "label": editor["title"], "title": editor["title"],
+            "label_i18n": copy.deepcopy(editor["title_i18n"]), "icon": "create-outline",
+        })
+        collection.setdefault("actions", []).extend([
+            {"on": f"click:{opener_id}", "type": "updateState", "params": {selection: "$event.id"}},
+            {"on": f"click:{opener_id}", "type": "openModal", "params": {"modalId": modal_id}},
+        ])
+        for command in commands:
+            if command["kind"] != "create":
+                source_map.setdefault(f"command:{command['id']}", []).append(
+                    f"ui.application.desktop.pageSchema.widgets.@{collection['id']}.inputs.buttons.@{opener_id}"
+                )
+        external_openers += 1
+        record_openers += 1
     if surface != "inline" and not external_openers:
         raise BuilderWorkflowError(
             f"modal editor {view['id']!r} needs at least one collection_header or row_action command exposure"
+        )
+    if surface != "inline" and any(command["kind"] != "create" for command in commands) and not record_openers:
+        raise BuilderWorkflowError(
+            f"modal editor {view['id']!r} has record commands but no selected-record row_action opener"
         )
     return True
 

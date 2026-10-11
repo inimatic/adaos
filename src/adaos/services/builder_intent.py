@@ -145,7 +145,7 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "inspect",
         re.compile(
             r"\b(?:inspect|open|view|review|see|scan|browse|find|найти|наход|"
-            r"откр|просмотр|просматр|изуч)\w*\b|"
+            r"откр|просмотр|просматр|изуч)\w*\b|\bсравнивать\b|"
             r"\bпровер(?:ить|ять|яет|яют|ял|яла|яли|ь|ьте)\b",
             re.IGNORECASE,
         ),
@@ -160,7 +160,8 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "create",
         re.compile(
             r"\b(?:add(?:s|ed|ing)?|creat(?:e|es|ed|ing)|captur(?:e|es|ed|ing)|"
-            r"record(?:s|ed|ing)?|добав\w*|созда\w*|запис(?:а|ы)\w*|запиш\w*)\b",
+            r"record(?:s|ed|ing)?|добав\w*|созда\w*|запис(?:а|ы)\w*|запиш\w*|"
+            r"(?:собир\w*|собра\w*|состав\w*|формир\w*)\s+заявк\w*)\b",
             re.IGNORECASE,
         ),
     ),
@@ -240,10 +241,10 @@ _REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
     r"authorization[-_ ]required|auth[-_ ]required|reusable[-_ ]account[-_ ]available|"
     r"connected|permission[-_ ]denied|provider[-_ ]error|success|"
     r"unfilled|understaffed|fully\s+staffed|blocked|disabled|loading|offline|error|failed?|forbid|prevent|overdue|late|"
-    r"conflict\w*|unavailable|busy|"
+    r"conflict\w*|unavailable|busy|waiting\s+for\s+(?:a\s+)?decision|pending\s+states?|"
     r"пуст\w*|нет|без|неназнач\w*|не\s+назнач\w*|незаверш\w*|чернов\w*|"
     r"заверш\w*|заблокир\w*|недоступ\w*|загруз\w*|офлайн\w*|ошиб\w*|"
-    r"неуспеш\w*|запрет\w*|нельзя|просроч\w*|конфликт\w*|занят\w*)\b",
+    r"неуспеш\w*|запрет\w*|нельзя|просроч\w*|конфликт\w*|занят\w*|состояни\w*\s+ожидани\w*)\b",
     re.IGNORECASE,
 )
 _NON_STATE_CONTINUITY_PATTERN = re.compile(
@@ -421,6 +422,13 @@ def _operation_mentions(
         matched = match.group(0).lower()
         prefix = clause[: match.start()]
         suffix = clause[match.end():]
+        if kind == "create" and re.match(
+            r"\s+(?:(?:realistic|sample|demo|test)\s+(?:data|records)|"
+            r"(?:реалистич\w*|демонстрацион\w*|тестов\w*)\s+данн\w*)\b", suffix, re.IGNORECASE
+        ):
+            # Fixture authoring is retained as a residual requirement, not a
+            # business create operation whose authority/coverage could drift.
+            continue
         if kind == "update" and re.search(
             r"\b(?:remove|delete)\s+(?:the\s+)?(?:generic\s+)?$",
             prefix,
@@ -698,6 +706,7 @@ def _extract_residual_requirements(statement: str) -> list[dict[str, Any]]:
             not process_kind
             and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value)
             and not _NON_STATE_CONTINUITY_PATTERN.search(value)
+            and not re.search(r"\b(?:реалистич\w*\s+данн\w*|realistic\s+data)\b", value, re.IGNORECASE)
         ):
             continue
         start = clause_start + value_start

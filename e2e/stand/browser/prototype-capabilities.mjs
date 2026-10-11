@@ -1,7 +1,7 @@
 import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { installSystemOverlayDismissal } from './prototype-navigation.mjs'
+import { installSystemOverlayDismissal, revealPrototypeWidget, selectPrototypeRow } from './prototype-navigation.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Requires ENV_TYPE=dev')
 const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))
@@ -36,7 +36,7 @@ try {
       window.__ADAOS_DEBUG__ = true
       window.__ADAOS_BASE__ = hub
       window.__ADAOS_TOKEN__ = token
-      for (const [key, value] of Object.entries({ adaos_device_id: 'e2e-capabilities', adaos_webspace_id: webspace,
+      for (const [key, value] of Object.entries({ adaos_device_id: `e2e-capabilities:${webspace}`, adaos_webspace_id: webspace,
         adaos_hub_base: hub, adaos_local_hub_base: hub, adaos_try_local_hub: '1', adaos_hub_token: token,
         adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: locale })) localStorage.setItem(key, value)
     }, { hub, token, subnet, webspace: preview.webspace_id, locale: checkpoint.context.locale })
@@ -70,14 +70,7 @@ try {
       const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
       return sync?.materializationReady && sync.materialization?.currentScenario === expected
     }, scenario, { timeout: 60_000 })
-    const reveal = async widget => {
-      if (await host(widget.id).isVisible()) return
-      for (const button of navigation?.inputs?.buttons || []) {
-        await host(navigation.id).locator(`[data-command-id=${JSON.stringify(button.id)}]`).click()
-        if (await host(widget.id).isVisible()) return
-      }
-      throw new Error(`No reachable section for ${widget.id}`)
-    }
+    const reveal = widget => revealPrototypeWidget(page, widgets, widget)
     const runtimeRecords = new Map()
     const recordsFor = resourceId => {
       if (!runtimeRecords.has(resourceId)) throw new Error(`No baseline snapshot for ${resourceId}`)
@@ -114,10 +107,14 @@ try {
       sample.checks.push({ kind: 'single-action-label-space', actions: singleActions })
       if (navigation) {
         for (const button of navigation.inputs.buttons) {
+          await reveal(navigation)
           await host(navigation.id).locator(`[data-command-id=${JSON.stringify(button.id)}]`).click()
           const expected = widgets.filter(widget => widget.visibleIf?.includes(`=== '${button.id}'`))
           if (!expected.length) throw new Error(`Tab ${button.id} has no owned content`)
-          for (const widget of expected.filter(widget => !widget.visibleIf.startsWith('('))) await expect(host(widget.id)).toBeVisible()
+          for (const widget of expected.filter(widget => !widget.visibleIf.startsWith('('))) {
+            await reveal(widget)
+            await expect(host(widget.id)).toBeVisible()
+          }
           sample.checks.push({ kind: 'tab', id: button.id, owned: expected.map(widget => widget.id) })
         }
       }
@@ -140,7 +137,7 @@ try {
           let pendingResets = []
           for (const index of available.slice(0, 2).map((_, index) => index).reverse()) {
             await reveal(widget)
-            await rows.nth(index).click()
+            await selectPrototypeRow(rows.nth(index))
             await expect(page.locator('ion-modal:visible')).toHaveCount(0)
             for (const pending of pendingResets) {
               await expect.poll(() => host(pending.target).locator('ada-table-widget').evaluate((element, keys) => {
@@ -320,7 +317,7 @@ try {
             const { modalId, form } = editorEntry
             const row = host(widget.id).locator('.collection-focus-item').first()
             await expect(row).toBeVisible()
-            await row.click()
+            await selectPrototypeRow(row)
             if (!widget.actions?.some(action => action.on === 'select' && action.type === 'openModal' && action.params?.modalId === modalId)) {
               await host(`open-${form.id}`).locator('[data-command-id="edit"]').click()
             }

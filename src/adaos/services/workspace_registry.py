@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections import OrderedDict
 from copy import deepcopy
 import logging
@@ -32,8 +33,12 @@ _LOG = logging.getLogger("adaos.workspace_registry")
 _REGISTRY_SNAPSHOT_LOCK = threading.Lock()
 # Content keys, not mtimes: in-place edits and atomic replacements are visible
 # immediately. Only portable v2 records are cached; v1 normalization reads disk.
-_REGISTRY_SNAPSHOTS: OrderedDict[bytes, dict[str, Any]] = OrderedDict()
-_REGISTRY_SNAPSHOT_MAX_BYTES = 512 * 1024
+_REGISTRY_SNAPSHOTS: OrderedDict[bytes, tuple[int, dict[str, Any]]] = OrderedDict()
+# Large portable indexes must not fall off the cache cliff once they exceed
+# 512 KiB. Bound both one input and the aggregate encoded-input weight; retain
+# only content digests as keys, not an additional copy of each large index.
+_REGISTRY_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024
+_REGISTRY_SNAPSHOT_TOTAL_BYTES = 8 * 1024 * 1024
 _REGISTRY_SNAPSHOT_MAX_ENTRIES = 4
 _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
 _INSTALL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -109,11 +114,12 @@ def _workspace_registry_snapshot(workspace_root: Path, *, fallback_to_scan: bool
     if path.exists():
         try:
             content = path.read_bytes()
+            cache_key = hashlib.sha256(content).digest()
             with _REGISTRY_SNAPSHOT_LOCK:
-                cached = _REGISTRY_SNAPSHOTS.get(content)
+                cached = _REGISTRY_SNAPSHOTS.get(cache_key)
                 if cached is not None:
-                    _REGISTRY_SNAPSHOTS.move_to_end(content)
-                    return cached
+                    _REGISTRY_SNAPSHOTS.move_to_end(cache_key)
+                    return cached[1]
             data = json.loads(content.decode("utf-8"))
         except Exception as exc:
             raise WorkspaceRegistryError(f"cannot parse workspace registry: {path}") from exc
@@ -138,9 +144,11 @@ def _workspace_registry_snapshot(workspace_root: Path, *, fallback_to_scan: bool
         )
         if version == REGISTRY_FORMAT_VERSION and len(content) <= _REGISTRY_SNAPSHOT_MAX_BYTES:
             with _REGISTRY_SNAPSHOT_LOCK:
-                _REGISTRY_SNAPSHOTS[content] = normalized
-                _REGISTRY_SNAPSHOTS.move_to_end(content)
-                while len(_REGISTRY_SNAPSHOTS) > _REGISTRY_SNAPSHOT_MAX_ENTRIES:
+                _REGISTRY_SNAPSHOTS[cache_key] = (len(content), normalized)
+                _REGISTRY_SNAPSHOTS.move_to_end(cache_key)
+                while len(_REGISTRY_SNAPSHOTS) > _REGISTRY_SNAPSHOT_MAX_ENTRIES or sum(
+                    item[0] for item in _REGISTRY_SNAPSHOTS.values()
+                ) > _REGISTRY_SNAPSHOT_TOTAL_BYTES:
                     _REGISTRY_SNAPSHOTS.popitem(last=False)
         return normalized
     if fallback_to_scan:

@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+from adaos.services.builder_context import ContextBudgetExceeded
+
 from jsonschema import Draft202012Validator, FormatChecker
 
 from adaos.services.builder.llm_input_attribution import (
@@ -120,3 +123,64 @@ def test_capability_context_is_part_of_the_cacheable_prefix() -> None:
 
     assert receipt["stable_prefix"]["message_indexes"] == [0, 1, 2]
     assert receipt["dynamic_suffix"]["message_indexes"] == [3]
+
+
+def test_output_and_tool_schemas_participate_in_request_estimate_without_secret_payload():
+    receipt = build_llm_input_attribution(
+        request_id="schemas", route="test", stage="generate", attempt=1,
+        messages=[{"role": "user", "content": "hello"}], message_purposes=["task"],
+        generation_options={"response_format": {"type": "json_schema", "schema": {"type": "object"}},
+                            "tools": [{"type": "mcp", "authorization": "must-not-log"}]},
+    )
+    configuration = receipt["generation"]["context_configuration"]
+    assert configuration["keys"] == ["response_format", "tools"]
+    assert configuration["estimated_tokens"] > 0
+    assert receipt["totals"]["request_estimated_tokens"] > receipt["totals"]["estimated_tokens"]
+    assert "must-not-log" not in json.dumps(receipt)
+    assert receipt["final_input_budget"]["must_keep_complete"]
+
+
+def test_provider_schema_can_block_before_builder_submits_a_request():
+    with pytest.raises(ContextBudgetExceeded):
+        build_llm_input_attribution(
+            request_id="large-schema", route="prototype.transform", stage="generate", attempt=1,
+            messages=[{"role": "user", "content": "small brief"}], message_purposes=["task"],
+            generation_options={"response_format": {"schema": {"description": "x" * 800}}},
+            context_capacity_tokens=160, context_reserve_tokens=20,
+        )
+
+
+def test_multimodal_bytes_do_not_masquerade_as_text_tokens_or_full_budget_coverage():
+    messages = [{"role": "user", "content": [
+        {"type": "input_text", "text": "Describe this image"},
+        {"type": "input_image", "image_url": "data:image/png;base64," + "A" * 300_000},
+    ]}]
+    before = json.dumps(messages)
+    receipt = build_llm_input_attribution(
+        request_id="image", route="test", stage="generate", attempt=1,
+        messages=messages, message_purposes=["task"],
+        context_capacity_tokens=200, context_reserve_tokens=20,
+    )
+    budget = receipt["final_input_budget"]
+    assert budget["status"] == "requires_modality_estimate"
+    assert not budget["full_input_covered"]
+    assert budget["unestimated_content_parts"] == 1
+    assert receipt["totals"]["request_estimated_tokens"] < 180
+    assert receipt["totals"]["request_bytes"] > 300_000
+    assert json.dumps(messages) == before
+    schema = json.loads((Path(__file__).resolve().parents[1] / "src/adaos/abi/builder.llm_input_attribution.v1.schema.json").read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(receipt)
+
+
+def test_known_text_overflow_still_blocks_when_an_image_is_present():
+    with pytest.raises(ContextBudgetExceeded) as blocked:
+        build_llm_input_attribution(
+            request_id="large-text-image", route="test", stage="generate", attempt=1,
+            messages=[{"role": "user", "content": [
+                {"type": "input_text", "text": "x" * 1000},
+                {"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}},
+            ]}], message_purposes=["task"],
+            context_capacity_tokens=160, context_reserve_tokens=20,
+        )
+    assert blocked.value.receipt["status"] == "blocked"
+    assert not blocked.value.receipt["full_input_covered"]

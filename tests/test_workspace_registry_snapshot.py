@@ -69,3 +69,27 @@ def test_cache_has_entry_and_input_size_limits_and_excludes_filesystem_dependent
     write_registry(tmp_path, version=1)
     registry.load_workspace_registry(tmp_path)
     assert not registry._REGISTRY_SNAPSHOTS
+
+
+def test_large_portable_index_reuses_normalization_and_keeps_digest_keys(tmp_path, monkeypatch):
+    write_registry(tmp_path, title='Large' * 120000)
+    assert (tmp_path / 'registry.json').stat().st_size > 512 * 1024
+    original = registry._normalize_registry_payload
+    calls = []
+    def tracked(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(registry, '_normalize_registry_payload', tracked)
+    for _ in range(3):
+        assert registry.find_workspace_registry_entry(tmp_path, kind='scenarios', name_or_id='sample')
+    assert len(calls) == 1
+    assert all(len(key) == 32 for key in registry._REGISTRY_SNAPSHOTS)
+
+
+def test_aggregate_encoded_input_weight_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, '_REGISTRY_SNAPSHOT_TOTAL_BYTES', 1500)
+    for number in range(4):
+        write_registry(tmp_path, title=str(number) * 600)
+        registry.load_workspace_registry(tmp_path)
+    assert sum(item[0] for item in registry._REGISTRY_SNAPSHOTS.values()) <= 1500
+    assert len(registry._REGISTRY_SNAPSHOTS) < 4

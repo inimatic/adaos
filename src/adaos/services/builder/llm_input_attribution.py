@@ -9,6 +9,8 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from adaos.services.builder_context import ContextBudgetExceeded, ContextSection, compile_sections
+
 
 SCHEMA = "adaos.builder.llm_input_attribution.v1"
 _SAFE_GENERATION_OPTIONS = frozenset(
@@ -77,6 +79,37 @@ def _content_refs(
     return result
 
 
+def _text_budget_projection(
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Estimate text, not base64 transport bytes or remote image URL length.
+
+    Non-text tokenization depends on provider/model/modality. Keep exact input
+    identities in the receipt, but do not falsely reject an image as huge text.
+    This projection is for estimation only; submitted messages are unchanged.
+    """
+    projected = copy.deepcopy([dict(message) for message in messages])
+    unestimated_parts = 0
+    for message in projected:
+        content = message.get("content")
+        if content is None or isinstance(content, str):
+            continue
+        parts = content if isinstance(content, list) else [content]
+        estimated_parts = []
+        for part in parts:
+            if isinstance(part, str) or (
+                isinstance(part, Mapping) and part.get("type") in {"text", "input_text", "output_text", "refusal"}
+            ):
+                estimated_parts.append(part)
+            else:
+                unestimated_parts += 1
+                estimated_parts.append({"type": str(part.get("type") or "unknown")
+                                        if isinstance(part, Mapping) else "unknown",
+                                        "token_estimate": "provider_modality_estimator_required"})
+        message["content"] = estimated_parts
+    return projected, unestimated_parts
+
+
 def build_llm_input_attribution(
     *,
     request_id: str,
@@ -91,6 +124,9 @@ def build_llm_input_attribution(
     stable_message_indexes: Sequence[int] | None = None,
     dynamic_message_indexes: Sequence[int] | None = None,
     created_at: str | None = None,
+    context_capacity_tokens: int = 64_000,
+    context_reserve_tokens: int = 8_192,
+    context_target_tokens: int = 8_000,
 ) -> dict[str, Any]:
     """Build a compact receipt for the exact messages submitted to a provider."""
 
@@ -165,6 +201,36 @@ def build_llm_input_attribution(
         if str(key) in _SAFE_GENERATION_OPTIONS and value is not None
     }
     options_raw = _canonical_bytes(safe_options)
+    # JSON-schema output and tool schemas are model input too. Record only
+    # content identities here: tool configuration can contain private routing.
+    configuration = {key: copy.deepcopy(value) for key, value in (generation_options or {}).items()
+                     if key in {"response_format", "text", "tools", "tool_choice"} and value is not None}
+    configuration_raw = _canonical_bytes(configuration) if configuration else b""
+    messages_raw = _canonical_bytes(normalized_messages)
+    request_bytes = len(messages_raw) + len(configuration_raw)
+    projected_messages, unestimated_parts = _text_budget_projection(normalized_messages)
+    budget_raw = _canonical_bytes(projected_messages)
+    budget_boundary = {
+        "representation": "canonical_messages_and_configuration_not_provider_transport",
+        "full_input_sha256": _digest(messages_raw),
+        "full_input_covered": not unestimated_parts,
+        "unestimated_content_parts": unestimated_parts,
+        "coverage": "text_and_configuration_only" if unestimated_parts else "text_messages_and_configuration",
+    }
+    try:
+        _, final_input_budget = compile_sections(
+            [ContextSection("model_input_envelope", budget_raw.decode("utf-8"))],
+            capacity_tokens=context_capacity_tokens, reserve_tokens=context_reserve_tokens,
+            target_tokens=context_target_tokens, strategy="full",
+            overhead_text=configuration_raw.decode("utf-8"),
+        )
+    except ContextBudgetExceeded as exc:
+        exc.receipt.update(budget_boundary)
+        raise
+    final_input_budget.update(budget_boundary)
+    if unestimated_parts:
+        final_input_budget["text_budget_status"] = final_input_budget["status"]
+        final_input_budget["status"] = "requires_modality_estimate"
     created = created_at or datetime.now(timezone.utc).isoformat()
     return {
         "schema": SCHEMA,
@@ -174,12 +240,17 @@ def build_llm_input_attribution(
         "attempt": int(attempt),
         "profile": profile,
         "model": str(model or "").strip() or None,
+        "final_input_budget": final_input_budget,
         "messages": message_receipts,
         "totals": {
             "messages": len(normalized_messages),
             "bytes": total_bytes,
             "estimated_tokens": _estimated_tokens(total_bytes),
             "estimation": "utf8_bytes_div_4_ceil",
+            "request_bytes": request_bytes,
+            "request_estimated_tokens": _estimated_tokens(len(budget_raw) + len(configuration_raw)),
+            "request_estimation": "utf8_bytes_div_4_ceil_text_and_configuration_only",
+            "request_unestimated_content_parts": unestimated_parts,
         },
         "stable_prefix": _segment(normalized_messages, stable_indexes),
         "dynamic_suffix": _segment(normalized_messages, dynamic_indexes),
@@ -202,6 +273,12 @@ def build_llm_input_attribution(
         "generation": {
             "options_sha256": _digest(options_raw),
             "options": safe_options,
+            "context_configuration": {
+                "bytes": len(configuration_raw),
+                "estimated_tokens": _estimated_tokens(len(configuration_raw)),
+                "sha256": _digest(configuration_raw),
+                "keys": sorted(configuration),
+            },
         },
         "created_at": created,
     }

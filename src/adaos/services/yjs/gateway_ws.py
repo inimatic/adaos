@@ -3658,9 +3658,13 @@ async def _drain_ws_event_send_queue(key: int, websocket: WebSocket) -> None:
             message = queue.popleft()
         try:
             await _send_ws_event_message(websocket, message)
-        finally:
-            with _WS_EVENT_SEND_LOCK:
-                _WS_EVENT_SEND_DIAG["sent_total"] = int(_WS_EVENT_SEND_DIAG.get("sent_total") or 0) + 1
+        except (WebSocketDisconnect, RuntimeError):
+            # The sender has already removed subscriptions and queued state.
+            # A normal close must not escape an unawaited background task or
+            # be reported as successful delivery.
+            return
+        with _WS_EVENT_SEND_LOCK:
+            _WS_EVENT_SEND_DIAG["sent_total"] = int(_WS_EVENT_SEND_DIAG.get("sent_total") or 0) + 1
         await asyncio.sleep(0)
 
 
@@ -10937,60 +10941,29 @@ async def process_events_command(
             "actor_id": transport_actor_id,
         }
         try:
-            from adaos.services import conversation_interactions
             from adaos.services.pending_action_projection import (
                 project_pending_action_from_store,
+                project_pending_action_page_from_store,
             )
+            from adaos.services.runtime_executor import run_runtime_interactive
 
             if kind == "conversation.interaction.get.request":
                 interaction_id = str(event_payload.get("interaction_id") or "").strip()
                 if not interaction_id:
                     raise ValueError("interaction_id is required")
-                result = project_pending_action_from_store(
+                result = await run_runtime_interactive(project_pending_action_from_store,
                     interaction_id,
                     principal=principal,
                 )
             else:
-                page = conversation_interactions.query_interactions(
+                result = await run_runtime_interactive(project_pending_action_page_from_store,
                     principal=principal,
                     conversation_id=(
                         str(event_payload.get("conversation_id") or "").strip() or None
                     ),
-                    statuses=(
-                        "created", "projected", "awaiting_input",
-                        "partially_answered", "validation_failed", "answered",
-                        "accepted", "completed", "expired", "cancelled",
-                        "superseded",
-                    ),
-                    active_only=False,
-                    field_mask="summary",
                     limit=max(1, min(int(event_payload.get("limit") or 50), 100)),
                     cursor=str(event_payload.get("cursor") or "").strip() or None,
                 )
-                items: list[dict[str, Any]] = []
-                skipped: list[dict[str, str]] = []
-                for item in page.get("items") or []:
-                    interaction_id = str(item.get("interaction_id") or "").strip()
-                    try:
-                        items.append(
-                            project_pending_action_from_store(
-                                interaction_id,
-                                principal=principal,
-                            )
-                        )
-                    except Exception as exc:
-                        skipped.append(
-                            {
-                                "interaction_id": interaction_id,
-                                "reason_code": type(exc).__name__,
-                            }
-                        )
-                result = {
-                    "schema": "adaos.pending_action.projection_page.v1",
-                    "items": items,
-                    "next_cursor": page.get("next_cursor"),
-                    "skipped": skipped,
-                }
             await _ack(data=result)
         except Exception as exc:
             _log.warning("conversation interaction projection command failed", exc_info=True)

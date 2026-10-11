@@ -545,9 +545,19 @@ def _llm_root_payload(
     stream_protocol: str | None = None,
     patch_stream: Mapping[str, Any] | str | bool | None = None,
     profile_scope: str | None = None,
+    provider_timeout_s: float | None = None,
+    provider_max_attempts: int | None = None,
 ) -> tuple[Dict[str, Any], list[Mapping[str, str]]]:
     normalized_messages = _message_list(messages)
     payload: Dict[str, Any] = {"messages": normalized_messages}
+    if provider_timeout_s is not None:
+        if isinstance(provider_timeout_s, bool) or not isinstance(provider_timeout_s, (int, float)) or not 30 <= provider_timeout_s <= 900:
+            raise ValueError("provider_timeout_s must be between 30 and 900 seconds")
+        payload["provider_timeout_ms"] = int(provider_timeout_s * 1000)
+    if provider_max_attempts is not None:
+        if isinstance(provider_max_attempts, bool) or not isinstance(provider_max_attempts, int) or not 1 <= provider_max_attempts <= 4:
+            raise ValueError("provider_max_attempts must be an integer between 1 and 4")
+        payload["provider_max_attempts"] = provider_max_attempts
     resolved_model = str(model or os.getenv("ADAOS_LLM_MODEL") or "").strip()
     if resolved_model:
         payload["model"] = resolved_model
@@ -764,6 +774,8 @@ def submit_response_job(
     stream_protocol: str | None = None,
     patch_stream: Mapping[str, Any] | str | bool | None = None,
     profile_scope: str | None = None,
+    provider_timeout_s: float | None = None,
+    provider_max_attempts: int | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
     """
@@ -792,6 +804,8 @@ def submit_response_job(
         stream_protocol=stream_protocol,
         patch_stream=patch_stream,
         profile_scope=profile_scope,
+        provider_timeout_s=provider_timeout_s,
+        provider_max_attempts=provider_max_attempts,
     )
     return _submit_root_job(root_payload, request_id=request_id, timeout=timeout, submit_started=submit_started)
 
@@ -1007,7 +1021,7 @@ def _submit_root_job(root_payload: Mapping[str, Any], *, request_id: str | None,
                 error_label,
                 exc,
             )
-            if index + 1 < len(base_urls) and _should_retry_llm_proxy(exc):
+            if _should_retry_llm_proxy(exc):
                 if request_id:
                     recovery_started = time.perf_counter()
                     recovery_timeout = max(1.0, min(float(timeout or 15), 10.0))
@@ -1080,8 +1094,9 @@ def _submit_root_job(root_payload: Mapping[str, Any], *, request_id: str | None,
                             recovery_label,
                             recovery_exc,
                         )
-                _LOG.warning("root LLM job submit failed base_url=%s; trying fallback error=%s", base_url, exc)
-                continue
+                if index + 1 < len(base_urls):
+                    _LOG.warning("root LLM job submit failed base_url=%s; trying fallback error=%s", base_url, exc)
+                    continue
             raise
     if last_exc is not None:
         raise last_exc

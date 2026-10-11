@@ -1100,11 +1100,12 @@ class RootDeveloperService:
                 raise RootServiceError("ROOT_TOKEN is not configured; set ROOT_TOKEN or pass --token")
 
             preferred_subnet = str(preferred_subnet_id or "").strip() or None
-            existing_subnet = preferred_subnet or cfg.subnet_settings.id or cfg.subnet_id
+            known_subnet = cfg.subnet_settings.id or cfg.subnet_id
+            existing_subnet = preferred_subnet or known_subnet
             key_path = cfg.hub_key_path()
             cert_path = cfg.hub_cert_path()
             ca_path = cfg.ca_cert_path()
-            force_new_keypair = bool(preferred_subnet and key_path.exists())
+            force_new_keypair = bool(preferred_subnet and preferred_subnet != known_subnet and key_path.exists())
 
             if existing_subnet and key_path.exists() and cert_path.exists() and ca_path.exists():
                 try:
@@ -1166,10 +1167,10 @@ class RootDeveloperService:
             ca_pem = registration.get("ca_pem")
             if not isinstance(subnet_id, str) or not subnet_id:
                 raise RootServiceError("Root response missing subnet_id")
-            if preferred_subnet and subnet_id != preferred_subnet:
+            if existing_subnet and subnet_id != existing_subnet:
                 raise RootServiceError(
-                    f"Root returned subnet_id {subnet_id} instead of requested {preferred_subnet}; "
-                    "the requested subnet may not be claimable with the current Root registration flow"
+                    f"Root returned subnet_id {subnet_id} instead of existing {existing_subnet}; "
+                    "refusing to replace the existing Hub identity; repair its Root fingerprint binding first"
                 )
             if not isinstance(cert_pem, str) or not cert_pem.strip():
                 raise RootServiceError("Root response missing hub certificate")
@@ -2199,6 +2200,13 @@ class RootDeveloperService:
         - legacy: CN='subnet:<subnet_id>'
         - новый:  CN='hub:<hub_id>' (дополнительно, если указан owner_id, и присутствует O, то O должно быть 'owner:<owner_id>')
         """
+        try:
+            certificate = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
+            now = datetime.now(timezone.utc)
+            if not certificate.not_valid_before_utc <= now < certificate.not_valid_after_utc:
+                return False
+        except (ValueError, TypeError):
+            return False
         cn = RootDeveloperService._hub_certificate_common_name(cert_pem)
         if not cn:
             return False

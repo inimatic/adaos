@@ -934,6 +934,17 @@ class ContextControlService:
                     capsule=capsule,
                     as_of=as_of,
                 )
+                learning_scope = _mapping(capsule["metadata"].get("learning_scope"))
+                current_learning_scope = _mapping(policy.get("learning_scope"))
+                if learning_scope and (
+                    current_learning_scope.get("platform_version") != learning_scope.get("platform_version")
+                    or not set(_strings(learning_scope.get("contract_refs"))).issubset(
+                        set(_strings(current_learning_scope.get("contract_refs")))
+                    )
+                    or any(current_learning_scope.get(key) != value for key, value in learning_scope.items()
+                           if key not in {"platform_version", "contract_refs"})
+                ):
+                    reason = "learned_rule_scope_not_admitted"
                 if applicable_invalidations and not reason:
                     reason = "source_invalidated"
                 unit = {
@@ -995,7 +1006,11 @@ class ContextControlService:
                         omitted.append({"ref": edge["relationship_id"], "reason": "relationship_not_effective"})
                         continue
                     relationships.append(edge)
-                    queue.append((
+                    # Finish required closure before optional exploration. A
+                    # shared dependency must not become optional merely because
+                    # an optional path happens to reach it first.
+                    enqueue = queue.appendleft if required and edge["required"] else queue.append
+                    enqueue((
                         edge["to_capsule_id"],
                         bool(required and edge["required"]),
                         [*path, edge["relationship_id"]],
@@ -1124,7 +1139,10 @@ class ContextControlService:
         required = _mappings(resolution.get("required"))
         candidates = _mappings(resolution.get("candidates"))
         required.sort(key=lambda item: (len(item.get("path") or []), _text(item.get("kind")), _text(item.get("ref"))))
-        candidates.sort(key=lambda item: (-float(item.get("utility") or 0), int(item.get("estimated_tokens") or 0), _text(item.get("ref"))))
+        candidates.sort(key=lambda item: (
+            -float(item.get("utility") or 0) / max(1, int(item.get("estimated_tokens") or 1)),
+            _text(item.get("ref")),
+        ))
         required_estimated_tokens = sum(
             max(1, int(item.get("estimated_tokens") or 1)) for item in required
         )
@@ -1484,6 +1502,7 @@ class ContextControlService:
         canonical = {
             "schema": RECEIPT_SCHEMA,
             "run_ref": run_ref,
+            "logical_task_ref": _text(request.get("logical_task_ref")) or None,
             "plan_ref": plan_ref,
             "subject_refs": _strings(request.get("subject_refs")),
             "purpose": _text(request.get("purpose")),
@@ -1493,6 +1512,8 @@ class ContextControlService:
             "denied": _mappings(request.get("denied")),
             "unavailable": _mappings(request.get("unavailable")),
             "context_misses": _mappings(request.get("context_misses")),
+            "context_use": _mapping(request.get("context_use")),
+            "final_input_budget": _mapping(request.get("final_input_budget")),
             "layer_usage": _mappings(request.get("layer_usage")),
             "context_margin": _mapping(request.get("context_margin")),
             "compaction": _mapping(request.get("compaction")),
@@ -1624,6 +1645,7 @@ class ContextControlService:
             raise ContextConflict("memory candidate revision conflict")
         if candidate["status"] not in {"proposed", "rejected"}:
             raise ContextConflict(f"memory candidate cannot be qualified from {candidate['status']}")
+        self._validate_learning_candidate(candidate, refs)
         with self._connect() as connection:
             connection.execute(
                 "UPDATE memory_candidates SET status = 'qualified', validation_refs_json = ?, qualified_by = ?, revision = ?, updated_at = ? WHERE candidate_id = ?",
@@ -1650,6 +1672,11 @@ class ContextControlService:
         if candidate["tainted"] and not any("sanit" in ref.lower() for ref in candidate["validation_refs"]):
             raise ContextAccessDenied("tainted memory requires sanitization validation")
         proposal = self.get_artifact(candidate["proposal_ref"])
+        content = proposal.get("content")
+        if isinstance(content, Mapping) and content.get("schema") == "adaos.context.learning_rule.v1":
+            if bind:
+                raise ContextAccessDenied("learned rules cannot replace authoritative subject bindings; promote with bind=False")
+            self._validate_learning_candidate(candidate, candidate["validation_refs"])
         capsule = self.register_capsule({
             "kind": f"{candidate['kind']}_memory",
             "subject_refs": list(subject_refs),
@@ -1658,10 +1685,14 @@ class ContextControlService:
             "tainted": False,
             "sensitivity": "workspace",
             "retention_class": "accepted_memory" if candidate["kind"] != "working" else "working",
+            "valid_to": content.get("expires_at") if isinstance(content, Mapping)
+            and content.get("schema") == "adaos.context.learning_rule.v1" else None,
             "origin": {"memory_candidate_ref": candidate_id, "validation_refs": candidate["validation_refs"], "sanitization_evidence_refs": candidate["validation_refs"] if candidate["tainted"] else []},
             "summary": proposal.get("summary"),
             "content": proposal.get("content"),
-            "metadata": {"memory_kind": candidate["kind"], "source_refs": candidate["source_refs"]},
+            "metadata": {"memory_kind": candidate["kind"], "source_refs": candidate["source_refs"],
+                         "learning_scope": dict(content.get("scope") or {}) if isinstance(content, Mapping)
+                         and content.get("schema") == "adaos.context.learning_rule.v1" else None},
             "bind": bind,
             "actor_ref": actor_ref,
         }, bind=bind)
@@ -1671,6 +1702,31 @@ class ContextControlService:
                 (capsule["capsule_id"], candidate["revision"] + 1, _now(), candidate_id),
             )
         return {"candidate": self.get_memory_candidate(candidate_id), "capsule": capsule}
+
+    def _validate_learning_candidate(self, candidate: Mapping[str, Any], refs: Sequence[str]) -> None:
+        from adaos.services.context_learning import LEARNING_SCHEMA, validate_learning_rule
+
+        content = self.get_artifact(candidate["proposal_ref"]).get("content")
+        if not isinstance(content, Mapping) or content.get("schema") != LEARNING_SCHEMA:
+            return
+        if candidate["kind"] != "procedural":
+            raise ValueError("context learning can produce procedural guidance, not authority")
+        observed: set[str] = set()
+        rule_scope = dict(content.get("scope") or {})
+        rule_contracts = set(_strings(rule_scope.pop("contract_refs", [])))
+        for ref in candidate["source_refs"]:
+            evidence = self.get_artifact(ref)
+            if evidence.get("schema") == RECEIPT_SCHEMA and evidence.get("context_misses"):
+                matching_miss = any(
+                    _mapping(miss.get("scope")) == rule_scope
+                    and set(_strings(miss.get("contract_refs"))) == rule_contracts
+                    for miss in _mappings(evidence.get("context_misses"))
+                )
+                if matching_miss and evidence.get("logical_task_ref"):
+                    observed.add(_text(evidence["logical_task_ref"]))
+        if not set(content.get("observed_task_refs") or []).issubset(observed):
+            raise ValueError("learning observations must be backed by retained matching contract/scope context-miss receipts")
+        validate_learning_rule(content, [self.get_artifact(ref) for ref in refs])
 
     def revoke_capsule(self, capsule_id: str, *, actor_ref: str, reason: str) -> dict[str, Any]:
         if not _text(reason):

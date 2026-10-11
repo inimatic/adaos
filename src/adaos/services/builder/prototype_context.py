@@ -112,15 +112,22 @@ def prototype_model_requirement_inventory(
         if item["kind"] == "operation"
     }
     seen_statements: set[str] = set()
+    seen_state_statements: set[str] = set()
     result: list[dict[str, str]] = []
     for item in inventory:
         statement_key = _requirement_statement_key(item)
         if item["kind"] == "job" and statement_key in operation_statements:
             continue
-        if item["kind"] in {"residual", "representative_state"} and statement_key in seen_statements:
+        if item["kind"] == "residual" and statement_key in seen_statements:
+            continue
+        # States require exactly one state proof. An identical residual clause
+        # may cover several views/fields/states: these are different contracts.
+        if item["kind"] == "representative_state" and statement_key in seen_state_statements:
             continue
         result.append(item)
         seen_statements.add(statement_key)
+        if item["kind"] == "representative_state":
+            seen_state_statements.add(statement_key)
     return result
 
 
