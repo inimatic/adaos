@@ -1,0 +1,5 @@
+tools/bootstrap.sh text eol=lf
+tools/bootstrap_uv.sh text eol=lf
+tools/adaosd_service_adapter.sh text eol=lf
+.env.example text eol=lf
+.env.prod.sample text eol=lf

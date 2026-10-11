@@ -1105,6 +1105,7 @@ class RootDeveloperService:
             key_path = cfg.hub_key_path()
             cert_path = cfg.hub_cert_path()
             ca_path = cfg.ca_cert_path()
+            identity_is_bound = bool(preferred_subnet or cert_path.is_file())
             force_new_keypair = bool(preferred_subnet and preferred_subnet != known_subnet and key_path.exists())
 
             if existing_subnet and key_path.exists() and cert_path.exists() and ca_path.exists():
@@ -1167,7 +1168,7 @@ class RootDeveloperService:
             ca_pem = registration.get("ca_pem")
             if not isinstance(subnet_id, str) or not subnet_id:
                 raise RootServiceError("Root response missing subnet_id")
-            if existing_subnet and subnet_id != existing_subnet:
+            if identity_is_bound and existing_subnet and subnet_id != existing_subnet:
                 raise RootServiceError(
                     f"Root returned subnet_id {subnet_id} instead of existing {existing_subnet}; "
                     "refusing to replace the existing Hub identity; repair its Root fingerprint binding first"

@@ -33,9 +33,13 @@ PYTHON_ARG=""
 NODE_NAME=""
 NO_CORE_UPDATE="0"
 WORKSPACE_REGISTRY_REPO="${ADAOS_WORKSPACE_REGISTRY_REPO:-}"
-RUNTIME_ENGINE="${ADAOS_RUNTIME_ENGINE:-python}"
+SUPERVISOR_IMPLEMENTATION="${ADAOS_SUPERVISOR_IMPLEMENTATION:-${ADAOS_RUNTIME_ENGINE:-}}"
+SIDECAR_IMPLEMENTATION="${ADAOS_SIDECAR_IMPLEMENTATION:-${ADAOS_REALTIME_IMPLEMENTATION:-}}"
 ADAOSD_BINARY="${ADAOSD_BINARY:-}"
 ADAOSD_SERVICE_CONFIG="${ADAOSD_SERVICE_CONFIG:-}"
+ADAOSD_APPROVAL_SCOPE="${ADAOSD_APPROVAL_SCOPE:-m4c_canary}"
+ADAOSD_APPROVAL_ID="${ADAOSD_APPROVAL_ID:-}"
+ADAOSD_APPROVAL_STAND="${ADAOSD_APPROVAL_STAND:-}"
 
 log()  { printf '\033[36m[*] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[+] %s\033[0m\n' "$*"; }
@@ -122,6 +126,16 @@ write_env_var() {
   mv "$tmp_file" "$env_file"
 }
 
+remove_env_var() {
+  local key="$1"
+  local env_file="${2:-.env}"
+  [[ -f "$env_file" && -n "${key:-}" ]] || return 0
+  local tmp_file
+  tmp_file="$(mktemp)"
+  awk -v key="$key" '$0 !~ ("^" key "=") { print }' "$env_file" > "$tmp_file"
+  mv "$tmp_file" "$env_file"
+}
+
 ORIG_ARGS=("$@")
 
 show_qr_if_available() {
@@ -175,16 +189,21 @@ http_get() {
   return 1
 }
 
-read_env_type_from_file() {
+read_env_value_from_file() {
   local path="$1"
+  local key="$2"
   [[ -f "$path" ]] || return 0
-  sed -n 's/^[[:space:]]*ENV_TYPE[[:space:]]*=[[:space:]]*//p' "$path" \
+  sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$path" \
     | head -n 1 \
     | tr -d '\r' \
     | tr -d '"' \
     | tr -d "'" \
     | xargs \
     || true
+}
+
+read_env_type_from_file() {
+  read_env_value_from_file "$1" "ENV_TYPE"
 }
 
 resolve_adaos_base_dir() {
@@ -261,6 +280,14 @@ print_bootstrap_config() {
   echo "  adaos_base_dir: ${ADAOS_BASE_DIR:-}"
   echo "  dev_mode:       ${DEV_MODE:-0}"
   echo "  node_name:      ${NODE_NAME:-}"
+  echo "  supervisor:     ${SUPERVISOR_IMPLEMENTATION:-python}"
+  echo "  sidecar:        ${SIDECAR_IMPLEMENTATION:-python}"
+  if [[ "${SUPERVISOR_IMPLEMENTATION:-python}" == "go" || "${SIDECAR_IMPLEMENTATION:-python}" == "go" ]]; then
+    echo "  adaosd_binary:  ${ADAOSD_BINARY:-}"
+  fi
+  if [[ "${SUPERVISOR_IMPLEMENTATION:-python}" == "go" ]]; then
+    echo "  service_config: ${ADAOSD_SERVICE_CONFIG:-auto}"
+  fi
   echo "  core_update:    $( [[ "${NO_CORE_UPDATE:-0}" == "1" ]] && printf '%s' "disabled" || printf '%s' "enabled" )"
   echo "  workspace_registry_repo: ${WORKSPACE_REGISTRY_REPO:-}"
   echo
@@ -551,9 +578,14 @@ while [[ $# -gt 0 ]]; do
     --python) PYTHON_ARG="${2:-}"; shift 2 ;;
     --node-name) NODE_NAME="${2:-}"; shift 2 ;;
     --workspace-registry-repo) WORKSPACE_REGISTRY_REPO="${2:-}"; shift 2 ;;
-    --runtime-engine) RUNTIME_ENGINE="${2:-}"; shift 2 ;;
+    --runtime-engine) SUPERVISOR_IMPLEMENTATION="${2:-}"; shift 2 ;;
+    --supervisor-implementation) SUPERVISOR_IMPLEMENTATION="${2:-}"; shift 2 ;;
+    --sidecar-implementation) SIDECAR_IMPLEMENTATION="${2:-}"; shift 2 ;;
     --adaosd-binary) ADAOSD_BINARY="${2:-}"; shift 2 ;;
     --adaosd-service-config) ADAOSD_SERVICE_CONFIG="${2:-}"; shift 2 ;;
+    --adaosd-approval-scope) ADAOSD_APPROVAL_SCOPE="${2:-}"; shift 2 ;;
+    --adaosd-approval-id) ADAOSD_APPROVAL_ID="${2:-}"; shift 2 ;;
+    --adaosd-approval-stand) ADAOSD_APPROVAL_STAND="${2:-}"; shift 2 ;;
     --no-core-update|--no_core_update) NO_CORE_UPDATE="1"; shift ;;
     --no_voice|--no-voice) NO_VOICE="1"; shift ;;
     --dev) DEV_MODE="1"; shift ;;
@@ -574,9 +606,14 @@ Usage: tools/bootstrap.sh [options]
   --python /path/to/python3.11
   --node-name NAME
   --workspace-registry-repo URL
-  --runtime-engine python|go
+  --supervisor-implementation python|go
+  --sidecar-implementation python|go
+  --runtime-engine python|go  Deprecated alias for --supervisor-implementation
   --adaosd-binary /absolute/path/to/adaosd
-  --adaosd-service-config /absolute/path/to/service.json
+  --adaosd-service-config /absolute/path/to/service.json  Optional custom Go service contract
+  --adaosd-approval-scope m4c_canary|production
+  --adaosd-approval-id ID
+  --adaosd-approval-stand STAND
   --no-core-update      Disable hub/member core updates from CI/CD signals for this node
   --dev
   --build-vendored-y-py Build repository vendor/y-py (requires Rust/Cargo >=1.72)
@@ -593,14 +630,38 @@ if [[ -n "${PYTHON_ARG:-}" ]]; then
   export ADAOS_PYTHON
 fi
 
-RUNTIME_ENGINE="$(printf '%s' "${RUNTIME_ENGINE:-python}" | tr '[:upper:]' '[:lower:]')"
+if [[ -z "${SUPERVISOR_IMPLEMENTATION:-}" ]]; then
+  SUPERVISOR_IMPLEMENTATION="$(read_env_value_from_file ".env" "ADAOS_SUPERVISOR_IMPLEMENTATION" || true)"
+fi
+if [[ -z "${SUPERVISOR_IMPLEMENTATION:-}" ]]; then
+  SUPERVISOR_IMPLEMENTATION="$(read_env_value_from_file ".env" "ADAOS_RUNTIME_ENGINE" || true)"
+fi
+if [[ -z "${SIDECAR_IMPLEMENTATION:-}" ]]; then
+  SIDECAR_IMPLEMENTATION="$(read_env_value_from_file ".env" "ADAOS_SIDECAR_IMPLEMENTATION" || true)"
+fi
+if [[ -z "${SIDECAR_IMPLEMENTATION:-}" ]]; then
+  SIDECAR_IMPLEMENTATION="$(read_env_value_from_file ".env" "ADAOS_REALTIME_IMPLEMENTATION" || true)"
+fi
+if [[ -z "${ADAOSD_BINARY:-}" ]]; then
+  ADAOSD_BINARY="$(read_env_value_from_file ".env" "ADAOSD_BINARY" || true)"
+fi
+if [[ -z "${ADAOSD_BINARY:-}" ]]; then
+  ADAOSD_BINARY="$(read_env_value_from_file ".env" "ADAOS_REALTIME_GO_BINARY" || true)"
+fi
+SUPERVISOR_IMPLEMENTATION="$(printf '%s' "${SUPERVISOR_IMPLEMENTATION:-python}" | tr '[:upper:]' '[:lower:]')"
+SIDECAR_IMPLEMENTATION="$(printf '%s' "${SIDECAR_IMPLEMENTATION:-python}" | tr '[:upper:]' '[:lower:]')"
+case "$ADAOSD_APPROVAL_SCOPE" in
+  m4c_canary|production) ;;
+  *) fail "adaosd approval scope must be m4c_canary or production" ;;
+esac
 systemctl_available=0
 if have systemctl; then
   systemctl_available=1
 fi
 if ! adapter_error="$(
   adaosd_service_adapter_validate \
-    "$RUNTIME_ENGINE" \
+    "$SUPERVISOR_IMPLEMENTATION" \
+    "$SIDECAR_IMPLEMENTATION" \
     "$ADAOSD_BINARY" \
     "$ADAOSD_SERVICE_CONFIG" \
     "$INSTALL_SERVICE" \
@@ -732,6 +793,26 @@ if [[ -n "${ZONE_ID:-}" ]]; then
 fi
 write_env_var "ADAOS_LANG" "$LANGUAGE" ".env"
 export ADAOS_LANG="$LANGUAGE"
+write_env_var "ADAOS_SUPERVISOR_IMPLEMENTATION" "$SUPERVISOR_IMPLEMENTATION" ".env"
+write_env_var "ADAOS_SIDECAR_IMPLEMENTATION" "$SIDECAR_IMPLEMENTATION" ".env"
+write_env_var "ADAOS_REALTIME_IMPLEMENTATION" "$SIDECAR_IMPLEMENTATION" ".env"
+remove_env_var "ADAOS_RUNTIME_ENGINE" ".env"
+export ADAOS_SUPERVISOR_IMPLEMENTATION="$SUPERVISOR_IMPLEMENTATION"
+export ADAOS_SIDECAR_IMPLEMENTATION="$SIDECAR_IMPLEMENTATION"
+export ADAOS_REALTIME_IMPLEMENTATION="$SIDECAR_IMPLEMENTATION"
+if [[ "$SUPERVISOR_IMPLEMENTATION" == "go" || "$SIDECAR_IMPLEMENTATION" == "go" ]]; then
+  write_env_var "ADAOSD_BINARY" "$ADAOSD_BINARY" ".env"
+  export ADAOSD_BINARY
+else
+  remove_env_var "ADAOSD_BINARY" ".env"
+fi
+if [[ "$SIDECAR_IMPLEMENTATION" == "go" ]]; then
+  write_env_var "ADAOS_REALTIME_GO_BINARY" "$ADAOSD_BINARY" ".env"
+  export ADAOS_REALTIME_GO_BINARY="$ADAOSD_BINARY"
+else
+  remove_env_var "ADAOS_REALTIME_GO_BINARY" ".env"
+  unset ADAOS_REALTIME_GO_BINARY || true
+fi
 if [[ "${DEV_MODE:-0}" == "1" ]]; then
   write_env_var "ENV_TYPE" "dev" ".env"
   write_env_var "ADAOS_SUPERVISOR_ENABLED" "0" ".env"
@@ -852,10 +933,37 @@ expected_node_id="$(
 )"
 log "Runtime state targets: ${ADAOS_BASE_DIR}/node.yaml + ${ADAOS_BASE_DIR}/state/node_runtime.json"
 
+if [[ "$SUPERVISOR_IMPLEMENTATION" == "go" ]]; then
+  if [[ -z "${ADAOSD_SERVICE_CONFIG:-}" ]]; then
+    ADAOSD_SERVICE_CONFIG="${ADAOS_BASE_DIR}/config/adaosd/service.json"
+    log "Generating adaosd supervisor and service contracts ..."
+    adaosd_config_args=(
+      -m adaos.apps.adaosd_installation
+      --base-dir "$ADAOS_BASE_DIR"
+      --repo-root "$PWD"
+      --python "$(command -v python)"
+      --binary "$ADAOSD_BINARY"
+      --service-config "$ADAOSD_SERVICE_CONFIG"
+      --dotenv "$PWD/.env"
+      --serve-host "$SERVE_HOST"
+      --serve-port "$SERVE_PORT"
+      --control-port "$CONTROL_PORT"
+      --sidecar-implementation "$SIDECAR_IMPLEMENTATION"
+      --approval-scope "$ADAOSD_APPROVAL_SCOPE"
+    )
+    [[ -z "${ADAOSD_APPROVAL_ID:-}" ]] || adaosd_config_args+=(--approval-id "$ADAOSD_APPROVAL_ID")
+    [[ -z "${ADAOSD_APPROVAL_STAND:-}" ]] || adaosd_config_args+=(--approval-stand "$ADAOSD_APPROVAL_STAND")
+    python "${adaosd_config_args[@]}" || fail "adaosd service contract generation failed"
+  fi
+  if ! adapter_error="$(adaosd_service_adapter_require_service_config "$ADAOSD_SERVICE_CONFIG" 2>&1)"; then
+    fail "$adapter_error"
+  fi
+fi
+
 log "Starting AdaOS API (${SERVE_HOST}:${SERVE_PORT}) ..."
 service_installed=0
 go_service_managed=0
-if [[ "$RUNTIME_ENGINE" == "go" ]]; then
+if [[ "$SUPERVISOR_IMPLEMENTATION" == "go" ]]; then
   set +e
   go_service_status="$(adaosd_service_adapter_status "$ADAOSD_BINARY" "$ADAOSD_SERVICE_CONFIG" 2>/dev/null)"
   go_service_status_rc=$?
@@ -903,7 +1011,7 @@ elif [[ "$INSTALL_SERVICE" != "never" ]]; then
     if ! wait_for_autostart_activation 45; then
       warn "Autostart did not become active within startup grace period"
       print_autostart_diagnostics
-      if [[ "$RUNTIME_ENGINE" == "go" ]]; then
+      if [[ "$SUPERVISOR_IMPLEMENTATION" == "go" ]]; then
         fail "Python fallback service must be healthy before Go service handoff"
       fi
       warn "Falling back to background run"
@@ -915,12 +1023,12 @@ elif [[ "$INSTALL_SERVICE" != "never" ]]; then
       printf '%s\n' "$autostart_enable_output"
     fi
     print_autostart_diagnostics
-    if [[ "$RUNTIME_ENGINE" == "go" ]]; then
+    if [[ "$SUPERVISOR_IMPLEMENTATION" == "go" ]]; then
       fail "Python fallback service installation is required before Go service handoff"
     fi
     warn "Falling back to background run"
   fi
-  if [[ "$service_installed" == "1" && "$RUNTIME_ENGINE" == "go" ]]; then
+  if [[ "$service_installed" == "1" && "$SUPERVISOR_IMPLEMENTATION" == "go" ]]; then
     log "Handing systemd ownership to adaosd ..."
     set +e
     adaosd_install_output="$(adaosd_service_adapter_install "$ADAOSD_BINARY" "$ADAOSD_SERVICE_CONFIG" 2>&1)"
@@ -935,8 +1043,8 @@ elif [[ "$INSTALL_SERVICE" != "never" ]]; then
   fi
 fi
 
-if [[ "$RUNTIME_ENGINE" == "go" && "$service_installed" != "1" ]]; then
-  fail "Go runtime engine requires an active managed service"
+if [[ "$SUPERVISOR_IMPLEMENTATION" == "go" && "$service_installed" != "1" ]]; then
+  fail "Go supervisor requires an active managed service"
 fi
 if [[ "$service_installed" != "1" || "$INSTALL_SERVICE" == "never" ]]; then
   nohup python -m adaos api serve --host "$SERVE_HOST" --port "$SERVE_PORT" >/dev/null 2>&1 & disown || true

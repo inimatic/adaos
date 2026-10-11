@@ -611,3 +611,44 @@ def test_root_init_fails_when_root_returns_different_preferred_subnet(
     message = str(exc_info.value)
     assert "sn_0e8c7326" in message
     assert "sn_c3d1fc00" in message
+
+
+def test_root_init_accepts_assigned_subnet_for_unbound_provisional_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_dir = _workspace_tmp_dir()
+    _install_dummy_ctx(monkeypatch, base_dir)
+    cfg = NodeConfig(
+        node_id="node-1",
+        subnet_id="sn_provisional",
+        role="hub",
+        root_settings=RootSettings(base_url="https://ru.api.inimatic.com"),
+    )
+    saved: list[str | None] = []
+    service = RootDeveloperService(
+        config_loader=lambda: cfg,
+        config_saver=lambda current: saved.append(current.subnet_id),
+    )
+    key_path = cfg.hub_key_path()
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(service, "_ensure_hub_keypair", lambda _cfg, *, force_new=False: (key_path, object()))
+    monkeypatch.setattr(service, "_plain_verify", lambda _cfg: True)
+    monkeypatch.setattr(service, "_client", lambda _cfg: object())
+    monkeypatch.setattr(
+        service,
+        "_register_hub",
+        lambda *args, **kwargs: {
+            "subnet_id": "sn_assigned1",
+            "cert_pem": "cert-for-sn-assigned1",
+            "ca_pem": "new-ca",
+        },
+    )
+    monkeypatch.setattr(service, "_hub_certificate_is_acceptable", lambda *args, **kwargs: True)
+    monkeypatch.setattr(service, "_prepare_workspace", lambda _cfg, owner: base_dir / "workspace")
+
+    result = service.init(root_token="dev-root-token")
+
+    assert result.subnet_id == "sn_assigned1"
+    assert cfg.subnet_id == "sn_assigned1"
+    assert saved == ["sn_assigned1"]
