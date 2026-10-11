@@ -20,6 +20,18 @@ def _bash(script: str, *args: str) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     if not bash:
         pytest.skip("bash is unavailable")
+    try:
+        probe = subprocess.run(
+            [bash, "-c", "true"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pytest.skip("bash is not usable")
+    if probe.returncode != 0:
+        pytest.skip("bash is not usable")
     return subprocess.run(
         [bash, "-c", script, "test", *args],
         cwd=REPO_ROOT,
