@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import y_py as Y
+from ypy_websocket.ystore import YDocNotFound
 
 from adaos.services.yjs import bootstrap as bootstrap_module
 from adaos.services.yjs.webspace import default_webspace_id
@@ -366,6 +367,42 @@ def test_bootstrap_restores_materialization_from_server_owned_register() -> None
     )
     assert ready is True
     assert reason == "ready"
+
+
+def test_bootstrap_empty_store_preserves_provided_doc_without_corruption_recovery(monkeypatch) -> None:
+    class _EmptyStore(_FakeStore):
+        async def apply_updates(self, ydoc: Y.YDoc) -> None:
+            self.apply_updates_calls += 1
+            raise YDocNotFound
+
+        async def discard_corrupt_state(self, **kwargs):
+            raise AssertionError("A new empty store must never be discarded")
+
+    class _ProjectingManager:
+        def project_scenario_to_doc(self, ydoc: Y.YDoc, scenario_id: str, *, space: str = "workspace") -> None:
+            assert ydoc is provided_doc
+            assert ydoc.get_map("private_test").get("owner_marker") == "preserved"
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+                ydoc.get_map("ui").set(txn, "application", {
+                    "desktop": {}, "modals": {"apps_catalog": {}, "widgets_catalog": {}}})
+                ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+
+    store = _EmptyStore()
+    provided_doc = Y.YDoc()
+    with provided_doc.begin_transaction() as txn:
+        provided_doc.get_map("private_test").set(txn, "owner_marker", "preserved")
+    monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _ProjectingManager())
+    result = asyncio.run(bootstrap_module.ensure_webspace_seeded_from_scenario(
+        store, webspace_id="empty-owned-dev", default_scenario_id="todo_list",
+        space="dev", ydoc=provided_doc, prefer_default_scenario=True))
+    assert result["apply_updates_store_empty"] is True
+    assert "apply_updates_error" not in result
+    assert "apply_updates_discarded_partial_state" not in result
+    assert "fresh_ydoc_required" not in result
+    assert provided_doc.get_map("ui").get("current_scenario") == "todo_list"
+    assert provided_doc.get_map("private_test").get("owner_marker") == "preserved"
+    assert store.write_calls > 0
 
 
 def test_bootstrap_requires_fresh_provided_doc_after_partial_apply_failure(monkeypatch) -> None:

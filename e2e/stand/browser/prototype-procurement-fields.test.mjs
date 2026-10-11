@@ -97,6 +97,16 @@ for (const intervention of ['one-supplier', 'different-parents', 'untyped-item',
   })
 }
 
+test('A typed request-to-offers one_to_many qualifies the same one-item workflow', () => {
+  const { form, action, semantic } = independentComparisonFixture()
+  const expected = directRequestCompositionFields(form, action, semantic)
+  semantic.relationships = semantic.relationships.map(link => link.from_resource_ref === 'offers'
+    ? { ...link, from_resource_ref: link.to_resource_ref, to_resource_ref: link.from_resource_ref,
+        from_field_ref: link.to_field_ref, to_field_ref: link.from_field_ref, cardinality: 'one_to_many' }
+    : link)
+  assert.deepEqual(directRequestCompositionFields(form, action, semantic), expected)
+})
+
 test('an additional quote editor does not invalidate a typed one-item request and comparison', () => {
   const { form, action, semantic } = independentComparisonFixture()
   semantic.views.push({ id: 'quote-editor', resource_ref: 'offers', role: 'editor', field_refs: ['request_ref', 'supplier', 'unit_price'] })

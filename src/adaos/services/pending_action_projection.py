@@ -220,12 +220,16 @@ def project_pending_action_from_store(
     interaction_id: str,
     *,
     principal: Mapping[str, Any],
+    _inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Rebuild one canonical PA view from durable decision/dispatch state."""
 
-    interaction = conversation_store.get_interaction(str(interaction_id or "").strip())
+    identity = str(interaction_id or "").strip()
+    interaction = _inputs.get("interaction") if _inputs is not None else conversation_store.get_interaction(identity)
     if interaction is None:
         raise PendingActionProjectionError("interaction is unavailable")
+    if str(interaction.get("interaction_id") or "") != identity:
+        raise PendingActionProjectionError("interaction identity mismatch")
     from adaos.services.conversation_interactions import principal_can_read_interaction
 
     if not principal_can_read_interaction(interaction, principal):
@@ -234,16 +238,17 @@ def project_pending_action_from_store(
     response_id = str(
         metadata.get("accepted_response_id") or metadata.get("latest_response_id") or ""
     ).strip()
-    response = conversation_store.get_interaction_response(response_id) if response_id else None
+    response = _inputs.get("response") if _inputs is not None else (
+        conversation_store.get_interaction_response(response_id) if response_id else None)
     presentation_id = str(_mapping(response).get("presentation_id") or "").strip()
-    presentation = (
+    presentation = _inputs.get("presentation") if _inputs is not None else (
         conversation_store.get_interaction_presentation(presentation_id)
         if presentation_id
         else conversation_store.latest_interaction_presentation(str(interaction["interaction_id"]))
     )
     if presentation is None:
         raise PendingActionProjectionError("interaction presentation is unavailable")
-    dispatch = (
+    dispatch = _inputs.get("dispatch") if _inputs is not None else (
         conversation_store.get_interaction_dispatch(response_id=response_id)
         if response_id
         else None
@@ -295,11 +300,14 @@ def project_pending_action_page_from_store(
         statuses=("created", "projected", "awaiting_input", "partially_answered",
             "validation_failed", "answered", "accepted", "completed", "expired", "cancelled", "superseded"),
         active_only=False, field_mask="summary", limit=max(1, min(int(limit), 100)), cursor=cursor)
+    inputs = conversation_store.read_interaction_projection_inputs([
+        str(item.get("interaction_id") or "").strip() for item in page.get("items") or []])
     items, skipped = [], []
     for item in page.get("items") or []:
         interaction_id = str(item.get("interaction_id") or "").strip()
         try:
-            items.append(project_pending_action_from_store(interaction_id, principal=principal))
+            items.append(project_pending_action_from_store(interaction_id, principal=principal,
+                _inputs=inputs.get(interaction_id, {})))
         except Exception as error:
             skipped.append({"interaction_id": interaction_id, "reason_code": type(error).__name__})
     return {"schema": "adaos.pending_action.projection_page.v1", "items": items,

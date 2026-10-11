@@ -7,6 +7,7 @@ import time
 from typing import Any, Mapping
 
 import y_py as Y
+from ypy_websocket.ystore import YDocNotFound
 
 from adaos.services.yjs.seed import SEED
 from adaos.adapters.db import SqliteScenarioRegistry
@@ -487,6 +488,12 @@ async def ensure_webspace_seeded_from_scenario(
     try:
         await ystore.apply_updates(target_doc)
         apply_updates_failed = False
+    except YDocNotFound:
+        # An empty store raises before replaying any update. This is normal
+        # first-open state, not a partial replay or a corrupt snapshot.
+        apply_updates_failed = False
+        result["apply_updates_store_empty"] = True
+        _log.debug("empty YStore on bootstrap webspace=%s", webspace_id)
     except BaseException as exc:  # catch PanicException and similar
         if isinstance(exc, asyncio.CancelledError):
             _log.warning(

@@ -1,5 +1,6 @@
 // A one-item request is a legitimate alternative to a request-header/line
 // resource pair. Qualification must not force an extra application concept.
+import { directedRelationships } from './prototype-relationship-links.mjs'
 export function directRequestCompositionFields(form, action, semantic) {
   const submitted = field => !field.readOnly && action?.params?.payload?.[field.id] === `$event.values.${field.id}`
   const fields = (form?.inputs?.fields || []).filter(submitted)
@@ -26,7 +27,7 @@ export function directRequestCompositionFields(form, action, semantic) {
   // price/lead/currency resource and a typed item relationship. Suppliers may
   // legitimately be quote text/choice values rather than a separate resource.
   for (const resource of semantic.resources) {
-    const links = (semantic.relationships || []).filter(link => link.from_resource_ref === resource.id)
+    const links = directedRelationships(semantic, resource.id)
     const supplierLink = links.find(link => supplier.optionsDataSource?.resourceType?.endsWith(`.${link.to_resource_ref}`))
     const itemLink = links.find(link => item.optionsDataSource.resourceType.endsWith(`.${link.to_resource_ref}`))
     const leaf = field => field.id.split('.').at(-1)
@@ -74,7 +75,7 @@ function linkedItemComposition(action, semantic, fields, quantity) {
     && field.optionsDataSource.resourceType?.endsWith(`.${link.to_resource_ref}`)))
   if (!item) return null
   for (const resource of semantic.resources) {
-    const parent = (semantic.relationships || []).find(link => link.from_resource_ref === resource.id
+    const parent = directedRelationships(semantic, resource.id).find(link => link.from_resource_ref === resource.id
       && link.to_resource_ref === request.id && link.to_field_ref === 'id')
     if (!parent) continue
     const match = pattern => resource.fields.find(field => pattern.test(`${field.id} ${JSON.stringify(field.label || '')}`))?.id

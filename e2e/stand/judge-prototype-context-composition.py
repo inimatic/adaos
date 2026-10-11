@@ -5,6 +5,7 @@ Compiler-failed/no-screenshot pairs are INELIGIBLE, not silently scored by prose
 Outputs are a model-judge proxy, not human preference or verified functionality.
 """
 import argparse, base64, hashlib, json, logging, os
+import requests
 from pathlib import Path
 from dotenv import load_dotenv
 from adaos.e2e.builder import _write_json
@@ -18,12 +19,15 @@ from adaos.services.builder.prototype_mcp import redact_credentials
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--run',type=Path,required=True)
 parser.add_argument('--plan-only',action='store_true')
+parser.add_argument('--amendment', default='uniform-replay-amendment.json')
 args=parser.parse_args(); run=args.run.resolve()
 if not run.is_relative_to(Path.cwd()/'e2e/artifacts/builder'):parser.error('Owned E2E required')
 registration=read(run/'preregistration.json'); output=run/'blind-ux'; output.mkdir(exist_ok=True)
 compact=registration.get('profile')=='compact-pair'
-qualification=read(run/'uniform-replay-amendment.json') if (run/'uniform-replay-amendment.json').exists() else {'browser_label':'prospective-compact'}
-browser_directory='browser-posthoc-'+qualification['browser_label'] if (run/'uniform-replay-amendment.json').exists() else 'browser-requalification-mcp'
+amendment_path=(run/args.amendment).resolve()
+if amendment_path.parent != run:parser.error('Amendment must be a receipt in the run directory')
+qualification=read(amendment_path) if amendment_path.exists() else {'browser_label':'prospective-compact'}
+browser_directory='browser-posthoc-'+qualification['browser_label'] if amendment_path.exists() else 'browser-requalification-mcp'
 budget=RequestBudget(run/'paid-request-budget.sqlite')
 dollars=DollarBudget(run/'dollar-budget.sqlite',limit_usd=registration['additional_usd_limit']) if registration.get('additional_usd_limit') else None
 load_dotenv(); logging.disable(logging.INFO)
@@ -87,10 +91,19 @@ for task in ('inventory','support'):
           'text':{'verbosity':'low','format':{'type':'json_schema','name':'blind_ux','strict':True,'schema':schema}},
           'provider_timeout_s':900,'provider_max_attempts':1,'profile_scope':'development',
           'request_id':'context-blind-ux:'+hashlib.sha256(str(sample).encode()).hexdigest()[:24],'stream':True}
+        root_payload, _ = llm_client._llm_root_payload(messages, **options)
+        # requests uses ASCII escaping/spaces, unlike the compact metrics
+        # serializer. Count the actual prepared wire body, without sending it.
+        payload_bytes = len(requests.Request('POST', worker+'/llm/jobs', json=root_payload).prepare().body)
+        # The deployed Root JSON parser admits at most 2 MiB. Check before
+        # reserving/submitting, including in free plan-only preparation.
+        if payload_bytes > 2 * 1024 * 1024:
+            raise ValueError(f'Blind packet exceeds Root body limit: {payload_bytes} bytes; no paid submission')
         mapping=[{**m,'A':m['B'] if reverse else m['A'],'B':m['A'] if reverse else m['B']} for m in mappings]
         packet={'schema':'adaos.e2e.blind_ux_packet.v1','task':task,'positions_reversed':reverse,
             'rubric':rubric,'images':metadata,'unblinding':mapping,'human_alignment':'NOT established',
             'browser_label':qualification['browser_label'],
+            'root_payload_bytes':payload_bytes,'root_payload_limit_bytes':2*1024*1024,
             'judge_model':'gpt-6-astra','reasoning_effort':'high','max_output_tokens':8192,
             'provider_worker':worker,'reserve_usd':2.0 if dollars else None,
             'judge_source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}

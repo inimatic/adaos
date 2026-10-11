@@ -21,13 +21,16 @@ parser.add_argument('--run',type=Path,required=True)
 parser.add_argument('--partial',action='store_true')
 parser.add_argument('--browser-label', default='', help='Separate uniform post-hoc browser qualification label')
 parser.add_argument('--compiler-label', default='', help='Separate deterministic replay label')
+parser.add_argument('--amendment', default='uniform-replay-amendment.json')
 args=parser.parse_args(); run=args.run.resolve()
 if not run.is_relative_to(Path.cwd()/'e2e/artifacts/builder'):parser.error('Owned E2E series required')
 registration=read(run/'preregistration.json')
 rates=RATES
 jobs=set(); rows=[]; groups=defaultdict(list); unknown=[]; browser_complete=[]
 browser_directory='browser-posthoc-'+args.browser_label if args.browser_label else 'browser-requalification-mcp'
-uniform=read(run/'uniform-replay-amendment.json') if (run/'uniform-replay-amendment.json').exists() else {}
+amendment_path=(run/args.amendment).resolve()
+if amendment_path.parent != run:parser.error('Amendment must be a receipt in the run directory')
+uniform=read(amendment_path) if amendment_path.exists() else {}
 primary_replay_path=run/('compiler-replay-'+uniform.get('primary_compiler_label',''))/'report.json'
 all_fragments=[fragment['id'] for fragment in library_snapshot()['fragments']]
 corrected_primary={(r['cohort'],r['sample']):r for r in read(primary_replay_path)['samples']} if primary_replay_path.exists() else {}
@@ -188,6 +191,7 @@ for terminal in sorted((run/'blind-ux').glob('*/terminal.json')):
     judges.append({'job_id':envelope.get('job_id'),'usage':value})
 ledger=RequestBudget(run/'paid-request-budget.sqlite').snapshot()
 amendments={name:read(run/name) for name in ('transport-amendment.json','delivery-amendment-02.json','uniform-replay-amendment.json') if (run/name).exists()}
+if amendment_path.exists():amendments[amendment_path.name]=uniform
 for name in ('context-routing-amendment-01.json', 'probe-selector-amendment-01.json', 'client-focus-amendment-01.json',
              'probe-composition-amendment-01.json', 'probe-choice-amendment-02.json', 'runtime-recovery-amendment-03.json',
              'probe-public-acceptance-amendment-04.json', 'probe-composition-taxonomy-amendment-05.json',

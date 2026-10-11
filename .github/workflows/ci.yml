@@ -194,11 +194,23 @@ jobs:
             tests/test_webspace_component_state.py \
             tests/test_builder_preview_sdk.py \
             tests/test_builder_workbench.py \
+            tests/test_yjs_bootstrap.py \
+            tests/test_pending_action_projection.py \
+            tests/test_pending_action_websocket_offload.py \
             tests/test_webspace_phase2.py::test_prepare_materialization_external_sources_tolerates_legacy_resolution \
             tests/test_webspace_phase2.py::test_desktop_launcher_includes_only_trials_selected_for_target_webspace \
             tests/test_webspace_phase2.py::test_phase5_derived_readiness_includes_sequential_catalog_preparation
+      - name: Install locked browser-test dependencies
+        working-directory: e2e/stand/browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
       - name: Check public usability acceptance helpers
-        run: node --test e2e/stand/browser/prototype-usability.test.mjs
+        run: >-
+          node --test e2e/stand/browser/prototype-usability.test.mjs
+          e2e/stand/browser/prototype-validation-guard.test.mjs
+          e2e/stand/browser/prototype-procurement-fields.test.mjs
+          e2e/stand/browser/prototype-procurement-basic.test.mjs
       - name: Upload contract receipts
         if: always()
         uses: actions/upload-artifact@v4

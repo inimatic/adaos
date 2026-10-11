@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 import json
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from adaos.services import conversation_interactions, conversation_store
+from adaos.services.agent_context import get_ctx
 from adaos.services.pending_action_projection import (
     PendingActionProjectionError,
     project_pending_action,
@@ -155,6 +157,12 @@ def test_projection_rebuilds_decision_dispatch_and_outcome_without_live_tokens()
     assert pending["choices"][0]["action_token"] is None
     assert pending["interaction_ref"]["generation"] == 1
     assert pending["interaction_ref"]["presentation_generation"] == 0
+    batch = conversation_store.read_interaction_projection_inputs([interaction["interaction_id"]])
+    assert project_pending_action_from_store(interaction["interaction_id"], principal=principal,
+        _inputs=batch[interaction["interaction_id"]]) == pending
+    with pytest.raises(PendingActionProjectionError, match="not authorized"):
+        project_pending_action_from_store(interaction["interaction_id"], principal={"actor_id": "transport:denied"},
+            _inputs=batch[interaction["interaction_id"]])
 
     claimed = conversation_store.claim_interaction_dispatch(
         answered["response"]["response_id"],
@@ -176,6 +184,52 @@ def test_projection_rebuilds_decision_dispatch_and_outcome_without_live_tokens()
     )
     assert completed["status"] == "succeeded"
     assert completed["receipts"]["outcome"]["result"] == "ok"
+    fresh = conversation_store.read_interaction_projection_inputs([interaction["interaction_id"]])
+    assert project_pending_action_from_store(interaction["interaction_id"], principal=principal,
+        _inputs=fresh[interaction["interaction_id"]]) == completed
+    assert fresh != batch, "A completed dispatch must never come from a stale page cache"
+
+
+def test_bounded_projection_inputs_use_one_connection_and_constant_queries(monkeypatch) -> None:
+    identities, expected = [], {}
+    principal = {"actor_id": "user:local"}
+    for index in range(20):
+        interaction, presentation = _projection_fixture()
+        identity = f"interaction.pa.batch.{index}"
+        interaction["interaction_id"] = identity
+        presentation["interaction_id"] = identity
+        presentation["presentation_id"] = f"presentation.pa.batch.{index}"
+        conversation_store.save_interaction(interaction)
+        conversation_store.append_interaction_presentation(presentation)
+        identities.append(identity)
+        expected[identity] = project_pending_action_from_store(identity, principal=principal)
+    sql = get_ctx().sql
+    original_connect = sql.connect
+    connections, statements = [], []
+
+    @contextmanager
+    def traced_connect():
+        connections.append(True)
+        with original_connect() as con:
+            con.set_trace_callback(statements.append)
+            try:
+                yield con
+            finally:
+                con.set_trace_callback(None)
+
+    monkeypatch.setattr(sql, "connect", traced_connect)
+    batch = conversation_store.read_interaction_projection_inputs([*identities, identities[0], "missing"])
+    assert len(connections) == 1
+    assert len([s for s in statements if s.lstrip().upper().startswith(("SELECT", "WITH"))]) <= 4
+    assert not any(s.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for s in statements)
+    assert set(batch) == set(identities)
+    for identity in identities:
+        assert project_pending_action_from_store(identity, principal=principal, _inputs=batch[identity]) == expected[identity]
+    assert len(connections) == 1, "Projection of a supplied snapshot must not reopen the durable store"
+    with pytest.raises(ValueError, match="exceeds 100"):
+        conversation_store.read_interaction_projection_inputs([str(i) for i in range(101)])
+    with pytest.raises(PendingActionProjectionError, match="identity mismatch"):
+        project_pending_action_from_store("different", principal=principal, _inputs=batch[identities[0]])
 
 
 def test_projection_rejects_stale_or_unsupported_presentation() -> None:

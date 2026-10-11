@@ -2633,6 +2633,57 @@ def commit_interaction_supersession(
     return {"interaction": current, "replacement": candidate}
 
 
+def read_interaction_projection_inputs(interaction_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """Read at most 100 projection inputs in one consistent durable snapshot.
+
+    Internal data access only: the projection still rechecks each interaction's
+    ACL. No result caching, no cross-principal sharing or lifecycle writes.
+    Four bounded SELECTs replace per-item connection/query fan-out.
+    """
+    ids = list(dict.fromkeys(str(item or "").strip() for item in interaction_ids if str(item or "").strip()))
+    if len(ids) > 100:
+        raise ValueError("projection input page exceeds 100 identities")
+    if not ids or not ensure_schema():
+        return {}
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN")
+
+        def payloads(table: str, key: str, identities: Sequence[str]) -> dict[str, dict[str, Any]]:
+            if not identities:
+                return {}
+            placeholders = ",".join("?" for _ in identities)
+            rows = con.execute(f"SELECT {key}, payload_json FROM {table} WHERE {key} IN ({placeholders})", tuple(identities)).fetchall()
+            return {row[key]: _json_load(row["payload_json"], {}) for row in rows}
+
+        interactions = payloads("conversation_interactions", "interaction_id", ids)
+        response_ids = {identity: str((item.get("metadata") or {}).get("accepted_response_id")
+            or (item.get("metadata") or {}).get("latest_response_id") or "").strip()
+            for identity, item in interactions.items()}
+        responses = payloads("conversation_interaction_responses", "response_id", list(dict.fromkeys(
+            value for value in response_ids.values() if value)))
+        presentations = {}
+        if interactions:
+            requested = [(identity, str((responses.get(response_ids[identity]) or {}).get("presentation_id") or "").strip())
+                for identity in interactions]
+            rows = con.execute(f"""
+                WITH requested(interaction_id, preferred_id) AS (VALUES {','.join('(?,?)' for _ in requested)})
+                SELECT requested.interaction_id, p.payload_json
+                FROM requested
+                LEFT JOIN conversation_interaction_presentations p ON p.presentation_id =
+                    CASE WHEN requested.preferred_id != '' THEN requested.preferred_id ELSE (
+                        SELECT presentation_id FROM conversation_interaction_presentations
+                        WHERE interaction_id=requested.interaction_id ORDER BY created_at DESC LIMIT 1
+                    ) END
+                """, tuple(value for pair in requested for value in pair)).fetchall()
+            presentations = {row["interaction_id"]: _json_load(row["payload_json"], {}) if row["payload_json"] else None for row in rows}
+        dispatches = payloads("conversation_interaction_dispatches", "response_id", list(dict.fromkeys(
+            value for value in response_ids.values() if value)))
+        return {identity: {"interaction": item, "response": responses.get(response_ids[identity]),
+            "presentation": presentations.get(identity), "dispatch": dispatches.get(response_ids[identity])}
+            for identity, item in interactions.items()}
+
+
 def get_interaction(interaction_id: str) -> dict[str, Any] | None:
     if not ensure_schema():
         return None

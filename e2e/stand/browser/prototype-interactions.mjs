@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { reviewSeparateCrud } from './prototype-crud-review.mjs'
 import { installSystemOverlayDismissal, prototypeRowCommand, prototypeRowSelector, recordEditorOpener, revealPrototypeWidget, selectPrototypeRow, selectPrototypeRowForCommand } from './prototype-navigation.mjs'
 import { pickEditableInteractionField } from './prototype-interaction-fields.mjs'
+import { assertInvalidSubmissionGuard } from './prototype-validation-guard.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Interaction review requires ENV_TYPE=dev')
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT || '')
@@ -272,13 +273,18 @@ try {
           sample.checks.push({ editor: widget.id, status: 'passed', task: 'dismiss-without-save/restore-focus/reopen', surface: 'overlay' })
         }
         if (field.required && field.type === 'shortText') {
-          const before = sample.mutations.length
           await setValue('')
-          await form.locator(`[data-command-id=${JSON.stringify(update.id)}]`).click()
-          await expect(form.locator('.field-error')).toBeVisible()
-          if (sample.mutations.length !== before) throw new Error('Invalid edit submitted a resource mutation')
+          await expect.poll(() => form.evaluate((element, id) =>
+            window.ng?.getComponent(element.querySelector('ada-form-widget'))?.values?.[id], field.id)).toBe('')
+          await input.blur()
+          const guard = await assertInvalidSubmissionGuard({
+            button: form.locator(`[data-command-id=${JSON.stringify(update.id)}]`).locator('button'),
+            error: form.locator('.field-error').first(),
+            settle: () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))),
+            mutationCount: () => sample.mutations.length,
+          })
           sample.checks.push({ editor: widget.id, resource: update.target, field: field.id,
-            status: 'passed', task: 'update/required-field-rejection/no-mutation' })
+            status: 'passed', task: 'update/required-field-rejection/no-mutation', guard })
         }
         const marker = probeValue('edit')
         await setValue(marker)

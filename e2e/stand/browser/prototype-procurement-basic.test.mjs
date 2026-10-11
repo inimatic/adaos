@@ -47,6 +47,21 @@ for (const intervention of ['one-supplier', 'different-lines', 'hidden-price', '
   })
 }
 
+test('Parent-to-children typed links qualify the same complete public supplier chain', () => {
+  const semantic = comparisonFixture()
+  semantic.relationships = semantic.relationships.map(link => ({
+    from_resource_ref: link.to_resource_ref, from_field_ref: link.to_field_ref,
+    to_resource_ref: link.from_resource_ref, to_field_ref: link.from_field_ref, cardinality: 'one_to_many' }))
+  assert.deepEqual(supplierComparisonMetadata(semantic), supplierComparisonMetadata(comparisonFixture()))
+  for (const invalid of ['unknown-cardinality', 'wrong-parent-field', 'wrong-child-field']) {
+    const changed = structuredClone(semantic)
+    if (invalid === 'unknown-cardinality') changed.relationships[0].cardinality = 'unverified'
+    if (invalid === 'wrong-parent-field') changed.relationships[0].from_field_ref = 'unverified'
+    if (invalid === 'wrong-child-field') changed.relationships[0].to_field_ref = 'unverified'
+    assert.equal(supplierComparisonMetadata(changed), null, invalid)
+  }
+})
+
 test('quote checks address exact visible price and lead cells, not concatenated adjacent numbers', async () => {
   const browser = await chromium.launch({ headless: true })
   try {
