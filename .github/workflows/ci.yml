@@ -157,9 +157,58 @@ jobs:
           path: reports/*.xml
           retention-days: 3
 
+  builder_contracts:
+    name: Builder context, delivery and usability contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      ADAOS_TESTING: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@1.72.0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install locked dependencies
+        run: uv sync --locked --extra dev
+      - name: Check Builder contracts without providers or external services
+        run: |
+          uv run python -m pytest -q --strict-markers -o importmode=importlib \
+            --junitxml=reports/builder-contracts.xml \
+            tests/test_builder_prototype_task_context.py \
+            tests/test_builder_prototype_pipeline.py \
+            tests/test_builder_prototype_context_ablation.py \
+            tests/test_e2e_composition_metrics.py \
+            tests/test_e2e_dollar_budget.py \
+            tests/test_e2e_blind_ux.py \
+            tests/test_materialization_runtime.py \
+            tests/test_webspace_component_state.py \
+            tests/test_builder_preview_sdk.py \
+            tests/test_builder_workbench.py \
+            tests/test_webspace_phase2.py::test_prepare_materialization_external_sources_tolerates_legacy_resolution \
+            tests/test_webspace_phase2.py::test_desktop_launcher_includes_only_trials_selected_for_target_webspace
+      - name: Check public usability acceptance helpers
+        run: node --test e2e/stand/browser/prototype-usability.test.mjs
+      - name: Upload contract receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: builder-context-delivery-usability-contracts
+          path: reports/builder-contracts.xml
+          retention-days: 7
+
   bump_patch_version:
     name: Bump patch version
-    needs: [quick_tests, skills_tests]
+    needs: [quick_tests, skills_tests, builder_contracts]
     if: >-
       ${{
         github.event_name == 'push' &&
