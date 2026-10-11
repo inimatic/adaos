@@ -1,7 +1,8 @@
-import { expect } from '@playwright/test'
+import { expect as baseExpect } from '@playwright/test'
 import path from 'node:path'
 import { prototypeRowById, prototypeRowSelector, revealPrototypeWidget, selectPrototypeRow } from './prototype-navigation.mjs'
 import { directRequestCompositionFields } from './prototype-procurement-fields.mjs'
+const expect = baseExpect.configure({ timeout: 15_000 })
 
 // Supplemental, post-generation task coverage. Only public controls mutate state;
 // an independent provider read proves that the line belongs to the new request.

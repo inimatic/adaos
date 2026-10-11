@@ -1,8 +1,10 @@
-import { chromium, expect } from '@playwright/test'
+import { chromium, expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { installSystemOverlayDismissal, revealPrototypeWidget, selectPrototypeRow } from './prototype-navigation.mjs'
 import { selectionPresentationExpectation } from './prototype-relationship-links.mjs'
+
+const expect = baseExpect.configure({ timeout: 20_000 })
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Requires ENV_TYPE=dev')
 const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))

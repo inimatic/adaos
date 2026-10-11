@@ -1,4 +1,5 @@
-import { expect } from '@playwright/test'
+import { expect as baseExpect } from '@playwright/test'
+const expect = baseExpect.configure({ timeout: 15_000 })
 const overlayCallbacks = new WeakMap()
 
 // Release notices belong to the surrounding Desktop, not to the isolated

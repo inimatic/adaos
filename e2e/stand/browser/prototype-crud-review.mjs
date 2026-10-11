@@ -1,7 +1,8 @@
-import { expect } from '@playwright/test'
+import { expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { revealPrototypeWidget } from './prototype-navigation.mjs'
+const expect = baseExpect.configure({ timeout: 30_000 })
 
 // Opt-in qualification of separate scalar editors; never admitted to model context.
 export async function reviewSeparateCrud({ page, application, source, sample, output, layout }) {

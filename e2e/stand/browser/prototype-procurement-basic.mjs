@@ -1,7 +1,8 @@
-import { expect } from '@playwright/test'
+import { expect as baseExpect } from '@playwright/test'
 import { prototypeRowById, revealPrototypeWidget, selectPrototypeRow } from './prototype-navigation.mjs'
 import { typedSelectionParent } from './prototype-relationship-links.mjs'
 import { fieldSemanticText } from './prototype-field-semantics.mjs'
+const expect = baseExpect.configure({ timeout: 15_000 })
 
 export function quoteFieldCell(row, widget, field) {
   const index = widget.inputs?.columns?.findIndex(column => column.key === field) ?? -1

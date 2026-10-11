@@ -856,6 +856,16 @@ def get_ydoc(
         # access violations on Windows. Callers that need a synchronous read
         # while a room is live must use read_live_maps_snapshot_sync().
         raise RuntimeError("sync_get_ydoc_live_room_requires_owner_handoff")
+    # Keep the live-owner handoff error stable, but reject active loops before
+    # allocating an unsendable native document or acquiring a detached session.
+    # Late rejection leaves native objects in traceback/coroutine frames which
+    # can be collected by another thread without any explicit native handoff.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("get_ydoc() cannot be used inside an active event loop; use async_get_ydoc().")
     session_started = time.perf_counter()
     inherited_write_meta = current_ystore_write_metadata()
     source_for_session = (
@@ -925,6 +935,7 @@ def get_ydoc(
     try:
         before = _run_blocking(_load(), timeout_s=operation_timeout_s)
     except BaseException:
+        ydoc = None
         _release_sync_get_ydoc_session(sync_slot_key, sync_session_lock)
         raise
     tracked_load_mark_roots = [str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()]
@@ -1257,7 +1268,7 @@ async def async_get_ydoc(
                 use_live_room = False
         except Exception:
             _log.debug("failed to apply live-room admission YJS primary-doc governance webspace=%s", webspace_id, exc_info=True)
-    ydoc = room.ydoc if use_live_room else Y.YDoc()
+    ydoc = room.ydoc if use_live_room else None
     detached_session_lock: threading.Lock | None = None
     if use_live_room:
         _set_doc_timing(timings, "ystore_start", 0.0, prefix=timing_prefix)
@@ -1270,7 +1281,9 @@ async def async_get_ydoc(
         stage_started = time.perf_counter()
         try:
             await ystore.start()
+            ydoc = Y.YDoc()
         except BaseException:
+            ydoc = None
             detached_session_lock.release()
             detached_session_lock = None
             raise

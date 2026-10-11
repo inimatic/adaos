@@ -1,4 +1,4 @@
-import { chromium, expect } from '@playwright/test'
+import { chromium, expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -6,6 +6,11 @@ import { reviewSeparateCrud } from './prototype-crud-review.mjs'
 import { installSystemOverlayDismissal, prototypeRowCommand, prototypeRowSelector, recordEditorOpener, revealPrototypeWidget, selectPrototypeRow, selectPrototypeRowForCommand } from './prototype-navigation.mjs'
 import { pickEditableInteractionField } from './prototype-interaction-fields.mjs'
 import { assertInvalidSubmissionGuard } from './prototype-validation-guard.mjs'
+
+// Playwright assertions have a separate 5s default from page operations.
+// Use the existing public operation deadline consistently; do not silently
+// fail a loaded record/options check earlier than the operation it observes.
+const expect = baseExpect.configure({ timeout: 30_000 })
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Interaction review requires ENV_TYPE=dev')
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT || '')

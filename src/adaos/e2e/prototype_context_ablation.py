@@ -36,6 +36,7 @@ def source_fingerprints(repo):
     files = ["src/adaos/services/builder/semantic_prototype.py", "src/adaos/services/builder_intent.py",
         "src/adaos/adapters/db/sqlite_store.py", "src/adaos/ports/contracts.py",
         "src/adaos/e2e/prototype_task_acceptance.py",
+        "src/adaos/services/yjs/doc.py",
         "src/adaos/services/builder/prototype_context.py", "src/adaos/services/builder/semantic_bindings.py",
         "src/adaos/sdk/llm/llm_client.py", "src/adaos/services/builder/model_controls.py",
         "src/adaos/sdk/builder/prototype.py", "src/adaos/services/builder/prototype_mcp.py",

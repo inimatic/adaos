@@ -1,10 +1,12 @@
 // Task-grounded qualification. Never included in model context.
-import { chromium, expect } from '@playwright/test'
+import { chromium, expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { dismissSystemOverlays, installSystemOverlayDismissal, prototypeRowById, revealPrototypeWidget, selectPrototypeFormOption, selectPrototypeRow } from './prototype-navigation.mjs'
 import { directRequestCompositionFields, transitionPersistenceExpectations } from './prototype-procurement-fields.mjs'
 import { qualifyBasicSupplierComparison, supplierComparisonMetadata } from './prototype-procurement-basic.mjs'
+
+const expect = baseExpect.configure({ timeout: 15_000 })
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Requires DEV')
 const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))

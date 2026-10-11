@@ -195,6 +195,7 @@ jobs:
             tests/test_builder_preview_sdk.py \
             tests/test_builder_workbench.py \
             tests/test_yjs_bootstrap.py \
+            tests/test_yjs_native_lifetime.py \
             tests/test_pending_action_projection.py \
             tests/test_pending_action_websocket_offload.py \
             tests/test_sqlite_readonly_snapshot.py \
