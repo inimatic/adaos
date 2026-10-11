@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 from adaos.e2e.builder import _write_json
 from adaos.e2e.prototype_context_ablation import read, verify_root_retry_budget_support
 from adaos.e2e.request_budget import RequestBudget
-from adaos.e2e.blind_ux import aggregate_judgments, validate_judgment
+from adaos.e2e.blind_ux import aggregate_judgments, paired_samples, validate_judgment
+from adaos.e2e.dollar_budget import DollarBudget
+from adaos.e2e.composition_metrics import usage_record
 from adaos.services.builder.prototype_mcp import redact_credentials
 
 parser=argparse.ArgumentParser(description=__doc__)
@@ -19,12 +21,14 @@ parser.add_argument('--plan-only',action='store_true')
 args=parser.parse_args(); run=args.run.resolve()
 if not run.is_relative_to(Path.cwd()/'e2e/artifacts/builder'):parser.error('Owned E2E required')
 registration=read(run/'preregistration.json'); output=run/'blind-ux'; output.mkdir(exist_ok=True)
-qualification=read(run/'uniform-replay-amendment.json')
-browser_directory='browser-posthoc-'+qualification['browser_label']
+compact=registration.get('profile')=='compact-pair'
+qualification={'browser_label':'prospective-compact'} if compact else read(run/'uniform-replay-amendment.json')
+browser_directory='browser-requalification-mcp' if compact else 'browser-posthoc-'+qualification['browser_label']
 budget=RequestBudget(run/'paid-request-budget.sqlite')
+dollars=DollarBudget(run/'dollar-budget.sqlite',limit_usd=registration['additional_usd_limit']) if registration.get('additional_usd_limit') else None
 load_dotenv(); logging.disable(logging.INFO)
 delivery_receipt=run/'direct-worker-judge-series.json'
-worker=read(delivery_receipt)['direct_worker'] if delivery_receipt.exists() else registration['root_base_url']
+worker=read(delivery_receipt)['direct_worker'] if delivery_receipt.exists() else registration.get('provider_worker',registration['root_base_url'])
 os.environ['ADAOS_ROOT_LLM_BASE_URL']=worker
 os.environ['ADAOS_ROOT_LLM_PREFER_GLOBAL']='0'
 from adaos.apps.cli.app import Settings, init_ctx
@@ -53,14 +57,19 @@ for task in ('inventory','support'):
         qualified_path=directory/browser_directory/'results.json'
         if not qualified_path.exists() or not read(qualified_path)['complete']:
             raise ValueError('Uniform browser qualification must be complete before blind judging')
-        qualified_by_arm={item['arm']:item for item in read(qualified_path)['samples']}
-        paths={item['arm']:directory/browser_directory/f"{item['order']:02d}-{item['arm']}"/'prototype-review' for item in results['samples']}
-        arms=('full-mcp','task-aware')
-        if any(not (paths[arm]/(layout+'.png')).exists() for arm in arms for layout in ('wide','compact')) or any(
-            qualified_by_arm[arm].get('probes',{}).get('prototype-review')!=0 for arm in arms):
-            ineligible.append({'cohort':cohort['id'],'reason':'Both candidates need retained wide and compact screenshots'});continue
-        pairs.append({'id':'pair-'+str(number),'paths':[paths[a] for a in arms]})
-        mappings.append({'id':'pair-'+str(number),'cohort':cohort['id'],'A':'full-mcp','B':'task-aware'})
+        qualified_by_sample={item['sample']:item for item in read(qualified_path)['samples']}
+        arms=('full-mcp','task-aware-compact' if compact else 'task-aware')
+        for repetition, matched in enumerate(paired_samples(results['samples'],arms),1):
+            names=[f"{item['order']:02d}-{item['arm']}" for item in matched]
+            paths=[directory/browser_directory/name/'prototype-review' for name in names]
+            if any(not (path/(layout+'.png')).exists() for path in paths for layout in ('wide','compact')) or any(
+                qualified_by_sample[name].get('probes',{}).get('prototype-review')!=0 for name in names):
+                ineligible.append({'cohort':cohort['id'],'repetition':repetition,'samples':names,
+                    'reason':'Both candidates need retained wide and compact screenshots'});continue
+            pair_id=f'pair-{number}-{repetition}'
+            pairs.append({'id':pair_id,'paths':paths})
+            mappings.append({'id':pair_id,'cohort':cohort['id']+f':repeat-{repetition}',
+                'source_cohort':cohort['id'],'repetition':repetition,'samples':names,'A':arms[0],'B':arms[1]})
     _write_json(output/(task+'-eligibility.json'),{'eligible_pairs':len(pairs),'ineligible':ineligible})
     if not pairs:continue
     for reverse in (False,True):
@@ -81,7 +90,10 @@ for task in ('inventory','support'):
         mapping=[{**m,'A':m['B'] if reverse else m['A'],'B':m['A'] if reverse else m['B']} for m in mappings]
         packet={'schema':'adaos.e2e.blind_ux_packet.v1','task':task,'positions_reversed':reverse,
             'rubric':rubric,'images':metadata,'unblinding':mapping,'human_alignment':'NOT established',
-            'browser_label':qualification['browser_label']}
+            'browser_label':qualification['browser_label'],
+            'judge_model':'gpt-6-astra','reasoning_effort':'high','max_output_tokens':8192,
+            'provider_worker':worker,'reserve_usd':2.0 if dollars else None,
+            'judge_source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
         if (sample/'packet.json').exists() and read(sample/'packet.json')!=packet:raise ValueError('Blind packet drift')
         _write_json(sample/'packet.json',packet)
         if args.plan_only:continue
@@ -95,8 +107,9 @@ for task in ('inventory','support'):
             _write_json(sample/'terminal.json',redact_credentials(terminal));budget.observe(slot,job_id=terminal.get('job_id'),status=terminal.get('status','terminal'))
         else:
             if (sample/'budget.json').exists():raise RuntimeError('Ambiguous judge submission: inspect reserved attempt; NEVER automatically resubmit')
+            if dollars:dollars.reserve(options['request_id'],reserve_usd=2.0)
             slot=budget.reserve('judge',str(sample.relative_to(Path.cwd()))+':judge')
-            _write_json(sample/'budget.json',{'ordinal':slot})
+            _write_json(sample/'budget.json',{'ordinal':slot,'dollar_key':options['request_id'] if dollars else None})
             # Persist only image hashes/text + exact controls; base64 duplicated nowhere.
             _write_json(sample/'request.json',{'options':options,'packet':packet,'original_task':instruction})
             submitted=llm_client.submit_response_job(messages,**options)
@@ -106,6 +119,13 @@ for task in ('inventory','support'):
             terminal=submitted if submitted.get('status')=='succeeded' else llm_client.wait_response_job(submitted['job_id'],
                 base_url=submitted.get('_client',{}).get('base_url') or registration['root_base_url'],timeout_s=1200,request_timeout=15)
             _write_json(sample/'terminal.json',redact_credentials(terminal));budget.observe(slot,job_id=terminal.get('job_id'),status=terminal.get('status','terminal'))
+        if dollars:
+            usage=usage_record(terminal,'gpt-6-astra')
+            if usage is not None:
+                dollars.observe(read(sample/'budget.json')['dollar_key'],usd=usage['usd_standard_estimate_without_unreported_cache_writes'])
+                _write_json(sample/'usage.json',usage)
+            _write_json(output/'dollar-budget.json',dollars.snapshot())
+            if dollars.snapshot()['remaining_estimated_usd']<0:raise RuntimeError('Estimated dollar ceiling exceeded; stop paid calls')
         if terminal.get('status')!='succeeded':raise RuntimeError('Judge failed; no automatic resubmission')
         judgment=validate_judgment(json.loads(terminal['output_text']),packet)
         _write_json(sample/'judgment.json',judgment)

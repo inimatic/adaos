@@ -3,6 +3,15 @@ from collections import defaultdict
 from statistics import mean
 
 
+def paired_samples(samples: list[dict], arms: tuple[str, str]) -> list[tuple[dict, dict]]:
+    """Pair every chronological repetition; never overwrite or cherry-pick arms."""
+    by_arm = {arm: sorted((s for s in samples if s["arm"] == arm),
+                          key=lambda s: s["order"]) for arm in arms}
+    if len(by_arm[arms[0]]) != len(by_arm[arms[1]]):
+        raise ValueError("Matched arms require the same number of repetitions")
+    return list(zip(by_arm[arms[0]], by_arm[arms[1]]))
+
+
 def validate_judgment(value: dict, packet: dict) -> dict:
     pairs = value.get("pairs")
     expected = {item["id"] for item in packet["unblinding"]}
@@ -42,11 +51,14 @@ def aggregate_judgments(records: list[dict]) -> dict:
     for cohort, judgments in sorted(groups.items()):
         paired = len(judgments) == 2 and {j["positions_reversed"] for j in judgments} == {False, True}
         winners = {j["winner"] for j in judgments}
+        arms = sorted({arm for judgment in judgments for arm in judgment["scores"]})
+        if len(arms) != 2 or any(set(j["scores"]) != set(arms) for j in judgments):
+            raise ValueError("Context arms drifted within a blinded pair")
         results.append({"cohort": cohort, "paired_positions_complete": paired,
             "position_consistent": len(winners) == 1 if paired else None,
             "winner": next(iter(winners)) if paired and len(winners) == 1 else "position_inconsistent" if paired else None,
             "mean_dimension_scores": {arm: [mean(j["scores"][arm][dimension] for j in judgments)
-                for dimension in range(4)] for arm in ("full-mcp", "task-aware")}, "judgments": judgments})
+                for dimension in range(4)] for arm in arms}, "judgments": judgments})
     return {"schema": "adaos.e2e.blind_ux_result.v1", "packets": len(records), "pairs": results,
         "scope": "Visible screenshot model-judge proxy; NOT functional proof, human preference or human-calibrated UX",
         "dimension_order": ["hierarchy", "action_discovery", "wide_narrow_readability", "density_friction"]}

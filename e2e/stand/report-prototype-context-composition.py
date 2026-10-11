@@ -108,6 +108,10 @@ for cohort in registration['cohorts']:
         delivery=qualified_row.get('timings',{})
         materialization_path=directory/browser_directory/sample_id/'preview-materialization.json'
         owner=read(materialization_path).get('materialization',{}) if materialization_path.exists() else {}
+        review_path=directory/browser_directory/sample_id/'prototype-review'/'review.json'
+        reviews=read(review_path).get('samples',[]) if review_path.exists() else []
+        usability={item['layout']:item.get('usability') for item in reviews}
+        usability_complete=set(usability)=={'wide','compact'} and all(isinstance(value,dict) for value in usability.values())
         composition=plan['planned'][row['arm']]
         selections=composition.get('task_selections',[])
         inline_fragments=[identity for selection in selections for identity in selection['inline_fragment_ids']] if selections else all_fragments
@@ -123,6 +127,8 @@ for cohort in registration['cohorts']:
             'corrected_first_pass_structural':corrected_primary.get((cohort['id'],sample_id),{}).get('structural_ok'),
             'final_compile':candidate.get('ok') is True,'final_structural':structural['ok'],
             'browser_pass':browser_verdict,'functional_e2e_pass':functional_verdict,
+            'usability_floor_pass':all(value.get('ok') is True for value in usability.values()) if usability_complete else None,
+            'usability_floor_by_layout':usability,
             'posthoc_rechecked_probes': rechecked_probes,
             'posthoc_rechecked_functional_pass': rechecked_verdict,
             'qualification_pending':outcome['qualification_pending'],
@@ -167,6 +173,8 @@ for (model,arm),items in groups.items():
         'corrected_first_pass_compile':sum(i['corrected_first_pass_compile'] is True for i in items),
         'corrected_first_pass_structural':sum(i['corrected_first_pass_structural'] is True for i in items),
         'functional_e2e_pass':successes,'functional_e2e_evaluated':sum(i['functional_e2e_pass'] is not None for i in items),
+        'usability_floor_pass':sum(i['usability_floor_pass'] is True for i in items),
+        'usability_floor_evaluated':sum(i['usability_floor_pass'] is not None for i in items),
         'usage':totals,'usage_primary':primary_totals,'usage_repair':repair_totals,'usage_complete':all(i['usage_complete'] for i in items),
         'posthoc_rechecked_functional_pass':sum(i['posthoc_rechecked_functional_pass'] is True for i in items),
         'attempts':sum(i['attempted_requests'] for i in items),'mcp_calls':sum(i['mcp_calls'] for i in items),
@@ -197,7 +205,8 @@ for row in rows:
         if row[key] is not None:phase_values[key.removesuffix('_ms')+'_seconds'].append(row[key]/1000)
 phase_summary={key:{'n':len(values),'min_seconds':min(values),'median_seconds':median(values),'mean_seconds':mean(values),'max_seconds':max(values)}
     for key,values in phase_values.items()}
-report={'schema':'adaos.e2e.context_composition_report.v1','registration':registration,'complete':len(rows)==20 and len(browser_complete)==4 and all(browser_complete) and all(r['functional_e2e_pass'] is not None for r in rows),
+expected_samples=registration.get('maximum_primary_attempts',20)
+report={'schema':'adaos.e2e.context_composition_report.v1','registration':registration,'complete':len(rows)==expected_samples and len(browser_complete)==len(registration['cohorts']) and all(browser_complete) and all(r['functional_e2e_pass'] is not None for r in rows),
     'samples':rows,'summary':summary,'paid_request_budget':ledger,'missing_usage_jobs':unknown,'judge_costs_separate':judges,
     'evidence_labels':{'browser':args.browser_label,'compiler':args.compiler_label},'amendments':amendments,'blind_ux':judge_results,
     'latency_phase_summary':phase_summary,
@@ -215,8 +224,9 @@ report={'schema':'adaos.e2e.context_composition_report.v1','registration':regist
         'Warm Client observation measures identity + visible hosts + fonts + frames, not all async data. Delivery observer setup excluded.',
         'Reconstructed critical path sums sequential phases measured at separate times, NOT chat-request-to-user-acceptance telemetry.',
         'Missing timing is null; never infer historical timing from zero. Functional probe wall time reported separately.'],
-    'inference_caveats':['n=1 per cell; no significance, no general architecture ranking.','Compare first-pass, final functionality, output/reasoning and ALL attempted cost separately.',
-        'Oracle is a frozen sufficient-fragment hypothesis, not established task sufficiency.','Blind model UX judge is an uncalibrated proxy; no human approval or human-alignment claim.']}
+    'inference_caveats':[f"n={registration.get('repetitions',1)} per cell; no significance, no general architecture ranking.",'Compare first-pass, final functionality, output/reasoning and ALL attempted cost separately.',
+        'Oracle is a frozen sufficient-fragment hypothesis, not established task sufficiency.','Blind model UX judge is an uncalibrated proxy; no human approval or human-alignment claim.',
+        'Usability floors check public-control names, compact targets and page overflow; NOT complete accessibility or human usability proof.']}
 _write_json(run/'report.json',report); _write_json(run/'paid-request-budget.json',ledger)
 for item in summary:
     print(json.dumps({**{key:item[key] for key in ('model', 'arm', 'n', 'corrected_first_pass_compile',
