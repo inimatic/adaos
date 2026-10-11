@@ -24,6 +24,6 @@
 	branch = main
 [submodule "src/adaos/integrations/adaosd"]
 	path = src/adaos/integrations/adaosd
-	url = https://github.com/inimatic/adaosd.git
+	url = git@github.com:inimatic/adaosd.git
 	branch = main
 	update = none
