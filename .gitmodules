@@ -26,3 +26,4 @@
 	path = src/adaos/integrations/adaosd
 	url = https://github.com/inimatic/adaosd.git
 	branch = main
+	update = none

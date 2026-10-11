@@ -13,6 +13,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--root-repo-root", required=True)
     parser.add_argument("--runtime-host", default="127.0.0.1")
     parser.add_argument("--runtime-port", type=int, default=8777)
+    parser.add_argument(
+        "--supervisor-owns-wrapper",
+        action="store_true",
+        help="preserve the launcher owned by an external supervisor",
+    )
     return parser
 
 
@@ -26,7 +31,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     from adaos.services.core_update import promote_root_from_slot
 
     result = promote_root_from_slot(slot=str(args.slot))
-    if bool(result.get("ok")):
+    if bool(result.get("ok")) and args.supervisor_owns_wrapper:
+        result["wrapper_refresh"] = {
+            "ok": True,
+            "skipped": True,
+            "reason": "supervisor_owns_wrapper",
+        }
+    elif bool(result.get("ok")):
         try:
             from adaos.services.autostart import refresh_runtime_wrapper
 
