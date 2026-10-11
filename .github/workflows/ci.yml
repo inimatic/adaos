@@ -190,6 +190,7 @@ jobs:
             tests/test_e2e_composition_metrics.py \
             tests/test_e2e_dollar_budget.py \
             tests/test_e2e_blind_ux.py \
+            tests/test_e2e_png_transport.py \
             tests/test_materialization_runtime.py \
             tests/test_webspace_component_state.py \
             tests/test_builder_preview_sdk.py \

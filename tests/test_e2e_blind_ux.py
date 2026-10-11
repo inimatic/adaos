@@ -63,3 +63,17 @@ def test_pair_samples_uses_chronological_repetitions_not_last_arm():
             paired_samples(samples, ("full-mcp", "task-aware-compact"))] == [[1, 2], [4, 3]]
     with pytest.raises(ValueError, match="repetitions"):
         paired_samples(samples[:-1], ("full-mcp", "task-aware-compact"))
+
+
+def test_transport_batches_preserve_every_complete_pair_in_order():
+    from adaos.e2e.blind_ux import bounded_pair_batches
+    assert bounded_pair_batches(list(range(5)), lambda rows: len(rows) <= 2) == [[0, 1], [2, 3], [4]]
+    assert bounded_pair_batches([], lambda rows: True) == []
+
+
+def test_oversized_single_pair_is_rejected_not_cropped_or_omitted():
+    import pytest
+    from adaos.e2e.blind_ux import bounded_pair_batches
+    with pytest.raises(ValueError, match='complete blinded pair'):
+        bounded_pair_batches([1, 2], lambda rows: 2 not in rows)
+

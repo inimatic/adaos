@@ -1,4 +1,4 @@
-"""Four optional blind UX proxy calls: two tasks, two positions per task.
+"""Bounded blind UX proxy packets: two tasks, both positions for every pair.
 
 Anonymous screenshot pairs compare task-aware with full+MCP within each model.
 Compiler-failed/no-screenshot pairs are INELIGIBLE, not silently scored by prose.
@@ -11,9 +11,10 @@ from dotenv import load_dotenv
 from adaos.e2e.builder import _write_json
 from adaos.e2e.prototype_context_ablation import read, verify_root_retry_budget_support
 from adaos.e2e.request_budget import RequestBudget
-from adaos.e2e.blind_ux import aggregate_judgments, paired_samples, validate_judgment
+from adaos.e2e.blind_ux import aggregate_judgments, bounded_pair_batches, paired_samples, validate_judgment
 from adaos.e2e.dollar_budget import DollarBudget
 from adaos.e2e.composition_metrics import usage_record
+from adaos.e2e.png_transport import compact_png
 from adaos.services.builder.prototype_mcp import redact_credentials
 
 parser=argparse.ArgumentParser(description=__doc__)
@@ -52,6 +53,38 @@ schema={'type':'object','properties':{'pairs':{'type':'array','items':{'type':'o
  'A_scores':{'type':'array','minItems':4,'maxItems':4,'items':{'type':'integer','minimum':0,'maximum':4}},
  'B_scores':{'type':'array','minItems':4,'maxItems':4,'items':{'type':'integer','minimum':0,'maximum':4}},'reason':{'type':'string'}},
  'required':['id','winner','A_scores','B_scores','reason'],'additionalProperties':False}}},'required':['pairs'],'additionalProperties':False}
+image_cache={}
+base_options={'model':'gpt-6-astra','reasoning':{'effort':'high'},'max_tokens':8192,
+    'text':{'verbosity':'low','format':{'type':'json_schema','name':'blind_ux','strict':True,'schema':schema}},
+    'provider_timeout_s':900,'provider_max_attempts':1,'profile_scope':'development',
+    'request_id':'context-blind-ux:'+'0'*24,'stream':True}
+
+
+def packet_parts(pairs, instruction, reverse):
+    parts=[{'type':'input_text','text':'Original task:\n'+instruction}];metadata=[]
+    for pair in pairs:
+        for label,directory in zip(('A','B'),reversed(pair['paths']) if reverse else pair['paths']):
+            for layout in ('wide','compact'):
+                path=directory/(layout+'.png')
+                if path not in image_cache:
+                    original=path.read_bytes();binary=compact_png(original)
+                    image_cache[path]=(base64.b64encode(binary).decode(),{
+                        'image_sha256':hashlib.sha256(binary).hexdigest(),
+                        'source_image_sha256':hashlib.sha256(original).hexdigest(),
+                        'source_bytes':len(original),'transport_bytes':len(binary),
+                        'image_transport':'lossless PNG IDAT recompression; identical filtered scanlines and other chunks, no resize/crop'})
+                encoded,receipt=image_cache[path]
+                parts.append({'type':'input_text','text':pair['id']+' '+label+' '+layout+' screenshot'})
+                parts.append({'type':'input_image','image_url':'data:image/png;base64,'+encoded,'detail':'high'})
+                metadata.append({'pair':pair['id'],'label':label,'layout':layout,**receipt})
+    return parts,metadata
+
+
+def wire_bytes(messages, options):
+    payload,_=llm_client._llm_root_payload(messages,**options)
+    return len(requests.Request('POST',worker+'/llm/jobs',json=payload).prepare().body)
+
+
 for task in ('inventory','support'):
     pairs=[]; mappings=[]; ineligible=[]
     cohorts=[c for c in registration['cohorts'] if c['task']==task]
@@ -76,30 +109,24 @@ for task in ('inventory','support'):
                 'source_cohort':cohort['id'],'repetition':repetition,'samples':names,'A':arms[0],'B':arms[1]})
     _write_json(output/(task+'-eligibility.json'),{'eligible_pairs':len(pairs),'ineligible':ineligible})
     if not pairs:continue
-    for reverse in (False,True):
-        sample=output/(task+('-BA' if reverse else '-AB'));sample.mkdir(exist_ok=True)
-        parts=[{'type':'input_text','text':'Original task:\n'+instruction}]; metadata=[]
-        for pair in pairs:
-            for label,directory in zip(('A','B'),reversed(pair['paths']) if reverse else pair['paths']):
-                for layout in ('wide','compact'):
-                    path=directory/(layout+'.png'); binary=path.read_bytes()
-                    parts.append({'type':'input_text','text':pair['id']+' '+label+' '+layout+' screenshot'})
-                    parts.append({'type':'input_image','image_url':'data:image/png;base64,'+base64.b64encode(binary).decode(),'detail':'high'})
-                    metadata.append({'pair':pair['id'],'label':label,'layout':layout,'image_sha256':hashlib.sha256(binary).hexdigest()})
+    def fits(group):
+        parts,_=packet_parts(group,instruction,False)
+        return wire_bytes([{'role':'system','content':rubric},{'role':'user','content':parts}],base_options)<=2*1024*1024
+    batches=bounded_pair_batches(pairs,fits)
+    for subset,reverse,batch_index in ((subset,reverse,index) for index,subset in enumerate(batches,1) for reverse in (False,True)):
+        sample=output/(task+(f'-part{batch_index}' if len(batches)>1 else '')+('-BA' if reverse else '-AB'));sample.mkdir(exist_ok=True)
+        parts,metadata=packet_parts(subset,instruction,reverse)
         messages=[{'role':'system','content':rubric},{'role':'user','content':parts}]
-        options={'model':'gpt-6-astra','reasoning':{'effort':'high'},'max_tokens':8192,
-          'text':{'verbosity':'low','format':{'type':'json_schema','name':'blind_ux','strict':True,'schema':schema}},
-          'provider_timeout_s':900,'provider_max_attempts':1,'profile_scope':'development',
-          'request_id':'context-blind-ux:'+hashlib.sha256(str(sample).encode()).hexdigest()[:24],'stream':True}
-        root_payload, _ = llm_client._llm_root_payload(messages, **options)
+        options={**base_options,'request_id':'context-blind-ux:'+hashlib.sha256(str(sample).encode()).hexdigest()[:24]}
         # requests uses ASCII escaping/spaces, unlike the compact metrics
         # serializer. Count the actual prepared wire body, without sending it.
-        payload_bytes = len(requests.Request('POST', worker+'/llm/jobs', json=root_payload).prepare().body)
+        payload_bytes = wire_bytes(messages,options)
         # The deployed Root JSON parser admits at most 2 MiB. Check before
         # reserving/submitting, including in free plan-only preparation.
         if payload_bytes > 2 * 1024 * 1024:
             raise ValueError(f'Blind packet exceeds Root body limit: {payload_bytes} bytes; no paid submission')
-        mapping=[{**m,'A':m['B'] if reverse else m['A'],'B':m['A'] if reverse else m['B']} for m in mappings]
+        subset_ids={pair['id'] for pair in subset}
+        mapping=[{**m,'A':m['B'] if reverse else m['A'],'B':m['A'] if reverse else m['B']} for m in mappings if m['id'] in subset_ids]
         packet={'schema':'adaos.e2e.blind_ux_packet.v1','task':task,'positions_reversed':reverse,
             'rubric':rubric,'images':metadata,'unblinding':mapping,'human_alignment':'NOT established',
             'browser_label':qualification['browser_label'],
@@ -107,6 +134,7 @@ for task in ('inventory','support'):
             'judge_model':'gpt-6-astra','reasoning_effort':'high','max_output_tokens':8192,
             'provider_worker':worker,'reserve_usd':2.0 if dollars else None,
             'judge_source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+        packet.update(batch_index=batch_index,task_batch_count=len(batches),complete_pairs_only=True)
         if (sample/'packet.json').exists() and read(sample/'packet.json')!=packet:raise ValueError('Blind packet drift')
         _write_json(sample/'packet.json',packet)
         if args.plan_only:continue

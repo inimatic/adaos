@@ -3,6 +3,23 @@ from collections import defaultdict
 from statistics import mean
 
 
+def bounded_pair_batches(pairs, fits):
+    """Pack complete matched pairs; never omit, crop or split pair evidence."""
+    batches, current = [], []
+    for pair in pairs:
+        proposed = current + [pair]
+        if fits(proposed):
+            current = proposed
+        else:
+            if not current or not fits([pair]):
+                raise ValueError('A complete blinded pair exceeds the transport limit')
+            batches.append(current)
+            current = [pair]
+    if current:
+        batches.append(current)
+    return batches
+
+
 def paired_samples(samples: list[dict], arms: tuple[str, str]) -> list[tuple[dict, dict]]:
     """Pair every chronological repetition; never overwrite or cherry-pick arms."""
     by_arm = {arm: sorted((s for s in samples if s["arm"] == arm),
