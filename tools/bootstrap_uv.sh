@@ -2,6 +2,10 @@
 # tools/bootstrap_uv.sh — bootstrap via uv (Linux/macOS)
 set -euo pipefail
 
+BOOTSTRAP_TOOL_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tools/adaosd_service_adapter.sh
+source "${BOOTSTRAP_TOOL_DIR}/adaosd_service_adapter.sh"
+
 CLIENT_SUBMODULE_PATH="src/adaos/integrations/adaos-client"
 BACKEND_SUBMODULE_PATH="src/adaos/integrations/adaos-backend"
 INFRA_SUBMODULE_PATH="src/adaos/integrations/infra-inimatic"
@@ -26,6 +30,9 @@ PYTHON_ARG=""
 NODE_NAME=""
 NO_CORE_UPDATE="0"
 WORKSPACE_REGISTRY_REPO="${ADAOS_WORKSPACE_REGISTRY_REPO:-}"
+RUNTIME_ENGINE="${ADAOS_RUNTIME_ENGINE:-python}"
+ADAOSD_BINARY="${ADAOSD_BINARY:-}"
+ADAOSD_SERVICE_CONFIG="${ADAOSD_SERVICE_CONFIG:-}"
 
 log()  { printf '\033[36m[*] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[+] %s\033[0m\n' "$*"; }
@@ -479,6 +486,9 @@ while [[ $# -gt 0 ]]; do
     --python) PYTHON_ARG="${2:-}"; shift 2 ;;
     --node-name) NODE_NAME="${2:-}"; shift 2 ;;
     --workspace-registry-repo) WORKSPACE_REGISTRY_REPO="${2:-}"; shift 2 ;;
+    --runtime-engine) RUNTIME_ENGINE="${2:-}"; shift 2 ;;
+    --adaosd-binary) ADAOSD_BINARY="${2:-}"; shift 2 ;;
+    --adaosd-service-config) ADAOSD_SERVICE_CONFIG="${2:-}"; shift 2 ;;
     --no-core-update|--no_core_update) NO_CORE_UPDATE="1"; shift ;;
     --no_voice|--no-voice) NO_VOICE="1"; shift ;;
     --dev) DEV_MODE="1"; shift ;;
@@ -499,6 +509,9 @@ Usage: tools/bootstrap_uv.sh [options]
   --python /path/to/python3.11
   --node-name NAME
   --workspace-registry-repo URL
+  --runtime-engine python|go
+  --adaosd-binary /absolute/path/to/adaosd
+  --adaosd-service-config /absolute/path/to/service.json
   --no-core-update      Disable hub/member core updates from CI/CD signals for this node
   --dev
   --build-vendored-y-py Build repository vendor/y-py (requires Rust/Cargo >=1.72)
@@ -513,6 +526,24 @@ done
 if [[ -n "${PYTHON_ARG:-}" ]]; then
   ADAOS_PYTHON="$PYTHON_ARG"
   export ADAOS_PYTHON
+fi
+
+RUNTIME_ENGINE="$(printf '%s' "${RUNTIME_ENGINE:-python}" | tr '[:upper:]' '[:lower:]')"
+systemctl_available=0
+if have systemctl; then
+  systemctl_available=1
+fi
+if ! adapter_error="$(
+  adaosd_service_adapter_validate \
+    "$RUNTIME_ENGINE" \
+    "$ADAOSD_BINARY" \
+    "$ADAOSD_SERVICE_CONFIG" \
+    "$INSTALL_SERVICE" \
+    "$(uname -s)" \
+    "${EUID:-$(id -u)}" \
+    "$systemctl_available" 2>&1
+)"; then
+  die "$adapter_error"
 fi
 
 if [[ -n "${ZONE_ID:-}" ]]; then
@@ -760,7 +791,39 @@ log "Runtime state targets: ${ADAOS_BASE_DIR}/node.yaml + ${ADAOS_BASE_DIR}/stat
 
 log "Starting AdaOS API (${SERVE_HOST}:${SERVE_PORT}) ..."
 service_installed=0
-if [[ "$INSTALL_SERVICE" != "never" ]]; then
+go_service_managed=0
+if [[ "$RUNTIME_ENGINE" == "go" ]]; then
+  set +e
+  go_service_status="$(adaosd_service_adapter_status "$ADAOSD_BINARY" "$ADAOSD_SERVICE_CONFIG" 2>/dev/null)"
+  go_service_status_rc=$?
+  set -e
+  if [[ $go_service_status_rc -ne 0 ]]; then
+    die "Cannot inspect existing adaosd service state"
+  fi
+  if ! go_service_state="$(adaosd_service_adapter_classify_status "$ADAOS_PY" <<<"$go_service_status" 2>/dev/null)"; then
+    die "adaosd returned an invalid or unsupported service status"
+  fi
+  case "$go_service_state" in
+    managed) go_service_managed=1 ;;
+    unmanaged) ;;
+    drift) die "Managed adaosd service drift must be resolved before bootstrap" ;;
+    *) die "adaosd returned an unknown service status classification" ;;
+  esac
+fi
+
+if [[ "$go_service_managed" == "1" ]]; then
+  log "Refreshing existing Go-managed AdaOS service ..."
+  set +e
+  adaosd_install_output="$(adaosd_service_adapter_install "$ADAOSD_BINARY" "$ADAOSD_SERVICE_CONFIG" 2>&1)"
+  adaosd_install_rc=$?
+  set -e
+  if [[ $adaosd_install_rc -ne 0 ]]; then
+    printf '%s\n' "$adaosd_install_output"
+    die "Go-managed service refresh failed; preserved fallback state was not replaced"
+  fi
+  service_installed=1
+  ok "Go-managed AdaOS service refreshed"
+elif [[ "$INSTALL_SERVICE" != "never" ]]; then
   set +e
   autostart_enable_output="$("$ADAOS_PY" -m adaos autostart enable --host "$SERVE_HOST" --port "$SERVE_PORT" 2>&1)"
   autostart_enable_rc=$?
@@ -775,17 +838,41 @@ if [[ "$INSTALL_SERVICE" != "never" ]]; then
       schtasks /Run /TN "AdaOS" >/dev/null 2>&1 || true
     fi
     if ! wait_for_autostart_activation 45; then
-      warn "Autostart did not become active within startup grace period; falling back to background run"
+      warn "Autostart did not become active within startup grace period"
       print_autostart_diagnostics
+      if [[ "$RUNTIME_ENGINE" == "go" ]]; then
+        die "Python fallback service must be healthy before Go service handoff"
+      fi
+      warn "Falling back to background run"
       service_installed=0
     fi
   else
-    warn "autostart enable failed; will fallback to background run"
+    warn "autostart enable failed"
     if [[ -n "${autostart_enable_output:-}" ]]; then
       printf '%s\n' "$autostart_enable_output"
     fi
     print_autostart_diagnostics
+    if [[ "$RUNTIME_ENGINE" == "go" ]]; then
+      die "Python fallback service installation is required before Go service handoff"
+    fi
+    warn "Falling back to background run"
   fi
+  if [[ "$service_installed" == "1" && "$RUNTIME_ENGINE" == "go" ]]; then
+    log "Handing systemd ownership to adaosd ..."
+    set +e
+    adaosd_install_output="$(adaosd_service_adapter_install "$ADAOSD_BINARY" "$ADAOSD_SERVICE_CONFIG" 2>&1)"
+    adaosd_install_rc=$?
+    set -e
+    if [[ $adaosd_install_rc -ne 0 ]]; then
+      printf '%s\n' "$adaosd_install_output"
+      print_autostart_diagnostics
+      die "Go service handoff failed; the installer restored the Python fallback"
+    fi
+    ok "Go-managed AdaOS service installed"
+  fi
+fi
+if [[ "$RUNTIME_ENGINE" == "go" && "$service_installed" != "1" ]]; then
+  die "Go runtime engine requires an active managed service"
 fi
 if [[ "$service_installed" != "1" || "$INSTALL_SERVICE" == "never" ]]; then
   nohup "$ADAOS_PY" -m adaos api serve --host "$SERVE_HOST" --port "$SERVE_PORT" >/dev/null 2>&1 & disown || true
