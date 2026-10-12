@@ -20,6 +20,7 @@ try {
     window.__ADAOS_DEBUG__ = true
     window.__ADAOS_BASE__ = hub
     window.__ADAOS_TOKEN__ = token
+    window.__ADAOS_E2E_DOCUMENT_ID__ = crypto.randomUUID()
     for (const [key, value] of Object.entries({ adaos_device_id: `e2e-warm:${webspace}`, adaos_webspace_id: webspace,
       adaos_hub_base: hub, adaos_local_hub_base: hub, adaos_try_local_hub: '1', adaos_hub_token: token,
       adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: 'en' })) localStorage.setItem(key, value)
@@ -35,6 +36,7 @@ try {
   const host = page.locator('[data-webui-widget-id="records-list"]').first()
   await expect(host).toContainText('Work queue')
   await expect(host).toContainText('First task')
+  const documentIdentity = await page.evaluate(() => window.__ADAOS_E2E_DOCUMENT_ID__)
   await fs.writeFile(path.join(output, 'armed.json'), JSON.stringify({ scenario, ready: true }))
   for (let phase = 1; phase <= 2; phase++) {
     const input = path.join(output, `phase-${phase}.json`)
@@ -49,6 +51,8 @@ try {
       await expect(host).toContainText(command.text)
       await expect(host).toContainText('Task subject')
       await expect(host).toContainText('First task')
+      sample.sameDocument = await page.evaluate(expected => window.__ADAOS_E2E_DOCUMENT_ID__ === expected, documentIdentity)
+      if (!sample.sameDocument) throw new Error('Client document was reloaded')
       sample.ok = true
     } catch (error) {
       sample.error = String(error)
@@ -57,7 +61,7 @@ try {
     await page.screenshot({ path: path.join(output, `phase-${phase}.png`), fullPage: true })
     await fs.writeFile(path.join(output, `phase-${phase}-result.json`), JSON.stringify(sample, null, 2))
   }
-  report.reloads = Math.max(0, navigations - 1)
+  report.reloads = report.samples.filter(sample => sample.sameDocument === false).length
   report.navigationEvents = navigations
   report.ok = report.samples.every(sample => sample.ok) && report.reloads === 0
 } finally {
