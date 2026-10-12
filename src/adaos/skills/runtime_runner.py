@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -19,6 +20,17 @@ _SKILL_SOURCE_SNAPSHOTS: dict[str, int | str] = {}
 _MODULE_LOAD_LOCK = threading.RLock()
 _MODULE_LOAD_COMPLETE = "__adaos_runtime_load_complete__"
 _MODULE_LOAD_SLOW_SECONDS = 0.25
+_CALL_TIMINGS: ContextVar[dict[str, float] | None] = ContextVar("skill_call_timings", default=None)
+
+
+@contextmanager
+def capture_skill_call_timings(timings: dict[str, float]):
+    """Collect this invocation's load timings without changing tool payloads."""
+    token = _CALL_TIMINGS.set(timings)
+    try:
+        yield
+    finally:
+        _CALL_TIMINGS.reset(token)
 _PREPARED_IMPORT_CONTEXT: tuple[str, str, tuple[str, ...]] | None = None
 # Collapse the concurrent first-paint burst, then return to the normal
 # filesystem/source-drift check. Exact revisions and slot paths are part of the
@@ -117,6 +129,7 @@ def execute_tool(
 
     global _PREPARED_IMPORT_CONTEXT
 
+    runner_started = time.perf_counter()
     skill_path = Path(skill_dir).resolve()
     from adaos.services.companion.policy import guard_skill_call, EXPERIMENTAL_NLU
 
@@ -173,6 +186,11 @@ def execute_tool(
             if revision:
                 _remember_prepared_module(module_key, mod)
         load_seconds = time.perf_counter() - load_started
+    timings = _CALL_TIMINGS.get()
+    if timings is not None:
+        timings["module_lock_ms"] = lock_wait_seconds * 1000.0
+        timings["module_load_ms"] = load_seconds * 1000.0
+        timings["runner_admission_ms"] = max(0.0, (lock_started - runner_started) * 1000.0)
     if lock_wait_seconds >= _MODULE_LOAD_SLOW_SECONDS or load_seconds >= _MODULE_LOAD_SLOW_SECONDS:
         import logging
 

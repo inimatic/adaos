@@ -3809,16 +3809,20 @@ class SkillManager:
         ctx.secrets = SecretsService(SkillSecretsBackend(slot_data_root / "files" / "secrets.json"), ctx.caps)
         _mark_phase("prepare_ms")
         call_timings: dict[str, float] = {}
+        call_meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
         execution_submitted_at = 0.0
 
         def _call_tool() -> Any:
             from adaos.services.applications.runtime_selection import application_execution
+            from adaos.skills.runtime_runner import capture_skill_call_timings
 
             call_timings["worker_start_ms"] = max(
                 0.0,
                 (time.perf_counter() - execution_submitted_at) * 1000.0,
             )
-            with use_ctx(ctx), application_execution(ctx, name):
+            entry_started = time.perf_counter()
+            with use_ctx(ctx), application_execution(ctx, name), capture_skill_call_timings(call_timings):
+                call_timings["application_entry_ms"] = (time.perf_counter() - entry_started) * 1000.0
                 step_started = time.perf_counter()
                 result = execute_tool(
                     skill_dir,
@@ -3835,11 +3839,15 @@ class SkillManager:
                 step_started = time.perf_counter()
                 self._persist_skill_env(env, slot)
                 call_timings["persist_env_ms"] = (time.perf_counter() - step_started) * 1000.0
-                return result
+                release_started = time.perf_counter()
+            call_timings["application_exit_ms"] = (time.perf_counter() - release_started) * 1000.0
+            return result
 
         try:
+            bind_started = time.perf_counter()
             if not ctx.skill_ctx.set(name, skill_dir):
                 raise RuntimeError(f"failed to establish context for skill '{name}'")
+            call_timings["context_bind_ms"] = (time.perf_counter() - bind_started) * 1000.0
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(skill_memory_path)
             os.environ["ADAOS_SKILL_STATE_DIR"] = str(
@@ -3893,7 +3901,9 @@ class SkillManager:
                     "skill run_tool slow skill=%s tool=%s total_ms=%.1f "
                     "runtime_status_ms=%.1f manifest_ms=%.1f projections_ms=%.1f "
                     "prepare_ms=%.1f execute_ms=%.1f worker_start_ms=%.1f "
-                    "execute_tool_ms=%.1f resolve_result_ms=%.1f persist_env_ms=%.1f",
+                    "execute_tool_ms=%.1f resolve_result_ms=%.1f persist_env_ms=%.1f "
+                    "context_bind_ms=%.1f application_entry_ms=%.1f application_exit_ms=%.1f "
+                    "runner_admission_ms=%.1f module_lock_ms=%.1f module_load_ms=%.1f trace_id=%s source_message_id=%s",
                     name,
                     target_tool,
                     total_ms,
@@ -3906,6 +3916,14 @@ class SkillManager:
                     float(call_timings.get("execute_tool_ms") or 0.0),
                     float(call_timings.get("resolve_result_ms") or 0.0),
                     float(call_timings.get("persist_env_ms") or 0.0),
+                    float(call_timings.get("context_bind_ms") or 0.0),
+                    float(call_timings.get("application_entry_ms") or 0.0),
+                    float(call_timings.get("application_exit_ms") or 0.0),
+                    float(call_timings.get("runner_admission_ms") or 0.0),
+                    float(call_timings.get("module_lock_ms") or 0.0),
+                    float(call_timings.get("module_load_ms") or 0.0),
+                    str(call_meta.get("turn_trace_id") or "")[:240],
+                    str(call_meta.get("source_message_id") or "")[:240],
                 )
 
         return result

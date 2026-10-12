@@ -15,6 +15,20 @@ from adaos.sdk.core import decorators as sdk_decorators
 from adaos.services import skills_loader_importlib as skills_loader_module
 
 
+def test_per_invocation_load_timings_are_correlated_not_global(tmp_path):
+    root = tmp_path / "timing_skill"
+    (root / "handlers").mkdir(parents=True)
+    (root / "handlers" / "main.py").write_text("def ping():\n    return {'ok': True}\n", encoding="utf-8")
+    timings = {}
+    with runtime_runner_module.capture_skill_call_timings(timings):
+        assert runtime_runner_module.execute_tool(root, module="handlers.main", attr="ping", payload={}) == {"ok": True}
+    assert set(timings) == {"module_lock_ms", "module_load_ms", "runner_admission_ms"}
+    assert all(value >= 0 for value in timings.values())
+    previous = dict(timings)
+    runtime_runner_module.execute_tool(root, module="handlers.main", attr="ping", payload={})
+    assert timings == previous
+
+
 def test_prioritize_import_paths_does_not_resolve_unrelated_entries(tmp_path, monkeypatch):
     first, second = tmp_path / "first", tmp_path / "second"
     first.mkdir()

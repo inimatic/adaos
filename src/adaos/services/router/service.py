@@ -4549,13 +4549,16 @@ class RouterService:
                         total_ms = (time.perf_counter() - worker_started) * 1000.0
                         log.log(
                             _dialog_timing_level(total_ms),
-                            "dialog runtime tool run completed skill=%s tool=%s webspace=%s fallback=workspace manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
+                            "dialog runtime tool run completed skill=%s tool=%s webspace=%s fallback=workspace manager_ms=%.1f run_ms=%.1f total_ms=%.1f queue_ms=%s trace_id=%s source_message_id=%s",
                             skill,
                             tool,
                             webspace_id,
                             manager_ms,
                             run_ms,
                             total_ms,
+                            f"{queue_ms:.1f}" if queue_ms is not None else "-",
+                            str(route_meta.get("turn_trace_id") or "")[:240],
+                            str(route_meta.get("source_message_id") or "")[:240],
                         )
                         return result
                     except Exception as workspace_exc:

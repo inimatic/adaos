@@ -5,7 +5,8 @@ import pytest
 from adaos.e2e.prototype_context_ablation import native_builder
 from adaos.sdk.builder import workflow as workflow_sdk
 from adaos.services.builder import semantic_graph
-from test_builder_semantic_graph import graph_project
+
+pytest_plugins = ("test_builder_semantic_graph",)
 
 
 @pytest.fixture
@@ -78,6 +79,10 @@ def test_chat_reuses_its_authoritative_target_instead_of_resolving_it_twice(nati
                          _meta={"message_id": "user-chat-label"})
     assert result["status"] == "semantic_label_applied"
     assert "routing_ms" in result["message_meta"]["builder_d0_turn_timing"]
+    assert set(result["message_meta"]["builder_d0_turn_timing"]["routing_stages_ms"]) == {
+        "target_guard_ms", "builder_context_ms", "binding_alignment_ms", "target_session_ms",
+        "conversation_topic_ms", "command_and_route_ms",
+    }
 
 
 def test_missing_managed_source_cannot_be_reclassified_as_legacy(native_label_builder):
