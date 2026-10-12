@@ -1,0 +1,19 @@
+schema: adaos.builder.e2e_suite.v1
+suite_id: builder-semantic-label-conversation
+version: "1"
+title: Installed Builder deterministic semantic request qualification
+description: Fixture provisioning followed by real visible chat requests, not autonomous initial generation.
+cohort: development
+case_refs: [labels-conversation-en.yaml]
+defaults:
+  adapter: sdk.v1
+  profile: generic
+  generation_contract: semantic.v2
+  repetitions: 1
+  timeout_seconds: 1200
+  browser: "on"
+  require_client_profile: true
+  retain_test_projects: true
+  domain_packs: []
+gates: {outcome_grade_required: false}
+tags: [semantic, incremental, replay, model-free, conversation]
