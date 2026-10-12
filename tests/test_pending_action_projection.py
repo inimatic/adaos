@@ -265,3 +265,61 @@ def test_projection_keeps_receipts_distinct_and_outcome_controls_status() -> Non
         "execution": {"status": "running", "attempt_id": "attempt.1"},
         "outcome": {"outcome": "outcome_unknown", "attempt_id": "attempt.1"},
     }
+
+
+def test_projection_cache_rechecks_access_and_exact_inputs(monkeypatch):
+    from adaos.services import pending_action_projection as module
+
+    interaction, presentation = _projection_fixture()
+    inputs = {"interaction": interaction, "presentation": presentation, "response": None, "dispatch": None}
+    monkeypatch.setattr(conversation_interactions, "principal_can_read_interaction",
+                        lambda item, principal: principal.get("actor_id") == "allowed")
+    original = module.project_pending_action
+    calls = []
+    def measured(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, "project_pending_action", measured)
+    module._PROJECTION_CACHE.clear()
+    first = module.project_pending_action_from_store(interaction["interaction_id"], principal={"actor_id": "allowed"}, _inputs=inputs)
+    first["prompt"] = "client mutation"
+    second = module.project_pending_action_from_store(interaction["interaction_id"], principal={"actor_id": "allowed"}, _inputs=inputs)
+    assert second["prompt"] != "client mutation"
+    assert len(calls) == 1
+    with pytest.raises(PendingActionProjectionError, match="not authorized"):
+        module.project_pending_action_from_store(interaction["interaction_id"], principal={"actor_id": "denied"}, _inputs=inputs)
+    changed = copy.deepcopy(inputs)
+    changed["interaction"]["prompt"] = "Changed canonical prompt"
+    result = module.project_pending_action_from_store(interaction["interaction_id"], principal={"actor_id": "allowed"}, _inputs=changed)
+    assert result["prompt"] == second["prompt"]  # Presentation owns the visible prompt.
+    assert len(calls) == 2
+
+
+def test_active_page_retains_dispatch_obligations_but_excludes_archive(monkeypatch):
+    from adaos.services.pending_action_projection import project_pending_action_page_from_store
+
+    queries = []
+    monkeypatch.setattr(conversation_interactions, "query_interactions", lambda **kw: queries.append(kw) or {"items": []})
+    project_pending_action_page_from_store(principal={"actor_id": "allowed"}, view="active")
+    assert {"answered", "accepted", "awaiting_input"} <= set(queries[-1]["statuses"])
+    assert queries[-1]["projection_view"] == "active"
+    project_pending_action_page_from_store(principal={"actor_id": "allowed"}, view="history")
+    assert queries[-1]["projection_view"] == "history"
+
+
+def test_projection_pages_partition_by_dispatch_outcome_not_only_interaction_status(monkeypatch):
+    records = [
+        {"interaction_id": "done", "status": "accepted", "metadata": {"accepted_response_id": "response.done"}},
+        {"interaction_id": "running", "status": "accepted", "metadata": {"accepted_response_id": "response.running"}},
+        {"interaction_id": "unknown", "status": "accepted", "metadata": {"accepted_response_id": "response.unknown"}},
+        {"interaction_id": "more-input", "status": "accepted", "metadata": {"accepted_response_id": "response.input"}},
+    ]
+    monkeypatch.setattr(conversation_store, "list_interactions", lambda **kw: records)
+    monkeypatch.setattr(conversation_interactions, "_principal_can_read_interaction", lambda *args: True)
+    states = {"response.done": "succeeded", "response.running": "dispatching",
+              "response.unknown": "outcome_unknown", "response.input": "input_required"}
+    monkeypatch.setattr(conversation_store, "read_interaction_dispatch_statuses", lambda ids: states)
+    active = conversation_interactions.query_interactions(principal={"actor_id": "allowed"}, projection_view="active")
+    history = conversation_interactions.query_interactions(principal={"actor_id": "allowed"}, projection_view="history")
+    assert {item["interaction_id"] for item in active["items"]} == {"running"}
+    assert {item["interaction_id"] for item in history["items"]} == {"done", "unknown", "more-input"}

@@ -1506,6 +1506,7 @@ def query_interactions(
     field_mask: str = "summary",
     limit: int = 50,
     cursor: str | None = None,
+    projection_view: str | None = None,
 ) -> dict[str, Any]:
     """Return an ACL-filtered page of canonical interactions.
 
@@ -1550,10 +1551,15 @@ def query_interactions(
         "active_only": bool(active_only),
         "principal": normalized_principal,
     }
+    if projection_view is not None:
+        if projection_view not in {"active", "history"}:
+            raise ConversationInteractionError("unsupported interaction projection view")
+        query["projection_view"] = projection_view
     records = conversation_store.list_interactions(
         conversation_id=query["conversation_id"],
         statuses=selected_statuses,
         limit=1000,
+        **({"projection_view": projection_view} if projection_view is not None else {}),
     )
     if len(records) >= 1000:
         raise ConversationInteractionError(
@@ -1565,6 +1571,17 @@ def query_interactions(
         if (not selected_owners or str(item.get("owner") or "") in selected_owners)
         and _principal_can_read_interaction(item, principal)
     ]
+    dispatch_states: dict[str, str] = {}
+    if projection_view is not None:
+        def response_identity(item):
+            metadata = item.get("metadata") or {}
+            return str(metadata.get("accepted_response_id") or metadata.get("latest_response_id") or "").strip()
+        dispatch_states = conversation_store.read_interaction_dispatch_statuses([response_identity(item) for item in selected])
+        def historical(item):
+            return str(item.get("status") or "") in _TERMINAL_STATUSES or dispatch_states.get(response_identity(item)) in {
+                "succeeded", "failed", "input_required", "outcome_unknown", "cancelled",
+            }
+        selected = [item for item in selected if historical(item) == (projection_view == "history")]
     selected.sort(
         key=lambda item: (
             str(item.get("updated_at") or ""),
@@ -1572,7 +1589,7 @@ def query_interactions(
         ),
         reverse=True,
     )
-    content_digest = _canonical_digest(selected)
+    content_digest = _canonical_digest({"items": selected, "dispatch_states": dispatch_states}) if projection_view is not None else _canonical_digest(selected)
     mask_contract = {"name": mask_name, "fields": list(fields)}
     try:
         offset = decode_opaque_cursor(

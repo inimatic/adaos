@@ -10963,6 +10963,7 @@ async def process_events_command(
                     ),
                     limit=max(1, min(int(event_payload.get("limit") or 50), 100)),
                     cursor=str(event_payload.get("cursor") or "").strip() or None,
+                    view=str(event_payload.get("view") or "all").strip(),
                 )
             await _ack(data=result)
         except Exception as exc:

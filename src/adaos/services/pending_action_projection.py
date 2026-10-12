@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import copy
+from collections import OrderedDict
+from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
+import threading
 
 from jsonschema import Draft202012Validator
 
@@ -27,6 +30,10 @@ _STATUS_MAP = {
     "superseded": "superseded",
 }
 _OUTCOME_STATUSES = {"succeeded", "failed", "input_required", "outcome_unknown", "cancelled"}
+_PROJECTION_CACHE: OrderedDict[tuple[Any, ...], tuple[dict[str, Any], int]] = OrderedDict()
+_PROJECTION_CACHE_LOCK = threading.RLock()
+_PROJECTION_CACHE_MAX_ITEMS = 512
+_PROJECTION_CACHE_MAX_BYTES = 8 * 1024 * 1024
 
 
 class PendingActionProjectionError(ValueError):
@@ -45,11 +52,22 @@ def _mapping(value: Any) -> dict[str, Any]:
     return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else {}
 
 
+def _schema_identity() -> tuple[str, int, int]:
+    stat = _SCHEMA_PATH.stat()
+    return str(_SCHEMA_PATH), stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=8)
+def _validator(identity: tuple[str, int, int]) -> Draft202012Validator:
+    schema = json.loads(Path(identity[0]).read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema)
+
+
 def _validate(value: Mapping[str, Any]) -> dict[str, Any]:
     record = copy.deepcopy(dict(value))
-    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
     errors = sorted(
-        Draft202012Validator(schema).iter_errors(record),
+        _validator(_schema_identity()).iter_errors(record),
         key=lambda item: list(item.absolute_path),
     )
     if errors:
@@ -253,6 +271,16 @@ def project_pending_action_from_store(
         if response_id
         else None
     )
+    # Authorization always runs above, including on a cache hit. A view is
+    # reusable only for the exact current canonical inputs and ABI revision;
+    # changes to decisions, dispatch outcomes or presentation invalidate it.
+    cache_key = (*_schema_identity(), _digest({"interaction": interaction, "response": response,
+                                             "presentation": presentation, "dispatch": dispatch}))
+    with _PROJECTION_CACHE_LOCK:
+        cached = _PROJECTION_CACHE.get(cache_key)
+        if cached is not None:
+            _PROJECTION_CACHE.move_to_end(cache_key)
+            return copy.deepcopy(cached[0])
     decision_receipt = None
     if response is not None:
         decision_receipt = {
@@ -277,18 +305,29 @@ def project_pending_action_from_store(
                 "status": dispatch["status"],
                 **_mapping(dispatch.get("outcome")),
             }
-    return project_pending_action(
+    result = project_pending_action(
         interaction,
         presentation,
         decision_receipt=decision_receipt,
         execution_receipt=execution_receipt,
         outcome_receipt=outcome_receipt,
     )
+    weight = len(_canonical(result))
+    if weight <= _PROJECTION_CACHE_MAX_BYTES:
+        with _PROJECTION_CACHE_LOCK:
+            _PROJECTION_CACHE[cache_key] = (copy.deepcopy(result), weight)
+            _PROJECTION_CACHE.move_to_end(cache_key)
+            while len(_PROJECTION_CACHE) > _PROJECTION_CACHE_MAX_ITEMS or sum(
+                item[1] for item in _PROJECTION_CACHE.values()
+            ) > _PROJECTION_CACHE_MAX_BYTES:
+                _PROJECTION_CACHE.popitem(last=False)
+    return result
 
 
 def project_pending_action_page_from_store(
     *, principal: Mapping[str, Any], conversation_id: str | None = None,
     limit: int = 50, cursor: str | None = None,
+    view: str = "all",
 ) -> dict[str, Any]:
     """Read a bounded ACL-checked page without touching a live Yjs document.
 
@@ -296,10 +335,15 @@ def project_pending_action_page_from_store(
     Pagination and per-item authorization remain the store's authority.
     """
     from adaos.services.conversation_interactions import query_interactions
+    active = ("created", "projected", "awaiting_input", "partially_answered", "validation_failed", "answered", "accepted")
+    history = ("completed", "expired", "cancelled", "superseded")
+    if view not in {"all", "active", "history"}:
+        raise PendingActionProjectionError("unsupported Pending Action view")
+    statuses = (*active, *history)
     page = query_interactions(principal=principal, conversation_id=conversation_id,
-        statuses=("created", "projected", "awaiting_input", "partially_answered",
-            "validation_failed", "answered", "accepted", "completed", "expired", "cancelled", "superseded"),
-        active_only=False, field_mask="summary", limit=max(1, min(int(limit), 100)), cursor=cursor)
+        statuses=statuses,
+        active_only=False, field_mask="summary", limit=max(1, min(int(limit), 100)), cursor=cursor,
+        projection_view=None if view == "all" else view)
     inputs = conversation_store.read_interaction_projection_inputs([
         str(item.get("interaction_id") or "").strip() for item in page.get("items") or []])
     items, skipped = [], []

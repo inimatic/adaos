@@ -2633,6 +2633,23 @@ def commit_interaction_supersession(
     return {"interaction": current, "replacement": candidate}
 
 
+def read_interaction_dispatch_statuses(response_ids: Sequence[str]) -> dict[str, str]:
+    """Read outcome states needed to classify PA pages before hydration."""
+    identifiers = list(dict.fromkeys(str(value).strip() for value in response_ids if str(value).strip()))
+    if not identifiers or not ensure_schema():
+        return {}
+    result: dict[str, str] = {}
+    with _sql().connect() as con:
+        for offset in range(0, len(identifiers), 200):
+            batch = identifiers[offset:offset + 200]
+            placeholders = ",".join("?" for _ in batch)
+            for response_id, status in con.execute(
+                f"SELECT response_id, status FROM conversation_interaction_dispatches WHERE response_id IN ({placeholders})", batch
+            ).fetchall():
+                result[str(response_id)] = str(status)
+    return result
+
+
 def read_interaction_projection_inputs(interaction_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
     """Read at most 100 projection inputs in one consistent durable snapshot.
 
@@ -2702,6 +2719,7 @@ def list_interactions(
     statuses: Sequence[str] | None = None,
     due_before: str | None = None,
     limit: int = 100,
+    projection_view: str | None = None,
 ) -> list[dict[str, Any]]:
     if not ensure_schema():
         return []
@@ -2714,6 +2732,20 @@ def list_interactions(
     if clean_statuses:
         clauses.append(f"status IN ({','.join('?' for _ in clean_statuses)})")
         params.extend(clean_statuses)
+    if projection_view is not None:
+        if projection_view not in {"active", "history"}:
+            raise ValueError("unsupported interaction projection view")
+        # Partition before the bounded query: a large historical archive must
+        # not overflow the active-obligation snapshot or trigger hydration.
+        # Decision status alone is insufficient: accepted interactions can
+        # already have a completed dispatch whose outcome is authoritative.
+        historical = """(status IN ('completed','expired','cancelled','superseded') OR EXISTS (
+            SELECT 1 FROM conversation_interaction_dispatches AS dispatch
+            WHERE dispatch.response_id = COALESCE(
+                NULLIF(json_extract(conversation_interactions.payload_json, '$.metadata.accepted_response_id'), ''),
+                json_extract(conversation_interactions.payload_json, '$.metadata.latest_response_id'))
+            AND dispatch.status IN ('succeeded','failed','cancelled')))"""
+        clauses.append(historical if projection_view == "history" else f"NOT {historical}")
     if str(due_before or "").strip():
         clauses.append("expires_at IS NOT NULL AND julianday(expires_at)<=julianday(?)")
         params.append(str(due_before).strip())
