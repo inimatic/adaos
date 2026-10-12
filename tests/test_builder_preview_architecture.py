@@ -275,6 +275,30 @@ def test_exact_builder_resolution_revalidates_preview_kind_without_provisioning(
         service.resolve_builder_context("host")
 
 
+@pytest.mark.asyncio
+async def test_builder_bootstrap_reads_only_the_registered_preview(tmp_path):
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("host")
+    registry.ensure("host", purpose=BUILDER_PROJECT_PREVIEW)
+    registry.sql.workspace("host-dev", kind="dev", scenario="app")
+
+    class PointOnly(_Webspaces):
+        def list(self, **kwargs):
+            raise AssertionError("Bootstrap must not discover unrelated Webspaces")
+
+        async def create(self, *args, **kwargs):
+            raise AssertionError("Existing single Preview must be reused")
+
+    service = BuilderWorkbenchService(
+        state_dir=tmp_path / "state",
+        relationship_registry=registry,
+        webspace_service=PointOnly(_webspace("host-dev", current="app", kind="dev")),
+    )
+    result = await service.ensure_dev_webspace("host", prepare_runtime=False)
+    assert result["preview_webspace_id"] == "host-dev"
+    assert result["created"] is False
+
+
 @pytest.mark.parametrize(
     "reason",
     [

@@ -732,6 +732,10 @@ class BuilderWorkbenchService:
         incoming = self.relationships.get_incoming(token)
         if incoming is not None:
             return token if incoming.purpose == BUILDER_SELF_HOST else incoming.source_webspace_id
+        if self.relationships.get_outgoing(token) is not None:
+            # A registered host is already canonical. Legacy binding scans
+            # are migration compatibility, not part of every admitted read.
+            return token
 
         bindings_root = self.root / "bindings"
         for path in bindings_root.glob("*.json") if bindings_root.is_dir() else ():
@@ -1038,12 +1042,7 @@ class BuilderWorkbenchService:
                 from adaos.services.scenario.webspace_runtime import WebspaceService
 
                 svc = WebspaceService()
-            existing = None
-            webspaces = await asyncio.to_thread(lambda: list(svc.list(mode="mixed")))
-            for item in webspaces:
-                if str(getattr(item, "id", "") or getattr(item, "webspace_id", "") or "").strip() == dev_id:
-                    existing = item
-                    break
+            existing = await asyncio.to_thread(svc.get, dev_id)
             if existing is None:
                 existing = await svc.create(
                     dev_id,

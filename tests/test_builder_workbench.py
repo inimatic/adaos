@@ -23,6 +23,13 @@ from adaos.services.development_feedback import DevelopmentFeedbackService
 from adaos.services.development_tickets import DevelopmentTicketService
 
 
+class _PointWebspaces:
+    """Give bounded legacy test doubles the new targeted-read contract."""
+
+    def get(self, webspace_id):
+        return next((item for item in self.list(mode="mixed") if item.id == webspace_id), None)
+
+
 @pytest.fixture(autouse=True)
 def registered_builder_host():
     from adaos.services.workspaces import index
@@ -228,7 +235,7 @@ def test_trial_pin_uses_existing_topology_and_survives_service_recreation(tmp_pa
 async def test_ensure_dev_webspace_creates_explicit_prompt_ide_binding(tmp_path: Path) -> None:
     calls: list[tuple[str, str, str, bool]] = []
 
-    class _Webspaces:
+    class _Webspaces(_PointWebspaces):
         def __init__(self) -> None:
             self.items: dict[str, SimpleNamespace] = {}
 
@@ -296,7 +303,7 @@ async def test_ensure_dev_webspace_creates_explicit_prompt_ide_binding(tmp_path:
 async def test_implicit_bootstrap_cannot_restore_a_target_captured_before_a_new_selection(tmp_path: Path):
     switch = {"enabled": False}
     service = None
-    class Webspaces:
+    class Webspaces(_PointWebspaces):
         def list(self, mode="mixed"):
             if switch["enabled"]:
                 switch["enabled"] = False
@@ -322,7 +329,7 @@ async def test_implicit_bootstrap_cannot_restore_a_target_captured_before_a_new_
 async def test_ensure_preview_topology_does_not_materialize_unpinned_current_content(monkeypatch, tmp_path: Path) -> None:
     created = []
 
-    class Webspaces:
+    class Webspaces(_PointWebspaces):
         def list(self, **_kwargs):
             return []
 
@@ -341,7 +348,7 @@ async def test_ensure_preview_topology_does_not_materialize_unpinned_current_con
 
 @pytest.mark.asyncio
 async def test_ensure_dev_webspace_switches_current_without_reloading_ready_skip(monkeypatch, tmp_path: Path) -> None:
-    class _Webspaces:
+    class _Webspaces(_PointWebspaces):
         def __init__(self) -> None:
             self.items: dict[str, SimpleNamespace] = {}
 
@@ -401,7 +408,7 @@ async def test_ensure_dev_webspace_switches_current_without_reloading_ready_skip
 async def test_ensure_dev_webspace_force_reload_reapplies_exact_preview_target(
     monkeypatch, tmp_path: Path
 ) -> None:
-    class _Webspaces:
+    class _Webspaces(_PointWebspaces):
         def __init__(self) -> None:
             self.items: dict[str, SimpleNamespace] = {}
 
@@ -526,7 +533,7 @@ async def test_ensure_dev_webspace_force_reload_reapplies_exact_preview_target(
 
 @pytest.mark.asyncio
 async def test_ensure_dev_webspace_schedules_reconcile_but_waits_inside_single_worker(monkeypatch, tmp_path: Path) -> None:
-    class _Webspaces:
+    class _Webspaces(_PointWebspaces):
         def list(self, mode: str = "mixed"):
             return []
 
@@ -559,7 +566,7 @@ async def test_ensure_dev_webspace_schedules_reconcile_but_waits_inside_single_w
 
 @pytest.mark.asyncio
 async def test_rapid_preview_switches_keep_one_materialization_in_flight(monkeypatch, tmp_path: Path) -> None:
-    class _Webspaces:
+    class _Webspaces(_PointWebspaces):
         def __init__(self) -> None:
             self.items: dict[str, SimpleNamespace] = {}
 
@@ -664,7 +671,7 @@ async def test_ensure_dev_webspace_reports_yjs_panic_without_raising(monkeypatch
     class _YjsPanic(BaseException):
         pass
 
-    class _Webspaces:
+    class _Webspaces(_PointWebspaces):
         def list(self, mode: str = "mixed"):
             return []
 
@@ -1210,7 +1217,7 @@ def test_project_projection_keeps_project_context_and_primary_conversation(tmp_p
 
 
 def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
-    class _Webspaces:
+    class _Webspaces(_PointWebspaces):
         def __init__(self) -> None:
             self.items: dict[str, SimpleNamespace] = {}
 
