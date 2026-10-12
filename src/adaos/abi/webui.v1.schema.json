@@ -2092,6 +2092,11 @@
           "type": "boolean",
           "description": "Refresh dynamic options when a menu opens. Dynamic option sources refresh on open by default."
         },
+        "loadOptionsOnOpen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Defer the first dynamic option-source request until the menu opens. Use for non-critical option sets that must not delay first paint."
+        },
         "selected": { "type": "boolean" },
         "connected": { "type": "boolean" },
         "node_status": { "type": "string" },
@@ -2099,17 +2104,23 @@
         "whenKey": { "$ref": "#/$defs/fieldPath" },
         "whenEquals": {}
       },
-      "allOf": [{
-        "if": { "required": ["rememberSelection"], "properties": { "rememberSelection": { "const": true } } },
-        "then": {
-          "required": ["selectedStateKey", "options"],
-          "not": { "required": ["optionsDataSource"] },
-          "properties": {
-            "selectedStateKey": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": { "enum": ["__proto__", "constructor", "prototype"] } },
-            "options": { "minItems": 1 }
+      "allOf": [
+        {
+          "if": { "required": ["rememberSelection"], "properties": { "rememberSelection": { "const": true } } },
+          "then": {
+            "required": ["selectedStateKey", "options"],
+            "not": { "required": ["optionsDataSource"] },
+            "properties": {
+              "selectedStateKey": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+              "options": { "minItems": 1 }
+            }
           }
+        },
+        {
+          "if": { "required": ["loadOptionsOnOpen"], "properties": { "loadOptionsOnOpen": { "const": true } } },
+          "then": { "required": ["optionsDataSource"] }
         }
-      }]
+      ]
     },
 
     "actionButtonList": {

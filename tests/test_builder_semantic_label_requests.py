@@ -1,12 +1,18 @@
 from pathlib import Path
 
 import pytest
+import test_builder_semantic_graph as shared_graph
 
 from adaos.e2e.prototype_context_ablation import native_builder
 from adaos.sdk.builder import workflow as workflow_sdk
 from adaos.services.builder import semantic_graph
 
-pytest_plugins = ("test_builder_semantic_graph",)
+
+@pytest.fixture
+def graph_project(tmp_path):
+    """Reuse the semantic graph fixture in isolated and combined collection."""
+
+    return shared_graph.graph_project.__wrapped__(tmp_path)
 
 
 @pytest.fixture

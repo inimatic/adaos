@@ -16,10 +16,27 @@ def test_upgrade_preserves_current_builder_commands_and_issue_trace():
     before = json.loads((path / 'webui.json').read_text(encoding='utf-8-sig'))
     after = upgrade(before)
     assert after['ui']['application']['modals']['design-trace'] == before['ui']['application']['modals']['design-trace']
-    widgets = lambda ui: {node['id']: node for node in ui['ui']['application']['desktop']['pageSchema']['widgets']}
+    def widgets(ui):
+        return {
+            node['id']: node
+            for node in ui['ui']['application']['desktop']['pageSchema']['widgets']
+        }
+
     for identity, widget in widgets(before).items():
         if identity != 'design-trace-tasks':
-            assert widgets(after)[identity] == widget
+            expected = copy.deepcopy(widget)
+
+            def expected_lazy_menu(value):
+                if isinstance(value, dict):
+                    if value.get('id') == 'specimens' and value.get('optionsDataSource'):
+                        value.update(loadOptionsOnOpen=True, refreshOptionsOnOpen=True)
+                    for nested in value.values():
+                        expected_lazy_menu(nested)
+                elif isinstance(value, list):
+                    for nested in value:
+                        expected_lazy_menu(nested)
+            expected_lazy_menu(expected)
+            assert widgets(after)[identity] == expected
     assert upgrade(after) == after
     assert audit_locales(after, path)['en'] == len(caption_keys(after))
     schema = json.loads((ROOT / 'src/adaos/abi/webui.v1.schema.json').read_text(encoding='utf-8'))
