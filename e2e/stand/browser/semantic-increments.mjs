@@ -7,6 +7,35 @@ import { canonicalWidgetSources, canonicalRenderedWidgetSources } from './widget
 import { observeUsability } from './prototype-usability.mjs'
 
 const expect = baseExpect.configure({ timeout: 30_000 })
+
+// CSS visibility alone admits text clipped by an inner table scroller. Check
+// the actual glyph rectangles against every clipping ancestor and the viewport.
+async function visibleTextGeometry(locator) {
+  return locator.evaluate(element => {
+    const clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      const style = getComputedStyle(node)
+      const box = node.getBoundingClientRect()
+      if (/auto|scroll|hidden|clip/.test(style.overflowX)) {
+        clip.left = Math.max(clip.left, box.left + node.clientLeft)
+        clip.right = Math.min(clip.right, box.left + node.clientLeft + node.clientWidth)
+      }
+      if (/auto|scroll|hidden|clip/.test(style.overflowY)) {
+        clip.top = Math.max(clip.top, box.top + node.clientTop)
+        clip.bottom = Math.min(clip.bottom, box.top + node.clientTop + node.clientHeight)
+      }
+    }
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    const rects = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0)
+    const visible = rects.length > 0 && rects.every(rect => rect.left >= clip.left - 1
+      && rect.right <= clip.right + 1 && rect.top >= clip.top - 1 && rect.bottom <= clip.bottom + 1)
+    const scroller = element.closest('.table-wrap')
+    return { visible, clip, rects: rects.map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })),
+      scrollLeft: scroller?.scrollLeft, scrollWidth: scroller?.scrollWidth, clientWidth: scroller?.clientWidth }
+  })
+}
+
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Semantic browser probe requires DEV')
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
 const webspace = process.env.ADAOS_E2E_WEBSPACE_ID
@@ -58,6 +87,9 @@ try {
       await expect(host(collection.id)).toContainText(report.expectedField)
       await expect(host(collection.id)).toContainText('Alpha')
       sample.checks.push('live records', 'view label', 'field label', 'related display')
+      const primaryText = host(collection.id).locator('tbody tr').first().locator('td .cell-text').first()
+      sample.primaryBeforeEditor = await visibleTextGeometry(primaryText)
+      if (!sample.primaryBeforeEditor.visible) throw new Error('Primary record text is clipped before opening its editor')
       const rendered = await page.locator('ada-page-widget-host').evaluateAll(elements => elements.map(element => window.ng?.getComponent(element)?.widget).filter(Boolean))
       const present = new Set(rendered.map(widget => widget.id))
       if (!isDeepStrictEqual(canonicalRenderedWidgetSources(rendered, widgets), canonicalWidgetSources(widgets.filter(widget => present.has(widget.id))))) {
@@ -81,6 +113,9 @@ try {
         await expect(form).toBeHidden()
         await expect(host(collection.id)).toContainText('First task')
         sample.checks.push('editor reachability', 'cancel preserves record')
+        sample.primaryAfterCancel = await visibleTextGeometry(primaryText)
+        if (!sample.primaryAfterCancel.visible) throw new Error('Primary record text is clipped after cancelling its editor')
+        sample.checks.push('primary record remains visually readable')
       } else {
         throw new Error('Fixture requires a separate update editor')
       }
