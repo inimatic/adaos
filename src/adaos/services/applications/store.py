@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+from collections import OrderedDict
+import copy
 import hashlib
 import json
 import os
 from pathlib import Path
 import time
-from typing import Any, Callable, Mapping, TypeVar
+import threading
+from typing import Any, Callable, Iterable, Mapping, TypeVar
 
 from adaos.domain.application import (
     Application,
@@ -45,6 +48,10 @@ class ApplicationChannelConflict(ApplicationStoreError):
 
 
 _T = TypeVar("_T")
+_VERIFIED_RELEASE_CACHE: OrderedDict[tuple[str, bytes], tuple[ApplicationRelease, int]] = OrderedDict()
+_VERIFIED_RELEASE_CACHE_LOCK = threading.RLock()
+_VERIFIED_RELEASE_CACHE_LIMIT = 256
+_VERIFIED_RELEASE_CACHE_BYTES = 16 * 1024 * 1024
 
 
 def _key(value: str) -> str:
@@ -483,9 +490,37 @@ class ApplicationStore:
         path = self._release_path(application_id, release_digest)
         if not path.is_file():
             raise FileNotFoundError(f"ApplicationRelease not found: {application_id}@{release_digest}")
-        value = ApplicationRelease.from_mapping(_read(path))
+        # Re-read exact bytes on every admission. Cache only validated parsing,
+        # never a runtime selection or authority decision; byte changes force
+        # full validation even with a forged unchanged filesystem timestamp.
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            raise ApplicationStoreError(f"cannot read Application record {path.name}") from exc
+        key = (str(path), hashlib.sha256(content).digest())
+        with _VERIFIED_RELEASE_CACHE_LOCK:
+            cached = _VERIFIED_RELEASE_CACHE.get(key)
+            if cached is not None:
+                if cached[0].application_id != application_id or cached[0].release_digest != release_digest:
+                    raise ApplicationStoreError("ApplicationRelease path identity mismatch")
+                _VERIFIED_RELEASE_CACHE.move_to_end(key)
+                return copy.deepcopy(cached[0])
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ApplicationStoreError(f"cannot read Application record {path.name}") from exc
+        if not isinstance(payload, Mapping):
+            raise ApplicationStoreError(f"Application record {path.name} is not an object")
+        value = ApplicationRelease.from_mapping(payload)
         if value.application_id != application_id or value.release_digest != release_digest:
             raise ApplicationStoreError("ApplicationRelease path identity mismatch")
+        with _VERIFIED_RELEASE_CACHE_LOCK:
+            _VERIFIED_RELEASE_CACHE[key] = (copy.deepcopy(value), len(content))
+            _VERIFIED_RELEASE_CACHE.move_to_end(key)
+            while len(_VERIFIED_RELEASE_CACHE) > _VERIFIED_RELEASE_CACHE_LIMIT or sum(
+                item[1] for item in _VERIFIED_RELEASE_CACHE.values()
+            ) > _VERIFIED_RELEASE_CACHE_BYTES:
+                _VERIFIED_RELEASE_CACHE.popitem(last=False)
         return value
 
     def get_release_summary(self, application_id: str, release_digest: str) -> dict[str, Any]:
