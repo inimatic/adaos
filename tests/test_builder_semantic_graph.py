@@ -125,6 +125,86 @@ def test_generation_precondition_is_enforced_without_mutation(graph_project):
     assert (root / "webui.json").read_bytes() == before
 
 
+def test_ordinary_request_prepare_apply_retry_and_inverse(graph_project, monkeypatch):
+    service, workflow, root, document = graph_project
+    monkeypatch.setattr(graph.SemanticGraphService, "from_context", classmethod(lambda cls: service))
+    title = next(view["title"]["en"] for view in document["views"] if view["id"] == "work-list")
+    text = f'Rename view "{title}" to "Work queue" in English.'
+    before = (root / "semantic.webui.json").read_bytes()
+    prepared = sdk.prepare_label_request(project_ref="scenario:semantic_labels", instruction=text,
+                                         source_message_id="message-rename", expected_revision="001")
+    assert (root / "semantic.webui.json").read_bytes() == before
+    assert prepared["request"]["write_refs"] == ["view:work-list"]
+    result = sdk.apply(prepared["request"])
+    assert result["source_request"] == {"instruction": text, "source_message_id": "message-rename"}
+    retry = sdk.prepare_label_request(project_ref="scenario:semantic_labels", instruction=text,
+                                      source_message_id="message-rename", expected_revision="001")
+    assert retry["replayed"] and retry["request"] == prepared["request"]
+    assert sdk.apply(retry["request"])["replayed"]
+    with pytest.raises(BuilderWorkflowError, match="identity conflicts"):
+        sdk.prepare_label_request(project_ref="scenario:semantic_labels", instruction=text.replace("Work queue", "New title"),
+                                  source_message_id="message-rename")
+    undo = sdk.prepare_label_request(project_ref="scenario:semantic_labels", instruction="Undo the last label change",
+                                     source_message_id="message-undo", expected_revision="002")
+    assert undo["request"]["ops"] == result["inverse_ops"]
+    assert sdk.apply(undo["request"])["revision"] == "003"
+    assert json.loads((root / "semantic.webui.json").read_text(encoding="utf-8")) == document
+
+
+@pytest.mark.parametrize("instruction", [
+    'Rename view "not present" to "Queue"',
+    'Rename field Name to Subject',
+    'Rename view "not present" to "Queue" and delete the records',
+])
+def test_incomplete_label_requests_clarify_without_mutation(graph_project, instruction):
+    service, workflow, root, _ = graph_project
+    before = (root / "webui.json").read_bytes(), workflow.describe("scenario", "semantic_labels")["generation"]
+    assert service.prepare_label_request(project_ref="scenario:semantic_labels", instruction=instruction,
+                                         source_message_id="clarify")["status"] == "clarification_required"
+    assert ((root / "webui.json").read_bytes(), workflow.describe("scenario", "semantic_labels")["generation"]) == before
+
+
+def test_request_resolution_requires_exact_locale_and_one_semantic_node(graph_project):
+    from adaos.services.builder.semantic_label_requests import parse_request, plan
+    _, _, _, document = graph_project
+    first = document["views"][0]
+    first["title"].update(en="Shared", ru="Shared")
+    assert plan(document, parse_request('Rename view "Shared" to "Queue"'))["reason"] == "ambiguous_label"
+    selected = plan(document, parse_request('Переименуй экран «Shared» в «Queue» на английском'))
+    assert selected["ops"][0]["locale"] == "en"
+    document["views"][1]["title"]["en"] = "Shared"
+    assert plan(document, parse_request('Rename view "Shared" to "Queue" in English'))["reason"] == "ambiguous_label"
+
+
+def test_stale_request_and_undo_without_label_receipt_fail_closed(graph_project):
+    service, _, _, _ = graph_project
+    with pytest.raises(BuilderWorkflowError, match="stale"):
+        service.prepare_label_request(project_ref="scenario:semantic_labels", instruction='Rename view "Work" to "Queue"',
+                                       source_message_id="stale", expected_revision="999")
+    with pytest.raises(BuilderWorkflowError, match="no exact"):
+        service.prepare_label_request(project_ref="scenario:semantic_labels", instruction="Undo the last label change",
+                                       source_message_id="undo")
+
+
+def test_label_request_does_not_trust_drifted_ui_or_a_forged_inverse(graph_project):
+    service, _, root, document = graph_project
+    request = operation(service, document)
+    service.apply(request)
+    revision_path = root / "ui_revisions/002.json"
+    revision = json.loads(revision_path.read_text(encoding="utf-8"))
+    revision["semantic_transaction"]["inverse_ops"][0]["text"] = "Forged original"
+    revision_path.write_text(json.dumps(revision), encoding="utf-8")
+    with pytest.raises(BuilderWorkflowError, match="exact retained"):
+        service.prepare_label_request(project_ref="scenario:semantic_labels", instruction="Undo the last label change",
+                                       source_message_id="forged-undo")
+    actual = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    actual["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["title"] = "Drift"
+    (root / "webui.json").write_text(json.dumps(actual), encoding="utf-8")
+    with pytest.raises(BuilderWorkflowError, match="baseline drift"):
+        service.prepare_label_request(project_ref="scenario:semantic_labels", instruction='Rename view "Work queue" to "New queue"',
+                                       source_message_id="drift")
+
+
 def test_shared_translation_key_does_not_authorize_other_label_changes(graph_project):
     service, _, _, document = graph_project
     other = document["resources"][0]["fields"][0]["label"]

@@ -201,6 +201,74 @@ class SemanticGraphService:
             else:
                 raise BuilderWorkflowError("pending semantic transaction has a conflicting revision")
 
+    def prepare_label_request(self, *, project_ref: str, instruction: str,
+                              source_message_id: str, expected_revision: str | None = None) -> dict[str, Any]:
+        """Read-only admission packet, or the exact retained request for a retry.
+
+        Caller intake may update the workflow generation but must not change the
+        admitted source/revision/write set. apply still verifies the entire base.
+        """
+        from .semantic_label_requests import parse_request, plan
+        parsed = parse_request(instruction)
+        if parsed is None:
+            return {"status": "not_applicable"}
+        if not re.fullmatch(r"scenario:[A-Za-z0-9_.-]{1,160}", project_ref):
+            raise BuilderWorkflowError("semantic label request requires a scenario ref")
+        origin = {"instruction": instruction.strip(), "source_message_id": source_message_id}
+        if not source_message_id.strip() or len(source_message_id) > 240 or len(origin["instruction"]) > 1000:
+            raise BuilderWorkflowError("semantic label request requires bounded source message identity")
+        object_id = project_ref.partition(":")[2]
+        root = self.workflow.project_root("scenario", object_id)
+        operation_root = _operation_root(self.workflow, project_ref)
+        with _LOCK, mutation_lock(operation_root / ".mutation.lock"):
+            state = self.workflow.describe("scenario", object_id)
+            change_id = (state.get("change") or {}).get("change_id")
+            if not change_id or not state["capabilities"].get("can_edit_prototype"):
+                raise BuilderWorkflowError("semantic label request requires an active editable Change")
+            self._recover(root, object_id)
+            state = self.workflow.describe("scenario", object_id)
+            transaction_id = "label-request-" + digest([project_ref, source_message_id])[7:39]
+            path = operation_root / (digest([change_id, transaction_id])[7:] + ".json")
+            if path.is_file():
+                journal = _read(path)
+                if journal["request"].get("source_request") != origin:
+                    raise BuilderWorkflowError("source message identity conflicts with retained label request")
+                if journal["status"] != "committed":
+                    raise BuilderWorkflowError("uncommitted label request requires explicit recovery")
+                if expected_revision and expected_revision != journal["request"]["source_revision"]:
+                    raise BuilderWorkflowError("label retry revision conflicts with retained request")
+                return {"status": "planned", "request": journal["request"], "replayed": True}
+            revision = self.workflow.current_prototype_revision("scenario", object_id)
+            if expected_revision and expected_revision != revision:
+                raise BuilderWorkflowError("stale label request revision")
+            document = _read(self._file(root, "semantic.webui.json"))
+            verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}")
+            if parsed["kind"] == "undo":
+                retained = _read(self._file(root, f"ui_revisions/{revision}.json"))
+                previous = retained.get("semantic_transaction") or {}
+                if previous.get("semantic_digest") != digest(document) or not previous.get("inverse_ops"):
+                    raise BuilderWorkflowError("current revision has no exact semantic label inverse")
+                patch = retained.get("patch") or {}
+                previous_path = operation_root / (digest([patch.get("change_id"), previous.get("transaction_id")])[7:] + ".json")
+                journal = _read(previous_path)
+                if journal["status"] != "committed" or patch.get("change_id") != change_id:
+                    raise BuilderWorkflowError("undo requires a committed label operation in the active Change")
+                if journal["result"] != previous or previous.get("revision") != revision:
+                    raise BuilderWorkflowError("undo revision differs from its exact retained transaction")
+                reduced = reduce_graph(document, previous["inverse_ops"], write_refs=previous["write_refs"])
+                planned = {"status": "planned", "ops": previous["inverse_ops"], "write_refs": previous["write_refs"],
+                           "semantic_digest": reduced["semantic_digest"]}
+            else:
+                planned = plan(document, parsed)
+            if planned["status"] != "planned":
+                return planned
+            request = {"schema": SCHEMA, "project_ref": project_ref, "change_id": change_id,
+                       "transaction_id": transaction_id, "source_revision": revision, "base_hash": digest(document),
+                       "expected_generation": state["generation"], "write_refs": planned["write_refs"],
+                       "ops": planned["ops"], "source_request": origin}
+            Draft202012Validator(_contract()).validate(request)
+            return {"status": "planned", "request": request, "replayed": False}
+
     def apply(self, request: Mapping[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(dict(request))
         try:
@@ -274,6 +342,8 @@ class SemanticGraphService:
                       "semantic_digest": reduced["semantic_digest"], "artifact_digest": digest(after_ui),
                       "inverse_ops": reduced["inverse_ops"], "write_refs": value["write_refs"],
                       "transaction_id": value["transaction_id"], "reducer": REDUCER, "model_calls": 0}
+            if "source_request" in value:
+                result["source_request"] = copy.deepcopy(value["source_request"])
             after_files[f"ui_revisions/{revision}.json"] = _bytes({
                 "schema": "adaos.builder.ui_revision.v1", "revision": revision, "scenario_id": object_id,
                 "patch": {"operation": "semantic_graph", "id": value["transaction_id"], "change_id": value["change_id"]},

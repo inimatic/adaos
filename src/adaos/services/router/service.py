@@ -6281,6 +6281,10 @@ class RouterService:
                 "ts": time.time(),
                 "_meta": dict(meta),
             }
+            # Bind downstream skill changes to the actual durable user turn.
+            # Keep message_id free for assistant/output identities; it is not
+            # interchangeable with the source message's provenance.
+            meta["source_message_id"] = str(msg["id"])
             _record_voice_turn_trace(
                 ws,
                 meta,

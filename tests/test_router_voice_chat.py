@@ -1302,6 +1302,9 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
     assert calls[0][0:2] == ("builder_skill", "chat")
     assert calls[0][2]["text"] == "создадим приложение список покупок"
     assert calls[0][2]["_meta"]["dialog_channel_id"] == "builder"
+    source_message_id = calls[0][2]["_meta"]["source_message_id"]
+    messages = doc.get_map("data")["voice_chat"]["messages"]
+    assert any(row["id"] == source_message_id and row["from"] == "user" for row in messages)
     state = dialog_runtime.get_active_channel(webspace_id)
     assert state is not None
     assert state.channel_id == "builder"
@@ -2251,6 +2254,7 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
         "conversation_id": f"conv.skill.conversation_companions.default.{webspace_id}",
         "conversation_owner": "skill:conversation_companions",
         "active_agent_id": "agent:conversation_companions:arseni",
+        "source_message_id": doc.get_map("data")["voice_chat"]["messages"][0]["id"],
     }
     assert doc.get_map("data")["voice_chat"]["messages"][0]["text"] == "free form companion turn"
     assert seen_stream
@@ -2628,6 +2632,9 @@ async def test_telegram_addressed_builder_uses_same_dialog_and_projects_reply(mo
     assert calls[0][2]["_meta"]["route_id"] == "telegram"
     assert calls[0][2]["_meta"]["dialog_channel_id"] == "builder"
     assert calls[0][2]["_meta"]["_router_tool_scheduled_at"] > 0
+    source_message_id = calls[0][2]["_meta"]["source_message_id"]
+    messages = doc.get_map("data")["nodes"]["hub-node"]["voice_chat"]["messages"]
+    assert any(row["id"] == source_message_id and row["from"] == "user" for row in messages)
     assert len(outputs) == 1
     assert outputs[0].type == "tg.output.main-bot.chat.42"
     assert outputs[0].payload["messages"] == [

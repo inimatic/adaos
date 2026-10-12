@@ -30,4 +30,17 @@ def verify_source(document: Mapping[str, Any], webui: Mapping[str, Any], *, proj
     return verify_baseline(document, webui, project_ref=project_ref)
 
 
-__all__ = ["apply", "replay", "verify_source"]
+def recognizes_label_request(instruction: str) -> bool:
+    from adaos.services.builder.semantic_label_requests import parse_request
+    return parse_request(instruction) is not None
+
+
+def prepare_label_request(*, project_ref: str, instruction: str, source_message_id: str,
+                          expected_revision: str | None = None) -> dict[str, Any]:
+    from adaos.services.builder.semantic_graph import SemanticGraphService
+    return SemanticGraphService.from_context().prepare_label_request(
+        project_ref=project_ref, instruction=instruction, source_message_id=source_message_id,
+        expected_revision=expected_revision)
+
+
+__all__ = ["apply", "replay", "verify_source", "recognizes_label_request", "prepare_label_request"]
