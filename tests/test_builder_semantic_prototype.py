@@ -117,6 +117,20 @@ def test_source_preserving_revision_rejects_structural_loss():
     assert caught.value.findings[0]["code"] == "semantic.preserved_fields_missing"
 
 
+@pytest.mark.parametrize("member,value", [("guard", None), ("fixed_values", {"status": "open"})])
+def test_source_preserving_revision_restores_same_identity_command_effects(member, value):
+    brief, previous = _multi_resource_fixture()
+    brief.setdefault("residual_requirements", []).append({"id": "residual:preserve",
+        "statement": "Preserve the existing resources, fields and operations.",
+        "evidence": ["intent.statement#char=0:1"], "confidence": 1.0})
+    current = copy.deepcopy(previous)
+    old = next(item for item in previous["commands"] if item["id"] == "complete")
+    next(item for item in current["commands"] if item["id"] == "complete")[member] = value
+    reconciled = reconcile_semantic_revision(previous, current, brief=brief)
+    assert next(item for item in reconciled["semantic_document"]["commands"] if item["id"] == "complete") == old
+    assert reconciled["normalizations"][-1]["reason"] == "effects_changed"
+
+
 def _text(key: str, en: str, ru: str) -> dict[str, str]:
     return {"key": key, "en": en, "ru": ru}
 

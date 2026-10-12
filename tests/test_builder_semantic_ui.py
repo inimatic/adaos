@@ -277,3 +277,85 @@ def test_semantic_move_uses_stable_anchor_and_records_reversible_order(
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
     assert [item["id"] for item in widgets] == ["recipe-summary", "recipe-list"]
     assert result["undo"]["value"]["index"] == 1
+
+    restored = service.apply({**result["operation"], "operation_id": "RUN-undo-move",
+                              "source_revision": result["revision"], "value": result["undo"]["value"]})
+    widgets = json.loads((root / "webui.json").read_text(encoding="utf-8"))["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    assert restored["ok"]
+    assert [item["id"] for item in widgets] == ["recipe-list", "recipe-summary"]
+
+
+def _label_operation(**changes):
+    return {"schema": "adaos.builder.semantic_ui_change.v1", "operation_id": "label-op",
+            "change_id": "CH-recipes-label", "project_ref": "scenario:recipes", "operation": "rename",
+            "target_ref": "field:recipe-list:recipe-name", "source_revision": "001",
+            "value": "Recipe name", "risk": "local_reversible", **changes}
+
+
+@pytest.mark.parametrize("condition", [
+    {"kind": "unknown", "value": False},
+    {"kind": "property_equals", "property": "label", "value": "Wrong"},
+    {"kind": "workflow_generation", "value": -1},
+    {"kind": "source_digest", "value": "sha256:wrong"},
+])
+def test_semantic_preconditions_fail_closed_without_mutation(semantic_project, condition):
+    service, workflow, root = semantic_project
+    before = (root / "webui.json").read_bytes()
+    generation = workflow.describe("scenario", "recipes")["generation"]
+    with pytest.raises(BuilderWorkflowError, match="precondition"):
+        service.apply(_label_operation(preconditions=[condition]))
+    assert (root / "webui.json").read_bytes() == before
+    assert workflow.describe("scenario", "recipes")["generation"] == generation
+    assert not (root / "ui_revisions" / "002.json").exists()
+
+
+def test_semantic_exact_retry_is_durable_and_conflict_is_not_a_new_revision(semantic_project):
+    service, workflow, root = semantic_project
+    operation = _label_operation(preconditions=[{"kind": "property_equals", "property": "label", "value": "Name"}])
+    first = service.apply(operation)
+    recovered = BuilderSemanticUIService(workflow=workflow).apply(operation)
+    assert recovered["revision"] == first["revision"]
+    assert recovered["replayed"] is True
+    with pytest.raises(BuilderWorkflowError, match="identity conflicts"):
+        service.apply({**operation, "value": "Another label", "source_revision": first["revision"]})
+    assert not (root / "ui_revisions" / "003.json").exists()
+
+
+def test_semantic_rename_undo_is_executable(semantic_project):
+    service, _, root = semantic_project
+    result = service.apply(_label_operation())
+    service.apply(_label_operation(operation="set_property", operation_id="undo-label",
+                                  source_revision=result["revision"], value=result["undo"]))
+    field = json.loads((root / "webui.json").read_text(encoding="utf-8"))["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["fields"][0]
+    assert field["label"] == "Name"
+
+
+def test_renderer_edits_cannot_leave_a_managed_semantic_source_stale(semantic_project):
+    service, _, root = semantic_project
+    (root / "semantic.webui.json").write_text('{}', encoding="utf-8")
+    before = (root / "webui.json").read_bytes()
+    with pytest.raises(BuilderWorkflowError, match="requires graph operations"):
+        service.apply(_label_operation())
+    assert (root / "webui.json").read_bytes() == before
+
+
+def test_failed_operation_receipt_rolls_back_ui_and_workflow(semantic_project, monkeypatch):
+    from adaos.services.builder import semantic_ui
+    service, workflow, root = semantic_project
+    before_ui = (root / "webui.json").read_bytes()
+    before_workflow = workflow.describe("scenario", "recipes")
+    write = semantic_ui._write_bytes_atomic
+
+    def fail_receipt(path, raw):
+        if path.parent.name == "semantic_operations":
+            raise OSError("injected receipt persistence failure")
+        write(path, raw)
+
+    monkeypatch.setattr(semantic_ui, "_write_bytes_atomic", fail_receipt)
+    with pytest.raises(OSError, match="receipt persistence"):
+        service.apply(_label_operation())
+    assert (root / "webui.json").read_bytes() == before_ui
+    after = workflow.describe("scenario", "recipes")
+    assert after["generation"] == before_workflow["generation"]
+    assert after["prototype"]["head_revision"] == "001"
+    assert not (root / "ui_revisions" / "002.json").exists()

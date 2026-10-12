@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -132,6 +133,7 @@ def _rename(target: dict[str, Any], target_kind: str, value: Any) -> dict[str, A
         raise BuilderWorkflowError("rename text is required")
     if len(text) > 240:
         raise BuilderWorkflowError("rename text exceeds 240 characters")
+    existed = property_name in target
     before = copy.deepcopy(target.get(property_name))
     target[property_name] = text
     return {
@@ -142,9 +144,62 @@ def _rename(target: dict[str, Any], target_kind: str, value: Any) -> dict[str, A
             "operation": "set_property",
             "property": property_name,
             "value": before,
-            "remove_when_null": before is None,
+            "remove_when_null": not existed,
         },
     }
+
+
+def _set_property(target: dict[str, Any], value: Any) -> dict[str, Any]:
+    """Restore only the label/title properties covered by the rename contract."""
+    if not isinstance(value, Mapping) or value.get("property") not in {"title", "label"}:
+        raise BuilderWorkflowError("set_property restores only title or label")
+    if set(value) - {"operation", "property", "value", "remove_when_null"}:
+        raise BuilderWorkflowError("unsupported label restoration members")
+    text = value.get("value")
+    if text is not None and (not isinstance(text, str) or len(text) > 240):
+        raise BuilderWorkflowError("restored label must be a bounded string or null")
+    remove = value.get("remove_when_null", False)
+    if not isinstance(remove, bool) or (remove and text is not None):
+        raise BuilderWorkflowError("invalid label restoration removal")
+    property_name = str(value["property"])
+    existed = property_name in target
+    before = copy.deepcopy(target.get(property_name))
+    if remove:
+        target.pop(property_name, None)
+    else:
+        target[property_name] = text
+    return {
+        "property": property_name, "before": before, "after": text,
+        "undo": {"operation": "set_property", "property": property_name,
+                 "value": before, "remove_when_null": not existed},
+    }
+
+
+def _operation_digest(value: Any) -> str:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _check_preconditions(value: Mapping[str, Any], webui: Mapping[str, Any],
+                         projection: Mapping[str, Any]) -> None:
+    for condition in value.get("preconditions") or []:
+        kind = condition.get("kind")
+        if kind == "property_equals" and set(condition) <= {"kind", "target_ref", "property", "value"}:
+            if condition.get("property") not in {"title", "label"} or "value" not in condition:
+                raise BuilderWorkflowError("invalid property_equals precondition")
+            target, _ = _resolve_target(webui, str(condition.get("target_ref") or value["target_ref"]))
+            matches = target.get(condition["property"]) == condition["value"]
+        elif kind == "workflow_generation" and set(condition) == {"kind", "value"}:
+            expected = condition["value"]
+            if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+                raise BuilderWorkflowError("invalid workflow_generation precondition")
+            matches = projection["generation"] == expected
+        elif kind == "source_digest" and set(condition) == {"kind", "value"}:
+            matches = _operation_digest(webui) == condition["value"]
+        else:
+            raise BuilderWorkflowError(f"unsupported semantic UI precondition: {kind!r}")
+        if not matches:
+            raise BuilderWorkflowError(f"semantic UI precondition failed: {kind}")
 
 
 def _add(target: dict[str, Any], target_ref: str, value: Any) -> dict[str, Any]:
@@ -252,7 +307,7 @@ def _move(
         anchor_index = anchor_location[1]
         requested_index = anchor_index if selectors[0] == "before_ref" else anchor_index + 1
     item = container.pop(source_index)
-    if requested_index > source_index:
+    if "index" not in selectors and requested_index > source_index:
         requested_index -= 1
     target_index = max(0, min(requested_index, len(container)))
     container.insert(target_index, item)
@@ -292,9 +347,9 @@ class BuilderSemanticUIService:
         value.setdefault("schema", BUILDER_SEMANTIC_UI_CHANGE_SCHEMA)
         value.setdefault("risk", "local_reversible")
         Draft202012Validator(_schema("builder.semantic_ui_change.v1.schema.json")).validate(value)
-        if value["operation"] not in {"rename", "move", "add", "remove", "set_data_mode"}:
+        if value["operation"] not in {"rename", "set_property", "move", "add", "remove", "set_data_mode"}:
             raise BuilderWorkflowError(
-                "enabled semantic UI operations are rename, move, add, remove, and set_data_mode"
+                "enabled semantic UI operations are rename, set_property, move, add, remove, and set_data_mode"
             )
 
         change_id = str(value["change_id"]).strip()
@@ -318,11 +373,25 @@ class BuilderSemanticUIService:
                 raise BuilderWorkflowError("semantic UI operation does not match the active Change")
             if not projection["capabilities"].get("can_edit_prototype"):
                 raise BuilderWorkflowError("semantic UI operations require an editable Prototype")
+            root = self.workflow.project_root(object_type, object_id)
+            receipt_path = root / "semantic_operations" / (
+                _operation_digest([change_id, operation_id]).removeprefix("sha256:") + ".json"
+            )
+            fingerprint = _operation_digest(value)
+            if receipt_path.is_file():
+                receipt = _read_json(receipt_path, label="semantic operation receipt")
+                if receipt.get("request_digest") != fingerprint:
+                    raise BuilderWorkflowError("semantic UI operation identity conflicts with retained payload")
+                return {**copy.deepcopy(receipt["result"]), "replayed": True}
             current_revision = self.workflow.current_prototype_revision(object_type, object_id)
             if current_revision != source_revision:
                 raise BuilderWorkflowError(
                     f"stale semantic UI source revision: expected {source_revision}, current {current_revision}"
                 )
+
+            _check_preconditions(value, _read_json(root / "webui.json", label="webui.json"), projection)
+            if (root / "semantic.webui.json").is_file() and value["operation"] != "set_data_mode":
+                raise BuilderWorkflowError("managed semantic source requires graph operations, not renderer edits")
 
             if value["operation"] == "set_data_mode":
                 binding = projection.get("data_binding") if isinstance(projection.get("data_binding"), Mapping) else {}
@@ -335,7 +404,7 @@ class BuilderSemanticUIService:
                     expected_binding_generation=int(binding.get("generation") or 0),
                     confirmed=bool(selected.get("confirmed")),
                 )
-                return {
+                result = {
                     "ok": True,
                     "operation": value,
                     "revision": source_revision,
@@ -344,6 +413,10 @@ class BuilderSemanticUIService:
                     "binding": copy.deepcopy(result["workflow"].get("data_binding")),
                     "workflow": result["workflow"],
                 }
+                receipt_path.parent.mkdir(exist_ok=True)
+                _write_bytes_atomic(receipt_path, (json.dumps({"request_digest": fingerprint,
+                    "operation": value, "result": result}, ensure_ascii=False) + "\n").encode("utf-8"))
+                return result
 
             root = self.workflow.project_root(object_type, object_id)
             webui_path = root / "webui.json"
@@ -357,6 +430,8 @@ class BuilderSemanticUIService:
             target, target_kind = _resolve_target(after_webui, target_ref)
             if value["operation"] == "rename":
                 edit = _rename(target, target_kind, value.get("value"))
+            elif value["operation"] == "set_property":
+                edit = _set_property(target, value.get("value"))
             elif value["operation"] == "move":
                 edit = _move(after_webui, target, target_ref, value.get("value"))
             elif value["operation"] == "add":
@@ -418,6 +493,7 @@ class BuilderSemanticUIService:
             prompt_state_path = root / "prompt_state.json"
             prompt_state_existed = prompt_state_path.is_file()
             before_prompt_state_raw = prompt_state_path.read_bytes() if prompt_state_existed else None
+            before_workflow_state = copy.deepcopy(self.workflow._read_state(object_type, object_id))
             context_packet = self.workflow.build_context_packet(
                 object_type,
                 object_id,
@@ -460,10 +536,19 @@ class BuilderSemanticUIService:
                     },
                     expected_generation=projection["generation"],
                 )
+                result = {
+                    "ok": True, "operation": value, "revision": revision,
+                    "revision_ref": f"ui_revision:{revision}", "undo": edit["undo"],
+                    "context_packet_digest": context_packet["digest"], "workflow": transition["workflow"],
+                }
+                receipt_path.parent.mkdir(exist_ok=True)
+                _write_bytes_atomic(receipt_path, (json.dumps({"request_digest": fingerprint,
+                    "operation": value, "result": result}, ensure_ascii=False) + "\n").encode("utf-8"))
             except Exception:
                 _write_bytes_atomic(webui_path, before_webui_raw)
                 _write_bytes_atomic(scenario_json_path, before_scenario_raw)
                 _write_bytes_atomic(current_path, before_current_raw)
+                self.workflow._write_state(object_type, object_id, before_workflow_state)
                 if before_prompt_state_raw is not None:
                     _write_bytes_atomic(prompt_state_path, before_prompt_state_raw)
                 elif not prompt_state_existed and prompt_state_path.is_file():
@@ -471,17 +556,11 @@ class BuilderSemanticUIService:
                 for path in new_paths:
                     if path.is_file():
                         path.unlink()
+                if receipt_path.is_file():
+                    receipt_path.unlink()
                 raise
 
-        return {
-            "ok": True,
-            "operation": value,
-            "revision": revision,
-            "revision_ref": f"ui_revision:{revision}",
-            "undo": edit["undo"],
-            "context_packet_digest": context_packet["digest"],
-            "workflow": transition["workflow"],
-        }
+        return result
 
 
 __all__ = [

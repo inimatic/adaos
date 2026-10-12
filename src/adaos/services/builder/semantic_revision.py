@@ -232,6 +232,12 @@ def reconcile_semantic_revision(
             ):
                 restore = True
                 reason = "retargeted"
+            elif {key: value for key, value in current_command.items()
+                  if key not in {"id", "label", "view_ref"}} != {
+                      key: value for key, value in old_command.items()
+                      if key not in {"id", "label", "view_ref"}}:
+                restore = True
+                reason = "effects_changed"
         if not restore:
             continue
         restored = copy.deepcopy(dict(old_command))
