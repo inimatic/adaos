@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.semantic_graph_change.v1",
+  "title": "Bounded semantic graph label transaction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "project_ref", "change_id", "transaction_id", "source_revision", "base_hash", "expected_generation", "write_refs", "ops"],
+  "properties": {
+    "schema": {"const": "adaos.builder.semantic_graph_change.v1"},
+    "project_ref": {"type": "string", "pattern": "^scenario:[A-Za-z0-9_.-]+$", "maxLength": 180},
+    "change_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "transaction_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "source_revision": {"type": "string", "minLength": 1, "maxLength": 80},
+    "base_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "expected_generation": {"type": "integer", "minimum": 0},
+    "write_refs": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/ref"}},
+    "ops": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/op"}}
+  },
+  "$defs": {
+    "ref": {"type": "string", "pattern": "^(view:[A-Za-z0-9_.-]+|field:[A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+)$", "maxLength": 250},
+    "op": {
+      "type": "object", "additionalProperties": false,
+      "required": ["seq", "kind", "ref", "locale", "expected", "text"],
+      "properties": {
+        "seq": {"type": "integer", "minimum": 1, "maximum": 16},
+        "kind": {"const": "label.set"}, "ref": {"$ref": "#/$defs/ref"},
+        "locale": {"enum": ["en", "ru"]},
+        "expected": {"type": "string", "minLength": 1, "maxLength": 240},
+        "text": {"type": "string", "minLength": 1, "maxLength": 240}
+      }
+    }
+  }
+}

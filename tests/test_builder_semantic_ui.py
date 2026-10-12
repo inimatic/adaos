@@ -347,7 +347,7 @@ def test_failed_operation_receipt_rolls_back_ui_and_workflow(semantic_project, m
     write = semantic_ui._write_bytes_atomic
 
     def fail_receipt(path, raw):
-        if path.parent.name == "semantic_operations":
+        if "semantic_operations" in path.parts:
             raise OSError("injected receipt persistence failure")
         write(path, raw)
 
@@ -359,3 +359,23 @@ def test_failed_operation_receipt_rolls_back_ui_and_workflow(semantic_project, m
     assert after["generation"] == before_workflow["generation"]
     assert after["prototype"]["head_revision"] == "001"
     assert not (root / "ui_revisions" / "002.json").exists()
+
+
+def test_failed_binding_receipt_does_not_leave_a_changed_profile(semantic_project, monkeypatch):
+    from adaos.services.builder import semantic_ui
+    service, workflow, root = semantic_project
+    state = workflow.describe("scenario", "recipes")
+    workflow.configure_binding_profile("scenario", "recipes", {
+        "profile_id": "binding-fixture", "mode": "fixture", "logical_schema_ref": "schema:recipes:prototype",
+        "source_ref": "fixture:recipes:sample", "owner": "builder",
+    }, expected_binding_generation=state["data_binding"]["generation"])
+    before = workflow.describe("scenario", "recipes")["data_binding"]
+    write = semantic_ui._write_bytes_atomic
+    def fail(path, raw):
+        if "semantic_operations" in path.parts:
+            raise OSError("binding receipt failure")
+        write(path, raw)
+    monkeypatch.setattr(semantic_ui, "_write_bytes_atomic", fail)
+    with pytest.raises(OSError, match="binding receipt"):
+        service.apply(_label_operation(operation="set_data_mode", value={"profile_id": "binding-fixture"}))
+    assert workflow.describe("scenario", "recipes")["data_binding"] == before

@@ -4912,12 +4912,13 @@ def _compile_semantic_prototype_v2(
     *,
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
+    primary_locale: str | None = None,
 ) -> dict[str, Any]:
     document = _validate_semantic_prototype_v2(value, brief=brief)
     resources = {str(item["id"]): dict(item) for item in document["resources"]}
     views = {str(item["id"]): dict(item) for item in document["views"]}
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
-    primary_locale = _brief_primary_locale(brief)
+    primary_locale = primary_locale or _brief_primary_locale(brief)
     dictionaries: dict[str, dict[str, str]] = {
         locale: {}
         for locale in _text_locales(
@@ -5226,6 +5227,7 @@ def _compile_semantic_prototype_v2(
     result = {
         "schema": SEMANTIC_COMPILE_RESULT_SCHEMA,
         "semantic_digest": _digest(document),
+        "semantic_document": copy.deepcopy(document),
         "webui": webui,
         "locale_dictionaries": dictionaries,
         "prototype_resources": prototype_resources,
@@ -5269,10 +5271,13 @@ def compile_semantic_prototype(
     *,
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
+    primary_locale: str | None = None,
 ) -> dict[str, Any]:
+    if primary_locale not in {None, "en", "ru"}:
+        _fail("primary_locale must be en or ru")
     if value.get("schema") == SEMANTIC_PROTOTYPE_V2_SCHEMA:
         return _compile_semantic_prototype_v2(
-            value, brief=brief, project_ref=project_ref
+            value, brief=brief, project_ref=project_ref, primary_locale=primary_locale
         )
     return _compile_semantic_prototype_v1(
         value, brief=brief, project_ref=project_ref
@@ -5352,7 +5357,7 @@ def compile_semantic_prototype_candidate(
             if str(item.get("detail") or "") != detail
         )
         raise SemanticPrototypeValidationError(findings) from exc
-    result["semantic_document"] = semantic_document
+    result["semantic_document"] = result.get("semantic_document", semantic_document)
     result["normalizations"] = normalizations
     return result
 

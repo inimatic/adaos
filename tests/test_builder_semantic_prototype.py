@@ -131,6 +131,20 @@ def test_source_preserving_revision_restores_same_identity_command_effects(membe
     assert reconciled["normalizations"][-1]["reason"] == "effects_changed"
 
 
+def test_sdk_candidate_compilation_enforces_explicit_preservation_on_supplied_base():
+    brief, source = _multi_resource_fixture()
+    brief.setdefault("residual_requirements", []).append({"id": "residual:preserve",
+        "statement": "Preserve the existing resources, fields and operations.",
+        "evidence": ["intent.statement#char=0:1"], "confidence": 1.0})
+    previous = prototype_sdk.compile_semantic_candidate(_multi_resource_candidate(source), brief=brief)["semantic_document"]
+    candidate = _multi_resource_candidate(previous)
+    next(item for item in candidate["commands"] if item["id"] == "complete")["fixed_values"] = [{"field_ref": "status", "value": "open"}]
+    compiled = prototype_sdk.compile_semantic_candidate(candidate, brief=brief, previous=previous)
+    old = next(item for item in previous["commands"] if item["id"] == "complete")
+    assert next(item for item in compiled["semantic_document"]["commands"] if item["id"] == "complete") == old
+    assert any(item.get("reason") == "effects_changed" for item in compiled["normalizations"])
+
+
 def _text(key: str, en: str, ru: str) -> dict[str, str]:
     return {"key": key, "en": en, "ru": ru}
 

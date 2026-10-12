@@ -180,6 +180,11 @@ def _operation_digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _operation_root(workflow: BuilderWorkflowService, project_ref: str) -> Path:
+    """Keep receipts/recovery images out of editable source and model context."""
+    return Path(workflow.state_dir) / "builder/source_recovery/semantic_operations" / _operation_digest(project_ref)[7:]
+
+
 def _check_preconditions(value: Mapping[str, Any], webui: Mapping[str, Any],
                          projection: Mapping[str, Any]) -> None:
     for condition in value.get("preconditions") or []:
@@ -374,7 +379,7 @@ class BuilderSemanticUIService:
             if not projection["capabilities"].get("can_edit_prototype"):
                 raise BuilderWorkflowError("semantic UI operations require an editable Prototype")
             root = self.workflow.project_root(object_type, object_id)
-            receipt_path = root / "semantic_operations" / (
+            receipt_path = _operation_root(self.workflow, project_ref) / (
                 _operation_digest([change_id, operation_id]).removeprefix("sha256:") + ".json"
             )
             fingerprint = _operation_digest(value)
@@ -394,6 +399,7 @@ class BuilderSemanticUIService:
                 raise BuilderWorkflowError("managed semantic source requires graph operations, not renderer edits")
 
             if value["operation"] == "set_data_mode":
+                before_binding_state = copy.deepcopy(self.workflow._read_state(object_type, object_id))
                 binding = projection.get("data_binding") if isinstance(projection.get("data_binding"), Mapping) else {}
                 selected = value.get("value") if isinstance(value.get("value"), Mapping) else {"profile_id": value.get("value")}
                 profile_id = str(selected.get("profile_id") or selected.get("id") or "").strip()
@@ -413,9 +419,13 @@ class BuilderSemanticUIService:
                     "binding": copy.deepcopy(result["workflow"].get("data_binding")),
                     "workflow": result["workflow"],
                 }
-                receipt_path.parent.mkdir(exist_ok=True)
-                _write_bytes_atomic(receipt_path, (json.dumps({"request_digest": fingerprint,
-                    "operation": value, "result": result}, ensure_ascii=False) + "\n").encode("utf-8"))
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    _write_bytes_atomic(receipt_path, (json.dumps({"request_digest": fingerprint,
+                        "operation": value, "result": result}, ensure_ascii=False) + "\n").encode("utf-8"))
+                except Exception:
+                    self.workflow._write_state(object_type, object_id, before_binding_state)
+                    raise
                 return result
 
             root = self.workflow.project_root(object_type, object_id)
@@ -541,7 +551,7 @@ class BuilderSemanticUIService:
                     "revision_ref": f"ui_revision:{revision}", "undo": edit["undo"],
                     "context_packet_digest": context_packet["digest"], "workflow": transition["workflow"],
                 }
-                receipt_path.parent.mkdir(exist_ok=True)
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
                 _write_bytes_atomic(receipt_path, (json.dumps({"request_digest": fingerprint,
                     "operation": value, "result": result}, ensure_ascii=False) + "\n").encode("utf-8"))
             except Exception:

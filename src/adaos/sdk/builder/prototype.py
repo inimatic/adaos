@@ -135,6 +135,7 @@ def compile_semantic_candidate(
     *,
     brief: Mapping[str, Any],
     project_ref: str | None = None,
+    previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile a strict model candidate into canonical runtime artifacts."""
 
@@ -142,11 +143,25 @@ def compile_semantic_candidate(
         compile_semantic_prototype_candidate,
     )
 
-    return compile_semantic_prototype_candidate(
+    compiled = compile_semantic_prototype_candidate(
         candidate,
         brief=brief,
         project_ref=project_ref,
     )
+    if previous is not None:
+        reconciled = reconcile_semantic_revision(previous, compiled["semantic_document"], brief=brief)
+        if reconciled["normalizations"]:
+            preserved = compile_semantic(reconciled["semantic_document"], brief=brief, project_ref=project_ref)
+            compiled = {**compiled, **preserved, "semantic_document": reconciled["semantic_document"],
+                        "normalizations": [*compiled.get("normalizations", []), *reconciled["normalizations"]]}
+    return compiled
+
+
+def verify_semantic_source(document: Mapping[str, Any], webui: Mapping[str, Any], *, project_ref: str) -> dict[str, Any]:
+    """Verify effective UI before constructing a semantic follow-up context."""
+    from adaos.services.builder.semantic_graph import verify_baseline
+    result = verify_baseline(document, webui, project_ref=project_ref)
+    return {"semantic_digest": result["semantic_digest"], "primary_locale": result["primary_locale"]}
 
 
 def reconcile_semantic_revision(
@@ -371,6 +386,7 @@ __all__ = [
     "automation_handoff",
     "model_context",
     "semantic_revision_context",
+    "verify_semantic_source",
     "output_locales",
     "reconcile_semantic_revision",
     "merge_briefs",
