@@ -714,10 +714,19 @@ def _normalize_run(value: Any, *, change_id: str) -> dict[str, Any]:
             if str(item).strip()
         ][-100:],
         "workflow_metrics": copy.deepcopy(dict(workflow_metrics or {})) or None,
+        "execution_metrics": _execution_metrics(value.get("execution_metrics")),
         "started_at": str(value.get("started_at") or "").strip() or None,
         "completed_at": str(value.get("completed_at") or "").strip() or None,
         "error": str(value.get("error") or "").strip() or None,
     }
+
+
+def _execution_metrics(value):
+    from adaos.services.builder.run_observability import validate_execution_metrics
+    try:
+        return validate_execution_metrics(value)
+    except Exception as exc:
+        raise BuilderWorkflowError(f"invalid Builder Run execution_metrics: {exc}") from exc
 
 
 def _normalize_acceptance_constraint(value: Any, *, change_id: str) -> dict[str, Any]:
@@ -6122,6 +6131,7 @@ class BuilderWorkflowService:
                 if str(item).strip()
             ][-100:],
             "workflow_metrics": metrics_evidence,
+            "execution_metrics": _execution_metrics(metadata.get("execution_metrics")),
             "started_at": changed_at,
             "completed_at": None if status == "running" else changed_at,
             "error": str(metadata.get("error") or "").strip() or None,

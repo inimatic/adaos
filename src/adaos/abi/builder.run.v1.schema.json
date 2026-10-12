@@ -19,11 +19,34 @@
     "output_refs": { "$ref": "#/$defs/refs" },
     "evidence_refs": { "$ref": "#/$defs/refs" },
     "workflow_metrics": { "type": ["object", "null"] },
+    "execution_metrics": { "anyOf": [{ "$ref": "#/$defs/execution_metrics" }, { "type": "null" }] },
     "started_at": { "type": ["string", "null"], "format": "date-time" },
     "completed_at": { "type": ["string", "null"], "format": "date-time" },
     "error": { "type": ["string", "null"], "maxLength": 4000 }
   },
   "$defs": {
+    "execution_metrics": {
+      "type": "object", "required": ["source"], "additionalProperties": false,
+      "properties": {
+        "source": { "enum": ["builder.llm_result", "core.semantic_graph"] },
+        "model": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "resolved_model": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "reasoning_effort": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "cached_input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "reasoning_tokens": { "type": "integer", "minimum": 0 },
+        "llm_calls": { "type": "integer", "minimum": 0 },
+        "repair_attempts": { "type": "integer", "minimum": 0 },
+        "cost_usd": { "type": "number", "minimum": 0 },
+        "cost_basis": { "enum": ["estimate", "metered", "invoiced", "zero_model"] },
+        "root_execution_ms": { "type": "number", "minimum": 0 },
+        "root_queue_ms": { "type": "number", "minimum": 0 },
+        "client_wait_ms": { "type": "number", "minimum": 0 },
+        "source_refs": { "type": "array", "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
+      },
+      "dependentRequired": { "cost_usd": ["cost_basis"] }
+    },
     "refs": {
       "type": "array",
       "maxItems": 100,

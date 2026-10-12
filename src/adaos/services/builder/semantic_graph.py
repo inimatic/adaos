@@ -293,7 +293,11 @@ class SemanticGraphService:
                     expected_generation=value["expected_generation"], metadata={
                         "revision": revision, "change_id": value["change_id"], "run_id": value["transaction_id"],
                         "input_refs": [f"ui_revision:{value['source_revision']}"], "output_refs": [f"ui_revision:{revision}"],
-                        "evidence_refs": [f"semantic_graph_transaction:{value['transaction_id']}"]})
+                        "evidence_refs": [f"semantic_graph_transaction:{value['transaction_id']}"],
+                        "execution_metrics": {"source": "core.semantic_graph", "llm_calls": 0, "repair_attempts": 0,
+                            "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0,
+                            "cost_usd": 0, "cost_basis": "zero_model",
+                            "source_refs": [f"semantic_graph_transaction:{value['transaction_id']}"]}})
                 journal["status"] = "committed"
                 atomic_write_json(path, journal)
             except Exception:

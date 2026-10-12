@@ -1,0 +1,68 @@
+from copy import deepcopy
+import pytest
+from jsonschema import ValidationError
+from adaos.services.builder.run_observability import execution_metrics_from_llm, project_run, validate_execution_metrics
+from adaos.services.builder.workflow import _normalize_run, BuilderWorkflowError
+
+
+def test_missing_metrics_are_unknown_not_free_or_unrepaired():
+    row = project_run({'run_id': 'run:one', 'activity': 'prototype_revision_recorded', 'output_refs': ['ui_revision:007']})
+    assert row['revision'] == '007'
+    assert 'run:one' in row['title']
+    assert row['cost_label'] == row['repair_attempts_label'] == row['model_label'] == '—'
+    assert row['measurement_label'] == 'Not recorded'
+
+
+def test_root_usage_is_not_double_counted_and_repairs_have_independent_sources():
+    result = {'model': 'gpt-6-astra', 'telemetry': {'root_job_id': 'primary', 'repair': {'root_job_id': 'repair'},
+        'usage': {'input_tokens': 1000, 'cached_input_tokens': 300, 'output_tokens': 700, 'reasoning_tokens': 500},
+        'timing': {'queue_ms': 23, 'execution_ms': 456}, 'wait_elapsed_ms': 600}}
+    original = deepcopy(result)
+    metrics = execution_metrics_from_llm(result, reasoning_effort='high')
+    assert metrics['output_tokens'] == 700
+    assert metrics['reasoning_tokens'] == 500
+    assert metrics['llm_calls'] == 2 and metrics['repair_attempts'] == 1
+    assert 'cost_usd' not in metrics
+    assert metrics['root_execution_ms'] == 456
+    assert metrics['client_wait_ms'] == 600
+    assert result == original
+    row = _normalize_run({'run_id': 'one', 'execution_metrics': metrics}, change_id='change')
+    assert row['execution_metrics'] == metrics
+
+
+def test_explicit_estimate_preserves_its_basis():
+    metrics = execution_metrics_from_llm({'cost': {'estimated_usd': 0.0000001}})
+    row = project_run({'execution_metrics': metrics})
+    assert row['cost_label'] != '$0 (estimate)'
+    assert '(estimate)' in row['cost_label']
+
+
+@pytest.mark.parametrize('bad', [{'source': 'invented'}, {'source': 'builder.llm_result', 'input_tokens': -1},
+    {'source': 'core.semantic_graph', 'llm_calls': True}, {'source': 'builder.llm_result', 'cost_usd': 0},
+    {'source': 'builder.llm_result', 'raw_prompt': 'private'},
+    {'source': 'builder.llm_result', 'root_execution_ms': float('inf')},
+    {'source': 'builder.llm_result', 'cost_usd': float('nan'), 'cost_basis': 'estimate'},
+    {'source': 'builder.llm_result', 'cost_usd': 0, 'cost_basis': 'zero_model', 'llm_calls': 1}])
+def test_invalid_or_unbounded_execution_evidence_is_rejected(bad):
+    with pytest.raises(ValidationError):
+        validate_execution_metrics(bad)
+    with pytest.raises(BuilderWorkflowError):
+        _normalize_run({'run_id': 'one', 'execution_metrics': bad}, change_id='change')
+
+
+def test_core_zero_model_is_explicit_not_an_inferred_missing_value():
+    metrics = {'source': 'core.semantic_graph', 'llm_calls': 0, 'cost_usd': 0, 'cost_basis': 'zero_model', 'repair_attempts': 0}
+    row = project_run({'run_id': 'tx', 'execution_metrics': validate_execution_metrics(metrics)})
+    assert row['model_label'] == 'Core (no LLM)'
+    assert row['cost_label'] == '$0 (zero_model)'
+
+
+def test_partial_repair_cost_never_looks_like_a_complete_total():
+    result = {'model': 'gpt-5', 'telemetry': {'root_job_id': 'primary', 'cost': {'estimated_usd': 1.2},
+              'provider': {'model': 'gpt-5-2025-08-07'}, 'repair': {'root_job_id': 'repair'}}}
+    metrics = execution_metrics_from_llm(result)
+    assert 'cost_usd' not in metrics
+    assert metrics['resolved_model'] == 'gpt-5-2025-08-07'
+    result['telemetry']['repair']['cost'] = {'estimated_usd': .8}
+    metrics = execution_metrics_from_llm(result)
+    assert metrics['cost_usd'] == 2 and metrics['cost_basis'] == 'estimate'
