@@ -167,11 +167,14 @@ def generate_configuration(
     control_port: int,
     sidecar_implementation: str,
     approval_scope: str,
+    update_implementation: str = "python",
     approval_id: str | None = None,
     approval_stand: str | None = None,
 ) -> dict[str, Any]:
     if sidecar_implementation not in {"python", "go"}:
         raise ValueError("sidecar implementation must be python or go")
+    if update_implementation not in {"python", "go"}:
+        raise ValueError("core update implementation must be python or go")
     if approval_scope not in {"m4c_canary", "production"}:
         raise ValueError("approval scope must be m4c_canary or production")
     if not 1 <= int(serve_port) <= 65535 or not 1 <= int(control_port) <= 65535:
@@ -349,6 +352,35 @@ def generate_configuration(
         "listen": {"host": "127.0.0.1", "port": 8776},
         "token_env": "ADAOS_TOKEN",
         "approval": approval,
+        "update": {
+            "implementation": "go" if update_implementation == "go" else "python_compat",
+            "source_mode": (
+                str(os.getenv("ADAOS_CORE_UPDATE_SOURCE_MODE") or "auto").strip().lower()
+                or "auto"
+            ),
+            "repo_url": str(
+                os.getenv("ADAOS_CORE_UPDATE_REPO_URL") or "https://github.com/inimatic/adaos.git"
+            ).strip(),
+            "source_archive_url": str(
+                os.getenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL")
+                or os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_URL")
+                or ""
+            ).strip(),
+            "source_archive_url_template": str(
+                os.getenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL_TEMPLATE")
+                or os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_URL_TEMPLATE")
+                or ""
+            ).strip(),
+            "source_archive_sha256": str(
+                os.getenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_SHA256")
+                or os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_SHA256")
+                or ""
+            ).strip(),
+            "shared_dotenv_path": str(dotenv),
+            "prepare_timeout_s": float(
+                str(os.getenv("ADAOS_CORE_UPDATE_PREPARE_TIMEOUT_S") or "1800").strip()
+            ),
+        },
         "workers": workers,
     }
     _write_json(supervisor_path, supervisor_config)
@@ -385,6 +417,7 @@ def generate_configuration(
         "runtime_profile_path": str(runtime_profile_path),
         "sidecar_profile_path": str(sidecar_profile_path) if sidecar_managed else None,
         "sidecar_implementation": sidecar_implementation,
+        "update_implementation": update_implementation,
         "sidecar_managed": sidecar_managed,
         "role": role,
         "approval": approval,
@@ -403,6 +436,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--serve-port", type=int, default=8777)
     parser.add_argument("--control-port", type=int, default=8777)
     parser.add_argument("--sidecar-implementation", choices=("python", "go"), default="python")
+    parser.add_argument("--update-implementation", choices=("python", "go"), default="python")
     parser.add_argument("--approval-scope", choices=("m4c_canary", "production"), default="m4c_canary")
     parser.add_argument("--approval-id")
     parser.add_argument("--approval-stand")
@@ -422,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         serve_port=args.serve_port,
         control_port=args.control_port,
         sidecar_implementation=args.sidecar_implementation,
+        update_implementation=args.update_implementation,
         approval_scope=args.approval_scope,
         approval_id=args.approval_id,
         approval_stand=args.approval_stand,

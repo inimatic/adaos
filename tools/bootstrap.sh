@@ -35,6 +35,7 @@ NO_CORE_UPDATE="0"
 WORKSPACE_REGISTRY_REPO="${ADAOS_WORKSPACE_REGISTRY_REPO:-}"
 SUPERVISOR_IMPLEMENTATION="${ADAOS_SUPERVISOR_IMPLEMENTATION:-${ADAOS_RUNTIME_ENGINE:-}}"
 SIDECAR_IMPLEMENTATION="${ADAOS_SIDECAR_IMPLEMENTATION:-${ADAOS_REALTIME_IMPLEMENTATION:-}}"
+UPDATE_IMPLEMENTATION="${ADAOS_CORE_UPDATE_IMPLEMENTATION:-}"
 ADAOSD_BINARY="${ADAOSD_BINARY:-}"
 ADAOSD_SERVICE_CONFIG="${ADAOSD_SERVICE_CONFIG:-}"
 ADAOSD_APPROVAL_SCOPE="${ADAOSD_APPROVAL_SCOPE:-m4c_canary}"
@@ -282,6 +283,7 @@ print_bootstrap_config() {
   echo "  node_name:      ${NODE_NAME:-}"
   echo "  supervisor:     ${SUPERVISOR_IMPLEMENTATION:-python}"
   echo "  sidecar:        ${SIDECAR_IMPLEMENTATION:-python}"
+  echo "  core update:    ${UPDATE_IMPLEMENTATION:-python}"
   if [[ "${SUPERVISOR_IMPLEMENTATION:-python}" == "go" || "${SIDECAR_IMPLEMENTATION:-python}" == "go" ]]; then
     echo "  adaosd_binary:  ${ADAOSD_BINARY:-}"
   fi
@@ -581,6 +583,7 @@ while [[ $# -gt 0 ]]; do
     --runtime-engine) SUPERVISOR_IMPLEMENTATION="${2:-}"; shift 2 ;;
     --supervisor-implementation) SUPERVISOR_IMPLEMENTATION="${2:-}"; shift 2 ;;
     --sidecar-implementation) SIDECAR_IMPLEMENTATION="${2:-}"; shift 2 ;;
+    --core-update-implementation) UPDATE_IMPLEMENTATION="${2:-}"; shift 2 ;;
     --adaosd-binary) ADAOSD_BINARY="${2:-}"; shift 2 ;;
     --adaosd-service-config) ADAOSD_SERVICE_CONFIG="${2:-}"; shift 2 ;;
     --adaosd-approval-scope) ADAOSD_APPROVAL_SCOPE="${2:-}"; shift 2 ;;
@@ -608,6 +611,7 @@ Usage: tools/bootstrap.sh [options]
   --workspace-registry-repo URL
   --supervisor-implementation python|go
   --sidecar-implementation python|go
+  --core-update-implementation python|go
   --runtime-engine python|go  Deprecated alias for --supervisor-implementation
   --adaosd-binary /absolute/path/to/adaosd
   --adaosd-service-config /absolute/path/to/service.json  Optional custom Go service contract
@@ -642,6 +646,9 @@ fi
 if [[ -z "${SIDECAR_IMPLEMENTATION:-}" ]]; then
   SIDECAR_IMPLEMENTATION="$(read_env_value_from_file ".env" "ADAOS_REALTIME_IMPLEMENTATION" || true)"
 fi
+if [[ -z "${UPDATE_IMPLEMENTATION:-}" ]]; then
+  UPDATE_IMPLEMENTATION="$(read_env_value_from_file ".env" "ADAOS_CORE_UPDATE_IMPLEMENTATION" || true)"
+fi
 if [[ -z "${ADAOSD_BINARY:-}" ]]; then
   ADAOSD_BINARY="$(read_env_value_from_file ".env" "ADAOSD_BINARY" || true)"
 fi
@@ -650,6 +657,14 @@ if [[ -z "${ADAOSD_BINARY:-}" ]]; then
 fi
 SUPERVISOR_IMPLEMENTATION="$(printf '%s' "${SUPERVISOR_IMPLEMENTATION:-python}" | tr '[:upper:]' '[:lower:]')"
 SIDECAR_IMPLEMENTATION="$(printf '%s' "${SIDECAR_IMPLEMENTATION:-python}" | tr '[:upper:]' '[:lower:]')"
+UPDATE_IMPLEMENTATION="$(printf '%s' "${UPDATE_IMPLEMENTATION:-python}" | tr '[:upper:]' '[:lower:]')"
+case "$UPDATE_IMPLEMENTATION" in
+  python|go) ;;
+  *) fail "core update implementation must be python or go" ;;
+esac
+if [[ "$UPDATE_IMPLEMENTATION" == "go" && "$SUPERVISOR_IMPLEMENTATION" != "go" ]]; then
+  fail "Go core update orchestration requires --supervisor-implementation go"
+fi
 case "$ADAOSD_APPROVAL_SCOPE" in
   m4c_canary|production) ;;
   *) fail "adaosd approval scope must be m4c_canary or production" ;;
@@ -796,10 +811,12 @@ export ADAOS_LANG="$LANGUAGE"
 write_env_var "ADAOS_SUPERVISOR_IMPLEMENTATION" "$SUPERVISOR_IMPLEMENTATION" ".env"
 write_env_var "ADAOS_SIDECAR_IMPLEMENTATION" "$SIDECAR_IMPLEMENTATION" ".env"
 write_env_var "ADAOS_REALTIME_IMPLEMENTATION" "$SIDECAR_IMPLEMENTATION" ".env"
+write_env_var "ADAOS_CORE_UPDATE_IMPLEMENTATION" "$UPDATE_IMPLEMENTATION" ".env"
 remove_env_var "ADAOS_RUNTIME_ENGINE" ".env"
 export ADAOS_SUPERVISOR_IMPLEMENTATION="$SUPERVISOR_IMPLEMENTATION"
 export ADAOS_SIDECAR_IMPLEMENTATION="$SIDECAR_IMPLEMENTATION"
 export ADAOS_REALTIME_IMPLEMENTATION="$SIDECAR_IMPLEMENTATION"
+export ADAOS_CORE_UPDATE_IMPLEMENTATION="$UPDATE_IMPLEMENTATION"
 if [[ "$SUPERVISOR_IMPLEMENTATION" == "go" || "$SIDECAR_IMPLEMENTATION" == "go" ]]; then
   write_env_var "ADAOSD_BINARY" "$ADAOSD_BINARY" ".env"
   export ADAOSD_BINARY
@@ -949,6 +966,7 @@ if [[ "$SUPERVISOR_IMPLEMENTATION" == "go" ]]; then
       --serve-port "$SERVE_PORT"
       --control-port "$CONTROL_PORT"
       --sidecar-implementation "$SIDECAR_IMPLEMENTATION"
+      --update-implementation "$UPDATE_IMPLEMENTATION"
       --approval-scope "$ADAOSD_APPROVAL_SCOPE"
     )
     [[ -z "${ADAOSD_APPROVAL_ID:-}" ]] || adaosd_config_args+=(--approval-id "$ADAOSD_APPROVAL_ID")

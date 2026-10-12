@@ -78,6 +78,7 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
     supervisor_path = Path(service["supervisor_config_path"])
     supervisor = json.loads(supervisor_path.read_text(encoding="utf-8"))
     assert [worker["startup_barrier"] for worker in supervisor["workers"][:1]] == [True]
+    assert supervisor["update"]["implementation"] == "python_compat"
     assert [Path(worker["profile_path"]).name for worker in supervisor["workers"]] == [
         "sidecar.json",
         "runtime.json",
@@ -108,11 +109,24 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
         serve_port=8777,
         control_port=8777,
         sidecar_implementation="python",
+        update_implementation="go",
         approval_scope="m4c_canary",
         approval_id="approval-two",
         approval_stand="stand-two",
     )
     assert second["approval"]["id"] == "approval-one"
+    assert second["update_implementation"] == "go"
+    updated_supervisor = json.loads(supervisor_path.read_text(encoding="utf-8"))
+    assert updated_supervisor["update"] == {
+        "implementation": "go",
+        "prepare_timeout_s": 1800.0,
+        "repo_url": "https://github.com/inimatic/adaos.git",
+        "shared_dotenv_path": str(dotenv.resolve()),
+        "source_archive_sha256": "",
+        "source_archive_url": "",
+        "source_archive_url_template": "",
+        "source_mode": "auto",
+    }
     python_sidecar = json.loads(
         (service_path.parent / "workers" / "sidecar.json").read_text(encoding="utf-8")
     )

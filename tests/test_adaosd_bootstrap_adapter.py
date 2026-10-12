@@ -192,12 +192,15 @@ def test_bootstraps_preserve_python_fallback_before_first_go_handoff() -> None:
         assert 'source "${BOOTSTRAP_TOOL_DIR}/adaosd_service_adapter.sh"' in source
         assert "--supervisor-implementation" in source
         assert "--sidecar-implementation" in source
+        assert "--core-update-implementation" in source
         assert "--runtime-engine" in source
         assert "--adaosd-binary" in source
         assert "--adaosd-service-config" in source
         assert "adaos.apps.adaosd_installation" in source
         assert 'ADAOS_SUPERVISOR_IMPLEMENTATION" "$SUPERVISOR_IMPLEMENTATION' in source
         assert 'ADAOS_SIDECAR_IMPLEMENTATION" "$SIDECAR_IMPLEMENTATION' in source
+        assert 'ADAOS_CORE_UPDATE_IMPLEMENTATION" "$UPDATE_IMPLEMENTATION' in source
+        assert "Go core update orchestration requires --supervisor-implementation go" in source
         assert "Managed adaosd service drift must be resolved before bootstrap" in source
         assert source.index("adaos.apps.adaosd_installation") < source.index(
             "adaosd_service_adapter_status"
