@@ -82,13 +82,23 @@ def upgrade(document):
     base = modal['schema']['widgets'][0]
     base['id'] = 'design-run-execution'
     base.update(title='Execution', title_i18n={'locales': {'en': 'Execution', 'ru': 'Исполнение'}})
-    base['inputs']['fields'] = [localized(en, ru, key=key) for key, en, ru in fields]
+    # Unknown historical metrics belong to one explicit coverage statement, not
+    # a screenful of empty token/cost rows above the useful input evidence.
+    summary_keys = {'title', 'status', 'revision', 'executor', 'started_at', 'completed_at', 'measurement_label', 'error'}
+    base['inputs']['fields'] = [localized(en, ru, key=key) for key, en, ru in fields if key in summary_keys]
     base['inputs']['emptyText'] = 'No recorded execution details.'
     details = copy.deepcopy(base)
     details['id'] = 'design-run-context'
     details.update(title='Inputs and evidence', title_i18n={'locales': {'en': 'Inputs and evidence', 'ru': 'Входные данные и доказательства'}})
-    details['inputs']['fields'] = [localized(en, ru, key=key) for key, en, ru in context]
-    modal['schema']['widgets'] = [base, details]
+    details['inputs']['fields'] = [localized('Run ID', 'ID запуска', key='id'), localized('Change', 'Изменение', key='change_id'),
+                                  *[localized(en, ru, key=key) for key, en, ru in context]]
+    measurements = copy.deepcopy(base)
+    measurements['id'] = 'design-run-measurements'
+    measurements.update(title='Recorded measurements', title_i18n={'locales': {'en': 'Recorded measurements', 'ru': 'Сохранённые измерения'}})
+    measurements['visibleIf'] = '$state.selectedTrace.execution_metrics'
+    measurements['inputs']['fields'] = [localized(en, ru, key=key) for key, en, ru in fields
+                                        if key not in summary_keys and key not in {'id', 'change_id'}]
+    modal['schema']['widgets'] = [base, details, measurements]
     app['modals']['design-run-details'] = modal
     notice = {
         'id': 'design-conversation-request-provenance', 'type': 'item.details', 'area': 'main',

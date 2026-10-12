@@ -27,6 +27,10 @@ def test_upgrade_preserves_current_builder_commands_and_issue_trace():
     table = widgets(after)['design-trace-tasks']
     assert table['inputs']['compactPresentation'] == 'cards'
     assert next(action for action in table['actions'] if action['type'] == 'openModal')['params']['modalId'] == 'design-run-details'
+    modal = after['ui']['application']['modals']['design-run-details']['schema']['widgets']
+    summary = next(widget for widget in modal if widget['id'] == 'design-run-execution')
+    assert len(summary['inputs']['fields']) <= 8
+    assert next(widget for widget in modal if widget['id'] == 'design-run-measurements')['visibleIf'] == '$state.selectedTrace.execution_metrics'
 
 
 def test_dynamic_context_keys_are_not_misclassified_as_missing_dictionary_entries():
