@@ -59,3 +59,45 @@ def test_native_ambiguous_or_incomplete_label_request_cannot_fall_back_to_genera
                                              _meta={"message_id": "user-clarify"})
     assert result["status"] == "clarification_required" and result["model_calls"] == 0
     assert ((root / "webui.json").read_bytes(), workflow.describe("scenario", "semantic_labels")["generation"]) == before
+
+
+def test_chat_reuses_its_authoritative_target_instead_of_resolving_it_twice(native_label_builder, monkeypatch):
+    module, _, _, document = native_label_builder
+    monkeypatch.setattr(module, "_resolve_builder_context_for_turn", lambda *a: {"builder_webspace_id": "builder-host"})
+    monkeypatch.setattr(module, "_parse_builder_command", lambda *a, **kw: {"intent": ""})
+    monkeypatch.setattr(module, "_requested_scenario_id_from_meta", lambda *a: "")
+    monkeypatch.setattr(module, "_project_external_user_turn", lambda *a, **kw: None)
+    monkeypatch.setattr(module, "_route_automation_chat", lambda **kw: None)
+    monkeypatch.setattr(module, "_safe_emit_chat", lambda *a, **kw: None)
+    monkeypatch.setattr(module, "_dialog_state", lambda *a, **kw: {})
+    def duplicate_resolution(*args, **kwargs):
+        raise AssertionError("chat already admitted this exact target")
+    monkeypatch.setattr(module, "update_current_scenario", duplicate_resolution)
+    title = next(view["title"]["en"] for view in document["views"] if view["id"] == "work-list")
+    result = module.chat(text=f'Rename view "{title}" to "Work queue" in English', webspace_id="builder-host",
+                         _meta={"message_id": "user-chat-label"})
+    assert result["status"] == "semantic_label_applied"
+    assert "routing_ms" in result["message_meta"]["builder_d0_turn_timing"]
+
+
+def test_missing_managed_source_cannot_be_reclassified_as_legacy(native_label_builder):
+    module, workflow, root, _ = native_label_builder
+    (root / "semantic.webui.json").unlink()
+    before = (root / "webui.json").read_bytes(), workflow.describe("scenario", "semantic_labels")["generation"]
+    result = module.update_current_scenario(instruction='Rename field "Name" to "Subject"', webspace_id="builder-host",
+                                             _meta={"message_id": "missing-source"})
+    assert result["status"] == "semantic_label_rejected" and result["model_calls"] == 0
+    assert ((root / "webui.json").read_bytes(), workflow.describe("scenario", "semantic_labels")["generation"]) == before
+
+
+def test_selected_project_and_conversation_mismatch_cannot_realign_or_mutate(native_label_builder, monkeypatch):
+    module, workflow, root, _ = native_label_builder
+    def forbidden(*args, **kwargs):
+        raise AssertionError("mismatch must stop before resolving or changing the Builder binding")
+    monkeypatch.setattr(module, "_resolve_builder_context_for_turn", forbidden)
+    before = (root / "webui.json").read_bytes(), workflow.describe("scenario", "semantic_labels")["generation"]
+    result = module.chat(text='Rename view "Work" to "Queue"', _meta={
+        "builder_selected_target": {"object_type": "scenario", "object_id": "semantic_labels"},
+        "thread_id": "prompt-project:scenario:other-project"})
+    assert result["status"] == "builder_target_mismatch" and result["model_calls"] == 0
+    assert ((root / "webui.json").read_bytes(), workflow.describe("scenario", "semantic_labels")["generation"]) == before

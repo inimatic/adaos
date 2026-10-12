@@ -37,6 +37,18 @@ def test_dynamic_context_keys_are_not_misclassified_as_missing_dictionary_entrie
     assert caption_keys({'title_i18n': '$state.current.summary_i18n', 'label_i18n': {'locales': {'en': 'Label', 'ru': 'Метка'}}}) == set()
 
 
+def test_builder_selection_uses_the_renderer_map_contract_not_ignored_mapping_alias():
+    path = ROOT / '.adaos/workspace/scenarios/builder/webui.json'
+    if not path.is_file():
+        pytest.skip('Optional live Builder source')
+    before = json.loads(path.read_text(encoding='utf-8-sig'))
+    source = before['ui']['application']['desktop']['pageSchema']['initialStateSource']
+    source['mapping'] = source.pop('map', source.get('mapping', {}))
+    after = upgrade(before)['ui']['application']['desktop']['pageSchema']['initialStateSource']
+    assert after['map']['selectedProjectId'] == 'object_id'
+    assert 'mapping' not in after
+
+
 def control_module():
     path = ROOT / '.adaos/workspace/skills/builder_sdk_control_skill/handlers/main.py'
     if not path.is_file():

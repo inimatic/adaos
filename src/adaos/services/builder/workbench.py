@@ -990,12 +990,16 @@ class BuilderWorkbenchService:
         # busy gate cannot stall the tool response that scheduled this preview.
         source_id = await asyncio.to_thread(self.resolve_source_webspace_id, source_webspace_id)
         workbench_scenario = str(scenario_id or "").strip() or BUILDER_WORKBENCH_SCENARIO_ID
+        legacy_binding = _read_json(self.binding_path(source_id))
+        explicit_target = bool(str(runtime_scenario_id or "").strip() or str(active_draft_id or "").strip())
+        if not explicit_target:
+            active_draft_id = legacy_binding.get("active_draft_id") or None
         runtime_scenario = (
             str(runtime_scenario_id or "").strip()
             or _draft_runtime_scenario_id(self.state_dir, active_draft_id)
+            or (str(legacy_binding.get("runtime_scenario_id") or "").strip() if not explicit_target else "")
             or BUILDER_RUNTIME_FALLBACK_SCENARIO_ID
         )
-        legacy_binding = _read_json(self.binding_path(source_id))
         legacy_target = str(
             legacy_binding.get("preview_webspace_id") or legacy_binding.get("dev_webspace_id") or ""
         ).strip() or None
@@ -1034,7 +1038,13 @@ class BuilderWorkbenchService:
                 if kind and kind != "dev":
                     raise ValueError(f"paired webspace {dev_id!r} exists but is not a dev webspace")
             info_payload = _info_to_dict(existing)
-            if prepare_runtime and runtime_scenario and self.webspace_service is None:
+            preserve_preview_intent = bool(
+                prepare_runtime and not explicit_target and not created and not force_runtime_reload
+                and (legacy_binding.get("runtime_scenario_id") or legacy_binding.get("active_draft_id"))
+            )
+            if preserve_preview_intent:
+                runtime_payload = {"ok": True, "skipped": "existing_preview_intent_preserved", "webspace_id": dev_id}
+            elif prepare_runtime and runtime_scenario and self.webspace_service is None:
                 try:
                     from adaos.services.scenario.webspace_runtime import (
                         apply_builder_revision_materialization,
@@ -1185,15 +1195,22 @@ class BuilderWorkbenchService:
         except Exception as exc:
             info_payload = {"ok": False, "error": "dev_webspace_unavailable", "detail": f"{type(exc).__name__}: {exc}"}
 
-        binding = await asyncio.to_thread(
-            self.set_active_draft,
-            source_webspace_id=source_id,
-            active_draft_id=active_draft_id,
-            scenario_id=workbench_scenario,
-            dev_webspace_id=dev_id,
-            runtime_scenario_id=runtime_scenario,
-            persist_projection=False,
-        )
+        if not explicit_target and (legacy_binding.get("runtime_scenario_id") or legacy_binding.get("active_draft_id")):
+            # Bootstrap is not a selection command. Re-read the latest owner
+            # binding after awaited preparation instead of writing a captured
+            # target over a newer selection (or the web_desktop fallback over
+            # an existing project). Keep the paired-preview intent intact.
+            binding = await asyncio.to_thread(self.get_workspace_binding, source_id)
+        else:
+            binding = await asyncio.to_thread(
+                self.set_active_draft,
+                source_webspace_id=source_id,
+                active_draft_id=active_draft_id,
+                scenario_id=workbench_scenario,
+                dev_webspace_id=dev_id,
+                runtime_scenario_id=runtime_scenario,
+                persist_projection=False,
+            )
         binding["created"] = created
         binding["relationship_created"] = relation_created
         binding["dev_webspace"] = info_payload

@@ -33,6 +33,22 @@ def upgrade(document):
     if 'resources' in result:
         result['resources'] = copy.deepcopy(resources)
     page = app['desktop']['pageSchema']
+    selection_source = page.get('initialStateSource') or {}
+    if 'mapping' in selection_source:
+        if 'map' in selection_source and selection_source['map'] != selection_source['mapping']:
+            raise ValueError('Conflicting Builder selection source mappings')
+        selection_source['map'] = selection_source.pop('mapping')
+    def pin_chat_target(value):
+        if isinstance(value, dict):
+            if value.get('type') == 'ui.chat' and value.get('inputs', {}).get('sendCommand') == 'voice.chat.user':
+                value['inputs'].setdefault('meta', {})['builder_selected_target'] = {
+                    'object_type': '$state.selectedProjectKind', 'object_id': '$state.selectedProjectId'}
+            for child in value.values():
+                pin_chat_target(child)
+        elif isinstance(value, list):
+            for child in value:
+                pin_chat_target(child)
+    pin_chat_target(page)
     table = next(widget for widget in page['widgets'] if widget['id'] == 'design-trace-tasks')
     table['inputs']['columns'] = [
         localized('Run / action', 'Запуск / действие', key='title'),

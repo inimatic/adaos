@@ -280,10 +280,42 @@ async def test_ensure_dev_webspace_creates_explicit_prompt_ide_binding(tmp_path:
     assert selected["dialog"]["meta"]["conversation_topic_id"] == "prompt-project:scenario:demo_scenario"
     assert selected["preview_webspace_id"] == preview_id
 
+    service.set_selected_project(source_webspace_id="desktop", object_type="project", object_id="selected-project")
+    bootstrapped = await service.ensure_dev_webspace("desktop", prepare_runtime=False)
+    assert bootstrapped["runtime_scenario_id"] == "demo_scenario"
+    assert bootstrapped["dialog"]["thread_id"] == "prompt-project:scenario:demo_scenario"
+    assert bootstrapped["selection"]["object_id"] == "selected-project"
+
     opened = await service.open_dev_webspace_ready("desktop", base_url="http://localhost:8100")
     assert opened["url"] == f"http://localhost:8100/?webspace={preview_id}"
     assert opened["binding"]["runtime_scenario_id"] == "demo_scenario"
     assert service.webspace_service.items[preview_id].home_scenario == "web_desktop"
+
+
+@pytest.mark.anyio
+async def test_implicit_bootstrap_cannot_restore_a_target_captured_before_a_new_selection(tmp_path: Path):
+    switch = {"enabled": False}
+    service = None
+    class Webspaces:
+        def list(self, mode="mixed"):
+            if switch["enabled"]:
+                switch["enabled"] = False
+                service.set_active_draft(source_webspace_id="desktop", active_draft_id=None,
+                                         runtime_scenario_id="new-scenario", persist_projection=False)
+                service.set_selected_project(source_webspace_id="desktop", object_type="project", object_id="new-project",
+                                             persist_projection=False)
+            return [SimpleNamespace(id="desktop-dev", kind="dev", source_mode="dev", home_scenario="old-scenario")]
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state", webspace_service=Webspaces())
+    service.set_active_draft(source_webspace_id="desktop", active_draft_id=None,
+                             runtime_scenario_id="old-scenario", persist_projection=False)
+    service.set_selected_project(source_webspace_id="desktop", object_type="project", object_id="old-project",
+                                 persist_projection=False)
+    switch["enabled"] = True
+    result = await service.ensure_dev_webspace("desktop")
+    assert result["runtime_scenario_id"] == "new-scenario"
+    assert result["selection"]["object_id"] == "new-project"
+    assert result["dialog"]["topic_id"] == "prompt-project:scenario:new-scenario"
+    assert result["runtime"]["skipped"] == "existing_preview_intent_preserved"
 
 
 @pytest.mark.asyncio
