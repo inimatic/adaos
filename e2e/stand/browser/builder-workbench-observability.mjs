@@ -79,6 +79,18 @@ try {
       }
       sample.checks.push('Root-advertised development models')
       await page.keyboard.press('Escape')
+      await page.locator('[data-command-id="conversation"]').first().click()
+      await expect(host('design-conversation-request-provenance')).toContainText('Change existing labels')
+      sample.checks.push('SDK request is visible without a fabricated discussion')
+      await page.locator('[data-command-id="result"]').first().click()
+      const popupPromise = page.waitForEvent('popup', { timeout: 30_000 })
+      await host('design-preview-commands').locator('[data-command-id="open"]').click()
+      const popup = await popupPromise
+      await expect.poll(() => popup.url(), { timeout: 30_000 }).toContain('desktop-dev')
+      sample.previewNavigation = popup.url()
+      if (!new URL(popup.url()).searchParams.get('expected_scenario_id')?.includes(scenario)) throw new Error('UI opener navigated to the wrong scenario')
+      sample.checks.push('visible Builder Open Preview action succeeds')
+      await popup.close()
       const preview = new URL(process.env.ADAOS_E2E_CLIENT_URL)
       for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: subnet,
         webspace_id: 'desktop-dev', space_kind: 'development', expected_scenario_id: scenario, try_local_hub: '1' })) preview.searchParams.set(key, value)
@@ -104,5 +116,5 @@ try {
   await browser.close()
   await fs.writeFile(path.join(output, 'browser-result.json'), JSON.stringify(report, null, 2))
 }
-console.log(JSON.stringify(report))
+console.log(JSON.stringify({ ok: report.ok, samples: report.samples.map(sample => ({ layout: sample.layout, checks: sample.checks, error: sample.error })), modelCalls: 0 }))
 if (!report.ok) process.exitCode = 1
