@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 import threading
 import time
 
@@ -30,7 +31,7 @@ _ROW_SELECT = (
 _UNSET = object()
 
 _log = logging.getLogger("adaos.workspaces.index")
-_WORKSPACE_SCHEMA_REVISION = "2026-08-16.1"
+_WORKSPACE_SCHEMA_REVISION = "2026-10-13.1"
 _WORKSPACE_SCHEMA_LOCK = threading.RLock()
 _ENSURED_WORKSPACE_SCHEMA_REVISIONS: set[tuple[str, str]] = set()
 _WARNED_UNRESOLVED_WORKSPACE_IDS: set[str] = set()
@@ -855,6 +856,15 @@ def _apply_workspace_schema(con: sqlite3.Connection) -> None:
         VALUES(1, 0, 0)
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS y_workspace_creation_audit(
+            workspace_id TEXT PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            origin_json TEXT NOT NULL
+        )
+        """
+    )
 
 
 def _ensure_schema(con: sqlite3.Connection) -> None:
@@ -1061,6 +1071,24 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
         import time as _time
 
         created_at = int(_time.time() * 1000)
+        caller = sys._getframe(1)
+        origin = {
+            "schema": "adaos.webspace.creation_origin.v1",
+            "module": str(caller.f_globals.get("__name__") or "")[:240],
+            "function": caller.f_code.co_name[:240],
+        }
+        from adaos.sdk.io.context import get_current_meta
+
+        meta = get_current_meta()
+        for key in ("turn_trace_id", "source_message_id"):
+            if meta.get(key):
+                origin[key] = str(meta[key])[:240]
+        # Retain the allocating code path, even when INFO logs are disabled.
+        # No prompt, credentials or arbitrary request metadata enter this audit.
+        con.execute(
+            "INSERT OR REPLACE INTO y_workspace_creation_audit VALUES (?,?,?)",
+            (workspace_id, created_at, json.dumps(origin, separators=(",", ":"))),
+        )
         inferred_kind = _infer_kind(workspace_id, None, None)
         if inferred_kind == KIND_DEV:
             from adaos.services.workspaces.relations import WebspaceRelationshipRegistry

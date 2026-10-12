@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sqlite3
 from types import SimpleNamespace
 
+from adaos.sdk.io.context import io_meta
 from adaos.services.workspaces import index as workspace_index
 from adaos.services.workspaces.relations import (
     BUILDER_PROJECT_PREVIEW,
@@ -106,3 +108,44 @@ def test_workspace_delete_removes_explicit_preview_relations(monkeypatch, tmp_pa
     )
     workspace_index.reset_webspaces([])
     assert registry.list() == []
+
+
+def test_workspace_creation_retains_allocating_code_without_request_content(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+
+    sql = _Sql(tmp_path / "origin.db")
+    monkeypatch.setattr(workspace_index, "get_ctx", lambda: SimpleNamespace(sql=sql))
+    monkeypatch.setattr(
+        workspace_index,
+        "ystore_path_for_webspace",
+        lambda identifier: tmp_path / f"{identifier}.yjs",
+    )
+    with io_meta(
+        {
+            "turn_trace_id": "trace.origin",
+            "source_message_id": "message.origin",
+            "prompt": "PRIVATE",
+            "token": "SECRET",
+        }
+    ):
+        workspace_index.ensure_workspace("origin-test")
+    with sql.connect() as con:
+        row = con.execute(
+            "SELECT created_at, origin_json FROM y_workspace_creation_audit WHERE workspace_id=?",
+            ("origin-test",),
+        ).fetchone()
+    assert row is not None
+    origin = json.loads(row[1])
+    assert origin["function"] == "test_workspace_creation_retains_allocating_code_without_request_content"
+    assert origin["source_message_id"] == "message.origin"
+    assert "PRIVATE" not in row[1] and "SECRET" not in row[1]
+    workspace_index.ensure_workspace("origin-test")
+    with sql.connect() as con:
+        retained = con.execute(
+            "SELECT created_at FROM y_workspace_creation_audit WHERE workspace_id=?",
+            ("origin-test",),
+        ).fetchone()
+    assert retained is not None
+    assert retained[0] == row[0]
