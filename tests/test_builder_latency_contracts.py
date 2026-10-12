@@ -1,12 +1,18 @@
 """Performance contracts assert work avoided, not machine-specific timings."""
+
 from adaos.services.scenario.webspace_components.cache import WebspaceCacheState
 from pathlib import Path
 
 
 def test_scenario_invalidation_preserves_unrelated_catalog_inputs():
     cache = WebspaceCacheState()
-    cache.put_skill_declarations("workspace", 0, "fp", [{"skill": "builder"}],
-                                 dependency_refs=frozenset({"skill:builder"}))
+    cache.put_skill_declarations(
+        "workspace",
+        0,
+        "fp",
+        [{"skill": "builder"}],
+        dependency_refs=frozenset({"skill:builder"}),
+    )
     cache.put_skill_source_fingerprint("workspace", 0, "sources")
     cache.put_desktop_scenarios("host", 0, (), [("changed", "Changed", "")])
     cache.put_desktop_scenarios("other", 0, (), [("other", "Other", "")])
@@ -21,9 +27,14 @@ def test_scenario_invalidation_preserves_unrelated_catalog_inputs():
 def test_skill_invalidation_only_discards_dependent_declarations():
     cache = WebspaceCacheState()
     for skill in ("changed", "other"):
-        cache.put_skill_declarations(skill, 0, skill, [], dependency_refs=frozenset({f"skill:{skill}"}))
+        cache.put_skill_declarations(
+            skill, 0, skill, [], dependency_refs=frozenset({f"skill:{skill}"})
+        )
     cache.put_skill_declarations("legacy-unknown", 0, "legacy", [])
-    assert cache.invalidate_catalog_dependencies(("skill:changed",))["skill_declarations"] == 2
+    assert (
+        cache.invalidate_catalog_dependencies(("skill:changed",))["skill_declarations"]
+        == 2
+    )
     assert cache.get_skill_declarations("changed") is None
     assert cache.get_skill_declarations("other") is not None
 
@@ -33,7 +44,9 @@ def test_unknown_mutation_conservatively_invalidates_catalogs():
     cache.put_skill_declarations("workspace", 0, "fp", [])
     cache.put_skill_source_fingerprint("workspace", 0, "fp")
     cache.put_desktop_scenarios("host", 0, (), [])
-    assert cache.invalidate_catalog_dependencies(None)["scope"] == "unknown_dependencies"
+    assert (
+        cache.invalidate_catalog_dependencies(None)["scope"] == "unknown_dependencies"
+    )
     assert cache.get_skill_declarations("workspace") is None
     assert cache.get_skill_source_fingerprint("workspace") is None
     assert cache.get_desktop_scenarios("host") is None
@@ -54,7 +67,42 @@ def test_unrecognized_artifact_ref_conservatively_invalidates_catalogs():
 
 
 def test_retained_qualification_cannot_allocate_builder_hosts():
-    source = (Path(__file__).resolve().parents[1] / "e2e/stand/qualify-context-composition-isolated.py").read_text(encoding="utf-8")
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "e2e/stand/qualify-context-composition-isolated.py"
+    ).read_text(encoding="utf-8")
     assert "require_builder_host(args.host)" in source
     assert "test_ctxqual_" not in source
     assert "owner.post(" not in source
+
+
+def test_capability_cache_reads_bytes_but_grant_decisions_remain_live(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from adaos.services.policy import skill_capabilities as policy
+    import json
+    import os
+
+    root = tmp_path / "skill"
+    root.mkdir()
+    manifest = root / "skill.yaml"
+    manifest.write_text("capabilities: [data.relational]\n", encoding="utf-8")
+    current = SimpleNamespace(name="example", path=root)
+    ctx = SimpleNamespace(
+        skill_ctx=SimpleNamespace(get=lambda: current),
+        paths=SimpleNamespace(state_dir=lambda: tmp_path),
+    )
+    assert policy.decide_skill_capability(ctx, "data.relational").allowed
+    profile = tmp_path / "capabilities/skill_grants.json"
+    profile.parent.mkdir()
+    profile.write_text(
+        json.dumps({"subjects": {"skill:example": {"deny": ["data.relational"]}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(policy, "_validate_profile", lambda value: value)
+    assert not policy.decide_skill_capability(ctx, "data.relational").allowed
+    stamp = manifest.stat()
+    manifest.write_text("capabilities: [data.filesystem]\n", encoding="utf-8")
+    os.utime(manifest, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert not policy.decide_skill_capability(ctx, "data.relational").declared

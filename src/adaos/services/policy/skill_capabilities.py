@@ -3,12 +3,40 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from collections import OrderedDict
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
 from jsonschema import Draft202012Validator
+
+_DECLARED_CAPABILITIES: OrderedDict[tuple[str, bytes], frozenset[str]] = OrderedDict()
+_DECLARED_CAPABILITIES_LOCK = threading.RLock()
+
+
+def _declared_capabilities(path: Path) -> frozenset[str]:
+    # Only parsing is memoized; grants and the admission remain live. Fresh
+    # bytes, not timestamps/TTL, distinguish every manifest source revision.
+    content = path.read_bytes()
+    key = (str(path), hashlib.sha256(content).digest())
+    with _DECLARED_CAPABILITIES_LOCK:
+        cached = _DECLARED_CAPABILITIES.get(key)
+        if cached is not None:
+            _DECLARED_CAPABILITIES.move_to_end(key)
+            return cached
+    payload = yaml.safe_load(content.decode("utf-8")) or {}
+    if not isinstance(payload, Mapping):
+        raise SkillCapabilityAdmissionError("skill manifest must contain an object")
+    result = _tokens(payload.get("capabilities"))
+    with _DECLARED_CAPABILITIES_LOCK:
+        _DECLARED_CAPABILITIES[key] = result
+        _DECLARED_CAPABILITIES.move_to_end(key)
+        while len(_DECLARED_CAPABILITIES) > 128:
+            _DECLARED_CAPABILITIES.popitem(last=False)
+    return result
 
 
 class SkillCapabilityAdmissionError(PermissionError):
@@ -35,11 +63,19 @@ def _manifest_path(current_skill: Any) -> Path:
 
 def _profile_path(ctx: Any) -> Path:
     authority = getattr(ctx, "authority_state_dir", None)
-    return (Path(authority or ctx.paths.state_dir()).resolve() / "capabilities" / "skill_grants.json").resolve()
+    return (
+        Path(authority or ctx.paths.state_dir()).resolve()
+        / "capabilities"
+        / "skill_grants.json"
+    ).resolve()
 
 
 def _validate_profile(value: Any) -> Mapping[str, Any]:
-    schema_path = Path(__file__).resolve().parents[2] / "abi" / "skill.capability_grants.v1.schema.json"
+    schema_path = (
+        Path(__file__).resolve().parents[2]
+        / "abi"
+        / "skill.capability_grants.v1.schema.json"
+    )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     errors = sorted(
         Draft202012Validator(schema).iter_errors(value),
@@ -73,10 +109,7 @@ def decide_skill_capability(ctx: Any, capability: str) -> SkillCapabilityDecisio
     if not requested:
         raise ValueError("capability must be non-empty")
     manifest_path = _manifest_path(current)
-    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-    if not isinstance(payload, Mapping):
-        raise SkillCapabilityAdmissionError("skill manifest must contain an object")
-    declared = requested in _tokens(payload.get("capabilities"))
+    declared = requested in _declared_capabilities(manifest_path)
     subject = f"skill:{skill_name}"
     profile_allowed = True
     profile = _profile_path(ctx)
@@ -90,7 +123,9 @@ def decide_skill_capability(ctx: Any, capability: str) -> SkillCapabilityDecisio
         elif allowed and requested not in allowed:
             profile_allowed = False
     allowed = declared and profile_allowed
-    reason = "allowed" if allowed else "not_declared" if not declared else "profile_denied"
+    reason = (
+        "allowed" if allowed else "not_declared" if not declared else "profile_denied"
+    )
     return SkillCapabilityDecision(
         subject=subject,
         capability=requested,
