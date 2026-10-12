@@ -4897,6 +4897,7 @@ def invalidate_webspace_materialization_cache(
     source_of_truth: str | None = None,
     scenario_id: str | None = None,
     defer_disk: bool = False,
+    changed_artifact_refs: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     target = str(webspace_id or "").strip() or default_webspace_id()
     current = dict(_RUNTIME.tasks.get_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target) or {})
@@ -4928,9 +4929,12 @@ def invalidate_webspace_materialization_cache(
         scenario_id=explicit_scenario,
         include_disk=not defer_disk,
     )
-    _RUNTIME.cache.clear_skill_declarations()
-    _RUNTIME.cache.clear_skill_source_fingerprints()
-    materialization["desktop_scenario_cache_dropped"] = _RUNTIME.cache.clear_desktop_scenarios()
+    dependencies = changed_artifact_refs
+    if dependencies is None and explicit_scenario:
+        dependencies = (f"scenario:{explicit_scenario}",)
+    catalog_invalidation = _RUNTIME.cache.invalidate_catalog_dependencies(dependencies)
+    materialization["catalog_invalidation"] = catalog_invalidation
+    materialization["desktop_scenario_cache_dropped"] = catalog_invalidation["desktop_scenarios"]
     materialization["cache_dropped"] = dropped_cache
     materialization["disk_cache_drop_deferred"] = bool(defer_disk)
     materialization["cache_drop_scope"] = "scenario" if explicit_scenario else "webspace"
@@ -7397,6 +7401,15 @@ class WebspaceService:
             if token:
                 ids.append(token)
         return ids
+
+    def get(self, webspace_id: str) -> WebspaceInfo | None:
+        """Read one existing Webspace with the same validation as inventory.
+
+        Targeted runtime admission must not enumerate or repair unrelated
+        Webspaces, nor create a catalog row for a missing identifier.
+        """
+        row = workspace_index.get_workspace(webspace_id)
+        return _webspace_info_from_row(row, local_display=_local_node_display()) if row is not None else None
 
     def list(self, *, mode: str = "mixed") -> List[WebspaceInfo]:
         """

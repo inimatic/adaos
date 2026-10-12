@@ -200,6 +200,7 @@ async def _finalize_subprocess_install(
         reason=f"{target_kind}_install_subprocess_completed:{target_id}",
         action=f"{target_kind}_install_sync",
         source_of_truth="operation_manager",
+        changed_artifact_refs=(f"{target_kind}:{target_id}",),
     )
     rebuild = await rebuild_webspace_from_sources(
         webspace_id,
@@ -1014,6 +1015,7 @@ def submit_install_operation(
             reason=f"{target_kind}_{operation_action}_accepted:{target_id}",
             action=f"{target_kind}_{operation_action}_operation",
             source_of_truth="operation_manager",
+            changed_artifact_refs=(f"{target_kind}:{target_id}",),
         )
     except Exception:
         _log.debug("failed to invalidate materialization cache for operation=%s", operation.operation_id, exc_info=True)

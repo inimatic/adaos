@@ -22,6 +22,17 @@ def localized(label, ru, *, key=None, **extra):
 def upgrade(document):
     result = copy.deepcopy(document)
     app = result['ui']['application']
+    def lazy_menus(value):
+        if isinstance(value, dict):
+            if value.get('id') == 'specimens' and value.get('optionsDataSource'):
+                value['loadOptionsOnOpen'] = True
+                value['refreshOptionsOnOpen'] = True
+            for nested in value.values():
+                lazy_menus(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                lazy_menus(nested)
+    lazy_menus(app)
     resources = app.setdefault('resources', {})
     for locale in ('en', 'ru'):
         for name, filename in [('design', f'design-071-{locale}.json'), ('live', f'workbench-live-{locale}.json')]:

@@ -42,6 +42,9 @@ class _Webspaces:
         assert mode == "mixed"
         return list(self.items)
 
+    def get(self, webspace_id):
+        return next((item for item in self.items if item.id == webspace_id), None)
+
 
 def test_preview_rejects_missing_and_orphan_hosts_without_allocating(tmp_path):
     registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
@@ -231,6 +234,45 @@ def test_builder_host_discovery_uses_active_scenario_and_existing_topology_only(
         service.resolve_builder_context("default")
     with pytest.raises(ValueError, match="not ready"):
         service.resolve_builder_context("lab")
+
+
+def test_exact_builder_resolution_reads_only_its_single_preview(tmp_path):
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("host")
+    relation, _ = registry.ensure("host", purpose=BUILDER_PROJECT_PREVIEW)
+    registry.sql.workspace(relation.target_webspace_id, kind="dev")
+
+    class ExactReads(_Webspaces):
+        reads = []
+
+        def list(self, **kwargs):
+            raise AssertionError("A Builder turn must not discover all Webspaces")
+
+        def get(self, identifier):
+            self.reads.append(identifier)
+            return super().get(identifier)
+
+    webspaces = ExactReads(_webspace("host", current="builder"),
+                          _webspace("host-dev", current="app", kind="dev"),
+                          _webspace("unrelated", current="builder"))
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state", relationship_registry=registry,
+                                      webspace_service=webspaces)
+    assert service.resolve_builder_context("host")["preview_webspace_id"] == "host-dev"
+    assert webspaces.reads == ["host", "host-dev"]
+    assert len(registry.list()) == 1
+
+
+def test_exact_builder_resolution_revalidates_preview_kind_without_provisioning(tmp_path):
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("host")
+    registry.ensure("host", purpose=BUILDER_PROJECT_PREVIEW)
+    webspaces = _Webspaces(_webspace("host", current="builder"))
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state", relationship_registry=registry,
+                                      webspace_service=webspaces)
+    assert service.resolve_builder_context("host", require_ready=False)["status"] == "preview_webspace_missing"
+    webspaces.items.append(_webspace("host-dev", current="app", kind="workspace"))
+    with pytest.raises(ValueError, match="preview_webspace_invalid"):
+        service.resolve_builder_context("host")
 
 
 @pytest.mark.parametrize(

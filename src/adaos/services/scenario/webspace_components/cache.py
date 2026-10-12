@@ -150,6 +150,7 @@ class WebspaceCacheState:
     def __init__(self) -> None:
         self._webui_declarations: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
         self._skill_declarations: dict[str, tuple[float, str, list[dict[str, Any]]]] = {}
+        self._skill_declaration_dependencies: dict[str, frozenset[str]] = {}
         self._skill_source_fingerprints: dict[str, tuple[float, str]] = {}
         self._resolved_webspaces: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._materialized_webspaces: OrderedDict[str, dict[str, Any]] = OrderedDict()
@@ -195,15 +196,60 @@ class WebspaceCacheState:
         cached_at: float,
         fingerprint: str,
         declarations: list[dict[str, Any]],
+        *,
+        dependency_refs: frozenset[str] | None = None,
     ) -> None:
         self._skill_declarations[key] = (
             float(cached_at),
             str(fingerprint),
             declarations,
         )
+        if dependency_refs is not None:
+            self._skill_declaration_dependencies[key] = dependency_refs
+        else:
+            self._skill_declaration_dependencies.pop(key, None)
 
     def clear_skill_declarations(self) -> None:
         self._skill_declarations.clear()
+        self._skill_declaration_dependencies.clear()
+
+    def invalidate_catalog_dependencies(self, refs: tuple[str, ...] | None) -> dict[str, int | str]:
+        """Invalidate only catalog inputs depending on changed artifacts.
+
+        None is a conservative compatibility boundary for an unidentified
+        mutation. Scenario UI changes never invalidate unrelated skill inputs.
+        Source fingerprints are aggregate skill-root identities, so a skill
+        change invalidates them while a scenario change leaves them intact.
+        """
+        if refs is None:
+            declarations = len(self._skill_declarations)
+            fingerprints = len(self._skill_source_fingerprints)
+            self.clear_skill_declarations()
+            self.clear_skill_source_fingerprints()
+            return {"scope": "unknown_dependencies", "skill_declarations": declarations,
+                    "skill_fingerprints": fingerprints, "desktop_scenarios": self.clear_desktop_scenarios()}
+        skills = frozenset(ref for ref in refs if ref.startswith("skill:"))
+        scenarios = frozenset(ref.removeprefix("scenario:") for ref in refs if ref.startswith("scenario:"))
+        removed = 0
+        for key in tuple(self._skill_declarations):
+            dependencies = self._skill_declaration_dependencies.get(key)
+            if skills and (dependencies is None or dependencies & skills):
+                self._skill_declarations.pop(key, None)
+                self._skill_declaration_dependencies.pop(key, None)
+                removed += 1
+        fingerprints = len(self._skill_source_fingerprints) if skills else 0
+        if skills:
+            self.clear_skill_source_fingerprints()
+        desktop = 0
+        for key, (_at, stamp, entries) in tuple(self._desktop_scenarios.items()):
+            # The file/directory stamp checked before every cache hit also
+            # detects newly installed or removed scenarios. These entries are
+            # the explicit current metadata dependencies of this snapshot.
+            if scenarios.intersection(str(entry[0]) for entry in entries):
+                self._desktop_scenarios.pop(key, None)
+                desktop += 1
+        return {"scope": "artifact_dependencies", "skill_declarations": removed,
+                "skill_fingerprints": fingerprints, "desktop_scenarios": desktop}
 
     def get_skill_source_fingerprint(self, key: str) -> tuple[float, str] | None:
         return self._skill_source_fingerprints.get(key)

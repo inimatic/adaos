@@ -883,7 +883,10 @@ class BuilderWorkbenchService:
         sufficient.
         """
 
-        inventory = self._webspace_inventory()
+        return self._builder_host_contexts(self._webspace_inventory())
+
+    def _builder_host_contexts(self, inventory: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        """Apply identical topology/readiness checks to discovered or exact rows."""
         configured_builder_scenarios = (
             os.getenv("ADAOS_BUILDER_HOST_SCENARIO_IDS") or BUILDER_HOST_SCENARIO_ID
         )
@@ -958,10 +961,26 @@ class BuilderWorkbenchService:
         """Resolve one explicit Builder host; never infer it from an id suffix."""
 
         requested = safe_source_webspace_id(builder_webspace_id)
+        svc = self.webspace_service
+        if svc is None:
+            from adaos.services.scenario.webspace_runtime import WebspaceService
+
+            svc = WebspaceService()
+        # Each Builder owns exactly one registered Preview. Discovery belongs
+        # to the host picker, not to execution of a turn on an explicit host.
+        relation = self.relationships.get_outgoing(requested)
+        identifiers = [requested]
+        if relation is not None:
+            identifiers.append(relation.target_webspace_id)
+        inventory = {
+            identifier: payload
+            for identifier in identifiers
+            if (payload := _info_to_dict(svc.get(identifier)))
+        }
         context = next(
             (
                 item
-                for item in self.list_builder_hosts()
+                for item in self._builder_host_contexts(inventory)
                 if str(item.get("builder_webspace_id") or "") == requested
             ),
             None,

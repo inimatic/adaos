@@ -1,11 +1,11 @@
-"""Uniform post-hoc qualification in NEW owned fixtures and isolated workspaces.
+"""Uniform post-hoc qualification in NEW fixtures on one existing Builder.
 
 Retained model text and Brief never change. Each candidate gets a fresh scenario
 namespace, preventing old browser mutations from contaminating a later arm.
-The user's existing Builder/Preview is never selected or rewritten here.
+The explicitly selected test Builder reuses its single Preview for every case;
+the runner must not create a host per candidate or per qualification label.
 """
 import argparse, hashlib, json, logging, os, subprocess, time
-import requests
 from pathlib import Path
 from unittest.mock import patch
 from dotenv import load_dotenv
@@ -16,6 +16,7 @@ from adaos.e2e.prototype_task_acceptance import task_mutation_contract
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--run',type=Path,required=True)
 parser.add_argument('--cohort',required=True)
+parser.add_argument('--host', required=True, help='Existing test Builder; its one Preview is reused sequentially')
 parser.add_argument('--label',default='final')
 parser.add_argument('--amendment', default='uniform-replay-amendment.json')
 args=parser.parse_args();run=args.run.resolve()
@@ -32,7 +33,6 @@ load_dotenv();logging.disable(logging.INFO)
 if os.getenv('ENV_TYPE')!='dev':parser.error('DEV only')
 from adaos.apps.cli.app import Settings,init_ctx
 from adaos.services.agent_context import get_ctx
-from adaos.apps.cli.active_control import resolve_control_token
 from adaos.sdk.developer import compositions,projects
 from adaos.sdk.builder import preview,workflow
 from adaos.sdk.llm import llm_client
@@ -46,19 +46,14 @@ assert results['complete'] and len(results['samples'])==expected_samples
 handler=Path(ctx.paths.dev_skills_dir())/'builder_skill/handlers/main.py'
 if 'sha256:'+hashlib.sha256(handler.read_bytes()).hexdigest()!=plan['native_builder_sha256']:raise ValueError('Native Builder drift')
 builder=native_builder(handler)
-host='test_ctxqual_'+hashlib.sha256((str(run)+cohort['id']+args.label).encode()).hexdigest()[:14]
+from adaos.e2e.builder_host import require_builder_host
+host = require_builder_host(args.host)
 host_receipt=output/'owned-host.json'
-owner=requests.Session();owner.trust_env=False
-owner.headers['Authorization']='Bearer '+resolve_control_token(base_url='http://127.0.0.1:8777')
-listed=owner.get('http://127.0.0.1:8777/api/node/yjs/webspaces',timeout=30)
-listed.raise_for_status();existing={str(item['id']) for item in listed.json()['items']}
-if host in existing and not host_receipt.exists():raise ValueError('Unowned existing qualification host')
-if host not in existing:
- created_host=owner.post('http://127.0.0.1:8777/api/node/yjs/webspaces',json={'id':host,
-  'title':'[TEST] Context qualification '+cohort['id'],'scenario_id':'builder','dev':False},timeout=150)
- created_host.raise_for_status();assert created_host.json().get('ok')
- _write_json(host_receipt,{'host':host,'test':True,'creation_via_hub_owner':True,'existing_user_preview_untouched':True})
-preview.ensure(host,runtime_scenario_id='web_desktop',wait_for_rebuild=True)
+if host_receipt.exists() and read(host_receipt)['host'] != host:
+ raise ValueError('Retained qualification host differs; use a fresh qualification label/amendment')
+_write_json(host_receipt, {'host': host, 'test': True, 'selected_existing_builder': True,
+                         'creation_via_hub_owner': False, 'single_preview_reused': True})
+preview.ensure(host,wait_for_rebuild=True)
 health=subprocess.run(['node','e2e/stand/browser/prototype-client-health.mjs'],capture_output=True,text=True,encoding='utf-8',timeout=60,check=True)
 _write_json(output/'client-health.json',json.loads(health.stdout))
 _write_json(output/'configuration.json',{'label':args.label,'compiler_label':amendment['final_compiler_label'],

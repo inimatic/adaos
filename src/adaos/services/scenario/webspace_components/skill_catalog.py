@@ -448,6 +448,9 @@ class WebspaceSkillCatalogService:
             now,
             fingerprint,
             operations.clone_json_like(decls),
+            dependency_refs=frozenset({"skill:web_desktop_skill", *(
+                f"skill:{rec.get('name') or rec.get('id')}" for rec in active_records
+            )}),
         )
         return decls
 
