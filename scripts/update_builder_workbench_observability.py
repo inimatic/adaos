@@ -40,6 +40,13 @@ def upgrade(document):
         selection_source['map'] = selection_source.pop('mapping')
     def pin_chat_target(value):
         if isinstance(value, dict):
+            if value.get('type') == 'ui.chat':
+                chat_inputs = value.setdefault('inputs', {})
+                for field, en, ru in [('historyButtonLabel', 'History', 'История'),
+                                      ('loadingHistoryLabel', 'Loading history…', 'Загрузка истории…')]:
+                    if field in chat_inputs:
+                        chat_inputs[field] = en
+                        chat_inputs[field + '_i18n'] = {'locales': {'en': en, 'ru': ru}}
             if value.get('type') == 'ui.chat' and value.get('inputs', {}).get('sendCommand') == 'voice.chat.user':
                 value['inputs'].setdefault('meta', {})['builder_selected_target'] = {
                     'object_type': '$state.selectedProjectKind', 'object_id': '$state.selectedProjectId'}
