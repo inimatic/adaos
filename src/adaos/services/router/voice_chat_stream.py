@@ -70,6 +70,13 @@ def _compact_voice_output_owner(value: Any) -> dict[str, str] | None:
 
 def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any]:
     compact: dict[str, Any] = {}
+    # Retain the identity link without exporting the full input context. An
+    # overlong/invalid identity is omitted, never silently truncated into a
+    # different id. Durable history remains authoritative for full details.
+    meta = item.get("_meta")
+    source_message_id = item.get("source_message_id") or (meta.get("source_message_id") if isinstance(meta, Mapping) else None)
+    if isinstance(source_message_id, str) and source_message_id.strip() and len(source_message_id) <= 240:
+        compact["source_message_id"] = source_message_id
     for key in (
         "id",
         "from",
@@ -133,7 +140,6 @@ def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any
             refs.append(record)
         if refs:
             compact["attachments"] = refs
-    meta = item.get("_meta")
     if isinstance(meta, Mapping):
         compact_meta: dict[str, Any] = {}
         for key in (

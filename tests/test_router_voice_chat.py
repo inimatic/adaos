@@ -4132,6 +4132,18 @@ async def test_voice_chat_stream_compacts_heavy_message_payloads(monkeypatch) ->
     assert "prototype_review_notes" not in json.dumps(message, ensure_ascii=False)
 
 
+async def test_chat_stream_compaction_retains_exact_bounded_source_message_identity():
+    from adaos.services.router.voice_chat_stream import _compact_voice_chat_stream_message
+    value = {"id": "reply", "text": "Applied", "thread_id": "project:mine",
+             "_meta": {"source_message_id": "real-user-turn", "private_context": "not exported"}}
+    compact = _compact_voice_chat_stream_message(value)
+    assert compact["source_message_id"] == "real-user-turn"
+    assert compact["thread_id"] == "project:mine"
+    assert "private_context" not in compact.get("_meta", {})
+    for invalid in (1, "", "x" * 241):
+        assert "source_message_id" not in _compact_voice_chat_stream_message({"text": "Legacy", "source_message_id": invalid})
+
+
 def test_voice_chat_stream_tail_is_utf8_byte_bounded_and_keeps_progress_sequence() -> None:
     messages = [
         {
