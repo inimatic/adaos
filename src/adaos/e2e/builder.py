@@ -1745,6 +1745,11 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
     def execute(self, step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any]) -> Mapping[str, Any]:
         from adaos.e2e import builder_lifecycle
 
+        if step_type == "prototype.semantic_episode":
+            from adaos.e2e import builder_semantic_episode
+            if self.browser_mode == "off":
+                raise BuilderE2EUnavailable("semantic episode requires live browser evidence")
+            return builder_semantic_episode.execute(inputs, context, repo_root=self.repo_root)
         if step_type == "prototype.browser":
             from adaos.e2e import builder_browser
             if self.browser_mode == "off":

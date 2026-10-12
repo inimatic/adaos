@@ -1,0 +1,14 @@
+schema: adaos.builder.e2e_case.v1
+case_id: semantic-label-episode-en
+title: Preserve a relational Prototype through semantic label changes
+locale: en
+tags: [semantic, incremental, replay, model-free]
+steps:
+  - id: semantic-episode
+    type: prototype.semantic_episode
+    input:
+      fixture_ref: e2e/builder/development/semantic-increments/fixture.json
+    expect:
+      paths_present: [scenario_id, revision, rows]
+      values: {ok: true, model_calls: 0, usd: 0}
+cleanup: {policy: never, retain_on_failure: true}
