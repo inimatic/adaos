@@ -221,6 +221,8 @@ class WebspaceCacheState:
         Source fingerprints are aggregate skill-root identities, so a skill
         change invalidates them while a scenario change leaves them intact.
         """
+        if refs is not None and any(not ref.startswith(("skill:", "scenario:")) for ref in refs):
+            refs = None  # Unknown aggregate/package dependencies remain fail-safe.
         if refs is None:
             declarations = len(self._skill_declarations)
             fingerprints = len(self._skill_source_fingerprints)

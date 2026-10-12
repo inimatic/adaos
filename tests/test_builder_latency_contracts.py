@@ -39,6 +39,20 @@ def test_unknown_mutation_conservatively_invalidates_catalogs():
     assert cache.get_desktop_scenarios("host") is None
 
 
+def test_unrecognized_artifact_ref_conservatively_invalidates_catalogs():
+    cache = WebspaceCacheState()
+    cache.put_skill_declarations("workspace", 0, "fp", [])
+    cache.put_skill_source_fingerprint("workspace", 0, "fp")
+    cache.put_desktop_scenarios("host", 0, (), [])
+
+    result = cache.invalidate_catalog_dependencies(("application:changed",))
+
+    assert result["scope"] == "unknown_dependencies"
+    assert cache.get_skill_declarations("workspace") is None
+    assert cache.get_skill_source_fingerprint("workspace") is None
+    assert cache.get_desktop_scenarios("host") is None
+
+
 def test_retained_qualification_cannot_allocate_builder_hosts():
     source = (Path(__file__).resolve().parents[1] / "e2e/stand/qualify-context-composition-isolated.py").read_text(encoding="utf-8")
     assert "require_builder_host(args.host)" in source
