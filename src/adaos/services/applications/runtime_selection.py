@@ -696,8 +696,21 @@ def application_execution(ctx: AgentContext, skill_name: str):
     for selection in guarded_selections:
         if selection.application_id in selected:
             continue
-        release = store.get_release(selection.application_id, selection.release_digest)
-        if any(item.kind == "skill" and item.artifact_id == skill_name for item in release.project_release.components):
+        check_component = getattr(store, "release_has_component", None)
+        if callable(check_component):
+            owns_component = check_component(
+                selection.application_id,
+                selection.release_digest,
+                kind="skill",
+                artifact_id=skill_name,
+            )
+        else:
+            release = store.get_release(selection.application_id, selection.release_digest)
+            owns_component = any(
+                item.kind == "skill" and item.artifact_id == skill_name
+                for item in release.project_release.components
+            )
+        if owns_component:
             selected[selection.application_id] = selection
     with ExitStack() as stack:
         for application_id, selection in sorted(selected.items()):

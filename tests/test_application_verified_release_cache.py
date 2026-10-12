@@ -12,13 +12,26 @@ def cached_release(tmp_path, monkeypatch):
     digest = "sha256:" + "a" * 64
     path = store._release_path("application", digest)
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"application_id": "application", "release_digest": digest, "nested": {"title": "original"}}), encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            {
+                "application_id": "application",
+                "release_digest": digest,
+                "nested": {"title": "original"},
+                "components": [{"kind": "skill", "artifact_id": "worker"}],
+            }
+        ),
+        encoding="utf-8",
+    )
     calls = []
+
     def parse(payload):
         calls.append(payload)
         if payload.get("invalid"):
             raise ValueError("invalid canonical release")
-        return SimpleNamespace(**payload)
+        components = [SimpleNamespace(**item) for item in payload.get("components", [])]
+        return SimpleNamespace(**payload, project_release=SimpleNamespace(components=components))
+
     monkeypatch.setattr(module.ApplicationRelease, "from_mapping", parse)
     module._VERIFIED_RELEASE_CACHE.clear()
     return store, digest, path, calls
@@ -61,3 +74,15 @@ def test_missing_or_nonobject_content_cannot_reuse_verified_release(cached_relea
     path.unlink()
     with pytest.raises(FileNotFoundError):
         store.get_release("application", digest)
+
+
+def test_component_membership_reuses_verified_release_without_exposing_cached_object(
+    cached_release,
+):
+    store, digest, _, calls = cached_release
+    assert store.release_has_component("application", digest, kind="skill", artifact_id="worker") is True
+    assert store.release_has_component("application", digest, kind="skill", artifact_id="missing") is False
+    release = store.get_release("application", digest)
+    release.project_release.components.clear()
+    assert store.release_has_component("application", digest, kind="skill", artifact_id="worker") is True
+    assert len(calls) == 1

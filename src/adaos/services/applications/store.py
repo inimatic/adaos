@@ -487,6 +487,24 @@ class ApplicationStore:
         }
 
     def get_release(self, application_id: str, release_digest: str) -> ApplicationRelease:
+        return copy.deepcopy(self._verified_release(application_id, release_digest))
+
+    def release_has_component(
+        self,
+        application_id: str,
+        release_digest: str,
+        *,
+        kind: str,
+        artifact_id: str,
+    ) -> bool:
+        """Check fresh verified membership without cloning an entire release."""
+        release = self._verified_release(application_id, release_digest)
+        return any(
+            item.kind == kind and item.artifact_id == artifact_id
+            for item in release.project_release.components
+        )
+
+    def _verified_release(self, application_id: str, release_digest: str) -> ApplicationRelease:
         path = self._release_path(application_id, release_digest)
         if not path.is_file():
             raise FileNotFoundError(f"ApplicationRelease not found: {application_id}@{release_digest}")
@@ -504,7 +522,7 @@ class ApplicationStore:
                 if cached[0].application_id != application_id or cached[0].release_digest != release_digest:
                     raise ApplicationStoreError("ApplicationRelease path identity mismatch")
                 _VERIFIED_RELEASE_CACHE.move_to_end(key)
-                return copy.deepcopy(cached[0])
+                return cached[0]
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as exc:
