@@ -1285,6 +1285,20 @@ def resolve_presentation(
                 "project_ref": project["ref"],
                 **dict(selected),
             }
+        # A scenario-backed Project already owns a presentation. Empty explicit
+        # entrypoints must not select the generic skill wrapper and contradict
+        # the runtime identity used for revision materialization.
+        owned = (project.get("components") or {}).get("owned") or []
+        primary = next((item for item in owned if item.get("role") == "primary"), None)
+        primary_ref = str((primary or {}).get("ref") or "")
+        if primary_ref.startswith("scenario:") and primary_ref.removeprefix("scenario:"):
+            return {
+                "source": "project_primary",
+                "project_ref": project["ref"],
+                "id": "primary",
+                "presentation": primary_ref,
+                "bindings": {},
+            }
     kind, _, component_id = str(component_ref).partition(":")
     if kind == "skill" and component_id:
         root = component_projects.resolve_root("skill", component_id)

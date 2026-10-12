@@ -311,6 +311,32 @@ def test_project_requires_one_primary_component(project_space) -> None:
         compositions.create(value)
 
 
+def test_scenario_backed_project_without_entrypoints_uses_its_owned_presentation(project_space):
+    _scenario(project_space["scenarios"], "board_view")
+    value = _project("board_project", "unused")
+    value["components"] = {"owned": [{"ref": "scenario:board_view", "role": "primary",
+                                      "exposure": "application", "lifecycle": "bound", "relations": ["uses"]}],
+                           "dependencies": []}
+    value["entrypoints"] = []
+    value["compatibility"] = {"required_entrypoints": []}
+    compositions.create(value)
+    resolved = compositions.resolve_presentation("project:board_project", project_id="board_project")
+    assert resolved["source"] == "project_primary"
+    assert resolved["presentation"] == "scenario:board_view"
+    assert resolved["bindings"] == {}
+
+
+def test_explicit_project_entrypoint_still_wins_over_primary_scenario(monkeypatch):
+    monkeypatch.setattr(compositions, "get", lambda _: {
+        "ref": "project:board_project", "components": {"owned": [{"ref": "scenario:board_view", "role": "primary"}]},
+        "entrypoints": [{"id": "review", "presentation": "scenario:review_view", "default": True, "bindings": {"mode": "review"}}],
+    })
+    resolved = compositions.resolve_presentation("project:board_project", project_id="board_project")
+    assert resolved["source"] == "project"
+    assert resolved["presentation"] == "scenario:review_view"
+    assert resolved["bindings"] == {"mode": "review"}
+
+
 def test_project_source_can_start_as_empty_builder_draft(project_space) -> None:
     value = _project("draft_project", "one")
     value["components"]["owned"] = []
