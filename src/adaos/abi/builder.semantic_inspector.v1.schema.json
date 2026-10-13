@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.semantic_inspector.v1",
+  "title": "Read-only semantic source and committed property write inspection",
+  "type": "object",
+  "required": ["schema", "project_ref", "status", "refs", "write_set", "read_refs", "dependency_refs", "admitted_write_refs", "transaction", "read_scope", "inventory_scope", "supported_operations"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "adaos.builder.semantic_inspector.v1"},
+    "project_ref": {"type": "string", "pattern": "^scenario:[A-Za-z0-9_.-]{1,160}$"},
+    "status": {"enum": ["source_missing", "blocked", "verified"]},
+    "status_label": {"type": "string", "maxLength": 240},
+    "source_revision": {"type": "string", "maxLength": 80},
+    "base_hash": {"$ref": "#/$defs/digest"},
+    "ref_count": {"type": "integer", "minimum": 0, "maximum": 1024},
+    "write_count": {"type": "integer", "minimum": 0, "maximum": 16},
+    "read_scope": {"const": "full_semantic_source_and_effective_compiled_ui"},
+    "inventory_scope": {"const": "resources_fields_views_relationships_commands"},
+    "supported_operations": {"type": "array", "items": {"enum": ["label.set", "view.fields.reorder"]}, "maxItems": 2, "uniqueItems": true},
+    "supported_operations_text": {"type": "string", "maxLength": 240},
+    "read_refs": {"$ref": "#/$defs/refs"},
+    "dependency_refs": {"$ref": "#/$defs/refs"},
+    "admitted_write_refs": {"$ref": "#/$defs/refs"},
+    "transaction_id": {"type": "string", "maxLength": 160},
+    "transaction_source_revision": {"type": "string", "maxLength": 80},
+    "block_reason": {"type": "string", "maxLength": 80},
+    "block_detail": {"type": "string", "maxLength": 240},
+    "refs": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/node"}},
+    "write_set": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/write"}},
+    "transaction": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/transaction"}]}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "ref": {"type": "string", "pattern": "^(resource|field|view|relationship|command):[A-Za-z0-9_.-]+$", "maxLength": 250},
+    "refs": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/ref"}},
+    "property": {"enum": ["title.en", "title.ru", "label.en", "label.ru", "field_refs"]},
+    "node": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ref", "kind", "label_en", "label_ru", "dependencies", "supported_writes", "dependencies_text", "writes_text"],
+      "properties": {
+        "ref": {"$ref": "#/$defs/ref"},
+        "kind": {"enum": ["resource", "field", "identity_field", "view", "relationship", "command"]},
+        "label_en": {"type": "string", "maxLength": 240},
+        "label_ru": {"type": "string", "maxLength": 240},
+        "dependencies": {"$ref": "#/$defs/refs"},
+        "supported_writes": {"type": "array", "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/property"}},
+        "dependencies_text": {"type": "string", "maxLength": 10000},
+        "writes_text": {"type": "string", "maxLength": 240}
+      }
+    },
+    "write": {
+      "type": "object", "additionalProperties": false,
+      "required": ["seq", "kind", "ref", "property", "before", "after", "before_text", "after_text"],
+      "properties": {
+        "seq": {"type": "integer", "minimum": 1, "maximum": 16},
+        "kind": {"enum": ["label.set", "view.fields.reorder"]},
+        "ref": {"$ref": "#/$defs/ref"}, "property": {"$ref": "#/$defs/property"},
+        "before": {"$ref": "#/$defs/value"}, "after": {"$ref": "#/$defs/value"},
+        "before_text": {"type": "string", "maxLength": 5000}, "after_text": {"type": "string", "maxLength": 5000}
+      }
+    },
+    "value": {"oneOf": [{"type": "string", "maxLength": 240}, {"type": "array", "maxItems": 24, "items": {"type": "string", "maxLength": 160}}]},
+    "transaction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["transaction_id", "change_id", "source_revision", "revision", "base_hash", "semantic_digest", "reducer", "status"],
+      "properties": {
+        "transaction_id": {"type": "string", "maxLength": 160}, "change_id": {"type": "string", "maxLength": 160},
+        "source_revision": {"type": "string", "maxLength": 80}, "revision": {"type": "string", "maxLength": 80},
+        "base_hash": {"$ref": "#/$defs/digest"}, "semantic_digest": {"$ref": "#/$defs/digest"},
+        "reducer": {"enum": ["semantic_graph.labels.v1", "semantic_graph.bounded.v1"]}, "status": {"const": "committed"}
+      }
+    }
+  }
+}

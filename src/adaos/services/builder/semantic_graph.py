@@ -1,6 +1,6 @@
-"""Core-owned, bounded semantic label edits and retained transaction recovery.
+"""Core-owned, bounded semantic edits and retained transaction recovery.
 
-This first slice supports existing view/field labels only. It does not execute
+This slice supports existing labels and table column order. It does not execute
 Application commands, alter resource schemas, or provide distributed authorship.
 """
 from __future__ import annotations
@@ -24,6 +24,33 @@ from .workflow import BuilderWorkflowError, BuilderWorkflowService, _LOCK
 SCHEMA = "adaos.builder.semantic_graph_change.v1"
 JOURNAL_SCHEMA = "adaos.builder.semantic_graph_transaction.v1"
 REDUCER = "semantic_graph.labels.v1"
+BOUNDED_REDUCER = "semantic_graph.bounded.v1"
+
+
+def supports_field_order(document: Mapping[str, Any], view: Mapping[str, Any]) -> bool:
+    """Do not reinterpret implicit relationship display identity as layout."""
+    return (view.get("role") == "collection" and view.get("presentation") == "table"
+            and len(view.get("field_refs", [])) >= 2
+            and not any(item["to_resource_ref"] == view["resource_ref"] and not item.get("label_field_refs")
+                        for item in document.get("relationships", [])))
+
+
+def _view(document: Mapping[str, Any], ref: str) -> dict[str, Any]:
+    kind, _, identity = ref.partition(":")
+    candidates = [item for item in document["views"] if kind == "view" and item["id"] == identity]
+    if len(candidates) != 1:
+        raise BuilderWorkflowError(f"semantic view ref must resolve exactly once: {ref}")
+    return candidates[0]
+
+
+def operation_write_set(ops: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Derive actual property writes from checked operations, never caller claims."""
+    return [{"seq": item["seq"], "kind": item["kind"], "ref": item["ref"],
+             "property": ("title" if item["ref"].startswith("view:") else "label") + "." + item["locale"]
+                         if item["kind"] == "label.set" else "field_refs",
+             "before": copy.deepcopy(item["expected"]),
+             "after": copy.deepcopy(item["text"] if item["kind"] == "label.set" else item["field_refs"])}
+            for item in ops]
 
 
 def digest(value: Any) -> str:
@@ -71,14 +98,14 @@ def _text_nodes(value: Any):
 
 
 def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], *, write_refs: Sequence[str]) -> dict[str, Any]:
-    """Pure ordered reduction. Only admitted locale text slots may change."""
+    """Pure ordered reduction over admitted text slots or table field order."""
     if document.get("schema") != "adaos.webui.semantic.v2":
-        raise BuilderWorkflowError("graph label reduction requires semantic v2")
+        raise BuilderWorkflowError("semantic graph reduction requires semantic v2")
     result = copy.deepcopy(dict(document))
     schema = _contract()
     validator = Draft202012Validator({"$schema": schema["$schema"], "$defs": schema["$defs"], "$ref": "#/$defs/op"})
     if not ops or len(ops) > 16 or not write_refs or len(write_refs) > 16:
-        raise BuilderWorkflowError("bounded graph label operation count required")
+        raise BuilderWorkflowError("bounded semantic operation count required")
     inverse = []
     for seq, operation in enumerate(ops, 1):
         try:
@@ -89,6 +116,20 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
             raise BuilderWorkflowError("semantic operation sequence must be contiguous")
         if operation["ref"] not in write_refs:
             raise BuilderWorkflowError("semantic operation is outside the admitted write scope")
+        if operation["kind"] == "view.fields.reorder":
+            view = _view(result, operation["ref"])
+            if view.get("role") != "collection" or view.get("presentation") != "table":
+                raise BuilderWorkflowError("column reordering requires an existing table collection view")
+            if not supports_field_order(result, view):
+                raise BuilderWorkflowError("column reordering requires explicit relationship display fields for a lookup target")
+            if view["field_refs"] != operation["expected"]:
+                raise BuilderWorkflowError("semantic field order precondition failed")
+            if set(view["field_refs"]) != set(operation["field_refs"]):
+                raise BuilderWorkflowError("column reordering must preserve exactly the existing field refs")
+            inverse.append({**operation, "expected": copy.deepcopy(operation["field_refs"]),
+                            "field_refs": copy.deepcopy(view["field_refs"])})
+            view["field_refs"] = list(operation["field_refs"])
+            continue
         label = _label(result, operation["ref"])
         if any(node is not label and node.get("key") == label["key"] for node in _text_nodes(result)):
             raise BuilderWorkflowError("shared locale key prevents an isolated semantic label edit")
@@ -101,7 +142,9 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
         label[locale] = operation["text"]
     validate_semantic_prototype(result)
     inverse = [{**operation, "seq": seq} for seq, operation in enumerate(reversed(inverse), 1)]
-    return {"semantic_document": result, "semantic_digest": digest(result), "inverse_ops": inverse, "reducer": REDUCER}
+    return {"semantic_document": result, "semantic_digest": digest(result), "inverse_ops": inverse,
+            "write_set": operation_write_set(ops),
+            "reducer": BOUNDED_REDUCER if any(item["kind"] != "label.set" for item in ops) else REDUCER}
 
 
 def _runtime_projection(webui: Mapping[str, Any]) -> dict[str, Any]:
@@ -201,22 +244,115 @@ class SemanticGraphService:
             else:
                 raise BuilderWorkflowError("pending semantic transaction has a conflicting revision")
 
+    def inspect(self, *, project_ref: str) -> dict[str, Any]:
+        """On-demand source/ref/write-set inspection; never recovers or selects UI."""
+        from .semantic_inspector import semantic_refs, dependency_refs, write_rows
+        if not re.fullmatch(r"scenario:[A-Za-z0-9_.-]{1,160}", project_ref):
+            raise BuilderWorkflowError("semantic inspector requires a scenario ref")
+        object_id = project_ref.partition(":")[2]
+        root = self.workflow.project_root("scenario", object_id)
+        packet = {"schema": "adaos.builder.semantic_inspector.v1", "project_ref": project_ref,
+                  "status": "source_missing", "refs": [], "write_set": [], "read_refs": [],
+                  "dependency_refs": [], "admitted_write_refs": [], "transaction": None,
+                  "read_scope": "full_semantic_source_and_effective_compiled_ui",
+                  "inventory_scope": "resources_fields_views_relationships_commands",
+                  "supported_operations": ["label.set", "view.fields.reorder"],
+                  "supported_operations_text": "label.set, view.fields.reorder"}
+        with _LOCK:
+            if not self._file(root, "semantic.webui.json").is_file():
+                packet["status_label"] = "Semantic source is missing"
+                return packet
+            stage = "source_verification"
+            try:
+                document = _read(self._file(root, "semantic.webui.json"))
+                baseline = verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}")
+                stage = "locale_verification"
+                for locale, expected in baseline["compiled"]["locale_dictionaries"].items():
+                    path = self._file(root, f"assets/i18n/{locale}.json")
+                    existing = _read(path) if path.is_file() else None
+                    if existing is not None and any(existing.get(key) != text for key, text in expected.items()):
+                        raise BuilderWorkflowError("semantic baseline drift: locale dictionary differs")
+                stage = "reference_inventory"
+                refs = semantic_refs(document)
+                revision = self.workflow.current_prototype_revision("scenario", object_id)
+                packet.update(status="verified", source_revision=revision, base_hash=digest(document),
+                              refs=refs, ref_count=len(refs), read_refs=sorted(item["ref"] for item in refs))
+                path = self._file(root, f"ui_revisions/{revision}.json")
+                retained = _read(path) if path.is_file() else {}
+                receipt = retained.get("semantic_transaction") or {}
+                if receipt:
+                    stage = "transaction_verification"
+                    patch = retained.get("patch") or {}
+                    journal_path = _operation_root(self.workflow, project_ref) / (digest([patch.get("change_id"), receipt.get("transaction_id")])[7:] + ".json")
+                    journal = _read(journal_path)
+                    request = journal["request"]
+                    if (journal.get("schema") != JOURNAL_SCHEMA or journal.get("status") != "committed"
+                            or journal.get("request_digest") != digest(request) or journal.get("result") != receipt
+                            or request["project_ref"] != project_ref or receipt["revision"] != revision
+                            or receipt["semantic_digest"] != digest(document)):
+                        raise BuilderWorkflowError("semantic receipt is not a committed exact source transaction")
+                    Draft202012Validator(_contract()).validate(request)
+                    encoded_base = (journal.get("before_files") or {}).get("semantic.webui.json")
+                    if not isinstance(encoded_base, str):
+                        raise BuilderWorkflowError("semantic receipt has no retained immutable base")
+                    try:
+                        base_document = json.loads(base64.b64decode(encoded_base, validate=True).decode("utf-8-sig"))
+                    except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                        raise BuilderWorkflowError("semantic receipt base is invalid") from exc
+                    if not isinstance(base_document, dict) or digest(base_document) != request["base_hash"]:
+                        raise BuilderWorkflowError("semantic receipt base does not match its admitted digest")
+                    replayed = reduce_graph(base_document, request["ops"], write_refs=request["write_refs"])
+                    if (replayed["semantic_digest"] != receipt["semantic_digest"]
+                            or replayed["inverse_ops"] != receipt["inverse_ops"]
+                            or receipt.get("write_set", replayed["write_set"]) != replayed["write_set"]
+                            or receipt["write_refs"] != request["write_refs"]):
+                        raise BuilderWorkflowError("semantic receipt does not replay to its retained result")
+                    stage = "dependency_closure"
+                    packet.update(transaction={"transaction_id": request["transaction_id"], "change_id": request["change_id"],
+                                               "source_revision": request["source_revision"], "revision": revision,
+                                               "base_hash": request["base_hash"], "semantic_digest": receipt["semantic_digest"],
+                                               "reducer": receipt["reducer"], "status": journal["status"]},
+                                  write_set=write_rows(request["ops"]),
+                                  admitted_write_refs=list(request["write_refs"]),
+                                  dependency_refs=dependency_refs(refs, list(request["write_refs"])))
+                    # The current source is not the transaction's immutable base.
+                    # Keep both identities explicit rather than labelling old writes
+                    # as a proposal against the current revision.
+                    packet["transaction_id"] = request["transaction_id"]
+                    packet["transaction_source_revision"] = request["source_revision"]
+                packet["write_count"] = len(packet["write_set"])
+                packet["status_label"] = "Verified source"
+                return packet
+            except (BuilderWorkflowError, OSError, ValueError, KeyError, TypeError, ValidationError) as exc:
+                packet.update(status="blocked", status_label="Source or receipt verification failed",
+                              block_reason=stage, block_detail=str(exc)[:240] if isinstance(exc, BuilderWorkflowError) else type(exc).__name__,
+                              refs=[], write_set=[], read_refs=[], dependency_refs=[], admitted_write_refs=[], transaction=None)
+                return packet
+
     def prepare_label_request(self, *, project_ref: str, instruction: str,
                               source_message_id: str, expected_revision: str | None = None) -> dict[str, Any]:
+        from .semantic_label_requests import parse_request
+        if parse_request(instruction) is None:
+            return {"status": "not_applicable"}
+        return self.prepare_request(project_ref=project_ref, instruction=instruction,
+                                    source_message_id=source_message_id, expected_revision=expected_revision)
+
+    def prepare_request(self, *, project_ref: str, instruction: str,
+                        source_message_id: str, expected_revision: str | None = None) -> dict[str, Any]:
         """Read-only admission packet, or the exact retained request for a retry.
 
         Caller intake may update the workflow generation but must not change the
         admitted source/revision/write set. apply still verifies the entire base.
         """
-        from .semantic_label_requests import parse_request, plan
+        from .semantic_edit_requests import parse_request, plan
         parsed = parse_request(instruction)
         if parsed is None:
             return {"status": "not_applicable"}
         if not re.fullmatch(r"scenario:[A-Za-z0-9_.-]{1,160}", project_ref):
-            raise BuilderWorkflowError("semantic label request requires a scenario ref")
+            raise BuilderWorkflowError("semantic edit request requires a scenario ref")
         origin = {"instruction": instruction.strip(), "source_message_id": source_message_id}
         if not source_message_id.strip() or len(source_message_id) > 240 or len(origin["instruction"]) > 1000:
-            raise BuilderWorkflowError("semantic label request requires bounded source message identity")
+            raise BuilderWorkflowError("semantic edit request requires bounded source message identity")
         object_id = project_ref.partition(":")[2]
         root = self.workflow.project_root("scenario", object_id)
         operation_root = _operation_root(self.workflow, project_ref)
@@ -224,19 +360,20 @@ class SemanticGraphService:
             state = self.workflow.describe("scenario", object_id)
             change_id = (state.get("change") or {}).get("change_id")
             if not change_id or not state["capabilities"].get("can_edit_prototype"):
-                raise BuilderWorkflowError("semantic label request requires an active editable Change")
+                raise BuilderWorkflowError("semantic edit request requires an active editable Change")
             self._recover(root, object_id)
             state = self.workflow.describe("scenario", object_id)
-            transaction_id = "label-request-" + digest([project_ref, source_message_id])[7:39]
+            prefix = "label-request-" if parsed["kind"] == "rename" or parsed.get("undo_family") == "labels" else "semantic-request-"
+            transaction_id = prefix + digest([project_ref, source_message_id])[7:39]
             path = operation_root / (digest([change_id, transaction_id])[7:] + ".json")
             if path.is_file():
                 journal = _read(path)
                 if journal["request"].get("source_request") != origin:
                     raise BuilderWorkflowError("source message identity conflicts with retained label request")
                 if journal["status"] != "committed":
-                    raise BuilderWorkflowError("uncommitted label request requires explicit recovery")
+                    raise BuilderWorkflowError("uncommitted semantic request requires explicit recovery")
                 if expected_revision and expected_revision != journal["request"]["source_revision"]:
-                    raise BuilderWorkflowError("label retry revision conflicts with retained request")
+                    raise BuilderWorkflowError("semantic retry revision conflicts with retained request")
                 return {"status": "planned", "request": journal["request"], "replayed": True}
             revision = self.workflow.current_prototype_revision("scenario", object_id)
             if expected_revision and expected_revision != revision:
@@ -247,7 +384,7 @@ class SemanticGraphService:
                 retained = _read(self._file(root, f"ui_revisions/{revision}.json"))
                 previous = retained.get("semantic_transaction") or {}
                 if previous.get("semantic_digest") != digest(document) or not previous.get("inverse_ops"):
-                    raise BuilderWorkflowError("current revision has no exact semantic label inverse")
+                    raise BuilderWorkflowError("current revision has no exact semantic inverse")
                 patch = retained.get("patch") or {}
                 previous_path = operation_root / (digest([patch.get("change_id"), previous.get("transaction_id")])[7:] + ".json")
                 journal = _read(previous_path)
@@ -255,6 +392,11 @@ class SemanticGraphService:
                     raise BuilderWorkflowError("undo requires a committed label operation in the active Change")
                 if journal["result"] != previous or previous.get("revision") != revision:
                     raise BuilderWorkflowError("undo revision differs from its exact retained transaction")
+                family = parsed.get("undo_family")
+                kinds = {item["kind"] for item in previous["inverse_ops"]}
+                if ((family == "labels" and kinds != {"label.set"})
+                        or (family == "columns" and kinds != {"view.fields.reorder"})):
+                    raise BuilderWorkflowError("undo request does not match the last semantic operation family")
                 reduced = reduce_graph(document, previous["inverse_ops"], write_refs=previous["write_refs"])
                 planned = {"status": "planned", "ops": previous["inverse_ops"], "write_refs": previous["write_refs"],
                            "semantic_digest": reduced["semantic_digest"]}
@@ -304,6 +446,8 @@ class SemanticGraphService:
             reduced = reduce_graph(document, value["ops"], write_refs=value["write_refs"])
             compiled = compile_semantic_prototype(reduced["semantic_document"], project_ref=compilation_ref,
                                                   primary_locale=baseline["primary_locale"])
+            if compiled["semantic_digest"] != reduced["semantic_digest"]:
+                raise BuilderWorkflowError("semantic operation changes compiler normalization outside the admitted write set")
             after_ui = copy.deepcopy(compiled["webui"])
             before_page = before_ui["ui"]["application"]["desktop"]["pageSchema"]
             after_page = after_ui["ui"]["application"]["desktop"]["pageSchema"]
@@ -341,7 +485,8 @@ class SemanticGraphService:
                       "source_revision": value["source_revision"], "base_hash": value["base_hash"],
                       "semantic_digest": reduced["semantic_digest"], "artifact_digest": digest(after_ui),
                       "inverse_ops": reduced["inverse_ops"], "write_refs": value["write_refs"],
-                      "transaction_id": value["transaction_id"], "reducer": REDUCER, "model_calls": 0}
+                      "transaction_id": value["transaction_id"], "reducer": reduced["reducer"], "model_calls": 0,
+                      "write_set": reduced["write_set"]}
             if "source_request" in value:
                 result["source_request"] = copy.deepcopy(value["source_request"])
             after_files[f"ui_revisions/{revision}.json"] = _bytes({

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 import subprocess
 import sys
 
@@ -10,13 +9,12 @@ import pytest
 
 from adaos.sdk.builder import semantic_ui as sdk
 from adaos.services.builder import semantic_graph as graph
-from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate
+from adaos.services.builder.semantic_prototype import compile_semantic_prototype, compile_semantic_prototype_candidate
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
 from test_builder_semantic_prototype import _multi_resource_fixture, _multi_resource_candidate
 
 
-@pytest.fixture
-def graph_project(tmp_path):
+def make_graph_project(tmp_path):
     skills = tmp_path / "skills"
     root = tmp_path / "scenarios" / "semantic_labels"
     root.mkdir(parents=True)
@@ -42,6 +40,11 @@ def graph_project(tmp_path):
     return graph.SemanticGraphService(workflow), workflow, root, document
 
 
+@pytest.fixture
+def graph_project(tmp_path):
+    return make_graph_project(tmp_path)
+
+
 def operation(service, document, **changes):
     label = next(view["title"] for view in document["views"] if view["id"] == "work-list")
     projection = service.workflow.describe("scenario", "semantic_labels")
@@ -60,6 +63,98 @@ def test_public_sdk_replay_is_pure_and_preserves_other_semantics(graph_project):
     next(view for view in expected["views"] if view["id"] == "work-list")["title"]["en"] = "Work queue"
     assert result["semantic_document"] == expected
     assert sdk.replay(result["semantic_document"], result["inverse_ops"], write_refs=request["write_refs"])["semantic_document"] == document
+
+
+def test_public_sdk_reorders_only_admitted_table_columns_and_replays_inverse(graph_project):
+    _, _, _, document = graph_project
+    document["relationships"][0]["label_field_refs"] = ["person_name"]
+    source = next(view for view in document["views"] if view["id"] == "people-list")
+    operation = {"seq": 1, "kind": "view.fields.reorder", "ref": "view:people-list",
+                 "expected": list(source["field_refs"]), "field_refs": list(reversed(source["field_refs"]))}
+
+    result = sdk.replay(document, [operation], write_refs=["view:people-list"])
+    expected = copy.deepcopy(document)
+    next(view for view in expected["views"] if view["id"] == "people-list")["field_refs"] = operation["field_refs"]
+
+    assert result["semantic_document"] == expected
+    assert result["reducer"] == graph.BOUNDED_REDUCER
+    assert result["write_set"] == [{"seq": 1, "kind": "view.fields.reorder", "ref": "view:people-list",
+                                    "property": "field_refs", "before": operation["expected"],
+                                    "after": operation["field_refs"]}]
+    assert sdk.replay(result["semantic_document"], result["inverse_ops"],
+                      write_refs=["view:people-list"])["semantic_document"] == document
+
+
+@pytest.mark.parametrize("change,error", [
+    ({"expected": ["person_phone", "person_name"]}, "precondition"),
+    ({"field_refs": ["person_name", "missing"]}, "preserve exactly"),
+    ({"ref": "view:work-list", "expected": ["title", "result", "status"],
+      "field_refs": ["status", "title", "result"]}, "table collection"),
+])
+def test_table_column_reorder_fails_closed_on_drift_or_scope_expansion(graph_project, change, error):
+    _, _, _, document = graph_project
+    document["relationships"][0]["label_field_refs"] = ["person_name"]
+    source = next(view for view in document["views"] if view["id"] == "people-list")
+    operation = {"seq": 1, "kind": "view.fields.reorder", "ref": "view:people-list",
+                 "expected": list(source["field_refs"]), "field_refs": list(reversed(source["field_refs"])),
+                 **change}
+    with pytest.raises(BuilderWorkflowError, match=error):
+        sdk.replay(document, [operation], write_refs=[operation["ref"]])
+
+
+def test_table_column_reorder_rejects_implicit_relationship_display_dependency(graph_project):
+    _, _, _, document = graph_project
+    source = next(view for view in document["views"] if view["id"] == "people-list")
+    operation = {"seq": 1, "kind": "view.fields.reorder", "ref": "view:people-list",
+                 "expected": list(source["field_refs"]), "field_refs": list(reversed(source["field_refs"]))}
+    with pytest.raises(BuilderWorkflowError, match="explicit relationship display fields"):
+        sdk.replay(document, [operation], write_refs=["view:people-list"])
+
+
+def test_explicit_column_request_applies_retries_and_undoes_without_a_model(graph_project, monkeypatch):
+    service, workflow, root, document = graph_project
+    monkeypatch.setattr(graph.SemanticGraphService, "from_context", classmethod(lambda cls: service))
+    document["relationships"][0]["label_field_refs"] = ["person_name"]
+    canonical = compile_semantic_prototype(document, project_ref="project:semantic_labels")
+    document = canonical["semantic_document"]
+    (root / "semantic.webui.json").write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    (root / "webui.json").write_text(json.dumps(canonical["webui"], ensure_ascii=False), encoding="utf-8")
+    for locale, messages in canonical["locale_dictionaries"].items():
+        (root / f"assets/i18n/{locale}.json").write_text(json.dumps(messages, ensure_ascii=False), encoding="utf-8")
+    instruction = 'Move column "Phone" before "Name" in table "People" in English.'
+
+    assert sdk.recognizes_request(instruction)
+    prepared = sdk.prepare_request(project_ref="scenario:semantic_labels", instruction=instruction,
+                                   source_message_id="message-columns", expected_revision="001")
+    assert prepared["status"] == "planned"
+    assert prepared["request"]["ops"][0]["kind"] == "view.fields.reorder"
+    result = sdk.apply(prepared["request"])
+
+    after = json.loads((root / "semantic.webui.json").read_text(encoding="utf-8"))
+    assert next(view for view in after["views"] if view["id"] == "people-list")["field_refs"] == [
+        "person_phone", "person_name"]
+    assert result["model_calls"] == 0
+    assert result["reducer"] == graph.BOUNDED_REDUCER
+    retry = sdk.prepare_request(project_ref="scenario:semantic_labels", instruction=instruction,
+                                source_message_id="message-columns", expected_revision="001")
+    assert retry["replayed"] and sdk.apply(retry["request"])["replayed"]
+
+    undo = sdk.prepare_request(project_ref="scenario:semantic_labels",
+                               instruction="Undo the last column order change.",
+                               source_message_id="message-columns-undo", expected_revision="002")
+    assert undo["request"]["ops"] == result["inverse_ops"]
+    assert sdk.apply(undo["request"])["revision"] == "003"
+    assert json.loads((root / "semantic.webui.json").read_text(encoding="utf-8")) == document
+    assert workflow.describe("scenario", "semantic_labels")["change"]["runs"][-1]["run_id"] == \
+        "semantic-request-" + graph.digest(["scenario:semantic_labels", "message-columns-undo"])[7:39]
+
+
+@pytest.mark.parametrize("instruction", [
+    'Move column "Phone" before "Name" in table "People" in English.',
+    'Перемести колонку «Телефон» перед «Имя» в таблице «Люди» на русском.',
+])
+def test_column_request_is_recognized_in_supported_locales(instruction):
+    assert sdk.recognizes_request(instruction)
 
 
 @pytest.mark.parametrize("change", [

@@ -43,4 +43,23 @@ def prepare_label_request(*, project_ref: str, instruction: str, source_message_
         expected_revision=expected_revision)
 
 
-__all__ = ["apply", "replay", "verify_source", "recognizes_label_request", "prepare_label_request"]
+def recognizes_request(instruction: str) -> bool:
+    from adaos.services.builder.semantic_edit_requests import parse_request
+    return parse_request(instruction) is not None
+
+
+def inspect(*, project_ref: str) -> dict[str, Any]:
+    from adaos.services.builder.semantic_graph import SemanticGraphService
+    return SemanticGraphService.from_context().inspect(project_ref=project_ref)
+
+
+def prepare_request(*, project_ref: str, instruction: str, source_message_id: str,
+                    expected_revision: str | None = None) -> dict[str, Any]:
+    from adaos.services.builder.semantic_graph import SemanticGraphService
+    return SemanticGraphService.from_context().prepare_request(
+        project_ref=project_ref, instruction=instruction, source_message_id=source_message_id,
+        expected_revision=expected_revision)
+
+
+__all__ = ["apply", "replay", "verify_source", "recognizes_label_request", "prepare_label_request",
+           "recognizes_request", "prepare_request", "inspect"]
