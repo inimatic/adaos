@@ -189,7 +189,8 @@ def test_other_bounded_repairs_keep_typed_relationship_closure(contract, scope):
     assert repair["repair_scope"] == scope
 
 
-def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch):
+@pytest.mark.parametrize("source", ["workspace", "installed"])
+def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch, source):
     import ast
     import os
     from pathlib import Path
@@ -198,14 +199,17 @@ def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch):
     from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
     repo = Path(__file__).parents[1]
     skills_root = repo / ".adaos/workspace/skills"
-    if not (skills_root / ".runtime/builder_skill/current_runtime.json").exists():
-        pytest.skip("Installed Builder runtime fixture absent")
-    runtime = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="builder_skill")
-    version = runtime.resolve_active_version()
-    if not version:
-        pytest.skip("Installed Builder runtime inactive")
-    slot = runtime.build_slot_paths(version, runtime.read_active_slot(version))
-    path = slot.src_dir / "skills/builder_skill/handlers/main.py"
+    if source == "workspace":
+        path = skills_root / "builder_skill/handlers/main.py"
+    else:
+        if not (skills_root / ".runtime/builder_skill/current_runtime.json").exists():
+            pytest.skip("Installed Builder runtime fixture absent")
+        runtime = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="builder_skill")
+        version = runtime.resolve_active_version()
+        if not version:
+            pytest.skip("Installed Builder runtime inactive")
+        slot = runtime.build_slot_paths(version, runtime.read_active_slot(version))
+        path = slot.src_dir / "skills/builder_skill/handlers/main.py"
     if not path.exists():
         pytest.skip("Installed Builder integration fixture absent")
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -217,6 +221,8 @@ def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch):
     monkeypatch.delenv("ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY", raising=False)
     original, purposes = namespace["_builder_llm_messages"](request, "task")
     assert [item["content"] for item in original] == ["policy", "stable", "task"]
+    monkeypatch.setenv("ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY", "full")
+    assert namespace["_builder_llm_messages"](request, "task") == (original, purposes)
     monkeypatch.setenv("ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY", "hybrid-focused")
     with pytest.raises(RuntimeError, match="current Builder SDK"):
         namespace["_builder_llm_messages"](request, "task")
@@ -226,3 +232,22 @@ def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch):
     assert delivered == original
     assert delivered_purposes == purposes
     assert len(calls) == 1
+    request["capability_user_prompt"] = "capability context"
+    request["dynamic_request"] = {"active_turn": {"instruction": "keep exact"}}
+    delivered, delivered_purposes = namespace["_builder_llm_messages"](request, "task")
+    assert [item["content"] for item in delivered[:-1]] == ["policy", "stable", "capability context", "task"]
+    assert json.loads(delivered[-1]["content"]) == {"active_turn": {"instruction": "keep exact"}}
+    assert delivered_purposes == ["system_policy", "stable_context", "capability_context", "user_delta", "active_turn_recap"]
+    assert len(calls) == 2
+    # Exercise the real SDK compiler as well as the call-boundary stub. No
+    # provider/inference is invoked by this local context projection.
+    from adaos.sdk.builder import prototype as facade
+    from adaos.services.builder import prototype_mcp
+    namespace["sdk_builder_prototype"] = facade
+    monkeypatch.setattr(prototype_mcp, "enabled", lambda: True)
+    structured = messages()
+    projected, projected_purposes = namespace["_builder_llm_messages"]({
+        "system_prompt": structured[0]["content"], "stable_user_prompt": structured[1]["content"]}, structured[2]["content"])
+    assert set(json.loads(projected[1]["content"])["stable_builder_context"]["semantic_invariants"]) == KERNEL
+    assert projected[0] == structured[0] and projected[-1] == structured[-1]
+    assert projected_purposes == purposes
