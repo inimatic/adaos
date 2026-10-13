@@ -210,6 +210,55 @@ def test_verified_application_execution_fences_exact_channel_without_global_scan
         clear_application()
 
 
+def test_runtime_selection_snapshot_reads_channels_once_and_masks_empty_ones(tmp_path, monkeypatch):
+    import adaos.services.applications.runtime_channel as module
+    from adaos.services.applications.store import ApplicationStore
+
+    current = selection()
+    ApplicationRuntimeChannel(tmp_path, 'sample').select(current, expected_revision=0)
+    ApplicationRuntimeChannel(tmp_path, 'retired').retire()
+    store = ApplicationStore(tmp_path)
+    stale = replace(current, application_id='retired')
+    legacy = replace(current, application_id='legacy')
+    monkeypatch.setattr(store, '_list_current', lambda *_args: [stale, legacy])
+    original_connect = module.sqlite3.connect
+    opens = []
+
+    def counted_connect(*args, **kwargs):
+        opens.append(args[0])
+        return original_connect(*args, **kwargs)
+
+    monkeypatch.setattr(module.sqlite3, 'connect', counted_connect)
+    active, pending = store.runtime_selection_snapshot()
+    assert set(active) == {current, legacy}
+    assert pending == ()
+    assert len(opens) == 2  # exactly one read per existing channel
+
+
+def test_execution_memoizes_only_duplicate_membership_within_one_admission(tmp_path, monkeypatch):
+    from adaos.services.applications import runtime_selection
+
+    calls = []
+    owns = False
+    choices = (selection(), selection('mobile'))
+
+    def membership(*args, **kwargs):
+        calls.append((args, kwargs))
+        return owns
+
+    store = SimpleNamespace(runtime_selection_snapshot=lambda **_kw: (choices, ()),
+                            release_has_component=membership)
+    monkeypatch.setattr(runtime_selection, 'ApplicationStore', lambda _state: store)
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+    with runtime_selection.application_execution(ctx, 'worker'):
+        pass
+    assert len(calls) == 1
+    owns = True  # a subsequent admission must re-check membership and acquire a lease
+    with runtime_selection.application_execution(ctx, 'worker'):
+        assert ApplicationRuntimeChannel(tmp_path, 'sample').read() == choices
+    assert len(calls) == 2
+
+
 def test_verified_compatibility_execution_ignores_empty_channel_tombstone(
     tmp_path,
 ) -> None:

@@ -798,17 +798,22 @@ class ApplicationStore:
         return value
 
     def list_runtime_selections(self) -> tuple[RuntimeSelection, ...]:
+        return self.runtime_selection_snapshot(include_pending=False)[0]
+
+    def runtime_selection_snapshot(
+        self, *, include_pending: bool = True
+    ) -> tuple[tuple[RuntimeSelection, ...], tuple[RuntimeSelection, ...]]:
+        """Combine live channels and legacy projections with one channel scan."""
         from .runtime_channel import ApplicationRuntimeChannel
 
-        channels = ApplicationRuntimeChannel.list_selections(self.state_dir)
+        channels, pending, application_ids = ApplicationRuntimeChannel.read_catalog_snapshot(
+            self.state_dir, include_pending=include_pending
+        )
         # An empty channel is an authoritative removal tombstone and must mask
         # legacy JSON projections just as a selected channel does.
-        application_ids = ApplicationRuntimeChannel.list_application_ids(
-            self.state_dir
-        )
         values = [item for item in self._list_current("runtime_selections", RuntimeSelection.from_mapping)
                   if item.application_id not in application_ids] + list(channels)
-        return tuple(sorted(values, key=lambda item: (item.webspace_id, item.application_id)))
+        return tuple(sorted(values, key=lambda item: (item.webspace_id, item.application_id))), pending
 
     def save_runtime_selection(self, value: RuntimeSelection, *, expected_revision: int) -> RuntimeSelection:
         from .runtime_channel import ApplicationRuntimeChannel

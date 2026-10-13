@@ -89,7 +89,21 @@ class ApplicationRuntimeChannel:
 
     @classmethod
     def list_selections(cls, state_dir: Path, *, include_pending: bool = False) -> tuple[RuntimeSelection, ...]:
+        selected, pending, _identities = cls.read_catalog_snapshot(state_dir, include_pending=include_pending)
+        return (*selected, *pending)
+
+    @classmethod
+    def read_catalog_snapshot(
+        cls, state_dir: Path, *, include_pending: bool = False
+    ) -> tuple[tuple[RuntimeSelection, ...], tuple[RuntimeSelection, ...], frozenset[str]]:
+        """Read selections, transition targets and empty-channel identities once.
+
+        This is fresh discovery, not an authority cache. Each channel is read
+        in one SQLite read transaction; execution must still acquire its lease.
+        """
         values = []
+        targets = []
+        identities = set()
         # The channel root is local authority, not an untrusted path.  Resolve
         # it lexically once; resolving every SQLite file performs avoidable
         # filesystem realpath work and was visible as an owner-loop stall.
@@ -97,6 +111,7 @@ class ApplicationRuntimeChannel:
         for path in root.glob("*.sqlite3"):
             try:
                 with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.25)) as connection:
+                    connection.execute("BEGIN")
                     if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel'").fetchone():
                         continue
                     row = connection.execute("SELECT document FROM channel WHERE id=1").fetchone()
@@ -107,46 +122,24 @@ class ApplicationRuntimeChannel:
                     if channel.path.name != path.name:
                         raise RuntimeChannelConflict("Application channel path identity mismatch")
                     values.extend(channel._decode(row[0]))
+                    identities.add(identity)
                     if include_pending and connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone():
                         for pending in cls._pending_transitions(connection):
                             target = RuntimeSelection.from_mapping(pending["intent"]["target"])
                             if target.application_id != identity:
                                 raise RuntimeChannelConflict("Transition target owner differs from its channel")
-                            values.append(target)
+                            targets.append(target)
             except sqlite3.OperationalError as exc:
                 if getattr(exc, "sqlite_errorcode", None) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
                     raise RuntimeChannelConflict("Application channel is changing; retry when it is idle") from exc
                 raise
-        return tuple(values)
+        return tuple(values), tuple(targets), frozenset(identities)
 
     @classmethod
     def list_application_ids(cls, state_dir: Path) -> frozenset[str]:
         """Return identities with an authoritative channel, including empty ones."""
 
-        root = (Path(state_dir) / "applications/runtime_channels").absolute()
-        values = set()
-        for path in root.glob("*.sqlite3"):
-            with closing(
-                sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.25)
-            ) as connection:
-                if not connection.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel'"
-                ).fetchone():
-                    continue
-                row = connection.execute(
-                    "SELECT document FROM channel WHERE id=1"
-                ).fetchone()
-                if row is None:
-                    raise RuntimeChannelConflict("Application channel record is missing")
-                identity = str(json.loads(row[0]).get("application_id") or "")
-                channel = cls(state_dir, identity)
-                if channel.path.name != path.name:
-                    raise RuntimeChannelConflict(
-                        "Application channel path identity mismatch"
-                    )
-                channel._decode(row[0])
-                values.add(identity)
-        return frozenset(values)
+        return cls.read_catalog_snapshot(state_dir)[2]
 
     def select(self, value: RuntimeSelection, *, expected_revision: int,
                legacy: Sequence[RuntimeSelection] = ()) -> RuntimeSelection:

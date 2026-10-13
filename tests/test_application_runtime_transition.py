@@ -101,7 +101,8 @@ def test_busy_runtime_prevents_any_effect_and_stale_intent_is_rejected(tmp_path)
         runner.run("cycle1", contract_digest=DIGEST, expected=[stable], target=beta, steps=steps)
 
 
-def test_new_release_components_are_fenced_before_selection_commits(tmp_path, monkeypatch):
+@pytest.mark.parametrize('use_snapshot', [False, True])
+def test_new_release_components_are_fenced_before_selection_commits(tmp_path, monkeypatch, use_snapshot):
     from types import SimpleNamespace
     from adaos.services.applications import runtime_selection
 
@@ -112,8 +113,13 @@ def test_new_release_components_are_fenced_before_selection_commits(tmp_path, mo
         name = "new_skill" if digest == beta.release_digest else "old_skill"
         return SimpleNamespace(project_release=SimpleNamespace(components=[SimpleNamespace(kind="skill", artifact_id=name)]))
 
-    monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _: SimpleNamespace(
-        list_runtime_selections=lambda: channel.read(), get_release=release))
+    store = SimpleNamespace(list_runtime_selections=lambda: channel.read(), get_release=release)
+    if use_snapshot:
+        store.runtime_selection_snapshot = lambda **kw: ApplicationRuntimeChannel.read_catalog_snapshot(tmp_path, **kw)[:2]
+        def forbidden_scan():
+            pytest.fail('snapshot-aware admission must not repeat the catalog scan')
+        store.list_runtime_selections = forbidden_scan
+    monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _: store)
     ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path, runtime_channel_ref="trial:candidate"))
 
     def activate(_key):

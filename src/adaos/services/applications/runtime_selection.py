@@ -702,16 +702,25 @@ def application_execution(ctx: AgentContext, skill_name: str, *, timings: dict[s
 
     store = ApplicationStore(state_dir)
     selected = {}
-    selections = store.list_runtime_selections()
+    read_snapshot = getattr(store, "runtime_selection_snapshot", None)
+    if callable(read_snapshot):
+        selections, pending_selections = read_snapshot(include_pending=True)
+    else:
+        selections = store.list_runtime_selections()
+        pending_selections = ApplicationRuntimeChannel.list_selections(state_dir, include_pending=True)
     mark_phase("application_selections_ms")
     # Newly introduced skills are fenced too, before the new release is selected.
-    guarded_selections = (*selections, *ApplicationRuntimeChannel.list_selections(state_dir, include_pending=True))
+    guarded_selections = (*selections, *pending_selections)
     mark_phase("application_pending_selections_ms")
+    checked_membership = {}
     for selection in guarded_selections:
         if selection.application_id in selected:
             continue
         check_component = getattr(store, "release_has_component", None)
-        if callable(check_component):
+        membership_key = (selection.application_id, selection.release_digest)
+        if membership_key in checked_membership:
+            owns_component = checked_membership[membership_key]
+        elif callable(check_component):
             owns_component = check_component(
                 selection.application_id,
                 selection.release_digest,
@@ -724,6 +733,7 @@ def application_execution(ctx: AgentContext, skill_name: str, *, timings: dict[s
                 item.kind == "skill" and item.artifact_id == skill_name
                 for item in release.project_release.components
             )
+        checked_membership[membership_key] = owns_component
         if owns_component:
             selected[selection.application_id] = selection
     mark_phase("application_component_membership_ms")
