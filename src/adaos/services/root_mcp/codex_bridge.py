@@ -1890,7 +1890,8 @@ class CodexRootMcpBridge:
                     if task_scoped
                     else str(args.get("consumer") or "builder")
                 ),
-                expected_source_digest=args.get("expected_source_digest"),
+                **({"expected_source_digest": args["expected_source_digest"]}
+                   if args.get("expected_source_digest") is not None else {}),
             )
             return _tool_text(
                 payload,
