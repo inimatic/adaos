@@ -20,6 +20,10 @@ def _ensure_builtin_room_observers_loaded() -> None:
         import adaos.services.yjs.load_mark  # noqa: F401
     except Exception:
         pass
+    try:
+        import adaos.services.yjs.sidecar_shadow  # noqa: F401
+    except Exception:
+        pass
 
 
 def _observer_name(observer: RoomObserver) -> str:

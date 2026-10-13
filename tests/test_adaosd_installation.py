@@ -55,6 +55,9 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
         "resolve_realtime_remote_candidates",
         lambda: ["wss://ru.api.inimatic.com/nats", "wss://api.inimatic.com/nats"],
     )
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES", "default,desktop")
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT", "64")
 
     result = adaosd_installation.generate_configuration(
         base_dir=base,
@@ -90,6 +93,12 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
     assert sidecar["environment"]["set"]["ADAOS_REALTIME_REMOTE_WS_ALT"] == (
         "wss://api.inimatic.com/nats"
     )
+    for profile in (sidecar, runtime):
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_ENABLE"] == "1"
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES"] == (
+            "default,desktop"
+        )
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT"] == "64"
     assert Path(runtime["working_directory"]).is_absolute()
     assert "{active_slot}" in runtime["working_directory"]
 
@@ -98,6 +107,7 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
     if os.name != "nt":
         assert private_env.stat().st_mode & 0o777 == 0o600
 
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_ENABLE", "0")
     second = adaosd_installation.generate_configuration(
         base_dir=base,
         repo_root=REPO_ROOT,

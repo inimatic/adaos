@@ -22,6 +22,14 @@ from adaos.services.realtime_sidecar import (
 SERVICE_SCHEMA = "adaosd.service_install.v1"
 SUPERVISOR_SCHEMA = "adaosd.supervisor_config.v1"
 WORKER_SCHEMA = "adaosd.worker_profile.v1"
+YJS_SHADOW_ENVIRONMENT = (
+    "ADAOS_YJS_SIDECAR_SHADOW_ENABLE",
+    "ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES",
+    "ADAOS_YJS_SIDECAR_SHADOW_MAX_UPDATE_BYTES",
+    "ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT",
+    "ADAOS_YJS_SIDECAR_SHADOW_TIMEOUT_S",
+    "ADAOS_YJS_SIDECAR_SHADOW_CONTROL_URL",
+)
 
 
 def _absolute_file(value: str | Path, *, name: str, executable: bool = False) -> Path:
@@ -79,6 +87,19 @@ def _load_dotenv(path: Path) -> None:
     for name, value in dotenv_values(path).items():
         if name and value is not None:
             os.environ.setdefault(str(name), str(value))
+
+
+def _selected_environment(names: tuple[str, ...]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and str(value).strip():
+            result[name] = str(value).strip()
+    return result
+
+
+def _enabled(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _runtime_token(base_dir: Path, config: Any) -> str:
@@ -196,6 +217,15 @@ def generate_configuration(
     role = str(getattr(node_config, "role", "") or "").strip().lower()
     node_id = str(getattr(node_config, "node_id", "") or "").strip() or "unknown"
     token = _runtime_token(base, node_config)
+    sidecar_managed = bool(realtime_sidecar_enabled(role=role))
+    yjs_shadow_environment = _selected_environment(YJS_SHADOW_ENVIRONMENT)
+    yjs_shadow_enabled = _enabled(yjs_shadow_environment.get("ADAOS_YJS_SIDECAR_SHADOW_ENABLE"))
+    if yjs_shadow_enabled and sidecar_implementation != "go":
+        raise ValueError("Yjs sidecar shadow requires the Go sidecar implementation")
+    if yjs_shadow_enabled and not sidecar_managed:
+        raise ValueError("Yjs sidecar shadow requires a managed realtime sidecar")
+    if yjs_shadow_enabled and not yjs_shadow_environment.get("ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES"):
+        raise ValueError("Yjs sidecar shadow requires an explicit webspace allowlist")
 
     config_dir = service_path.parent
     workers_dir = config_dir / "workers"
@@ -211,6 +241,7 @@ def generate_configuration(
         "ADAOS_SHARED_DOTENV_PATH": str(dotenv),
         "PYTHONPATH": "{slot_repo}/src",
     }
+    runtime_environment.update(yjs_shadow_environment)
     runtime_profile = {
         "schema": WORKER_SCHEMA,
         "id": "adaos-runtime",
@@ -237,7 +268,6 @@ def generate_configuration(
     _write_json(runtime_profile_path, runtime_profile)
 
     workers: list[dict[str, Any]] = []
-    sidecar_managed = bool(realtime_sidecar_enabled(role=role))
     remote_candidates: list[str] = []
     if sidecar_managed:
         remote_candidates = resolve_realtime_remote_candidates()
@@ -278,6 +308,7 @@ def generate_configuration(
         }
         if len(remote_candidates) > 1:
             sidecar_environment["ADAOS_REALTIME_REMOTE_WS_ALT"] = ",".join(remote_candidates[1:])
+        sidecar_environment.update(yjs_shadow_environment)
         if sidecar_implementation == "python":
             sidecar_environment["PYTHONPATH"] = str(repo / "src")
         sidecar_environment.update(_lifecycle_environment(node_config))
