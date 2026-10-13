@@ -6139,6 +6139,18 @@ async def node_yjs_create_webspace(payload: WebspaceCreateRequest) -> dict[str, 
     }
 
 
+@router.get("/yjs/sidecar-shadow", dependencies=[Depends(require_token)])
+async def node_yjs_sidecar_shadow() -> dict[str, Any]:
+    from adaos.services.yjs.sidecar_shadow import (  # pylint: disable=import-outside-toplevel
+        sidecar_shadow_mirror_status,
+    )
+
+    return {
+        "ok": True,
+        "shadow": sidecar_shadow_mirror_status(),
+    }
+
+
 @router.get("/yjs/webspaces/{webspace_id}/runtime", dependencies=[Depends(require_token)])
 async def node_yjs_webspace_runtime(webspace_id: str) -> dict[str, Any]:
     conf = load_config()

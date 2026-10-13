@@ -150,4 +150,6 @@ def test_shadow_registration_reloads_token_after_early_import(monkeypatch: pytes
     assert bridge.register_sidecar_shadow_mirror() is True
     assert bridge._remove_listener is not None
     assert bridge.sidecar_shadow_mirror_status()["enabled"] is True
+    assert bridge.sidecar_shadow_mirror_status()["listener_registered"] is True
+    assert bridge.sidecar_shadow_mirror_status()["token_configured"] is True
     bridge.unregister_sidecar_shadow_mirror()

@@ -131,6 +131,12 @@ def sidecar_shadow_mirror_status() -> dict[str, Any]:
         result = dict(_status)
     result["queue_depth"] = _queue.qsize() if _queue is not None else 0
     result["allowed_webspaces"] = sorted(_WEBSPACES)
+    result["listener_registered"] = _remove_listener is not None
+    result["worker_alive"] = bool(_worker is not None and _worker.is_alive())
+    result["token_configured"] = bool(_TOKEN)
+    result["max_update_bytes"] = _MAX_UPDATE_BYTES
+    result["queue_limit"] = _QUEUE_LIMIT
+    result["timeout_s"] = _TIMEOUT_S
     return result
 
 
