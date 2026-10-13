@@ -20,6 +20,7 @@ def test_runtime_ready_schedules_registry_sync_on_running_loop(monkeypatch) -> N
     calls = []
     monkeypatch.setattr(runtime, "get_ctx", lambda: ctx)
     monkeypatch.setattr(runtime, "_startup_delay_s", lambda: 0.0)
+    monkeypatch.setattr(runtime, "_materialization_refresh_webspaces", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         runtime,
         "sync_workspace_sparse_to_registry",
@@ -56,6 +57,7 @@ def test_runtime_registry_event_coalesces_while_sync_is_running(monkeypatch) -> 
     release = asyncio.Event()
     calls = []
     monkeypatch.setattr(runtime, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(runtime, "_materialization_refresh_webspaces", lambda *_args, **_kwargs: [])
     runtime._TASK = None
     runtime._PENDING_TRIGGER = None
 
@@ -101,6 +103,7 @@ def test_runtime_skips_dirty_development_workspace_without_registry_mutation(
     monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setattr(runtime, "get_ctx", lambda: ctx)
     monkeypatch.setattr(runtime, "_startup_delay_s", lambda: 0.0)
+    monkeypatch.setattr(runtime, "_materialization_refresh_webspaces", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         runtime,
         "sync_workspace_sparse_to_registry",
@@ -124,7 +127,105 @@ def test_runtime_skips_dirty_development_workspace_without_registry_mutation(
         "status": "skipped",
         "reason": "dirty_development_workspace",
         "changed_count": 1,
+        "materialization_reconcile": {
+            "status": "not_required",
+            "trigger": "sys.ready",
+            "webspace_count": 0,
+            "refreshed_count": 0,
+            "failed_count": 0,
+            "webspaces": [],
+        },
     }
+
+
+def test_startup_recovers_all_selected_stable_webspaces(monkeypatch) -> None:
+    selections = (
+        SimpleNamespace(
+            webspace_id="desktop",
+            application_id="management",
+            source="stable_installation",
+            runtime_root_ref="workspace",
+        ),
+        SimpleNamespace(
+            webspace_id="office",
+            application_id="notes",
+            source="stable_installation",
+            runtime_root_ref="workspace",
+        ),
+        SimpleNamespace(
+            webspace_id="preview",
+            application_id="builder",
+            source="local_trial",
+            runtime_root_ref="trial:candidate-one",
+        ),
+    )
+    monkeypatch.setattr(runtime, "_runtime_selections_for_context", lambda _ctx: selections)
+
+    assert runtime._materialization_refresh_webspaces(
+        SimpleNamespace(),
+        {"status": "completed", "applied_count": 0},
+        recover_all_stable=True,
+    ) == ["desktop", "office"]
+
+
+def test_registry_update_refreshes_only_affected_application_webspaces(monkeypatch) -> None:
+    selections = (
+        SimpleNamespace(
+            webspace_id="desktop",
+            application_id="management",
+            source="stable_installation",
+            runtime_root_ref="workspace",
+        ),
+        SimpleNamespace(
+            webspace_id="office",
+            application_id="notes",
+            source="stable_installation",
+            runtime_root_ref="workspace",
+        ),
+    )
+    monkeypatch.setattr(runtime, "_runtime_selections_for_context", lambda _ctx: selections)
+
+    assert runtime._materialization_refresh_webspaces(
+        SimpleNamespace(),
+        {
+            "outcomes": [
+                {"application_id": "management", "status": "succeeded"},
+                {"application_id": "notes", "status": "failed"},
+            ]
+        },
+        recover_all_stable=False,
+    ) == ["desktop"]
+
+
+def test_materialization_reconcile_continues_after_webspace_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime,
+        "_materialization_refresh_webspaces",
+        lambda *_args, **_kwargs: ["desktop", "office"],
+    )
+
+    async def refresh(webspace_id: str):
+        if webspace_id == "desktop":
+            raise RuntimeError("busy")
+        return {"ok": True, "accepted": True, "scenario_id": "notes"}
+
+    monkeypatch.setattr(runtime, "_refresh_webspace_materialization", refresh)
+
+    result = asyncio.run(
+        runtime._reconcile_application_materializations(
+            SimpleNamespace(),
+            {"status": "completed"},
+            trigger="applications.registry.updated",
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert result["refreshed_count"] == 1
+    assert result["failed_count"] == 1
+    assert [item["webspace_id"] for item in result["webspaces"]] == [
+        "desktop",
+        "office",
+    ]
 
 
 def test_dirty_workspace_preflight_does_not_change_production(monkeypatch) -> None:

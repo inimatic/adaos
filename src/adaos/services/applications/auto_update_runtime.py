@@ -7,6 +7,8 @@ import logging
 import os
 import time
 import hashlib
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from adaos.domain import Event
@@ -18,6 +20,141 @@ from adaos.services.workspace_sync import sync_workspace_sparse_to_registry
 _LOG = logging.getLogger("adaos.applications.auto_update")
 _TASK: asyncio.Task[Any] | None = None
 _PENDING_TRIGGER: str | None = None
+
+
+def _runtime_selections_for_context(ctx: Any) -> tuple[Any, ...]:
+    from adaos.services.applications.store import ApplicationStore
+
+    return ApplicationStore(Path(ctx.paths.state_dir())).list_runtime_selections()
+
+
+def _updated_application_ids(result: Mapping[str, Any] | None) -> set[str]:
+    if not isinstance(result, Mapping):
+        return set()
+    application_ids: set[str] = set()
+    for outcome in result.get("outcomes") or ():
+        if not isinstance(outcome, Mapping) or outcome.get("status") != "succeeded":
+            continue
+        application_id = str(outcome.get("application_id") or "").strip()
+        if application_id:
+            application_ids.add(application_id)
+        operation_result = outcome.get("result")
+        if not isinstance(operation_result, Mapping):
+            continue
+        for rebound in operation_result.get("shared_dependency_rebindings") or ():
+            if not isinstance(rebound, Mapping):
+                continue
+            application_id = str(rebound.get("application_id") or "").strip()
+            if application_id:
+                application_ids.add(application_id)
+    return application_ids
+
+
+def _materialization_refresh_webspaces(
+    ctx: Any,
+    result: Mapping[str, Any] | None,
+    *,
+    recover_all_stable: bool,
+) -> list[str]:
+    """Return stable Webspaces whose persisted Application identity may be stale."""
+
+    affected_applications = _updated_application_ids(result)
+    if not recover_all_stable and not affected_applications:
+        return []
+    try:
+        selections = _runtime_selections_for_context(ctx)
+    except Exception:
+        _LOG.warning("failed to inspect Application channels for materialization refresh", exc_info=True)
+        return []
+    return sorted(
+        {
+            str(selection.webspace_id).strip()
+            for selection in selections
+            if str(getattr(selection, "webspace_id", "") or "").strip()
+            and str(getattr(selection, "source", "") or "").strip()
+            == "stable_installation"
+            and str(getattr(selection, "runtime_root_ref", "") or "").strip()
+            == "workspace"
+            and (
+                recover_all_stable
+                or str(getattr(selection, "application_id", "") or "").strip()
+                in affected_applications
+            )
+        }
+    )
+
+
+async def _refresh_webspace_materialization(webspace_id: str) -> dict[str, Any]:
+    from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
+
+    return await rebuild_webspace_from_sources(
+        webspace_id,
+        action="runtime_selection_refresh",
+        source_of_truth="application_auto_update",
+        reseed_from_scenario=False,
+    )
+
+
+async def _reconcile_application_materializations(
+    ctx: Any,
+    result: Mapping[str, Any] | None,
+    *,
+    trigger: str,
+) -> dict[str, Any]:
+    """Make Yjs page authority follow committed stable Application channels.
+
+    A core restart can happen after a runtime-channel cutover but before the
+    affected Yjs document is rematerialized. On startup, reconcile every
+    selected stable Webspace; for later registry events, limit the work to
+    Applications advanced by that update run.
+    """
+
+    webspace_ids = await asyncio.to_thread(
+        _materialization_refresh_webspaces,
+        ctx,
+        result,
+        recover_all_stable=trigger == "sys.ready",
+    )
+    items: list[dict[str, Any]] = []
+    for webspace_id in webspace_ids:
+        try:
+            refreshed = await _refresh_webspace_materialization(webspace_id)
+            items.append(
+                {
+                    "webspace_id": webspace_id,
+                    "ok": bool(refreshed.get("ok")),
+                    "accepted": bool(refreshed.get("accepted")),
+                    "scenario_id": str(refreshed.get("scenario_id") or "").strip()
+                    or None,
+                    "error": str(refreshed.get("error") or "").strip() or None,
+                }
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _LOG.warning(
+                "Application materialization refresh failed webspace=%s",
+                webspace_id,
+                exc_info=True,
+            )
+            items.append(
+                {
+                    "webspace_id": webspace_id,
+                    "ok": False,
+                    "accepted": False,
+                    "scenario_id": None,
+                    "error": f"{type(exc).__name__}: {exc}"[:500],
+                }
+            )
+    failed = sum(1 for item in items if not item["ok"] or not item["accepted"])
+    return {
+        "status": "failed" if failed else "completed" if items else "not_required",
+        "trigger": trigger,
+        "webspace_count": len(items),
+        "refreshed_count": len(items) - failed,
+        "failed_count": failed,
+        "webspaces": items,
+    }
 
 
 def _publish_contribution_notification(result: dict[str, Any]) -> None:
@@ -151,6 +288,14 @@ async def _run_updates(initial_trigger: str) -> None:
                 else None
             )
             if isinstance(auto_update, dict):
+                materialization_reconcile = await _reconcile_application_materializations(
+                    ctx,
+                    auto_update,
+                    trigger=trigger,
+                )
+                auto_update["materialization_reconcile"] = materialization_reconcile
+                if isinstance(result, dict):
+                    result["post_application_materialization"] = materialization_reconcile
                 _publish_contribution_notification(auto_update)
             try:
                 get_ctx().bus.publish(
