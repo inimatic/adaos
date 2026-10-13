@@ -141,6 +141,78 @@ def test_stage_skill_sources_tolerates_empty_directory_residue(monkeypatch, tmp_
     assert (staged / "handlers" / "main.py").is_file()
 
 
+def test_prepare_runtime_serializes_same_skill_candidate(monkeypatch) -> None:
+    ctx = get_ctx()
+    workspace_root = Path(ctx.paths.skills_dir())
+    skill_name = "serialized_prepare_skill"
+    skill_dir = workspace_root / skill_name
+    runtime_root = workspace_root / ".runtime" / skill_name
+    entered = threading.Event()
+    release = threading.Event()
+    overlap = threading.Event()
+    guard = threading.Lock()
+    active = 0
+    original = SkillManager._stage_skill_sources
+
+    try:
+        (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+        (skill_dir / "handlers" / "main.py").write_text(
+            "def handle(payload=None):\n    return payload or {}\n", encoding="utf-8"
+        )
+        (skill_dir / "skill.yaml").write_text(
+            f"name: {skill_name}\nversion: 1.0.0\n", encoding="utf-8"
+        )
+        manager = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+        monkeypatch.setattr(
+            manager,
+            "_prepare_runtime_environment",
+            lambda **_kwargs: (Path("python"), []),
+        )
+
+        def observed_stage(source, slot):
+            nonlocal active
+            with guard:
+                active += 1
+                if active > 1:
+                    overlap.set()
+                first = active == 1 and not entered.is_set()
+            if first:
+                entered.set()
+                assert release.wait(timeout=5)
+            try:
+                return original(manager, source, slot)
+            finally:
+                with guard:
+                    active -= 1
+
+        monkeypatch.setattr(manager, "_stage_skill_sources", observed_stage)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(
+                manager.prepare_runtime,
+                skill_name,
+                run_tests=False,
+                preferred_slot="B",
+            )
+            assert entered.wait(timeout=5)
+            second = pool.submit(
+                manager.prepare_runtime,
+                skill_name,
+                run_tests=False,
+                preferred_slot="B",
+            )
+            time.sleep(0.15)
+            assert not overlap.is_set()
+            release.set()
+            assert first.result(timeout=10).slot == "B"
+            assert second.result(timeout=10).slot == "B"
+        staged = runtime_root / "v1.0" / "slots" / "B" / "src" / "skills" / skill_name
+        assert (staged / "skill.yaml").is_file()
+    finally:
+        release.set()
+        shutil.rmtree(skill_dir, ignore_errors=True)
+        shutil.rmtree(runtime_root, ignore_errors=True)
+
+
 def test_slot_skill_env_uses_shared_runtime_store() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())

@@ -19,6 +19,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
@@ -53,6 +54,7 @@ from adaos.services.models.artifacts import (
     install_local_artifact,
     local_artifact_state,
 )
+from adaos.services.mutation_lock import mutation_lock
 from adaos.services.root.client import RootHttpClient, RootHttpError
 from adaos.skills.runtime_runner import execute_tool, isolated_skill_import_state
 from adaos.services.skill.validation import SkillValidationService, ValidationReport
@@ -132,6 +134,30 @@ def _runtime_preparation_identity() -> dict[str, str]:
         "python_implementation": str(sys.implementation.name),
         "python_cache_tag": str(getattr(sys.implementation, "cache_tag", "") or ""),
     }
+
+
+def _serialize_runtime_mutation(*, dev: bool = False):
+    """Fence one skill lifecycle across API and migration-worker processes.
+
+    Prepare and activate share this re-entrant lock.  Keeping it outside the
+    version/slot tree prevents candidate cleanup from deleting the lock while
+    another process is waiting.
+    """
+
+    def decorate(function):
+        @wraps(function)
+        def guarded(self, name: str, *args, **kwargs):
+            skills_root = Path(
+                self.ctx.paths.dev_skills_dir() if dev else self.ctx.paths.skills_dir()
+            )
+            identity = hashlib.sha256(str(name or "").encode("utf-8")).hexdigest()
+            lock_path = skills_root / ".runtime" / ".locks" / f"{identity}.lock"
+            with mutation_lock(lock_path, timeout_s=300.0):
+                return function(self, name, *args, **kwargs)
+
+        return guarded
+
+    return decorate
 
 
 def _archive_failed_candidate_test_log(
@@ -2223,6 +2249,7 @@ class SkillManager:
     # ------------------------------------------------------------------
     # Runtime lifecycle helpers
     # ------------------------------------------------------------------
+    @_serialize_runtime_mutation()
     def prepare_runtime(
         self,
         name: str,
@@ -2547,6 +2574,7 @@ class SkillManager:
             "source_manifest_digest": adopted_source_digest,
         }
 
+    @_serialize_runtime_mutation()
     def activate_runtime(
         self,
         name: str,
@@ -2833,6 +2861,7 @@ class SkillManager:
             pass
         return target_slot
 
+    @_serialize_runtime_mutation()
     def rollback_runtime(self, name: str) -> str:
         env = self._runtime_env(name)
         version = env.resolve_active_version()
@@ -2966,6 +2995,7 @@ class SkillManager:
             "activation_emitted": activation_emitted,
         }
 
+    @_serialize_runtime_mutation(dev=True)
     def dev_rollback_runtime(self, name: str) -> str:
         env = self._runtime_env_dev(name)
         version = env.resolve_active_version()
@@ -3075,6 +3105,7 @@ class SkillManager:
             emit(self.bus, "skills.rolledback", payload, "skill.mgr")
         return target
 
+    @_serialize_runtime_mutation()
     def deactivate_runtime(
         self,
         name: str,
@@ -3415,6 +3446,7 @@ class SkillManager:
             state["default_tool"] = manifest.get("default_tool")
         return state
 
+    @_serialize_runtime_mutation(dev=True)
     def deactivate_dev_runtime(
         self,
         name: str,
@@ -6356,6 +6388,7 @@ class SkillManager:
         except OSError:
             pass
 
+    @_serialize_runtime_mutation(dev=True)
     def prepare_dev_runtime(
         self,
         name: str,
@@ -6512,6 +6545,7 @@ class SkillManager:
             lifecycle=dict(lifecycle),
         )
 
+    @_serialize_runtime_mutation(dev=True)
     def activate_dev_runtime(self, name: str, *, version: str | None = None, slot: str | None = None) -> str:
         """Activate a prepared DEV runtime (under .adaos/dev/<subnet>/skills).
 
