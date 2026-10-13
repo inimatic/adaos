@@ -28,6 +28,8 @@ _log = logging.getLogger("adaos.yjs.ystore")
 _SUPPRESS_NOTIFY: contextvars.ContextVar[bool] = contextvars.ContextVar("adaos_ystore_suppress_notify", default=False)
 _WRITE_META: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("adaos_ystore_write_meta", default=None)
 _GLOBAL_WRITE_LISTENERS: list[Callable[[str, bytes], Any]] = []
+_BUILTIN_WRITE_LISTENERS_LOADED = False
+_BUILTIN_WRITE_LISTENERS_LOCK = threading.Lock()
 
 
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
@@ -1820,6 +1822,24 @@ class AdaosMemoryYStore(BaseYStore):
 _YSTORE_CACHE: Dict[str, AdaosMemoryYStore] = {}
 
 
+def _ensure_builtin_write_listeners_loaded() -> None:
+    global _BUILTIN_WRITE_LISTENERS_LOADED
+    if _BUILTIN_WRITE_LISTENERS_LOADED:
+        return
+    with _BUILTIN_WRITE_LISTENERS_LOCK:
+        if _BUILTIN_WRITE_LISTENERS_LOADED:
+            return
+        try:
+            from adaos.services.yjs.sidecar_shadow import (  # pylint: disable=import-outside-toplevel
+                register_sidecar_shadow_mirror,
+            )
+
+            register_sidecar_shadow_mirror()
+        except Exception:
+            _log.warning("failed to load built-in YStore write listeners", exc_info=True)
+        _BUILTIN_WRITE_LISTENERS_LOADED = True
+
+
 def get_ystore_for_webspace(webspace_id: str) -> AdaosMemoryYStore:
     """
         Return a cached in-memory YStore for the given webspace.
@@ -1827,6 +1847,7 @@ def get_ystore_for_webspace(webspace_id: str) -> AdaosMemoryYStore:
         All callers (web_desktop_skill, async_get_ydoc, y_gateway) share the same
         instance to avoid \"YStore already running\" races.
     """
+    _ensure_builtin_write_listeners_loaded()
     store = _YSTORE_CACHE.get(webspace_id)
     if store is None:
         store = AdaosMemoryYStore(webspace_id)

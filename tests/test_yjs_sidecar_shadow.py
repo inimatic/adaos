@@ -124,3 +124,17 @@ def test_shadow_bridge_preserves_one_queue_across_writer_threads(monkeypatch: py
     assert sorted(sequence for _webspace, sequence in accepted) == list(range(1, 7))
     assert bridge.sidecar_shadow_mirror_status()["dropped_total"] == 0
     bridge.unregister_sidecar_shadow_mirror()
+
+
+def test_headless_ystore_access_loads_shadow_write_listener(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = _load_bridge(monkeypatch)
+    from adaos.services.yjs import store
+
+    bridge.unregister_sidecar_shadow_mirror()
+    monkeypatch.setattr(store, "_BUILTIN_WRITE_LISTENERS_LOADED", False)
+
+    store.get_ystore_for_webspace("headless-shadow-bootstrap")
+
+    assert bridge.register_sidecar_shadow_mirror() is True
+    assert bridge._remove_listener is not None
+    bridge.unregister_sidecar_shadow_mirror()
