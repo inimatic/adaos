@@ -243,6 +243,14 @@ def _compact_voice_chat_stream_messages(*args: Any, **kwargs: Any) -> Any:
     return _call_voice_chat_stream_helper("_compact_voice_chat_stream_messages", *args, **kwargs)
 
 
+def _voice_chat_projection_is_stale(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_voice_chat_projection_is_stale", *args, **kwargs)
+
+
+def _merge_voice_chat_optimistic_message(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_merge_voice_chat_optimistic_message", *args, **kwargs)
+
+
 def _voice_chat_stream_json_bytes(*args: Any, **kwargs: Any) -> Any:
     return _call_voice_chat_stream_helper("_voice_chat_stream_json_bytes", *args, **kwargs)
 
@@ -1679,14 +1687,9 @@ class RouterService:
         ) -> None:
             cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
             cached = _voice_chat_stream_cache.get(cache_key) or {}
-            cached_raw = cached.get("messages") if isinstance(cached, dict) else None
-            messages = [dict(item) for item in cached_raw if isinstance(item, dict)] if isinstance(cached_raw, list) else []
-            try:
-                previous_total = int(cached.get("total_message_count") or len(messages)) if isinstance(cached, dict) else len(messages)
-            except Exception:
-                previous_total = len(messages)
-            messages.append(dict(msg))
-            total_count = max(previous_total + 1, len(messages))
+            merged = _merge_voice_chat_optimistic_message(cached if isinstance(cached, dict) else {}, msg)
+            messages = merged["messages"]
+            total_count = merged["total_message_count"]
             messages = messages[-VOICE_CHAT_VISIBLE_TAIL:]
             effective_has_more_before = bool(has_more_before) or total_count > len(messages)
             effective_before_cursor = str(before_cursor or "")
@@ -3456,33 +3459,8 @@ class RouterService:
                         for item in current_raw
                         if isinstance(item, dict)
                     ] if isinstance(current_raw, list) else []
-                    if current_messages:
-                        def _order_value(item: Mapping[str, Any]) -> float:
-                            try:
-                                seq = float(item.get("seq") or 0.0)
-                            except Exception:
-                                seq = 0.0
-                            if seq > 0:
-                                return seq
-                            try:
-                                return float(item.get("ts") or 0.0)
-                            except Exception:
-                                return 0.0
-
-                        current_last = current_messages[-1]
-                        next_last = stream_snapshot[-1]
-                        current_order = _order_value(current_last)
-                        next_order = _order_value(next_last)
-                        if current_order > 0 and next_order > 0 and next_order < current_order:
-                            return
-                        current_last_id = str(current_last.get("id") or "").strip()
-                        next_last_id = str(next_last.get("id") or "").strip()
-                        if (
-                            len(stream_snapshot) < len(current_messages)
-                            and current_last_id
-                            and current_last_id == next_last_id
-                        ):
-                            return
+                    if _voice_chat_projection_is_stale(current_messages, stream_snapshot):
+                        return
                 last_refresh_ts = time.time()
                 _publish_voice_chat_stream(
                     webspace_id,

@@ -4,6 +4,71 @@ import json
 import os
 from collections.abc import Mapping
 from typing import Any
+import math
+
+
+def _voice_chat_projection_is_stale(current: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> bool:
+    """Compare one clock at a time; ledger sequence numbers are not timestamps."""
+    if not current or not incoming:
+        return False
+    previous, next_item = current[-1], incoming[-1]
+    previous_id = str(previous.get("id") or "").strip()
+    if previous_id and previous_id == str(next_item.get("id") or "").strip():
+        # The ledger may enrich an optimistic echo or collapse duplicate ids.
+        return False
+
+    def number(item: Mapping[str, Any], key: str) -> float:
+        try:
+            result = float(item.get(key) or 0)
+            return result if math.isfinite(result) and result > 0 else 0
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    previous_seq, next_seq = number(previous, "seq"), number(next_item, "seq")
+    if previous_seq and next_seq:
+        return next_seq < previous_seq
+    previous_ts, next_ts = number(previous, "ts"), number(next_item, "ts")
+    return bool(previous_ts and next_ts and next_ts < previous_ts)
+
+
+def _merge_voice_chat_optimistic_message(cached: Mapping[str, Any], message: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep one identity per optimistic row, within the explicitly addressed topic."""
+    def scope(item: Mapping[str, Any]) -> tuple[str, str]:
+        return (str(item.get("conversation_id") or "").strip(),
+                str(item.get("thread_id") or item.get("conversation_topic_id") or "").strip())
+
+    addressed = scope(message)
+    incoming_id = str(message.get("id") or "").strip()
+    rows: list[dict[str, Any]] = []
+    indices: dict[str, int] = {}
+    dropped_scope = False
+    duplicates = 0
+    for item in cached.get("messages") or []:
+        if not isinstance(item, Mapping):
+            continue
+        previous_scope = scope(item)
+        if any(expected and actual != expected for expected, actual in zip(addressed, previous_scope)):
+            dropped_scope = True
+            continue
+        identity = str(item.get("id") or "").strip()
+        if identity and identity in indices:
+            rows[indices[identity]] = dict(item)
+            duplicates += 1
+        else:
+            if identity:
+                indices[identity] = len(rows)
+            rows.append(dict(item))
+    replaced = bool(incoming_id and incoming_id in indices)
+    try:
+        previous_total = int(cached.get("total_message_count") or len(rows))
+    except (TypeError, ValueError, OverflowError):
+        previous_total = len(rows)
+    previous_total = len(rows) if dropped_scope else max(len(rows), previous_total - duplicates)
+    if replaced:
+        rows[indices[incoming_id]] = dict(message)
+    else:
+        rows.append(dict(message))
+    return {"messages": rows, "total_message_count": max(previous_total + int(not replaced), len(rows))}
 
 
 try:

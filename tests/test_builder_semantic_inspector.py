@@ -130,7 +130,7 @@ def test_inspector_projects_exact_committed_write_set_and_replay(graph_project):
     assert 'resource:' + table(document)['resource_ref'] in packet['dependency_refs']
 
 
-@pytest.mark.parametrize('drift', ['runtime', 'locale', 'receipt', 'retained_base'])
+@pytest.mark.parametrize('drift', ['runtime', 'locale', 'locale_missing', 'receipt', 'retained_base'])
 def test_inspector_fails_closed_on_source_or_receipt_drift(graph_project, drift):
     service, workflow, root, document = graph_project
     op = reorder(document)
@@ -147,6 +147,9 @@ def test_inspector_fails_closed_on_source_or_receipt_drift(graph_project, drift)
         path = root / 'assets/i18n/en.json'
         payload = json.loads(path.read_text(encoding='utf-8'))
         payload[next(iter(payload))] = 'Drift'
+    elif drift == 'locale_missing':
+        path = root / 'assets/i18n/en.json'
+        path.unlink()
     elif drift == 'receipt':
         path = root / 'ui_revisions/002.json'
         payload = json.loads(path.read_text(encoding='utf-8'))
@@ -155,9 +158,14 @@ def test_inspector_fails_closed_on_source_or_receipt_drift(graph_project, drift)
         path = next(_operation_root(workflow, request['project_ref']).glob('*.json'))
         payload = json.loads(path.read_text(encoding='utf-8'))
         payload['before_files']['semantic.webui.json'] = 'e30='
-    path.write_text(json.dumps(payload), encoding='utf-8')
+    if drift != 'locale_missing':
+        path.write_text(json.dumps(payload), encoding='utf-8')
     packet = service.inspect(project_ref=request['project_ref'])
     assert packet['status'] == 'blocked' and packet['write_set'] == [] and packet['refs'] == []
+    assert packet['ref_count'] == 0 and packet['write_count'] == 0
+    if drift == 'locale_missing':
+        assert packet['block_reason'] == 'locale_verification'
+        assert not path.exists(), 'Inspection must not repair a missing projection'
 
 
 def test_inspector_missing_source_is_read_only(graph_project):

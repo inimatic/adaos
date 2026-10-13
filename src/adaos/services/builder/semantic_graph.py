@@ -270,7 +270,9 @@ class SemanticGraphService:
                 for locale, expected in baseline["compiled"]["locale_dictionaries"].items():
                     path = self._file(root, f"assets/i18n/{locale}.json")
                     existing = _read(path) if path.is_file() else None
-                    if existing is not None and any(existing.get(key) != text for key, text in expected.items()):
+                    if existing is None:
+                        raise BuilderWorkflowError("semantic baseline drift: required locale dictionary is missing")
+                    if any(existing.get(key) != text for key, text in expected.items()):
                         raise BuilderWorkflowError("semantic baseline drift: locale dictionary differs")
                 stage = "reference_inventory"
                 refs = semantic_refs(document)
@@ -326,7 +328,8 @@ class SemanticGraphService:
             except (BuilderWorkflowError, OSError, ValueError, KeyError, TypeError, ValidationError) as exc:
                 packet.update(status="blocked", status_label="Source or receipt verification failed",
                               block_reason=stage, block_detail=str(exc)[:240] if isinstance(exc, BuilderWorkflowError) else type(exc).__name__,
-                              refs=[], write_set=[], read_refs=[], dependency_refs=[], admitted_write_refs=[], transaction=None)
+                              refs=[], write_set=[], ref_count=0, write_count=0,
+                              read_refs=[], dependency_refs=[], admitted_write_refs=[], transaction=None)
                 return packet
 
     def prepare_label_request(self, *, project_ref: str, instruction: str,

@@ -27,6 +27,27 @@ await context.addInitScript(({ hub, token, subnet }) => {
     adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo' })) localStorage.setItem(key, value)
 }, { hub, token, subnet })
 const page = await context.newPage()
+// Retain bounded wire evidence so a correct durable receipt can be separated
+// from a stale or malformed delivery projection when a browser check fails.
+report.delivery = []
+page.on('websocket', socket => socket.on('framereceived', event => {
+  try {
+    const frame = JSON.parse(String(event.payload))
+    function capture(value, depth = 0) {
+      if (!value || typeof value !== 'object' || depth > 6) return
+      if (value.receiver === 'voice_chat.messages') {
+        const data = value.data || {}
+        report.delivery.push({params: value.params || value._meta?.params,
+          messages: (data.messages || []).map(message => ({id: message.id, from: message.from,
+            seq: message.seq, thread: message.thread_id, sourceMessageId: message.source_message_id}))})
+        report.delivery = report.delivery.slice(-24)
+        return
+      }
+      for (const child of Object.values(value)) capture(child, depth + 1)
+    }
+    capture(frame)
+  } catch {}
+}))
 page.on('response', async response => {
   try {
     if (!response.url().endsWith('/api/tools/call')) return
