@@ -1401,6 +1401,16 @@ def main() -> None:
             os.environ["ADAOS_TOKEN"] = str(token)
         os.environ["ADAOS_SELF_BASE_URL"] = advertised_base
 
+        phase = "register_yjs_sidecar_shadow"
+        try:
+            from adaos.services.yjs.sidecar_shadow import (  # pylint: disable=import-outside-toplevel
+                register_sidecar_shadow_mirror,
+            )
+
+            register_sidecar_shadow_mirror()
+        except Exception:
+            _LOG.warning("failed to register optional Yjs sidecar shadow mirror", exc_info=True)
+
         phase = "launch_active_slot"
         _launch_active_slot_if_needed(args, host=host, port=port, validate=pending_update_succeeded)
 

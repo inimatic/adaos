@@ -1834,10 +1834,14 @@ def _ensure_builtin_write_listeners_loaded() -> None:
                 register_sidecar_shadow_mirror,
             )
 
-            register_sidecar_shadow_mirror()
+            registered = register_sidecar_shadow_mirror()
         except Exception:
             _log.warning("failed to load built-in YStore write listeners", exc_info=True)
-        _BUILTIN_WRITE_LISTENERS_LOADED = True
+            registered = False
+        _BUILTIN_WRITE_LISTENERS_LOADED = registered or not _env_flag(
+            "ADAOS_YJS_SIDECAR_SHADOW_ENABLE",
+            False,
+        )
 
 
 def get_ystore_for_webspace(webspace_id: str) -> AdaosMemoryYStore:

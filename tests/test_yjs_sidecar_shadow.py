@@ -138,3 +138,16 @@ def test_headless_ystore_access_loads_shadow_write_listener(monkeypatch: pytest.
     assert bridge.register_sidecar_shadow_mirror() is True
     assert bridge._remove_listener is not None
     bridge.unregister_sidecar_shadow_mirror()
+
+
+def test_shadow_registration_reloads_token_after_early_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = _load_bridge(monkeypatch, ADAOS_TOKEN="")
+    assert bridge.register_sidecar_shadow_mirror() is False
+    assert bridge._remove_listener is None
+
+    monkeypatch.setenv("ADAOS_TOKEN", "late-runtime-token")
+
+    assert bridge.register_sidecar_shadow_mirror() is True
+    assert bridge._remove_listener is not None
+    assert bridge.sidecar_shadow_mirror_status()["enabled"] is True
+    bridge.unregister_sidecar_shadow_mirror()

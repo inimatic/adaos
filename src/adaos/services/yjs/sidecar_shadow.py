@@ -90,6 +90,37 @@ _status: dict[str, Any] = {
 }
 
 
+def _refresh_configuration() -> None:
+    global _CONFIGURATION_ERROR, _CONTROL_URL, _ENABLED, _MAX_UPDATE_BYTES
+    global _QUEUE_LIMIT, _TIMEOUT_S, _TOKEN, _WEBSPACES
+
+    enabled = _env_flag("ADAOS_YJS_SIDECAR_SHADOW_ENABLE", False)
+    webspaces = _webspaces()
+    token = str(os.getenv("ADAOS_TOKEN") or "").strip()
+    max_update_bytes = _env_int("ADAOS_YJS_SIDECAR_SHADOW_MAX_UPDATE_BYTES", 8 << 20)
+    queue_limit = _env_int("ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT", 256)
+    timeout_s = _env_float("ADAOS_YJS_SIDECAR_SHADOW_TIMEOUT_S", 2.0)
+    try:
+        control_url = _control_url()
+        configuration_error = ""
+    except Exception as exc:
+        control_url = ""
+        configuration_error = f"{type(exc).__name__}:{exc}"
+
+    _ENABLED = enabled
+    _WEBSPACES = webspaces
+    _TOKEN = token
+    _MAX_UPDATE_BYTES = max_update_bytes
+    _QUEUE_LIMIT = queue_limit
+    _TIMEOUT_S = timeout_s
+    _CONTROL_URL = control_url
+    _CONFIGURATION_ERROR = configuration_error
+    _record(
+        enabled=enabled,
+        last_error=configuration_error or _status.get("last_error"),
+    )
+
+
 def _record(**values: Any) -> None:
     with _status_lock:
         _status.update(values)
@@ -215,6 +246,7 @@ def register_sidecar_shadow_mirror() -> bool:
     global _remove_listener
     if _remove_listener is not None:
         return True
+    _refresh_configuration()
     if not _ENABLED:
         return False
     if not _WEBSPACES or not _TOKEN or _CONFIGURATION_ERROR:
