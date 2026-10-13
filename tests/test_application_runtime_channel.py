@@ -156,9 +156,16 @@ def test_native_execution_uses_node_authority_and_rejects_stale_beta(tmp_path, m
     with pytest.raises(RuntimeChannelConflict, match="inactive"):
         with runtime_selection.application_execution(stable, "worker"):
             pytest.fail("Stable must not execute during Beta")
-    with runtime_selection.application_execution(beta, "worker"):
+    timings = {}
+    with runtime_selection.application_execution(beta, "worker", timings=timings):
         with pytest.raises(RuntimeChannelConflict, match="executing"):
             channel.select(selection(revision=2), expected_revision=1)
+    assert set(timings) == {
+        "application_identity_ms", "application_selections_ms",
+        "application_pending_selections_ms", "application_component_membership_ms",
+        "application_channel_fence_ms",
+    }
+    assert all(isinstance(value, float) and value >= 0 for value in timings.values())
     channel.select(selection(revision=2), expected_revision=1)
     with pytest.raises(RuntimeChannelConflict, match="inactive"):
         with runtime_selection.application_execution(beta, "worker"):
@@ -191,9 +198,14 @@ def test_verified_application_execution_fences_exact_channel_without_global_scan
         "component_ref": "skill:worker",
     })
     try:
-        with runtime_selection.application_execution(ctx, "worker"):
+        timings = {}
+        with runtime_selection.application_execution(ctx, "worker", timings=timings):
             with pytest.raises(RuntimeChannelConflict, match="executing"):
                 channel.select(selection(beta=True, revision=2), expected_revision=1)
+        assert set(timings) == {
+            "application_identity_ms", "application_channel_read_ms", "application_channel_fence_ms",
+        }
+        assert all(isinstance(value, float) and value >= 0 for value in timings.values())
     finally:
         clear_application()
 

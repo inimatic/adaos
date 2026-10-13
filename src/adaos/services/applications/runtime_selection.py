@@ -611,9 +611,18 @@ def _selected_trial_exact_uncached(
 
 
 @contextmanager
-def application_execution(ctx: AgentContext, skill_name: str):
+def application_execution(ctx: AgentContext, skill_name: str, *, timings: dict[str, float] | None = None):
     """Fence selected production runtimes for the entire synchronous/awaited call."""
     from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
+
+    phase_started = time.perf_counter()
+
+    def mark_phase(name: str) -> None:
+        nonlocal phase_started
+        now = time.perf_counter()
+        if timings is not None:
+            timings[name] = (now - phase_started) * 1000.0
+        phase_started = now
 
     state_dir = Path(getattr(ctx, "authority_state_dir", None) or ctx.paths.state_dir())
     # Tool ingress has already resolved and authorized one exact Application
@@ -635,6 +644,7 @@ def application_execution(ctx: AgentContext, skill_name: str):
     verified_application_id = str(verified.get("application_id") or "").strip()
     verified_release_digest = str(verified.get("release_digest") or "").strip()
     verified_runtime_root = str(verified.get("runtime_root_ref") or "").strip()
+    mark_phase("application_identity_ms")
     if (
         verified_component == f"skill:{skill_name}"
         and verified_application_id
@@ -653,6 +663,7 @@ def application_execution(ctx: AgentContext, skill_name: str):
         # forever after a rejected first Beta, even after a later Stable
         # release was installed.
         channel_values = channel.read()
+        mark_phase("application_channel_read_ms")
         if channel_values:
             actual_root = str(getattr(ctx.paths, "runtime_channel_ref", "workspace"))
             if actual_root != verified_runtime_root:
@@ -685,14 +696,17 @@ def application_execution(ctx: AgentContext, skill_name: str):
                 verified_runtime_root,
                 verified_release_digest,
             ):
+                mark_phase("application_channel_fence_ms")
                 yield
             return
 
     store = ApplicationStore(state_dir)
     selected = {}
     selections = store.list_runtime_selections()
+    mark_phase("application_selections_ms")
     # Newly introduced skills are fenced too, before the new release is selected.
     guarded_selections = (*selections, *ApplicationRuntimeChannel.list_selections(state_dir, include_pending=True))
+    mark_phase("application_pending_selections_ms")
     for selection in guarded_selections:
         if selection.application_id in selected:
             continue
@@ -712,6 +726,7 @@ def application_execution(ctx: AgentContext, skill_name: str):
             )
         if owns_component:
             selected[selection.application_id] = selection
+    mark_phase("application_component_membership_ms")
     with ExitStack() as stack:
         for application_id, selection in sorted(selected.items()):
             actual_root = str(getattr(ctx.paths, "runtime_channel_ref", "workspace"))
@@ -720,6 +735,7 @@ def application_execution(ctx: AgentContext, skill_name: str):
             stack.enter_context(ApplicationRuntimeChannel(state_dir, application_id).execution(
                 selection.runtime_root_ref, selection.release_digest,
                 legacy=tuple(item for item in selections if item.application_id == application_id)))
+        mark_phase("application_channel_fence_ms")
         yield
 
 

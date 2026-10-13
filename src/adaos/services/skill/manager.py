@@ -3821,8 +3821,15 @@ class SkillManager:
                 (time.perf_counter() - execution_submitted_at) * 1000.0,
             )
             entry_started = time.perf_counter()
-            with use_ctx(ctx), application_execution(ctx, name), capture_skill_call_timings(call_timings):
+            entry_cpu_started = time.thread_time()
+            with use_ctx(ctx), application_execution(ctx, name, timings=call_timings), capture_skill_call_timings(call_timings):
                 call_timings["application_entry_ms"] = (time.perf_counter() - entry_started) * 1000.0
+                call_timings["application_entry_cpu_ms"] = (time.thread_time() - entry_cpu_started) * 1000.0
+                # Includes I/O, locks, GIL scheduling and OS preemption; not pure
+                # disk latency or an inferred provider/model compute duration.
+                call_timings["application_entry_off_cpu_ms"] = max(
+                    0.0, call_timings["application_entry_ms"] - call_timings["application_entry_cpu_ms"]
+                )
                 step_started = time.perf_counter()
                 result = execute_tool(
                     skill_dir,
@@ -3903,6 +3910,9 @@ class SkillManager:
                     "prepare_ms=%.1f execute_ms=%.1f worker_start_ms=%.1f "
                     "execute_tool_ms=%.1f resolve_result_ms=%.1f persist_env_ms=%.1f "
                     "context_bind_ms=%.1f application_entry_ms=%.1f application_exit_ms=%.1f "
+                    "application_entry_cpu_ms=%.1f application_entry_off_cpu_ms=%.1f "
+                    "application_selections_ms=%.1f application_pending_selections_ms=%.1f "
+                    "application_component_membership_ms=%.1f application_channel_fence_ms=%.1f "
                     "runner_admission_ms=%.1f module_lock_ms=%.1f module_load_ms=%.1f trace_id=%s source_message_id=%s",
                     name,
                     target_tool,
@@ -3919,6 +3929,12 @@ class SkillManager:
                     float(call_timings.get("context_bind_ms") or 0.0),
                     float(call_timings.get("application_entry_ms") or 0.0),
                     float(call_timings.get("application_exit_ms") or 0.0),
+                    float(call_timings.get("application_entry_cpu_ms") or 0.0),
+                    float(call_timings.get("application_entry_off_cpu_ms") or 0.0),
+                    float(call_timings.get("application_selections_ms") or 0.0),
+                    float(call_timings.get("application_pending_selections_ms") or 0.0),
+                    float(call_timings.get("application_component_membership_ms") or 0.0),
+                    float(call_timings.get("application_channel_fence_ms") or 0.0),
                     float(call_timings.get("runner_admission_ms") or 0.0),
                     float(call_timings.get("module_lock_ms") or 0.0),
                     float(call_timings.get("module_load_ms") or 0.0),
