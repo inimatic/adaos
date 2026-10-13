@@ -81,6 +81,32 @@ try {
   report.checks.push('EN captions', 'no eager inspection', 'one read for three projections',
     'exact current revision', 'separate operation base', 'actual field_refs write', 'searchable semantic refs')
   await page.screenshot({path: path.join(output, 'inspector.png'), fullPage: true})
+  const refLabel = refs.getByText('view:records-list', {exact: true}).last()
+  await refLabel.scrollIntoViewIfNeeded()
+  await expect(refLabel).toBeInViewport()
+  report.refGeometry = await refLabel.evaluate(element => {
+    const clip = {left: 0, top: 0, right: innerWidth, bottom: innerHeight}
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      const style = getComputedStyle(node), box = node.getBoundingClientRect()
+      if (/auto|scroll|hidden|clip/.test(style.overflowX)) {
+        clip.left = Math.max(clip.left, box.left + node.clientLeft)
+        clip.right = Math.min(clip.right, box.left + node.clientLeft + node.clientWidth)
+      }
+      if (/auto|scroll|hidden|clip/.test(style.overflowY)) {
+        clip.top = Math.max(clip.top, box.top + node.clientTop)
+        clip.bottom = Math.min(clip.bottom, box.top + node.clientTop + node.clientHeight)
+      }
+    }
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    const rects = [...range.getClientRects()].filter(rect => rect.width && rect.height)
+    return {visible: rects.length > 0 && rects.every(rect => rect.left >= clip.left - 1
+      && rect.right <= clip.right + 1 && rect.top >= clip.top - 1 && rect.bottom <= clip.bottom + 1), clip}
+  })
+  if (!report.refGeometry.visible) throw new Error('Semantic ref text is clipped inside the inspector')
+  if (report.reads !== 1) throw new Error('Local ref search or scrolling issued an additional read')
+  report.checks.push('filtered ref glyphs are readable within clipping ancestors', 'local search needs no additional read')
+  await page.screenshot({path: path.join(output, 'inspector-ref-details.png'), fullPage: true})
   await page.keyboard.press('Escape')
   await expect(summary).toBeHidden()
   report.checks.push('inspector closes without Preview navigation')
