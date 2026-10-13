@@ -263,6 +263,11 @@ def _encode_snapshot_update(updates: List[Tuple[bytes, bytes, float]]) -> bytes:
         ydoc = None
 
 
+def encode_ystore_shadow_seed(updates: tuple[bytes, ...]) -> bytes:
+    records = [(bytes(update), b"", 0.0) for update in updates if update]
+    return _encode_snapshot_update(records)
+
+
 def _encode_snapshot_artifacts(updates: List[Tuple[bytes, bytes, float]]) -> tuple[bytes, bytes]:
     """
     Encode a compacted snapshot together with its state vector in one pass.
@@ -1820,6 +1825,14 @@ class AdaosMemoryYStore(BaseYStore):
 
 
 _YSTORE_CACHE: Dict[str, AdaosMemoryYStore] = {}
+
+
+def ystore_updates_for_shadow(webspace_id: str) -> tuple[bytes, ...]:
+    store = _YSTORE_CACHE.get(str(webspace_id or "").strip() or "default")
+    if store is None:
+        return ()
+    with store._lock:  # pylint: disable=protected-access
+        return tuple(bytes(update) for update, _metadata, _timestamp in store._updates if update)  # pylint: disable=protected-access
 
 
 def _ensure_builtin_write_listeners_loaded() -> None:

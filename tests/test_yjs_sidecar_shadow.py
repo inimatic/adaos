@@ -82,7 +82,30 @@ def test_shadow_bridge_posts_bounded_binary_control_request(monkeypatch: pytest.
     assert captured["headers"]["x-adaos-token"] == "test-token"
     assert captured["headers"]["x-adaos-webspace-id"] == "default"
     assert captured["headers"]["x-adaos-yjs-sequence"] == "7"
+    assert captured["headers"]["x-adaos-yjs-mode"] == "update"
     assert captured["timeout"] == 1.0
+    bridge.unregister_sidecar_shadow_mirror()
+
+
+def test_shadow_bridge_seeds_existing_ystore_before_incremental_mirroring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _load_bridge(monkeypatch)
+    accepted: list[tuple[str, bytes, int, str]] = []
+    monkeypatch.setattr(bridge, "_seed_updates", lambda _webspace: (b"base", b"delta"))
+    monkeypatch.setattr(bridge, "_encode_seed", lambda updates: b"snapshot:" + b"+".join(updates))
+
+    def _accept(webspace: str, update: bytes, sequence: int, *, mode: str = "update") -> None:
+        accepted.append((webspace, update, sequence, mode))
+
+    monkeypatch.setattr(bridge, "_post_update", _accept)
+    bridge._mirror_write_listener("default", b"delta")
+    asyncio.run(bridge.wait_for_sidecar_shadow_idle(2))
+
+    assert accepted == [("default", b"snapshot:base+delta", 1, "seed")]
+    status = bridge.sidecar_shadow_mirror_status()
+    assert status["seed_enqueued_total"] == 1
+    assert status["seed_accepted_total"] == 1
     bridge.unregister_sidecar_shadow_mirror()
 
 
