@@ -242,13 +242,14 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                 buttons = {button.get("id") for button in widget.get("inputs", {}).get("buttons", [])}
                 def realized_actions(command):
                     operation = "update" if command["kind"] == "transition" else command["kind"]
+                    payload = {key: "$event.values." + key for key in command.get("input_field_refs", [])}
+                    payload.update(command.get("fixed_values") or {})
                     return [action for action in actions if action.get("id") == command["id"]
                         and command["id"] in buttons and action.get("on") == "submit"
                         and action.get("params", {}).get("operation_id") == operation
                         and action.get("params", {}).get("context", {}).get("prototype_command_id") == command["id"]
                         and action.get("target") == widget.get("dataSource", {}).get("resourceType")
-                        and all(action.get("params", {}).get("payload", {}).get(key) == value
-                            for key, value in command.get("fixed_values", {}).items())]
+                        and action.get("params", {}).get("payload", {}) == payload]
                 coverage = []
                 for command in commands:
                     matches = realized_actions(command)
@@ -258,6 +259,7 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                     if not members and (command.get("exposure") or {}).get("placement") == "row_action":
                         submits = [other for other in commands if other["kind"] == command["kind"]
                             and (other.get("exposure") or {}).get("placement") == "editor_primary"
+                            and command_obligations(other) == command_obligations(command)
                             and realized_actions(other)]
                         for candidate in widgets:
                             event = "click:" + command["id"]
@@ -270,7 +272,8 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                                     and any(item.get("id") == widget["id"] for item in modal.get("schema", {}).get("widgets", []))
                                     for key, modal in (application.get("modals") or {}).items()) for action in sequence)
                             if submits and exposed and selected and opened:
-                                members.extend({"widget_id": candidate["id"], "event": event, "submit_command_id": other["id"]} for other in submits)
+                                members.extend({"widget_id": candidate["id"], "event": event, "submit_command_id": other["id"],
+                                    "composition": "editor_entry_point_to_mutation", "obligations": command_obligations(command)} for other in submits)
                     if not members:
                         raise ValueError("component.command_realization_missing:command:" + command["id"])
                     coverage.append({"source_ref": "command:" + command["id"], "members": members})
@@ -279,6 +282,38 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                      {"ref": "client.resourceOperation", "command_ids": [action.get("id") for action in actions], "coverage": coverage},
                      {"ref": "provider.prototype", "resource_ref": view["resource_ref"]}])
     return {"schema": "adaos.ui.contract_lowering_receipt.v1", "source": projection["provenance"], "relations": rows}
+
+
+def command_obligations(command: Mapping[str, Any]) -> dict[str, Any]:
+    """Semantic obligations, independent of labels, tool ids and placements."""
+    return {"kind": command["kind"], "view_ref": command["view_ref"],
+        "inputs": sorted(set(command.get("input_field_refs") or [])),
+        "fixed_effects": copy.deepcopy(command.get("fixed_values") or {}),
+        "guard": copy.deepcopy(command.get("guard")), "confirmation": copy.deepcopy(command.get("confirmation")),
+        "authority": copy.deepcopy(command.get("authority"))}
+
+
+class CommandCompositionGap(ValueError):
+    def __init__(self, command: Mapping[str, Any], candidates: list[Mapping[str, Any]]):
+        self.findings = [{"code": "component.command_composition_incompatible", "source_ref": "command:" + command['id'],
+            "candidate_refs": ["command:" + item['id'] for item in candidates],
+            "obligations": command_obligations(command)}]
+        super().__init__("component.command_composition_incompatible:command:" + command['id'])
+
+
+def editor_entry_point_target(command: Mapping[str, Any], commands: list[Mapping[str, Any]]) -> str | None:
+    """Only lossless N:1 compositions may replace a source mutation action."""
+    if (command.get('exposure') or {}).get('placement') != 'row_action':
+        return None
+    candidates = [other for other in commands if other['id'] != command['id']
+        and other.get('view_ref') == command.get('view_ref') and other.get('kind') == command.get('kind')
+        and (other.get('exposure') or {}).get('placement') == 'editor_primary']
+    if not candidates:
+        return None
+    matching = [other for other in candidates if command_obligations(other) == command_obligations(command)]
+    if not matching:
+        raise CommandCompositionGap(command, candidates)
+    return matching[0]['id']
 
 
 def contract_impact(previous: Mapping[str, Any], current: Mapping[str, Any]) -> dict[str, Any]:

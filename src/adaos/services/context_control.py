@@ -333,6 +333,23 @@ class ContextControlService:
                     event_ref TEXT NOT NULL,
                     recorded_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS component_contract_heads (
+                    owner TEXT NOT NULL,
+                    contract_id TEXT NOT NULL,
+                    source_digest TEXT NOT NULL,
+                    snapshot_ref TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(owner, contract_id)
+                );
+                CREATE TABLE IF NOT EXISTS component_contract_transitions (
+                    owner TEXT NOT NULL,
+                    contract_id TEXT NOT NULL,
+                    event_ref TEXT NOT NULL,
+                    request_digest TEXT NOT NULL,
+                    result_ref TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    PRIMARY KEY(owner, contract_id, event_ref)
+                );
                 """
             )
             missing_search = connection.execute(
@@ -399,7 +416,28 @@ class ContextControlService:
         return result
 
     def publish_component_projection(self, snapshot: Mapping[str, Any]) -> dict[str, Any]:
-        return self._store_component_projection(snapshot, promote=True)
+        with self._transaction():
+            active = self._active_component_digest(snapshot['provenance'])
+            if active and active != snapshot['provenance']['source_digest']:
+                raise ContextConflict('Immutable component contract identity/version conflict or active contract requires an explicit version transition')
+            return self._store_component_projection(snapshot, promote=True)
+
+    def _active_component_digest(self, provenance: Mapping[str, Any]) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute('SELECT source_digest FROM component_contract_heads WHERE owner = ? AND contract_id = ?',
+                (provenance['owner'], provenance['contract_id'])).fetchone()
+            if row:
+                return row['source_digest']
+            # Adopt the active identity in databases created before head records,
+            # without trusting a supplied base or mutating existing bindings.
+            rows = connection.execute("""SELECT DISTINCT json_extract(c.metadata_json, '$.component_contract_digest') AS source_digest
+                FROM bindings b JOIN capsules c ON b.capsule_id = c.capsule_id
+                WHERE b.purpose = 'builder.contract_input' AND b.audience = 'builder' AND b.branch = 'main'
+                  AND c.authority_ref = ? AND json_extract(c.metadata_json, '$.component_contract_id') = ?""",
+                (provenance['owner'], provenance['contract_id'])).fetchall()
+            if len(rows) > 1:
+                raise ContextConflict('Active component contract has mixed source digests')
+            return rows[0]['source_digest'] if rows else None
 
     def _store_component_projection(self, snapshot: Mapping[str, Any], *, promote: bool) -> dict[str, Any]:
         with self._transaction():
@@ -448,18 +486,51 @@ class ContextControlService:
                 edge = self.add_relationship({"from_capsule_id": capsules[unit["id"]]["capsule_id"],
                     "to_capsule_id": capsules[dependency]["capsule_id"], "relation_type": "requires", "required": True})
                 snapshot_times.append(edge['recorded_at'])
+        if promote:
+            snapshot_ref = self.put_artifact(snapshot)['ref']
+            with self._connect() as connection:
+                connection.execute('''INSERT INTO component_contract_heads VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(owner, contract_id) DO UPDATE SET source_digest = excluded.source_digest,
+                        snapshot_ref = excluded.snapshot_ref, updated_at = excluded.updated_at''',
+                    (provenance['owner'], provenance['contract_id'], provenance['source_digest'], snapshot_ref, _now()))
         return {"source": snapshot["provenance"], "capsules": capsules, "snapshot_as_of": max(snapshot_times, key=_instant)}
 
     def evolve_component_contract(self, previous: Mapping[str, Any], current: Mapping[str, Any], *, event_ref: str) -> dict[str, Any]:
         from adaos.services.ui_component_contracts import contract_impact, project_component_contract
         impact = contract_impact(previous, current)
+        base = project_component_contract(previous)
         projection = project_component_contract(current)
+        provenance = projection['provenance']
+        if not _text(event_ref):
+            raise ValueError('Component contract transition requires event_ref')
+        if any(base['provenance'][key] != provenance[key] for key in ('owner', 'contract_id')):
+            raise ContextConflict('Component contract authority/identity transition is not admitted')
+        request_digest = _digest({'previous': base['provenance'], 'current': provenance})
         with self._transaction():
-            published = self.publish_component_projection(projection)
+            with self._connect() as connection:
+                prior = connection.execute('SELECT * FROM component_contract_transitions WHERE owner = ? AND contract_id = ? AND event_ref = ?',
+                    (provenance['owner'], provenance['contract_id'], event_ref)).fetchone()
+            if prior:
+                if prior['request_digest'] != request_digest:
+                    raise ContextConflict('Component contract event replay has a conflicting request digest')
+                return self.get_artifact(prior['result_ref'])
+            active = self._active_component_digest(provenance)
+            if active != base['provenance']['source_digest']:
+                raise ContextConflict('Component contract stale base: expected active source digest does not match')
+            if provenance['source_digest'] != active and tuple(map(int, current['version'].split('.'))) <= tuple(map(int, previous['version'].split('.'))):
+                raise ContextConflict('Immutable component contract identity/version conflict: version must advance')
+            published = self._store_component_projection(projection, promote=True)
             invalidations = [self.invalidate(subject_ref="component:" + identity, reason="component_contract_changed",
                 event_ref=event_ref, source_digest=projection["provenance"]["source_digest"])
                 for identity in impact["affected_units"]]
-        return {"impact": impact, "invalidations": invalidations, "projection": published}
+            result = {"impact": impact, "invalidations": invalidations, "projection": published,
+                "transition": {"event_ref": event_ref, "request_digest": request_digest,
+                    "previous_digest": active, "current_digest": provenance['source_digest']}}
+            artifact = self.put_artifact(result)
+            with self._connect() as connection:
+                connection.execute('INSERT INTO component_contract_transitions VALUES (?, ?, ?, ?, ?, ?)',
+                    (provenance['owner'], provenance['contract_id'], event_ref, request_digest, artifact['ref'], _now()))
+        return result
 
     def put_artifact(self, value: Any) -> dict[str, Any]:
         payload = _canonical_bytes(value)

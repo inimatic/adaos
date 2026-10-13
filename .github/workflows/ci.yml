@@ -203,6 +203,7 @@ jobs:
             tests/test_component_contract_mcp.py \
             tests/test_builder_contract_usage.py \
             tests/test_component_contract_ci.py \
+            tests/test_component_contract_transitions.py \
             tests/test_context_control.py \
             tests/test_prototype_resource_workbench.py \
             tests/test_builder_semantic_prototype.py \

@@ -4715,13 +4715,8 @@ def _compile_declared_editor_exposure(
         if placement == "row_action" and presentation == "icon":
             button["title"] = label
             button.pop("label", None)
-        is_editor_opener = placement == "row_action" and any(
-            other is not command
-            and other.get("view_ref") == command.get("view_ref")
-            and other.get("kind") == command.get("kind")
-            and (other.get("exposure") or {}).get("placement") == "editor_primary"
-            for other in commands
-        )
+        from adaos.services.ui_component_contracts import editor_entry_point_target
+        is_editor_opener = editor_entry_point_target(command, commands) is not None
         if is_editor_opener:
             # A row action is the record-aware entry point into the editor.  It
             # must not also survive as a submit button inside that editor: doing

@@ -13,7 +13,7 @@ def test_component_contract_tests_and_generators_are_required_ci_gates():
     required = [step.get('run', '') for step in steps if not step.get('continue-on-error') and not step.get('if')]
     commands = '\n'.join(required)
     for module in ('ui_component_contracts', 'contract_context_admission', 'component_contract_reference',
-                   'component_matched_evolution', 'component_contract_mcp', 'builder_contract_usage', 'component_contract_ci'):
+                   'component_matched_evolution', 'component_contract_mcp', 'builder_contract_usage', 'component_contract_ci', 'component_contract_transitions'):
         assert f'tests/test_{module}.py' in commands
     assert 'scripts/generate_ui_component_contract.py --check' in commands
     assert 'git submodule update --init --depth 1 src/adaos/integrations/adaos-client' in commands

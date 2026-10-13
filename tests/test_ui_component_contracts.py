@@ -106,7 +106,7 @@ def test_global_dependencies_affect_every_unit_and_require_admission(key, value)
     assert impact["requires_new_admission"] and impact["fixtures"]
 
 
-@pytest.mark.parametrize("fault", ["missing", "operation", "identity", "opener", "button", "target", "fixed"])
+@pytest.mark.parametrize("fault", ["missing", "operation", "identity", "opener", "button", "target", "fixed", "missing_input", "unexpected_input", "wrong_input_expression"])
 def test_lowering_requires_individual_command_and_composition_coverage(fault):
     document, _ = load_slice(ROOT)
     webui = compile_semantic_prototype(document, project_ref="project:lowering")['webui']
@@ -118,8 +118,43 @@ def test_lowering_requires_individual_command_and_composition_coverage(fault):
     elif fault == "button": form['inputs']['buttons'] = [button for button in form['inputs']['buttons'] if button['id'] != 'complete']
     elif fault == "target": complete['target'] = 'prototype.another.records'
     elif fault == "fixed": complete['params']['payload']['state'] = 'open'
+    elif fault == "missing_input": next(action for action in form['actions'] if action['id'] == 'save')['params']['payload'].pop('name')
+    elif fault == "unexpected_input": complete['params']['payload']['name'] = '$event.values.name'
+    elif fault == "wrong_input_expression": complete['params']['payload']['review_note'] = 'Forged review'
     else:
         table = next(item for item in webui['ui']['application']['desktop']['pageSchema']['widgets'] if item['id'] == 'records-list')
         table['actions'] = [action for action in table['actions'] if action.get('on') != 'click:edit']
     with pytest.raises(ValueError, match="command_realization_missing"):
         lowering_receipt(document, webui)
+
+
+@pytest.mark.parametrize('obligation', ['inputs', 'fixed_effects', 'guard', 'confirmation'])
+def test_editor_entry_point_cannot_erase_source_command_obligations(obligation):
+    from adaos.services.ui_component_contracts import CommandCompositionGap
+    document, _ = load_slice(ROOT)
+    source = next(command for command in document['commands'] if command['id'] == 'edit')
+    if obligation == 'inputs': source['input_field_refs'].remove('review_note')
+    elif obligation == 'fixed_effects': source['fixed_values']['state'] = 'done'
+    elif obligation == 'guard': source['guard'] = {'when': {'field_ref': 'state', 'operator': 'equals', 'value': 'open'}, 'require_nonempty': ['review_note']}
+    else: source['confirmation'] = {'key': 'confirm.edit', 'en': 'Confirm edit?', 'ru': 'Подтвердить?'}
+    with pytest.raises(CommandCompositionGap) as rejected:
+        compile_semantic_prototype(document, project_ref='project:composition-obligations')
+    assert rejected.value.findings[0]['code'] == 'component.command_composition_incompatible'
+
+
+def test_equal_fixed_effect_composition_preserves_runtime_effect(tmp_path):
+    from adaos.sdk.developer.prototypes import derive_resource_specs
+    from adaos.services.resources.prototype import PrototypeResourceService
+    document, _ = load_slice(ROOT)
+    for command in document['commands']:
+        if command['id'] in {'edit', 'save'}:
+            command['fixed_values']['state'] = 'done'
+    compiled = compile_semantic_prototype(document, project_ref='project:composition-runtime')
+    provider = PrototypeResourceService(tmp_path)
+    specs = derive_resource_specs(compiled['webui'], compiled['prototype_resources'])
+    for spec in specs:
+        provider.materialize({'schema': 'adaos.builder.prototype_resource.v1', 'project_ref': 'project:composition-runtime',
+            'change_id': 'composition', 'revision': '001', 'webui_digest': compiled['semantic_digest'], **spec})
+    record = provider.operate(specs[0]['resource_definition']['resource_type'], 'update', record_id='record-1',
+        payload={'name': 'First task', 'state': 'done', 'team_id': 'team-1', 'review_note': ''}, command_id='save')['record']
+    assert record['state'] == 'done'
