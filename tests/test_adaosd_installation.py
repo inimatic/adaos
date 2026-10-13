@@ -56,10 +56,15 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
         lambda: ["wss://ru.api.inimatic.com/nats", "wss://api.inimatic.com/nats"],
     )
     monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_ENABLE", "1")
-    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES", "default,desktop")
-    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_MAX_ROOMS", "2")
+    monkeypatch.setenv(
+        "ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES",
+        "default,desktop,go-yjs-canary",
+    )
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_MAX_ROOMS", "3")
     monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_MAX_SNAPSHOT_BYTES", "33554432")
     monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT", "64")
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES", "go-yjs-canary")
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_AUTHORITY_MAX_MESSAGE_BYTES", "4194304")
 
     result = adaosd_installation.generate_configuration(
         base_dir=base,
@@ -98,9 +103,9 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
     for profile in (sidecar, runtime):
         assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_ENABLE"] == "1"
         assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES"] == (
-            "default,desktop"
+            "default,desktop,go-yjs-canary"
         )
-        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_MAX_ROOMS"] == "2"
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_MAX_ROOMS"] == "3"
         assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_MAX_SNAPSHOT_BYTES"] == (
             "33554432"
         )
@@ -110,6 +115,12 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
             base.resolve() / "state" / "yjs-shadow"
         )
         assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_CHECKPOINT_EVERY"] == "64"
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES"] == (
+            "go-yjs-canary"
+        )
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_AUTHORITY_MAX_MESSAGE_BYTES"] == (
+            "4194304"
+        )
     assert Path(runtime["working_directory"]).is_absolute()
     assert "{active_slot}" in runtime["working_directory"]
 
@@ -119,6 +130,8 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
         assert private_env.stat().st_mode & 0o777 == 0o600
 
     monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_ENABLE", "0")
+    monkeypatch.delenv("ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES")
+    monkeypatch.delenv("ADAOS_YJS_SIDECAR_AUTHORITY_MAX_MESSAGE_BYTES")
     second = adaosd_installation.generate_configuration(
         base_dir=base,
         repo_root=REPO_ROOT,

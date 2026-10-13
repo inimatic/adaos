@@ -725,6 +725,11 @@ class AdaosMemoryYStore(BaseYStore):
         does not delete keys that no longer exist. Callers that rebuild a whole
         materialized view from authoritative sources need replacement semantics.
         """
+        from adaos.services.yjs.sidecar_authority import (
+            assert_python_yjs_write_authority,
+        )
+
+        await assert_python_yjs_write_authority(self.path)
         payload = bytes(snapshot or b"")
         state_vector_payload = bytes(state_vector or b"") or None
         kind_token = str(backup_kind or "").strip() or "replace_snapshot"
@@ -957,6 +962,11 @@ class AdaosMemoryYStore(BaseYStore):
         `update_kind` is diagnostic only and lets runtime snapshots distinguish
         full-state writes from incremental diff writes.
         """
+        from adaos.services.yjs.sidecar_authority import (
+            assert_python_yjs_write_authority,
+        )
+
+        await assert_python_yjs_write_authority(self.path)
         payload = bytes(data or b"")
         now = time.time()
         if not payload:

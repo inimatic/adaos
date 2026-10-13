@@ -34,6 +34,10 @@ YJS_SHADOW_ENVIRONMENT = (
     "ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT",
     "ADAOS_YJS_SIDECAR_SHADOW_TIMEOUT_S",
     "ADAOS_YJS_SIDECAR_SHADOW_CONTROL_URL",
+    "ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES",
+    "ADAOS_YJS_SIDECAR_AUTHORITY_MAX_MESSAGE_BYTES",
+    "ADAOS_YJS_SIDECAR_AUTHORITY_CONTROL_URL",
+    "ADAOS_YJS_SIDECAR_AUTHORITY_TIMEOUT_S",
 )
 
 
@@ -225,12 +229,36 @@ def generate_configuration(
     sidecar_managed = bool(realtime_sidecar_enabled(role=role))
     yjs_shadow_environment = _selected_environment(YJS_SHADOW_ENVIRONMENT)
     yjs_shadow_enabled = _enabled(yjs_shadow_environment.get("ADAOS_YJS_SIDECAR_SHADOW_ENABLE"))
+    yjs_authority_webspaces = str(
+        yjs_shadow_environment.get("ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES") or ""
+    ).strip()
     if yjs_shadow_enabled and sidecar_implementation != "go":
         raise ValueError("Yjs sidecar shadow requires the Go sidecar implementation")
     if yjs_shadow_enabled and not sidecar_managed:
         raise ValueError("Yjs sidecar shadow requires a managed realtime sidecar")
     if yjs_shadow_enabled and not yjs_shadow_environment.get("ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES"):
         raise ValueError("Yjs sidecar shadow requires an explicit webspace allowlist")
+    if yjs_authority_webspaces and not yjs_shadow_enabled:
+        raise ValueError("Yjs sidecar authority requires the durable Yjs shadow")
+    if yjs_authority_webspaces and sidecar_implementation != "go":
+        raise ValueError("Yjs sidecar authority requires the Go sidecar implementation")
+    if yjs_authority_webspaces:
+        shadow_webspaces = {
+            value.strip()
+            for value in str(
+                yjs_shadow_environment.get("ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES") or ""
+            ).replace(";", ",").split(",")
+            if value.strip()
+        }
+        authority_webspaces = {
+            value.strip()
+            for value in yjs_authority_webspaces.replace(";", ",").split(",")
+            if value.strip()
+        }
+        if "*" in authority_webspaces:
+            raise ValueError("Yjs sidecar authority requires explicit webspace ids")
+        if "*" not in shadow_webspaces and not authority_webspaces.issubset(shadow_webspaces):
+            raise ValueError("Yjs sidecar authority webspaces must be admitted by the shadow")
     if yjs_shadow_enabled:
         yjs_shadow_environment.setdefault("ADAOS_YJS_SIDECAR_SHADOW_PERSIST_ENABLE", "1")
         yjs_shadow_environment.setdefault(

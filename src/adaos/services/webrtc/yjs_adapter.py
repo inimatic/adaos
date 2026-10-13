@@ -30,6 +30,15 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _sidecar_authority_webspaces() -> set[str]:
+    raw = str(os.getenv("ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES") or "")
+    return {
+        value.strip()
+        for value in raw.replace(";", ",").split(",")
+        if value.strip()
+    }
+
+
 _MAX_MESSAGE_BYTES = _env_int("ADAOS_WEBRTC_YJS_MAX_MESSAGE_BYTES", 16 * 1024 * 1024)
 _MAX_QUEUE_BYTES = _env_int("ADAOS_WEBRTC_YJS_MAX_QUEUE_BYTES", 8 * 1024 * 1024)
 _MAX_QUEUE_MESSAGES = _env_int("ADAOS_WEBRTC_YJS_MAX_QUEUE_MESSAGES", 512)
@@ -406,6 +415,16 @@ class DataChannelYjsAdapter:
         enabled_token = str(os.getenv("ADAOS_WEBRTC_YJS_CHANNEL_ENABLED", "1") or "1").strip().lower()
         if enabled_token in {"0", "false", "no", "off"}:
             _log.info("yjs datachannel disabled by ADAOS_WEBRTC_YJS_CHANNEL_ENABLED webspace=%s", self._path)
+            return
+        if self._path in _sidecar_authority_webspaces():
+            _log.info(
+                "yjs datachannel delegated to sidecar websocket authority webspace=%s",
+                self._path,
+            )
+            try:
+                self._dc.close()
+            finally:
+                self.close()
             return
         await yjs_gateway.start_y_server()
         room = None

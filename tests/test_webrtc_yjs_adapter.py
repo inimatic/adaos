@@ -110,6 +110,7 @@ def _load_yjs_adapter(
     except Exception:
         pass
     monkeypatch.setenv("ADAOS_WEBRTC_YJS_CHANNEL_ENABLED", enabled)
+    monkeypatch.delenv("ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES", raising=False)
     monkeypatch.setenv("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_TIMEOUT_MS", drain_timeout_ms)
     monkeypatch.setenv("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_POLL_MS", drain_poll_ms)
     return importlib.import_module("adaos.services.webrtc.yjs_adapter"), called
@@ -299,6 +300,28 @@ def test_datachannel_yjs_adapter_respects_disabled_env(monkeypatch) -> None:
     assert called["acquire"] == 0
     assert called["room_serve"] == 0
     assert called["server_serve"] == 0
+
+
+def test_datachannel_yjs_adapter_delegates_authority_canary_to_websocket(monkeypatch) -> None:
+    yjs_adapter, called = _load_yjs_adapter(monkeypatch, enabled="1")
+    monkeypatch.setenv(
+        "ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES",
+        "go-yjs-canary",
+    )
+    dc = _DummyDataChannel()
+
+    asyncio.run(
+        yjs_adapter.DataChannelYjsAdapter(
+            dc,
+            "go-yjs-canary",
+            device_id="dev-1",
+        ).serve()
+    )
+
+    assert dc.close_called == 1
+    assert called["start"] == 0
+    assert called["acquire"] == 0
+    assert called["room_serve"] == 0
 
 
 def test_datachannel_yjs_adapter_serves_acquired_yws_room_when_enabled(monkeypatch) -> None:
