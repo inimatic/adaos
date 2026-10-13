@@ -7,7 +7,7 @@ Status: public current-state setup guide.
 Linux and macOS:
 
 ```bash
-git clone -b rev2026 https://github.com/inimatic/adaos.git
+git clone -b main https://github.com/inimatic/adaos.git
 cd adaos
 bash tools/bootstrap.sh --zone ru --dev
 source .venv/bin/activate
@@ -17,7 +17,7 @@ adaos --help
 Windows PowerShell:
 
 ```powershell
-git clone -b rev2026 https://github.com/inimatic/adaos.git
+git clone -b main https://github.com/inimatic/adaos.git
 cd adaos
 powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1 -ZoneId ru -Dev
 .\.venv\Scripts\Activate.ps1

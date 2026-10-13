@@ -2,7 +2,7 @@
 
 Status: public current-state operations guide.
 
-Core version information is stored in `pyproject.toml`. The `rev2026` branch is
+Core version information is stored in `pyproject.toml`. The `main` branch is
 the active rollout branch for this documentation track.
 
 ## Hosted Health Checks

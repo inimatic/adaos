@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -19,6 +20,7 @@ from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_i
 from adaos.services.release_validation_autorun import read_autonomous_release_validation_report
 
 _CORE_UPDATE_STREAM_FLOW_ID = "hub_root.integration.github_core_update"
+_GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$", re.IGNORECASE)
 
 
 def _node_core_update_disabled(conf: Any) -> bool:
@@ -30,11 +32,29 @@ def _core_update_stream_id(conf) -> str:
     return f"hub-integration:github-core-update:{subnet_id}:{runtime_instance_id()}"
 
 
+def _named_core_update_branch(manifest: dict[str, Any] | None = None) -> str:
+    manifest = manifest or {}
+    candidates = (
+        manifest.get("source_branch"),
+        manifest.get("git_branch"),
+        manifest.get("target_rev"),
+        os.getenv("ADAOS_CORE_UPDATE_BRANCH"),
+        os.getenv("ADAOS_REV"),
+        os.getenv("ADAOS_INIT_REV"),
+    )
+    for value in candidates:
+        branch = str(value or "").strip()
+        if not branch or branch.lower() in {"head", "detached"} or _GIT_COMMIT_RE.fullmatch(branch):
+            continue
+        return branch
+    return ""
+
+
 def _core_update_authority_epoch(conf) -> str:
     manifest = active_slot_manifest() or {}
     subnet_id = str(getattr(conf, "subnet_id", "") or "").strip() or "unknown_hub"
     commit = str(manifest.get("git_commit") or "").strip()
-    branch = str(manifest.get("target_rev") or manifest.get("git_branch") or "").strip()
+    branch = _named_core_update_branch(manifest)
     parts = [f"hub:{subnet_id}"]
     parts.append(f"role:{runtime_transition_role()}")
     parts.append(f"instance:{runtime_instance_id()}")
@@ -224,7 +244,7 @@ def reconcile_hub_core_update(conf, *, countdown_sec: float = 60.0) -> dict[str,
     except Exception:
         logging.getLogger("adaos.hub-io").debug("core update state report failed", exc_info=True)
     manifest = active_slot_manifest() or {}
-    branch = str(manifest.get("target_rev") or manifest.get("git_branch") or os.getenv("ADAOS_REV") or os.getenv("ADAOS_INIT_REV") or "").strip()
+    branch = _named_core_update_branch(manifest)
     current_commit = str(manifest.get("git_commit") or "").strip()
     release = client.hub_core_update_release(branch=branch or None, current_commit=current_commit or None)
     if not isinstance(release, dict) or not release.get("ok"):

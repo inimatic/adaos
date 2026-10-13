@@ -21,13 +21,13 @@ adaos autostart status
 Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --zone ru
+curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --zone ru
 ```
 
 Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
+& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/windows/init.ps1).Content)) -ZoneId ru
 ```
 
 Useful options:

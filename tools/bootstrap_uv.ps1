@@ -11,7 +11,7 @@ param(
   [int]$ServePort = 8777,
   [int]$ControlPort = 8777,
   [string]$RootUrl = "https://api.inimatic.com",
-  [string]$Rev = "rev2026",
+  [string]$Rev = "main",
   [string]$ZoneId = "",
   [ValidateSet("en", "ru")]
   [string]$Language = $(if ($env:ADAOS_LANG) { $env:ADAOS_LANG } else { "en" }),

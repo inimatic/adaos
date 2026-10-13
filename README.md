@@ -64,7 +64,7 @@ boundaries, maturity labels, canonical scenarios, and non-goals.
 Clone and bootstrap:
 
 ```bash
-git clone -b rev2026 https://github.com/inimatic/adaos.git
+git clone -b main https://github.com/inimatic/adaos.git
 cd adaos
 bash tools/bootstrap.sh --zone ru --dev
 source .venv/bin/activate
@@ -74,7 +74,7 @@ adaos --help
 Windows PowerShell:
 
 ```powershell
-git clone -b rev2026 https://github.com/inimatic/adaos.git
+git clone -b main https://github.com/inimatic/adaos.git
 cd adaos
 powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1 -ZoneId ru -Dev
 .\.venv\Scripts\Activate.ps1
@@ -104,13 +104,13 @@ More setup paths are documented in [Quickstart](docs-stable/2027/quickstart.md).
 Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --zone ru
+curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --zone ru
 ```
 
 Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
+& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/windows/init.ps1).Content)) -ZoneId ru
 ```
 
 Useful options:
@@ -166,7 +166,7 @@ See [Browser and Member Connection](docs-stable/2027/onboarding/browser-and-memb
 
 ## Versions and health
 
-Core version is stored in `pyproject.toml`. On `rev2026`, `AdaOS CI` runs a
+Core version is stored in `pyproject.toml`. On `main`, `AdaOS CI` runs a
 small mandatory SDK/smoke set plus a parallel skill-test job, then bumps the
 patch version. The complete SDK suite runs sequentially only on the nightly
 schedule or when `full_validation` is requested manually.

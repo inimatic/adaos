@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Minimal "download & bootstrap" entrypoint (Linux).
 # Served from GitHub raw:
-#   https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh
+#   https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh
 # Zone arguments are passed through to tools/bootstrap.sh, for example: --zone ru
 set -euo pipefail
 
 REPO_OWNER="${ADAOS_INIT_REPO_OWNER:-inimatic}"
 REPO_NAME="${ADAOS_INIT_REPO_NAME:-adaos}"
 REPO_URL_DEFAULT="${ADAOS_INIT_REPO_URL:-}"
-REV_DEFAULT="${ADAOS_INIT_REV:-rev2026}"
+REV_DEFAULT="${ADAOS_INIT_REV:-main}"
 
 log()  { printf '\033[36m[*] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[+] %s\033[0m\n' "$*"; }
@@ -85,13 +85,13 @@ Defaults:
   stable installs use a source archive; Git source is limited to --dev/Codespaces
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code ABCD --zone ru
-  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code ABCD --node-name "Codespace Member" --zone ru
-  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
-  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --role hub --install-service auto --zone ru
-  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --dev --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
-  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --archive --zone ru
-  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --join-code ABCD --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --join-code ABCD --node-name "Codespace Member" --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --role hub --install-service auto --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --dev --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --archive --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/main/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
 EOF
 }
 

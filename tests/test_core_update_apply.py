@@ -1821,6 +1821,7 @@ def test_prepare_slot_preserves_pinned_target_version(monkeypatch, tmp_path: Pat
     assert manifest["resolved_target_version"] == pinned_sha
     assert manifest["target_resolution"] == "pinned_commit"
     assert manifest["git_commit"] == pinned_sha
+    assert manifest["source_branch"] == "rev2026"
     persisted = json.loads((slot_dir / "manifest.json").read_text(encoding="utf-8"))
     assert persisted["git_commit"] == pinned_sha
     assert not (global_base / "state" / "core_slots" / "slots" / "B" / "manifest.json").exists()
@@ -1868,6 +1869,7 @@ def test_prepare_slot_resolves_unpinned_target_rev_to_remote_head(monkeypatch, t
     assert manifest["requested_target_version"] == ""
     assert manifest["resolved_target_version"] == head_sha
     assert manifest["target_resolution"] == "remote_branch_head"
+    assert manifest["source_branch"] == "rev2026"
 
 
 def test_prepare_slot_stable_archive_does_not_resolve_ref_through_git(

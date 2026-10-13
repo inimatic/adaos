@@ -52,6 +52,15 @@ def _is_probably_git_sha(value: str) -> bool:
     return True
 
 
+def _source_branch(target_rev: str, git_branch: str) -> str:
+    for value in (target_rev, git_branch):
+        branch = str(value or "").strip()
+        if not branch or branch.lower() in {"head", "detached"} or _is_probably_git_sha(branch):
+            continue
+        return branch
+    return ""
+
+
 def _checkout_target_version(repo_dir: Path, *, target_rev: str, target_version: str) -> None:
     """
     Ensure the checkout is at the requested git commit-ish when target_version looks like a SHA.
@@ -2394,6 +2403,7 @@ def prepare_slot(
             "slot": slot_name,
             "created_at": time.time(),
             "target_rev": target_rev,
+            "source_branch": _source_branch(target_rev, git_branch),
             "target_version": str(target_version or "").strip(),
             "requested_target_version": str(requested_target_version or "").strip(),
             "resolved_target_version": str(resolved_target_version or "").strip(),

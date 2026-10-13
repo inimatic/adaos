@@ -178,6 +178,26 @@ def test_core_update_report_surfaces_runtime_identity(monkeypatch) -> None:
     assert "instance:rt-b-a-abcdef12" in authority_epoch
 
 
+def test_core_update_branch_ignores_detached_checkout_identity(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_CORE_UPDATE_BRANCH", raising=False)
+    monkeypatch.delenv("ADAOS_REV", raising=False)
+    monkeypatch.delenv("ADAOS_INIT_REV", raising=False)
+
+    assert core_update_sync._named_core_update_branch(
+        {
+            "target_rev": "c73034dbf231504c671cf7ed8a020141e6c0818d",
+            "git_branch": "HEAD",
+        }
+    ) == ""
+    assert core_update_sync._named_core_update_branch(
+        {
+            "source_branch": "main",
+            "target_rev": "c73034dbf231504c671cf7ed8a020141e6c0818d",
+            "git_branch": "HEAD",
+        }
+    ) == "main"
+
+
 def test_core_update_reconcile_skips_dev_api_serve(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_LAUNCH_MODE", "api_serve")
     monkeypatch.delenv("ADAOS_API_SERVE_ALLOW_CORE_UPDATE", raising=False)
@@ -302,3 +322,38 @@ def test_core_update_reconcile_dispatches_via_supervisor_when_managed(monkeypatc
     assert calls[0][1]["target_version"] == "64a6e03cbe8fae54ecfd395d0ae501bbba71e963"
     assert result["dispatch_url"] == "http://127.0.0.1:8776/api/supervisor/update/start"
     assert result["dispatch"]["accepted"] is True
+
+
+def test_core_update_reconcile_defers_detached_branch_to_root(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_RUNTIME_LAUNCH_MODE", raising=False)
+    monkeypatch.delenv("ENV_TYPE", raising=False)
+    monkeypatch.delenv("ADAOS_CORE_UPDATE_BRANCH", raising=False)
+    monkeypatch.delenv("ADAOS_REV", raising=False)
+    monkeypatch.delenv("ADAOS_INIT_REV", raising=False)
+    monkeypatch.setattr(core_update_sync, "core_update_reactions_disabled_reason", lambda: None)
+    monkeypatch.setattr(core_update_sync, "report_hub_core_update_state", lambda _conf: {"ok": True})
+    monkeypatch.setattr(
+        core_update_sync,
+        "active_slot_manifest",
+        lambda: {
+            "git_commit": "c73034dbf231504c671cf7ed8a020141e6c0818d",
+            "git_branch": "HEAD",
+            "target_rev": "c73034dbf231504c671cf7ed8a020141e6c0818d",
+        },
+    )
+
+    calls: list[tuple[str | None, str | None]] = []
+
+    class FakeRootClient:
+        def hub_core_update_release(self, *, branch, current_commit):
+            calls.append((branch, current_commit))
+            return {"ok": True, "needs_update": False, "release": None}
+
+    monkeypatch.setattr(core_update_sync, "_root_client", lambda _conf: FakeRootClient())
+
+    result = core_update_sync.reconcile_hub_core_update(
+        SimpleNamespace(subnet_id="sn-test", node_id="node-1", role="hub", core_update_enabled=True)
+    )
+
+    assert result == {"ok": True, "needs_update": False, "release": None}
+    assert calls == [(None, "c73034dbf231504c671cf7ed8a020141e6c0818d")]
