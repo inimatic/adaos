@@ -2,6 +2,7 @@ import pytest
 
 from adaos.services.yjs.store import (
     add_ystore_write_listener,
+    add_ystore_write_observer,
     get_ystore_for_webspace,
     suppress_ystore_write_notifications,
     ystore_write_metadata,
@@ -49,6 +50,27 @@ async def test_ystore_write_listener_receives_optional_metadata():
         assert update == b"x"
         assert meta["root_names"] == ["data"]
         assert meta["source"] == "test_case"
+    finally:
+        remove()
+
+
+async def test_ystore_write_observer_includes_notification_suppressed_writes():
+    seen: list[tuple[str, bytes]] = []
+
+    def _observer(webspace_id: str, update: bytes) -> None:
+        seen.append((webspace_id, update))
+
+    remove = add_ystore_write_observer(_observer)
+    try:
+        store = get_ystore_for_webspace("observer-suppressed")
+        await store.start()
+        await store.write_update(b"direct-suppressed", notify=False)
+        async with suppress_ystore_write_notifications():
+            await store.write(b"context-suppressed")
+        assert seen == [
+            ("observer-suppressed", b"direct-suppressed"),
+            ("observer-suppressed", b"context-suppressed"),
+        ]
     finally:
         remove()
 

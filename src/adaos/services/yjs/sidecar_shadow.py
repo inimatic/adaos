@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from adaos.services.yjs.store import add_ystore_write_listener
+from adaos.services.yjs.store import add_ystore_write_observer
 
 _log = logging.getLogger("adaos.yjs.sidecar_shadow")
 
@@ -314,7 +314,7 @@ def register_sidecar_shadow_mirror() -> bool:
         _record(last_error=_CONFIGURATION_ERROR or "missing_shadow_admission_config")
         _log.warning("Yjs sidecar shadow mirror disabled by incomplete admission config")
         return False
-    _remove_listener = add_ystore_write_listener(_mirror_write_listener)
+    _remove_listener = add_ystore_write_observer(_mirror_write_listener)
     return True
 
 

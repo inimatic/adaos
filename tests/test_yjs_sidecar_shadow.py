@@ -30,6 +30,7 @@ def test_shadow_bridge_queues_allowlisted_updates_without_taking_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bridge = _load_bridge(monkeypatch)
+    monkeypatch.setattr(bridge, "_seed_updates", lambda _webspace: ())
     accepted: list[tuple[str, bytes, int]] = []
     monkeypatch.setattr(
         bridge,
@@ -122,6 +123,7 @@ def test_shadow_bridge_rejects_non_loopback_control_url(monkeypatch: pytest.Monk
 
 def test_shadow_bridge_preserves_one_queue_across_writer_threads(monkeypatch: pytest.MonkeyPatch) -> None:
     bridge = _load_bridge(monkeypatch)
+    monkeypatch.setattr(bridge, "_seed_updates", lambda _webspace: ())
     accepted: list[tuple[str, int]] = []
     accepted_lock = threading.Lock()
 

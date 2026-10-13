@@ -28,6 +28,7 @@ _log = logging.getLogger("adaos.yjs.ystore")
 _SUPPRESS_NOTIFY: contextvars.ContextVar[bool] = contextvars.ContextVar("adaos_ystore_suppress_notify", default=False)
 _WRITE_META: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("adaos_ystore_write_meta", default=None)
 _GLOBAL_WRITE_LISTENERS: list[Callable[[str, bytes], Any]] = []
+_GLOBAL_WRITE_OBSERVERS: list[Callable[[str, bytes], Any]] = []
 _BUILTIN_WRITE_LISTENERS_LOADED = False
 _BUILTIN_WRITE_LISTENERS_LOCK = threading.Lock()
 
@@ -109,6 +110,23 @@ def add_ystore_write_listener(cb: Callable[..., Any]) -> Callable[[], None]:
     def _remove() -> None:
         try:
             _GLOBAL_WRITE_LISTENERS.remove(cb)
+        except ValueError:
+            return
+
+    return _remove
+
+
+def add_ystore_write_observer(cb: Callable[..., Any]) -> Callable[[], None]:
+    """Register an internal observer for every accepted YStore write.
+
+    Unlike user-facing write listeners, observers are not affected by
+    notification suppression or the per-write ``notify`` flag.
+    """
+    _GLOBAL_WRITE_OBSERVERS.append(cb)
+
+    def _remove() -> None:
+        try:
+            _GLOBAL_WRITE_OBSERVERS.remove(cb)
         except ValueError:
             return
 
@@ -205,10 +223,12 @@ def _listener_accepts_meta(cb: Callable[..., Any]) -> bool:
     return len(positional) >= 3
 
 
-def _notify_write_listeners(webspace_id: str, update: bytes) -> None:
-    if _SUPPRESS_NOTIFY.get():
-        return
-    if not _GLOBAL_WRITE_LISTENERS:
+def _dispatch_write_callbacks(
+    callbacks: tuple[Callable[..., Any], ...],
+    webspace_id: str,
+    update: bytes,
+) -> None:
+    if not callbacks:
         return
     # Best-effort, never block the writer.
     try:
@@ -218,7 +238,7 @@ def _notify_write_listeners(webspace_id: str, update: bytes) -> None:
     except Exception:
         loop = None
     meta = dict(_WRITE_META.get() or {})
-    for cb in list(_GLOBAL_WRITE_LISTENERS):
+    for cb in callbacks:
         try:
             if meta and _listener_accepts_meta(cb):
                 res = cb(webspace_id, update, meta)
@@ -234,6 +254,16 @@ def _notify_write_listeners(webspace_id: str, update: bytes) -> None:
                     pass
         except Exception:
             continue
+
+
+def _observe_ystore_write(webspace_id: str, update: bytes) -> None:
+    _dispatch_write_callbacks(tuple(_GLOBAL_WRITE_OBSERVERS), webspace_id, update)
+
+
+def _notify_write_listeners(webspace_id: str, update: bytes) -> None:
+    if _SUPPRESS_NOTIFY.get():
+        return
+    _dispatch_write_callbacks(tuple(_GLOBAL_WRITE_LISTENERS), webspace_id, update)
 
 
 def current_ystore_write_metadata() -> dict[str, Any]:
@@ -744,6 +774,7 @@ class AdaosMemoryYStore(BaseYStore):
             if persist_snapshot:
                 self._last_disk_snapshot_bytes = int(written_bytes or len(payload))
         notify_ms = 0.0
+        _observe_ystore_write(self.path, payload)
         if notify:
             notify_started = time.perf_counter()
             try:
@@ -1058,6 +1089,7 @@ class AdaosMemoryYStore(BaseYStore):
                     auto_backup_reason = pressure_reason
                     auto_backup_debounce_override = float(self.auto_backup_replay_pressure_debounce_sec) + cooldown_remaining
             self._generation += 1
+        _observe_ystore_write(self.path, payload)
         if notify:
             try:
                 _notify_write_listeners(self.path, payload)
