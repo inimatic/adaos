@@ -180,10 +180,34 @@ jobs:
           node-version: "22"
       - name: Install locked dependencies
         run: uv sync --locked --extra dev
+      - name: Checkout pinned Client contract consumer
+        run: git submodule update --init --depth 1 src/adaos/integrations/adaos-client
+      - name: Check generated component contracts
+        run: uv run python scripts/generate_ui_component_contract.py --check
+      - name: Install locked Client dependencies
+        working-directory: src/adaos/integrations/adaos-client
+        run: npm ci
+      - name: Check Client contract inventory, boundaries and types
+        working-directory: src/adaos/integrations/adaos-client
+        run: |
+          npm run test:boundaries
+          npx tsc --noEmit -p tsconfig.app.json
       - name: Check Builder contracts without providers or external services
         run: |
           uv run python -m pytest -q --strict-markers -o importmode=importlib \
             --junitxml=reports/builder-contracts.xml \
+            tests/test_ui_component_contracts.py \
+            tests/test_contract_context_admission.py \
+            tests/test_component_contract_reference.py \
+            tests/test_component_matched_evolution.py \
+            tests/test_component_contract_mcp.py \
+            tests/test_builder_contract_usage.py \
+            tests/test_component_contract_ci.py \
+            tests/test_context_control.py \
+            tests/test_prototype_resource_workbench.py \
+            tests/test_builder_semantic_prototype.py \
+            tests/test_builder_semantic_admission.py \
+            tests/test_builder_semantic_proposer.py \
             tests/test_builder_prototype_task_context.py \
             tests/test_builder_prototype_pipeline.py \
             tests/test_builder_prototype_context_ablation.py \
@@ -216,6 +240,7 @@ jobs:
       - name: Check public usability acceptance helpers
         run: >-
           node --test e2e/stand/browser/prototype-usability.test.mjs
+          e2e/stand/browser/component-contract-write-proof.test.mjs
           e2e/stand/browser/prototype-validation-guard.test.mjs
           e2e/stand/browser/prototype-procurement-fields.test.mjs
           e2e/stand/browser/prototype-procurement-basic.test.mjs

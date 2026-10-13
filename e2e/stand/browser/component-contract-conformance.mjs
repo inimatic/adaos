@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { installSystemOverlayDismissal, prototypeRowSelector, prototypeRowCommand, revealPrototypeWidget } from './prototype-navigation.mjs'
 import { assertInvalidSubmissionGuard } from './prototype-validation-guard.mjs'
+import { assertContractWriteProof } from './component-contract-write-proof.mjs'
 
 const expect = baseExpect.configure({ timeout: 30_000 })
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
@@ -30,11 +31,20 @@ try {
     const page = await context.newPage()
     const sample = { layout, checks: [], errors: [], mutations: [] }
     report.samples.push(sample)
+    if (process.env.ADAOS_E2E_REJECT_CONTRACT_WRITES === '1') {
+      sample.injectedFault = 'confirmed-command-always-rejected'
+      await page.route('**/api/resources/operate', async route => {
+        if (route.request().postDataJSON()?.context?.prototype_command_id === 'complete') {
+          await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ ok: false, detail: 'injected_write_rejection' }) })
+        } else await route.continue()
+      })
+    }
     page.on('pageerror', error => sample.errors.push(String(error)))
     page.on('request', request => {
       if (new URL(request.url()).pathname === '/api/resources/operate') {
         const body = request.postDataJSON()
-        sample.mutations.push({ operation: body.operation_id, command: body.context?.prototype_command_id })
+        sample.mutations.push({ operation: body.operation_id, command: body.context?.prototype_command_id,
+          resource: body.resource_type, record: body.record_id, payload: body.payload })
       }
     })
     await installSystemOverlayDismissal(page, () => {})
@@ -97,6 +107,50 @@ try {
       await prototypeRowCommand(row, 'edit').click()
       await expect(note).toHaveValue('')
       sample.checks.push('draft-isolation-on-reopen')
+      await note.fill('Contract approved')
+      await complete.click()
+      await expect(alert).toBeVisible()
+      const pending = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate'
+        && response.request().postDataJSON()?.context?.prototype_command_id === 'complete', { timeout: 30_000 })
+      void pending.catch(() => {})
+      await alert.locator('button').last().click()
+      const response = await pending
+      const body = response.request().postDataJSON()
+      const headers = Object.fromEntries(Object.entries(await response.request().allHeaders())
+        .filter(([key]) => !['content-length', 'host', 'origin'].includes(key)))
+      const readRecord = async () => {
+        const queried = await context.request.post(`${process.env.ADAOS_E2E_HUB_URL}/api/resources/query`, {
+          headers, data: { resource_type: collection.dataSource.resourceType, filters: { id: 'record-1' } } })
+        if (!queried.ok()) throw new Error('Independent persisted-record read failed')
+        const result = await queried.json()
+        return (result.items ?? result.records ?? []).find(item => item.id === 'record-1')
+      }
+      try {
+        sample.writeProof = await assertContractWriteProof({ response, resourceType: collection.dataSource.resourceType,
+          recordId: 'record-1', expected: { review_note: 'Contract approved', state: 'done' }, readRecord,
+          reopen: async () => {
+            await expect(page.locator('ion-modal').filter({ visible: true })).toHaveCount(0)
+            await prototypeRowCommand(row, 'edit').click()
+            await expect(note).toHaveValue('Contract approved')
+            await expect(name).toHaveValue('First task')
+            const done = form.getByRole('radio', { name: 'Done', exact: true })
+            await expect(done).toBeChecked()
+            return { review_note: await note.inputValue(), state: await done.isChecked() ? 'done' : 'open' }
+          } })
+        if (sample.mutations.length !== 1) throw new Error('Confirmation must cause exactly one write')
+        sample.checks.push('confirmed-write-persisted-and-reopened')
+      } finally {
+        // Restore only this owned fixture through its declared save command.
+        // Cleanup is evidence, not a claimed UI success, and never hides failure.
+        if (body.resource_type !== collection.dataSource.resourceType || !body.resource_type.startsWith('prototype.')) throw new Error('Unsafe fixture restoration')
+        const restored = await context.request.post(`${process.env.ADAOS_E2E_HUB_URL}/api/resources/operate`, {
+          headers, data: { ...body, context: { ...body.context, prototype_command_id: 'save' }, expected_revision: null,
+            idempotency_key: '', payload: { name: 'First task', state: 'open', team_id: 'team-1', review_note: '' } } })
+        if (!restored.ok() || (await restored.json()).ok !== true) throw new Error('Owned fixture restoration failed')
+        const stored = await readRecord()
+        if (stored?.state !== 'open' || stored.review_note !== '' || stored.name !== 'First task') throw new Error('Restoration was not persisted')
+        sample.cleanup = { ok: true, evidenceKind: 'stand_cleanup', record: stored }
+      }
       if (sample.errors.length) throw new Error('Renderer page errors')
       sample.ok = true
     } catch (error) {

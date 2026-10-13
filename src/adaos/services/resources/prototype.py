@@ -401,6 +401,12 @@ class PrototypeResourceService:
             if operation is None:
                 raise ValueError(f"unsupported prototype resource operation: {resource_type}.{operation_id}")
             operation_kind = _text(operation.get("kind") or operation_id)
+            # Normalize once, by the operation actually executed. An unrelated
+            # wrapper must never be used as evidence for a different write.
+            wrapper = {"create": "record", "update": "patch"}.get(operation_kind)
+            if wrapper and wrapper in payload and not isinstance(payload[wrapper], Mapping):
+                raise ValueError(f"prototype {operation_kind} requires an object {wrapper}")
+            values = dict(payload[wrapper]) if wrapper and wrapper in payload else dict(payload)
             runtime = PrototypeDataRuntime.start(dict(state["data_definition"]))
             runtime.records = copy.deepcopy(list(state.get("records") or []))
             runtime.generation = int(state.get("generation") or 0)
@@ -419,7 +425,6 @@ class PrototypeResourceService:
                 expected_kind = "update" if command["kind"] == "transition" else command["kind"]
                 if operation_kind != expected_kind:
                     raise PrototypeResourceConflict("prototype command operation mismatch")
-                values = dict(payload.get("patch") or payload.get("record") or payload)
                 provided = set(values) - {"id", "revision"}
                 allowed = set(command["input_field_refs"]) | set(command["fixed_values"])
                 if not provided <= allowed or any(values.get(key) != value for key, value in command["fixed_values"].items()):
@@ -449,14 +454,14 @@ class PrototypeResourceService:
                     )
             input_value: dict[str, Any]
             if operation_kind == "create":
-                record = dict(payload.get("record")) if isinstance(payload.get("record"), Mapping) else dict(payload)
+                record = dict(values)
                 record.setdefault("id", f"prec.{new_id()}")
                 self._default_revision(runtime.definition["record_schema"], record)
                 input_value = {"record": record}
             elif operation_kind == "update":
                 if not identifier:
                     raise ValueError("prototype resource update requires record_id")
-                patch = dict(payload.get("patch")) if isinstance(payload.get("patch"), Mapping) else dict(payload)
+                patch = dict(values)
                 patch.pop("id", None)
                 if isinstance(current, Mapping) and "revision" in current and "revision" not in patch:
                     patch["revision"] = int(current.get("revision") or 0) + 1

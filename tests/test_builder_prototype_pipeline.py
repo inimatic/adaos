@@ -195,8 +195,17 @@ def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
     from typing import Mapping, Any
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
     repo = Path(__file__).parents[1]
-    path = repo / ".adaos/workspace/skills/builder_skill/handlers/main.py"
+    skills_root = repo / ".adaos/workspace/skills"
+    if not (skills_root / ".runtime/builder_skill/current_runtime.json").exists():
+        pytest.skip("Installed Builder runtime fixture absent")
+    runtime = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="builder_skill")
+    version = runtime.resolve_active_version()
+    if not version:
+        pytest.skip("Installed Builder runtime inactive")
+    slot = runtime.build_slot_paths(version, runtime.read_active_slot(version))
+    path = slot.src_dir / "skills/builder_skill/handlers/main.py"
     if not path.exists():
         pytest.skip("Installed Builder integration fixture absent")
     tree = ast.parse(path.read_text(encoding="utf-8"))

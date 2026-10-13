@@ -239,11 +239,44 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
             record("editor.surface", [ref], [{"ref": "ui.form", "widget_id": view["id"], "alternative": view.get("surface", "inline")}])
             if commands:
                 actions = [action for action in widget.get("actions") or [] if action.get("type") == "resourceOperation"]
-                if not actions:
-                    raise ValueError("component.command_realization_missing:" + ref)
+                buttons = {button.get("id") for button in widget.get("inputs", {}).get("buttons", [])}
+                def realized_actions(command):
+                    operation = "update" if command["kind"] == "transition" else command["kind"]
+                    return [action for action in actions if action.get("id") == command["id"]
+                        and command["id"] in buttons and action.get("on") == "submit"
+                        and action.get("params", {}).get("operation_id") == operation
+                        and action.get("params", {}).get("context", {}).get("prototype_command_id") == command["id"]
+                        and action.get("target") == widget.get("dataSource", {}).get("resourceType")
+                        and all(action.get("params", {}).get("payload", {}).get(key) == value
+                            for key, value in command.get("fixed_values", {}).items())]
+                coverage = []
+                for command in commands:
+                    matches = realized_actions(command)
+                    members = [{"widget_id": widget["id"], "action_id": action["id"]} for action in matches]
+                    # A row command may be an entry point composed with a
+                    # primary submit command (N:1), not a duplicate mutation.
+                    if not members and (command.get("exposure") or {}).get("placement") == "row_action":
+                        submits = [other for other in commands if other["kind"] == command["kind"]
+                            and (other.get("exposure") or {}).get("placement") == "editor_primary"
+                            and realized_actions(other)]
+                        for candidate in widgets:
+                            event = "click:" + command["id"]
+                            sequence = [action for action in candidate.get("actions", []) if action.get("on") == event]
+                            exposed = any(button.get("id") == command["id"] for button in candidate.get("inputs", {}).get("buttons", []))
+                            selected = any(action.get("type") == "updateState"
+                                and action.get("params", {}).get(widget.get("inputs", {}).get("selectedStateKey")) == "$event.id" for action in sequence)
+                            opened = view.get("surface", "inline") == "inline" or any(action.get("type") == "openModal"
+                                and any(modal.get("id", key) == action.get("params", {}).get("modalId")
+                                    and any(item.get("id") == widget["id"] for item in modal.get("schema", {}).get("widgets", []))
+                                    for key, modal in (application.get("modals") or {}).items()) for action in sequence)
+                            if submits and exposed and selected and opened:
+                                members.extend({"widget_id": candidate["id"], "event": event, "submit_command_id": other["id"]} for other in submits)
+                    if not members:
+                        raise ValueError("component.command_realization_missing:command:" + command["id"])
+                    coverage.append({"source_ref": "command:" + command["id"], "members": members})
                 record("editor.commands", [ref, *["command:" + command["id"] for command in commands]],
                     [{"ref": "ui.form", "widget_id": view["id"]},
-                     {"ref": "client.resourceOperation", "command_ids": [action.get("id") for action in actions]},
+                     {"ref": "client.resourceOperation", "command_ids": [action.get("id") for action in actions], "coverage": coverage},
                      {"ref": "provider.prototype", "resource_ref": view["resource_ref"]}])
     return {"schema": "adaos.ui.contract_lowering_receipt.v1", "source": projection["provenance"], "relations": rows}
 
@@ -254,13 +287,19 @@ def contract_impact(previous: Mapping[str, Any], current: Mapping[str, Any]) -> 
     new = {item["id"]: item for item in after["retrieval_units"]}
     affected = {identity for identity in set(old) | set(new)
                 if old.get(identity, {}).get("content_digest") != new.get(identity, {}).get("content_digest")}
+    global_dependencies = [key for key in ("discovery_policy", "projection_version", "applicability", "owner", "contract_id")
+                           if previous.get(key) != current.get(key)]
+    if global_dependencies:
+        affected.update(set(old) | set(new))
     while True:
-        expanded = affected | {item["id"] for item in after["retrieval_units"] if affected & set(item["dependencies"])}
+        expanded = affected | {item["id"] for item in [*before["retrieval_units"], *after["retrieval_units"]] if affected & set(item["dependencies"])}
         if expanded == affected:
             break
         affected = expanded
     return {"schema": "adaos.ui.contract_impact.v1", "previous": before["provenance"], "current": after["provenance"],
-            "affected_units": sorted(affected), "affected_mappings": [item["id"] for item in after["mappings"] if affected & set(item["required"])],
+            "global_dependencies": global_dependencies,
+            "affected_units": sorted(affected), "affected_mappings": sorted({item["id"] for item in [*before["mappings"], *after["mappings"]] if affected & set(item["required"])}),
             "projections": ["client.registration", "client.types", "core.validation", "builder.retrieval", "root.descriptors"],
-            "fixtures": after["fixtures"] if affected else [], "requires_new_admission": bool(affected),
+            "fixtures": after["fixtures"] if affected else [],
+            "requires_new_admission": before["provenance"] != after["provenance"] or bool(affected),
             "active_runs": "retain_pinned_snapshot"}

@@ -76,3 +76,27 @@ def test_required_field_rejection_does_not_write_or_change_generation(tmp_path):
     with pytest.raises(ValueError):
         provider.operate(identity, "update", record_id="record-1", payload={"name": ""}, command_id="save")
     assert provider.query(identity, filters={}, search="", sort=[], limit=None) == before
+
+
+@pytest.mark.parametrize("operation,wrapper,decoy", [("create", "record", "patch"), ("update", "patch", "record")])
+def test_guards_validate_exactly_the_payload_that_is_executed(tmp_path, operation, wrapper, decoy):
+    provider, identity, _, _ = runtime(tmp_path)
+    valid = {"name": "Valid draft", "state": "open", "team_id": "team-1", "review_note": ""}
+    invalid = {**valid, "name": ""}
+    before = provider._require_state(identity)
+    with pytest.raises(ValueError):
+        provider.operate(identity, operation, record_id="record-1" if operation == "update" else "",
+            payload={wrapper: invalid, decoy: valid}, command_id="save" if operation == "update" else "create")
+    assert provider._require_state(identity) == before
+    result = provider.operate(identity, operation, record_id="record-1" if operation == "update" else "",
+        payload={wrapper: valid, decoy: invalid}, command_id="save" if operation == "update" else "create")
+    assert result["record"]["name"] == "Valid draft"
+
+
+@pytest.mark.parametrize("value", [None, [], "invalid", 0])
+def test_malformed_write_wrapper_cannot_fall_back_to_another_payload(tmp_path, value):
+    provider, identity, _, _ = runtime(tmp_path)
+    before = provider._require_state(identity)
+    with pytest.raises(ValueError, match="object record"):
+        provider.operate(identity, "create", record_id="", payload={"record": value}, command_id="create")
+    assert provider._require_state(identity) == before

@@ -78,6 +78,12 @@ def execute(inputs, context, *, repo_root: Path):
             rejected = error.findings
         if not rejected or state.get_artifact(admission['snapshot_ref']) != snapshot:
             raise ValueError('Contract change rebased or failed to reject stale input')
+        active = state.get_binding(subject_ref='component:ui.table', purpose='builder.contract_input', audience='builder')
+        resumed_admission = state.admit_model_input(envelope, snapshot=snapshot, required_ids=['ui.table'], run_ref='builder-run:' + scenario)
+        if state.get_binding(subject_ref='component:ui.table', purpose='builder.contract_input', audience='builder') != active:
+            raise ValueError('Pinned Run admission changed the shared active contract')
+        if state.get_artifact(resumed_admission['snapshot_ref']) != snapshot:
+            raise ValueError('Resumed admission did not retain its pinned contract')
         from adaos.services.builder.semantic_prototype import compile_semantic_prototype
         from adaos.services.root_mcp.descriptor_search import get_descriptor_item
         with component_contract_scope(current) as evolved_snapshot:
@@ -94,6 +100,7 @@ def execute(inputs, context, *, repo_root: Path):
                 raise ValueError('Root MCP projection did not rebuild from the same declaration')
             write(output / 'evolved-mcp-descriptor.json', descriptor)
         stage(6, {'impact': evolution['impact'], 'stale_findings': rejected, 'projection_findings': projection_findings,
+                  'resumed_admission': resumed_admission, 'active_binding_preserved': active,
                   'pinned_snapshot_ref': admission['snapshot_ref'], 'scoped_rebuild': 'compiler/client-types/catalog/mcp/context'})
         before = read(root / 'semantic.webui.json')
         prepared = semantic_ui.prepare_request(project_ref='scenario:' + scenario,

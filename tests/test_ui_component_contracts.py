@@ -8,6 +8,7 @@ from adaos.e2e.component_contract_conformance import load_slice
 from adaos.services.ui_component_contracts import (
     component_registration_types, contract_impact, load_component_contract,
     project_component_contract, validate_component_contract, component_contract_scope, component_contract_findings,
+    lowering_receipt,
 )
 from adaos.services.builder.semantic_prototype import compile_semantic_prototype
 
@@ -88,3 +89,37 @@ def test_scoped_contract_evolution_rebuilds_real_compiler_catalog_and_descriptor
         assert actual["item"]["component_contract"] == snapshot["retrieval_units"][0]
         assert component_registration_types(current) != component_registration_types(previous)
     assert load_component_contract() == previous and compiler_digest() == fingerprint
+
+
+@pytest.mark.parametrize("key,value", [("discovery_policy", {"known_locator": "Read directly with new authority"}), ("projection_version", "2")])
+def test_global_dependencies_affect_every_unit_and_require_admission(key, value):
+    previous = load_component_contract()
+    current = copy.deepcopy(previous)
+    current["version"] = "1.0.1"
+    if isinstance(value, dict):
+        current[key].update(value)
+    else:
+        current[key] = value
+    impact = contract_impact(previous, current)
+    assert impact["global_dependencies"] == [key]
+    assert impact["affected_units"] == sorted(item["id"] for item in current["components"])
+    assert impact["requires_new_admission"] and impact["fixtures"]
+
+
+@pytest.mark.parametrize("fault", ["missing", "operation", "identity", "opener", "button", "target", "fixed"])
+def test_lowering_requires_individual_command_and_composition_coverage(fault):
+    document, _ = load_slice(ROOT)
+    webui = compile_semantic_prototype(document, project_ref="project:lowering")['webui']
+    form = next(item for modal in webui['ui']['application']['modals'].values() for item in modal['schema']['widgets'] if item['id'] == 'record-editor')
+    complete = next(action for action in form['actions'] if action['id'] == 'complete')
+    if fault == "missing": form['actions'].remove(complete)
+    elif fault == "operation": complete['params']['operation_id'] = 'delete'
+    elif fault == "identity": complete['params']['context']['prototype_command_id'] = 'save'
+    elif fault == "button": form['inputs']['buttons'] = [button for button in form['inputs']['buttons'] if button['id'] != 'complete']
+    elif fault == "target": complete['target'] = 'prototype.another.records'
+    elif fault == "fixed": complete['params']['payload']['state'] = 'open'
+    else:
+        table = next(item for item in webui['ui']['application']['desktop']['pageSchema']['widgets'] if item['id'] == 'records-list')
+        table['actions'] = [action for action in table['actions'] if action.get('on') != 'click:edit']
+    with pytest.raises(ValueError, match="command_realization_missing"):
+        lowering_receipt(document, webui)

@@ -5,6 +5,8 @@ import json
 import sqlite3
 from collections import deque
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +36,7 @@ _TRUST_ORDER = {
 }
 _SHARED_KINDS = {"platform", "sdk", "api", "abi", "policy", "domain", "resource"}
 _MEMORY_KINDS = {"authoritative", "procedural", "episodic", "working"}
+_TRANSACTIONS: ContextVar[dict[str, sqlite3.Connection]] = ContextVar("context_transactions", default={})
 
 
 class ContextConflict(ValueError):
@@ -165,12 +168,35 @@ class ContextControlService:
     def artifact_root(self) -> Path:
         return self.root / "artifacts" / "sha256"
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
+        existing = _TRANSACTIONS.get().get(str(self.database_path))
+        if existing is not None:
+            # The outer transaction owns commit/rollback, including nested calls.
+            yield existing
+            return
         connection = sqlite3.connect(self.database_path, timeout=30.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    @contextmanager
+    def _transaction(self):
+        with self._connect() as connection:
+            if str(self.database_path) in _TRANSACTIONS.get():
+                yield connection
+                return
+            connection.execute("BEGIN IMMEDIATE")
+            token = _TRANSACTIONS.set({**_TRANSACTIONS.get(), str(self.database_path): connection})
+            try:
+                yield connection
+            finally:
+                _TRANSACTIONS.reset(token)
 
     def _initialize(self) -> None:
         with self._connect() as connection:
@@ -338,15 +364,29 @@ class ContextControlService:
 
     def admit_model_input(self, envelope: Mapping[str, Any], *, snapshot: Mapping[str, Any],
                           required_ids: list[str], run_ref: str | None = None) -> dict[str, Any]:
+        with self._transaction():
+            return self._admit_model_input_atomic(envelope, snapshot=snapshot, required_ids=required_ids, run_ref=run_ref)
+
+    def _admit_model_input_atomic(self, envelope: Mapping[str, Any], *, snapshot: Mapping[str, Any],
+                                 required_ids: list[str], run_ref: str | None) -> dict[str, Any]:
         from adaos.services.contract_context_admission import admit_contract_input
         receipt = admit_contract_input(envelope, snapshot=snapshot, required_ids=required_ids)
         snapshot_artifact = self.put_artifact(snapshot)
         admission_artifact = self.put_artifact(receipt)
         result = {**receipt, "snapshot_ref": snapshot_artifact["ref"], "admission_ref": admission_artifact["ref"]}
         if run_ref:
-            self.publish_component_projection(snapshot)
-            resolution = self.resolve({"subject_refs": ["component:" + identity for identity in required_ids],
-                "purpose": "builder.contract_input", "audience": "builder"})
+            with self._connect() as connection:
+                prior = connection.execute("SELECT artifact_ref FROM context_receipts WHERE run_ref = ?", (run_ref,)).fetchall()
+            for row in prior:
+                pinned = self.get_artifact(row['artifact_ref']).get('context_use', {}).get('contract_input', {})
+                if pinned.get('snapshot_ref') and pinned['snapshot_ref'] != snapshot_artifact['ref']:
+                    raise ContextConflict('Run component snapshot cannot be silently rebased')
+            stored = self._store_component_projection(snapshot, promote=False)
+            # Resolve the immutable publication, not today's shared bindings.
+            # Its historical admission time includes all dependency edges, but
+            # deliberately excludes later active-contract invalidations.
+            resolution = self.resolve({"subject_refs": [stored["capsules"][identity]["capsule_id"] for identity in required_ids],
+                "as_of": stored["snapshot_as_of"], "purpose": "builder.contract_input", "audience": "builder"})
             plan = self.plan({"resolution": resolution, "token_budget": 16_000})
             if plan["status"] != "ready":
                 raise ContextConflict("Contract facts could not form a dependency-closed context plan")
@@ -359,6 +399,13 @@ class ContextControlService:
         return result
 
     def publish_component_projection(self, snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        return self._store_component_projection(snapshot, promote=True)
+
+    def _store_component_projection(self, snapshot: Mapping[str, Any], *, promote: bool) -> dict[str, Any]:
+        with self._transaction():
+            return self._store_component_projection_atomic(snapshot, promote=promote)
+
+    def _store_component_projection_atomic(self, snapshot: Mapping[str, Any], *, promote: bool) -> dict[str, Any]:
         provenance = snapshot['provenance']
         with self._connect() as connection:
             prior = connection.execute("SELECT metadata_json FROM capsules WHERE kind = 'platform' AND authority_ref = ? AND json_extract(metadata_json, '$.component_contract_id') = ? AND json_extract(metadata_json, '$.component_contract_version') = ?",
@@ -366,42 +413,52 @@ class ContextControlService:
         if any(json.loads(row['metadata_json']).get('component_contract_digest') != provenance['source_digest'] for row in prior):
             raise ContextConflict('Immutable component contract identity/version conflict')
         capsules = {}
+        snapshot_times = []
         for unit in snapshot["retrieval_units"]:
-            try:
-                binding = self.get_binding(subject_ref="component:" + unit["id"], purpose="builder.contract_input", audience="builder")
-                existing = self.get_capsule(binding["capsule_id"], include_content=True)
-                if existing["artifact"].get("content") == unit and not existing.get("revoked_at"):
-                    capsules[unit["id"]] = existing
-                    continue
-            except KeyError:
-                pass
-            capsules[unit["id"]] = self.register_capsule({"kind": "platform",
+            with self._connect() as connection:
+                rows = connection.execute("SELECT * FROM capsules WHERE kind = 'platform' AND authority_ref = ? AND json_extract(metadata_json, '$.component_contract_digest') = ? AND revoked_at IS NULL ORDER BY recorded_at",
+                    (provenance['owner'], provenance['source_digest'])).fetchall()
+            existing = next((self._capsule_row(row) for row in rows
+                if self.get_artifact(row['artifact_ref']).get('content') == unit), None)
+            capsules[unit["id"]] = existing or self.register_capsule({"kind": "platform",
                 "subject_refs": ["component:" + unit["id"]], "authority_ref": unit["provenance"]["owner"],
                 "trust_class": "validated", "sensitivity": "public", "content": unit,
                 "source_digests": {"contract": unit["provenance"]["source_digest"], "unit": unit["content_digest"]},
                 "metadata": {"component_contract_id": provenance['contract_id'], "component_contract_version": provenance['version'], "component_contract_digest": provenance['source_digest']},
                 "summary": "Owned renderer contract for " + unit["id"],
-                "purpose": "builder.contract_input", "audience": "builder"}, bind=True)
+                "purpose": "builder.contract_input", "audience": "builder"}, bind=False)
+            capsule = capsules[unit["id"]]
+            snapshot_times.append(capsule["recorded_at"])
+            if promote:
+                try:
+                    binding = self.get_binding(subject_ref="component:" + unit["id"], purpose="builder.contract_input", audience="builder")
+                except KeyError:
+                    binding = {}
+                if binding.get("capsule_id") != capsule["capsule_id"]:
+                    self.bind_subject(subject_ref="component:" + unit["id"], capsule_id=capsule["capsule_id"],
+                        purpose="builder.contract_input", audience="builder", actor_ref=provenance['owner'], reason="component_contract_promoted")
         for unit in snapshot["retrieval_units"]:
             for dependency in unit["dependencies"]:
                 with self._connect() as connection:
-                    existing_edge = connection.execute("SELECT 1 FROM relationships WHERE from_capsule_id = ? AND to_capsule_id = ? AND relation_type = 'requires' AND required = 1 AND valid_to IS NULL",
+                    existing_edge = connection.execute("SELECT recorded_at FROM relationships WHERE from_capsule_id = ? AND to_capsule_id = ? AND relation_type = 'requires' AND required = 1 AND valid_to IS NULL AND revoked_at IS NULL",
                         (capsules[unit["id"]]["capsule_id"], capsules[dependency]["capsule_id"])).fetchone()
                 if existing_edge:
+                    snapshot_times.append(existing_edge['recorded_at'])
                     continue
-                self.add_relationship({"from_capsule_id": capsules[unit["id"]]["capsule_id"],
+                edge = self.add_relationship({"from_capsule_id": capsules[unit["id"]]["capsule_id"],
                     "to_capsule_id": capsules[dependency]["capsule_id"], "relation_type": "requires", "required": True})
-        return {"source": snapshot["provenance"], "capsules": capsules}
+                snapshot_times.append(edge['recorded_at'])
+        return {"source": snapshot["provenance"], "capsules": capsules, "snapshot_as_of": max(snapshot_times, key=_instant)}
 
     def evolve_component_contract(self, previous: Mapping[str, Any], current: Mapping[str, Any], *, event_ref: str) -> dict[str, Any]:
         from adaos.services.ui_component_contracts import contract_impact, project_component_contract
         impact = contract_impact(previous, current)
         projection = project_component_contract(current)
-        units = {unit["id"]: unit for unit in projection["retrieval_units"]}
-        invalidations = [self.invalidate(subject_ref="component:" + identity, reason="component_contract_changed",
-            event_ref=event_ref, source_digest=projection["provenance"]["source_digest"])
-            for identity in impact["affected_units"]]
-        published = self.publish_component_projection(projection)
+        with self._transaction():
+            published = self.publish_component_projection(projection)
+            invalidations = [self.invalidate(subject_ref="component:" + identity, reason="component_contract_changed",
+                event_ref=event_ref, source_digest=projection["provenance"]["source_digest"])
+                for identity in impact["affected_units"]]
         return {"impact": impact, "invalidations": invalidations, "projection": published}
 
     def put_artifact(self, value: Any) -> dict[str, Any]:
@@ -696,7 +753,8 @@ class ContextControlService:
         if subject_ref not in capsule["subject_refs"]:
             raise ValueError("binding subject must be declared by the capsule")
         with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            if not connection.in_transaction:
+                connection.execute("BEGIN IMMEDIATE")
             current = connection.execute(
                 "SELECT * FROM bindings WHERE subject_ref = ? AND purpose = ? AND audience = ? AND branch = ?",
                 (subject_ref, purpose, audience, branch),

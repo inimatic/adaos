@@ -100,3 +100,80 @@ def test_component_capsules_are_idempotent_and_revision_conflicts_are_rejected(t
     declaration['components'][0]['effects'].append('undeclared.version.change')
     with pytest.raises(ContextConflict, match='identity/version conflict'):
         service.publish_component_projection(project_component_contract(declaration))
+
+
+def test_old_run_admission_preserves_active_bindings_and_has_pinned_dependency_plan(tmp_path):
+    service = ContextControlService(tmp_path)
+    previous = load_component_contract()
+    old = project_component_contract(previous)
+    service.publish_component_projection(old)
+    current = copy.deepcopy(previous)
+    current["version"] = "1.0.1"
+    current["components"][0]["effects"].append("selection.changed")
+    service.evolve_component_contract(previous, current, event_ref="contract:upgrade")
+    before = {identity: service.get_binding(subject_ref="component:" + identity,
+        purpose="builder.contract_input", audience="builder") for identity in ("ui.table", "ui.queryToolbar")}
+    payload, _ = prepare_component_input(envelope(), snapshot=old, required_ids=["ui.queryToolbar"])
+    receipt = service.admit_model_input(payload, snapshot=old, required_ids=["ui.queryToolbar"], run_ref="builder-run:historical")
+    assert service.get_artifact(receipt["snapshot_ref"]) == old
+    for identity, binding in before.items():
+        assert service.get_binding(subject_ref="component:" + identity, purpose="builder.contract_input", audience="builder") == binding
+    plan = service.get_artifact(receipt["context_receipt"]["plan_ref"])
+    assert plan["status"] == "ready"
+    assert {service.get_capsule(unit['ref'], include_content=True)['artifact']['content']['provenance']['version']
+        for unit in plan['selected']} == {'1.0.0'}
+    assert service.resolve({"subject_refs": ["component:ui.queryToolbar"], "purpose": "builder.contract_input", "audience": "builder"})["status"] == "ready"
+
+
+@pytest.mark.parametrize("failure", ["conflict", "second_binding", "second_invalidation"])
+def test_contract_evolution_is_atomic_even_after_partial_work(tmp_path, monkeypatch, failure):
+    from adaos.services.context_control import ContextConflict
+    service = ContextControlService(tmp_path)
+    previous = load_component_contract()
+    service.publish_component_projection(project_component_contract(previous))
+    current = copy.deepcopy(previous)
+    if failure != "conflict":
+        current["version"] = "1.0.1"
+    current["components"][0]["effects"].append("selection.changed")
+    with service._connect() as connection:
+        before = {table: [tuple(row) for row in connection.execute("SELECT * FROM " + table)]
+            for table in ("capsules", "capsule_search", "relationships", "bindings", "binding_events", "invalidations")}
+    if failure != "conflict":
+        method = "bind_subject" if failure == "second_binding" else "invalidate"
+        original = getattr(service, method)
+        calls = []
+        def fail_after_one(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 2:
+                raise ContextConflict("Injected transaction failure")
+            return original(*args, **kwargs)
+        monkeypatch.setattr(ContextControlService, method, lambda self, *args, **kwargs: fail_after_one(*args, **kwargs))
+    with pytest.raises(ContextConflict):
+        service.evolve_component_contract(previous, current, event_ref="contract:rejected")
+    with service._connect() as connection:
+        after = {table: [tuple(row) for row in connection.execute("SELECT * FROM " + table)] for table in before}
+    assert after == before
+    assert service.resolve({"subject_refs": ["component:ui.queryToolbar"], "purpose": "builder.contract_input", "audience": "builder"})["status"] == "ready"
+
+
+def test_run_snapshot_cannot_be_replaced_by_a_new_admission(tmp_path):
+    from adaos.services.context_control import ContextConflict
+    service = ContextControlService(tmp_path)
+    old = project_component_contract()
+    payload, _ = prepare_component_input(envelope(), snapshot=old, required_ids=["ui.table"])
+    service.admit_model_input(payload, snapshot=old, required_ids=["ui.table"], run_ref="builder-run:frozen")
+    current = load_component_contract()
+    current['version'] = '1.0.1'
+    new = project_component_contract(current)
+    payload, _ = prepare_component_input(envelope(), snapshot=new, required_ids=["ui.table"])
+    with pytest.raises(ContextConflict, match="silently rebased"):
+        service.admit_model_input(payload, snapshot=new, required_ids=["ui.table"], run_ref="builder-run:frozen")
+    assert len(service.list_receipts(run_ref="builder-run:frozen")) == 1
+
+
+def test_admission_does_not_create_shared_bindings(tmp_path):
+    service = ContextControlService(tmp_path)
+    snapshot = project_component_contract()
+    payload, _ = prepare_component_input(envelope(), snapshot=snapshot, required_ids=["ui.queryToolbar"])
+    service.admit_model_input(payload, snapshot=snapshot, required_ids=["ui.queryToolbar"], run_ref="builder-run:isolated")
+    assert service.resolve({"subject_refs": ["component:ui.table"], "purpose": "builder.contract_input", "audience": "builder"})['status'] == 'insufficient'
