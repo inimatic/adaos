@@ -87,9 +87,17 @@ try {
       await expect(host(collection.id)).toContainText(report.expectedField)
       await expect(host(collection.id)).toContainText('Alpha')
       sample.checks.push('live records', 'view label', 'field label', 'related display')
-      const primaryText = host(collection.id).locator('tbody tr').first().locator('td .cell-text').first()
-      sample.primaryBeforeEditor = await visibleTextGeometry(primaryText)
-      if (!sample.primaryBeforeEditor.visible) throw new Error('Primary record text is clipped before opening its editor')
+      const primaryText = host(collection.id).locator('tbody tr').first()
+        .locator('td .cell-text').filter({ hasText: /^First task$/ }).first()
+      const primaryReadyStarted = performance.now()
+      // Live projection replacement can momentarily leave a cell empty after
+      // another assertion found the old row. Wait for the exact record glyphs;
+      // persistent clipping still fails the same geometry condition.
+      await expect.poll(async () => {
+        sample.primaryBeforeEditor = await visibleTextGeometry(primaryText)
+        return sample.primaryBeforeEditor.visible
+      }, { message: 'Primary record text is clipped before opening its editor' }).toBe(true)
+      sample.primaryTextReadyMs = Math.round(performance.now() - primaryReadyStarted)
       const rendered = await page.locator('ada-page-widget-host').evaluateAll(elements => elements.map(element => window.ng?.getComponent(element)?.widget).filter(Boolean))
       const present = new Set(rendered.map(widget => widget.id))
       if (!isDeepStrictEqual(canonicalRenderedWidgetSources(rendered, widgets), canonicalWidgetSources(widgets.filter(widget => present.has(widget.id))))) {
@@ -113,8 +121,12 @@ try {
         await expect(form).toBeHidden()
         await expect(host(collection.id)).toContainText('First task')
         sample.checks.push('editor reachability', 'cancel preserves record')
-        sample.primaryAfterCancel = await visibleTextGeometry(primaryText)
-        if (!sample.primaryAfterCancel.visible) throw new Error('Primary record text is clipped after cancelling its editor')
+        const cancelReadyStarted = performance.now()
+        await expect.poll(async () => {
+          sample.primaryAfterCancel = await visibleTextGeometry(primaryText)
+          return sample.primaryAfterCancel.visible
+        }, { message: 'Primary record text is clipped after cancelling its editor' }).toBe(true)
+        sample.primaryAfterCancelReadyMs = Math.round(performance.now() - cancelReadyStarted)
         sample.checks.push('primary record remains visually readable')
       } else {
         throw new Error('Fixture requires a separate update editor')
