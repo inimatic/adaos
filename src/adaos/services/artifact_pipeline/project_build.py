@@ -262,6 +262,17 @@ def build_workspace_project_release(
         for item in definition["components"]["dependencies"]
         if str(item.get("ref") or "").startswith("project:")
     ]
+    component_dependencies: dict[str, DependencyRequirement] = {}
+    for item in definition["components"]["dependencies"]:
+        ref = str(item.get("ref") or "")
+        if not ref.startswith(("skill:", "scenario:")):
+            continue
+        kind, artifact_id = _component_ref(ref)
+        component_dependencies[ref] = DependencyRequirement(
+            kind=kind,  # type: ignore[arg-type]
+            artifact_id=artifact_id,
+            version_spec=str(item.get("version") or ""),
+        )
     project_dependency_locks = _resolve_project_dependency_locks(
         project_dependencies,
         release_repository,
@@ -285,10 +296,7 @@ def build_workspace_project_release(
             binding.dependency
         )
     pending: list[tuple[str, bool]] = [(item, False) for item in owned_refs]
-    for item in definition["components"]["dependencies"]:
-        ref = str(item.get("ref") or "")
-        if ref.startswith(("skill:", "scenario:")):
-            pending.append((ref, False))
+    pending.extend((ref, False) for ref in component_dependencies)
 
     built_by_ref: dict[str, BuiltArtifactPackage] = {}
     external_by_ref: dict[str, ArtifactPackageRef] = {}
@@ -298,7 +306,22 @@ def build_workspace_project_release(
         if ref in built_by_ref or ref in external_by_ref:
             continue
         active_package = active_packages.get(ref)
-        if ref not in owned_ref_set and active_package is not None:
+        declared_requirement = component_dependencies.get(ref)
+        active_matches_declaration = (
+            (
+                declared_requirement is None
+                or not declared_requirement.version_spec
+                or Version(active_package.version)
+                in SpecifierSet(declared_requirement.version_spec)
+            )
+            if active_package is not None
+            else False
+        )
+        if (
+            ref not in owned_ref_set
+            and active_package is not None
+            and active_matches_declaration
+        ):
             external_by_ref[ref] = active_package
             requirements = tuple(
                 DependencyRequirement(
@@ -353,18 +376,7 @@ def build_workspace_project_release(
     declared_requirements = list(
         requirements_by_digest.get(primary.ref.digest, ())
     )
-    for item in definition["components"]["dependencies"]:
-        ref = str(item.get("ref") or "")
-        if not ref.startswith(("skill:", "scenario:")):
-            continue
-        kind, artifact_id = _component_ref(ref)
-        declared_requirements.append(
-            DependencyRequirement(
-                kind=kind,  # type: ignore[arg-type]
-                artifact_id=artifact_id,
-                version_spec=str(item.get("version") or ""),
-            )
-        )
+    declared_requirements.extend(component_dependencies.values())
     requirements_by_digest[primary.ref.digest] = tuple(declared_requirements)
 
     catalog = PackageCatalog(

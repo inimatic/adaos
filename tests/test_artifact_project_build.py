@@ -198,6 +198,120 @@ def test_workspace_project_build_persists_exact_dependency_closure(
     }
 
 
+def test_workspace_project_build_replaces_active_dependency_outside_declared_range(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    _write_yaml(
+        workspace / "skills" / "shared_worker" / "skill.yaml",
+        {
+            "name": "shared_worker",
+            "version": "2.0.0",
+            "entry": "handlers.main:run",
+            "dependencies": [],
+            "tools": [
+                {
+                    "name": "run",
+                    "entry": "handlers.main:run",
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                }
+            ],
+        },
+    )
+    handler = workspace / "skills" / "shared_worker" / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("def run(**_):\n    return {'ok': True}\n", encoding="utf-8")
+    _write_yaml(
+        workspace / "scenarios" / "viewer" / "scenario.yaml",
+        {
+            "id": "viewer",
+            "name": "viewer",
+            "version": "2.0.0",
+            "title": "Viewer",
+            "type": "desktop",
+            "runtime": {"skills": {"required": ["shared_worker"]}},
+        },
+    )
+    (workspace / "scenarios" / "viewer" / "webui.json").write_text(
+        '{"schema":"adaos.webui.v1","pages":[]}', encoding="utf-8"
+    )
+    project_dir = workspace / "projects" / "viewer"
+    _write_yaml(
+        project_dir / "project.yaml",
+        {
+            "schema": "adaos.project.v1",
+            "kind": "project",
+            "id": "viewer",
+            "version": "2.0.0",
+            "profiles": [],
+            "components": {
+                "owned": [{"ref": "scenario:viewer", "role": "primary"}],
+                "dependencies": [
+                    {
+                        "ref": "skill:shared_worker",
+                        "version": "==2.0.0",
+                        "lifecycle": "shared",
+                    }
+                ],
+            },
+            "entrypoints": [],
+            "catalog": {
+                "title": "Viewer",
+                "description": "",
+                "categories": [],
+                "tags": [],
+            },
+            "lifecycle": {
+                "uninstall": {
+                    "components": "retain",
+                    "runtime_data": "retain",
+                    "source_artifacts": "retain",
+                }
+            },
+        },
+    )
+    installed_root = tmp_path / "installed" / "skills" / "shared_worker"
+    _write_yaml(
+        installed_root / "skill.yaml",
+        {"name": "shared_worker", "version": "1.0.0", "tools": []},
+    )
+    active = build_artifact_package(
+        installed_root,
+        kind="skill",
+        source_ref=ArtifactSourceRef(
+            forge="workspace-migration",
+            repository="installed-workspace",
+            revision="b" * 40,
+            path_scope=("skills/shared_worker/",),
+        ),
+    )
+
+    result = build_workspace_project_release(
+        project_dir=project_dir,
+        workspace_root=workspace,
+        source_ref=ArtifactSourceRef(
+            forge="github",
+            repository="example/projects",
+            revision="a" * 40,
+            path_scope=("projects/viewer/",),
+        ),
+        package_store=ContentAddressedPackageStore(tmp_path / "packages"),
+        release_repository=ReleaseRepository(tmp_path / "releases"),
+        active_workspace_lock=WorkspaceLock(
+            lock_revision=1,
+            updated_at="2026-10-13T00:00:00+00:00",
+            components=(active.ref,),
+        ),
+    )
+
+    selected = next(
+        item for item in result.plan.packages if item.key == "skill:shared_worker"
+    )
+    assert selected.version == "2.0.0"
+    assert selected.digest != active.ref.digest
+
+
 def test_workspace_project_build_rejects_empty_builder_draft(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     project_dir = workspace / "projects" / "draft"
