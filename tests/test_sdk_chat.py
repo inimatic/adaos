@@ -170,6 +170,34 @@ def test_response_envelope_materializes_chat_and_speech() -> None:
     assert projection["messages"][0]["active_agent_avatar_ref"] == "resource:assistant.arseni.avatar"
 
 
+def test_response_materialization_can_leave_chat_projection_to_its_owner() -> None:
+    bus = LocalEventBus()
+    chat_events: list[Event] = []
+    say_events: list[Event] = []
+    bus.subscribe("io.out.chat.append", lambda ev: chat_events.append(ev))
+    bus.subscribe("io.out.say", lambda ev: say_events.append(ev))
+
+    result = conversation_response.materialize_response(
+        {
+            "content": [{"type": "text", "text": "Owned projection"}],
+            "render_targets": ["text_tail", "speech_text"],
+        },
+        webspace_id="desktop",
+        conversation_id="conv.owned.projection",
+        channel_id="builder",
+        owner="skill:builder",
+        bus=bus,
+        route_id="voice_chat",
+        publish_chat_event=False,
+    )
+
+    assert result["stored_message"]["text"] == "Owned projection"
+    assert result["published_chat"][0]["text"] == "Owned projection"
+    assert chat_events == []
+    assert say_events[0].payload["text"] == "Owned projection"
+    assert conversation_store.list_projection("conv.owned.projection")["messages"][0]["text"] == "Owned projection"
+
+
 def test_tool_result_receipt_only_message_is_not_materialized() -> None:
     bus = LocalEventBus()
     seen: list[Event] = []

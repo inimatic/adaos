@@ -58,6 +58,7 @@ def materialize_response(
     meta: Mapping[str, Any] | None = None,
     source: str = "conversation.response",
     materialized_chat_appends: Sequence[Mapping[str, Any]] | None = None,
+    publish_chat_event: bool = True,
 ) -> dict[str, Any]:
     envelope = normalize_response_envelope(
         response,
@@ -153,7 +154,7 @@ def materialize_response(
                 thread_id=thread_id,
                 meta=clean_meta,
             )
-            if bus is not None:
+            if bus is not None and publish_chat_event:
                 _publish(bus, "io.out.chat.append", payload, source=source)
             published.append(payload)
 
@@ -199,6 +200,7 @@ def materialize_tool_result(
     payload_meta: Mapping[str, Any] | None = None,
     source: str = "conversation.response",
     materialized_chat_appends: Sequence[Mapping[str, Any]] | None = None,
+    publish_chat_event: bool = True,
 ) -> dict[str, Any]:
     meta = {**dict(raw_meta or {}), **dict(payload_meta or {})}
     if tool_result_suppresses_visible_message(result):
@@ -234,6 +236,7 @@ def materialize_tool_result(
         meta=meta,
         source=source,
         materialized_chat_appends=materialized_chat_appends,
+        publish_chat_event=publish_chat_event,
     )
 
 

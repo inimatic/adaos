@@ -2600,9 +2600,6 @@ class RouterService:
             )
             if self._voice_chat_persist_committed_signatures.get(key) == signature and key not in self._voice_chat_persist_pending:
                 return
-            current_pending = self._voice_chat_persist_pending.get(key)
-            if isinstance(current_pending, dict) and str(current_pending.get("signature") or "") == signature:
-                return
             self._voice_chat_persist_pending[key] = {
                 "webspace_id": str(webspace_id or "default").strip() or "default",
                 "target_node_id": str(target_node_id or "").strip(),
@@ -2697,10 +2694,6 @@ class RouterService:
                     )
                     return False
 
-            existing = self._voice_chat_persist_tasks_by_key.get(key)
-            if existing is not None and not existing.done():
-                return
-
             async def _persist() -> None:
                 while True:
                     payload = self._voice_chat_persist_pending.pop(key, None)
@@ -2727,28 +2720,43 @@ class RouterService:
                     if key not in self._voice_chat_persist_pending:
                         return
 
-            try:
-                task = asyncio.create_task(
-                    _persist(),
-                    name=f"voice-chat-persist:{str(webspace_id or 'default')}:{str(target_node_id or 'shared')}",
-                )
-            except RuntimeError:
-                return
-            self._voice_chat_persist_tasks.add(task)
-            self._voice_chat_persist_tasks_by_key[key] = task
-
-            def _forget(done: asyncio.Task[None]) -> None:
-                self._voice_chat_persist_tasks.discard(done)
-                if self._voice_chat_persist_tasks_by_key.get(key) is done:
-                    self._voice_chat_persist_tasks_by_key.pop(key, None)
+            def _start_persist_worker() -> None:
+                existing = self._voice_chat_persist_tasks_by_key.get(key)
+                if existing is not None and not existing.done():
+                    return
                 try:
-                    done.result()
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    self._vlog.warning("voice_chat.persist background task failed", exc_info=True)
+                    task = asyncio.create_task(
+                        _persist(),
+                        name=f"voice-chat-persist:{str(webspace_id or 'default')}:{str(target_node_id or 'shared')}",
+                    )
+                except RuntimeError:
+                    return
+                self._voice_chat_persist_tasks.add(task)
+                self._voice_chat_persist_tasks_by_key[key] = task
 
-            task.add_done_callback(_forget)
+                def _forget(done: asyncio.Task[None]) -> None:
+                    self._voice_chat_persist_tasks.discard(done)
+                    if self._voice_chat_persist_tasks_by_key.get(key) is done:
+                        self._voice_chat_persist_tasks_by_key.pop(key, None)
+                    try:
+                        done.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        self._vlog.warning("voice_chat.persist background task failed", exc_info=True)
+                    # A producer can enqueue a newer snapshot after the
+                    # worker's final pending check but before this callback.
+                    # Restart ownership here so that snapshot cannot remain
+                    # stranded until an unrelated future chat event.
+                    if (
+                        key in self._voice_chat_persist_pending
+                        and float(self._voice_chat_persist_next_allowed_at.get(key) or 0.0) <= time.monotonic()
+                    ):
+                        _start_persist_worker()
+
+                task.add_done_callback(_forget)
+
+            _start_persist_worker()
 
         async def _publish_voice_chat_snapshot(
             webspace_id: str,
@@ -3138,6 +3146,9 @@ class RouterService:
             webspace_id: str,
             msg: dict,
             target_node_id: str | None = None,
+            *,
+            ledger_materialized: bool = False,
+            wait_for_projection: bool = False,
         ) -> None:
             clean_msg = dict(msg)
             context = _voice_message_dialog_context(webspace_id, clean_msg)
@@ -3266,40 +3277,42 @@ class RouterService:
                 if local_turn_trace_id:
                     local_msg["turn_trace_id"] = local_turn_trace_id
 
-                conversation_store.upsert_conversation(
-                    conversation_id=conversation_id,
-                    webspace_id=worker_webspace_id,
-                    owner=owner,
-                    kind="dialog",
-                    title="General" if channel_id == GENERAL_DIALOG_CHANNEL_ID else channel_id,
-                    active_agent_id=str(worker_agent.get("id") or "") or None,
-                    meta={"route_id": route_id, "channel_id": channel_id},
-                )
-                _store_dialog_channel_projection(worker_webspace_id, worker_context_channel)
-                stored = conversation_store.materialize_message(
-                    conversation_id=conversation_id,
-                    thread_id=topic_id or None,
-                    webspace_id=worker_webspace_id,
-                    channel_id=channel_id,
-                    owner=owner,
-                    role=str(local_msg.get("from") or "hub"),
-                    text=str(local_msg.get("text") or ""),
-                    payload=local_msg,
-                    meta=local_meta,
-                    actor_id=str(local_msg.get("active_agent_id") or "") or None,
-                    actor_label=str(local_msg.get("active_agent_label") or "") or None,
-                    actor_icon=str(local_msg.get("active_agent_icon") or local_msg.get("agent_icon") or "") or None,
-                    route_id=route_id,
-                    request_id=str(local_meta.get("request_id") or local_msg.get("request_id") or "") or None,
-                    turn_trace_id=local_turn_trace_id or None,
-                    idempotency_key=str(
-                        local_meta.get("response_idempotency_key")
-                        or local_meta.get("idempotency_key")
-                        or ""
+                stored: dict[str, Any] | None = dict(local_msg) if ledger_materialized else None
+                if not ledger_materialized:
+                    conversation_store.upsert_conversation(
+                        conversation_id=conversation_id,
+                        webspace_id=worker_webspace_id,
+                        owner=owner,
+                        kind="dialog",
+                        title="General" if channel_id == GENERAL_DIALOG_CHANNEL_ID else channel_id,
+                        active_agent_id=str(worker_agent.get("id") or "") or None,
+                        meta={"route_id": route_id, "channel_id": channel_id},
                     )
-                    or None,
-                    ts=float(local_msg.get("ts") or time.time()),
-                )
+                    _store_dialog_channel_projection(worker_webspace_id, worker_context_channel)
+                    stored = conversation_store.materialize_message(
+                        conversation_id=conversation_id,
+                        thread_id=topic_id or None,
+                        webspace_id=worker_webspace_id,
+                        channel_id=channel_id,
+                        owner=owner,
+                        role=str(local_msg.get("from") or "hub"),
+                        text=str(local_msg.get("text") or ""),
+                        payload=local_msg,
+                        meta=local_meta,
+                        actor_id=str(local_msg.get("active_agent_id") or "") or None,
+                        actor_label=str(local_msg.get("active_agent_label") or "") or None,
+                        actor_icon=str(local_msg.get("active_agent_icon") or local_msg.get("agent_icon") or "") or None,
+                        route_id=route_id,
+                        request_id=str(local_meta.get("request_id") or local_msg.get("request_id") or "") or None,
+                        turn_trace_id=local_turn_trace_id or None,
+                        idempotency_key=str(
+                            local_meta.get("response_idempotency_key")
+                            or local_meta.get("idempotency_key")
+                            or ""
+                        )
+                        or None,
+                        ts=float(local_msg.get("ts") or time.time()),
+                    )
                 projection = conversation_store.list_projection(
                     conversation_id,
                     thread_id=topic_id or None,
@@ -3317,11 +3330,36 @@ class RouterService:
                     if isinstance(item, dict)
                 ]
                 ledger_backed = bool(stream_snapshot)
-                if not stream_snapshot and isinstance(stored, dict):
-                    stream_snapshot = [dict(stored)]
-                    ledger_backed = True
                 if not stream_snapshot:
-                    stream_snapshot = [dict(local_msg)]
+                    # The durable store can be temporarily unavailable during
+                    # cold bootstrap. Do not replace a newer optimistic tail
+                    # with this single message: merge the cache by message id
+                    # and restore turn order before persisting the fallback.
+                    cache_key = (worker_webspace_id, str(target_node_id or "").strip())
+                    cached = _voice_chat_stream_cache.get(cache_key) or {}
+                    cached_raw = cached.get("messages") if isinstance(cached, dict) else None
+                    fallback_by_id: dict[str, dict[str, Any]] = {}
+                    for item in cached_raw if isinstance(cached_raw, list) else []:
+                        if not isinstance(item, dict):
+                            continue
+                        item_conversation_id = str(item.get("conversation_id") or "").strip()
+                        if item_conversation_id and item_conversation_id != conversation_id:
+                            continue
+                        item_id = str(item.get("id") or "").strip()
+                        if item_id:
+                            fallback_by_id[item_id] = dict(item)
+                    local_id = str(local_msg.get("id") or "").strip()
+                    fallback_by_id[local_id or f"local:{id(local_msg)}"] = dict(local_msg)
+                    ledger_backed = isinstance(stored, dict)
+
+                    def _fallback_order(item: Mapping[str, Any]) -> tuple[float, str]:
+                        try:
+                            item_ts = float(item.get("ts") or 0.0)
+                        except (TypeError, ValueError):
+                            item_ts = 0.0
+                        return item_ts, str(item.get("id") or "")
+
+                    stream_snapshot = sorted(fallback_by_id.values(), key=_fallback_order)[-VOICE_CHAT_VISIBLE_TAIL:]
                 finished_turn_trace = False
                 if local_turn_trace_id and str(local_msg.get("from") or "").strip() == "hub":
                     try:
@@ -3399,8 +3437,6 @@ class RouterService:
                 if not bool(materialized.get("visible_in_active_stream")):
                     if bool(materialized.get("finished_turn_trace")):
                         _schedule_dialog_state_write(webspace_id, event="inactive_turn_stored")
-                    return
-                if optimistic_published and not bool(materialized.get("ledger_backed")):
                     return
                 materialized_msg = (
                     dict(materialized.get("clean_msg") or {})
@@ -3507,6 +3543,26 @@ class RouterService:
                     self._vlog.warning("voice_chat.append materialization task failed", exc_info=True)
 
             task.add_done_callback(_forget_append_task)
+            if wait_for_projection:
+                await asyncio.shield(task)
+                persist_key = _voice_chat_persist_key(webspace_id, target_node_id)
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + _voice_chat_yjs_timeout_s() + _voice_chat_persist_debounce_s() + 0.25
+                while loop.time() < deadline:
+                    persist_task = self._voice_chat_persist_tasks_by_key.get(persist_key)
+                    if persist_task is None or persist_task.done():
+                        if persist_key not in self._voice_chat_persist_pending:
+                            break
+                        await asyncio.sleep(0)
+                        continue
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(persist_task),
+                            timeout=max(0.01, deadline - loop.time()),
+                        )
+                    except asyncio.TimeoutError:
+                        break
+                    await asyncio.sleep(0)
 
         def _voice_intent_demo_enabled() -> bool:
             return str(os.getenv("ADAOS_VOICE_CHAT_INTENT_DEMO") or "0").strip().lower() in {
@@ -5221,6 +5277,8 @@ class RouterService:
                     "dialog follow-up result state update failed",
                     exc_info=True,
                 )
+            external_transport = str(action_meta.get("io_type") or "").strip().lower()
+            router_owns_chat_projection = external_transport != "telegram"
             materialization = conversation_response.materialize_tool_result(
                 result,
                 webspace_id=webspace_id,
@@ -5241,7 +5299,25 @@ class RouterService:
                 payload_meta=action_meta,
                 source="router.voice_chat",
                 materialized_chat_appends=materialized_chat_appends,
+                # Router owns the durable voice-chat projection for this
+                # turn. Publishing a nested chat event here introduced a
+                # second asynchronous boundary after the ledger commit, so a
+                # caller could observe the turn as complete before the reply
+                # reached Yjs. Project the newly stored payload directly.
+                publish_chat_event=not router_owns_chat_projection,
             )
+            stored_message = materialization.get("stored_message") if isinstance(materialization, dict) else None
+            published_chat = materialization.get("published_chat") if isinstance(materialization, dict) else None
+            if router_owns_chat_projection and isinstance(published_chat, list):
+                for published_payload in published_chat:
+                    if isinstance(published_payload, dict):
+                        await _append_voice_chat_message(
+                            webspace_id,
+                            published_payload,
+                            target_node_id,
+                            ledger_materialized=isinstance(stored_message, dict),
+                            wait_for_projection=True,
+                        )
             result_message = str(result.get("message") or "").strip()
             suppress_visible_result_message = conversation_response.tool_result_suppresses_visible_message(result)
             materialized_payload = None
@@ -5277,7 +5353,6 @@ class RouterService:
                 ),
             }
             if materialized_payload is not None:
-                external_transport = str(action_meta.get("io_type") or "").strip().lower()
                 trace_status = "delivery_pending" if external_transport == "telegram" else "materialized"
                 trace_renderer = {
                     "receiver": "telegram.transport" if external_transport == "telegram" else "voice_chat.messages",
