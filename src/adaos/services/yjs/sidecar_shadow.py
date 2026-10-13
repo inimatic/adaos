@@ -141,12 +141,10 @@ def _mirror_write_listener(
     with _status_lock:
         _sequence[key] += 1
         sequence = _sequence[key]
-    try:
-        queue.put_nowait((key, payload, sequence))
-        with _status_lock:
+        try:
+            queue.put_nowait((key, payload, sequence))
             _status["enqueued_total"] = int(_status["enqueued_total"]) + 1
-    except queue_module.Full:
-        with _status_lock:
+        except queue_module.Full:
             _status["dropped_total"] = int(_status["dropped_total"]) + 1
             _status["last_error"] = "mirror_queue_full"
 

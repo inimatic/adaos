@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import threading
 from typing import Any
 
 import pytest
@@ -93,4 +94,33 @@ def test_shadow_bridge_rejects_non_loopback_control_url(monkeypatch: pytest.Monk
     status = bridge.sidecar_shadow_mirror_status()
     assert bridge.register_sidecar_shadow_mirror() is False
     assert "loopback HTTP" in str(status["last_error"])
+    bridge.unregister_sidecar_shadow_mirror()
+
+
+def test_shadow_bridge_preserves_one_queue_across_writer_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = _load_bridge(monkeypatch)
+    accepted: list[tuple[str, int]] = []
+    accepted_lock = threading.Lock()
+
+    def _accept(webspace: str, _update: bytes, sequence: int) -> None:
+        with accepted_lock:
+            accepted.append((webspace, sequence))
+
+    monkeypatch.setattr(bridge, "_post_update", _accept)
+    writers = [
+        threading.Thread(
+            target=bridge._mirror_write_listener,
+            args=("default", f"update-{index}".encode()),
+        )
+        for index in range(6)
+    ]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join()
+
+    asyncio.run(bridge.wait_for_sidecar_shadow_idle(2))
+    assert len(accepted) == 6
+    assert sorted(sequence for _webspace, sequence in accepted) == list(range(1, 7))
+    assert bridge.sidecar_shadow_mirror_status()["dropped_total"] == 0
     bridge.unregister_sidecar_shadow_mirror()
