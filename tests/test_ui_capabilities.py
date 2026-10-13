@@ -3174,6 +3174,36 @@ def test_application_manager_accepts_canonical_context_reset_actions() -> None:
     assert by_id["applications.detail_lifecycle_binding"]["ok"] is True
 
 
+def test_application_manager_rejects_installed_release_as_explicit_selection() -> None:
+    request = (
+        "Build Applications lifecycle manager with Extensions, installed, and MCP."
+    )
+    webui = _application_manager_webui()
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    details = next(widget for widget in widgets if widget["id"] == "details")
+    details["inputs"]["stateBindings"]["selectedReleaseDigest"] = {
+        "path": "installation_summary.release_digest",
+        "default": "",
+    }
+
+    rejected = evaluate_ui_request(request, webui)
+
+    by_id = {item["id"]: item for item in rejected["postconditions"]}
+    authority = by_id["applications.release_selection_authority"]
+    assert authority["ok"] is False
+    assert authority["actual"]["shadowBindings"] == [
+        {
+            "widgetId": "details",
+            "binding": {
+                "path": "installation_summary.release_digest",
+                "default": "",
+            },
+        }
+    ]
+    assert by_id["applications.detail_state_binding"]["ok"] is False
+    assert by_id["applications.detail_lifecycle_binding"]["ok"] is False
+
+
 def test_application_manager_evaluation_rejects_non_runtime_event_paths() -> None:
     request = (
         "Build Applications lifecycle manager with Extensions, installed, and MCP."

@@ -2693,6 +2693,25 @@ def evaluate_ui_request(
             )
             and (widget.get("inputs") or {}).get("stateOnly") is True
         ]
+        release_selection_shadow_bindings = [
+            {
+                "widgetId": str(widget.get("id") or ""),
+                "binding": dict(
+                    ((widget.get("inputs") or {}).get("stateBindings") or {}).get(
+                        "selectedReleaseDigest"
+                    )
+                    or {}
+                ),
+            }
+            for widget in application_detail_sources
+            if isinstance(
+                ((widget.get("inputs") or {}).get("stateBindings") or {}).get(
+                    "selectedReleaseDigest"
+                ),
+                Mapping,
+            )
+        ]
+        release_selection_authority_ok = not release_selection_shadow_bindings
         area_roles = {
             str(region.get("id") or ""): str(region.get("role") or "")
             for layout in application_layouts
@@ -3102,6 +3121,7 @@ def evaluate_ui_request(
         ]
         detail_state_binding_ok = bool(
             len(application_details) == 1
+            and release_selection_authority_ok
             and release_selectors
             and operation_lists
             and reports
@@ -3174,6 +3194,19 @@ def evaluate_ui_request(
             )
             if not ok
         ]
+        postconditions.append(
+            {
+                "id": "applications.release_selection_authority",
+                "ok": release_selection_authority_ok,
+                "expected": (
+                    "selectedReleaseDigest is written only by explicit release "
+                    "selection and is not rebound from installed Application state"
+                ),
+                "actual": {
+                    "shadowBindings": release_selection_shadow_bindings,
+                },
+            }
+        )
         postconditions.append(
             {
                 "id": "applications.detail_state_binding",
