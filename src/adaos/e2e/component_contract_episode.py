@@ -120,6 +120,40 @@ def execute(inputs, context, *, repo_root: Path):
         carry_revision_resources(scenario, root, inverse)
         if read(root / 'semantic.webui.json') != before:
             raise ValueError('Independent source equality failed after undo')
+        # Behavioral increment: replace only one existing permanent scope value.
+        scope_admission = semantic_ui.admit(project_ref='scenario:' + scenario,
+            instruction='Show only team-2 records in records-list; preserve every other obligation',
+            source_message_id='scope-delta:' + scenario, write_refs=['view:records-list'],
+            write_properties={'view:records-list': ['scope_filters.team_id.value']}, operation_kinds=['view.scope.value.set'])
+        scope_proposal = semantic_ui.prepare_proposal(project_ref='scenario:' + scenario, admission_id=scope_admission['admission_id'],
+            proposal={'schema': 'adaos.builder.semantic_op_proposal.v1', 'status': 'proposed', 'message': '',
+                'ops': [{'kind': 'view.scope.value.set', 'ref': 'view:records-list', 'field_ref': 'team_id', 'value': 'team-2'}]})
+        scoped = semantic_ui.apply(scope_proposal['request'])
+        scope_replay = semantic_ui.apply(scope_proposal['request'])
+        expected_scope = copy.deepcopy(before)
+        next(view for view in expected_scope['views'] if view['id'] == 'records-list')['scope_filters'][0]['value'] = 'team-2'
+        if read(root / 'semantic.webui.json') != expected_scope or not scope_replay.get('replayed'):
+            raise ValueError('Scope increment changed undeclared source or failed replay')
+        carry_revision_resources(scenario, root, scoped)
+        selected_scope = preview.select_target('scenario', scenario, source_webspace_id=host,
+            revision=scoped['revision'], stage='prototype', via_owner=True)
+        if not selected_scope.get('ok'):
+            raise ValueError('Scope revision did not reach owned Preview')
+        scope_environment = {**environment, 'ADAOS_E2E_OUTPUT': str(output / 'browser-scope')}
+        scope_probe = subprocess.run(['node', str(repo_root / 'e2e/stand/browser/component-contract-scope.mjs')],
+            cwd=repo_root, env=scope_environment, capture_output=True, text=True, encoding='utf-8', timeout=240)
+        (output / 'browser-scope.log').write_text(scope_probe.stdout + scope_probe.stderr, encoding='utf-8')
+        scope_browser = read(output / 'browser-scope/result.json') if (output / 'browser-scope/result.json').exists() else {'ok': False}
+        if scope_probe.returncode or not scope_browser.get('ok'):
+            raise ValueError('Independent query-scope browser obligation failed')
+        scope_undo = semantic_ui.prepare_request(project_ref='scenario:' + scenario,
+            instruction='Undo the last semantic change', source_message_id='scope-undo:' + scenario)
+        inverse = semantic_ui.apply(scope_undo['request'])
+        carry_revision_resources(scenario, root, inverse)
+        if read(root / 'semantic.webui.json') != before:
+            raise ValueError('Scope inverse did not preserve the full original source')
+        write(output / 'scope-increment.json', {'admission': scope_admission, 'result': scoped,
+            'replay': scope_replay, 'undo': inverse, 'browser': scope_browser})
         final_materialization = preview.select_target('scenario', scenario, source_webspace_id=host,
             revision=inverse['revision'], stage='prototype', via_owner=True)
         write(output / 'final-materialization.json', final_materialization)
@@ -139,6 +173,7 @@ def execute(inputs, context, *, repo_root: Path):
             raise ValueError('Matched runtime evolution episode failed; preserve its original evidence')
         stage(7, {'revision': inverse['revision'], 'replay': replay, 'undo': inverse,
             'final_browser': final_browser,
+            'scope_browser': scope_browser,
             'matched_episodes': episodes,
             'cost': {'llm_calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'usd': 0},
             'qualification_scope': 'bounded renderer, provider evolution, source preservation/replay/undo; no whole-platform closure'})

@@ -44,13 +44,32 @@ def _view(document: Mapping[str, Any], ref: str) -> dict[str, Any]:
     return candidates[0]
 
 
+def scope_filter(document, ref, field_ref):
+    view = _view(document, ref)
+    matches = [item for item in view.get('scope_filters', []) if item['field_ref'] == field_ref]
+    if view['role'] != 'collection' or view.get('presentation') != 'table' or len(matches) != 1:
+        raise BuilderWorkflowError('scope edit requires one existing permanent table filter')
+    return matches[0]
+
+
+def scope_values(document, view):
+    """Bound this operation to declared fixture values, never widen to no scope."""
+    resource = next(item for item in document['resources'] if item['id'] == view['resource_ref'])
+    return {item['field_ref']: [row.get(item['field_ref'], row.get(item['field_ref'].rsplit('.', 1)[-1]))
+            for row in resource.get('records', [])] for item in view.get('scope_filters', [])}
+
+
+def scope_property(field_ref):
+    return 'scope_filters.' + field_ref + '.value'
+
+
 def operation_write_set(ops: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Derive actual property writes from checked operations, never caller claims."""
     return [{"seq": item["seq"], "kind": item["kind"], "ref": item["ref"],
              "property": ("title" if item["ref"].startswith("view:") else "label") + "." + item["locale"]
-                         if item["kind"] == "label.set" else "field_refs",
+                         if item["kind"] == "label.set" else scope_property(item['field_ref']) if item['kind'] == 'view.scope.value.set' else "field_refs",
              "before": copy.deepcopy(item["expected"]),
-             "after": copy.deepcopy(item["text"] if item["kind"] == "label.set" else item["field_refs"])}
+             "after": copy.deepcopy(item["text"] if item["kind"] == "label.set" else item['value'] if item['kind'] == 'view.scope.value.set' else item["field_refs"])}
             for item in ops]
 
 
@@ -117,6 +136,17 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
             raise BuilderWorkflowError("semantic operation sequence must be contiguous")
         if operation["ref"] not in write_refs:
             raise BuilderWorkflowError("semantic operation is outside the admitted write scope")
+        if operation['kind'] == 'view.scope.value.set':
+            view = _view(result, operation['ref'])
+            scoped = scope_filter(result, operation['ref'], operation['field_ref'])
+            if digest(scoped['value']) != digest(operation['expected']):
+                raise BuilderWorkflowError('semantic scope precondition failed')
+            values = scope_values(result, view)[operation['field_ref']]
+            if operation['value'] in (None, '') or not any(type(value) is type(operation['value']) and value == operation['value'] for value in values):
+                raise BuilderWorkflowError('scope value must preserve a declared, typed fixture boundary')
+            inverse.append({**operation, 'expected': copy.deepcopy(operation['value']), 'value': copy.deepcopy(scoped['value'])})
+            scoped['value'] = copy.deepcopy(operation['value'])
+            continue
         if operation["kind"] == "view.fields.reorder":
             view = _view(result, operation["ref"])
             if view.get("role") != "collection" or view.get("presentation") != "table":
@@ -282,8 +312,8 @@ class SemanticGraphService:
                   "dependency_refs": [], "admitted_write_refs": [], "transaction": None,
                   "read_scope": "full_semantic_source_and_effective_compiled_ui",
                   "inventory_scope": "resources_fields_views_relationships_commands",
-                  "supported_operations": ["label.set", "view.fields.reorder"],
-                  "supported_operations_text": "label.set, view.fields.reorder"}
+                  "supported_operations": ["label.set", "view.fields.reorder", "view.scope.value.set"],
+                  "supported_operations_text": "label.set, view.fields.reorder, view.scope.value.set"}
         with _LOCK:
             if not self._file(root, "semantic.webui.json").is_file():
                 packet["status_label"] = "Semantic source is missing"

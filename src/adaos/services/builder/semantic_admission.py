@@ -13,14 +13,14 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from .semantic_graph import SemanticGraphService, _read, _label, _view, digest, reduce_graph, verify_baseline
+from .semantic_graph import SemanticGraphService, _read, _label, _view, digest, reduce_graph, verify_baseline, scope_filter, scope_property
 from .semantic_inspector import semantic_refs, dependency_refs
 from .semantic_ui import _operation_root
 from .workflow import BuilderWorkflowError, _LOCK
 
 ADMISSION_SCHEMA = 'adaos.builder.semantic_admission.v1'
 PROPOSAL_SCHEMA = 'adaos.builder.semantic_op_proposal.v1'
-SUPPORTED = ('label.set', 'view.fields.reorder')
+SUPPORTED = ('label.set', 'view.fields.reorder', 'view.scope.value.set')
 
 
 def compiler_digest():
@@ -115,6 +115,7 @@ class SemanticAdmissionService:
                     continue
                 properties = [value for value in node['supported_writes']
                               if (value == 'field_refs' and 'view.fields.reorder' in kinds)
+                              or (value.startswith('scope_filters.') and 'view.scope.value.set' in kinds)
                               or (value.startswith(('title.', 'label.')) and 'label.set' in kinds)]
                 if not properties:
                     continue
@@ -125,7 +126,8 @@ class SemanticAdmissionService:
                     properties = selected
                 values = {}
                 for prop in properties:
-                    values[prop] = (copy.deepcopy(_view(document, node['ref'])['field_refs']) if prop == 'field_refs'
+                    values[prop] = (copy.deepcopy(scope_filter(document, node['ref'], prop[len('scope_filters.'):-len('.value')])['value']) if prop.startswith('scope_filters.')
+                                    else copy.deepcopy(_view(document, node['ref'])['field_refs']) if prop == 'field_refs'
                                     else _label(document, node['ref'])[prop.partition('.')[2]])
                 masks.append({'ref': node['ref'], 'properties': properties})
                 descriptors.append({**node, 'values': values})
@@ -145,7 +147,7 @@ class SemanticAdmissionService:
                     'dependency_refs': dependency_ids,
                     'dependencies': [{key: node[key] for key in ('ref', 'kind', 'label_en', 'label_ru', 'dependencies')}
                                      for node in nodes if node['ref'] in dependency_ids and node['ref'] not in refs],
-                    'read_scope': 'descriptors_for_existing_labels_and_table_field_order',
+                    'read_scope': 'descriptors_for_existing_labels_table_field_order_and_permanent_scope',
                     'preservation': 'Core validates the complete source, runtime, locales and protected semantics.'}}
             record['admission_digest'] = digest(record)
             from adaos.services.ui_component_contracts import project_component_contract
@@ -195,12 +197,15 @@ class SemanticAdmissionService:
             working = copy.deepcopy(document)
             for seq, proposed in enumerate(proposal['ops'], 1):
                 kind, ref = proposed['kind'], proposed['ref']
-                prop = ('title' if ref.startswith('view:') else 'label') + '.' + proposed.get('locale', '') if kind == 'label.set' else 'field_refs'
+                prop = (('title' if ref.startswith('view:') else 'label') + '.' + proposed.get('locale', '') if kind == 'label.set'
+                    else scope_property(proposed['field_ref']) if kind == 'view.scope.value.set' else 'field_refs')
                 if kind not in retained['operation_kinds'] or prop not in masks.get(ref, set()):
                     raise BuilderWorkflowError('proposal is outside the Core-admitted property write set')
                 op = {'seq': seq, 'kind': kind, 'ref': ref}
                 if kind == 'label.set':
                     op.update(locale=proposed['locale'], expected=_label(working, ref)[proposed['locale']], text=proposed['text'])
+                elif kind == 'view.scope.value.set':
+                    op.update(field_ref=proposed['field_ref'], expected=copy.deepcopy(scope_filter(working, ref, proposed['field_ref'])['value']), value=copy.deepcopy(proposed['value']))
                 else:
                     op.update(expected=copy.deepcopy(_view(working, ref)['field_refs']), field_refs=copy.deepcopy(proposed['field_refs']))
                 working = reduce_graph(working, [dict(op, seq=1)], write_refs=[ref])['semantic_document']
@@ -242,6 +247,12 @@ class SemanticAdmissionService:
                     if original != updated:
                         _view(expected, ref)['field_refs'] = copy.deepcopy(updated)
                         ops.append({'kind': 'view.fields.reorder', 'ref': ref, 'field_refs': copy.deepcopy(updated)})
+                elif prop.startswith('scope_filters.'):
+                    field_ref = prop[len('scope_filters.'):-len('.value')]
+                    original, updated = scope_filter(before, ref, field_ref)['value'], scope_filter(after, ref, field_ref)['value']
+                    if digest(original) != digest(updated):
+                        scope_filter(expected, ref, field_ref)['value'] = copy.deepcopy(updated)
+                        ops.append({'kind': 'view.scope.value.set', 'ref': ref, 'field_ref': field_ref, 'value': copy.deepcopy(updated)})
                 else:
                     locale = prop.partition('.')[2]
                     original, updated = _label(before, ref)[locale], _label(after, ref)[locale]

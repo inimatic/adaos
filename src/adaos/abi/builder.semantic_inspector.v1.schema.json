@@ -16,7 +16,7 @@
     "write_count": {"type": "integer", "minimum": 0, "maximum": 16},
     "read_scope": {"const": "full_semantic_source_and_effective_compiled_ui"},
     "inventory_scope": {"const": "resources_fields_views_relationships_commands"},
-    "supported_operations": {"type": "array", "items": {"enum": ["label.set", "view.fields.reorder"]}, "maxItems": 2, "uniqueItems": true},
+    "supported_operations": {"type": "array", "items": {"enum": ["label.set", "view.fields.reorder", "view.scope.value.set"]}, "maxItems": 3, "uniqueItems": true},
     "supported_operations_text": {"type": "string", "maxLength": 240},
     "read_refs": {"$ref": "#/$defs/refs"},
     "dependency_refs": {"$ref": "#/$defs/refs"},
@@ -33,7 +33,7 @@
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "ref": {"type": "string", "pattern": "^(resource|field|view|relationship|command):[A-Za-z0-9_.-]+$", "maxLength": 250},
     "refs": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/ref"}},
-    "property": {"enum": ["title.en", "title.ru", "label.en", "label.ru", "field_refs"]},
+    "property": {"anyOf": [{"enum": ["title.en", "title.ru", "label.en", "label.ru", "field_refs"]}, {"type": "string", "pattern": "^scope_filters\\.[A-Za-z0-9_.-]+\\.value$"}]},
     "node": {
       "type": "object", "additionalProperties": false,
       "required": ["ref", "kind", "label_en", "label_ru", "dependencies", "supported_writes", "dependencies_text", "writes_text"],
@@ -43,7 +43,7 @@
         "label_en": {"type": "string", "maxLength": 240},
         "label_ru": {"type": "string", "maxLength": 240},
         "dependencies": {"$ref": "#/$defs/refs"},
-        "supported_writes": {"type": "array", "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/property"}},
+        "supported_writes": {"type": "array", "maxItems": 11, "uniqueItems": true, "items": {"$ref": "#/$defs/property"}},
         "dependencies_text": {"type": "string", "maxLength": 10000},
         "writes_text": {"type": "string", "maxLength": 240}
       }
@@ -53,13 +53,13 @@
       "required": ["seq", "kind", "ref", "property", "before", "after", "before_text", "after_text"],
       "properties": {
         "seq": {"type": "integer", "minimum": 1, "maximum": 16},
-        "kind": {"enum": ["label.set", "view.fields.reorder"]},
+        "kind": {"enum": ["label.set", "view.fields.reorder", "view.scope.value.set"]},
         "ref": {"$ref": "#/$defs/ref"}, "property": {"$ref": "#/$defs/property"},
         "before": {"$ref": "#/$defs/value"}, "after": {"$ref": "#/$defs/value"},
         "before_text": {"type": "string", "maxLength": 5000}, "after_text": {"type": "string", "maxLength": 5000}
       }
     },
-    "value": {"oneOf": [{"type": "string", "maxLength": 240}, {"type": "array", "maxItems": 24, "items": {"type": "string", "maxLength": 160}}]},
+    "value": {"oneOf": [{"type": "string", "maxLength": 240}, {"type": "number"}, {"type": "boolean"}, {"type": "array", "maxItems": 24, "items": {"type": "string", "maxLength": 160}}]},
     "transaction": {
       "type": "object", "additionalProperties": false,
       "required": ["transaction_id", "change_id", "source_revision", "revision", "base_hash", "semantic_digest", "reducer", "status"],

@@ -16,6 +16,8 @@ RULES = """You propose a bounded edit to an existing AdaOS declarative prototype
 Use only the Core-admitted stable refs, operation kinds and writable properties.
 Localized labels are independent en/ru slots: change only the requested locale.
 field_refs is the order of existing table columns, not a resource schema change.
+view.scope.value.set changes one explicitly admitted existing permanent filter value;
+it cannot remove the scope, change its field, or widen to undeclared fixture values.
 Read-only dependency descriptors explain current labels; they grant no write authority.
 Do not change ids, records, relationships, commands, guards or other properties.
 If the request is ambiguous, return clarification and no operations. If it requires
@@ -30,10 +32,27 @@ def provider_contract(admission: Mapping[str, Any]) -> dict[str, Any]:
     contract['properties']['message'].pop('maxLength', None)
     contract['properties']['ops']['maxItems'] = admission['max_ops']
     variants = contract['properties']['ops']['items']['anyOf']
+    admitted = []
     for variant in variants:
         props = variant['properties']
         kind = props['kind'].pop('const')
+        if kind not in admission['operation_kinds']:
+            continue
         props['kind'].update(type='string', enum=[kind])
+        if kind == 'view.scope.value.set':
+            for mask in admission['write_masks']:
+                for prop in mask['properties']:
+                    if not prop.startswith('scope_filters.'):
+                        continue
+                    selected = copy.deepcopy(variant)
+                    fields = selected['properties']
+                    fields['ref'] = {'type': 'string', 'enum': [mask['ref']]}
+                    fields['field_ref'] = {'type': 'string', 'enum': [prop[len('scope_filters.'):-len('.value')]]}
+                    target = next(item for item in admission['context']['targets'] if item['ref'] == mask['ref'])
+                    current = target['values'][prop]
+                    fields['value'] = {'type': 'boolean' if isinstance(current, bool) else 'number' if isinstance(current, (float, int)) else 'string'}
+                    admitted.append(selected)
+            continue
         refs = [mask['ref'] for mask in admission['write_masks'] if
                 ('field_refs' in mask['properties'] if kind == 'view.fields.reorder'
                  else any(prop.startswith(('title.', 'label.')) for prop in mask['properties']))]
@@ -42,10 +61,12 @@ def provider_contract(admission: Mapping[str, Any]) -> dict[str, Any]:
             props['text'] = {'type': 'string'}
             props['locale']['enum'] = sorted({prop.partition('.')[2] for mask in admission['write_masks']
                 for prop in mask['properties'] if prop.startswith(('title.', 'label.'))})
-        else:
+        elif kind == 'view.fields.reorder':
             props['field_refs'].pop('uniqueItems', None)
             props['field_refs']['items'] = {'type': 'string'}
-    contract['properties']['ops']['items']['anyOf'] = [variant for variant in variants if variant['properties']['ref']['enum']]
+        if refs:
+            admitted.append(variant)
+    contract['properties']['ops']['items']['anyOf'] = admitted
     return contract
 
 

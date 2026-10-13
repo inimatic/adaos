@@ -239,15 +239,20 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
             record("editor.surface", [ref], [{"ref": "ui.form", "widget_id": view["id"], "alternative": view.get("surface", "inline")}])
             if commands:
                 actions = [action for action in widget.get("actions") or [] if action.get("type") == "resourceOperation"]
+                if any(action.get('id') not in {command['id'] for command in commands} for action in actions):
+                    raise ValueError('component.command_effect_undeclared:' + ref)
                 buttons = {button.get("id") for button in widget.get("inputs", {}).get("buttons", [])}
                 def realized_actions(command):
                     operation = "update" if command["kind"] == "transition" else command["kind"]
                     payload = {key: "$event.values." + key for key in command.get("input_field_refs", [])}
                     payload.update(command.get("fixed_values") or {})
                     return [action for action in actions if action.get("id") == command["id"]
+                        and sum(item.get('id') == command['id'] for item in actions) == 1
                         and command["id"] in buttons and action.get("on") == "submit"
                         and action.get("params", {}).get("operation_id") == operation
                         and action.get("params", {}).get("context", {}).get("prototype_command_id") == command["id"]
+                        and set(action.get('params', {})) <= {'operation_id', 'context', 'payload', 'record_id'}
+                        and action.get('params', {}).get('context') == {'prototype_command_id': command['id']}
                         and action.get("target") == widget.get("dataSource", {}).get("resourceType")
                         and action.get("params", {}).get("payload", {}) == payload]
                 coverage = []

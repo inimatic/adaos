@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import pytest
 import test_builder_semantic_graph as shared_graph
@@ -18,7 +19,9 @@ def graph_project(tmp_path):
 @pytest.fixture
 def native_label_builder(graph_project, monkeypatch):
     service, workflow, root, document = graph_project
-    module = native_builder(Path(__file__).resolve().parents[1] / ".adaos/workspace/skills/builder_skill/handlers/main.py")
+    declared = os.environ.get('ADAOS_TEST_BUILDER_SOURCE')
+    source = Path(declared) if declared else Path(__file__).resolve().parents[1] / ".adaos/workspace/skills/builder_skill"
+    module = native_builder(source / 'handlers/main.py')
     session = {"id": "fixture", "scenario_id": "semantic_labels", "artifact_root": str(root), "ui_revision": "001"}
     monkeypatch.setattr(semantic_graph.SemanticGraphService, "from_context", classmethod(lambda cls: service))
     monkeypatch.setattr(workflow_sdk, "_service", lambda: workflow)

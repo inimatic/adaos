@@ -34,6 +34,7 @@ def tree_identity(root: Path) -> dict[str, str]:
 
 
 def fixed_contract_index() -> dict[str, Any]:
+    """Local prefetch fixture, not a set of registered Root MCP locators."""
     bundle = _implementation_sdk_contract_bundle()
     contracts = bundle.get("contracts") or []
     return {
@@ -45,7 +46,9 @@ def fixed_contract_index() -> dict[str, Any]:
         "details": [{"descriptor_id": "public-sdk", "item_id": item.get("name"), "level": "exact",
                      "item": {"title": item.get("name"), "summary": json.dumps(item, ensure_ascii=False)}}
                     for item in contracts],
-        "evidence": {"status": "retained", "result_digest": digest(bundle)},
+        "evidence": {"status": "retained", "result_digest": digest(bundle),
+                     "source_scope": "local_sdk_export_snapshot", "root_mcp_readable": False,
+                     "locator_policy": "These synthetic ids are local prefetch keys, not callable Root MCP locators."},
     }
 
 

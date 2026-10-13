@@ -106,7 +106,7 @@ def test_global_dependencies_affect_every_unit_and_require_admission(key, value)
     assert impact["requires_new_admission"] and impact["fixtures"]
 
 
-@pytest.mark.parametrize("fault", ["missing", "operation", "identity", "opener", "button", "target", "fixed", "missing_input", "unexpected_input", "wrong_input_expression"])
+@pytest.mark.parametrize("fault", ["missing", "operation", "identity", "opener", "button", "target", "fixed", "missing_input", "unexpected_input", "wrong_input_expression", "duplicate", "authority"])
 def test_lowering_requires_individual_command_and_composition_coverage(fault):
     document, _ = load_slice(ROOT)
     webui = compile_semantic_prototype(document, project_ref="project:lowering")['webui']
@@ -121,6 +121,8 @@ def test_lowering_requires_individual_command_and_composition_coverage(fault):
     elif fault == "missing_input": next(action for action in form['actions'] if action['id'] == 'save')['params']['payload'].pop('name')
     elif fault == "unexpected_input": complete['params']['payload']['name'] = '$event.values.name'
     elif fault == "wrong_input_expression": complete['params']['payload']['review_note'] = 'Forged review'
+    elif fault == "duplicate": form['actions'].append(copy.deepcopy(complete))
+    elif fault == "authority": complete['params']['actor'] = {'role': 'owner'}
     else:
         table = next(item for item in webui['ui']['application']['desktop']['pageSchema']['widgets'] if item['id'] == 'records-list')
         table['actions'] = [action for action in table['actions'] if action.get('on') != 'click:edit']

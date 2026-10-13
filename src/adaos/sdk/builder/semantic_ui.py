@@ -61,8 +61,12 @@ def record_turn_timing(*, meta: Mapping[str, Any], stage: str, timings: Mapping[
 
 
 def admit(*, project_ref: str, instruction: str, source_message_id: str, write_refs=None, write_properties=None,
-          operation_kinds=('label.set', 'view.fields.reorder'), max_ops=1) -> dict[str, Any]:
+          operation_kinds=None, max_ops=1) -> dict[str, Any]:
     from adaos.services.builder.semantic_admission import SemanticAdmissionService
+    if operation_kinds is None:
+        selected = [prop for properties in (write_properties or {}).values() for prop in properties]
+        operation_kinds = (['view.scope.value.set'] if selected and all(prop.startswith('scope_filters.') for prop in selected)
+            else ['label.set', 'view.fields.reorder'])
     return SemanticAdmissionService.from_context().begin(project_ref=project_ref, instruction=instruction,
         source_message_id=source_message_id, write_refs=write_refs, write_properties=write_properties,
         operation_kinds=operation_kinds, max_ops=max_ops)

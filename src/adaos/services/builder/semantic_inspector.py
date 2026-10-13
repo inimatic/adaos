@@ -19,7 +19,7 @@ def field_ref(resource_id: str, identity: str) -> str:
 
 
 def semantic_refs(document: Mapping[str, Any]) -> list[dict[str, Any]]:
-    from .semantic_graph import supports_field_order
+    from .semantic_graph import supports_field_order, scope_property
     nodes = []
     keys = Counter()
     def text_keys(value):
@@ -63,8 +63,11 @@ def semantic_refs(document: Mapping[str, Any]) -> list[dict[str, Any]]:
         writes = label_writes(view['title'], 'title')
         if supports_field_order(document, view):
             writes.append('field_refs')
+        if view['role'] == 'collection' and view.get('presentation') == 'table':
+            writes.extend(scope_property(item['field_ref']) for item in view.get('scope_filters', []))
         add(f"view:{view['id']}", 'view', view['title'],
-            [f"resource:{view['resource_ref']}", *[field_ref(view['resource_ref'], ref) for ref in view['field_refs']]], writes)
+            [f"resource:{view['resource_ref']}", *[field_ref(view['resource_ref'], ref) for ref in view['field_refs']],
+             *[field_ref(view['resource_ref'], item['field_ref']) for item in view.get('scope_filters', [])]], writes)
     for relation in document.get('relationships', []):
         dependencies = [
             f"resource:{relation['from_resource_ref']}", f"resource:{relation['to_resource_ref']}",
