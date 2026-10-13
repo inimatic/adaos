@@ -28,6 +28,9 @@ YJS_SHADOW_ENVIRONMENT = (
     "ADAOS_YJS_SIDECAR_SHADOW_MAX_UPDATE_BYTES",
     "ADAOS_YJS_SIDECAR_SHADOW_MAX_ROOMS",
     "ADAOS_YJS_SIDECAR_SHADOW_MAX_SNAPSHOT_BYTES",
+    "ADAOS_YJS_SIDECAR_SHADOW_PERSIST_ENABLE",
+    "ADAOS_YJS_SIDECAR_SHADOW_STORAGE_DIR",
+    "ADAOS_YJS_SIDECAR_SHADOW_CHECKPOINT_EVERY",
     "ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT",
     "ADAOS_YJS_SIDECAR_SHADOW_TIMEOUT_S",
     "ADAOS_YJS_SIDECAR_SHADOW_CONTROL_URL",
@@ -228,6 +231,13 @@ def generate_configuration(
         raise ValueError("Yjs sidecar shadow requires a managed realtime sidecar")
     if yjs_shadow_enabled and not yjs_shadow_environment.get("ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES"):
         raise ValueError("Yjs sidecar shadow requires an explicit webspace allowlist")
+    if yjs_shadow_enabled:
+        yjs_shadow_environment.setdefault("ADAOS_YJS_SIDECAR_SHADOW_PERSIST_ENABLE", "1")
+        yjs_shadow_environment.setdefault(
+            "ADAOS_YJS_SIDECAR_SHADOW_STORAGE_DIR",
+            str(base / "state" / "yjs-shadow"),
+        )
+        yjs_shadow_environment.setdefault("ADAOS_YJS_SIDECAR_SHADOW_CHECKPOINT_EVERY", "64")
 
     config_dir = service_path.parent
     workers_dir = config_dir / "workers"

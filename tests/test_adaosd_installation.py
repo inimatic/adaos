@@ -105,6 +105,11 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
             "33554432"
         )
         assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT"] == "64"
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_PERSIST_ENABLE"] == "1"
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_STORAGE_DIR"] == str(
+            base.resolve() / "state" / "yjs-shadow"
+        )
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_CHECKPOINT_EVERY"] == "64"
     assert Path(runtime["working_directory"]).is_absolute()
     assert "{active_slot}" in runtime["working_directory"]
 
