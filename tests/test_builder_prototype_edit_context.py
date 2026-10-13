@@ -39,3 +39,20 @@ def test_archived_edit_context_matches_full_refusal(graph_project, monkeypatch):
     bounded = workflow.prototype_edit_context('scenario', root.name)
     assert bounded['archived']
     assert not bounded['capabilities']['can_edit_prototype']
+
+
+def test_edit_context_cache_is_bound_to_the_complete_actual_state(graph_project, monkeypatch):
+    _service, workflow, root, _document = graph_project
+    before = workflow.prototype_edit_context('scenario', root.name)
+    original = type(workflow)._normalized_workflow
+    calls = []
+    def counted(self, *args, **kwargs):
+        calls.append(True)
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(type(workflow), '_normalized_workflow', counted)
+    assert workflow.prototype_edit_context('scenario', root.name) == before
+    assert calls == []
+    state = workflow._read_state('scenario', root.name)
+    monkeypatch.setattr(type(workflow), '_read_state', lambda *_args: {**state, 'archived': True})
+    assert not workflow.prototype_edit_context('scenario', root.name)['capabilities']['can_edit_prototype']
+    assert calls == [True]

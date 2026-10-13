@@ -60,11 +60,12 @@ def record_turn_timing(*, meta: Mapping[str, Any], stage: str, timings: Mapping[
     return record(meta=meta, stage=stage, timings=timings)
 
 
-def admit(*, project_ref: str, instruction: str, source_message_id: str, write_refs=None,
+def admit(*, project_ref: str, instruction: str, source_message_id: str, write_refs=None, write_properties=None,
           operation_kinds=('label.set', 'view.fields.reorder'), max_ops=1) -> dict[str, Any]:
     from adaos.services.builder.semantic_admission import SemanticAdmissionService
     return SemanticAdmissionService.from_context().begin(project_ref=project_ref, instruction=instruction,
-        source_message_id=source_message_id, write_refs=write_refs, operation_kinds=operation_kinds, max_ops=max_ops)
+        source_message_id=source_message_id, write_refs=write_refs, write_properties=write_properties,
+        operation_kinds=operation_kinds, max_ops=max_ops)
 
 
 def prepare_proposal(*, project_ref: str, admission_id: str, proposal: Mapping[str, Any]) -> dict[str, Any]:
@@ -89,5 +90,20 @@ def prepare_request(*, project_ref: str, instruction: str, source_message_id: st
         expected_revision=expected_revision)
 
 
+def proposal_observation(*, project_ref: str, admission_id: str) -> dict[str, Any]:
+    """Bounded job evidence, including failed/invalid proposals; no private payloads."""
+    from adaos.services.builder.semantic_admission import SemanticAdmissionService
+    from adaos.services.builder.semantic_graph import _read
+    service = SemanticAdmissionService.from_context()
+    _root, path = service._location(project_ref, admission_id)
+    model_path = path.with_suffix('.model.json')
+    if not model_path.is_file():
+        return {'status': 'not_submitted', 'model_calls': 0}
+    retained = _read(model_path)
+    metrics = retained.get('execution_metrics') or {}
+    return {'status': retained.get('status'), 'root_job_id': retained.get('job_id'),
+            'execution_metrics': metrics, 'model_calls': metrics.get('llm_calls', int(bool(retained.get('job_id'))))}
+
+
 __all__ = ["apply", "replay", "verify_source", "recognizes_label_request", "prepare_label_request",
-           "recognizes_request", "prepare_request", "inspect", "record_turn_timing", "admit", "prepare_proposal", "propose"]
+           "recognizes_request", "prepare_request", "inspect", "record_turn_timing", "admit", "prepare_proposal", "propose", "proposal_observation"]

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from .semantic_admission import SemanticAdmissionService, PROPOSAL_SCHEMA, proposal_contract
+from .semantic_admission import SemanticAdmissionService, PROPOSAL_SCHEMA, proposal_contract, compiler_digest
 from .semantic_graph import _read, digest
 from .run_observability import execution_metrics_from_llm
 from .workflow import BuilderWorkflowError
@@ -70,13 +70,34 @@ def document_shape(value):
 def _response_metrics(job: Mapping[str, Any], effort: str) -> dict[str, Any]:
     candidates = [job]
     for _ in range(4):
-        added = [value for candidate in candidates for key in ('result', 'response', 'data', 'job')
+        added = [value for candidate in candidates for key in ('result', 'response', 'data', 'job', '_protocol')
                  if isinstance(value := candidate.get(key), Mapping) and all(value is not old for old in candidates)]
         if not added:
             break
         candidates.extend(added)
-    selected = next((row for row in candidates if row.get('telemetry')), None)
-    selected = selected or next((row for row in candidates if row.get('usage')), job)
+    # Root wrappers may hold timing while the nested response owns usage/cost.
+    # Merge disjoint measurements; a thin wrapper must not hide billed tokens.
+    selected = {}
+    telemetry = {}
+    for row in reversed(candidates):
+        for key in ('model', 'usage', 'cost'):
+            if row.get(key):
+                selected[key] = row[key]
+        for key, value in (row.get('telemetry') or {}).items():
+            if isinstance(value, Mapping) and isinstance(telemetry.get(key), Mapping):
+                telemetry[key] = {**telemetry[key], **value}
+            elif value is not None:
+                telemetry[key] = value
+    usage = dict(telemetry.get('usage') or selected.get('usage') or {})
+    for name, nested, key in [('cached_input_tokens', 'input_tokens_details', 'cached_tokens'),
+                              ('reasoning_tokens', 'output_tokens_details', 'reasoning_tokens')]:
+        value = (usage.get(nested) or {}).get(key)
+        if name not in usage and value is not None:
+            usage[name] = value
+    selected['usage'] = usage
+    if telemetry.get('usage'):
+        telemetry['usage'] = usage
+    selected['telemetry'] = telemetry
     metrics = execution_metrics_from_llm(selected, reasoning_effort=effort)
     metrics.setdefault('llm_calls', 1)
     metrics.setdefault('repair_attempts', 0)
@@ -103,6 +124,13 @@ class SemanticProposer:
         reasoning = reasoning_for_model(model, reasoning_effort)
         root, path = self.admission._location(project_ref, admission_id)
         record = _read(path)
+        immutable = {key: value for key, value in record.items() if key not in
+                     ('admission_digest', 'prepared_request', 'proposal', 'prepared_digest')}
+        if digest(immutable) != record['admission_digest'] or compiler_digest() != record['compiler_digest']:
+            raise BuilderWorkflowError('Proposal admission integrity/compiler dependency mismatch')
+        gate = self.admission.graph.workflow.prototype_edit_context('scenario', project_ref.partition(':')[2])
+        if record['change_id'] != gate['change']['change_id'] or not gate['capabilities']['can_edit_prototype']:
+            raise BuilderWorkflowError('Proposal requires its active editable Change')
         packet = self.admission._packet(record)
         model_path = path.with_suffix('.model.json')
         user_input = {'request': record['source_request']['instruction'], 'context': packet['context']}
@@ -133,7 +161,9 @@ class SemanticProposer:
             # Recheck the immutable base before any paid submission, not after it.
             if not retained:
                 _root, gate, document, runtime, locales = self.admission._base(project_ref)
-                if (gate['generation'] != record['expected_generation'] or digest(document) != record['base_hash']
+                if (gate['generation'] != record['expected_generation']
+                        or self.admission.graph.workflow.current_prototype_revision('scenario', gate['object_id']) != record['source_revision']
+                        or digest(document) != record['base_hash']
                         or digest(runtime) != record['runtime_hash']
                         or {locale: digest(value) for locale, value in locales.items()} != record['locale_hashes']):
                     raise BuilderWorkflowError('The proposal base changed before model submission')

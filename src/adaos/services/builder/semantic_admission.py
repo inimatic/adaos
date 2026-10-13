@@ -47,6 +47,9 @@ class SemanticAdmissionService:
         return cls(SemanticGraphService.from_context())
 
     def _location(self, project_ref: str, admission_id: str | None = None):
+        from .semantic_request_scope import current_target
+        if current_target() is not None and current_target() != project_ref:
+            raise BuilderWorkflowError('semantic admission target differs from the caller-selected project')
         if not re.fullmatch(r'scenario:[A-Za-z0-9_.-]{1,160}', project_ref):
             raise BuilderWorkflowError('semantic admission requires an exact scenario ref')
         root = self.graph.workflow.project_root('scenario', project_ref.partition(':')[2])
@@ -70,7 +73,8 @@ class SemanticAdmissionService:
         return root, gate, document, runtime, locales
 
     def begin(self, *, project_ref: str, instruction: str, source_message_id: str,
-              write_refs: Sequence[str] | None = None, operation_kinds: Sequence[str] = SUPPORTED,
+              write_refs: Sequence[str] | None = None, write_properties: Mapping[str, Sequence[str]] | None = None,
+              operation_kinds: Sequence[str] = SUPPORTED,
               max_ops: int = 1) -> dict[str, Any]:
         if (not isinstance(instruction, str) or not instruction.strip() or len(instruction) > 1000
                 or not isinstance(source_message_id, str) or not source_message_id.strip() or len(source_message_id) > 240):
@@ -86,9 +90,14 @@ class SemanticAdmissionService:
         with _LOCK, mutation_lock(path.parent / '.mutation.lock'):
             root, gate, document, runtime, locales = self._base(project_ref)
             requested_refs = sorted(set(write_refs)) if write_refs is not None else None
+            requested_properties = ({ref: sorted(set(props)) for ref, props in write_properties.items()}
+                                    if write_properties is not None else None)
+            if requested_properties is not None and set(requested_properties) != set(requested_refs or []):
+                raise BuilderWorkflowError('property scope requires exactly its explicit semantic refs')
             if path.is_file():
                 retained = _read(path)
                 if (retained['source_request'] != origin or retained['requested_write_refs'] != requested_refs
+                        or retained.get('requested_write_properties') != requested_properties
                         or retained['operation_kinds'] != kinds or retained['max_ops'] != max_ops):
                     raise BuilderWorkflowError('source message identity conflicts with retained semantic admission')
                 if retained['change_id'] != gate['change']['change_id']:
@@ -105,6 +114,11 @@ class SemanticAdmissionService:
                               or (value.startswith(('title.', 'label.')) and 'label.set' in kinds)]
                 if not properties:
                     continue
+                if requested_properties is not None:
+                    selected = requested_properties[node['ref']]
+                    if not selected or not set(selected) <= set(properties):
+                        raise BuilderWorkflowError('requested semantic properties are unsupported')
+                    properties = selected
                 values = {}
                 for prop in properties:
                     values[prop] = (copy.deepcopy(_view(document, node['ref'])['field_refs']) if prop == 'field_refs'
@@ -119,7 +133,8 @@ class SemanticAdmissionService:
                 'change_id': gate['change']['change_id'], 'source_revision': self.graph.workflow.current_prototype_revision('scenario', gate['object_id']),
                 'expected_generation': gate['generation'], 'base_hash': digest(document), 'runtime_hash': digest(runtime),
                 'locale_hashes': {locale: digest(value) for locale, value in locales.items()},
-                'source_request': origin, 'requested_write_refs': requested_refs, 'operation_kinds': kinds,
+                'source_request': origin, 'requested_write_refs': requested_refs,
+                'requested_write_properties': requested_properties, 'operation_kinds': kinds,
                 'max_ops': max_ops, 'write_masks': masks, 'status': 'admitted', 'compiler_digest': compiler_digest(),
                 'context': {'schema': 'adaos.builder.semantic_op_context.v1', 'title': document['title'],
                     'operation_kinds': kinds, 'max_ops': max_ops, 'targets': descriptors,
@@ -164,7 +179,9 @@ class SemanticAdmissionService:
                 if proposal['ops']:
                     raise BuilderWorkflowError('clarification or unsupported proposal cannot carry operations')
                 return {'status': proposal['status'], 'message': proposal['message'], 'model_calls': 0}
-            if not proposal['ops'] or len(proposal['ops']) > retained['max_ops']:
+            if not proposal['ops']:
+                return {'status': 'noop', 'message': proposal['message'] or 'The proposal changes no admitted property.'}
+            if len(proposal['ops']) > retained['max_ops']:
                 raise BuilderWorkflowError('proposal exceeds admitted operation capacity')
             masks = {row['ref']: set(row['properties']) for row in retained['write_masks']}
             ops = []
@@ -226,8 +243,6 @@ class SemanticAdmissionService:
                         ops.append({'kind': 'label.set', 'ref': ref, 'locale': locale, 'text': updated})
         if after != expected:
             raise BuilderWorkflowError('full-document candidate changed semantics outside its admitted property write set')
-        if not ops:
-            return {'status': 'noop', 'message': 'The full-document proposal changes no admitted property.'}
         return self.prepare(project_ref=project_ref, admission_id=admission_id, proposal={
             'schema': PROPOSAL_SCHEMA, 'status': 'proposed', 'message': candidate['message'], 'ops': ops})
 

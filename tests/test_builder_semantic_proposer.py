@@ -89,3 +89,18 @@ def test_provider_schema_is_closed_and_uses_only_admitted_refs(graph_project):
         assert variant['additionalProperties'] is False
         assert set(variant['required']) == set(variant['properties'])
         assert variant['properties']['ref']['enum'] == ['view:work-list']
+
+
+def test_thin_root_wrapper_does_not_hide_nested_usage_or_cost():
+    from adaos.services.builder.semantic_proposer import _response_metrics
+    metrics = _response_metrics({'job_id': 'nested.job', 'telemetry': {'timing': {'queue_ms': 7}},
+        'result': {'model': 'gpt-5', 'usage': {'input_tokens': 120, 'output_tokens': 80},
+                   'cost': {'basis': 'estimate', 'estimated_usd': 0.002}}}, 'high')
+    assert metrics['input_tokens'] == 120 and metrics['output_tokens'] == 80
+    assert metrics['cost_usd'] == 0.002 and metrics['root_queue_ms'] == 7
+
+
+def test_missing_metering_is_not_reported_as_zero_cost():
+    from adaos.services.builder.semantic_proposer import _response_metrics
+    metrics = _response_metrics({'job_id': 'unmetered', 'status': 'failed'}, 'high')
+    assert metrics['llm_calls'] == 1 and 'cost_usd' not in metrics

@@ -80,7 +80,21 @@ def submit_request(
             "prototype_request_source": source_kind,
         },
     }
-    execution = port.submit_turn(payload, timeout_seconds=max(0.1, timeout_seconds))
+    from .semantic_request_scope import request_target
+    target_ref = None
+    if meta.get('builder_semantic_edit_mode') in {'bounded_ops', 'full_document'}:
+        selected = meta.get('builder_selected_target') or {}
+        if selected.get('object_type') != 'scenario' or not selected.get('object_id'):
+            raise ValueError('A bounded SDK edit requires an explicit scenario target')
+        target_ref = 'scenario:' + str(selected['object_id'])
+        thread_id = 'prompt-project:' + target_ref
+        for key in ('thread_id', 'conversation_thread_id', 'conversation_topic_id', 'topic_id'):
+            if meta.get(key) and meta[key] != thread_id:
+                raise ValueError('The selected semantic project and conversation target disagree')
+        payload['_meta']['thread_id'] = thread_id
+        payload['_meta']['builder_topic'] = {'scenario_id': selected['object_id'], 'thread_id': thread_id}
+    with request_target(target_ref):
+        execution = port.submit_turn(payload, timeout_seconds=max(0.1, timeout_seconds))
     if not isinstance(execution, Mapping):
         raise RuntimeError("Builder Prototype execution port returned a non-object")
     return {

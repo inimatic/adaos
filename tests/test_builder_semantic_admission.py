@@ -18,6 +18,23 @@ def begin(graph_project, **kwargs):
     return service, packet
 
 
+def test_explicit_property_mask_cannot_be_widened_by_a_model(graph_project):
+    service, packet = begin(graph_project, write_properties={'view:work-list': ['title.en']})
+    assert packet['write_masks'] == [{'ref': 'view:work-list', 'properties': ['title.en']}]
+    candidate = {'schema': PROPOSAL_SCHEMA, 'status': 'proposed', 'message': '',
+                 'ops': [{'kind': 'label.set', 'ref': 'view:work-list', 'locale': 'ru', 'text': 'Other'}]}
+    with pytest.raises(BuilderWorkflowError, match='property write set'):
+        service.prepare(project_ref=packet['project_ref'], admission_id=packet['admission_id'], proposal=candidate)
+
+
+def test_empty_model_proposal_is_a_meterable_noop_not_a_mutation(graph_project):
+    service, packet = begin(graph_project)
+    result = service.prepare(project_ref=packet['project_ref'], admission_id=packet['admission_id'], proposal={
+        'schema': PROPOSAL_SCHEMA, 'status': 'proposed', 'message': 'Already matches', 'ops': []})
+    assert result['status'] == 'noop'
+    assert graph_project[1].current_prototype_revision('scenario', 'semantic_labels') == '001'
+
+
 def proposal(graph_project):
     _graph, _workflow, _root, document = graph_project
     view = next(row for row in document['views'] if row['id'] == 'work-list')

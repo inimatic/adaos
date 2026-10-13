@@ -72,8 +72,8 @@ def _prompt_topic_id(object_type: Optional[str], object_id: Optional[str]) -> st
 
 
 def _builder_conversation_id(webspace_id: str) -> str:
-    ws = str(webspace_id or "default").strip() or "default"
-    return f"conv.skill.builder_skill.default.{ws}"
+    from adaos.services.conversation_links import builder_conversation_id
+    return builder_conversation_id(webspace_id)
 
 
 @dataclass(slots=True)

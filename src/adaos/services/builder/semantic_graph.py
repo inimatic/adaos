@@ -25,6 +25,7 @@ SCHEMA = "adaos.builder.semantic_graph_change.v1"
 JOURNAL_SCHEMA = "adaos.builder.semantic_graph_transaction.v1"
 REDUCER = "semantic_graph.labels.v1"
 BOUNDED_REDUCER = "semantic_graph.bounded.v1"
+_BASELINE_COMPILE_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
 
 def supports_field_order(document: Mapping[str, Any], view: Mapping[str, Any]) -> bool:
@@ -174,13 +175,25 @@ def verify_baseline(document: Mapping[str, Any], webui: Mapping[str, Any], *, pr
     """Compare the effective UI with recompilation; a digest marker is insufficient."""
     if document.get("schema") != "adaos.webui.semantic.v2":
         raise BuilderWorkflowError("semantic baseline requires v2 source")
+    from .semantic_admission import compiler_digest
+    source_digest = digest(document)
+    implementation_digest = compiler_digest()
     actual = _runtime_projection(webui)
     for locale in ("en", "ru"):
-        compiled = compile_semantic_prototype(document, project_ref=project_ref, primary_locale=locale)
-        if compiled["semantic_digest"] != digest(document):
+        key = (project_ref, source_digest, implementation_digest, locale)
+        with _LOCK:
+            compiled = _BASELINE_COMPILE_CACHE.get(key)
+            if compiled is None:
+                compiled = compile_semantic_prototype(document, project_ref=project_ref, primary_locale=locale)
+                if len(_BASELINE_COMPILE_CACHE) >= 32:
+                    _BASELINE_COMPILE_CACHE.pop(next(iter(_BASELINE_COMPILE_CACHE)))
+                _BASELINE_COMPILE_CACHE[key] = copy.deepcopy(compiled)
+            else:
+                compiled = copy.deepcopy(compiled)
+        if compiled["semantic_digest"] != source_digest:
             raise BuilderWorkflowError("semantic baseline source is not canonical; explicit normalization is required")
         if _runtime_projection(compiled["webui"]) == actual:
-            return {"compiled": compiled, "primary_locale": locale, "semantic_digest": digest(document)}
+            return {"compiled": compiled, "primary_locale": locale, "semantic_digest": source_digest}
     raise BuilderWorkflowError("semantic baseline drift: effective UI differs from compiled source")
 
 

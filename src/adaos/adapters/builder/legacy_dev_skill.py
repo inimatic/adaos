@@ -55,4 +55,20 @@ class LegacyDevSkillPrototypeExecution:
         )
 
 
-__all__ = ["LegacyDevSkillPrototypeExecution"]
+class WorkspaceSkillPrototypeExecution(LegacyDevSkillPrototypeExecution):
+    """Execute the admitted opt-in route in the active Workspace package.
+
+    The separate legacy DEV slot is not an attestation of the installed Builder.
+    No fallback to another package is permitted after an installed-route failure.
+    """
+    adapter_id = "workspace_skill.v1"
+
+    def submit_turn(self, payload: Mapping[str, Any], *, timeout_seconds: float) -> Mapping[str, Any]:
+        return self._manager().run_tool("builder_skill", "chat", dict(payload), timeout=timeout_seconds)
+
+    def get_session(self, session_id: str, *, webspace_id: str, timeout_seconds: float) -> Mapping[str, Any]:
+        return self._manager().run_tool("builder_skill", "get_session",
+            {"session_id": session_id, "webspace_id": webspace_id}, timeout=timeout_seconds)
+
+
+__all__ = ["LegacyDevSkillPrototypeExecution", "WorkspaceSkillPrototypeExecution"]

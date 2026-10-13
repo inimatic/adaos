@@ -135,6 +135,7 @@ def _feature_flag(value: bool | None, *, env_name: str) -> bool:
 BUILDER_CONTEXT_PACKET_SCHEMA = "adaos.builder.context_packet.v1"
 BUILDER_INTERACTION_FRAME_SCHEMA = "adaos.builder.interaction_frame.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
+_EDIT_CONTEXT_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 _LOCK = threading.RLock()
 _MAX_STATE_BYTES = 512 * 1024
 _MAX_INLINE_STATE_BYTES = 384 * 1024
@@ -3284,15 +3285,26 @@ class BuilderWorkflowService:
         kind, project_id = _kind(object_type), _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
+            definition = self._governed_definition()
+            fingerprint = hashlib.sha256(json.dumps({"state": state, "definition": definition.source,
+                "package_digest": self._active_package_digest, "binding_digest": self._active_binding_digest},
+                sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+            cache_key = (str(self._state_path(kind, project_id).resolve()), kind, project_id, fingerprint)
+            if cache_key in _EDIT_CONTEXT_CACHE:
+                return copy.deepcopy(_EDIT_CONTEXT_CACHE[cache_key])
             workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
             capabilities = self._capabilities(workflow, archived=bool(state.get("archived")),
                                               object_type=kind, normalized=True)
             change = workflow.get("change") or {}
-            return {"schema": "adaos.builder.prototype_edit_context.v1", "object_type": kind,
+            result = {"schema": "adaos.builder.prototype_edit_context.v1", "object_type": kind,
                     "object_id": project_id, "generation": workflow["generation"],
                     "active_phase": workflow.get("active_phase"), "archived": bool(state.get("archived")),
                     "change": {"change_id": change.get("change_id"), "status": change.get("status")},
                     "capabilities": {"can_edit_prototype": capabilities["can_edit_prototype"]}}
+            if len(_EDIT_CONTEXT_CACHE) >= 64:
+                _EDIT_CONTEXT_CACHE.pop(next(iter(_EDIT_CONTEXT_CACHE)))
+            _EDIT_CONTEXT_CACHE[cache_key] = copy.deepcopy(result)
+            return result
 
     def describe(self, object_type: str, object_id: str) -> dict[str, Any]:
         kind = _kind(object_type)

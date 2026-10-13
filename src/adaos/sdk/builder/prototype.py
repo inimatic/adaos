@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 _COMPATIBILITY_PORT: Any = None
+_WORKSPACE_PORT: Any = None
 
 
 def _compatibility_execution_port():
@@ -39,8 +40,19 @@ def submit_request(
 
     from adaos.services.builder.prototype_requests import submit_request as submit
 
+    global _WORKSPACE_PORT
+    # Scope this cutover to the admitted semantic proposer. General generation
+    # retains its explicitly named compatibility backend until separately qualified.
+    mode = (metadata or {}).get("builder_semantic_edit_mode")
+    if mode in {"bounded_ops", "full_document"}:
+        from adaos.adapters.builder.legacy_dev_skill import WorkspaceSkillPrototypeExecution
+        if _WORKSPACE_PORT is None:
+            _WORKSPACE_PORT = WorkspaceSkillPrototypeExecution()
+        port = _WORKSPACE_PORT
+    else:
+        port = _compatibility_execution_port()
     return submit(
-        _compatibility_execution_port(),
+        port,
         statement,
         webspace_id=webspace_id,
         locale=locale,
