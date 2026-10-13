@@ -36,16 +36,8 @@ SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA = (
 )
 SEMANTIC_COMPILE_RESULT_SCHEMA = "adaos.builder.semantic_compile_result.v1"
 _ABI_ROOT = Path(__file__).resolve().parents[2] / "abi"
-_FIELD_TYPES = {
-    "short_text": "shortText",
-    "long_text": "longText",
-    "number": "number",
-    "date": "date",
-    "boolean": "boolean",
-    "choice": "singleChoice",
-    "multi_choice": "multiChoice",
-    "attachment": "fileUpload",
-}
+from adaos.services.ui_component_contracts import load_component_contract, project_component_contract, lowering_receipt
+
 
 
 @lru_cache(maxsize=8)
@@ -2081,6 +2073,16 @@ def _guard_expression(guard: Mapping[str, Any], fields: Mapping[str, Any]) -> st
     return f"{inverse} || ({condition} && {requirement})"
 
 
+def _prototype_command_policies(commands: Sequence[Mapping[str, Any]], resource: Mapping[str, Any]) -> dict[str, Any]:
+    if not any(command.get("guard") for command in commands):
+        return {}
+    required = {field["id"] for field in resource["fields"] if field["required"]}
+    return {str(command["id"]): {**{key: copy.deepcopy(command[key]) for key in
+            ("kind", "input_field_refs", "fixed_values", "guard") if key in command},
+            "required_field_refs": sorted(required & set(command["input_field_refs"]))}
+            for command in commands}
+
+
 def _prototype_record_schema(resource: Mapping[str, Any]) -> dict[str, Any]:
     properties: dict[str, Any] = {
         "id": {"type": "string", "minLength": 1},
@@ -2117,6 +2119,7 @@ def _compile_semantic_prototype_v1(
     primary_locale: str | None = None,
 ) -> dict[str, Any]:
     """Compile a validated semantic document into canonical Prototype artifacts."""
+    field_types = load_component_contract()["field_types"]
 
     document = _validate_semantic_prototype_v1(
         value, brief=brief, require_primary=require_primary, record_state_ids=record_state_ids
@@ -2436,7 +2439,7 @@ def _compile_semantic_prototype_v1(
                     "id": field_id,
                     "title": label,
                     "title_i18n": label_i18n,
-                    "type": _FIELD_TYPES[str(field["value_type"])],
+                    "type": field_types[str(field["value_type"])],
                     "required": bool(field["required"]) and not read_only,
                 }
                 for semantic_key, runtime_key in (
@@ -2504,6 +2507,7 @@ def _compile_semantic_prototype_v1(
                         "operation_id": "update"
                         if command["kind"] == "transition"
                         else command["kind"],
+                        "context": {"prototype_command_id": command_id},
                         "payload": {
                             field_id: f"$event.values.{field_id}"
                             for field_id in command["input_field_refs"]
@@ -2615,7 +2619,10 @@ def _compile_semantic_prototype_v1(
                 "brief_ref": document["brief_ref"],
                 "capability_gaps": copy.deepcopy(document["capability_gaps"]),
                 "prototype_record_schemas": {resource_type: _prototype_record_schema(resource)},
-                "prototype_resource_policies": {resource_type: {"read_only_when": resource["read_only_when"]}} if resource.get("read_only_when") else {},
+                "prototype_resource_policies": {resource_type: {
+                    **({"read_only_when": resource["read_only_when"]} if resource.get("read_only_when") else {}),
+                    **({"commands": _prototype_command_policies(document["commands"], resource)} if _prototype_command_policies(document["commands"], resource) else {}),
+                }} if resource.get("read_only_when") or _prototype_command_policies(document["commands"], resource) else {},
             }
         },
     }
@@ -2689,6 +2696,7 @@ def _compile_semantic_prototype_v1(
         "source_map": source_map,
         "requirement_runtime_map": requirement_map,
         "binding_expansions": binding_expansions,
+        "component_contract": project_component_contract()["provenance"],
         "capability_gaps": copy.deepcopy(document["capability_gaps"]),
         "validation": validation,
     }
@@ -4982,6 +4990,9 @@ def _compile_semantic_prototype_v2(
         )
         runtime_type = _runtime_resource_type(resource_id, project_ref)
         policy = {"read_only_when": copy.deepcopy(resource["read_only_when"])} if resource.get("read_only_when") else {}
+        command_policies = _prototype_command_policies(slice_document["commands"], resource)
+        if command_policies:
+            policy["commands"] = command_policies
         relationships = [
             {
                 "field_ref": item["from_field_ref"],
@@ -5138,6 +5149,7 @@ def _compile_semantic_prototype_v2(
                 "semantic_source": SEMANTIC_PROTOTYPE_V2_SCHEMA,
                 "prototype_record_schemas": record_schemas,
                 "prototype_resource_policies": resource_policies,
+                "component_contract": project_component_contract()["provenance"],
                 "semantic_digest": _digest(document),
                 "brief_ref": document["brief_ref"],
                 "relationships": copy.deepcopy(document["relationships"]),
@@ -5235,6 +5247,8 @@ def _compile_semantic_prototype_v2(
         "source_map": source_map,
         "requirement_runtime_map": requirement_map,
         "binding_expansions": binding_expansions,
+        "component_contract": project_component_contract()["provenance"],
+        "contract_lowering": lowering_receipt(document, webui),
         "capability_gaps": copy.deepcopy(document["capability_gaps"]),
         "automation_requirements": automation_obligations(document, brief),
         "process_constraints": prototype_process_constraints(brief or {}),

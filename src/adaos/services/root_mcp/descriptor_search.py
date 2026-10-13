@@ -212,6 +212,7 @@ def _payload_headers(
                         summary=str(item.get("summary") or ""),
                         owner="adaos.client",
                         stability=str(payload.get("stage") or "experimental"),
+                        fingerprint=_fingerprint(item["component_contract"]) if item.get("component_contract") else None,
                         tags=tags,
                     )
                 )
@@ -451,6 +452,7 @@ def get_descriptor_item(
     level: str = "std",
     purpose: str = "authoring",
     consumer: str | None = None,
+    expected_source_digest: str | None = None,
 ) -> dict[str, Any]:
     """Return one exact descriptor item selected from a search result."""
 
@@ -579,6 +581,10 @@ def get_descriptor_item(
         if item is None:
             raise KeyError(selected_item_id)
     item_mapping = dict(item) if isinstance(item, Mapping) else {"value": item}
+    if expected_source_digest is not None:
+        observed = (item_mapping.get("component_contract") or {}).get("provenance", {}).get("source_digest")
+        if observed != expected_source_digest:
+            raise ValueError("descriptor.contract_snapshot_incompatible")
     contract = (
         dict(item_mapping.get("contract") or {})
         if isinstance(item_mapping.get("contract"), Mapping)
@@ -625,6 +631,7 @@ def get_descriptor_item(
         ),
         "examples": _fingerprint({"examples": item_mapping.get("examples") or []}),
         "description": _fingerprint({"description": str(item_mapping.get("description") or "")}),
+        "component_declaration": (item_mapping.get("component_contract") or {}).get("provenance", {}).get("source_digest"),
     }
     receipt = {
         "schema": "adaos.descriptor.item_receipt.v1",

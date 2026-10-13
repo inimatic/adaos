@@ -1,0 +1,38 @@
+{
+  "schema": "adaos.ui.component_contract.v1",
+  "contract_id": "ui.collection_editor",
+  "version": "1.0.0",
+  "owner": "adaos.core.ui",
+  "projection_version": "1",
+  "applicability": {"stage": "prototype", "mode": "local_reversible", "environment": "web"},
+  "semantic_schema": "adaos.webui.semantic.v2",
+  "state_ownership": {"records": "prototype_provider", "draft": "editor", "query": "page", "scope": "semantic_source"},
+  "field_types": {"short_text": "shortText", "long_text": "longText", "number": "number", "date": "date", "boolean": "boolean", "choice": "singleChoice", "multi_choice": "multiChoice", "attachment": "fileUpload"},
+  "input_shapes": {
+    "ContractTableColumn": {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}, "label": {"type": "string"}, "width": {"type": "string"}, "align": {"enum": ["start", "center", "end"]}}},
+    "ContractFormField": {"type": "object", "required": ["id", "type"], "properties": {"id": {"type": "string"}, "type": {"type": "string"}, "title": {"type": "string"}, "required": {"type": "boolean"}, "readOnly": {"type": "boolean"}}},
+    "ContractCommandButton": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "enabledIf": {"type": "string"}}},
+    "ContractQueryControl": {"type": "object", "required": ["id", "label", "stateKey", "kind", "inputType"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "stateKey": {"type": "string"}, "kind": {"enum": ["search", "filter"]}, "inputType": {"enum": ["search", "text", "date", "number", "select"]}, "options": {"type": "array", "items": {"type": "object", "required": ["value", "label"], "properties": {"value": {"type": ["string", "number", "boolean"]}, "label": {"type": "string"}}}}}}
+  },
+  "shape_refs": {"ui.table": {"columns": "ContractTableColumn"}, "ui.form": {"fields": "ContractFormField", "buttons": "ContractCommandButton"}, "ui.actions": {"buttons": "ContractCommandButton"}, "ui.queryToolbar": {"controls": "ContractQueryControl"}},
+  "components": [
+    {"id": "ui.table", "role": "collection", "implementation": "TableWidgetComponent", "module": "../renderer/widgets/table.widget.component", "properties": {"columns": "array"}, "events": ["select", "click:<buttonId>"], "effects": ["page.selection"], "required_inputs": ["columns"], "dependencies": [], "loading": "common"},
+    {"id": "ui.form", "role": "editor", "implementation": "FormWidgetComponent", "module": "../renderer/widgets/form.widget.component", "properties": {"fields": "array", "buttons": "array", "autoCommit": "boolean"}, "events": ["submit", "validate", "save_draft", "reset", "change:<fieldId>"], "effects": ["editor.draft", "guarded.local_mutation"], "required_inputs": ["fields"], "dependencies": [], "loading": "common"},
+    {"id": "ui.actions", "role": "commands", "implementation": "CommandBarWidgetComponent", "module": "../renderer/widgets/command-bar.widget.component", "properties": {"buttons": "array"}, "events": ["click", "click:<buttonId>", "select:<buttonId>"], "effects": ["declared_action"], "required_inputs": ["buttons"], "dependencies": [], "loading": "common"},
+    {"id": "ui.queryToolbar", "role": "query", "implementation": "QueryToolbarWidgetComponent", "module": "../renderer/widgets/query-toolbar.widget.component", "properties": {"controls": "array"}, "events": [], "effects": ["page.query"], "required_inputs": ["controls"], "dependencies": ["ui.table"], "loading": "common"}
+  ],
+  "realizations": {
+    "provider.prototype": {"owner": "adaos.core.resources", "implementation": "adaos.services.resources.prototype.PrototypeResourceService", "effects": ["guarded.local_mutation"], "authority": "active_preview"},
+    "client.resourceOperation": {"owner": "adaos.client.action_runtime", "implementation": "PageActionService.resourceOperation", "effects": ["declared_action"], "authority": "declared_command"}
+  },
+  "mappings": [
+    {"id": "collection.table", "relation": "refinement", "source_roles": ["collection"], "condition": "presentation.table", "required": ["ui.table"], "alternatives": [], "obligations": ["query.scope_preserved", "selection.stable_id"]},
+    {"id": "collection.query", "relation": "refinement", "source_roles": ["collection", "query"], "condition": "collection.table.query_controls.present", "required": ["ui.table", "ui.queryToolbar"], "alternatives": [], "obligations": ["query.reset_user_only", "query.scope_preserved"]},
+    {"id": "editor.commands", "relation": "refinement", "source_roles": ["editor", "command"], "condition": "editor.commands.present", "required": ["ui.form", "client.resourceOperation", "provider.prototype"], "alternatives": [], "obligations": ["editor.cancel_no_write", "editor.required_before_write", "command.guard_before_write", "command.confirmation_before_write"]},
+    {"id": "editor.surface", "relation": "alternative", "source_roles": ["editor"], "condition": "editor.surface", "required": ["ui.form"], "alternatives": ["inline", "modal", "side_sheet"], "obligations": ["editor.reachable", "editor.cancel_no_write"]}
+  ],
+  "constraints": {"i18n": ["en", "ru"], "responsive": ["wide", "compact"], "external_effects": "unsupported", "mutation_authority": "active_preview", "confirmation": "declared_or_legacy_safety_default", "risk": "local_reversible"},
+  "fixtures": ["semantic-increments/fixture.json", "contract-conformance/slice.json"],
+  "obligations": ["query.reset_user_only", "query.scope_preserved", "selection.stable_id", "editor.cancel_no_write", "editor.required_before_write", "editor.reachable", "command.guard_before_write", "command.confirmation_before_write"],
+  "discovery_policy": {"inline": "Use admitted inline facts first. Do not call tools merely to satisfy a quota.", "known_locator": "Read a known locator directly; do not search for an already known identity.", "unknown_identity": "Search compatible candidate headers, then read and verify the exact record.", "unavailable": "Report a typed gap; do not invent callable tools or a production binding."}
+}

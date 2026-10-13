@@ -9,6 +9,10 @@
     "schema": { "const": "adaos.ui.capability_catalog.v1" },
     "catalog_version": { "type": "string", "minLength": 1 },
     "webui_schema": { "const": "adaos.webui.v1" },
+    "component_contracts": {"type": "array", "items": {"type": "object", "required": ["owner", "contract_id", "version", "source_digest", "projection_version", "applicability"]}},
+    "discovery_policy": {"type": "object", "required": ["inline", "known_locator", "unknown_identity", "unavailable"]},
+    "catalog_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "coverage": {"type": "object"},
     "navigation_contracts": {
       "type": "object",
       "additionalProperties": {

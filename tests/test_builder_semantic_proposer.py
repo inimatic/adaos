@@ -134,6 +134,25 @@ def test_observer_resume_keeps_the_frozen_request_after_a_prompt_update(graph_pr
     assert calls[0]['messages'] == original_messages
 
 
+def test_paid_pending_job_is_metered_after_compiler_change_without_rebase(graph_project, monkeypatch):
+    from adaos.services.builder import semantic_proposer as module
+    waits = []
+    def wait(*args, **kwargs):
+        waits.append(args[0])
+        if len(waits) == 1:
+            raise TimeoutError('observer interrupted')
+        return completed(*args, **kwargs)
+    proposer, packet, calls, completed = setup_proposer(graph_project, wait=wait)
+    with pytest.raises(TimeoutError):
+        run(proposer, packet)
+    monkeypatch.setattr(module, 'compiler_digest', lambda: 'sha256:' + '0' * 64)
+    result = run(proposer, packet)
+    assert result['status'] == 'stale_contract' and len(calls) == 1
+    assert result['execution_metrics']['cost_usd'] == 0.0002
+    assert graph_project[1].current_prototype_revision('scenario', 'semantic_labels') == '001'
+    assert run(proposer, packet) == result and len(calls) == 1
+
+
 def test_pending_model_job_is_visible_without_advancing_admitted_generation(graph_project):
     def wait(*args, **kwargs):
         raise TimeoutError('observer interrupted')

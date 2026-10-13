@@ -1,0 +1,13 @@
+schema: adaos.builder.e2e_case.v1
+case_id: collection-editor-contract-en
+title: Scope, guards, cancellation, source preservation and contract admission
+locale: en
+tags: [component-contract, reference, scoped-preview]
+steps:
+  - id: contract-episode
+    type: prototype.contract_episode
+    input: {owns_created_draft: true}
+    expect:
+      paths_present: [scenario_id, revision, rows]
+      values: {ok: true, model_calls: 0, usd: 0}
+cleanup: {policy: never, retain_on_failure: true}

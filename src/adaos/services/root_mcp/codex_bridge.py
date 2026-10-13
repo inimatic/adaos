@@ -917,6 +917,7 @@ class CodexRootMcpBridge:
                     "properties": {
                         "descriptor_id": {"type": "string"},
                         "item_id": {"type": "string"},
+                        "expected_source_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
                         "level": {
                             "type": "string",
                             "enum": ["std"] if self.profile.task_id else ["mini", "std", "rich"],
@@ -1889,6 +1890,7 @@ class CodexRootMcpBridge:
                     if task_scoped
                     else str(args.get("consumer") or "builder")
                 ),
+                expected_source_digest=args.get("expected_source_digest"),
             )
             return _tool_text(
                 payload,

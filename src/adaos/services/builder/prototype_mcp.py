@@ -101,16 +101,14 @@ def enabled() -> bool:
 
 
 def retrieval_index(*, available: bool | None = None) -> dict[str, Any]:
+    from adaos.services.ui_component_contracts import discovery_policy_text
     available = enabled() if available is None else available
     snapshot = library_snapshot()
     return {"schema": "adaos.builder.prototype_retrieval_index.v1", "available": available,
         "library_digest": snapshot["library_digest"], "authority": snapshot["authority"],
         "server_label": SERVER_LABEL if available else None,
         "tools": list(OPENAI_TOOLS) if available else [],
-        "policy": ("Read only the relevant platform-guidance fragment when inline information is insufficient; "
-            "search returns headers, read returns exact content. Pass library_digest as expected_digest. "
-            "Do not call tools merely to satisfy a quota. Tools cannot change project or application state.") if available
-            else "No retrieval tools are available in this controlled run; use the supplied context without inventing a tool channel.",
+        "policy": discovery_policy_text(available=bool(available)),
         "dimensions": [{"id": part["id"], "keywords": part["keywords"],
             "read_when": _READ_WHEN.get(part["id"], "Exact platform authoring rule for " + part["id"] + ".")}
             for part in snapshot["fragments"]]}

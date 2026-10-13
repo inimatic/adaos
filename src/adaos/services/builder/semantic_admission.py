@@ -31,7 +31,11 @@ def compiler_digest():
     paths = sorted(path for path in source.glob('semantic_*.py') if path.name not in noncompiler) + [abi / name for name in (
         'webui.semantic.v2.schema.json', 'builder.semantic_graph_change.v1.schema.json',
         'builder.semantic_op_proposal.v1.schema.json')]
-    return digest({str(path.relative_to(source.parents[1])): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths})
+    paths.extend([abi / 'ui.collection_editor.contract.v1.json', abi / 'ui.component_contract.v1.schema.json',
+                  source.parent / 'ui_component_contracts.py'])
+    from adaos.services.ui_component_contracts import project_component_contract
+    return digest({**{str(path.relative_to(source.parents[1])): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths},
+        'selected_component_declaration': project_component_contract()['provenance']['source_digest']})
 
 
 def proposal_contract() -> dict[str, Any]:
@@ -144,6 +148,9 @@ class SemanticAdmissionService:
                     'read_scope': 'descriptors_for_existing_labels_and_table_field_order',
                     'preservation': 'Core validates the complete source, runtime, locales and protected semantics.'}}
             record['admission_digest'] = digest(record)
+            from adaos.services.ui_component_contracts import project_component_contract
+            record['component_snapshot'] = project_component_contract()
+            record['admission_digest'] = digest({key: value for key, value in record.items() if key != 'admission_digest'})
             atomic_write_json(path, record)
             return self._packet(record)
 

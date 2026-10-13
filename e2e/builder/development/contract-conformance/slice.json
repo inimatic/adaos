@@ -1,0 +1,21 @@
+{
+  "schema": "adaos.e2e.component_contract_slice.v1",
+  "base_fixture": "e2e/builder/development/semantic-increments/fixture.json",
+  "contract_ref": "ui.collection_editor",
+  "scope": {"view_ref": "records-list", "field_ref": "team_id", "value": "team-1"},
+  "query_controls": [
+    {"id": "record-search", "kind": "search", "label": {"key": "query.search", "en": "Search records", "ru": "Поиск записей"}},
+    {"id": "record-state", "kind": "filter", "field_ref": "state", "label": {"key": "query.state", "en": "State", "ru": "Состояние"}}
+  ],
+  "reference_episodes": ["query_scope_reset", "cancel_invalid_draft", "required_rejection", "guard_rejection", "guard_success", "mutation_replay", "semantic_undo_preservation"],
+  "model_budget_usd": 15,
+  "assertion_owners": {
+    "field_types": "Core component declaration",
+    "query_scope_reset": "semantic source and independent reference semantics",
+    "cancel_invalid_draft": "Client renderer and independent reference semantics",
+    "guard_rejection": "Prototype provider and independent reference semantics",
+    "retrieval": "Root MCP component descriptor projector",
+    "input_admission": "Context Control",
+    "runtime_authority": "active Preview binding"
+  }
+}

@@ -603,6 +603,34 @@ def _llm_root_payload(
             payload["patch_stream"] = dict(patch_stream)
         else:
             payload["patch_stream"] = patch_stream
+    # Only typed Builder carriers opt into platform-fact admission. Generic LLM
+    # requests keep their original shape and do not gain Builder authority.
+    builder_contract = False
+    for message in normalized_messages:
+        try:
+            carrier = json.loads(message.get('content', ''))
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(carrier, dict):
+            continue
+        stable = carrier.get('stable_builder_context') or {}
+        context = carrier.get('context') or {}
+        if (isinstance(stable, dict) and isinstance(stable.get('semantic_invariants'), dict)
+                and stable['semantic_invariants'].get('contract') == 'adaos.builder.semantic_prototype_candidate.v2'):
+            builder_contract = True
+        if isinstance(context, dict) and context.get('schema') == 'adaos.builder.semantic_op_context.v1':
+            builder_contract = True
+    if builder_contract:
+        from adaos.services.contract_context_admission import prepare_component_input
+        from adaos.services.ui_component_contracts import project_component_contract
+        from adaos.services.context_control import ContextControlService
+        payload, _contract_admission = prepare_component_input(payload)
+        normalized_messages = payload['messages']
+        payload = _responses_payload(payload, normalized_messages)
+        ContextControlService().admit_model_input(payload, snapshot=project_component_contract(),
+            required_ids=_contract_admission['required_closure'], run_ref='llm-request:' + str(request_id)
+            if request_id else None)
+        return payload, normalized_messages
     return _responses_payload(payload, normalized_messages), normalized_messages
 
 

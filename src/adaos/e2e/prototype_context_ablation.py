@@ -93,6 +93,7 @@ def compile_experiment_messages(messages, *, strategy, generation_options, conte
     if context_mode == "composition":
         from adaos.services.builder.prototype_pipeline import compile_messages
         from adaos.services.builder.prototype_mcp import library_snapshot
+        from adaos.services.ui_component_contracts import discovery_policy_text
         if strategy not in {"full-no-mcp", "full-mcp", "core-indexed", "task-aware", "task-aware-compact", "oracle"}:
             raise ValueError("Unknown composition arm")
         source = copy.deepcopy(messages)
@@ -109,7 +110,7 @@ def compile_experiment_messages(messages, *, strategy, generation_options, conte
                 # their actual provider tool definitions differ.
                 stable.pop("prototype_retrieval", None)
                 stable["prototype_library"] = {"library_digest": snapshot["library_digest"],
-                    "authority": snapshot["authority"], "policy": "If tools are supplied, they read exact public guidance from this pinned library; otherwise use inline guidance."}
+                    "authority": snapshot["authority"], "policy": discovery_policy_text(available=None)}
                 message["content"] = canonical(body)
         projected, receipt = compile_messages(source, strategy="full" if strategy.startswith("full-") else strategy,
             retrieval_available=mcp_available, oracle_fragment_ids=oracle_fragment_ids)

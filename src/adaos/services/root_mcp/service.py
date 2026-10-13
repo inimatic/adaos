@@ -526,6 +526,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                 properties={
                     "descriptor_id": {"type": "string"},
                     "item_id": {"type": "string"},
+                    "expected_source_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
                     "level": {"type": "string", "enum": ["mini", "std", "rich"]},
                     "purpose": {"type": "string", "enum": ["authoring", "migration"]},
                     "consumer": {
@@ -2742,6 +2743,7 @@ def get_descriptor_item(
     level: str = "std",
     purpose: str = "authoring",
     consumer: str | None = None,
+    expected_source_digest: str | None = None,
 ) -> dict[str, Any]:
     return get_registry_descriptor_item(
         descriptor_id,
@@ -2749,6 +2751,7 @@ def get_descriptor_item(
         level=level,
         purpose=purpose,
         consumer=consumer,
+        expected_source_digest=expected_source_digest,
     )
 
 
@@ -2943,6 +2946,7 @@ def _handle_get_descriptor_item(
             level=str(arguments.get("level") or "std"),
             purpose=_text_or_none(arguments.get("purpose")) or "authoring",
             consumer=_text_or_none(arguments.get("consumer")),
+            expected_source_digest=_text_or_none(arguments.get("expected_source_digest")),
         )
     }
 

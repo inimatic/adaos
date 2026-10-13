@@ -119,6 +119,7 @@ class RootMcpClient:
         level: str = "std",
         purpose: str = "authoring",
         consumer: str | None = None,
+        expected_source_digest: str | None = None,
     ) -> dict[str, Any]:
         arguments = {
             "descriptor_id": str(descriptor_id),
@@ -129,6 +130,8 @@ class RootMcpClient:
             arguments["purpose"] = "migration"
         if consumer:
             arguments["consumer"] = str(consumer)
+        if expected_source_digest is not None:
+            arguments["expected_source_digest"] = str(expected_source_digest)
         return self.call(
             "development.get_descriptor_item",
             arguments=arguments,

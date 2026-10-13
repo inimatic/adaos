@@ -196,7 +196,6 @@ def compile_messages(messages, *, strategy: str | None = None, retrieval_availab
                 inline_ids = {key for key in KERNEL if key != "contract"}
                 retrieval["dimensions"] = [item for item in retrieval["dimensions"] if item["id"] not in inline_ids]
                 retrieval["inline_dimensions"] = sorted(inline_ids)
-                retrieval["policy"] += " Known related ids may be read together with fragment_ids (1–8); avoid searching again for an already known id. Inline kernel rules remain authoritative."
                 receipt["omitted"].extend(sorted(set(invariants) - KERNEL))
             stable["prototype_retrieval"] = retrieval
             changed = True

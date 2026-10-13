@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from jsonschema import Draft202012Validator
 
 from adaos.services.ui_resource_queries import widget_resource_queries
+from adaos.services.ui_component_contracts import project_component_contract
 from adaos.services.webui_layout import layout_v2_findings
 
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief, partition_intent_scope
@@ -199,7 +200,7 @@ def _score(item: Mapping[str, Any], query: str) -> int:
 
 
 @lru_cache(maxsize=1)
-def _generic_ui_capability_catalog() -> dict[str, Any]:
+def _generic_ui_capability_catalog(source_fingerprint: str = "") -> dict[str, Any]:
     schema = _read_json(_CATALOG_SCHEMA_PATH)
     catalog = _read_json(_CATALOG_PATH)
     Draft202012Validator(schema).validate(catalog)
@@ -232,13 +233,21 @@ def _generic_ui_capability_catalog() -> dict[str, Any]:
     ]
     result = copy.deepcopy(catalog)
     result["components"] = [*result.get("components", []), *generated]
+    contract_projection = project_component_contract()
+    contract_units = {unit["id"]: unit for unit in contract_projection["retrieval_units"]}
+    for component in result["components"]:
+        if component["id"] in contract_units:
+            component["component_contract"] = copy.deepcopy(contract_units[component["id"]])
+            component["events"] = copy.deepcopy(contract_units[component["id"]]["content"]["events"])
+    result["component_contracts"] = [contract_projection["provenance"]]
+    result["discovery_policy"] = contract_projection["discovery_policy"]
     result["coverage"] = {
         "abi_widget_types": len(widget_types),
         "curated_component_profiles": len(enriched),
         "minimal_component_profiles": len(generated),
         "complete": len(result["components"]) == len(widget_types),
     }
-    result["catalog_digest"] = _digest(catalog)
+    result["catalog_digest"] = _digest({key: value for key, value in result.items() if key != "catalog_digest"})
     return result
 
 
@@ -248,7 +257,10 @@ def ui_capability_catalog(
     adapter = ui_domain_adapter(domain_packs)
     if adapter is not None:
         return copy.deepcopy(adapter.ui_capability_catalog())
-    result = copy.deepcopy(_generic_ui_capability_catalog())
+    from adaos.services.ui_component_contracts import CONTRACT_PATH
+    fingerprint = hashlib.sha256(_CATALOG_PATH.read_bytes() + _CATALOG_SCHEMA_PATH.read_bytes()
+        + _WEBUI_SCHEMA_PATH.read_bytes() + json.dumps(project_component_contract()["provenance"], sort_keys=True).encode()).hexdigest()
+    result = copy.deepcopy(_generic_ui_capability_catalog(fingerprint))
     recipes = [
         copy.deepcopy(dict(recipe))
         for pack in resolve_domain_packs(domain_packs)
@@ -1288,13 +1300,14 @@ def _has_path(value: Any, path: str) -> bool:
 
 
 def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
+    from adaos.services.ui_component_contracts import component_contract_findings
     catalog = ui_capability_catalog()
     known_types = {
         str(item.get("id") or "")
         for item in catalog.get("components") or []
         if isinstance(item, Mapping)
     }
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = component_contract_findings(webui)
     schemas = _page_schemas(webui)
     desktop_state = next((page.get("initialState") for path, page in schemas if path == "ui.application.desktop.pageSchema"), {})
     shared_initial_state = desktop_state if isinstance(desktop_state, Mapping) else {}

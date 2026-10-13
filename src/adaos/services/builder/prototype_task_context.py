@@ -213,9 +213,6 @@ def project_task_guidance(invariants: dict[str, Any], messages, *, strategy: str
     index = retrieval_index(available=True)
     index["dimensions"] = [part for part in index["dimensions"] if part["id"] not in inline]
     # Inline ids/digests belong to the audit receipt, not the model's input.
-    index["policy"] += (" Before authoring a platform feature not specified inline, read its indexed rules. "
-        "Known ids can be read directly in batches of 1–8. Do not search for an id already listed. "
-        "Do not reread inline fragments unless resolving an actual conflict.")
     accents = {"schema": "adaos.builder.prototype_platform_accents.v1", "authority": snapshot["authority"],
         "library_digest": snapshot["library_digest"],
         "dimensions": [{"id": identity, "accent": accent, "lookup": [part for part in lookup if part not in inline]}

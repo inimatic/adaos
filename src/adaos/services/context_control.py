@@ -336,6 +336,74 @@ class ContextControlService:
                     continue
                 self._index_plan_subjects(connection, str(row["plan_id"]), plan)
 
+    def admit_model_input(self, envelope: Mapping[str, Any], *, snapshot: Mapping[str, Any],
+                          required_ids: list[str], run_ref: str | None = None) -> dict[str, Any]:
+        from adaos.services.contract_context_admission import admit_contract_input
+        receipt = admit_contract_input(envelope, snapshot=snapshot, required_ids=required_ids)
+        snapshot_artifact = self.put_artifact(snapshot)
+        admission_artifact = self.put_artifact(receipt)
+        result = {**receipt, "snapshot_ref": snapshot_artifact["ref"], "admission_ref": admission_artifact["ref"]}
+        if run_ref:
+            self.publish_component_projection(snapshot)
+            resolution = self.resolve({"subject_refs": ["component:" + identity for identity in required_ids],
+                "purpose": "builder.contract_input", "audience": "builder"})
+            plan = self.plan({"resolution": resolution, "token_budget": 16_000})
+            if plan["status"] != "ready":
+                raise ContextConflict("Contract facts could not form a dependency-closed context plan")
+            result["context_receipt"] = self.record_receipt({"run_ref": run_ref,
+                "plan_ref": plan["plan_ref"], "subject_refs": ["component:" + identity for identity in required_ids],
+                "purpose": "builder.contract_input", "audience": "builder",
+                "selected_refs": [snapshot_artifact["ref"]], "execution_route": "final_contract_input_admission",
+                "usage": {"model_calls": 0, "llm_calls": 0, "billing_status": "not_submitted"},
+                "context_use": {"contract_input": result.copy()}, "validation": {"status": "admitted"}})
+        return result
+
+    def publish_component_projection(self, snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        provenance = snapshot['provenance']
+        with self._connect() as connection:
+            prior = connection.execute("SELECT metadata_json FROM capsules WHERE kind = 'platform' AND authority_ref = ? AND json_extract(metadata_json, '$.component_contract_id') = ? AND json_extract(metadata_json, '$.component_contract_version') = ?",
+                (provenance['owner'], provenance['contract_id'], provenance['version'])).fetchall()
+        if any(json.loads(row['metadata_json']).get('component_contract_digest') != provenance['source_digest'] for row in prior):
+            raise ContextConflict('Immutable component contract identity/version conflict')
+        capsules = {}
+        for unit in snapshot["retrieval_units"]:
+            try:
+                binding = self.get_binding(subject_ref="component:" + unit["id"], purpose="builder.contract_input", audience="builder")
+                existing = self.get_capsule(binding["capsule_id"], include_content=True)
+                if existing["artifact"].get("content") == unit and not existing.get("revoked_at"):
+                    capsules[unit["id"]] = existing
+                    continue
+            except KeyError:
+                pass
+            capsules[unit["id"]] = self.register_capsule({"kind": "platform",
+                "subject_refs": ["component:" + unit["id"]], "authority_ref": unit["provenance"]["owner"],
+                "trust_class": "validated", "sensitivity": "public", "content": unit,
+                "source_digests": {"contract": unit["provenance"]["source_digest"], "unit": unit["content_digest"]},
+                "metadata": {"component_contract_id": provenance['contract_id'], "component_contract_version": provenance['version'], "component_contract_digest": provenance['source_digest']},
+                "summary": "Owned renderer contract for " + unit["id"],
+                "purpose": "builder.contract_input", "audience": "builder"}, bind=True)
+        for unit in snapshot["retrieval_units"]:
+            for dependency in unit["dependencies"]:
+                with self._connect() as connection:
+                    existing_edge = connection.execute("SELECT 1 FROM relationships WHERE from_capsule_id = ? AND to_capsule_id = ? AND relation_type = 'requires' AND required = 1 AND valid_to IS NULL",
+                        (capsules[unit["id"]]["capsule_id"], capsules[dependency]["capsule_id"])).fetchone()
+                if existing_edge:
+                    continue
+                self.add_relationship({"from_capsule_id": capsules[unit["id"]]["capsule_id"],
+                    "to_capsule_id": capsules[dependency]["capsule_id"], "relation_type": "requires", "required": True})
+        return {"source": snapshot["provenance"], "capsules": capsules}
+
+    def evolve_component_contract(self, previous: Mapping[str, Any], current: Mapping[str, Any], *, event_ref: str) -> dict[str, Any]:
+        from adaos.services.ui_component_contracts import contract_impact, project_component_contract
+        impact = contract_impact(previous, current)
+        projection = project_component_contract(current)
+        units = {unit["id"]: unit for unit in projection["retrieval_units"]}
+        invalidations = [self.invalidate(subject_ref="component:" + identity, reason="component_contract_changed",
+            event_ref=event_ref, source_digest=projection["provenance"]["source_digest"])
+            for identity in impact["affected_units"]]
+        published = self.publish_component_projection(projection)
+        return {"impact": impact, "invalidations": invalidations, "projection": published}
+
     def put_artifact(self, value: Any) -> dict[str, Any]:
         payload = _canonical_bytes(value)
         digest = "sha256:" + hashlib.sha256(payload).hexdigest()

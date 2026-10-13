@@ -138,6 +138,30 @@ class PrototypeResourceService:
         if not isinstance(policy, Mapping):
             raise ValueError("prototype policy must be an object")
         relationships = policy.get("relationships") or []
+        commands = policy.get("commands") or {}
+        if not isinstance(commands, dict):
+            raise ValueError("prototype commands must be an owned mapping")
+        semantic_defs = _schema("webui.semantic.v1.schema.json")["$defs"]
+        fields = record_schema.get("properties") or {}
+        for command_id, command in commands.items():
+            Draft202012Validator({"type": "object", "additionalProperties": False,
+                "required": ["kind", "input_field_refs", "fixed_values", "required_field_refs"], "properties": {
+                    "kind": {"enum": ["create", "update", "delete", "transition"]},
+                    "input_field_refs": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+                    "required_field_refs": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+                    "fixed_values": {"type": "object"}, "guard": {"type": "object", "additionalProperties": False,
+                        "required": ["when", "require_nonempty"], "properties": {"when": {"$ref": "#/$defs/condition"},
+                            "require_nonempty": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string"}}}}},
+                "$defs": semantic_defs}).validate(command)
+            refs = set(command["input_field_refs"]) | set(command["fixed_values"])
+            if not set(command["required_field_refs"]) <= set(command["input_field_refs"]):
+                raise ValueError("prototype required inputs exceed the command write set")
+            if command.get("guard"):
+                refs |= set(command["guard"]["require_nonempty"]) | {command["guard"]["when"]["field_ref"]}
+            if not command_id or not refs <= set(fields):
+                raise ValueError("prototype command references an unknown property")
+            for field, fixed_value in command["fixed_values"].items():
+                Draft202012Validator(fields[field]).validate(fixed_value)
         Draft202012Validator({
             "type": "array", "maxItems": 16,
             "items": {"type": "object", "additionalProperties": False,
@@ -356,6 +380,7 @@ class PrototypeResourceService:
         record_id: str,
         payload: Mapping[str, Any],
         expected_revision: Any = None,
+        command_id: str | None = None,
     ) -> dict[str, Any]:
         from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
@@ -386,6 +411,31 @@ class PrototypeResourceService:
                 (item for item in runtime.records if _record_id(item) == identifier),
                 None,
             )
+            command_policies = (definition.get("metadata", {}).get("prototype_policy") or {}).get("commands") or {}
+            if command_policies and operation_kind in {"create", "update", "delete", "reset"}:
+                command = command_policies.get(_text(command_id))
+                if command is None:
+                    raise PrototypeResourceConflict("prototype mutation requires an admitted command identity")
+                expected_kind = "update" if command["kind"] == "transition" else command["kind"]
+                if operation_kind != expected_kind:
+                    raise PrototypeResourceConflict("prototype command operation mismatch")
+                values = dict(payload.get("patch") or payload.get("record") or payload)
+                provided = set(values) - {"id", "revision"}
+                allowed = set(command["input_field_refs"]) | set(command["fixed_values"])
+                if not provided <= allowed or any(values.get(key) != value for key, value in command["fixed_values"].items()):
+                    raise PrototypeResourceConflict("prototype command payload exceeds its declared effect")
+                guard = command.get("guard")
+                # Fixed effects do not alter the condition before the guard is
+                # evaluated. Writable draft inputs do, exactly as in the editor.
+                before_effect = {**dict(current or {}), **{key: value for key, value in values.items()
+                    if key in command["input_field_refs"] and key not in command["fixed_values"]}}
+                if any(before_effect.get(key) is None or before_effect.get(key) == "" or before_effect.get(key) == []
+                       for key in command["required_field_refs"]):
+                    raise PrototypeResourceConflict("prototype command required input rejected the mutation")
+                if guard and self._condition_matches(before_effect, guard["when"]):
+                    if any(before_effect.get(key) is None or before_effect.get(key) == "" or before_effect.get(key) == []
+                           for key in guard["require_nonempty"]):
+                        raise PrototypeResourceConflict("prototype command guard rejected the mutation")
             condition = (definition.get("metadata", {}).get("prototype_policy") or {}).get("read_only_when")
             if operation_kind in {"update", "delete"} and current is not None and condition and self._condition_matches(current, condition):
                 raise PrototypeResourceConflict("prototype record is read-only in its current state")

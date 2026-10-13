@@ -722,7 +722,7 @@ def _collect_usage(
 
     def add_usage(keys: Mapping[str, Any], *, authoritative: bool = False) -> None:
         before = dict(totals)
-        input_tokens = int(keys.get("input_tokens") or keys.get("prompt_tokens") or 0)
+        input_tokens = int(keys.get("input_tokens") or keys.get("prompt_tokens") or keys.get("provider_input_tokens") or 0)
         cached_tokens = int(
             keys.get("cached_input_tokens") or keys.get("cached_tokens") or 0
         )
@@ -741,7 +741,12 @@ def _collect_usage(
         totals["fresh_input_tokens"] += max(0, input_tokens - cached_tokens)
         totals["output_tokens"] += output_tokens
         totals["reasoning_tokens"] += max(0, int(reasoning or 0))
-        if authoritative:
+        explicit_calls = keys.get("llm_calls", keys.get("model_calls"))
+        if isinstance(explicit_calls, int) and not isinstance(explicit_calls, bool):
+            if explicit_calls < 0 or (explicit_calls == 0 and input_tokens + output_tokens > 0):
+                raise BuilderE2EError("usage has an inconsistent explicit inference count")
+            totals["model_calls"] += explicit_calls
+        elif authoritative:
             attempts = keys.get("attempts")
             totals["model_calls"] += (
                 max(0, int(attempts))
@@ -835,6 +840,7 @@ def _collect_usage(
                 for key in (
                     "input_tokens",
                     "prompt_tokens",
+                    "provider_input_tokens",
                     "output_tokens",
                     "completion_tokens",
                     "cached_tokens",
@@ -1750,6 +1756,11 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
             if self.browser_mode == "off":
                 raise BuilderE2EUnavailable("semantic episode requires live browser evidence")
             return builder_semantic_episode.execute(inputs, context, repo_root=self.repo_root)
+        if step_type == "prototype.contract_episode":
+            from adaos.e2e import component_contract_episode
+            if self.browser_mode == "off":
+                raise BuilderE2EUnavailable("contract episode requires live browser evidence")
+            return component_contract_episode.execute(inputs, context, repo_root=self.repo_root)
         if step_type == "prototype.browser":
             from adaos.e2e import builder_browser
             if self.browser_mode == "off":
