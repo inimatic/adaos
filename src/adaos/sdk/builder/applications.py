@@ -2451,6 +2451,31 @@ def _carry_forward_unchanged_access_verification(
     }
 
 
+def _trial_runtime_selection(candidate_id: str, selections: Sequence[Any]):
+    """Resolve one Trial target from a channel projected to many Webspaces."""
+
+    exact = tuple(selections)
+    if len(exact) == 1:
+        return exact[0]
+    if not exact:
+        return None
+
+    from adaos.services.artifact_pipeline.trial_activation import (
+        TrialActivationStore,
+    )
+
+    activation = TrialActivationStore(
+        _state_dir() / "artifact_pipeline/trial-activations"
+    ).load(candidate_id)
+    target_webspace_id = str(
+        (activation.get("target") or {}).get("webspace_id") or ""
+    ).strip()
+    matches = [
+        item for item in exact if item.webspace_id == target_webspace_id
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def promote_stable(
     application_id: str,
     candidate_id: str,
@@ -2493,7 +2518,8 @@ def promote_stable(
         access_verification_recovery = None
         recovery_publication_verification = None
         recovery_trial_publication = None
-        if len(selections) != 1:
+        trial_selection = _trial_runtime_selection(candidate_id, selections)
+        if trial_selection is None:
             runtime_reconciliation = _reconcile_promoted_project_runtime(
                 distribution,
                 application_id=application_id,
@@ -2508,7 +2534,8 @@ def promote_stable(
                 and item.release_digest == candidate.release_digest
                 and item.source in {"local_trial", "stable_installation"}
             ]
-        if len(selections) != 1 and project_promotion_is_current:
+            trial_selection = _trial_runtime_selection(candidate_id, selections)
+        if trial_selection is None and project_promotion_is_current:
             if application.visibility != "public":
                 raise ValueError(
                     "Project-only Application recovery requires a public Application"
@@ -2586,7 +2613,8 @@ def promote_stable(
                 and item.release_digest == candidate.release_digest
                 and item.source in {"local_trial", "stable_installation"}
             ]
-        if len(selections) != 1:
+            trial_selection = _trial_runtime_selection(candidate_id, selections)
+        if trial_selection is None:
             raise ValueError(
                 "Application stable promotion requires one unambiguous exact Trial "
                 "RuntimeSelection"
@@ -2596,7 +2624,7 @@ def promote_stable(
             or _promote_local_trial_final_verification(
                 management,
                 application_id=application_id,
-                webspace_id=selections[0].webspace_id,
+                webspace_id=trial_selection.webspace_id,
                 candidate_id=candidate_id,
                 candidate_digest=candidate.package_digest,
                 release_digest=candidate.release_digest,

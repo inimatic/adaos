@@ -350,10 +350,13 @@ def test_create_trial_derives_and_persists_sealed_automation_evidence(
 
 
 def test_promote_stable_publishes_attested_project_and_link_trial_first(
-    monkeypatch,
+    monkeypatch, tmp_path: Path,
 ) -> None:
+    from adaos.services.artifact_pipeline import trial_activation
+
     application = SimpleNamespace(publisher_ref="subnet:home")
     calls: list[tuple[str, object]] = []
+    verification_webspaces: list[str] = []
 
     class _Store:
         @staticmethod
@@ -368,6 +371,12 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
                     release_digest="sha256:" + "c" * 64,
                     source="local_trial",
                     webspace_id="desktop",
+                ),
+                SimpleNamespace(
+                    application_id="mail_reader",
+                    release_digest="sha256:" + "c" * 64,
+                    source="local_trial",
+                    webspace_id="desktop-dev",
                 ),
             )
 
@@ -397,10 +406,23 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
 
     monkeypatch.setattr(applications, "_application", lambda *_args: application)
     monkeypatch.setattr(applications, "_distribution_service", _Distribution)
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        trial_activation,
+        "TrialActivationStore",
+        lambda _root: SimpleNamespace(
+            load=lambda _candidate_id: {
+                "target": {"webspace_id": "desktop-dev"},
+            }
+        ),
+    )
     monkeypatch.setattr(
         applications,
         "_promote_local_trial_final_verification",
-        lambda *_args, **_kwargs: {"publication_allowed": True},
+        lambda *_args, **kwargs: (
+            verification_webspaces.append(kwargs["webspace_id"])
+            or {"publication_allowed": True}
+        ),
     )
     monkeypatch.setattr(
         projects,
@@ -437,6 +459,7 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
     assert result["project_publication"]["status"] == "promoted"
     assert result["trial_publication"]["mode"] == "link_only"
     assert result["publication_verification"]["publication_allowed"] is True
+    assert verification_webspaces == ["desktop-dev"]
 
 
 def test_promote_reconciles_exact_completed_project_activation(
