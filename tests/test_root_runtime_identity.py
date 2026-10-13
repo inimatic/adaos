@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from types import SimpleNamespace
+
+import pytest
 
 from adaos.services.root import control_lifecycle_sync, core_update_sync
 
@@ -357,3 +361,44 @@ def test_core_update_reconcile_defers_detached_branch_to_root(monkeypatch) -> No
 
     assert result == {"ok": True, "needs_update": False, "release": None}
     assert calls == [(None, "c73034dbf231504c671cf7ed8a020141e6c0818d")]
+
+
+def test_core_update_reconcile_interval_is_bounded(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_RECONCILE_INTERVAL_SEC", "1")
+    assert core_update_sync.core_update_reconcile_interval_sec() == 15.0
+
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_RECONCILE_INTERVAL_SEC", "7200")
+    assert core_update_sync.core_update_reconcile_interval_sec() == 3600.0
+
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_RECONCILE_INTERVAL_SEC", "invalid")
+    assert core_update_sync.core_update_reconcile_interval_sec() == 60.0
+
+
+def test_periodic_core_update_reconcile_retries(monkeypatch) -> None:
+    calls: list[object] = []
+    reconciled = threading.Event()
+
+    def fake_reconcile(conf):
+        calls.append(conf)
+        if len(calls) >= 2:
+            reconciled.set()
+        return {"ok": True, "needs_update": False}
+
+    monkeypatch.setattr(core_update_sync, "reconcile_hub_core_update", fake_reconcile)
+    conf = SimpleNamespace(role="hub", core_update_enabled=True)
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            core_update_sync.run_hub_core_update_reconcile_loop(
+                conf,
+                initial_delay_sec=0,
+                interval_sec=0.01,
+            )
+        )
+        assert await asyncio.to_thread(reconciled.wait, 1.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert calls[:2] == [conf, conf]

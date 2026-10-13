@@ -1992,6 +1992,7 @@ async def _runtime_context(app: FastAPI):
         app.state.skill_runtime_migration_start_task = None
         reset_runtime_lifecycle()
         app.state.core_update_task = None
+        app.state.core_update_reconcile_task = None
         app.state.artifact_delayed_verification_task = None
         app.state.restart_marker = _consume_restart_marker(os.getenv("ADAOS_SELF_BASE_URL"))
         app.state.realtime_sidecar_proc = None
@@ -2661,6 +2662,26 @@ async def _runtime_context(app: FastAPI):
         pass
 
     try:
+        conf = get_ctx().config
+        if (
+            str(getattr(conf, "role", "") or "").strip().lower() == "hub"
+            and bool(getattr(conf, "core_update_enabled", True))
+        ):
+            from adaos.services.root.core_update_sync import (
+                run_hub_core_update_reconcile_loop,
+            )
+
+            app.state.core_update_reconcile_task = asyncio.create_task(
+                run_hub_core_update_reconcile_loop(conf),
+                name="hub-core-update-release-reconcile",
+            )
+    except Exception:
+        logging.getLogger("adaos.hub-io").warning(
+            "failed to start periodic core update reconciliation",
+            exc_info=True,
+        )
+
+    try:
         app.state.skill_runtime_migration_start_task = asyncio.create_task(
             _run_post_boot_skill_runtime_migration(app, reason="core_update_post_boot"),
             name="post-boot-skill-runtime-migration",
@@ -2700,6 +2721,10 @@ async def _runtime_context(app: FastAPI):
             await _cancel_background_task(getattr(app.state, "skill_runtime_migration_start_task", None))
         finally:
             app.state.skill_runtime_migration_start_task = None
+        try:
+            await _cancel_background_task(getattr(app.state, "core_update_reconcile_task", None))
+        finally:
+            app.state.core_update_reconcile_task = None
         try:
             from adaos.services.skill.runtime_migration_worker import cancel_background_migration
 

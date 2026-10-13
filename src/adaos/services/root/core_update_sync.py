@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -21,6 +22,8 @@ from adaos.services.release_validation_autorun import read_autonomous_release_va
 
 _CORE_UPDATE_STREAM_FLOW_ID = "hub_root.integration.github_core_update"
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$", re.IGNORECASE)
+_DEFAULT_RECONCILE_INTERVAL_SEC = 60.0
+_DEFAULT_RECONCILE_INITIAL_DELAY_SEC = 15.0
 
 
 def _node_core_update_disabled(conf: Any) -> bool:
@@ -298,8 +301,50 @@ def reconcile_hub_core_update(conf, *, countdown_sec: float = 60.0) -> dict[str,
     }
 
 
+def core_update_reconcile_interval_sec() -> float:
+    raw = str(os.getenv("ADAOS_CORE_UPDATE_RECONCILE_INTERVAL_SEC") or "").strip()
+    try:
+        value = float(raw) if raw else _DEFAULT_RECONCILE_INTERVAL_SEC
+    except ValueError:
+        value = _DEFAULT_RECONCILE_INTERVAL_SEC
+    return max(15.0, min(value, 3600.0))
+
+
+async def run_hub_core_update_reconcile_loop(
+    conf: Any,
+    *,
+    initial_delay_sec: float = _DEFAULT_RECONCILE_INITIAL_DELAY_SEC,
+    interval_sec: float | None = None,
+) -> None:
+    delay = max(0.0, float(initial_delay_sec))
+    interval = (
+        core_update_reconcile_interval_sec()
+        if interval_sec is None
+        else max(0.01, float(interval_sec))
+    )
+    logger = logging.getLogger("adaos.hub-io")
+    while True:
+        await asyncio.sleep(delay)
+        delay = interval
+        try:
+            result = await asyncio.to_thread(reconcile_hub_core_update, conf)
+            if isinstance(result, dict) and result.get("needs_update"):
+                release = result.get("release") if isinstance(result.get("release"), dict) else {}
+                logger.info(
+                    "periodic core update reconcile scheduled branch=%s release=%s",
+                    release.get("branch") or result.get("branch") or "",
+                    release.get("head_short_sha") or release.get("head_sha") or "",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("periodic core update reconcile failed", exc_info=True)
+
+
 __all__ = [
     "build_core_update_report",
+    "core_update_reconcile_interval_sec",
     "reconcile_hub_core_update",
     "report_hub_core_update_state",
+    "run_hub_core_update_reconcile_loop",
 ]
