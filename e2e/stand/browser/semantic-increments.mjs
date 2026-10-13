@@ -87,6 +87,16 @@ try {
       await expect(host(collection.id)).toContainText(report.expectedField)
       await expect(host(collection.id)).toContainText('Alpha')
       sample.checks.push('live records', 'view label', 'field label', 'related display')
+      if (process.env.ADAOS_E2E_COLUMN_ORDER) {
+        const expectedColumns = JSON.parse(process.env.ADAOS_E2E_COLUMN_ORDER)
+        const table = host(collection.id).locator('ada-table-widget').first()
+        const actualColumns = await table.evaluate(element => window.ng.getComponent(element).columns.map(column => column.label))
+        if (!isDeepStrictEqual(actualColumns, expectedColumns)) throw new Error(`Wrong compiled column order: ${JSON.stringify(actualColumns)}`)
+        // Check rendered labels too; semantic source equality is not a browser proof.
+        for (const label of expectedColumns) await expect(table).toContainText(label)
+        sample.columnOrder = actualColumns
+        sample.checks.push('exact column order')
+      }
       const primaryText = host(collection.id).locator('tbody tr').first()
         .locator('td .cell-text').filter({ hasText: /^First task$/ }).first()
       const primaryReadyStarted = performance.now()

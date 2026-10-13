@@ -9,6 +9,7 @@ const expect = baseExpect.configure({ timeout: 30_000 })
 const output = process.env.ADAOS_E2E_OUTPUT
 const instruction = process.env.ADAOS_E2E_INSTRUCTION
 const revision = process.env.ADAOS_E2E_EXPECTED_REVISION
+const receiptPrefix = process.env.ADAOS_E2E_RECEIPT_PREFIX || 'Label'
 const hub = process.env.ADAOS_E2E_HUB_URL, token = process.env.ADAOS_E2E_HUB_TOKEN
 const subnet = process.env.ADAOS_E2E_SUBNET_ID, host = process.env.ADAOS_E2E_HOST
 const project = process.env.ADAOS_E2E_SCENARIO_ID
@@ -75,26 +76,26 @@ try {
     await expect(chat.locator('[aria-label="Send message"]')).toBeEnabled()
     await chat.locator('[aria-label="Send message"]').click()
   }
-  await page.waitForFunction(({ previousIds, revision, instruction, project }) => {
+  await page.waitForFunction(({ previousIds, revision, instruction, project, receiptPrefix }) => {
     const element = document.querySelector('[data-webui-widget-id="design-conversation-full-task"] ada-chat-widget')
     const component = element && window.ng?.getComponent(element)
     const messages = component?.messages || []
     const receipt = messages.find(message => !previousIds.includes(message.id)
-      && message.text === `Label operation applied: revision ${revision}.`
+      && message.text === `${receiptPrefix} operation applied: revision ${revision}.`
       && message.thread_id === `prompt-project:scenario:${project}`)
     return receipt && messages.some(message => message.from === 'user'
       && message.id === receipt.source_message_id && message.text === instruction)
-  }, { previousIds, revision, instruction, project }, { timeout: 90_000 })
-  await expect(chat).toContainText(`Label operation applied: revision ${revision}.`, { timeout: 90_000 })
+  }, { previousIds, revision, instruction, project, receiptPrefix }, { timeout: 90_000 })
+  await expect(chat).toContainText(`${receiptPrefix} operation applied: revision ${revision}.`, { timeout: 90_000 })
   if (!observeOnly) report.sendToReceiptMs = Math.round(performance.now() - started)
   await expect(chat).toContainText(instruction)
-  report.receipt = await chat.locator('ada-chat-widget').evaluate((element, { previousIds, revision, project }) => {
+  report.receipt = await chat.locator('ada-chat-widget').evaluate((element, { previousIds, revision, project, receiptPrefix }) => {
     const message = window.ng.getComponent(element).messages.find(message => !previousIds.includes(message.id)
-      && message.text === `Label operation applied: revision ${revision}.`
+      && message.text === `${receiptPrefix} operation applied: revision ${revision}.`
       && message.thread_id === `prompt-project:scenario:${project}`)
     return { id: message.id, sourceMessageId: message.source_message_id, threadId: message.thread_id }
-  }, { previousIds, revision, project })
-  const visibleReceipt = chat.getByText(`Label operation applied: revision ${revision}.`, { exact: true }).last()
+  }, { previousIds, revision, project, receiptPrefix })
+  const visibleReceipt = chat.getByText(`${receiptPrefix} operation applied: revision ${revision}.`, { exact: true }).last()
   await visibleReceipt.scrollIntoViewIfNeeded()
   await expect(visibleReceipt).toBeInViewport()
   report.receiptGeometry = await visibleReceipt.evaluate(element => {

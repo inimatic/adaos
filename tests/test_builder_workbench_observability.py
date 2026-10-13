@@ -23,7 +23,7 @@ def test_upgrade_preserves_current_builder_commands_and_issue_trace():
         }
 
     for identity, widget in widgets(before).items():
-        if identity != 'design-trace-tasks':
+        if identity not in {'design-trace-tasks', 'design-preview-commands'}:
             expected = copy.deepcopy(widget)
 
             def expected_lazy_menu(value):
@@ -48,6 +48,35 @@ def test_upgrade_preserves_current_builder_commands_and_issue_trace():
     summary = next(widget for widget in modal if widget['id'] == 'design-run-execution')
     assert len(summary['inputs']['fields']) <= 8
     assert next(widget for widget in modal if widget['id'] == 'design-run-measurements')['visibleIf'] == '$state.selectedTrace.execution_metrics'
+
+
+def test_semantic_inspector_is_a_single_on_demand_read_with_local_projections():
+    path = ROOT / '.adaos/workspace/scenarios/builder/webui.json'
+    if not path.is_file():
+        pytest.skip('Optional live Builder source')
+    ui = upgrade(json.loads(path.read_text(encoding='utf-8-sig')))
+    app = ui['ui']['application']
+    commands = next(item for item in app['desktop']['pageSchema']['widgets'] if item['id'] == 'design-preview-commands')
+    actions = [item for item in commands['actions'] if item['on'] == 'click:semantic-inspector']
+    assert [item['type'] for item in actions] == ['callSkill', 'openModal']
+    assert actions[0]['resultStateKey'] == 'semanticInspector'
+    assert actions[0]['target'] == 'builder_sdk_control_skill.get_semantic_inspector'
+    widgets = app['modals']['design-semantic-inspector']['schema']['widgets']
+    assert len(widgets) == 3 and all(item['dataSource']['kind'] == 'static' for item in widgets)
+    assert all(item['dataSource']['value'].startswith('$state.semanticInspector') for item in widgets)
+    assert next(item for item in widgets if item['id'] == 'design-semantic-refs')['inputs']['compactPresentation'] == 'cards'
+
+
+def test_semantic_inspector_control_uses_primary_execution_identity(monkeypatch):
+    control = control_module()
+    monkeypatch.setattr(control, '_execution_identity', lambda *_: ('scenario', 'exact-primary'))
+    seen = []
+    def inspect(**kwargs):
+        seen.append(kwargs)
+        return {'status': 'verified', 'refs': [], 'write_set': []}
+    monkeypatch.setattr(control.semantic_ui, 'inspect', inspect)
+    assert control.get_semantic_inspector('project', 'owner')['status'] == 'verified'
+    assert seen == [{'project_ref': 'scenario:exact-primary'}]
 
 
 def test_dynamic_context_keys_are_not_misclassified_as_missing_dictionary_entries():

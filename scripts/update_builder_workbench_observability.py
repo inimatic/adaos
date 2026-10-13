@@ -134,6 +134,56 @@ def upgrade(document):
                                         if key not in summary_keys and key not in {'id', 'change_id'}]
     modal['schema']['widgets'] = [base, details, measurements]
     app['modals']['design-run-details'] = modal
+    preview_commands = next(widget for widget in page['widgets'] if widget['id'] == 'design-preview-commands')
+    preview_commands['inputs']['buttons'] = [button for button in preview_commands['inputs']['buttons']
+                                             if button['id'] != 'semantic-inspector']
+    preview_commands['inputs']['buttons'].append({'id': 'semantic-inspector', 'icon': 'git-compare-outline',
+                                                  'label': 'Semantics', 'label_i18n': 'builder.semantic.inspector'})
+    preview_commands['actions'] = [action for action in preview_commands['actions'] if action['on'] != 'click:semantic-inspector']
+    preview_commands['actions'].extend([
+        {'on': 'click:semantic-inspector', 'type': 'callSkill',
+         'target': 'builder_sdk_control_skill.get_semantic_inspector',
+         'params': {'object_type': '$state.selectedProjectKind', 'object_id': '$state.selectedProjectId',
+                    '_meta': {'current_scenario': 'builder'}}, 'resultStateKey': 'semanticInspector'},
+        {'on': 'click:semantic-inspector', 'type': 'openModal', 'params': {'modalId': 'design-semantic-inspector'}}])
+    semantic = copy.deepcopy(app['modals']['design-context'])
+    semantic.update(title='Semantic inspector', title_i18n={'locales': {'en': 'Semantic inspector', 'ru': 'Инспектор семантики'}})
+    semantic['schema']['id'] = 'design-semantic-inspector'
+    summary = copy.deepcopy(base)
+    summary.update(id='design-semantic-summary', title='Exact source and scope',
+                   title_i18n={'locales': {'en': 'Exact source and scope', 'ru': 'Точный источник и область изменения'}})
+    summary['dataSource'] = {'kind': 'static', 'value': '$state.semanticInspector'}
+    summary['inputs']['fields'] = [localized(en, ru, key=key) for key, en, ru in [
+        ('status', 'Verification status', 'Статус проверки'),
+        ('project_ref', 'Semantic source', 'Семантический источник'),
+        ('source_revision', 'Current source revision', 'Текущая редакция источника'),
+        ('base_hash', 'Current source digest', 'Дайджест текущего источника'),
+        ('read_scope', 'Validation read scope (complete source)', 'Область чтения проверки (полный источник)'),
+        ('supported_operations_text', 'Supported bounded operations', 'Поддерживаемые ограниченные операции'),
+        ('transaction_id', 'Last committed transaction', 'Последняя зафиксированная операция'),
+        ('transaction_source_revision', 'Last operation base revision', 'Базовая редакция последней операции'),
+        ('admitted_write_refs', 'Admitted write refs', 'Разрешённые ссылки для записи'),
+        ('dependency_refs', 'Dependency hints (not minimal model context)', 'Зависимости (не минимальный контекст модели)'),
+        ('write_count', 'Recorded property writes', 'Сохранённые изменения свойств'),
+        ('block_reason', 'Blocked verification stage', 'Этап остановки проверки'),
+        ('block_detail', 'Reason', 'Причина'),
+    ]]
+    def inspector_table(identity, title, ru, path, columns, row_key):
+        return {'id': identity, 'type': 'ui.table', 'area': 'main', 'title': title,
+                'title_i18n': {'locales': {'en': title, 'ru': ru}},
+                'dataSource': {'kind': 'static', 'value': '$state.semanticInspector.' + path},
+                'inputs': {'columns': [localized(en, caption_ru, key=key) for key, en, caption_ru in columns],
+                           'rowKey': row_key, 'pagination': True, 'pageSize': 10, 'search': True,
+                           'compactPresentation': 'cards', 'selectionMode': 'none'}}
+    refs = inspector_table('design-semantic-refs', 'Semantic refs', 'Семантические ссылки', 'refs', [
+        ('ref', 'Ref', 'Ссылка'), ('kind', 'Kind', 'Вид'), ('label_en', 'English label', 'Английская подпись'),
+        ('label_ru', 'Russian label', 'Русская подпись'), ('writes_text', 'Supported writable properties', 'Поддерживаемые свойства для записи'),
+        ('dependencies_text', 'Dependencies', 'Зависимости')], 'ref')
+    writes = inspector_table('design-semantic-writes', 'Last committed write set', 'Последний зафиксированный набор изменений', 'write_set', [
+        ('ref', 'Ref', 'Ссылка'), ('property', 'Property', 'Свойство'), ('kind', 'Operation', 'Операция'),
+        ('before_text', 'Before', 'До'), ('after_text', 'After', 'После')], 'seq')
+    semantic['schema']['widgets'] = [summary, writes, refs]
+    app['modals']['design-semantic-inspector'] = semantic
     notice = {
         'id': 'design-conversation-request-provenance', 'type': 'item.details', 'area': 'main',
         'title': 'Workflow request without linked discussion',

@@ -50,6 +50,9 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
     if route not in {"sdk", "installed_conversation"}:
         raise ValueError("unsupported semantic episode request route")
     conversational = route == "installed_conversation"
+    column_order = inputs.get("include_column_order", False)
+    if not isinstance(column_order, bool) or (column_order and not conversational):
+        raise ValueError("column-order qualification requires the installed conversation route")
     compiled = prototype.compile_semantic(fixture, project_ref=project_ref)
     fixture = compiled["semantic_document"]
     source_before = copy.deepcopy(fixture)
@@ -67,9 +70,9 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
     atomic_write_bytes(root / "ui_revisions/current.txt", b"001\n")
     change_id = f"semantic-{scenario_id}"
     workflow.transition("scenario", scenario_id, "plan_change_set", actor="e2e:semantic-increments", metadata={
-        "change_set_id": change_id, "request": "Change existing labels without altering records, relationships or commands.",
-        "issues": [{"issue_id": "labels", "title": "Preserve behavior through label changes", "lane": "prototype",
-                    "acceptance_criteria": ["Label changes and undo are visible; existing records and actions remain usable."]}]})
+        "change_set_id": change_id, "request": "Change existing labels and table column order without altering records, relationships or commands." if column_order else "Change existing labels without altering records, relationships or commands.",
+        "issues": [{"issue_id": "bounded-semantic-edits", "title": "Preserve behavior through bounded semantic edits", "lane": "prototype",
+                    "acceptance_criteria": ["Admitted label/order changes and undo are visible; existing records, relationships and actions remain usable."]}]})
     specs = prototypes.derive_resource_specs(ui, compiled["prototype_resources"])
     _write_json(output / "resource-initialization.json", prototypes.materialize_resources(project_ref=project_ref,
         change_id=change_id, revision="001", webui=ui, resources=specs))
@@ -79,6 +82,7 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
     expected_view = "Records"
     expected_field = "Name"
     revision = "001"
+    column_moved = False
 
     def observe(label):
         evidence = output / label
@@ -99,6 +103,9 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
             "ADAOS_E2E_CLIENT_URL": "http://127.0.0.1:8100/", "ADAOS_E2E_LOCALE": "en", "ADAOS_E2E_EXPECTED_WEBUI": str(root / "webui.json"),
             "ADAOS_E2E_OUTPUT": str(evidence), "ADAOS_E2E_CHECKPOINT": str(evidence / "checkpoint.json"),
             "ADAOS_E2E_LABEL_VIEW": expected_view, "ADAOS_E2E_LABEL_FIELD": expected_field}
+        if column_order:
+            environment["ADAOS_E2E_COLUMN_ORDER"] = json.dumps(
+                ["State", expected_field, "Team"] if column_moved else [expected_field, "State", "Team"])
         completed = subprocess.run(["node", str(repo_root / "e2e/stand/browser/semantic-increments.mjs")],
             cwd=repo_root, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=180)
         (evidence / "browser.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
@@ -110,7 +117,7 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
         if not row["ok"]:
             raise ValueError(f"semantic episode browser stage failed: {label}")
 
-    def send_request(instruction, order):
+    def send_request(instruction, order, *, receipt_prefix="Label"):
         import requests
         evidence = output / f"request-{order}"
         evidence.mkdir(exist_ok=False)
@@ -133,6 +140,7 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
             "ADAOS_E2E_HOST": host, "ADAOS_E2E_CLIENT_URL": "http://127.0.0.1:8100/",
             "ADAOS_E2E_SCENARIO_ID": scenario_id,
             "ADAOS_E2E_INSTRUCTION": instruction, "ADAOS_E2E_EXPECTED_REVISION": expected,
+            "ADAOS_E2E_RECEIPT_PREFIX": receipt_prefix,
             "ADAOS_E2E_COMPACT": "1" if order == 2 else "0", "ADAOS_E2E_OUTPUT": str(evidence)}
         completed = subprocess.run(["node", str(repo_root / "e2e/stand/browser/builder-semantic-request.mjs")],
             cwd=repo_root, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=180)
@@ -150,11 +158,26 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
         if not any(row.get("id", row.get("message_id")) == origin["source_message_id"] and row.get("text") == instruction
                    and row.get("from", row.get("role")) == "user" for row in records):
             raise ValueError("actual semantic request has no matching durable user message")
-        packet = semantic_ui.prepare_label_request(project_ref=f"scenario:{scenario_id}", instruction=instruction,
+        packet = semantic_ui.prepare_request(project_ref=f"scenario:{scenario_id}", instruction=instruction,
             source_message_id=origin["source_message_id"], expected_revision=revision)
         if not packet.get("replayed"):
             raise ValueError("installed label request was not retained for replay")
         return packet["request"], receipt
+
+    def inspect_in_browser(label, *, compact=False):
+        evidence = output / label
+        evidence.mkdir(exist_ok=False)
+        environment = {**os.environ, "ENV_TYPE": "dev", "ADAOS_E2E_HUB_URL": "http://127.0.0.1:8777",
+            "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url="http://127.0.0.1:8777"),
+            "ADAOS_E2E_SUBNET_ID": Path(get_ctx().paths.dev_dir()).name,
+            "ADAOS_E2E_HOST": host, "ADAOS_E2E_CLIENT_URL": "http://127.0.0.1:8100/",
+            "ADAOS_E2E_SCENARIO_ID": scenario_id, "ADAOS_E2E_EXPECTED_REVISION": revision,
+            "ADAOS_E2E_COMPACT": "1" if compact else "0", "ADAOS_E2E_OUTPUT": str(evidence)}
+        completed = subprocess.run(["node", str(repo_root / "e2e/stand/browser/builder-semantic-inspector.mjs")],
+            cwd=repo_root, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=180)
+        (evidence / "browser.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
+        if completed.returncode or not json.loads((evidence / "result.json").read_text(encoding="utf-8")).get("ok"):
+            raise ValueError("installed semantic inspector browser qualification failed: " + label)
 
     with patch.object(llm_client, "submit_response_job", side_effect=AssertionError("model-free semantic episode cannot submit inference")):
         observe("00-baseline")
@@ -196,23 +219,53 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
                     expected_field = text
             observe(f"0{order}-label")
             last_request, last_receipt = request, receipt
+        if column_order:
+            before_order = json.loads((root / "semantic.webui.json").read_text(encoding="utf-8"))
+            request, receipt = send_request(f'Move column "State" before "{expected_field}" in view "{expected_view}" in English', 4,
+                                            receipt_prefix="Semantic")
+            revision = receipt["revision"]
+            after_order = json.loads((root / "semantic.webui.json").read_text(encoding="utf-8"))
+            replay = semantic_ui.replay(before_order, request["ops"], write_refs=request["write_refs"])
+            expected_source = copy.deepcopy(before_order)
+            target = next(item for item in expected_source["views"] if item["id"] == "records-list")
+            target["field_refs"] = [target["field_refs"][1], target["field_refs"][0], *target["field_refs"][2:]]
+            if after_order != expected_source or replay["semantic_document"] != after_order:
+                raise ValueError("column order changed semantics outside the admitted view property")
+            if semantic_ui.apply(request)["revision"] != revision:
+                raise ValueError("column order retry created a second revision")
+            _write_json(output / "operation-4.json", {"request": request, "receipt": receipt, "replay_equal": True})
+            _write_json(output / "semantic-inspector-after-order.json", semantic_ui.inspect(project_ref=f"scenario:{scenario_id}"))
+            column_moved = True
+            observe("04-column-order")
+            inspect_in_browser("inspector-after-order-wide")
+            last_request, last_receipt = request, receipt
         undo = {**last_request, "transaction_id": "undo-last-label", "source_revision": revision,
                 "base_hash": last_receipt["semantic_digest"], "ops": last_receipt["inverse_ops"],
                 "expected_generation": workflow.get_state("scenario", scenario_id)["generation"]}
         if conversational:
-            undo, undone = send_request("Undo the last label change", 4)
+            undo, undone = send_request("Undo the last column order change" if column_order else "Undo the last label change",
+                                       5 if column_order else 4, receipt_prefix="Semantic" if column_order else "Label")
         else:
             undone = semantic_ui.apply(undo)
         revision = undone["revision"]
         _write_json(output / "undo.json", {"request": undo, "receipt": undone})
         prototypes.carry_forward_resources(project_ref=project_ref, change_id=change_id, revision=revision,
             webui=json.loads((root / "webui.json").read_text(encoding="utf-8")))
-        observe("04-undo")
+        column_moved = False
+        if column_order:
+            restored = json.loads((root / "semantic.webui.json").read_text(encoding="utf-8"))
+            if restored != before_order:
+                raise ValueError("undo did not restore column order while preserving prior label changes")
+            _write_json(output / "semantic-inspector-after-undo.json", semantic_ui.inspect(project_ref=f"scenario:{scenario_id}"))
+        observe("05-undo" if column_order else "04-undo")
+        if column_order:
+            inspect_in_browser("inspector-after-undo-compact", compact=True)
     result = {"ok": True, "scenario_id": scenario_id, "artifact_root": str(root), "created": created,
               "revision": revision, "rows": rows, "model_calls": 0, "usd": 0,
               "initial_source": "diagnostic_fixture", "acceptance": "not_approved", "host": host,
               "request_route": route,
-              "scope": ("Real installed Builder chat label requests and undo, durable messages and live wide/compact Preview; fixture initial source, not autonomous generation"
+              "include_column_order": column_order,
+              "scope": ("Real installed Builder chat bounded label/column-order requests, family-specific undo, durable messages, semantic inspector and live wide/compact Preview; fixture initial source, not autonomous generation"
                         if conversational else "Public SDK semantic labels/replay/undo plus live wide/compact Client; not language interpretation or generation")}
     _write_json(output / "result.json", result)
     return result
