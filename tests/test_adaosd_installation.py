@@ -57,6 +57,8 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
     )
     monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_ENABLE", "1")
     monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES", "default,desktop")
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_MAX_ROOMS", "2")
+    monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_MAX_SNAPSHOT_BYTES", "33554432")
     monkeypatch.setenv("ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT", "64")
 
     result = adaosd_installation.generate_configuration(
@@ -97,6 +99,10 @@ def test_generates_go_supervisor_contracts_and_preserves_approval(
         assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_ENABLE"] == "1"
         assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_WEBSPACES"] == (
             "default,desktop"
+        )
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_MAX_ROOMS"] == "2"
+        assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_MAX_SNAPSHOT_BYTES"] == (
+            "33554432"
         )
         assert profile["environment"]["set"]["ADAOS_YJS_SIDECAR_SHADOW_QUEUE_LIMIT"] == "64"
     assert Path(runtime["working_directory"]).is_absolute()
