@@ -3280,7 +3280,7 @@ class BuilderWorkflowService:
             and change_set_status not in _CHANGE_SET_TERMINAL_STATES,
         }
 
-    def prototype_edit_context(self, object_type: str, object_id: str) -> dict[str, Any]:
+    def prototype_edit_context(self, object_type: str, object_id: str, *, include_intake: bool = False) -> dict[str, Any]:
         """Canonical edit gate without constructing inspection/UI projections."""
         kind, project_id = _kind(object_type), _project_id(object_id)
         with _LOCK:
@@ -3289,7 +3289,7 @@ class BuilderWorkflowService:
             fingerprint = hashlib.sha256(json.dumps({"state": state, "definition": definition.source,
                 "package_digest": self._active_package_digest, "binding_digest": self._active_binding_digest},
                 sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
-            cache_key = (str(self._state_path(kind, project_id).resolve()), kind, project_id, fingerprint)
+            cache_key = (str(self._state_path(kind, project_id).resolve()), kind, project_id, fingerprint, include_intake)
             if cache_key in _EDIT_CONTEXT_CACHE:
                 return copy.deepcopy(_EDIT_CONTEXT_CACHE[cache_key])
             workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
@@ -3301,6 +3301,10 @@ class BuilderWorkflowService:
                     "active_phase": workflow.get("active_phase"), "archived": bool(state.get("archived")),
                     "change": {"change_id": change.get("change_id"), "status": change.get("status")},
                     "capabilities": {"can_edit_prototype": capabilities["can_edit_prototype"]}}
+            if include_intake:
+                result['change'].update({key: copy.deepcopy(change[key]) for key in
+                    ('change_set_id', 'request', 'request_addenda', 'member_change_ids', 'issues', 'source_message_ids')
+                    if key in change})
             if len(_EDIT_CONTEXT_CACHE) >= 64:
                 _EDIT_CONTEXT_CACHE.pop(next(iter(_EDIT_CONTEXT_CACHE)))
             _EDIT_CONTEXT_CACHE[cache_key] = copy.deepcopy(result)
@@ -5977,6 +5981,42 @@ class BuilderWorkflowService:
             or None,
             "workflow": projection,
         }
+
+    def record_semantic_model_observation(
+        self, object_id: str, *, change_id: str, run_id: str,
+        activity: str, execution_metrics: Mapping[str, Any], source_message_id: str,
+    ) -> dict[str, Any]:
+        """Record metering without granting authoring authority or a revision.
+
+        Observation is not a workflow transition: it must not invalidate the
+        immutable generation admitted before a paid request. The successful
+        semantic commit updates this same Run id rather than billing it twice.
+        """
+        if activity not in {'prototype_semantic_model_started', 'prototype_semantic_model_ready',
+                            'prototype_semantic_model_failed', 'prototype_semantic_model_noop',
+                            'prototype_semantic_model_clarification', 'prototype_semantic_model_unsupported'}:
+            raise BuilderWorkflowError('unsupported semantic model observation')
+        metrics = _execution_metrics(execution_metrics)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state('scenario', project_id)
+            workflow = self._normalized_workflow(state, object_type='scenario', object_id=project_id)
+            current = _normalize_change(workflow.get('change') or workflow.get('change_set'))
+            if not current or current['change_id'] != change_id:
+                return {'ok': False, 'skipped': 'originating_change_not_active'}
+            previous = next((row for row in current.get('runs') or [] if row['run_id'] == run_id), None)
+            if previous and previous['activity'] == 'prototype_revision_recorded':
+                return {'ok': True, 'skipped': 'semantic_commit_already_recorded'}
+            changed_at = _now()
+            self._record_transition_run(workflow, action=activity, actor='builder.semantic_proposer',
+                metadata={'run_id': run_id, 'execution_metrics': metrics,
+                          'source_message_ids': [source_message_id],
+                          'input_refs': ['message:' + source_message_id],
+                          'evidence_refs': list(metrics.get('source_refs') or [])},
+                changed_at=changed_at, project_ref='scenario:' + project_id)
+            state['workflow'] = workflow
+            self._write_state('scenario', project_id, state)
+        return {'ok': True, 'run_id': run_id}
 
     def _record_transition_run(
         self,

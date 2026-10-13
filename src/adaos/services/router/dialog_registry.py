@@ -415,7 +415,7 @@ def _fallback_agent_registry_records() -> list[dict[str, Any]]:
     return records
 
 
-def _skill_manifest_dirs() -> list[Path]:
+def _skill_manifest_dirs(owner_skill_id: str | None = None) -> list[Path]:
     roots: list[Path] = []
     try:
         roots.append(Path(get_ctx().paths.skills_workspace_dir()))
@@ -427,9 +427,15 @@ def _skill_manifest_dirs() -> list[Path]:
         pass
     dirs: list[Path] = []
     seen: set[str] = set()
+    if owner_skill_id and not re.fullmatch(r'[A-Za-z0-9_-]+', owner_skill_id):
+        raise ValueError('invalid channel owner skill id')
     for root in roots:
         try:
-            candidates = sorted(path for path in root.iterdir() if (path / "skill.yaml").exists())
+            if owner_skill_id:
+                candidate = root / owner_skill_id
+                candidates = [candidate] if (candidate / "skill.yaml").is_file() else []
+            else:
+                candidates = sorted(path for path in root.iterdir() if (path / "skill.yaml").exists())
         except Exception:
             candidates = []
         for path in candidates:
@@ -515,13 +521,13 @@ def _normalize_manifest_renderer_capabilities(raw: Mapping[str, Any]) -> dict[st
     return result
 
 
-def _conversation_manifest_channel_records(webspace_id: str) -> list[dict[str, Any]]:
+def _conversation_manifest_channel_records(webspace_id: str, *, owner_skill_id: str | None = None) -> list[dict[str, Any]]:
     ws = str(webspace_id or "").strip() or "default"
     channels_out: list[dict[str, Any]] = []
-    for skill_dir in _skill_manifest_dirs():
+    for skill_dir in _skill_manifest_dirs(owner_skill_id):
         manifest = _read_skill_manifest(skill_dir)
         skill_id = str(manifest.get("name") or skill_dir.name).strip()
-        if not skill_id:
+        if not skill_id or (owner_skill_id and owner_skill_id != skill_id):
             continue
         conv = manifest.get("conversation") if isinstance(manifest, dict) else {}
         if not isinstance(conv, dict):
@@ -575,7 +581,7 @@ def _conversation_manifest_channel_records(webspace_id: str) -> list[dict[str, A
                     },
                 }
             )
-    if not any(str(item.get("id") or "").strip() == BUILDER_DIALOG_CHANNEL_ID for item in channels_out):
+    if owner_skill_id in (None, BUILDER_SKILL_ID) and not any(str(item.get("id") or "").strip() == BUILDER_DIALOG_CHANNEL_ID for item in channels_out):
         renderer_capabilities = _normalize_manifest_renderer_capabilities({})
         channels_out.append(
             {

@@ -57,6 +57,52 @@ def call(on, name, **params):
             "params": {**IDENTITY, **params}, "invalidates": [*TAGS, "builder.project.files", "builder.project.llm"]}
 
 
+def configure_semantic_edit_controls(application):
+    """Expose the opt-in edit path without changing default generation."""
+    page = application["desktop"]["pageSchema"]
+    page["initialState"].setdefault("builderSemanticEditMode", "full_candidate")
+    page["initialState"].setdefault("builderSemanticWriteRef", "")
+    page["initialState"].setdefault("builderSemanticWriteProperty", "title.en")
+    page["initialState"].get("dev", {}).pop("semanticEditMode", None)
+    for widget in page["widgets"]:
+        if widget.get("id") in ("design-conversation-side-task", "design-conversation-full-task"):
+            widget["inputs"].setdefault("meta", {})["builder_semantic_edit_mode"] = "$state.builderSemanticEditMode"
+            widget["inputs"]["meta"].update(builder_semantic_write_ref="$state.builderSemanticWriteRef",
+                builder_semantic_write_property="$state.builderSemanticWriteProperty")
+    settings = application["modals"]["design-settings"]["schema"]["widgets"]
+    control = {"id": "design-semantic-edit-settings", "type": "ui.form", "area": "main",
+        "title": "Prototype edit mode",
+        "title_i18n": {"locales": {"en": "Prototype edit mode", "ru": "Режим правок прототипа"}},
+        "inputs": {"showSubmit": False, "autoCommit": True, "fields": [{"id": "semanticEditMode", "type": "select",
+            "stateKey": "builderSemanticEditMode", "default": "full_candidate", "label": "Edit path",
+            "label_i18n": {"locales": {"en": "Edit path", "ru": "Способ правки"}},
+            "options": [{"value": "full_candidate", "label": "Standard (deterministic edits first)",
+                "label_i18n": {"locales": {"en": "Standard (deterministic edits first)", "ru": "Обычный (сначала точные правки без LLM)"}}},
+                {"value": "bounded_ops", "label": "Bounded LLM edit: labels or column order (beta)",
+                "label_i18n": {"locales": {"en": "Bounded LLM edit: labels or column order (beta)", "ru": "Ограниченная LLM-правка: подписи или порядок колонок (бета)"}}}]},
+            {"id": "writeRef", "type": "select", "stateKey": "builderSemanticWriteRef", "default": "",
+                "visibleIf": "$state.builderSemanticEditMode === 'bounded_ops'", "label": "Exact semantic target",
+                "label_i18n": {"locales": {"en": "Exact semantic target", "ru": "Точная семантическая цель"}},
+                "optionsStatePath": "builderSemanticRefs", "optionValuePath": "ref", "optionLabelPaths": ["ref", "label_en"]},
+            {"id": "writeProperty", "type": "select", "stateKey": "builderSemanticWriteProperty", "default": "title.en",
+                "visibleIf": "$state.builderSemanticEditMode === 'bounded_ops'", "label": "Only allowed property",
+                "label_i18n": {"locales": {"en": "Only allowed property", "ru": "Единственное разрешённое свойство"}},
+                "options": [{"value": value, "label": value} for value in
+                            ("title.en", "title.ru", "label.en", "label.ru", "field_refs")]}]},
+        "actions": []}
+    scope = {"id": "design-semantic-edit-scope", "type": "item.details", "area": "main",
+        "visibleIf": "$state.builderSemanticEditMode === 'bounded_ops'",
+        "dataSource": source("get_semantic_inspector"), "inputs": {"presentation": "section",
+            "fields": [{"key": "status_label", "label": "Semantic scope",
+                "label_i18n": {"locales": {"en": "Semantic scope", "ru": "Семантическая область"}}}],
+            "stateBindings": {"builderSemanticRefs": "refs"}}}
+    for modal in application["modals"].values():
+        widgets = modal.get("schema", {}).get("widgets", [])
+        widgets[:] = [widget for widget in widgets if widget.get("id") not in (control["id"], scope["id"])]
+    settings[1:1] = [scope, control]
+    return application
+
+
 def configure_workbench_page(page):
     """Forward-port accepted Builder content into the current layout ABI."""
     page["surfaceClass"] = "operations"
@@ -384,6 +430,7 @@ def build():
             item["visibleIf"] = "$state.projectArchived !== true" if key == "overview-archive" else "$state.projectArchived === true"
             settings_widgets.append(item)
     modals["design-settings"] = design.modal("design-settings", "Настройки", "Settings", settings_widgets)
+    configure_semantic_edit_controls(application)
     checkpoint = design.form("design-checkpoint-form", [design.label("Комментарий", "Comment", id="message", type="longText")],
                              "Принять проверку", "Accept verification", [call("submit", "push_project", confirmed=True,
                              message="$event.values.message", checkpoint_id="$state.workbench.change_id")])

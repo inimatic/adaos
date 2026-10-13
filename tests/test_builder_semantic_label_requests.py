@@ -68,6 +68,19 @@ def test_native_ambiguous_or_incomplete_label_request_cannot_fall_back_to_genera
     assert ((root / "webui.json").read_bytes(), workflow.describe("scenario", "semantic_labels")["generation"]) == before
 
 
+def test_semantic_intake_does_not_read_the_display_projection(native_label_builder, monkeypatch):
+    module, workflow, root, _document = native_label_builder
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Semantic intake must use the canonical compact gate')
+    monkeypatch.setattr(module.sdk_builder_workflow, 'get_state', forbidden)
+    result = module._register_builder_change_set(session={'scenario_id': root.name},
+        patch={'id': 'compact-intake'}, request_text='Rename view "Work" to "Queue"',
+        _meta={'source_message_id': 'compact-intake-user'}, compact=True)
+    assert result['ok'], result
+    state = workflow.describe('scenario', root.name)
+    assert 'compact-intake-user' in state['change']['source_message_ids']
+
+
 def test_chat_reuses_its_authoritative_target_instead_of_resolving_it_twice(native_label_builder, monkeypatch):
     module, _, _, document = native_label_builder
     monkeypatch.setattr(module, "_resolve_builder_context_for_turn", lambda *a: {"builder_webspace_id": "builder-host"})

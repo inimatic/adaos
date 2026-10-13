@@ -40,6 +40,8 @@ def provider_contract(admission: Mapping[str, Any]) -> dict[str, Any]:
         props['ref'] = {'type': 'string', 'enum': refs}
         if kind == 'label.set':
             props['text'] = {'type': 'string'}
+            props['locale']['enum'] = sorted({prop.partition('.')[2] for mask in admission['write_masks']
+                for prop in mask['properties'] if prop.startswith(('title.', 'label.'))})
         else:
             props['field_refs'].pop('uniqueItems', None)
             props['field_refs']['items'] = {'type': 'string'}
@@ -114,6 +116,18 @@ class SemanticProposer:
         self.submit = submit or llm_client.submit_response_job
         self.wait = wait or llm_client.wait_response_job
 
+    def _observe_run(self, record, retained, activity):
+        metrics = retained.get('execution_metrics') or {'source': 'builder.llm_result',
+            'model': retained['request']['model'],
+            'llm_calls': 1, 'repair_attempts': 0, 'source_refs': ['llm_job:' + retained['job_id']]}
+        effort = (retained['request'].get('reasoning') or {}).get('effort')
+        if effort:
+            metrics.setdefault('reasoning_effort', effort)
+        return self.admission.graph.workflow.record_semantic_model_observation(
+            record['project_ref'].removeprefix('scenario:'), change_id=record['change_id'],
+            run_id=record['admission_id'], activity='prototype_semantic_model_' + activity,
+            execution_metrics=metrics, source_message_id=record['source_request']['source_message_id'])
+
     def propose(self, *, project_ref: str, admission_id: str, model: str, reasoning_effort: str = 'high',
                 max_tokens: int = 32768, timeout_s: float = 300, output_mode: str = 'bounded_ops') -> dict[str, Any]:
         from .model_controls import reasoning_for_model
@@ -133,7 +147,9 @@ class SemanticProposer:
             raise BuilderWorkflowError('Proposal requires its active editable Change')
         packet = self.admission._packet(record)
         model_path = path.with_suffix('.model.json')
-        user_input = {'request': record['source_request']['instruction'], 'context': packet['context']}
+        user_input = {'request': record['source_request']['instruction'], 'context': packet['context'],
+            'admitted_scope': {'write_masks': packet['write_masks'], 'max_ops': packet['max_ops'],
+                               'operation_kinds': packet['operation_kinds']}}
         contract = provider_contract(packet)
         instructions = RULES
         if output_mode == 'full_document':
@@ -154,12 +170,21 @@ class SemanticProposer:
         request_digest = digest(envelope)
         with mutation_lock(model_path.parent / '.model.lock'):
             retained = _read(model_path) if model_path.is_file() else {}
-            if retained and retained['request_digest'] != request_digest:
-                raise BuilderWorkflowError('A retained proposal cannot change its model/profile/context on retry')
+            if retained:
+                frozen = retained['request']
+                frozen_mode = 'full_document' if 'semantic_document' in frozen['text']['format']['schema']['properties'] else 'bounded_ops'
+                if (digest(frozen) != retained['request_digest'] or frozen_mode != output_mode
+                        or any(frozen.get(key) != envelope.get(key) for key in
+                               ('model', 'reasoning', 'max_tokens', 'tools', 'tool_choice', 'profile_scope'))):
+                    raise BuilderWorkflowError('A retained proposal cannot change its model/profile/context on retry')
+                # Software/prompt updates must not replace a previously sealed
+                # Root request. Resume its exact envelope, not a new paid input.
+                envelope = copy.deepcopy(frozen)
+                request_digest = retained['request_digest']
             if 'result' in retained:
                 return copy.deepcopy(retained['result'])
             # Recheck the immutable base before any paid submission, not after it.
-            if not retained:
+            if not retained.get('job_id'):
                 _root, gate, document, runtime, locales = self.admission._base(project_ref)
                 if (gate['generation'] != record['expected_generation']
                         or self.admission.graph.workflow.current_prototype_revision('scenario', gate['object_id']) != record['source_revision']
@@ -167,6 +192,7 @@ class SemanticProposer:
                         or digest(runtime) != record['runtime_hash']
                         or {locale: digest(value) for locale, value in locales.items()} != record['locale_hashes']):
                     raise BuilderWorkflowError('The proposal base changed before model submission')
+            if not retained:
                 retained = {'schema': 'adaos.builder.semantic_model_request.v1', 'admission_id': admission_id,
                     'request_id': f'builder-semantic-proposal:{admission_id}', 'request_digest': request_digest,
                     'request': envelope, 'status': 'prepared'}
@@ -179,23 +205,28 @@ class SemanticProposer:
                     raise BuilderWorkflowError('Root returned no durable proposal job identity')
                 retained.update(job_id=job_id, base_url=(submitted.get('_client') or {}).get('base_url'), status='submitted')
                 atomic_write_json(model_path, retained)
+            self._observe_run(record, retained, 'started')
             job = self.wait(retained['job_id'], base_url=retained.get('base_url'), timeout_s=timeout_s, poll_interval_s=0.5)
             metrics = _response_metrics(job, reasoning_effort)
+            metrics.setdefault('model', model)
             retained.update(status='observed', job=job, execution_metrics=metrics)
             atomic_write_json(model_path, retained)
             output = job.get('output_text')
             if not output or str(job.get('status') or '') not in ('succeeded', 'completed'):
+                self._observe_run(record, retained, 'failed')
                 raise BuilderWorkflowError('Proposal job is incomplete, refused or failed; no source was changed')
             try:
                 proposal = json.loads(output)
                 prepared = (self.admission.prepare_document if output_mode == 'full_document' else self.admission.prepare)(
                     project_ref=project_ref, admission_id=admission_id,
                     **({'candidate': proposal} if output_mode == 'full_document' else {'proposal': proposal}))
-            except (ValueError, TypeError, KeyError) as exc:
+            except Exception as exc:
+                self._observe_run(record, retained, 'failed')
                 raise BuilderWorkflowError('The model returned no valid semantic proposal') from exc
+            self._observe_run(record, retained, 'ready' if prepared['status'] == 'planned' else prepared['status'])
             result = {**prepared, 'proposal': proposal, 'execution_metrics': metrics, 'root_job_id': retained['job_id'],
                 'admission_id': admission_id, 'model_calls': metrics['llm_calls'], 'requested_model': model,
                 'reasoning_effort': reasoning_effort, 'output_mode': output_mode,
-                'input_bytes': len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))}
+                'input_bytes': len(json.dumps(envelope['messages'], ensure_ascii=False).encode('utf-8'))}
             atomic_write_json(model_path, {**retained, 'status': 'completed', 'result': result})
             return result

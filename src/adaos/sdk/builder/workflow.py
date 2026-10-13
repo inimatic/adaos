@@ -21,6 +21,11 @@ def get_prototype_edit_context(object_type: str, object_id: str) -> dict[str, An
     return dict(_service().prototype_edit_context(object_type, object_id))
 
 
+def get_prototype_intake_context(object_type: str, object_id: str) -> dict[str, Any]:
+    """Read actual Change intake fields without Process/inspection projections."""
+    return dict(_service().prototype_edit_context(object_type, object_id, include_intake=True))
+
+
 def get_process_stages(object_type: str, object_id: str, *, revision: str | None = None) -> list[dict[str, Any]]:
     from adaos.services.builder.process_stages import process_stages
 
@@ -310,6 +315,7 @@ def update_interaction_context(
 
 __all__ = [
     "get_prototype_edit_context",
+    "get_prototype_intake_context",
     "save_specification_delta",
     "accept_prototype",
     "build_context_packet",

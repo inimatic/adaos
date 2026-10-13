@@ -18,6 +18,21 @@ def test_edit_context_matches_the_full_authority_projection(graph_project):
     assert 'runs' not in bounded['change'] and 'process' not in bounded and 'workflow_inspection' not in bounded
 
 
+def test_intake_context_keeps_actual_change_fields_without_widening_the_edit_packet(graph_project, monkeypatch):
+    _service, workflow, root, _document = graph_project
+    full = workflow.describe('scenario', root.name)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Intake does not require display projections')
+    monkeypatch.setattr(type(workflow), '_workflow_inspection', forbidden)
+    monkeypatch.setattr(type(workflow), '_process_projection', forbidden)
+    bounded = workflow.prototype_edit_context('scenario', root.name)
+    intake = workflow.prototype_edit_context('scenario', root.name, include_intake=True)
+    for key in ('change_id', 'request', 'request_addenda', 'member_change_ids', 'issues', 'source_message_ids'):
+        assert intake['change'].get(key) == full['change'].get(key)
+    assert 'issues' not in bounded['change'] and 'runs' not in intake['change']
+    assert workflow.prototype_edit_context('scenario', root.name) == bounded
+
+
 def test_edit_admission_never_constructs_display_projections(graph_project, monkeypatch):
     service, workflow, root, document = graph_project
     def forbidden(*_args, **_kwargs):

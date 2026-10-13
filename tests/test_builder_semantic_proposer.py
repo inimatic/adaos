@@ -104,3 +104,67 @@ def test_missing_metering_is_not_reported_as_zero_cost():
     from adaos.services.builder.semantic_proposer import _response_metrics
     metrics = _response_metrics({'job_id': 'unmetered', 'status': 'failed'}, 'high')
     assert metrics['llm_calls'] == 1 and 'cost_usd' not in metrics
+
+
+def test_property_scope_is_visible_and_decoder_locale_is_not_broader_than_the_mask(graph_project):
+    service = SemanticAdmissionService(graph_project[0])
+    packet = service.begin(project_ref='scenario:semantic_labels', instruction='English heading only',
+        source_message_id='explicit.locale.scope', write_refs=['view:work-list'],
+        write_properties={'view:work-list': ['title.en']})
+    contract = provider_contract(packet)
+    label = next(v for v in contract['properties']['ops']['items']['anyOf'] if v['properties']['kind']['enum'] == ['label.set'])
+    assert label['properties']['locale']['enum'] == ['en']
+
+
+def test_observer_resume_keeps_the_frozen_request_after_a_prompt_update(graph_project, monkeypatch):
+    from adaos.services.builder import semantic_proposer as module
+    waits = []
+    def wait(*args, **kwargs):
+        waits.append(args[0])
+        if len(waits) == 1:
+            raise TimeoutError('observer interrupted')
+        return completed(*args, **kwargs)
+    proposer, packet, calls, completed = setup_proposer(graph_project, wait=wait)
+    with pytest.raises(TimeoutError):
+        run(proposer, packet)
+    original_messages = calls[0]['messages']
+    monkeypatch.setattr(module, 'RULES', module.RULES + '\nNew guidance for future requests only.')
+    result = run(proposer, packet)
+    assert result['status'] == 'planned' and len(calls) == 1
+    assert calls[0]['messages'] == original_messages
+
+
+def test_pending_model_job_is_visible_without_advancing_admitted_generation(graph_project):
+    def wait(*args, **kwargs):
+        raise TimeoutError('observer interrupted')
+    proposer, packet, calls, _completed = setup_proposer(graph_project, wait=wait)
+    workflow = graph_project[1]
+    before = workflow.prototype_edit_context('scenario', 'semantic_labels')['generation']
+    with pytest.raises(TimeoutError):
+        run(proposer, packet)
+    state = workflow.describe('scenario', 'semantic_labels')
+    observed = next(row for row in state['change']['runs'] if row['run_id'] == packet['admission_id'])
+    assert observed['status'] == 'running' and observed['execution_metrics']['llm_calls'] == 1
+    assert 'cost_usd' not in observed['execution_metrics']
+    assert state['generation'] == before and len(calls) == 1
+
+
+@pytest.mark.parametrize('output', [
+    {'schema': PROPOSAL_SCHEMA, 'status': 'unsupported', 'message': 'unsupported', 'ops': []},
+    {'schema': PROPOSAL_SCHEMA, 'status': 'proposed', 'message': '', 'ops': []},
+    {'unknown': 'invalid'},
+])
+def test_paid_nonrevision_outcome_remains_a_single_metered_canonical_run(graph_project, output):
+    proposer, packet, calls, _completed = setup_proposer(graph_project, output=output)
+    before = (graph_project[2] / 'semantic.webui.json').read_bytes()
+    if 'unknown' in output:
+        with pytest.raises(BuilderWorkflowError, match='no valid semantic proposal'):
+            run(proposer, packet)
+    else:
+        run(proposer, packet)
+    rows = graph_project[1].describe('scenario', 'semantic_labels')['change']['runs']
+    observed = [row for row in rows if row['run_id'] == packet['admission_id']]
+    assert len(observed) == 1 and observed[0]['execution_metrics']['cost_usd'] == 0.0002
+    assert observed[0]['status'] == ('failed' if 'unknown' in output else 'succeeded')
+    assert (graph_project[2] / 'semantic.webui.json').read_bytes() == before
+    assert len(calls) == 1

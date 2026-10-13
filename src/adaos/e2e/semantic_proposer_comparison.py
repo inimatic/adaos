@@ -131,6 +131,37 @@ def retained_attempt(root, source_message_id, *, admission_id=None):
     return read(path.with_suffix('.model.json')) if path.with_suffix('.model.json').is_file() else {}
 
 
+def installed_runtime(client, repo):
+    """Pin the actual installed owner, never a dated activation artifact."""
+    response = client.get('http://127.0.0.1:8777/api/skills/runtime/status/builder_skill', timeout=30)
+    response.raise_for_status()
+    packet = response.json()
+    state = packet.get('state', packet)
+    if not state.get('ready') or not state.get('active_slot'):
+        raise ValueError('The installed Workspace Builder must be ready before qualification')
+    manifest = Path(state['resolved_manifest']).resolve()
+    manifest.relative_to(repo)
+    handler = manifest.parent / 'src/skills/builder_skill/handlers/main.py'
+    if handler.read_bytes() != (repo / '.adaos/workspace/skills/builder_skill/handlers/main.py').read_bytes():
+        raise ValueError('Installed Builder differs from Workspace; activate it before freezing the batch')
+    return state, manifest, handler
+
+
+def carry_revision_resources(scenario_id, root, receipt):
+    from adaos.sdk.builder import workflow
+    from adaos.sdk.developer import prototypes
+    state = workflow.get_state('scenario', scenario_id)
+    return prototypes.carry_forward_resources(project_ref='project:' + scenario_id,
+        change_id=state['change']['change_id'], revision=receipt['revision'], webui=read(root / 'webui.json'))
+
+
+def check_series_budget(*, prior_paid_requests, reserved_attempts, prior_cost_usd,
+                        known_cost_usd, unknown_reserved_usd, max_usd):
+    if (prior_paid_requests + reserved_attempts >= 32
+            or prior_cost_usd + known_cost_usd + unknown_reserved_usd + 0.5 > max_usd):
+        raise ValueError('Whole-series conservative budget exhausted')
+
+
 def execute(args):
     from dotenv import load_dotenv
     load_dotenv()
@@ -148,22 +179,25 @@ def execute(args):
     output = Path(args.output).resolve()
     if not output.is_relative_to(repo / 'e2e/artifacts'):
         raise ValueError('Evidence must be under e2e/artifacts')
+    from adaos.apps.cli.active_control import resolve_control_token
+    client = requests.Session()
+    client.trust_env = False
+    client.headers['X-AdaOS-Token'] = resolve_control_token(base_url='http://127.0.0.1:8777')
     source_paths = ['src/adaos/services/builder/' + name for name in
         ('semantic_admission.py', 'semantic_proposer.py', 'semantic_graph.py', 'workflow.py')]
-    source_paths += ['.adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py',
+    source_paths += ['.adaos/workspace/skills/builder_skill/handlers/main.py',
                      'src/adaos/e2e/semantic_proposer_comparison.py',
                      'src/adaos/services/builder/prototype_requests.py',
                      'src/adaos/services/builder/semantic_request_scope.py',
                      'src/adaos/sdk/builder/prototype.py', 'src/adaos/adapters/builder/legacy_dev_skill.py']
-    activation = read(repo / 'e2e/artifacts/builder/four-step-runtime-20261013-03/after.json')['state']
-    manifest_path = Path(activation['resolved_manifest']).resolve()
-    runtime_handler = manifest_path.parent / 'src/skills/builder_skill/handlers/main.py'
+    activation, manifest_path, runtime_handler = installed_runtime(client, repo)
     source_paths += [str(manifest_path.relative_to(repo)), str(runtime_handler.relative_to(repo))]
     pins = {path: hashlib.sha256((repo / path).read_bytes()).hexdigest() for path in source_paths}
     selected_fixtures = fixtures(repo)[:1] if args.pilot else fixtures(repo)
     plan = {'schema': 'adaos.e2e.semantic_proposer_comparison.v1', 'model': 'gpt-5', 'reasoning_effort': 'high',
         'max_output_tokens': 32768, 'max_paid_requests': 32, 'max_usd': args.max_usd,
         'request_reserve_usd': 0.5, 'prior_reserved_cost_usd': args.prior_cost_usd,
+        'prior_paid_requests': args.prior_paid_requests,
         'installed_version': activation['version'], 'installed_slot': activation['active_slot'],
         'repetitions': args.repetitions, 'source_pins': pins,
         'fixtures': [{'id': name, 'source_digest': digest(source)} for name, source in selected_fixtures],
@@ -173,15 +207,14 @@ def execute(args):
         'quality': ['Exact complete semantic document', 'Protected records/relationships/commands',
                     'Wide/compact live labels, column order, selection, editor, guards, CRUD and clipping', 'Replay and mixed undo'],
         'order': 'Counterbalanced by fixture and repetition; three sequential edits per route.'}
+    planned = len(selected_fixtures) * args.repetitions * 2 * 3
+    if args.prior_paid_requests + planned > plan['max_paid_requests']:
+        raise ValueError('Frozen batch exceeds the remaining whole-series request cap')
     output.mkdir(parents=True, exist_ok=False)
     write(output / 'plan.json', plan)
     if not args.run_paid:
         print(json.dumps({'status': 'planned', 'planned_primary': len(selected_fixtures) * args.repetitions * 2 * 3, 'llm_calls': 0}))
         return
-    from adaos.apps.cli.active_control import resolve_control_token
-    client = requests.Session()
-    client.trust_env = False
-    client.headers['X-AdaOS-Token'] = resolve_control_token(base_url='http://127.0.0.1:8777')
     rows, chains = [], []
     def save():
         write(output / 'progress.json', {'rows': rows, 'chains': chains,
@@ -207,8 +240,9 @@ def execute(args):
                 for index, task in enumerate(changes()):
                     spent = sum(r.get('metrics', {}).get('cost_usd', 0) for r in rows)
                     unknown = sum(0.5 for r in rows if r.get('paid_job') and 'cost_usd' not in r.get('metrics', {}))
-                    if len(rows) >= 32 or args.prior_cost_usd + spent + unknown + 0.5 > args.max_usd:
-                        raise ValueError('Whole-series conservative budget exhausted')
+                    check_series_budget(prior_paid_requests=args.prior_paid_requests, reserved_attempts=len(rows),
+                        prior_cost_usd=args.prior_cost_usd, known_cost_usd=spent,
+                        unknown_reserved_usd=unknown, max_usd=args.max_usd)
                     if any(hashlib.sha256((repo / path).read_bytes()).hexdigest() != pin for path, pin in pins.items()):
                         raise ValueError('Frozen implementation changed; stop and retain this batch')
                     message_id = f'{output.name}:{chain_id}:{task["id"]}'
@@ -274,9 +308,9 @@ def execute(args):
                     receipt = semantic_ui.apply(undo['request'])
                     chain['undo_ok'] = read(root / 'semantic.webui.json') == chain.pop('pre_order_document')
                     write(chain_out / 'undo.json', {'request': undo['request'], 'receipt': receipt})
-                    if fixture_index == 0 and repetition == 0:
-                        chain['undo_browser'] = browser_observation(repo, chain_out / 'undo-browser', args.host, scenario_id, root,
-                                                                    columns=['Subject', 'State', 'Team'])
+                    write(chain_out / 'undo-resource-carry-forward.json', carry_revision_resources(scenario_id, root, receipt))
+                    chain['undo_browser'] = browser_observation(repo, chain_out / 'undo-browser', args.host, scenario_id, root,
+                                                                columns=['Subject', 'State', 'Team'])
                 save()
     summary = {'schema': plan['schema'], 'complete': True, 'plan': plan, 'rows': rows, 'chains': chains,
         'paid_jobs': len({r['paid_job'] for r in rows if r.get('paid_job')}),
@@ -295,11 +329,18 @@ def main():
     parser.add_argument('--run-paid', action='store_true')
     parser.add_argument('--pilot', action='store_true', help='One fixture; use with repetitions=1 for six primary calls')
     parser.add_argument('--prior-cost-usd', type=float, default=0, help='Previous batches, including unknown-charge reserves')
+    parser.add_argument('--prior-paid-requests', type=int, help='Previous paid/unknown attempts in this whole series')
     args = parser.parse_args()
     if not 0 < args.max_usd <= 15:
         parser.error('Budget must be within the approved $15')
     if not 0 <= args.prior_cost_usd < args.max_usd:
         parser.error('Prior cost must be nonnegative and below the whole-series budget')
+    if args.prior_paid_requests is None:
+        if args.prior_cost_usd:
+            parser.error('Prior cost requires an explicit prior-paid-requests count')
+        args.prior_paid_requests = 0
+    if not 0 <= args.prior_paid_requests <= 32:
+        parser.error('Prior request count must be within the whole-series 32-attempt cap')
     execute(args)
 
 

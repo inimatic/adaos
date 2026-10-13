@@ -22,7 +22,8 @@ def native_proposer(native_label_builder, monkeypatch):
 
 
 @pytest.mark.parametrize('mode', ['bounded_ops', 'full_document'])
-def test_explicit_model_route_commits_through_core_and_records_billing(native_proposer, monkeypatch, mode):
+@pytest.mark.parametrize('scope_style', ['sdk', 'ui'])
+def test_explicit_model_route_commits_through_core_and_records_billing(native_proposer, monkeypatch, mode, scope_style):
     module, workflow, root, document = native_proposer
     admission = SemanticAdmissionService.from_context()
     calls = []
@@ -39,15 +40,22 @@ def test_explicit_model_route_commits_through_core_and_records_billing(native_pr
         'telemetry': {'usage': {'input_tokens': 600, 'output_tokens': 100},
             'cost': {'basis': 'estimate', 'estimated_usd': 0.003}}})
     monkeypatch.setattr(module.sdk_builder_semantic_ui, 'propose', proposer.propose)
+    scope = ({'builder_semantic_write_refs': ['view:work-list'],
+              'builder_semantic_write_properties': {'view:work-list': ['title.en']}} if scope_style == 'sdk' else
+             {'builder_semantic_write_ref': 'view:work-list', 'builder_semantic_write_property': 'title.en'})
     result = module.chat(text='Rename view "Work" to "Work queue" in English', webspace_id='builder-host',
         _meta={'source_message_id': 'native.model.user', 'builder_semantic_edit_mode': mode,
-               'builder_semantic_write_refs': ['view:work-list'], 'builder_llm_model': 'gpt-5'})
+               **scope, 'builder_llm_model': 'gpt-5'})
     assert result['status'] == 'semantic_proposal_applied', result
     assert result['route_class'] == 'D1' and len(calls) == 1
+    packet = json.loads(calls[0]['messages'][1]['content'])
+    assert packet['admitted_scope']['write_masks'] == [{'ref': 'view:work-list', 'properties': ['title.en']}]
     assert result['execution_metrics']['cost_usd'] == 0.003
     full = workflow.describe('scenario', root.name)
     assert 'native.model.user' in full['change_set']['source_message_ids']
     assert full['change']['runs'][-1]['execution_metrics']['input_tokens'] == 600
+    model_runs = [row for row in full['change']['runs'] if row['execution_metrics'] and row['execution_metrics'].get('llm_calls') == 1]
+    assert len(model_runs) == 1 and model_runs[0]['activity'] == 'prototype_revision_recorded'
     assert json.loads((root / 'semantic.webui.json').read_text(encoding='utf-8'))['resources'] == document['resources']
 
 
@@ -63,3 +71,16 @@ def test_model_failure_never_falls_back_to_full_generation(native_proposer, monk
     assert result['status'] == 'semantic_proposal_rejected'
     assert (root / 'semantic.webui.json').read_bytes() == before
     assert workflow.current_prototype_revision('scenario', root.name) == '001'
+
+
+def test_bounded_ui_requires_explicit_scope_before_intake_or_paid_call(native_proposer, monkeypatch):
+    module, workflow, root, _document = native_proposer
+    before = (root / 'semantic.webui.json').read_bytes()
+    generation = workflow.describe('scenario', root.name)['generation']
+    monkeypatch.setattr(module.sdk_builder_semantic_ui, 'propose', lambda **kw: pytest.fail('Missing scope must never bill'))
+    result = module.chat(text='Use a clearer heading', webspace_id='builder-host', _meta={
+        'source_message_id': 'native.missing.scope', 'builder_semantic_edit_mode': 'bounded_ops',
+        'builder_semantic_write_ref': '', 'builder_semantic_write_property': 'title.en'})
+    assert result['status'] == 'semantic_proposal_rejected' and result['model_calls'] == 0
+    assert (root / 'semantic.webui.json').read_bytes() == before
+    assert workflow.describe('scenario', root.name)['generation'] == generation

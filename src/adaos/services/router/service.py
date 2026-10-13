@@ -5667,7 +5667,22 @@ class RouterService:
             if not cid or cid == GENERAL_DIALOG_CHANNEL_ID:
                 return False
             try:
-                manifest_channels = await asyncio.to_thread(_conversation_manifest_channel_records, ws)
+                resolution_submitted = time.perf_counter()
+                def resolve_channels():
+                    worker_started = time.perf_counter()
+                    try:
+                        if cid == BUILDER_DIALOG_CHANNEL_ID:
+                            # The built-in Builder channel belongs to Builder;
+                            # unrelated manifests are not its dependencies.
+                            return _conversation_manifest_channel_records(ws, owner_skill_id=BUILDER_SKILL_ID)
+                        return _conversation_manifest_channel_records(ws)
+                    finally:
+                        if cid == BUILDER_DIALOG_CHANNEL_ID:
+                            from adaos.services.turn_timing import record_turn_timing
+                            record_turn_timing(meta={**meta, "webspace_id": ws}, stage="channel_resolution", timings={
+                                "executor_queue_ms": (worker_started - resolution_submitted) * 1000,
+                                "manifest_resolution_ms": (time.perf_counter() - worker_started) * 1000})
+                manifest_channels = await asyncio.to_thread(resolve_channels)
                 channel = next(
                     (
                         item
