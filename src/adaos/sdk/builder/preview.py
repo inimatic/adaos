@@ -606,9 +606,14 @@ def select_target(
     revision: str | None = None,
     source_webspace_id: str = "desktop",
     follow_active: bool = False,
-    via_owner: bool = False,
+    via_owner: bool = True,
 ) -> dict[str, Any]:
-    """Materialize an explicit Lifecycle snapshot without changing its active phase."""
+    """Materialize an exact Lifecycle snapshot through its live Hub owner.
+
+    Detached materialization is explicit (via_owner=False), for an in-owner or
+    offline diagnostic caller only. A standalone SDK client must not write a
+    second YDoc while the Hub retains a live room for the same Webspace.
+    """
 
     delivery_started = time.perf_counter()
     delivery_timings = {}

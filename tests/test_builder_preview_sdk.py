@@ -79,7 +79,8 @@ def test_revision_selection_persists_actual_target_and_keeps_project_identity(mo
         return {"ok": True, "preview_webspace_id": "desktop-dev", "binding": {
             "selection": {"object_type": kind, "object_id": "app", "title": "Example"}}}
     monkeypatch.setattr(preview, "select_project", select)
-    monkeypatch.setattr(preview, "materialize_revision", lambda **kw: renders.append(kw) or materialized)
+    monkeypatch.setattr(preview, "materialize_revision_via_owner", lambda **kw: renders.append(kw) or materialized)
+    monkeypatch.setattr(preview, "materialize_revision", lambda **kw: pytest.fail('Default SDK Preview cannot write a detached second document'))
     monkeypatch.setattr("adaos.sdk.data.events.publish", lambda *args, **kwargs: events.append((args, kwargs)))
     result = preview.select_target(kind, "app", stage=stage, revision=revision)
     if materialized.get("ok") is False or materialized.get("accepted") is False:
@@ -120,7 +121,7 @@ def test_waiting_automation_follows_available_prototype_but_explicit_selection_f
         "ok": True, "preview_webspace_id": "desktop-dev", "binding": {
             "selection": {"object_type": "scenario", "object_id": "app", "title": "Example"}},
     })
-    monkeypatch.setattr(preview, "materialize_revision", lambda **kwargs: renders.append(kwargs) or {"ok": True})
+    monkeypatch.setattr(preview, "materialize_revision_via_owner", lambda **kwargs: renders.append(kwargs) or {"ok": True})
     monkeypatch.setattr("adaos.sdk.data.events.publish", lambda *args, **kwargs: None)
     if follow_active:
         result = preview.select_target("scenario", "app", stage="automation", follow_active=True)
