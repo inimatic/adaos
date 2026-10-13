@@ -149,6 +149,11 @@ try {
     } catch (error) {
       sample.ok = false
       sample.error = String(error)
+      sample.sync = await page.evaluate(() => {
+        const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync || {}
+        return {materializationReady: sync.materializationReady, materialization: sync.materialization,
+          connectionState: sync.connectionState, phase: sync.phase, lastError: sync.lastError}
+      })
       await fs.writeFile(path.join(output, `${layout}-body.txt`), await page.locator('body').innerText())
     }
     await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })

@@ -16,6 +16,11 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def get_prototype_edit_context(object_type: str, object_id: str) -> dict[str, Any]:
+    """Read the canonical gate without loading display-only Process projections."""
+    return dict(_service().prototype_edit_context(object_type, object_id))
+
+
 def get_process_stages(object_type: str, object_id: str, *, revision: str | None = None) -> list[dict[str, Any]]:
     from adaos.services.builder.process_stages import process_stages
 
@@ -304,6 +309,7 @@ def update_interaction_context(
 
 
 __all__ = [
+    "get_prototype_edit_context",
     "save_specification_delta",
     "accept_prototype",
     "build_context_packet",

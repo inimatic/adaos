@@ -206,6 +206,19 @@ class SemanticGraphService:
             raise BuilderWorkflowError("semantic artifact escapes project ownership")
         return target
 
+    def verify_locale_assets(self, root: Path, baseline: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+        """Check required projections before proposing or applying any edit."""
+        values = {}
+        for locale, expected in baseline["compiled"]["locale_dictionaries"].items():
+            path = self._file(root, f"assets/i18n/{locale}.json")
+            if not path.is_file():
+                raise BuilderWorkflowError("semantic baseline drift: required locale dictionary is missing")
+            existing = _read(path)
+            if any(existing.get(key) != text for key, text in expected.items()):
+                raise BuilderWorkflowError("semantic baseline drift: locale dictionary differs")
+            values[locale] = existing
+        return values
+
     def _restore(self, root: Path, files: Mapping[str, Any]) -> None:
         for name, encoded in files.items():
             path = self._file(root, name)
@@ -267,13 +280,7 @@ class SemanticGraphService:
                 document = _read(self._file(root, "semantic.webui.json"))
                 baseline = verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}")
                 stage = "locale_verification"
-                for locale, expected in baseline["compiled"]["locale_dictionaries"].items():
-                    path = self._file(root, f"assets/i18n/{locale}.json")
-                    existing = _read(path) if path.is_file() else None
-                    if existing is None:
-                        raise BuilderWorkflowError("semantic baseline drift: required locale dictionary is missing")
-                    if any(existing.get(key) != text for key, text in expected.items()):
-                        raise BuilderWorkflowError("semantic baseline drift: locale dictionary differs")
+                self.verify_locale_assets(root, baseline)
                 stage = "reference_inventory"
                 refs = semantic_refs(document)
                 revision = self.workflow.current_prototype_revision("scenario", object_id)
@@ -360,12 +367,12 @@ class SemanticGraphService:
         root = self.workflow.project_root("scenario", object_id)
         operation_root = _operation_root(self.workflow, project_ref)
         with _LOCK, mutation_lock(operation_root / ".mutation.lock"):
-            state = self.workflow.describe("scenario", object_id)
+            state = self.workflow.prototype_edit_context("scenario", object_id)
             change_id = (state.get("change") or {}).get("change_id")
             if not change_id or not state["capabilities"].get("can_edit_prototype"):
                 raise BuilderWorkflowError("semantic edit request requires an active editable Change")
             self._recover(root, object_id)
-            state = self.workflow.describe("scenario", object_id)
+            state = self.workflow.prototype_edit_context("scenario", object_id)
             prefix = "label-request-" if parsed["kind"] == "rename" or parsed.get("undo_family") == "labels" else "semantic-request-"
             transaction_id = prefix + digest([project_ref, source_message_id])[7:39]
             path = operation_root / (digest([change_id, transaction_id])[7:] + ".json")
@@ -382,7 +389,8 @@ class SemanticGraphService:
             if expected_revision and expected_revision != revision:
                 raise BuilderWorkflowError("stale label request revision")
             document = _read(self._file(root, "semantic.webui.json"))
-            verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}")
+            baseline = verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}")
+            self.verify_locale_assets(root, baseline)
             if parsed["kind"] == "undo":
                 retained = _read(self._file(root, f"ui_revisions/{revision}.json"))
                 previous = retained.get("semantic_transaction") or {}
@@ -414,8 +422,10 @@ class SemanticGraphService:
             Draft202012Validator(_contract()).validate(request)
             return {"status": "planned", "request": request, "replayed": False}
 
-    def apply(self, request: Mapping[str, Any]) -> dict[str, Any]:
+    def apply(self, request: Mapping[str, Any], *, execution_metrics: Mapping[str, Any] | None = None) -> dict[str, Any]:
         value = copy.deepcopy(dict(request))
+        from .run_observability import validate_execution_metrics
+        metrics = validate_execution_metrics(execution_metrics)
         try:
             Draft202012Validator(_contract()).validate(value)
         except ValidationError as exc:
@@ -424,11 +434,14 @@ class SemanticGraphService:
         root = self.workflow.project_root("scenario", object_id)
         operation_root = _operation_root(self.workflow, value["project_ref"])
         with _LOCK, mutation_lock(operation_root / ".mutation.lock"):
-            projection = self.workflow.describe("scenario", object_id)
+            projection = self.workflow.prototype_edit_context("scenario", object_id)
             if (projection.get("change") or {}).get("change_id") != value["change_id"] or not projection["capabilities"].get("can_edit_prototype"):
                 raise BuilderWorkflowError("semantic transaction requires its active editable Change")
+            if 'admission' in value:
+                from .semantic_admission import SemanticAdmissionService
+                SemanticAdmissionService(self).verify_request(value)
             self._recover(root, object_id)
-            projection = self.workflow.describe("scenario", object_id)
+            projection = self.workflow.prototype_edit_context("scenario", object_id)
             path = operation_root / (digest([value["change_id"], value["transaction_id"]])[7:] + ".json")
             if path.is_file():
                 journal = _read(path)
@@ -446,6 +459,7 @@ class SemanticGraphService:
             # The first slice admits only the selected scenario's own namespace.
             compilation_ref = f"project:{object_id}"
             baseline = verify_baseline(document, before_ui, project_ref=compilation_ref)
+            self.verify_locale_assets(root, baseline)
             reduced = reduce_graph(document, value["ops"], write_refs=value["write_refs"])
             compiled = compile_semantic_prototype(reduced["semantic_document"], project_ref=compilation_ref,
                                                   primary_locale=baseline["primary_locale"])
@@ -473,7 +487,7 @@ class SemanticGraphService:
             app_resources = copy.deepcopy(before_ui["ui"]["application"].get("resources", {}))
             for locale, messages in compiled["locale_dictionaries"].items():
                 name = f"assets/i18n/{locale}.json"
-                existing = _read(self._file(root, name)) if self._file(root, name).exists() else {}
+                existing = _read(self._file(root, name))
                 # Compiler-owned keys must match the source before a label edit.
                 original = baseline["compiled"]["locale_dictionaries"][locale]
                 if self._file(root, name).exists() and any(existing.get(key) != text for key, text in original.items()):
@@ -488,7 +502,8 @@ class SemanticGraphService:
                       "source_revision": value["source_revision"], "base_hash": value["base_hash"],
                       "semantic_digest": reduced["semantic_digest"], "artifact_digest": digest(after_ui),
                       "inverse_ops": reduced["inverse_ops"], "write_refs": value["write_refs"],
-                      "transaction_id": value["transaction_id"], "reducer": reduced["reducer"], "model_calls": 0,
+                      "transaction_id": value["transaction_id"], "reducer": reduced["reducer"],
+                      "model_calls": metrics.get('llm_calls', 0) if metrics else 0,
                       "write_set": reduced["write_set"]}
             if "source_request" in value:
                 result["source_request"] = copy.deepcopy(value["source_request"])
@@ -512,7 +527,7 @@ class SemanticGraphService:
                         "revision": revision, "change_id": value["change_id"], "run_id": value["transaction_id"],
                         "input_refs": [f"ui_revision:{value['source_revision']}"], "output_refs": [f"ui_revision:{revision}"],
                         "evidence_refs": [f"semantic_graph_transaction:{value['transaction_id']}"],
-                        "execution_metrics": {"source": "core.semantic_graph", "llm_calls": 0, "repair_attempts": 0,
+                        "execution_metrics": metrics or {"source": "core.semantic_graph", "llm_calls": 0, "repair_attempts": 0,
                             "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0,
                             "cost_usd": 0, "cost_basis": "zero_model",
                             "source_refs": [f"semantic_graph_transaction:{value['transaction_id']}"]}})

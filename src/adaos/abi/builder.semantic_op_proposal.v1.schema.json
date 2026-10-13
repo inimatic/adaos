@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.semantic_op_proposal.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "message", "ops"],
+  "properties": {
+    "schema": {"const": "adaos.builder.semantic_op_proposal.v1"},
+    "status": {"enum": ["proposed", "clarification", "unsupported"]},
+    "message": {"type": "string", "maxLength": 512},
+    "ops": {"type": "array", "maxItems": 16, "items": {"anyOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind", "ref", "locale", "text"],
+       "properties": {"kind": {"const": "label.set"}, "ref": {"type": "string", "maxLength": 250},
+         "locale": {"enum": ["en", "ru"]}, "text": {"type": "string", "minLength": 1, "maxLength": 240}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "ref", "field_refs"],
+       "properties": {"kind": {"const": "view.fields.reorder"}, "ref": {"type": "string", "maxLength": 250},
+         "field_refs": {"type": "array", "minItems": 2, "maxItems": 24, "uniqueItems": true,
+           "items": {"type": "string", "minLength": 1, "maxLength": 160}}}}
+    ]}}
+  }
+}

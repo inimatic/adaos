@@ -3279,6 +3279,21 @@ class BuilderWorkflowService:
             and change_set_status not in _CHANGE_SET_TERMINAL_STATES,
         }
 
+    def prototype_edit_context(self, object_type: str, object_id: str) -> dict[str, Any]:
+        """Canonical edit gate without constructing inspection/UI projections."""
+        kind, project_id = _kind(object_type), _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            capabilities = self._capabilities(workflow, archived=bool(state.get("archived")),
+                                              object_type=kind, normalized=True)
+            change = workflow.get("change") or {}
+            return {"schema": "adaos.builder.prototype_edit_context.v1", "object_type": kind,
+                    "object_id": project_id, "generation": workflow["generation"],
+                    "active_phase": workflow.get("active_phase"), "archived": bool(state.get("archived")),
+                    "change": {"change_id": change.get("change_id"), "status": change.get("status")},
+                    "capabilities": {"can_edit_prototype": capabilities["can_edit_prototype"]}}
+
     def describe(self, object_type: str, object_id: str) -> dict[str, Any]:
         kind = _kind(object_type)
         project_id = _project_id(object_id)

@@ -1119,7 +1119,7 @@ async def test_dialog_channel_select_supports_builder_and_persisted_skill_channe
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=5.0), "Channel activation must finish before its state is inspected"
     await _drain_voice_chat_persist(router)
     builder_state = dialog_runtime.get_active_channel(webspace_id)
     assert builder_state is not None
@@ -2430,7 +2430,7 @@ async def test_voice_chat_receipt_only_tool_message_does_not_append_fallback(mon
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=5.0), "Dialog dispatch must complete before its receipt is checked"
     await _drain_voice_chat_persist(router)
 
     messages = doc.get_map("data")["voice_chat"]["messages"]
@@ -2513,7 +2513,7 @@ async def test_voice_chat_user_active_dialog_tool_failure_reports_runtime_and_ex
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=5.0), "The failed tool dispatch must finish before checking its diagnostic"
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
@@ -2537,7 +2537,7 @@ async def test_voice_chat_user_active_dialog_tool_failure_reports_runtime_and_ex
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=5.0), "The retry dispatch must finish before checking its diagnostic"
     await _drain_voice_chat_persist(router)
 
     messages = doc.get_map("data")["voice_chat"]["messages"]

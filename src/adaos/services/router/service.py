@@ -3485,6 +3485,12 @@ class RouterService:
                     if isinstance(materialized, dict)
                     else len(stream_snapshot),
                 )
+                timing_meta = materialized_msg.get("_meta") or {}
+                ingress_at = timing_meta.get("_router_turn_ingress_at")
+                if materialized_msg.get("dialog_channel_id") == "builder" and isinstance(ingress_at, (int, float)):
+                    from adaos.services.turn_timing import record_turn_timing
+                    record_turn_timing(meta=timing_meta, stage="live_enqueue", timings={
+                        "from_ingress_ms": max(0, (time.perf_counter() - ingress_at) * 1000)})
                 if bool(materialized.get("finished_turn_trace")):
                     _schedule_dialog_state_write(webspace_id, event="turn_materialized")
 
@@ -4535,6 +4541,25 @@ class RouterService:
                 settings=ctx.settings,
             )
             manager_ms = (time.perf_counter() - manager_started) * 1000.0
+
+            def complete_timing(result: Any) -> Any:
+                if skill == "builder_skill":
+                    from adaos.services.turn_timing import record_turn_timing
+                    # Isolated skill workers may not forward their logger.
+                    # Re-emit their bounded receipt at the owning Hub boundary.
+                    native = result.get('turn_timing') if isinstance(result, dict) else None
+                    if isinstance(native, dict) and native.get('schema') == 'adaos.builder.turn_timing.v1':
+                        record_turn_timing(meta=route_meta, stage='native_turn', timings=native.get('timings_ms') or {})
+                    receipt = record_turn_timing(meta=route_meta, stage="runtime_tool", timings={
+                        "queue_ms": queue_ms if queue_ms is not None else 0,
+                        "manager_ms": manager_ms,
+                        "run_ms": (time.perf_counter() - run_started) * 1000,
+                        "total_ms": (time.perf_counter() - worker_started) * 1000,
+                    })
+                    if isinstance(result, dict):
+                        result["runtime_timing"] = receipt
+                return result
+
             try:
                 tool_payload: dict[str, Any] = dict(payload)
                 tool_payload["_meta"] = route_meta
@@ -4576,7 +4601,7 @@ class RouterService:
                             run_ms,
                             total_ms,
                         )
-                        return result
+                        return complete_timing(result)
                     try:
                         result = mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
                         run_ms = (time.perf_counter() - run_started) * 1000.0
@@ -4594,7 +4619,7 @@ class RouterService:
                             str(route_meta.get("turn_trace_id") or "")[:240],
                             str(route_meta.get("source_message_id") or "")[:240],
                         )
-                        return result
+                        return complete_timing(result)
                     except Exception as workspace_exc:
                         if not _dialog_runtime_dev_fallback_allowed(skill, workspace_exc) or not hasattr(mgr, "run_dev_tool"):
                             log.warning(
@@ -4642,7 +4667,7 @@ class RouterService:
                             dev_run_ms,
                             total_ms,
                         )
-                        return result
+                        return complete_timing(result)
             finally:
                 if prev is None:
                     try:
@@ -6087,10 +6112,12 @@ class RouterService:
             voice_started = time.perf_counter()
             phase_started = voice_started
             voice_ws = "-"
+            voice_phases: dict[str, float] = {}
 
             def _log_voice_phase(phase: str, *, level: int = logging.DEBUG, extra: str = "") -> None:
                 nonlocal phase_started
                 now = time.perf_counter()
+                voice_phases[phase + "_ms"] = (now - phase_started) * 1000
                 logging.getLogger("adaos.router.voice_chat").log(
                     level,
                     "voice chat user phase=%s webspace=%s phase_ms=%.1f total_ms=%.1f%s",
@@ -6133,6 +6160,9 @@ class RouterService:
             target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=True)
 
             meta = {**meta, "webspace_id": ws}
+            meta.pop("_router_turn_ingress_at", None)
+            if str(meta.get("dialog_channel_id") or "") == "builder":
+                meta["_router_turn_ingress_at"] = voice_started
             if event_kind == DIALOG_USER_MESSAGE_EVENT:
                 meta.setdefault("dialog_event_kind", DIALOG_USER_MESSAGE_EVENT)
                 meta.setdefault("canonical_event_kind", DIALOG_USER_MESSAGE_EVENT)
@@ -6788,6 +6818,10 @@ class RouterService:
             except Exception:
                 dialog_action = None
             _log_voice_phase("followup_action_resolved", extra=f"has_action={isinstance(dialog_action, dict)}")
+            if requested_dialog_channel_id == "builder":
+                from adaos.services.turn_timing import record_turn_timing
+                record_turn_timing(meta=meta, stage="router_ingress", timings={**voice_phases,
+                    "until_tool_ms": (time.perf_counter() - voice_started) * 1000})
             if isinstance(dialog_action, dict) and await _handle_dialog_action(
                 dialog_action=dialog_action,
                 webspace_id=ws,
