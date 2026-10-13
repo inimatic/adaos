@@ -110,6 +110,38 @@ def test_shadow_bridge_seeds_existing_ystore_before_incremental_mirroring(
     bridge.unregister_sidecar_shadow_mirror()
 
 
+def test_shadow_bridge_recovers_a_failed_seed_before_queued_incrementals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _load_bridge(monkeypatch)
+    first_attempt = threading.Event()
+    release_failure = threading.Event()
+    accepted: list[tuple[int, str]] = []
+    monkeypatch.setattr(bridge, "_seed_updates", lambda _webspace: (b"current-snapshot",))
+    monkeypatch.setattr(bridge, "_encode_seed", lambda updates: b"+".join(updates))
+
+    def _accept(_webspace: str, _update: bytes, sequence: int, *, mode: str = "update") -> None:
+        accepted.append((sequence, mode))
+        if len(accepted) == 1:
+            first_attempt.set()
+            assert release_failure.wait(2)
+            raise OSError("temporary sidecar failure")
+
+    monkeypatch.setattr(bridge, "_post_update", _accept)
+    bridge._mirror_write_listener("default", b"first")
+    assert first_attempt.wait(2)
+    bridge._mirror_write_listener("default", b"second")
+    release_failure.set()
+    asyncio.run(bridge.wait_for_sidecar_shadow_idle(2))
+
+    assert accepted == [(1, "seed"), (2, "seed")]
+    status = bridge.sidecar_shadow_mirror_status()
+    assert status["failed_total"] == 1
+    assert status["seed_accepted_total"] == 1
+    assert status["last_accepted_sequence"] == 2
+    bridge.unregister_sidecar_shadow_mirror()
+
+
 def test_shadow_bridge_rejects_non_loopback_control_url(monkeypatch: pytest.MonkeyPatch) -> None:
     bridge = _load_bridge(
         monkeypatch,

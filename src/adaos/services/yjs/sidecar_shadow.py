@@ -78,7 +78,7 @@ class _MirrorItem:
     webspace_id: str
     update: bytes
     sequence: int
-    seed_updates: tuple[bytes, ...] = ()
+    seed_required: bool = False
 
 
 _queue: queue_module.Queue[_MirrorItem] | None = None
@@ -88,6 +88,7 @@ _stop_event = threading.Event()
 _remove_listener = None
 _sequence: dict[str, int] = defaultdict(int)
 _seeded_webspaces: set[str] = set()
+_seeding_webspaces: set[str] = set()
 _status_lock = threading.Lock()
 _status: dict[str, Any] = {
     "schema": "adaos.yjs.sidecar_shadow_bridge.v1",
@@ -195,24 +196,17 @@ def _mirror_write_listener(
     with _status_lock:
         _sequence[key] += 1
         sequence = _sequence[key]
-        seed_updates: tuple[bytes, ...] = ()
-        if key not in _seeded_webspaces:
-            try:
-                seed_updates = _seed_updates(key)
-            except Exception as exc:
-                _status["failed_total"] = int(_status["failed_total"]) + 1
-                _status["last_error"] = f"seed_snapshot:{type(exc).__name__}:{exc}"
-                return
-            if seed_updates:
-                _seeded_webspaces.add(key)
+        seed_required = key not in _seeded_webspaces and key not in _seeding_webspaces
         try:
-            queue.put_nowait(_MirrorItem(key, payload, sequence, seed_updates))
+            queue.put_nowait(_MirrorItem(key, payload, sequence, seed_required))
+            if seed_required:
+                _seeding_webspaces.add(key)
             _status["enqueued_total"] = int(_status["enqueued_total"]) + 1
-            if seed_updates:
+            if seed_required:
                 _status["seed_enqueued_total"] = int(_status["seed_enqueued_total"]) + 1
         except queue_module.Full:
-            if seed_updates:
-                _seeded_webspaces.discard(key)
+            if seed_required:
+                _seeding_webspaces.discard(key)
             _status["dropped_total"] = int(_status["dropped_total"]) + 1
             _status["last_error"] = "mirror_queue_full"
 
@@ -239,8 +233,11 @@ def _mirror_worker(
         except queue_module.Empty:
             continue
         try:
-            mode = "seed" if item.seed_updates else "update"
-            update = _encode_seed(item.seed_updates) if item.seed_updates else item.update
+            with _status_lock:
+                seed_required = item.webspace_id not in _seeded_webspaces
+            seed_updates = _seed_updates(item.webspace_id) if seed_required else ()
+            mode = "seed" if seed_updates else "update"
+            update = _encode_seed(seed_updates) if seed_updates else item.update
             if mode == "seed" and len(update) > _MAX_SNAPSHOT_BYTES:
                 raise ValueError("shadow_seed_too_large")
             if mode == "seed":
@@ -248,6 +245,9 @@ def _mirror_worker(
             else:
                 _post_update(item.webspace_id, update, item.sequence)
             with _status_lock:
+                if seed_required:
+                    _seeded_webspaces.add(item.webspace_id)
+                    _seeding_webspaces.discard(item.webspace_id)
                 _status["accepted_total"] = int(_status["accepted_total"]) + 1
                 if mode == "seed":
                     _status["seed_accepted_total"] = int(_status["seed_accepted_total"]) + 1
@@ -256,8 +256,8 @@ def _mirror_worker(
                 _status["last_accepted_sequence"] = item.sequence
         except Exception as exc:
             with _status_lock:
-                if item.seed_updates:
-                    _seeded_webspaces.discard(item.webspace_id)
+                _seeded_webspaces.discard(item.webspace_id)
+                _seeding_webspaces.discard(item.webspace_id)
                 _status["failed_total"] = int(_status["failed_total"]) + 1
                 _status["last_error"] = f"{type(exc).__name__}:{exc}"
             _log.warning(
@@ -334,6 +334,7 @@ def unregister_sidecar_shadow_mirror() -> None:
             _queue = None
     with _status_lock:
         _seeded_webspaces.clear()
+        _seeding_webspaces.clear()
         _sequence.clear()
 
 
