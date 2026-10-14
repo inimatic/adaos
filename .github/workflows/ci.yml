@@ -214,6 +214,7 @@ jobs:
       - name: Check Client contract inventory, boundaries and types
         run: |
           uv run python scripts/run_private_contract_check.py --label client-boundaries --cwd src/adaos/integrations/adaos-client -- npm run test:boundaries
+          uv run python scripts/run_private_contract_check.py --label client-inventory-parity --cwd src/adaos/integrations/adaos-client -- node --test scripts/generate-client-capability-inventory.spec.mjs
           uv run python scripts/run_private_contract_check.py --label client-types --cwd src/adaos/integrations/adaos-client -- npx tsc --noEmit -p tsconfig.app.json
       - name: Fetch and verify exact native Builder source
         env:
