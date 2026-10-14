@@ -469,6 +469,7 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.llm.content.generate",
     "adaos.sdk.llm.content.get",
     "adaos.sdk.llm.images.generate",
+    "adaos.sdk.llm.images.edit",
     "adaos.sdk.llm.images.get",
     "adaos.sdk.llm.images.list_drafts",
     "adaos.sdk.resources.definition",
@@ -1180,6 +1181,20 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "status is completed and data exactly validates the caller-supplied "
                     "schema; persist data, not the enclosing draft."
                 ),
+            },
+            "image_edit_draft": {
+                "methods": ["adaos.sdk.llm.images.edit", "adaos.sdk.llm.images.get"],
+                "response_contract": "image_draft",
+                "preferred_model_id": "gpt-image-2.5-sunburst-2026-09-08",
+                "model_admission": "Explicit image model; Root policy, quota and provider availability are checked at submission. Unsupported models are errors, never substituted.",
+                "inputs": {
+                    "images": "1..16 inline image_url references in PNG/JPEG/WebP; aggregate encoded references <=16 MiB",
+                    "mask": "Optional PNG image_url reference with alpha and the same dimensions as the first image",
+                    "size": "Explicit WIDTHxHEIGHT. GPT Image 2 family: multiples of 16, each edge <=3840, pixels 655360..8294400, aspect <=3:1. Output above 3686400 pixels is experimental.",
+                    "quality": "low/medium/high; GPT Image 2.5 also supports xhigh/max",
+                },
+                "durability": "Same request_id recovers the same owned draft. Changed source, mask, prompt or options require a new explicit request identity.",
+                "safety": "Edits are candidates. Validate geometry and composite on the same base only through an application-owned mask; provider mask adherence is not a pixel preservation guarantee.",
             },
             "image_draft": {
                 "methods": [

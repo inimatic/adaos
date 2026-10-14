@@ -39,9 +39,19 @@ def get(request_id: str) -> dict[str, Any]:
     return _service("workspace.read").get(request_id)
 
 
+def edit(*, request_id: str, model: str, prompt: str, images: list[dict[str, str]],
+         mask: dict[str, str] | None = None, size: str = "1024x1024", quality: str = "high",
+         output_format: str = "png", background: str = "opaque",
+         context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Submit an owned image edit once; polling uses get with the same identity."""
+    return _service("workspace.write").submit(request_id=request_id, model=model, prompt=prompt,
+        images=images, mask=mask, size=size, quality=quality, output_format=output_format,
+        background=background, context=context)
+
+
 def list_drafts(*, context: Mapping[str, Any], limit: int = 10) -> list[dict[str, Any]]:
     """Observe current actor/skill drafts matching explicit local context without paid work."""
     return _service("workspace.read").list_drafts(context=context, limit=limit)
 
 
-__all__ = ["generate", "get", "list_drafts"]
+__all__ = ["generate", "edit", "get", "list_drafts"]

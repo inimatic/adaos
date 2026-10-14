@@ -609,7 +609,7 @@ def _validate_semantic_prototype_v1(
         ):
             transitions = [command for command in commands.values() if command["view_ref"] == view["id"]]
             if not transitions or any(command["input_field_refs"] or not (
-                command["fixed_values"] or command["kind"] == "delete"
+                command.get("fixed_values") or command["kind"] == "delete"
             ) for command in transitions):
                 _fail(f"editor view {view['id']!r} has no editable fields or fixed transition commands")
         for control in view.get("query_controls") or []:
@@ -2079,6 +2079,7 @@ def _prototype_command_policies(commands: Sequence[Mapping[str, Any]], resource:
     required = {field["id"] for field in resource["fields"] if field["required"]}
     return {str(command["id"]): {**{key: copy.deepcopy(command[key]) for key in
             ("kind", "input_field_refs", "fixed_values", "guard") if key in command},
+            'fixed_values': copy.deepcopy(command.get('fixed_values') or {}),
             'guard_draft_field_refs': sorted({ref for peer in commands if peer['view_ref'] == command['view_ref']
                 for ref in peer['input_field_refs'] if ref not in peer.get('fixed_values', {})
                 and any(field['id'] == ref and field['editable'] for field in resource['fields'])}),

@@ -15797,7 +15797,34 @@ class BuilderAutomationService:
             _write_json(compact_path, self._compact_status_payload(payload))
         if emit_projection and self.event_sink is not None:
             self.event_sink(self.project_session(payload))
+        if emit_projection:
+            self._notify_execution_state_change(payload, previous)
         return self._hydrate_session_compatibility(payload)
+
+    def _notify_execution_state_change(self, session: Mapping[str, Any], previous: Mapping[str, Any] | None) -> None:
+        """Publish actual worker phase changes and failures alongside start/end."""
+        status = str(session.get('status') or '')
+        labels = {'workspace_preparing': 'подготавливает рабочую копию',
+                  'in_progress': 'реализует приложение', 'tests_running': 'выполняет проверки',
+                  'commit_ready': 'подготовил проверенный кандидат',
+                  'failed': 'остановил работу с ошибкой', 'cancelled': 'отменил работу',
+                  'expired': 'остановил работу по истечении времени',
+                  'waiting_for_core': 'ожидает доработку Core'}
+        task_id = str(session.get('current_task_id') or '')
+        if status not in labels or not task_id:
+            return
+        if previous and previous.get('status') == status and previous.get('current_task_id') == task_id:
+            return
+        progress = session.get('progress') if isinstance(session.get('progress'), Mapping) else {}
+        failure = session.get('last_failure') if isinstance(session.get('last_failure'), Mapping) else {}
+        detail = str(progress.get('message') or failure.get('message') or '').strip()
+        message = f"Builder {labels[status]}: {session.get('object_id')}."
+        if detail:
+            message += f"\n{detail[:2500]}"
+        try:
+            self._publish_lifecycle_notification(session, status=f'phase.{status}', message=message)
+        except Exception:
+            _log.debug('failed to publish Builder phase task=%s status=%s', task_id, status, exc_info=True)
 
 
 __all__ = [

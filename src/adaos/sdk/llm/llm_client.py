@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional
 import json
+import base64
+import io
 import logging
 import os
 import re
@@ -868,6 +870,71 @@ def submit_image_job(*, request_id: str, model: str, prompt: str, size: str = "1
                "image": {"prompt": prompt, "size": size, "quality": quality,
                          "output_format": output_format, "background": background}}
     return _submit_root_job(payload, request_id=request_id, timeout=timeout, submit_started=time.perf_counter())
+
+
+def submit_image_edit_job(*, request_id: str, model: str, prompt: str,
+                          images: list[dict[str, str]], mask: dict[str, str] | None = None,
+                          size: str = "1024x1024", quality: str = "high",
+                          output_format: str = "png", background: str = "opaque",
+                          timeout: float | None = None) -> Dict[str, Any]:
+    """Edit supplied images through the owned, durable Root image contract.
+
+    Inputs are bounded inline references, never provider credentials or arbitrary
+    remote URLs. Reuse request_id when recovering an uncertain submission.
+    """
+    if not re.fullmatch(r"gpt-image-[a-z0-9.-]+", str(model or "")):
+        raise ValueError("An explicit GPT Image model is required")
+    if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 200:
+        raise ValueError("A bounded stable image request_id is required")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode("utf-8")) > 32000:
+        raise ValueError("Image prompt must contain 1..32000 UTF-8 bytes")
+    modern = bool(re.match(r"^gpt-image-2(?:[.-]|$)", model))
+    dimensions = re.fullmatch(r"(\d+)x(\d+)", size)
+    if size not in {"1024x1024", "1536x1024", "1024x1536"}:
+        if not modern or dimensions is None:
+            raise ValueError("Unsupported edit size")
+        width, height = map(int, dimensions.groups())
+        if min(width, height) <= 0 or max(width, height) > 3840 or width % 16 or height % 16 or not 655360 <= width * height <= 8294400 or max(width, height) > 3 * min(width, height):
+            raise ValueError("Edit size exceeds model pixel, edge or aspect limits")
+    qualities = {"low", "medium", "high"}
+    if model.startswith("gpt-image-2.5-"):
+        qualities |= {"xhigh", "max"}
+    if quality not in qualities or output_format not in {"png", "jpeg", "webp"} or background not in {"opaque", "transparent"} or (background == "transparent" and output_format == "jpeg"):
+        raise ValueError("Invalid image edit output parameters")
+    if not isinstance(images, list) or not 1 <= len(images) <= 16:
+        raise ValueError("Image edit requires 1..16 image references")
+    references = [*images, *([mask] if mask is not None else [])]
+    encoded_bytes = 0
+    first_size = None
+    from PIL import Image
+    for index, reference in enumerate(references):
+        if not isinstance(reference, dict) or set(reference) != {"image_url"}:
+            raise ValueError("Image edit accepts inline image_url references only")
+        value = reference.get("image_url")
+        match = re.fullmatch(r"data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)", str(value or ""))
+        if not match or (mask is not None and index == len(images) and match.group(1) != "png"):
+            raise ValueError("Invalid inline image or PNG mask")
+        encoded_bytes += len(value)
+        if encoded_bytes > 16 * 1024 * 1024:
+            raise ValueError("Image edit references exceed the Root 16 MiB bound")
+        try:
+            raw = base64.b64decode(match.group(2), validate=True)
+            with Image.open(io.BytesIO(raw), formats=["PNG", "JPEG", "WEBP"]) as source:
+                if source.format.lower() != match.group(1) or getattr(source, 'n_frames', 1) != 1:
+                    raise ValueError("Reference must be a single image of its declared format")
+                if first_size is None:
+                    first_size = source.size
+                if mask is not None and index == len(images) and (source.size != first_size or 'A' not in source.getbands()):
+                    raise ValueError("PNG mask must have alpha and match the first image dimensions")
+                source.verify()
+        except (ValueError, OSError, base64.binascii.Error, Image.DecompressionBombError) as exc:
+            raise ValueError("Invalid source image or edit mask") from exc
+    image = {"prompt": prompt, "images": images, "size": size, "quality": quality,
+             "output_format": output_format, "background": background}
+    if mask is not None:
+        image["mask"] = mask
+    return _submit_root_job({"api": "images.edit", "model": model, "request_id": request_id, "image": image},
+                            request_id=request_id, timeout=timeout, submit_started=time.perf_counter())
 
 
 def _submit_root_job(root_payload: Mapping[str, Any], *, request_id: str | None,

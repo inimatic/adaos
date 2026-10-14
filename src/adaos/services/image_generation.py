@@ -58,11 +58,18 @@ class ImageGenerationService:
 
     def submit(self, *, request_id: str, model: str, prompt: str, size: str = "1024x1024",
                quality: str = "low", output_format: str = "png", background: str = "opaque",
-               context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+               context: Mapping[str, Any] | None = None,
+               images: list[dict[str, str]] | None = None, mask: dict[str, str] | None = None) -> dict[str, Any]:
         from PIL import Image
 
         Image.init()  # Verify local decoder availability before starting a paid job.
         request = dict(model=model, prompt=prompt, size=size, quality=quality, output_format=output_format, background=background)
+        if images is not None:
+            request['images'] = images
+            if mask is not None:
+                request['mask'] = mask
+        elif mask is not None:
+            raise ValueError('An image edit mask requires source images')
         local_context = dict(context or {})
         if len(json.dumps(local_context, ensure_ascii=False, allow_nan=False).encode("utf-8")) > 8192:
             raise ValueError("Image draft context exceeds 8 KiB; use references, not asset contents")
@@ -81,7 +88,8 @@ class ImageGenerationService:
                           "request": request, "context": local_context, "status": "submitting",
                           "root_request_id": "image-" + _digest([str(self.root), request_id])}
                 atomic_write_json(path, record)
-            job = self.broker.submit_image_job(request_id=record["root_request_id"], **request)
+            submit = self.broker.submit_image_edit_job if images is not None else self.broker.submit_image_job
+            job = submit(request_id=record["root_request_id"], **request)
             if not isinstance(job, Mapping) or not job.get("job_id"):
                 raise ValueError("Root did not return a durable job; retry only the same request_id")
             record["job"] = {"job_id": job["job_id"], "base_url": (job.get("_client") or {}).get("base_url")}

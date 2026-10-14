@@ -3719,3 +3719,8 @@ def test_modal_board_editor_selects_record_on_the_opening_event() -> None:
         if item["id"] == "kanban.edit_selection"
     )
     assert accepted_selection["ok"] is True
+def test_presentation_schema_inventory_does_not_request_a_kanban_board():
+    from adaos.services.ui_capabilities import qualify_ui_request
+    request = "Обнови приложение ретуши. presentation_options только для list/board/tree/chart/accordion."
+    assert qualify_ui_request(request)["surface_kind"] != "board"
+    assert qualify_ui_request("Create a Kanban board with status columns")["surface_kind"] == "board"

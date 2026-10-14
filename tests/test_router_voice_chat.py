@@ -4586,6 +4586,30 @@ async def test_io_out_chat_append_projects_telegram_controls_before_local_skip(m
     ]
 
 
+async def test_builder_browser_transcript_uses_notification_route_once(monkeypatch) -> None:
+    bus = LocalEventBus()
+    notices: list[Event] = []
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(
+        config=SimpleNamespace(node_id="hub-node", subnet_id="sn-test")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [
+        {"target": {"io_type": "telegram", "node_id": "this"}}])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    monkeypatch.setattr(router, "_handle_notify_event", lambda _event: None)
+    await router.start()
+    bus.subscribe("ui.notify", lambda event: notices.append(event))
+    for role, identity in (("user", "brief-1"), ("hub", "answer-1"), ("user", "brief-1")):
+        bus.publish(Event(type="io.out.chat.append", source="test", ts=1.0, payload={
+            "id": identity, "from": role, "text": "Сохранить оригинал и фактуру кожи.",
+            "_meta": {"dialog_channel_id": "builder", "skip_voice_chat": True},
+        }))
+    assert await bus.wait_for_idle(timeout=1.0)
+    assert len(notices) == 2
+    assert "Постановка" in notices[0].payload["text"]
+    assert "Ответ" in notices[1].payload["text"]
+    assert all(event.payload["_meta"]["skip_voice_chat"] for event in notices)
+
+
 def test_text_fallback_does_not_edit_the_user_message() -> None:
     assert router_service_module._telegram_interaction_consumed_projection(
         {"interaction_id": "interaction.text", "prompt": "Choose"},

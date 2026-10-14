@@ -436,6 +436,13 @@ def _is_primary_board_request(
             for separator in (".", ";", ":", "\n")
         )
         prefix = normalized[max(clause_start + 1, match.start() - 120) : match.start()]
+        # A schema's allowed presentation inventory is implementation context,
+        # not a request to make the application a Kanban board.
+        clause_end = min((position for separator in (".", ";", "\n")
+                          if (position := normalized.find(separator, match.end())) >= 0), default=len(normalized))
+        clause = normalized[clause_start + 1:clause_end]
+        if "presentation_options" in clause and re.search(r"\blist\s*/\s*board\s*/", clause):
+            continue
         negated = bool(
             re.search(
                 r"(?:\bdo\s+not\b|\bdon't\b|\bmust\s+not\b|\bshould\s+not\b|"

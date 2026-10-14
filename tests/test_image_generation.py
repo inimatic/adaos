@@ -33,6 +33,26 @@ class Broker:
         self.polls.append((job, kwargs))
         return copy.deepcopy(self.job)
 
+    def submit_image_edit_job(self, **kwargs):
+        self.submits.append(kwargs)
+        return copy.deepcopy(self.job)
+
+
+def test_edit_binds_source_and_mask_and_recovers_without_resubmitting(tmp_path):
+    broker = Broker()
+    service = ImageGenerationService(tmp_path, "skill:retouch|user:owner", broker, publisher)
+    source = {"image_url": "data:image/png;base64," + encoded_image()}
+    mask = {"image_url": "data:image/png;base64," + encoded_image(size=(16, 12))}
+    params = dict(request_id="edit-one", model="gpt-image-2.5-sunburst", prompt="Preserve texture",
+                  images=[source], mask=mask)
+    service.submit(**params)
+    recovered = ImageGenerationService(tmp_path, "skill:retouch|user:owner", broker, publisher)
+    recovered.submit(**params)
+    assert len(broker.submits) == 1
+    assert broker.submits[0]["images"] == [source] and broker.submits[0]["mask"] == mask
+    with pytest.raises(ValueError, match="different"):
+        recovered.submit(**{**params, "mask": {"image_url": "data:image/png;base64," + encoded_image(size=(20, 12))}})
+
 
 def publisher(path, **kwargs):
     assert path.is_file()

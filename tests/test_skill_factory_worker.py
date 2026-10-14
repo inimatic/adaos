@@ -12032,6 +12032,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         "adaos.sdk.data.skill_env.skill_data_root",
         "adaos.sdk.llm.content.generate",
         "adaos.sdk.llm.images.generate",
+        "adaos.sdk.llm.images.edit",
         "adaos.sdk.resources.operate",
     } <= sdk_names
     assert sdk_contracts["response_contracts"]["content_draft"][
@@ -12040,6 +12041,9 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert sdk_contracts["response_contracts"]["image_draft"][
         "admitted_model_id"
     ] == "gpt-image-1"
+    assert sdk_contracts["response_contracts"]["image_edit_draft"]["preferred_model_id"] == "gpt-image-2.5-sunburst-2026-09-08"
+    edit_contract = next(item for item in sdk_contracts["contracts"] if item["name"] == "adaos.sdk.llm.images.edit")
+    assert "images" in edit_contract["signature"] and "mask" in edit_contract["signature"]
     automation_contract = sdk_contracts["response_contracts"][
         "automation_inventory"
     ]

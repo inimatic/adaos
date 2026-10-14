@@ -14124,3 +14124,17 @@ def test_automation_checkpoints_primary_scenario_when_project_manifest_changed(
     assert checkpoints == [
         {"ok": True, "kind": "scenario", "name": "companion_console"}
     ]
+def test_worker_phase_notices_include_failure_and_skip_unchanged_state(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    notices = []
+    monkeypatch.setattr(BuilderAutomationService, '_publish_lifecycle_notification',
+                        lambda self, session, **kwargs: notices.append(kwargs) or True)
+    session = {'object_id': 'recipes', 'current_task_id': 'task.1', 'status': 'in_progress'}
+    service._notify_execution_state_change(session, {'current_task_id': 'task.1', 'status': 'workspace_preparing'})
+    service._notify_execution_state_change(session, dict(session))
+    failed = {**session, 'status': 'failed', 'progress': {'message': 'Required Image Edit contract is unavailable'}}
+    service._notify_execution_state_change(failed, session)
+    assert len(notices) == 2
+    assert notices[0]['status'] == 'phase.in_progress'
+    assert notices[1]['status'] == 'phase.failed'
+    assert 'Required Image Edit contract is unavailable' in notices[1]['message']

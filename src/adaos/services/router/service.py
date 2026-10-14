@@ -21,6 +21,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_identity import runtime_transition_role
 from .rules_loader import load_rules, watch_rules
+from .builder_chat_notifications import builder_chat_notifications
 from .media_routes import build_media_route_refresh_payload, resolve_media_route_state
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
@@ -821,7 +822,11 @@ class RouterService:
                 # Root API base
                 from adaos.services.agent_context import get_ctx as _get_ctx
 
-                api_base = getattr(_get_ctx().settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
+                # Telegram pairing is zonal; use the node's effective Root,
+                # as startup/binding probes do, instead of a global default.
+                notification_ctx = _get_ctx()
+                root_settings = getattr(notification_ctx.config, "root_settings", None)
+                api_base = getattr(root_settings, "base_url", None) or getattr(notification_ctx.settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
                 url = f"{api_base.rstrip('/')}/io/tg/send"
                 # Prefix message with subnet alias (or id) for clarity
                 try:
@@ -3915,6 +3920,23 @@ class RouterService:
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 return
+
+            # Browser Builder turns use the same configured subnet Telegram
+            # route as lifecycle notifications, including the user's brief.
+            # Publish before skip_voice_chat: user echoes intentionally set it.
+            if self._has_rule_for("telegram"):
+                notification = builder_chat_notifications(payload)
+                if notification is not None:
+                    identity, items = notification
+                    mirrored = getattr(self, "_builder_chat_mirrored", None)
+                    if mirrored is None:
+                        mirrored = self._builder_chat_mirrored = {}
+                    if identity not in mirrored:
+                        mirrored[identity] = None
+                        if len(mirrored) > 1024:
+                            mirrored.pop(next(iter(mirrored)))
+                        for item in items:
+                            self.bus.publish(Event(type="ui.notify", source="router.builder.chat", ts=time.time(), payload=item))
 
             try:
                 # All dialog replies use the canonical tg.output transport.  The
