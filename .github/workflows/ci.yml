@@ -180,8 +180,36 @@ jobs:
           node-version: "22"
       - name: Install locked dependencies
         run: uv sync --locked --extra dev
-      - name: Checkout pinned Client and Root contract consumers
-        run: git submodule update --init --depth 1 src/adaos/integrations/adaos-client src/adaos/integrations/adaos-backend
+      - name: Resolve exact contract consumer pins
+        id: consumer-pins
+        run: |
+          echo "client=$(git ls-tree HEAD src/adaos/integrations/adaos-client | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+          echo "backend=$(git ls-tree HEAD src/adaos/integrations/adaos-backend | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+      - name: Issue read-only token for private contract consumers
+        id: consumers-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: adaos-client,adaos-backend
+          permission-contents: read
+      - name: Checkout exact Client contract consumer
+        uses: actions/checkout@v4
+        with:
+          repository: inimatic/adaos-client
+          ref: ${{ steps.consumer-pins.outputs.client }}
+          path: src/adaos/integrations/adaos-client
+          token: ${{ steps.consumers-token.outputs.token }}
+          persist-credentials: false
+      - name: Checkout exact Root contract consumer
+        uses: actions/checkout@v4
+        with:
+          repository: inimatic/adaos-backend
+          ref: ${{ steps.consumer-pins.outputs.backend }}
+          path: src/adaos/integrations/adaos-backend
+          token: ${{ steps.consumers-token.outputs.token }}
+          persist-credentials: false
       - name: Check generated component contracts
         run: uv run python scripts/generate_ui_component_contract.py --check
       - name: Check common remote Root publication against Core declarations
