@@ -290,8 +290,9 @@ def test_preferred_activation_slot_skips_stale_patch_slot(tmp_path: Path) -> Non
     assert mgr._preferred_activation_slot(env, "0.1.8", metadata) == "B"
 
 
+@pytest.mark.parametrize('allow_prepare', [True, False])
 def test_activate_runtime_reprepares_slot_from_different_core_identity(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, allow_prepare
 ) -> None:
     skill_name = "stale_core_skill"
     skills_root = tmp_path / "skills"
@@ -344,14 +345,16 @@ def test_activate_runtime_reprepares_slot_from_different_core_identity(
 
     monkeypatch.setattr(mgr, "prepare_runtime", _prepare)
 
-    with pytest.raises(RuntimeError, match="skill_runtime_prepare_failed") as error:
+    with pytest.raises(RuntimeError, match="skill_runtime_prepare_failed" if allow_prepare else "exact_runtime_candidate_not_prepared") as error:
         mgr.activate_runtime(
             skill_name,
             version="1.0.0",
             slot="B",
             source_manifest_digest="sha256:" + "1" * 64,
+            allow_prepare=allow_prepare,
         )
-    assert isinstance(error.value.__cause__, ReprepareExpected)
+    if allow_prepare:
+        assert isinstance(error.value.__cause__, ReprepareExpected)
 
 
 def test_activate_dev_runtime_uses_manifest_version_and_reprepares_stale_patch_slot(
@@ -2153,6 +2156,13 @@ def test_activate_runtime_reprepares_same_version_after_project_removal(monkeypa
         transient=False,
     )
 
+    with pytest.raises(RuntimeError, match='exact_runtime_candidate_not_prepared'):
+        mgr.activate_runtime(skill_name, version='1.0.0',
+            source_manifest_digest='sha256:' + 'b' * 64,
+            package_digest='sha256:' + '3' * 64, package_manifest_digest='sha256:' + '4' * 64)
+    mgr.prepare_runtime(skill_name, preferred_slot='B', allow_deactivated=True,
+        source_manifest_digest='sha256:' + 'b' * 64,
+        package_digest='sha256:' + '3' * 64, package_manifest_digest='sha256:' + '4' * 64)
     selected = mgr.activate_runtime(
         skill_name,
         version="1.0.0",

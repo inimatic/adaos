@@ -1,0 +1,42 @@
+{
+  "schema": "adaos.webui.semantic.v2",
+  "document_id": "warehouse-stock-control",
+  "brief_ref": "brief:000000000000000000000000",
+  "brief_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "title": {"key": "stock.app", "en": "Warehouse stock", "ru": "Складские остатки"},
+  "layout": {"pattern": "split"},
+  "resources": [
+    {"id": "stock", "identity_field_refs": ["id"], "item_semantics": "One warehouse stock position.",
+      "item_label": {"key": "stock.item", "en": "Stock position", "ru": "Позиция"},
+      "fields": [
+        {"id": "sku", "label": {"key": "stock.sku", "en": "SKU", "ru": "Артикул"}, "value_type": "short_text", "required": true, "editable": true},
+        {"id": "status", "label": {"key": "stock.status", "en": "Status", "ru": "Статус"}, "value_type": "choice", "required": true, "editable": true,
+          "options": [{"value": "available", "label": {"key": "stock.available", "en": "Available", "ru": "Доступно"}}, {"value": "reserved", "label": {"key": "stock.reserved", "en": "Reserved", "ru": "В резерве"}}]},
+        {"id": "warehouse_id", "label": {"key": "stock.warehouse", "en": "Warehouse", "ru": "Склад"}, "value_type": "short_text", "required": true, "editable": true},
+        {"id": "quantity", "label": {"key": "stock.quantity", "en": "Quantity", "ru": "Количество"}, "value_type": "number", "required": true, "editable": true},
+        {"id": "reserve_note", "label": {"key": "stock.note", "en": "Reservation note", "ru": "Причина резерва"}, "value_type": "short_text", "required": false, "editable": true}
+      ],
+      "records": [{"id": "stock-1", "sku": "SKU-A", "status": "available", "warehouse_id": "warehouse-1", "quantity": 12, "reserve_note": ""},
+                  {"id": "stock-2", "sku": "SKU-B", "status": "available", "warehouse_id": "warehouse-2", "quantity": 7, "reserve_note": ""}]},
+    {"id": "warehouses", "identity_field_refs": ["id"], "item_semantics": "One independently identified warehouse.",
+      "item_label": {"key": "warehouse.item", "en": "Warehouse", "ru": "Склад"},
+      "fields": [{"id": "warehouse_name", "label": {"key": "warehouse.name", "en": "Warehouse name", "ru": "Название склада"}, "value_type": "short_text", "required": true, "editable": false}],
+      "records": [{"id": "warehouse-1", "warehouse_name": "North"}, {"id": "warehouse-2", "warehouse_name": "South"}]}
+  ],
+  "relationships": [{"id": "stock_warehouse", "from_resource_ref": "stock", "from_field_ref": "warehouse_id", "to_resource_ref": "warehouses", "to_field_ref": "id", "cardinality": "many_to_one", "label_field_refs": ["warehouse_name"]}],
+  "views": [
+    {"id": "stock-list", "resource_ref": "stock", "role": "collection", "region_role": "primary", "presentation": "table", "title": {"key": "stock.list", "en": "Stock positions", "ru": "Остатки"}, "field_refs": ["sku", "status", "warehouse_id", "quantity"],
+      "empty_state": {"title": {"key": "stock.empty", "en": "No stock", "ru": "Нет остатков"}},
+      "scope_filters": [{"field_ref": "warehouse_id", "value": "warehouse-1"}],
+      "query_controls": [{"id": "stock-search", "kind": "search", "label": {"key": "stock.search", "en": "Search stock", "ru": "Поиск остатков"}}]},
+    {"id": "stock-editor", "resource_ref": "stock", "role": "editor", "region_role": "supporting", "surface": "side_sheet", "title": {"key": "stock.editor", "en": "Edit stock", "ru": "Изменить остаток"}, "field_refs": ["sku", "status", "warehouse_id", "quantity", "reserve_note"]},
+    {"id": "warehouse-list", "resource_ref": "warehouses", "role": "collection", "region_role": "supporting", "presentation": "table", "title": {"key": "warehouse.list", "en": "Warehouses", "ru": "Склады"}, "field_refs": ["warehouse_name"]}
+  ],
+  "commands": [
+    {"id": "stock-create", "kind": "create", "view_ref": "stock-editor", "label": {"key": "stock.create", "en": "New stock", "ru": "Новый остаток"}, "input_field_refs": ["sku", "status", "warehouse_id", "quantity", "reserve_note"], "fixed_values": {}, "exposure": {"placement": "collection_header", "presentation": "button"}},
+    {"id": "stock-edit", "kind": "update", "view_ref": "stock-editor", "label": {"key": "stock.edit", "en": "Edit stock", "ru": "Изменить"}, "input_field_refs": ["sku", "status", "warehouse_id", "quantity", "reserve_note"], "fixed_values": {}, "exposure": {"placement": "row_action", "presentation": "icon"}},
+    {"id": "stock-save", "kind": "update", "view_ref": "stock-editor", "label": {"key": "stock.save", "en": "Save stock", "ru": "Сохранить"}, "input_field_refs": ["sku", "status", "warehouse_id", "quantity", "reserve_note"], "fixed_values": {}, "exposure": {"placement": "editor_primary", "presentation": "button"}},
+    {"id": "stock-reserve", "kind": "transition", "view_ref": "stock-editor", "label": {"key": "stock.reserve", "en": "Reserve stock", "ru": "Зарезервировать"}, "input_field_refs": ["reserve_note"], "fixed_values": {"status": "reserved"}, "guard": {"when": {"field_ref": "status", "operator": "equals", "value": "available"}, "require_nonempty": ["reserve_note"]}, "exposure": {"placement": "editor_primary", "presentation": "button"}}
+  ],
+  "representative_states": [], "requirement_bindings": [], "capability_gaps": []
+}

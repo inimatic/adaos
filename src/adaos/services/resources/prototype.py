@@ -161,7 +161,10 @@ class PrototypeResourceService:
             if not command_id or not refs <= set(fields):
                 raise ValueError("prototype command references an unknown property")
             for field, fixed_value in command["fixed_values"].items():
-                Draft202012Validator(fields[field]).validate(fixed_value)
+                try:
+                    Draft202012Validator(fields[field]).validate(fixed_value)
+                except ValidationError as exc:
+                    raise ValueError('Prototype command fixed effect conflicts with its record schema') from exc
         Draft202012Validator({
             "type": "array", "maxItems": 16,
             "items": {"type": "object", "additionalProperties": False,

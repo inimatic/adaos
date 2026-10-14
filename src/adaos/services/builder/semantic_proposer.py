@@ -51,6 +51,12 @@ def provider_contract(admission: Mapping[str, Any]) -> dict[str, Any]:
                     target = next(item for item in admission['context']['targets'] if item['ref'] == mask['ref'])
                     current = target['values'][prop]
                     fields['value'] = {'type': 'boolean' if isinstance(current, bool) else 'number' if isinstance(current, (float, int)) else 'string'}
+                    options = target.get('allowed_values', {}).get(prop)
+                    if options:
+                        options = [value for value in options if value not in (None, '') and
+                            (type(value) is type(current) or isinstance(current, (int, float)) and not isinstance(current, bool)
+                             and isinstance(value, (int, float)) and not isinstance(value, bool))]
+                        fields['value']['enum'] = list(dict.fromkeys(options))
                     admitted.append(selected)
             continue
         refs = [mask['ref'] for mask in admission['write_masks'] if
@@ -161,6 +167,8 @@ class SemanticProposer:
         record = _read(path)
         model_path = path.with_suffix('.model.json')
         observed_request = _read(model_path) if model_path.is_file() else {}
+        if 'component_snapshot' not in record and not observed_request.get('job_id'):
+            raise BuilderWorkflowError('An unpinned legacy admission requires explicit new admission before inference')
         immutable = {key: value for key, value in record.items() if key not in
                      ('admission_digest', 'prepared_request', 'proposal', 'prepared_digest')}
         if (digest(immutable) != record['admission_digest']
@@ -171,6 +179,7 @@ class SemanticProposer:
             raise BuilderWorkflowError('Proposal requires its active editable Change')
         packet = self.admission._packet(record)
         user_input = {'request': record['source_request']['instruction'], 'context': packet['context'],
+            'authoring_discovery': packet['authoring_discovery'],
             'admitted_scope': {'write_masks': packet['write_masks'], 'max_ops': packet['max_ops'],
                                'operation_kinds': packet['operation_kinds']}}
         contract = provider_contract(packet)
@@ -189,7 +198,8 @@ class SemanticProposer:
         envelope = {'messages': messages, 'model': model, 'reasoning': reasoning, 'max_tokens': max_tokens,
                     'text': text, 'tools': [], 'tool_choice': 'none', 'profile_scope': 'development'}
         from adaos.services.contract_context_admission import prepare_component_input
-        envelope, input_admission = prepare_component_input(envelope, snapshot=record.get('component_snapshot'))
+        envelope, input_admission = prepare_component_input(envelope, snapshot=record.get('component_snapshot'),
+            required_ids=packet['authoring_discovery']['required_closure'])
         if len(json.dumps(envelope, ensure_ascii=False).encode('utf-8')) > 256 * 1024:
             raise BuilderWorkflowError('The admitted proposal exceeds its bounded context capacity')
         request_digest = digest(envelope)
@@ -224,8 +234,10 @@ class SemanticProposer:
                 retained['contract_input_admission'] = input_admission
                 atomic_write_json(model_path, retained)
             if not retained.get('job_id'):
-                submitted = self.submit(**envelope, request_id=retained['request_id'], stream=False,
-                                        provider_max_attempts=1, timeout=30)
+                from adaos.services.contract_context_admission import component_input_scope
+                with component_input_scope(record['component_snapshot'], required_ids=input_admission['required_closure'], route='increment'):
+                    submitted = self.submit(**envelope, request_id=retained['request_id'], stream=False,
+                                            provider_max_attempts=1, timeout=30)
                 job_id = submitted.get('job_id') or (submitted.get('job') or {}).get('id')
                 if not job_id:
                     raise BuilderWorkflowError('Root returned no durable proposal job identity')
@@ -241,6 +253,7 @@ class SemanticProposer:
             if compiler_digest() != record['compiler_digest']:
                 self._observe_run(record, retained, 'failed')
                 result = {'status': 'stale_contract', 'model_calls': 1, 'execution_metrics': metrics,
+                    'root_job_id': retained['job_id'],
                     'request_digest': request_digest, 'findings': [{'code': 'contract.compiler_snapshot_incompatible',
                     'detail': 'The paid job was observed on its pinned input; no proposal was applied or rebased.'}]}
                 atomic_write_json(model_path, {**retained, 'status': 'stale_contract', 'result': result})

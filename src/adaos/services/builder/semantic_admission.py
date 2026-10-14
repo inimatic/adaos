@@ -13,7 +13,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from .semantic_graph import SemanticGraphService, _read, _label, _view, digest, reduce_graph, verify_baseline, scope_filter, scope_property
+from .semantic_graph import SemanticGraphService, _read, _label, _view, digest, reduce_graph, verify_baseline, scope_filter, scope_property, scope_values
 from .semantic_inspector import semantic_refs, dependency_refs
 from .semantic_ui import _operation_root
 from .workflow import BuilderWorkflowError, _LOCK
@@ -130,7 +130,9 @@ class SemanticAdmissionService:
                                     else copy.deepcopy(_view(document, node['ref'])['field_refs']) if prop == 'field_refs'
                                     else _label(document, node['ref'])[prop.partition('.')[2]])
                 masks.append({'ref': node['ref'], 'properties': properties})
-                descriptors.append({**node, 'values': values})
+                allowed_values = {prop: copy.deepcopy(scope_values(document, _view(document, node['ref']))[prop[len('scope_filters.'):-len('.value')]])
+                    for prop in properties if prop.startswith('scope_filters.')}
+                descriptors.append({**node, 'values': values, **({'allowed_values': allowed_values} if allowed_values else {})})
             if not masks or (requested_refs is not None and {row['ref'] for row in masks} != set(requested_refs)):
                 raise BuilderWorkflowError('requested write scope includes unsupported or unknown semantic refs')
             refs = [row['ref'] for row in masks]
@@ -152,15 +154,25 @@ class SemanticAdmissionService:
             record['admission_digest'] = digest(record)
             from adaos.services.ui_component_contracts import project_component_contract
             record['component_snapshot'] = project_component_contract()
+            from .authoring_discovery import component_authoring_discovery
+            record['authoring_discovery'] = component_authoring_discovery(document, masks, record['component_snapshot'],
+                editable=gate['capabilities']['can_edit_prototype'])
             record['admission_digest'] = digest({key: value for key, value in record.items() if key != 'admission_digest'})
             atomic_write_json(path, record)
             return self._packet(record)
 
     @staticmethod
     def _packet(record):
-        return copy.deepcopy({key: record[key] for key in ('schema', 'admission_id', 'admission_digest', 'project_ref',
+        packet = {key: record[key] for key in ('schema', 'admission_id', 'admission_digest', 'project_ref',
             'change_id', 'source_revision', 'expected_generation', 'base_hash', 'operation_kinds', 'max_ops',
-            'write_masks', 'status', 'context', 'compiler_digest')})
+            'write_masks', 'status', 'context', 'compiler_digest')}
+        # Old immutable admissions retain their original broad facts. Deriving
+        # a smaller closure on resume would be a hidden context rebase.
+        packet['authoring_discovery'] = record.get('authoring_discovery') or {
+            'schema': 'adaos.builder.authoring_discovery.v1', 'status': 'retained_legacy_scope',
+            'required_closure': [unit['id'] for unit in record.get('component_snapshot', {}).get('retrieval_units', [])],
+            'callable_tools': [], 'binding_availability': {'production': 'not_assessed'}}
+        return copy.deepcopy(packet)
 
     def prepare(self, *, project_ref: str, admission_id: str, proposal: Mapping[str, Any]) -> dict[str, Any]:
         Draft202012Validator(proposal_contract()).validate(proposal)

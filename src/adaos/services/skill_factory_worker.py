@@ -5129,6 +5129,7 @@ class SubprocessCodexExecutor:
         max_billable_tokens: int | None = None,
         token_budget_metric: str = "model_tokens",
         cancel_check: Callable[[], bool] | None = None,
+        developer_instructions: str | None = None,
     ) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         final_path = output_dir / "last_message.md"
@@ -5157,6 +5158,8 @@ class SubprocessCodexExecutor:
             str(final_path),
         ]
         command.extend(self._root_mcp_config_args(root_mcp))
+        if developer_instructions:
+            command.extend(['-c', 'developer_instructions=' + _toml_value(developer_instructions)])
         if self.model:
             command.extend(["--model", self.model])
         if self.reasoning_effort:
@@ -5380,7 +5383,7 @@ class SubprocessCodexExecutor:
         if env_var:
             values[f"mcp_servers.{server}.bearer_token_env_var"] = env_var
         enabled_tools = _string_list(profile.get("enabled_tools"))
-        if enabled_tools:
+        if 'enabled_tools' in profile:
             values[f"mcp_servers.{server}.enabled_tools"] = enabled_tools
         disabled_tools = _string_list(profile.get("disabled_tools"))
         if disabled_tools:
@@ -6073,7 +6076,9 @@ class LocalSkillFactoryWorker:
         }
 
     def _portable_contract_reuse_bundle(
-        self, webui: Mapping[str, Any]
+        self, webui: Mapping[str, Any], *, discovery_request: Mapping[str, Any] | None = None,
+        task_tools: Sequence[str] = (),
+        application_ref: str | None = None,
     ) -> dict[str, Any] | None:
         """Project installed contracts as registry refs plus compiler-only views."""
 
@@ -6226,8 +6231,20 @@ class LocalSkillFactoryWorker:
             )
         if not requirements:
             return None
+        discovery = None
+        if discovery_request is not None:
+            from adaos.services.builder.authoring_discovery import qualified_semantic_discovery, installed_binding_admission
+            from adaos.services.capability_binding_state.registry_projection import SemanticRegistryProjection
+            registry_root = self.repo_root / '.adaos/workspace'
+            projection = SemanticRegistryProjection(registry_root, self.state_dir)
+            discovery = qualified_semantic_discovery(discovery_request, registry_root=registry_root,
+                index=projection.read_index(), registry_revision=discovery_request['snapshot']['registry_revision'],
+                local_admit=(lambda candidate: installed_binding_admission(candidate, state_dir=self.state_dir,
+                    application_ref=application_ref, environment_profile=discovery_request['environment_profile'])) if application_ref else None,
+                task_tools=task_tools)
         return {
             "schema": "adaos.builder.portable_contract_reuse.v2",
+            **({'semantic_discovery': discovery} if discovery is not None else {}),
             "authority": {
                 "canonical_content": "registry_only",
                 "model_input": "compiler_view",
@@ -8171,6 +8188,29 @@ class LocalSkillFactoryWorker:
         # This is the last admission boundary: repairs and continuations already
         # exist here, unlike the earlier capsule plan and packet projection.
         artifacts = dict(dict((assignment or {}).get("realize_request") or {}).get("artifacts") or {})
+        contract_input = artifacts.get('component_contract_input')
+        developer_instructions = None
+        contract_admission = None
+        if isinstance(contract_input, Mapping):
+            from adaos.services.contract_context_admission import prepare_component_input, ContractInputRejected
+            from adaos.services.ui_component_contracts import project_component_contract
+            pinned_path = output_dir.parent / 'runtime/component-contract-pins.json'
+            selected_snapshot = contract_input.get('snapshot') or project_component_contract()
+            selected_required = contract_input.get('required_ids') or ['ui.table', 'ui.form', 'ui.actions', 'ui.queryToolbar']
+            if pinned_path.is_file():
+                pinned = _read_json(pinned_path)
+                if pinned['snapshot'] != selected_snapshot or pinned['required_ids'] != selected_required:
+                    raise ValueError('contract.worker_resume_snapshot_conflict')
+            else:
+                _write_json(pinned_path, {'snapshot': selected_snapshot, 'required_ids': selected_required})
+            if root_mcp and root_mcp.get('enabled') is not False:
+                if not root_mcp.get('url') or not isinstance(root_mcp.get('enabled_tools'), list):
+                    raise ContractInputRejected([{'code': 'contract.tool_scope_unbounded'}])
+            platform_tools = [{'type': 'function', 'name': name} for name in (root_mcp or {}).get('enabled_tools', [])]
+            sealed, contract_admission = prepare_component_input({'messages': [{'role': 'user', 'content': prompt}],
+                'tools': platform_tools, 'tool_choice': 'auto' if platform_tools else 'none'},
+                snapshot=selected_snapshot, required_ids=selected_required)
+            developer_instructions = sealed['messages'][-1]['content']
         budget = dict(artifacts.get("execution_budget") or {})
         capacity = int(budget.get("max_context_tokens") or 64_000)
         selection_path = output_dir.parent / "input" / "context-selection.json"
@@ -8181,7 +8221,7 @@ class LocalSkillFactoryWorker:
                 capacity_tokens=capacity, reserve_tokens=min(8_192, capacity // 4),
                 target_tokens=int(budget.get("target_context_tokens") or 8_000),
                 strategy=str(selection.get("strategy") or "full"),
-                overhead_text=json.dumps(OUTCOME_SCHEMA, ensure_ascii=False, sort_keys=True),
+                overhead_text=json.dumps(OUTCOME_SCHEMA, ensure_ascii=False, sort_keys=True) + (developer_instructions or ''),
                 provider_overhead_tokens=CODEX_LIVE_PROVIDER_BASELINE_TOKENS,
             )
         except ContextBudgetExceeded as exc:
@@ -8190,6 +8230,17 @@ class LocalSkillFactoryWorker:
         input_root = output_dir.parent / "input" / "model-attempts"
         input_root.mkdir(parents=True, exist_ok=True)
         attempt = len(list(input_root.glob("*.prompt.md"))) + 1
+        if developer_instructions:
+            from adaos.services.contract_context_admission import admit_contract_input
+            from adaos.services.context_control import ContextControlService
+            final_envelope = {'messages': [{'role': 'user', 'content': prompt},
+                {'role': 'developer', 'content': developer_instructions}],
+                'tools': platform_tools, 'tool_choice': 'auto' if platform_tools else 'none',
+                'transport': 'codex-cli', 'model': (agent_profile or {}).get('model')}
+            contract_admission = admit_contract_input(final_envelope, snapshot=selected_snapshot, required_ids=selected_required)
+            persisted_admission = ContextControlService(self.state_dir).admit_model_input(final_envelope,
+                snapshot=selected_snapshot, required_ids=selected_required, run_ref=f'task-model:{task_id}:{attempt}')
+            _write_json(output_dir.parent / 'runtime/final-input-contract.json', persisted_admission)
         if attempt > 1:
             # Keep the preceding response and failed checks before the executor
             # replaces compatibility live paths with the next repair attempt.
@@ -8207,6 +8258,8 @@ class LocalSkillFactoryWorker:
                 "prompt_bytes": len(raw_prompt),
                 "prompt_sha256": hashlib.sha256(raw_prompt).hexdigest(),
                 "final_input_budget": final_budget,
+                "contract_input_admission": contract_admission,
+                "developer_instructions": developer_instructions,
             },
         )
         _write_json(output_dir.parent / "runtime" / "final-input-budget.json", final_budget)
@@ -8242,6 +8295,7 @@ class LocalSkillFactoryWorker:
                 prompt=prompt,
                 output_dir=output_dir,
                 root_mcp=root_mcp,
+                **({'developer_instructions': developer_instructions} if developer_instructions else {}),
                 max_model_tokens=max_model_tokens,
                 max_billable_tokens=max_billable_tokens,
                 token_budget_metric=token_budget_metric,
@@ -8267,6 +8321,8 @@ class LocalSkillFactoryWorker:
             "cancel_check": lambda: self._task_status(task_id)
             in {"cancelled", "expired"},
         }
+        if developer_instructions:
+            executor_kwargs['developer_instructions'] = developer_instructions
         # Custom/local executors historically accepted only the three core
         # arguments. Pass richer governed context when declared, while keeping
         # that stable seam usable by tests and third-party runners.
@@ -8276,6 +8332,8 @@ class LocalSkillFactoryWorker:
             for parameter in signature.parameters.values()
         )
         if not accepts_kwargs:
+            if developer_instructions and 'developer_instructions' not in signature.parameters:
+                raise ValueError('contract.worker_executor_does_not_deliver_admitted_instructions')
             executor_kwargs = {
                 key: value
                 for key, value in executor_kwargs.items()
@@ -10543,8 +10601,26 @@ class LocalSkillFactoryWorker:
                 include_workspace_navigation=include_workspace_navigation,
             )
             if target_webui_value is not None:
+                from adaos.services.builder.prototype_stage import prototype_builder_metadata
+                if prototype_builder_metadata(target_webui_value).get('component_contract'):
+                    # Accepted semantic UI declares the owned C2 fact source.
+                    # The final worker boundary pins it for all repair attempts.
+                    from adaos.services.ui_component_contracts import project_component_contract
+                    snapshot = project_component_contract()
+                    if prototype_builder_metadata(target_webui_value)['component_contract'] != snapshot['provenance']:
+                        from adaos.services.contract_context_admission import ContractInputRejected
+                        raise ContractInputRejected([{'code': 'contract.worker_accepted_projection_stale'}])
+                    artifacts['component_contract_input'] = {'snapshot': snapshot,
+                        'required_ids': ['ui.table', 'ui.form', 'ui.actions', 'ui.queryToolbar']}
+                    # Persist in the governed assignment, not merely this local
+                    # projection; final-input admission reads the same source.
+                    assignment['realize_request']['artifacts']['component_contract_input'] = artifacts['component_contract_input']
                 portable_reuse = self._portable_contract_reuse_bundle(
-                    target_webui_value
+                    target_webui_value,
+                    **({'discovery_request': artifacts['semantic_discovery_query'],
+                        'task_tools': tuple((root_mcp or {}).get('enabled_tools', [])),
+                        'application_ref': f'{target_type}:{target_id}'}
+                        if isinstance(artifacts.get('semantic_discovery_query'), Mapping) else {}),
                 )
                 if portable_reuse is not None:
                     implementation_bindings["portable_contract_reuse"] = portable_reuse

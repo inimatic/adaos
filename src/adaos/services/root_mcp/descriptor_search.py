@@ -583,6 +583,8 @@ def get_descriptor_item(
     item_mapping = dict(item) if isinstance(item, Mapping) else {"value": item}
     if expected_source_digest is not None:
         observed = (item_mapping.get("component_contract") or {}).get("provenance", {}).get("source_digest")
+        if token == 'sdk_metadata':
+            observed = _fingerprint(item_mapping)
         if observed != expected_source_digest:
             raise ValueError("descriptor.contract_snapshot_incompatible")
     contract = (

@@ -605,7 +605,9 @@ def _llm_root_payload(
             payload["patch_stream"] = patch_stream
     # Only typed Builder carriers opt into platform-fact admission. Generic LLM
     # requests keep their original shape and do not gain Builder authority.
-    builder_contract = False
+    from adaos.services.contract_context_admission import current_component_input_scope
+    contract_scope = current_component_input_scope()
+    builder_contract = contract_scope is not None
     for message in normalized_messages:
         try:
             carrier = json.loads(message.get('content', ''))
@@ -613,6 +615,8 @@ def _llm_root_payload(
             continue
         if not isinstance(carrier, dict):
             continue
+        if 'platform_contracts' in carrier:
+            builder_contract = True
         stable = carrier.get('stable_builder_context') or {}
         context = carrier.get('context') or {}
         if (isinstance(stable, dict) and isinstance(stable.get('semantic_invariants'), dict)
@@ -624,10 +628,12 @@ def _llm_root_payload(
         from adaos.services.contract_context_admission import prepare_component_input
         from adaos.services.ui_component_contracts import project_component_contract
         from adaos.services.context_control import ContextControlService
-        payload, _contract_admission = prepare_component_input(payload)
+        snapshot = contract_scope['snapshot'] if contract_scope else project_component_contract()
+        required_ids = contract_scope.get('required_ids') if contract_scope else None
+        payload, _contract_admission = prepare_component_input(payload, snapshot=snapshot, required_ids=required_ids)
         normalized_messages = payload['messages']
         payload = _responses_payload(payload, normalized_messages)
-        ContextControlService().admit_model_input(payload, snapshot=project_component_contract(),
+        ContextControlService().admit_model_input(payload, snapshot=snapshot,
             required_ids=_contract_admission['required_closure'], run_ref='llm-request:' + str(request_id)
             if request_id else None)
         return payload, normalized_messages

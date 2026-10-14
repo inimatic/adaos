@@ -63,6 +63,14 @@ def scope_property(field_ref):
     return 'scope_filters.' + field_ref + '.value'
 
 
+def scope_value_equal(left, right):
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left == right  # JSON Schema has one number type, not Python int/float.
+    return type(left) is type(right) and left == right
+
+
 def operation_write_set(ops: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Derive actual property writes from checked operations, never caller claims."""
     return [{"seq": item["seq"], "kind": item["kind"], "ref": item["ref"],
@@ -142,10 +150,12 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
             if digest(scoped['value']) != digest(operation['expected']):
                 raise BuilderWorkflowError('semantic scope precondition failed')
             values = scope_values(result, view)[operation['field_ref']]
-            if operation['value'] in (None, '') or not any(type(value) is type(operation['value']) and value == operation['value'] for value in values):
+            matching = [value for value in values if scope_value_equal(value, operation['value'])]
+            if operation['value'] in (None, '') or not matching:
                 raise BuilderWorkflowError('scope value must preserve a declared, typed fixture boundary')
-            inverse.append({**operation, 'expected': copy.deepcopy(operation['value']), 'value': copy.deepcopy(scoped['value'])})
-            scoped['value'] = copy.deepcopy(operation['value'])
+            value = matching[0]
+            inverse.append({**operation, 'expected': copy.deepcopy(value), 'value': copy.deepcopy(scoped['value'])})
+            scoped['value'] = copy.deepcopy(value)
             continue
         if operation["kind"] == "view.fields.reorder":
             view = _view(result, operation["ref"])

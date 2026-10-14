@@ -2584,6 +2584,7 @@ class SkillManager:
         source_manifest_digest: str | None = None,
         package_digest: str | None = None,
         package_manifest_digest: str | None = None,
+        allow_prepare: bool = True,
     ) -> str:
         env = self._runtime_env(name)
         source_path: Path | None = None
@@ -2628,6 +2629,8 @@ class SkillManager:
         slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
         slot_source_root = slot_paths.src_dir / "skills" / name
         needs_prepare = not manifest_path.exists() or not slot_source_root.exists() or not any(slot_source_root.iterdir())
+        if slot_version != str(target_version).strip():
+            needs_prepare = True
         prepared_source_digest = str(slot_meta.get("source_manifest_digest") or "").strip()
         if source_manifest_digest is not None and source_manifest_digest != prepared_source_digest:
             needs_prepare = True
@@ -2653,6 +2656,8 @@ class SkillManager:
         ):
             needs_prepare = True
         if needs_prepare:
+            if not allow_prepare or package_digest is not None or package_manifest_digest is not None:
+                raise RuntimeError('exact_runtime_candidate_not_prepared; mutable Workspace fallback is forbidden')
             if slot is None:
                 active_slot = env.read_active_slot(target_version)
                 if target_slot == active_slot:
@@ -3033,6 +3038,10 @@ class SkillManager:
         webspace_id: str | None = None,
         version: str | None = None,
         slot: str | None = None,
+        allow_prepare: bool = True,
+        source_manifest_digest: str | None = None,
+        package_digest: str | None = None,
+        package_manifest_digest: str | None = None,
         defer_webspace_rebuild: bool = False,
         emit_activation: bool = True,
         observation_source: str = "skill.manager",
@@ -3051,7 +3060,10 @@ class SkillManager:
             if space == "dev":
                 target = self.activate_dev_runtime(name, version=version, slot=slot)
             else:
-                target = self.activate_runtime(name, version=version, slot=slot)
+                pins = {key: value for key, value in dict(source_manifest_digest=source_manifest_digest,
+                    package_digest=package_digest, package_manifest_digest=package_manifest_digest).items() if value is not None}
+                target = self.activate_runtime(name, version=version, slot=slot,
+                    **({'allow_prepare': False} if not allow_prepare else {}), **pins)
         except Exception as exc:
             try:
                 emit_runtime_activation_failure(
@@ -4269,7 +4281,12 @@ class SkillManager:
     def _stage_skill_sources(self, source: Path, slot: SkillSlotPaths) -> Path:
         destination_root = slot.src_dir
         namespace_root = destination_root / "skills"
-        target = namespace_root / source.name
+        # A materialized content-addressed package need not live in a directory
+        # named after the skill. Runtime identity comes from its declaration.
+        artifact_id = str(self._load_manifest(source).get('name') or '').strip()
+        if not artifact_id or Path(artifact_id).name != artifact_id or artifact_id in {'.', '..'}:
+            raise ValueError('invalid staged skill identity')
+        target = namespace_root / artifact_id
         if destination_root.exists():
             self._remove_tree(destination_root)
         if destination_root.exists():
@@ -4295,15 +4312,16 @@ class SkillManager:
         )
         shutil.copytree(source, target, ignore=ignore, dirs_exist_ok=True)
         self._verify_staged_declaration_artifacts(source, target)
+        sealed_package = (source / '.adaos/package-manifest.json').is_file()
         package_init = target / "__init__.py"
-        if not package_init.exists():
+        if not package_init.exists() and not sealed_package:
             package_init.write_text("", encoding="utf-8")
         handlers_dir = target / "handlers"
         handler_main = handlers_dir / "main.py"
         if not handler_main.exists():
             raise FileNotFoundError(f"handler entrypoint missing: {handler_main}")
         handlers_init = handlers_dir / "__init__.py"
-        if not handlers_init.exists():
+        if not handlers_init.exists() and not sealed_package:
             handlers_init.write_text(
                 "try:\n"
                 "    from .main import handle  # noqa: F401\n"

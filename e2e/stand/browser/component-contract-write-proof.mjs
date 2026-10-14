@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 // A successful response/DOM echo is not a persistence oracle. The caller must
 // perform an independent provider read and reopen the real editor.
-export async function assertContractWriteProof({ response, resourceType, recordId, expected, readRecord, reopen }) {
+export async function assertContractWriteProof({ response, resourceType, recordId, expected, readRecord, reopen, commandId = 'complete' }) {
   const body = response.request().postDataJSON()
   assert.equal(response.ok(), true, 'Confirmed write was rejected')
   const result = await response.json()
@@ -10,7 +10,7 @@ export async function assertContractWriteProof({ response, resourceType, recordI
   assert.equal(body.resource_type, resourceType)
   assert.equal(body.record_id, recordId)
   assert.equal(body.operation_id, 'update')
-  assert.equal(body.context?.prototype_command_id, 'complete')
+  assert.equal(body.context?.prototype_command_id, commandId)
   assert.deepEqual(body.payload, expected)
   const stored = await readRecord()
   assert.equal(stored.id, recordId)

@@ -3068,7 +3068,7 @@ def test_worker_rejects_unreachable_form_success_action_before_browser(tmp_path)
     form = {
         "id": "editor",
         "type": "ui.form",
-        "inputs": {"buttons": [{"id": "delete"}]},
+        "inputs": {"fields": [], "buttons": [{"id": "delete"}]},
         "actions": [
             {
                 "id": "delete",

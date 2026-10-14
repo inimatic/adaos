@@ -246,6 +246,10 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                     operation = "update" if command["kind"] == "transition" else command["kind"]
                     payload = {key: "$event.values." + key for key in command.get("input_field_refs", [])}
                     payload.update(command.get("fixed_values") or {})
+                    selection = widget.get("inputs", {}).get("selectedStateKey")
+                    # Mutation identity is part of the source obligation, not
+                    # merely an allowed parameter. Creates have no selected id.
+                    record_id = "$state." + selection if isinstance(selection, str) and selection else None
                     return [action for action in actions if action.get("id") == command["id"]
                         and sum(item.get('id') == command['id'] for item in actions) == 1
                         and command["id"] in buttons and action.get("on") == "submit"
@@ -253,6 +257,8 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                         and action.get("params", {}).get("context", {}).get("prototype_command_id") == command["id"]
                         and set(action.get('params', {})) <= {'operation_id', 'context', 'payload', 'record_id'}
                         and action.get('params', {}).get('context') == {'prototype_command_id': command['id']}
+                        and (('record_id' not in action.get('params', {})) if operation == 'create'
+                             else record_id is not None and action.get('params', {}).get('record_id') == record_id)
                         and action.get("target") == widget.get("dataSource", {}).get("resourceType")
                         and action.get("params", {}).get("payload", {}) == payload]
                 coverage = []

@@ -3,13 +3,16 @@ import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { installSystemOverlayDismissal, revealPrototypeWidget } from './prototype-navigation.mjs'
+import { observeUsability } from './prototype-usability.mjs'
 
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
 const webspace = process.env.ADAOS_E2E_WEBSPACE_ID
 const output = process.env.ADAOS_E2E_OUTPUT
 if (process.env.ENV_TYPE !== 'dev' || !scenario?.startsWith('test_semantic_') || !webspace?.endsWith('-dev')) throw new Error('Owned DEV fixture required')
 const widgets = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_EXPECTED_WEBUI, 'utf8')).ui.application.desktop.pageSchema.widgets
-const collection = widgets.find(widget => widget.id === 'records-list')
+const collection = widgets.find(widget => widget.id === (process.env.ADAOS_E2E_COLLECTION_ID || 'records-list'))
+const visibleText = process.env.ADAOS_E2E_VISIBLE_TEXT || 'Second task'
+const hiddenText = process.env.ADAOS_E2E_HIDDEN_TEXT || 'First task'
 const browser = await chromium.launch({ headless: true })
 const report = { ok: false, samples: [], modelCalls: 0 }
 await fs.mkdir(output, { recursive: true })
@@ -37,17 +40,19 @@ try {
       await page.waitForFunction(expected => window.__ADAOS_DEBUG_STATE__?.()?.sync?.materializationReady
         && window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario === expected, scenario, { timeout: 60_000 })
       await revealPrototypeWidget(page, widgets, collection)
-      const table = page.locator('[data-webui-widget-id="records-list"]').filter({ visible: true }).first()
-      await expect(table).toContainText('Second task', { timeout: 30_000 })
-      await expect(table).not.toContainText('First task')
+      const table = page.locator(`[data-webui-widget-id="${collection.id}"]`).filter({ visible: true }).first()
+      await expect(table).toContainText(visibleText, { timeout: 30_000 })
+      await expect(table).not.toContainText(hiddenText)
       sample.checks.push('new-permanent-scope')
-      const toolbar = page.locator('[data-webui-widget-id="queries-records-list"]').filter({ visible: true }).first()
+      const toolbar = page.locator(`[data-webui-widget-id="queries-${collection.id}"]`).filter({ visible: true }).first()
       await toolbar.locator('input[type=search]').fill('not found')
-      await expect(table).not.toContainText('Second task')
+      await expect(table).not.toContainText(visibleText)
       await toolbar.locator('.query-toolbar__reset').click()
-      await expect(table).toContainText('Second task')
-      await expect(table).not.toContainText('First task')
+      await expect(table).toContainText(visibleText)
+      await expect(table).not.toContainText(hiddenText)
       sample.checks.push('reset-keeps-new-scope')
+      sample.usability = await observeUsability(page, { compact: layout === 'compact' })
+      if (!sample.usability.ok) throw new Error('Deterministic usability floor failed')
       if (sample.mutations || sample.errors.length) throw new Error('Scope navigation mutated records or produced renderer errors')
       sample.ok = true
     } catch (error) { sample.ok = false; sample.error = String(error) }

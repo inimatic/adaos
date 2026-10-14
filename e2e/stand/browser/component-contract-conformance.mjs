@@ -13,7 +13,11 @@ const output = process.env.ADAOS_E2E_OUTPUT
 if (process.env.ENV_TYPE !== 'dev' || !scenario?.startsWith('test_semantic_') || !webspace?.endsWith('-dev')) throw new Error('Owned DEV fixture required')
 const source = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_EXPECTED_WEBUI, 'utf8'))
 const widgets = source.ui.application.desktop.pageSchema.widgets
-const collection = widgets.find(widget => widget.id === 'records-list')
+const oracle = JSON.parse(process.env.ADAOS_E2E_CONTRACT_ORACLE || '{}')
+const config = { collectionId: 'records-list', editorId: 'record-editor', openCommand: 'edit', saveCommand: 'save', mutationCommand: 'complete',
+  recordId: 'record-1', rowText: 'First task', hiddenText: 'Second task', nameField: 'name', noteField: 'review_note', stateField: 'state',
+  beforeState: 'open', afterState: 'done', afterChoice: 'Done', basePayload: { name: 'First task', state: 'open', team_id: 'team-1', review_note: '' }, ...oracle }
+const collection = widgets.find(widget => widget.id === config.collectionId)
 const report = { ok: false, scenario, webspace, modelCalls: 0, samples: [] }
 const browser = await chromium.launch({ headless: true })
 try {
@@ -34,7 +38,7 @@ try {
     if (process.env.ADAOS_E2E_REJECT_CONTRACT_WRITES === '1') {
       sample.injectedFault = 'confirmed-command-always-rejected'
       await page.route('**/api/resources/operate', async route => {
-        if (route.request().postDataJSON()?.context?.prototype_command_id === 'complete') {
+        if (route.request().postDataJSON()?.context?.prototype_command_id === config.mutationCommand) {
           await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ ok: false, detail: 'injected_write_rejection' }) })
         } else await route.continue()
       })
@@ -59,39 +63,39 @@ try {
         return sync?.materializationReady && sync.materialization.currentScenario === expected
       }, scenario, { timeout: 60_000 })
       await revealPrototypeWidget(page, widgets, collection)
-      const table = host('records-list')
-      await expect(table).toContainText('First task')
-      await expect(table).not.toContainText('Second task')
+      const table = host(config.collectionId)
+      await expect(table).toContainText(config.rowText)
+      await expect(table).not.toContainText(config.hiddenText)
       sample.checks.push('permanent-scope')
-      const query = host('queries-records-list')
+      const query = host('queries-' + config.collectionId)
       const search = query.locator('input[type=search]')
       await search.fill('no-such-record')
-      await expect(table).not.toContainText('First task')
+      await expect(table).not.toContainText(config.rowText)
       await query.locator('.query-toolbar__reset').click()
-      await expect(table).toContainText('First task')
-      await expect(table).not.toContainText('Second task')
+      await expect(table).toContainText(config.rowText)
+      await expect(table).not.toContainText(config.hiddenText)
       await expect(search).toHaveValue('')
       sample.checks.push('reset-preserves-scope')
-      const row = table.locator(prototypeRowSelector(collection)).filter({ hasText: 'First task' }).first()
-      await prototypeRowCommand(row, 'edit').click()
-      const form = host('record-editor')
+      const row = table.locator(prototypeRowSelector(collection)).filter({ hasText: config.rowText }).first()
+      await prototypeRowCommand(row, config.openCommand).click()
+      const form = host(config.editorId)
       await expect(form).toBeVisible()
-      const name = form.locator('input[id="form-record-editor-name"]')
-      const note = form.locator('input[id="form-record-editor-review_note"]')
-      await expect(name).toHaveValue('First task')
+      const name = form.locator(`input[id="form-${config.editorId}-${config.nameField}"]`)
+      const note = form.locator(`input[id="form-${config.editorId}-${config.noteField}"]`)
+      await expect(name).toHaveValue(config.rowText)
       await expect(note).toHaveValue('')
-      const complete = form.locator('[data-command-id="complete"]').locator('button').or(form.locator('button[data-command-id="complete"]')).first()
+      const complete = form.locator(`[data-command-id="${config.mutationCommand}"]`).locator('button').or(form.locator(`button[data-command-id="${config.mutationCommand}"]`)).first()
       await expect(complete).toBeDisabled()
       sample.checks.push('guard-rejected-draft')
       await name.fill('')
-      const save = form.locator('[data-command-id="save"]').locator('button').or(form.locator('button[data-command-id="save"]')).first()
+      const save = form.locator(`[data-command-id="${config.saveCommand}"]`).locator('button').or(form.locator(`button[data-command-id="${config.saveCommand}"]`)).first()
       sample.invalidSubmissionMode = await assertInvalidSubmissionGuard({ button: save,
         error: form.locator('.field-error').first(), settle: async () => {}, mutationCount: () => sample.mutations.length })
       sample.checks.push('required-rejected-draft')
       await page.locator('ion-modal').filter({ visible: true }).last().getByRole('button', { name: /^(Close|Закрыть)$/ }).click()
-      await expect(table).toContainText('First task')
-      await prototypeRowCommand(row, 'edit').click()
-      await expect(name).toHaveValue('First task')
+      await expect(table).toContainText(config.rowText)
+      await prototypeRowCommand(row, config.openCommand).click()
+      await expect(name).toHaveValue(config.rowText)
       await expect(note).toHaveValue('')
       await note.fill('Contract approved')
       await expect(complete).toBeEnabled()
@@ -104,14 +108,14 @@ try {
       if (sample.mutations.length !== 0) throw new Error('Cancel/invalid/confirmation cancel caused a mutation')
       sample.checks.push('cancel-and-confirmation-no-write')
       await page.locator('ion-modal').filter({ visible: true }).last().getByRole('button', { name: /^(Close|Закрыть)$/ }).click()
-      await prototypeRowCommand(row, 'edit').click()
+      await prototypeRowCommand(row, config.openCommand).click()
       await expect(note).toHaveValue('')
       sample.checks.push('draft-isolation-on-reopen')
       await note.fill('Contract approved')
       await complete.click()
       await expect(alert).toBeVisible()
       const pending = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate'
-        && response.request().postDataJSON()?.context?.prototype_command_id === 'complete', { timeout: 30_000 })
+        && response.request().postDataJSON()?.context?.prototype_command_id === config.mutationCommand, { timeout: 30_000 })
       void pending.catch(() => {})
       await alert.locator('button').last().click()
       const response = await pending
@@ -120,22 +124,22 @@ try {
         .filter(([key]) => !['content-length', 'host', 'origin'].includes(key)))
       const readRecord = async () => {
         const queried = await context.request.post(`${process.env.ADAOS_E2E_HUB_URL}/api/resources/query`, {
-          headers, data: { resource_type: collection.dataSource.resourceType, filters: { id: 'record-1' } } })
+          headers, data: { resource_type: collection.dataSource.resourceType, filters: { id: config.recordId } } })
         if (!queried.ok()) throw new Error('Independent persisted-record read failed')
         const result = await queried.json()
-        return (result.items ?? result.records ?? []).find(item => item.id === 'record-1')
+        return (result.items ?? result.records ?? []).find(item => item.id === config.recordId)
       }
       try {
         sample.writeProof = await assertContractWriteProof({ response, resourceType: collection.dataSource.resourceType,
-          recordId: 'record-1', expected: { review_note: 'Contract approved', state: 'done' }, readRecord,
+          recordId: config.recordId, commandId: config.mutationCommand, expected: { [config.noteField]: 'Contract approved', [config.stateField]: config.afterState }, readRecord,
           reopen: async () => {
             await expect(page.locator('ion-modal').filter({ visible: true })).toHaveCount(0)
-            await prototypeRowCommand(row, 'edit').click()
+            await prototypeRowCommand(row, config.openCommand).click()
             await expect(note).toHaveValue('Contract approved')
-            await expect(name).toHaveValue('First task')
-            const done = form.getByRole('radio', { name: 'Done', exact: true })
+            await expect(name).toHaveValue(config.rowText)
+            const done = form.getByRole('radio', { name: config.afterChoice, exact: true })
             await expect(done).toBeChecked()
-            return { review_note: await note.inputValue(), state: await done.isChecked() ? 'done' : 'open' }
+            return { [config.noteField]: await note.inputValue(), [config.stateField]: await done.isChecked() ? config.afterState : config.beforeState }
           } })
         if (sample.mutations.length !== 1) throw new Error('Confirmation must cause exactly one write')
         sample.checks.push('confirmed-write-persisted-and-reopened')
@@ -144,11 +148,11 @@ try {
         // Cleanup is evidence, not a claimed UI success, and never hides failure.
         if (body.resource_type !== collection.dataSource.resourceType || !body.resource_type.startsWith('prototype.')) throw new Error('Unsafe fixture restoration')
         const restored = await context.request.post(`${process.env.ADAOS_E2E_HUB_URL}/api/resources/operate`, {
-          headers, data: { ...body, context: { ...body.context, prototype_command_id: 'save' }, expected_revision: null,
-            idempotency_key: '', payload: { name: 'First task', state: 'open', team_id: 'team-1', review_note: '' } } })
+          headers, data: { ...body, context: { ...body.context, prototype_command_id: config.saveCommand }, expected_revision: null,
+            idempotency_key: '', payload: config.basePayload } })
         if (!restored.ok() || (await restored.json()).ok !== true) throw new Error('Owned fixture restoration failed')
         const stored = await readRecord()
-        if (stored?.state !== 'open' || stored.review_note !== '' || stored.name !== 'First task') throw new Error('Restoration was not persisted')
+        if (stored?.[config.stateField] !== config.beforeState || stored[config.noteField] !== '' || stored[config.nameField] !== config.rowText) throw new Error('Restoration was not persisted')
         sample.cleanup = { ok: true, evidenceKind: 'stand_cleanup', record: stored }
       }
       if (sample.errors.length) throw new Error('Renderer page errors')

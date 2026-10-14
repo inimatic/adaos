@@ -86,7 +86,7 @@ class CollectionEditorReference:
         return "committed"
 
 
-def matched_runtime_episodes(compiled: dict[str, Any], state_root: Path) -> list[dict[str, Any]]:
+def matched_runtime_episodes(compiled: dict[str, Any], state_root: Path, *, episode_spec=None) -> list[dict[str, Any]]:
     """Compare independently specified outcomes across actual provider changes.
 
     Each episode has a fresh StateSpace; no always-reject implementation can
@@ -96,6 +96,10 @@ def matched_runtime_episodes(compiled: dict[str, Any], state_root: Path) -> list
     from adaos.services.resources.prototype import PrototypeResourceService
     from adaos.services.resources.workbench import ResourceWorkbenchService
     specs = derive_resource_specs(compiled["webui"], compiled["prototype_resources"])
+    oracle = {'state_field': 'state', 'note_field': 'review_note', 'before_state': 'open', 'after_state': 'done',
+              'command_id': 'complete', 'record_id': 'record-1', **(episode_spec or {})}
+    state_field, note_field = oracle['state_field'], oracle['note_field']
+    payload = {state_field: oracle['after_state'], note_field: 'Approved'}
     rows = []
     for episode, expected in [("baseline", "committed"), ("binding_swap", "committed"),
                               ("schema_extension", "committed"), ("schema_incompatible", "rejected"),
@@ -114,15 +118,15 @@ def matched_runtime_episodes(compiled: dict[str, Any], state_root: Path) -> list
                 definition["authority"]["binding"] = data["source_id"]
                 for relation in definition.get("metadata", {}).get("prototype_policy", {}).get("relationships", []):
                     relation["target_resource_type"] = targets[relation["target_resource_type"]]
-            if "state" in definition["record_schema"]["properties"]:
+            if state_field in definition["record_schema"]["properties"]:
                 if episode == "schema_extension":
                     for schema in (definition["record_schema"], data["record_schema"]):
                         schema["properties"]["qualification_marker"] = {"type": "string"}
                 elif episode == "schema_incompatible":
                     for schema in (definition["record_schema"], data["record_schema"]):
-                        schema["properties"]["state"] = {"enum": ["open"]}
+                        schema["properties"][state_field] = {"enum": [oracle['before_state']]}
                 elif episode == "state_locked":
-                    definition["metadata"]["prototype_policy"]["read_only_when"] = {"field_ref": "state", "operator": "equals", "value": "open"}
+                    definition["metadata"]["prototype_policy"]["read_only_when"] = {"field_ref": state_field, "operator": "equals", "value": oracle['before_state']}
         resource_type = transformed[0]["resource_definition"]["resource_type"]
         original_records = copy.deepcopy(compiled["prototype_resources"][0]["records"])
         before = None
@@ -136,19 +140,19 @@ def matched_runtime_episodes(compiled: dict[str, Any], state_root: Path) -> list
                 before = provider.query(resource_type, filters={}, search="", sort=[], limit=None)
             if episode == "authority_denied":
                 ResourceWorkbenchService(state_dir=state_root / episode).operate({"schema": "adaos.resource.operation.v1",
-                    "resource_type": resource_type, "operation_id": "update", "record_id": "record-1",
-                    "payload": {"state": "done", "review_note": "Approved"}, "actor": {"id": "guest", "role": "guest"},
-                    "context": {"prototype_command_id": "complete"}})
+                    "resource_type": resource_type, "operation_id": "update", "record_id": oracle['record_id'],
+                    "payload": payload, "actor": {"id": "guest", "role": "guest"},
+                    "context": {"prototype_command_id": oracle['command_id']}})
             else:
-                provider.operate(resource_type, "update", record_id="record-1",
-                    payload={"state": "done", "review_note": "Approved"}, command_id="complete")
+                provider.operate(resource_type, "update", record_id=oracle['record_id'],
+                    payload=payload, command_id=oracle['command_id'])
             observed = "committed"
         except (ValueError, PermissionError) as failure:
             observed, error = "rejected", type(failure).__name__ + ": " + str(failure)
         if observed == "committed":
             after = provider.query(resource_type, filters={}, search="", sort=[], limit=None)
             expected_records = copy.deepcopy(before)
-            expected_records[0].update(state="done", review_note="Approved")
+            expected_records[0].update(payload)
             if "revision" in expected_records[0]:
                 expected_records[0]["revision"] += 1
             preservation = after == expected_records
@@ -158,6 +162,7 @@ def matched_runtime_episodes(compiled: dict[str, Any], state_root: Path) -> list
             preservation = True
         row = {"episode": episode, "expected": expected, "observed": observed, "ok": observed == expected and preservation,
                "preservation": preservation, "error": error, "binding": resource_type,
+               "binding_substitution": targets or None,
                "cost": {"llm_calls": 0, "usd": 0}}
         rows.append(row)
     return rows

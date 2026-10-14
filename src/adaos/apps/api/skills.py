@@ -443,6 +443,9 @@ class RuntimeActivateReq(BaseModel):
     version: str | None = None
     auto_prepare: bool = True
     webspace_id: str | None = "default"
+    source_manifest_digest: str | None = None
+    package_digest: str | None = None
+    package_manifest_digest: str | None = None
 
 
 class RuntimeNotifyActivatedReq(BaseModel):
@@ -992,6 +995,10 @@ async def runtime_activate(
             body.name,
             version=body.version,
             slot=body.slot,
+            allow_prepare=body.auto_prepare,
+            source_manifest_digest=body.source_manifest_digest,
+            package_digest=body.package_digest,
+            package_manifest_digest=body.package_manifest_digest,
             space="default",
             webspace_id=webspace_id,
             emit_activation=False,

@@ -7,10 +7,28 @@ from __future__ import annotations
 
 import copy
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Mapping
 
 from adaos.domain.artifact_release import canonical_payload_digest as digest
 from adaos.services.ui_component_contracts import project_component_contract
+
+_INPUT_SCOPE = ContextVar('adaos_contract_input_scope', default=None)
+
+
+@contextmanager
+def component_input_scope(snapshot, *, required_ids=None, route='builder'):
+    """Core-only pins shared by generation, repair, increment and final transport."""
+    token = _INPUT_SCOPE.set({'snapshot': copy.deepcopy(snapshot), 'required_ids': required_ids, 'route': route})
+    try:
+        yield
+    finally:
+        _INPUT_SCOPE.reset(token)
+
+
+def current_component_input_scope():
+    return copy.deepcopy(_INPUT_SCOPE.get())
 
 
 class ContractInputRejected(ValueError):
@@ -170,8 +188,11 @@ def prepare_component_input(envelope: Mapping[str, Any], *, snapshot: Mapping[st
                   "binding_availability": {"status": "not_assessed", "production_callable": False},
                   "callable_tools": callable_tool_names(result),
                   "units": [unit for unit in snapshot["retrieval_units"] if unit["id"] in closure]}
-        result["messages"] = [*result.get("messages", []), {"role": "system", "content": json.dumps(
-            {"platform_contracts": packet}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))}]
+        content = json.dumps({"platform_contracts": packet}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if 'input' in result:
+            result['instructions'] = (str(result.get('instructions') or '') + '\n\n' + content).strip()
+        else:
+            result["messages"] = [*result.get("messages", []), {"role": "system", "content": content}]
     return result, admit_contract_input(result, snapshot=snapshot, required_ids=required_ids)
 
 

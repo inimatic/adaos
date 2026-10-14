@@ -44,7 +44,11 @@ def submit_request(
     # Scope this cutover to the admitted semantic proposer. General generation
     # retains its explicitly named compatibility backend until separately qualified.
     mode = (metadata or {}).get("builder_semantic_edit_mode")
-    if mode in {"bounded_ops", "full_document"}:
+    selected = (metadata or {}).get('builder_selected_target') or {}
+    from adaos.sdk.builder.semantic_ui import recognizes_request
+    managed_edit = (isinstance(selected, Mapping) and selected.get('object_type') in {'scenario', 'project'}
+                    and recognizes_request(statement))
+    if mode in {"bounded_ops", "full_document"} or managed_edit:
         from adaos.adapters.builder.legacy_dev_skill import WorkspaceSkillPrototypeExecution
         if _WORKSPACE_PORT is None:
             _WORKSPACE_PORT = WorkspaceSkillPrototypeExecution()
