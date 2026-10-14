@@ -166,6 +166,10 @@ jobs:
       PYTHONIOENCODING: utf-8
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       ADAOS_TESTING: "1"
+      # Existing CI credential is used only for exact, read-only checkouts.
+      # Prefer the dedicated modules token; the configured infrastructure
+      # integration token is a compatibility option, never GITHUB_TOKEN.
+      CONSUMER_READ_TOKEN: ${{ secrets.ADAOS_MODULES_TOKEN || secrets.INFRA_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -186,6 +190,7 @@ jobs:
           echo "client=$(git ls-tree HEAD src/adaos/integrations/adaos-client | awk '{print $3}')" >> "$GITHUB_OUTPUT"
           echo "backend=$(git ls-tree HEAD src/adaos/integrations/adaos-backend | awk '{print $3}')" >> "$GITHUB_OUTPUT"
       - name: Issue read-only token for private contract consumers
+        if: env.CONSUMER_READ_TOKEN == ''
         id: consumers-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
@@ -200,7 +205,7 @@ jobs:
           repository: inimatic/adaos-client
           ref: ${{ steps.consumer-pins.outputs.client }}
           path: src/adaos/integrations/adaos-client
-          token: ${{ steps.consumers-token.outputs.token }}
+          token: ${{ env.CONSUMER_READ_TOKEN || steps.consumers-token.outputs.token }}
           persist-credentials: false
       - name: Checkout exact Root contract consumer
         uses: actions/checkout@v4
@@ -208,7 +213,7 @@ jobs:
           repository: inimatic/adaos-backend
           ref: ${{ steps.consumer-pins.outputs.backend }}
           path: src/adaos/integrations/adaos-backend
-          token: ${{ steps.consumers-token.outputs.token }}
+          token: ${{ env.CONSUMER_READ_TOKEN || steps.consumers-token.outputs.token }}
           persist-credentials: false
       - name: Check generated component contracts
         run: uv run python scripts/generate_ui_component_contract.py --check
