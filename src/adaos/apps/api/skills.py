@@ -995,7 +995,7 @@ async def runtime_activate(
             body.name,
             version=body.version,
             slot=body.slot,
-            allow_prepare=body.auto_prepare,
+            allow_prepare=body.auto_prepare and not bool(body.package_digest or body.package_manifest_digest),
             source_manifest_digest=body.source_manifest_digest,
             package_digest=body.package_digest,
             package_manifest_digest=body.package_manifest_digest,

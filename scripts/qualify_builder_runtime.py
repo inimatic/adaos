@@ -21,7 +21,7 @@ from adaos.apps.cli.active_control import resolve_control_token
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
 from adaos.services.builder.delivery_qualification import qualify_message_hook, qualify_native_proposal_boundary
-from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore, build_artifact_package
+from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore, build_artifact_package, artifact_source_snapshot
 from adaos.domain.artifact_release import ArtifactPackageRef
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 
@@ -47,6 +47,8 @@ ctx = get_ctx()
 manager = SkillManager(git=ctx.git, paths=ctx.paths, caps=ctx.caps, settings=ctx.settings, bus=ctx.bus)
 previous = manager.active_runtime_package_identity('builder_skill')
 environment = manager._runtime_env('builder_skill')
+previous_source = environment.build_slot_paths(previous['version'], previous['slot']).src_dir / 'skills/builder_skill'
+previous_source_digest = artifact_source_snapshot(previous_source)['digest']
 candidate_slot = environment.select_inactive_slot(package.version)
 slot_path = environment.build_slot_paths(package.version, candidate_slot).root.resolve()
 runtime_root = (Path(ctx.paths.skills_dir()) / '.runtime/builder_skill').resolve()
@@ -77,6 +79,9 @@ def activate(version, slot, gate):
     observed = manager.active_runtime_package_identity('builder_skill')
     if observed['version'] != version or observed['slot'] != slot:
         raise ValueError('Activation did not converge to the exact selection')
+    if version != package.version:
+        if artifact_source_snapshot(previous_source)['digest'] != previous_source_digest:
+            raise ValueError('Rollback changed the previous source bytes')
     rows.append({'gate': gate, 'identity': observed, 'ok': True})
     atomic_write_json(delivery / 'runtime-progress.json', {'rows': rows, 'complete': False})
     print('runtime-gate=' + gate + ' ok=true', flush=True)

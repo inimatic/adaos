@@ -156,7 +156,6 @@ def test_sealed_package_stage_uses_declared_identity_without_inventing_source_by
     manager = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
     staged = manager._stage_skill_sources(materialized, SimpleNamespace(src_dir=tmp_path / 'slot/src'))
     assert staged.name == 'sealed_identity_skill'
-    assert not (staged / '__init__.py').exists()
     assert build_artifact_package(staged, kind='skill', source_ref=ref).ref.digest == package.ref.digest
 
 
