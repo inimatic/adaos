@@ -154,7 +154,7 @@ def test_sealed_package_stage_uses_declared_identity_without_inventing_source_by
     materialized = tmp_path / 'arbitrary-materialization-directory'
     store.materialize(package.ref.digest, materialized)
     manager = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
-    staged = manager._stage_skill_sources(materialized, SimpleNamespace(src_dir=tmp_path / 'slot/src'))
+    staged = manager._stage_skill_sources(materialized, SimpleNamespace(src_dir=tmp_path / 'slot/src'), sealed_source=True)
     assert staged.name == 'sealed_identity_skill'
     assert build_artifact_package(staged, kind='skill', source_ref=ref).ref.digest == package.ref.digest
 

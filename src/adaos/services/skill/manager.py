@@ -2293,7 +2293,7 @@ class SkillManager:
         slot = env.build_slot_paths(version, slot_name)
 
         try:
-            staged_dir = self._stage_skill_sources(skill_dir, slot)
+            staged_dir = self._stage_skill_sources(skill_dir, slot, **({'sealed_source': True} if package_digest else {}))
         except Exception:
             env.cleanup_slot(version, slot_name)
             raise
@@ -4293,7 +4293,7 @@ class SkillManager:
             )
         raise NotImplementedError(f"runtime type '{runtime_type}' is not supported")
 
-    def _stage_skill_sources(self, source: Path, slot: SkillSlotPaths) -> Path:
+    def _stage_skill_sources(self, source: Path, slot: SkillSlotPaths, *, sealed_source: bool = False) -> Path:
         destination_root = slot.src_dir
         namespace_root = destination_root / "skills"
         # A materialized content-addressed package need not live in a directory
@@ -4327,7 +4327,7 @@ class SkillManager:
         )
         shutil.copytree(source, target, ignore=ignore, dirs_exist_ok=True)
         self._verify_staged_declaration_artifacts(source, target)
-        sealed_package = (source / '.adaos/package-manifest.json').is_file()
+        sealed_package = sealed_source
         package_init = target / "__init__.py"
         if not package_init.exists() and not sealed_package:
             package_init.write_text("", encoding="utf-8")
