@@ -50,6 +50,7 @@ def main() -> int:
     parser.add_argument('--cwd', type=Path, default=ROOT)
     parser.add_argument('--junit', type=Path)
     parser.add_argument('--public-junit', type=Path)
+    parser.add_argument('--require-complete', action='store_true', help='Fail if any required test was skipped')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if not re.fullmatch(r'[a-z0-9-]+', args.label):
@@ -57,6 +58,8 @@ def main() -> int:
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command or bool(args.junit) != bool(args.public_junit):
         parser.error('command required; junit and public-junit must be paired')
+    if args.require_complete and not args.junit:
+        parser.error('require-complete requires a JUnit receipt')
     diagnostics = ROOT / '.tmp/private-contract-checks'
     diagnostics.mkdir(parents=True, exist_ok=True)
     log = diagnostics / f'{args.label}.log'
@@ -69,6 +72,9 @@ def main() -> int:
     if args.junit:
         try:
             summary.update(public_junit(args.junit, args.public_junit))
+            if args.require_complete and summary['skipped']:
+                summary['receipt'] = 'incomplete'
+                status = status or 1
         except (OSError, ET.ParseError):
             summary['receipt'] = 'missing-or-invalid'
             status = status or 1

@@ -30,6 +30,7 @@ def test_component_contract_tests_and_generators_are_required_ci_gates():
     assert 'INFRA_DISPATCH_TOKEN' not in str(job)
     assert 'scripts/run_private_contract_check.py' in commands
     assert '--public-junit reports/builder-contracts.xml' in commands
+    assert '--require-complete' in commands
     assert 'npm run test:boundaries' in commands and 'tsc --noEmit' in commands
     assert 'node --test scripts/generate-client-capability-inventory.spec.mjs' in commands
     assert 'component-contract-write-proof.test.mjs' in commands

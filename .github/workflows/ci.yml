@@ -227,9 +227,11 @@ jobs:
           ADAOS_TEST_BUILDER_SOURCE: ${{ github.workspace }}/.tmp/ci-builder-source/skills/builder_skill
         run: |
           uv run python scripts/run_private_contract_check.py --label builder-contracts \
+            --require-complete \
             --junit .tmp/private-contract-checks/builder-contracts.xml \
             --public-junit reports/builder-contracts.xml -- \
             python -m pytest -q --strict-markers -o importmode=importlib \
+            --basetemp=.tmp/ci-builder-pytest \
             --junitxml=.tmp/private-contract-checks/builder-contracts.xml \
             tests/test_ui_component_contracts.py \
             tests/test_contract_context_admission.py \

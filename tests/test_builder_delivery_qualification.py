@@ -1,6 +1,7 @@
 import pytest
 
 from pathlib import Path
+import os
 from adaos.services.builder.delivery_qualification import DeliveryQualificationError, qualify_message_hook, qualify_native_proposal_boundary
 
 HOOK = '''def _builder_llm_messages(request, final_user_prompt):
@@ -14,28 +15,16 @@ HOOK = '''def _builder_llm_messages(request, final_user_prompt):
     return messages, purposes
 '''
 
-# Public CI has no private Workspace checkout. This independent boundary double
-# tests the qualifier; live delivery executes the actual package entry point.
-NATIVE = '''def _try_bounded_semantic_request(*, instruction, ws, session, binding, topic, _meta, auto_apply, output_mode):
-    admission = sdk_builder_semantic_ui.admit(project_ref='scenario:scenario', instruction=instruction,
-        write_properties={_meta['builder_semantic_write_ref']: [_meta['builder_semantic_write_property']]})
-    prepared = sdk_builder_semantic_ui.propose(admission_id=admission['admission_id'])
-    metrics = prepared.get("execution_metrics") or {}
-    common = dict(model_calls=prepared.get('model_calls', 0), execution_metrics=metrics,
-        semantic_admission=admission["admission_id"])
-    common['findings'] = prepared.get('findings', [])
-    if prepared['status'] != 'planned':
-        return {**common, 'status': 'semantic_proposal_' + prepared['status']}
-    if not auto_apply:
-        return {**common, 'status': 'semantic_proposal_ready'}
-    result = sdk_builder_semantic_ui.apply(prepared['request'], execution_metrics=metrics)
-    return {**common, 'status': 'semantic_proposal_applied', 'semantic_transaction': result}
-'''
+# HOOK is a deliberate qualifier unit double. Native entry-point checks below
+# require the actual declared source and must not substitute a synthetic handler.
 
 
 def declared_source():
-    path = Path(__file__).resolve().parents[1] / '.adaos/workspace/skills/builder_skill/handlers/main.py'
-    return path.read_text(encoding='utf-8') if path.is_file() else NATIVE
+    declared = os.environ.get('ADAOS_TEST_BUILDER_SOURCE')
+    root = Path(declared) if declared else Path(__file__).resolve().parents[1] / '.adaos/workspace/skills/builder_skill'
+    path = root / 'handlers/main.py'
+    assert path.is_file(), 'Native qualification requires declared source; no synthetic fallback is allowed'
+    return path.read_text(encoding='utf-8')
 
 
 def test_hook_gate_requires_real_opt_in_and_legacy_safe_assembly():

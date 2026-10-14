@@ -33,3 +33,15 @@ def test_real_command_failure_is_preserved_without_console_output():
     assert result.returncode == 23
     assert 'PRIVATE SOURCE' not in result.stdout + result.stderr
     assert '"exit_code": 23' in result.stdout
+
+
+def test_required_cohort_cannot_succeed_with_skipped_tests(tmp_path):
+    source = tmp_path / 'private.xml'
+    destination = tmp_path / 'public.xml'
+    source.write_text('<testsuites><testsuite><testcase name="PRIVATE"><skipped/></testcase></testsuite></testsuites>')
+    result = subprocess.run([sys.executable, str(SCRIPT), '--label', 'complete-regression', '--require-complete',
+                             '--junit', str(source), '--public-junit', str(destination), '--',
+                             sys.executable, '-c', 'raise SystemExit(0)'], capture_output=True, text=True)
+    assert result.returncode == 1
+    assert '"receipt": "incomplete"' in result.stdout
+    assert 'PRIVATE' not in result.stdout + result.stderr

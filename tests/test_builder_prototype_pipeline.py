@@ -190,7 +190,7 @@ def test_other_bounded_repairs_keep_typed_relationship_closure(contract, scope):
 
 
 @pytest.mark.parametrize("source", ["workspace", "installed"])
-def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch, source):
+def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch, tmp_path, source):
     import ast
     import os
     from pathlib import Path
@@ -199,19 +199,39 @@ def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch, so
     from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
     repo = Path(__file__).parents[1]
     skills_root = repo / ".adaos/workspace/skills"
-    if source == "workspace":
+    declared = os.environ.get('ADAOS_TEST_BUILDER_SOURCE')
+    if declared:
+        declared_root = Path(declared)
+        path = declared_root / 'handlers/main.py'
+        assert path.is_file(), 'Declared CI Builder source is missing; integration cannot be skipped'
+        if source == 'installed':
+            from adaos.domain.artifact_release import ArtifactSourceRef
+            from adaos.services.artifact_pipeline.packages import (
+                ContentAddressedPackageStore, artifact_source_snapshot, build_artifact_package,
+            )
+            pin = json.loads((repo / 'e2e/builder/development/contract-conformance/builder-source-pin.json').read_text())
+            package = build_artifact_package(declared_root, kind='skill', source_ref=ArtifactSourceRef(
+                forge='local', repository='declared-builder-source',
+                revision=artifact_source_snapshot(declared_root)['digest'], path_scope=(pin['source_path'] + '/',)))
+            assert package.ref.digest == pin['package_digest'], 'Materialization must use the exact qualified package'
+            store = ContentAddressedPackageStore(tmp_path / 'package-store')
+            store.put(package.archive_bytes, expected_digest=package.ref.digest)
+            target = tmp_path / 'materialized-builder'
+            store.materialize(package.ref.digest, target)
+            path = target / 'handlers/main.py'
+    elif source == "workspace":
         path = skills_root / "builder_skill/handlers/main.py"
     else:
         if not (skills_root / ".runtime/builder_skill/current_runtime.json").exists():
-            pytest.skip("Installed Builder runtime fixture absent")
+            pytest.fail("Installed Builder runtime fixture absent; configure ADAOS_TEST_BUILDER_SOURCE")
         runtime = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="builder_skill")
         version = runtime.resolve_active_version()
         if not version:
-            pytest.skip("Installed Builder runtime inactive")
+            pytest.fail("Installed Builder runtime inactive")
         slot = runtime.build_slot_paths(version, runtime.read_active_slot(version))
         path = slot.src_dir / "skills/builder_skill/handlers/main.py"
     if not path.exists():
-        pytest.skip("Installed Builder integration fixture absent")
+        pytest.fail("Declared Builder integration fixture absent")
     tree = ast.parse(path.read_text(encoding="utf-8"))
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_builder_llm_messages")
     namespace = {"Mapping": Mapping, "Any": Any, "os": os, "_compact_json": json.dumps,
