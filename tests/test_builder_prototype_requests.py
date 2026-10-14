@@ -31,6 +31,21 @@ class FakePrototypeExecution:
         return {"ok": True, "session": {"id": session_id}}
 
 
+def test_selected_native_undo_receives_the_same_fenced_conversation_as_model_edits():
+    from adaos.services.builder.prototype_requests import submit_request
+    port = FakePrototypeExecution()
+    submit_request(port, 'Undo the last semantic change', webspace_id='host', locale='en',
+        metadata={'builder_selected_target': {'object_type': 'scenario', 'object_id': 'owned'}})
+    meta = port.turns[-1][0]['_meta']
+    assert meta['thread_id'] == 'prompt-project:scenario:owned'
+    assert meta['builder_topic']['scenario_id'] == 'owned'
+    import pytest
+    with pytest.raises(ValueError, match='conversation target disagree'):
+        submit_request(port, 'Undo the last semantic change', webspace_id='host', locale='en',
+            metadata={'builder_selected_target': {'object_type': 'scenario', 'object_id': 'owned'},
+                      'thread_id': 'prompt-project:scenario:someone-else'})
+
+
 def test_submit_request_admits_intent_and_brief_before_execution() -> None:
     port = FakePrototypeExecution()
 

@@ -133,6 +133,11 @@ def _response_metrics(job: Mapping[str, Any], effort: str) -> dict[str, Any]:
     job_id = job.get('job_id') or (job.get('job') or {}).get('id')
     if job_id:
         metrics.setdefault('source_refs', [f'llm_job:{job_id}'])
+    if 'cost_usd' not in metrics:
+        from .model_costs import estimate_observed_model_cost
+        estimate = estimate_observed_model_cost(metrics)
+        if estimate:
+            metrics.update(cost_usd=estimate['estimated_usd'], cost_basis='estimate')
     return metrics
 
 

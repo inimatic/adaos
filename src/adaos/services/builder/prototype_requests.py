@@ -82,8 +82,10 @@ def submit_request(
     }
     from .semantic_request_scope import request_target
     target_ref = None
-    if meta.get('builder_semantic_edit_mode') in {'bounded_ops', 'full_document'}:
-        selected = meta.get('builder_selected_target') or {}
+    selected = meta.get('builder_selected_target') or {}
+    from .semantic_edit_requests import parse_request
+    semantic_request = (selected.get('object_type') == 'scenario' and parse_request(text) is not None)
+    if meta.get('builder_semantic_edit_mode') in {'bounded_ops', 'full_document'} or semantic_request:
         if selected.get('object_type') != 'scenario' or not selected.get('object_id'):
             raise ValueError('A bounded SDK edit requires an explicit scenario target')
         target_ref = 'scenario:' + str(selected['object_id'])

@@ -28,8 +28,9 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json
 parser = argparse.ArgumentParser(__doc__)
 parser.add_argument('--delivery', type=Path, required=True)
 parser.add_argument('--run', action='store_true')
+parser.add_argument('--verify-restart', action='store_true')
 args = parser.parse_args()
-if os.getenv('ENV_TYPE') != 'dev' or not args.run:
+if os.getenv('ENV_TYPE') != 'dev' or not (args.run or args.verify_restart):
     parser.error('Requires ENV_TYPE=dev and --run')
 delivery = args.delivery.resolve()
 if not delivery.is_relative_to(ROOT / 'e2e/artifacts'):
@@ -45,6 +46,27 @@ if rebuilt.ref.digest != package.digest:
 init_ctx(Settings.from_sources())
 ctx = get_ctx()
 manager = SkillManager(git=ctx.git, paths=ctx.paths, caps=ctx.caps, settings=ctx.settings, bus=ctx.bus)
+if args.verify_restart:
+    result = json.loads((delivery / 'runtime-result.json').read_text(encoding='utf-8'))
+    actual = manager.active_runtime_package_identity('builder_skill')
+    if actual != result['active']:
+        raise ValueError('Restart changed the active package identity')
+    env = manager._runtime_env('builder_skill')
+    active_source = env.build_slot_paths(actual['version'], actual['slot']).src_dir / 'skills/builder_skill'
+    if build_artifact_package(active_source, kind='skill', source_ref=package.source_ref).ref.digest != package.digest:
+        raise ValueError('Restart changed the actual package bytes')
+    http = requests.Session(); http.trust_env = False
+    http.headers['Authorization'] = 'Bearer ' + resolve_control_token(base_url='http://127.0.0.1:8777')
+    response = http.get('http://127.0.0.1:8777/api/skills/runtime/status/builder_skill', timeout=30)
+    response.raise_for_status()
+    state = response.json().get('state', response.json())
+    if not state.get('ready') or state.get('version') != package.version:
+        raise ValueError('Restarted API is not ready on the selected version')
+    result['restart_qualified'] = True
+    result['restart_state'] = state
+    atomic_write_json(delivery / 'runtime-result.json', result)
+    print(json.dumps({'ok': True, 'restart_qualified': True, 'active': actual}))
+    raise SystemExit(0)
 previous = manager.active_runtime_package_identity('builder_skill')
 environment = manager._runtime_env('builder_skill')
 previous_source = environment.build_slot_paths(previous['version'], previous['slot']).src_dir / 'skills/builder_skill'
