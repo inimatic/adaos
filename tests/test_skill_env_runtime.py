@@ -141,6 +141,25 @@ def test_stage_skill_sources_tolerates_empty_directory_residue(monkeypatch, tmp_
     assert (staged / "handlers" / "main.py").is_file()
 
 
+def test_sealed_package_stage_uses_declared_identity_without_inventing_source_bytes(tmp_path):
+    from adaos.services.artifact_pipeline.packages import build_artifact_package, ContentAddressedPackageStore
+    source = tmp_path / 'source'
+    (source / 'handlers').mkdir(parents=True)
+    (source / 'skill.yaml').write_text('name: sealed_identity_skill\nversion: 1.0.0\nentry: handlers/main.py\n', encoding='utf-8')
+    (source / 'handlers/main.py').write_text('def handle(): return True\n', encoding='utf-8')
+    ref = ArtifactSourceRef(forge='test', repository='fixtures', revision='0' * 40, path_scope=('skills/sealed_identity_skill/',))
+    package = build_artifact_package(source, kind='skill', source_ref=ref)
+    store = ContentAddressedPackageStore(tmp_path / 'packages')
+    store.put(package.archive_bytes)
+    materialized = tmp_path / 'arbitrary-materialization-directory'
+    store.materialize(package.ref.digest, materialized)
+    manager = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    staged = manager._stage_skill_sources(materialized, SimpleNamespace(src_dir=tmp_path / 'slot/src'))
+    assert staged.name == 'sealed_identity_skill'
+    assert not (staged / '__init__.py').exists()
+    assert build_artifact_package(staged, kind='skill', source_ref=ref).ref.digest == package.ref.digest
+
+
 def test_prepare_runtime_serializes_same_skill_candidate(monkeypatch) -> None:
     ctx = get_ctx()
     workspace_root = Path(ctx.paths.skills_dir())

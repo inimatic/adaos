@@ -2711,6 +2711,20 @@ class SkillManager:
             manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
             if not manifest_path.exists():
                 raise RuntimeError(f"slot {target_slot} of version {target_version} is not prepared")
+        slot_source_root = slot_paths.src_dir / 'skills' / name
+        if not allow_prepare or package_digest is not None:
+            actual_version = str(self._load_manifest(slot_source_root).get('version') or '')
+            if actual_version != str(target_version):
+                raise RuntimeError('exact_runtime_source_version_incompatible')
+        selected_package = str(slot_meta.get('package_digest') or '')
+        if selected_package and (slot_source_root / '.adaos/package-manifest.json').is_file():
+            from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore, build_artifact_package
+            packages = ContentAddressedPackageStore(Path(self.ctx.paths.state_dir()) / 'artifact_pipeline/packages')
+            verified = packages.verify(selected_package)
+            rebuilt = build_artifact_package(slot_source_root, kind='skill', source_ref=verified.ref.source_ref)
+            if (verified.ref.artifact_id != name or verified.ref.version != str(target_version)
+                    or rebuilt.ref.digest != selected_package):
+                raise RuntimeError('exact_runtime_package_source_incompatible')
         target_manifest = self._read_json_dict(manifest_path)
         self._ensure_core_compatible(target_manifest, skill_name=name, stage="activate")
         lifecycle = self._slot_lifecycle_state(metadata=metadata, slot=target_slot)
