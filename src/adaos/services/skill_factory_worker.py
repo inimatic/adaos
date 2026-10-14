@@ -6237,11 +6237,31 @@ class LocalSkillFactoryWorker:
             from adaos.services.capability_binding_state.registry_projection import SemanticRegistryProjection
             registry_root = self.repo_root / '.adaos/workspace'
             projection = SemanticRegistryProjection(registry_root, self.state_dir)
+            actual_revision = subprocess.check_output(['git', '-C', str(registry_root), 'rev-parse', 'HEAD'], text=True).strip()
             discovery = qualified_semantic_discovery(discovery_request, registry_root=registry_root,
-                index=projection.read_index(), registry_revision=discovery_request['snapshot']['registry_revision'],
+                index=projection.read_index(), registry_revision=actual_revision,
                 local_admit=(lambda candidate: installed_binding_admission(candidate, state_dir=self.state_dir,
                     application_ref=application_ref, environment_profile=discovery_request['environment_profile'])) if application_ref else None,
                 task_tools=task_tools)
+            # Installed history is a canonical authoring reference, not an
+            # eligible binding. Do not feed rejected alternatives back to the
+            # model beside the compatibility-filtered discovery result.
+            eligible = [row['candidate'] for row in discovery['candidates']]
+            for requirement in requirements:
+                bindings = []
+                for binding in requirement['reusable_bindings']:
+                    candidates = [candidate for candidate in eligible
+                        if candidate['binding_definition']['digest'] == binding['binding']['digest']
+                        and candidate['capability_contract']['digest'] == requirement['selected_digest']]
+                    if not candidates:
+                        continue
+                    delivery_digests = {candidate['delivery']['digest'] for candidate in candidates}
+                    binding['deliveries'] = [item for item in binding['deliveries'] if item['digest'] in delivery_digests]
+                    package_digests = {candidate['delivery']['package']['digest'] for candidate in candidates}
+                    binding['delivery_interfaces'] = [item for item in binding.get('delivery_interfaces', [])
+                        if item['compiler_view']['package']['digest'] in package_digests]
+                    bindings.append(binding)
+                requirement['reusable_bindings'] = bindings
         return {
             "schema": "adaos.builder.portable_contract_reuse.v2",
             **({'semantic_discovery': discovery} if discovery is not None else {}),

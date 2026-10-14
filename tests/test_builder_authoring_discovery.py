@@ -33,3 +33,38 @@ def test_normal_component_authoring_uses_exact_locators_and_task_dependency_clos
     assert selected['required_closure'] == ['ui.queryToolbar', 'ui.table']
     assert selected['binding_availability'] == {'authoring': 'available', 'production': 'not_assessed'}
     assert not selected['callable_tools'] and all(row['locator']['expected_source_digest'] for row in selected['candidates'])
+
+
+def test_normal_worker_filters_rejected_bindings_and_uses_actual_registry_revision(tmp_path):
+    import subprocess
+    import pytest
+    from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
+    from adaos.services.capability_binding_state import PortableContractCatalog
+    from adaos.services.capability_binding_state.registry_query import SemanticRegistryQueryError
+    profile, capability, binding, delivery, evidence, requirement = _fixture_records()
+    registry = tmp_path / 'repo/.adaos/workspace'
+    index = _write_registry(registry, (capability, binding, delivery, evidence))
+    for args in [['init'], ['add', '.'], ['-c', 'user.name=E2E', '-c', 'user.email=e2e@example.invalid', 'commit', '-m', 'Frozen registry']]:
+        subprocess.run(['git', '-C', str(registry), *args], check=True, capture_output=True)
+    revision = subprocess.check_output(['git', '-C', str(registry), 'rev-parse', 'HEAD'], text=True).strip()
+    state = tmp_path / 'state'
+    catalog = PortableContractCatalog(state/'capability-binding-state/portable')
+    for record in (capability, binding, delivery, evidence):
+        catalog.put(record)
+    worker = LocalSkillFactoryWorker(state_dir=state, repo_root=tmp_path/'repo',
+        dev_skills_root=tmp_path/'skills', dev_scenarios_root=tmp_path/'scenarios')
+    webui = {'ui': {'application': {'desktop': {'pageSchema': {'meta': {'builder': {'cbs_intent': {
+        'schema': 'adaos.builder.cbs_intent.v1', 'requirements': [{'id': 'mail', 'capability_ref': capability.capability_ref,
+            'contract_range': '^1.0.0', 'origin': 'human_explicit'}]}}}}}}}}
+    query = _query(index, profile, requirement)
+    query['snapshot']['registry_revision'] = revision
+    result = worker._portable_contract_reuse_bundle(webui, discovery_request=query)
+    assert result['requirements'][0]['reusable_bindings']
+    assert not result['semantic_discovery']['callable_tools']
+    query['evidence_inputs']['as_of'] = '2026-10-14T00:00:00+00:00'
+    rejected = worker._portable_contract_reuse_bundle(webui, discovery_request=query)
+    assert rejected['requirements'][0]['reusable_bindings'] == []
+    query['snapshot']['registry_revision'] = '0' * 40
+    with pytest.raises(SemanticRegistryQueryError) as error:
+        worker._portable_contract_reuse_bundle(webui, discovery_request=query)
+    assert error.value.code == 'snapshot_drift'

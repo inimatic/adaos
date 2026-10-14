@@ -48,7 +48,7 @@ def consume_context_units(projection: Mapping[str, Any], *, consumer: str, requi
     if any(consumer not in by_id[name]['consumer_masks'] for name in closure):
         raise ValueError('context.consumer_not_admitted')
     return {'projection_digest': projection['projection_digest'], 'required_closure': sorted(closure),
-            'units': [copy.deepcopy(by_id[name]) for name in sorted(closure)]}
+            'units': [copy.deepcopy(unit) for unit in projection['units'] if unit['id'] in closure]}
 
 
 def publish_context_units(projection: Mapping[str, Any], *, read=None) -> dict[str, Any]:

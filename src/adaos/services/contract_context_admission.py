@@ -183,11 +183,16 @@ def prepare_component_input(envelope: Mapping[str, Any], *, snapshot: Mapping[st
     closure = dependency_closure(snapshot, required_ids)
     result = copy.deepcopy(dict(envelope))
     if not _carriers(result):
+        from adaos.services.contract_projections import project_context_units, consume_context_units
+        projection = project_context_units(snapshot=snapshot)
+        selected = consume_context_units(projection, consumer='builder.inline', required_ids=closure)
+        units = [{key: value for key, value in unit.items() if key not in ('consumer_masks', 'source_kind')}
+                 for unit in selected['units']]
         packet = {"provenance": snapshot["provenance"], "discovery_policy": snapshot["discovery_policy"],
                   "semantic_support": {"contract_id": snapshot["provenance"]["contract_id"], "supported": True},
                   "binding_availability": {"status": "not_assessed", "production_callable": False},
                   "callable_tools": callable_tool_names(result),
-                  "units": [unit for unit in snapshot["retrieval_units"] if unit["id"] in closure]}
+                  "units": units}
         content = json.dumps({"platform_contracts": packet}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if 'input' in result:
             result['instructions'] = (str(result.get('instructions') or '') + '\n\n' + content).strip()

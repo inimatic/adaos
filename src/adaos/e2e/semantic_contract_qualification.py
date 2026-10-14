@@ -84,6 +84,11 @@ def execute(args):
     http.headers['X-AdaOS-Token'] = resolve_control_token(base_url='http://127.0.0.1:8777')
     runtime, _, handler = installed_runtime(http, repo)
     selected_cases = cases(repo)
+    from adaos.services.contract_projections import project_context_units, publish_context_units, consume_context_units
+    common_units = project_context_units(sdk_symbols=['adaos.sdk.builder.semantic_ui.admit', 'adaos.sdk.resources.query'])
+    write(output/'shared-context-publication.json', publish_context_units(common_units))
+    write(output/'e2e-consumer-units.json', consume_context_units(common_units, consumer='e2e',
+        required_ids=[unit['id'] for unit in common_units['units']]))
     plan = {'schema': 'adaos.e2e.semantic_contract_qualification.v1', 'model': 'gpt-5', 'reasoning_effort': 'high',
         'max_output_tokens': 16384, 'max_usd': args.max_usd, 'repetitions': args.repetitions, 'runtime': runtime,
         'scope': 'Native prompt/model/proposal, exact preservation, renderer usability floors, writes, replay/undo and local prototype binding substitution; not unconstrained initial generation or production provider interoperability',
