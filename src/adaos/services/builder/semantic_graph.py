@@ -71,13 +71,41 @@ def scope_value_equal(left, right):
     return type(left) is type(right) and left == right
 
 
+def _command(document, ref):
+    kind, _, identity = ref.partition(':')
+    matches = [item for item in document['commands'] if kind == 'command' and item['id'] == identity]
+    if len(matches) != 1:
+        raise BuilderWorkflowError('command ref must resolve exactly once')
+    return matches[0]
+
+
+def guard_condition(document, ref):
+    condition = (_command(document, ref).get('guard') or {}).get('when')
+    if not isinstance(condition, dict) or set(condition) != {'field_ref', 'operator', 'value'} or condition['operator'] != 'equals':
+        raise BuilderWorkflowError('guard value edit requires an existing simple equals predicate')
+    return condition
+
+
+def guard_values(document, ref):
+    command = _command(document, ref)
+    condition = guard_condition(document, ref)
+    view = _view(document, 'view:' + command['view_ref'])
+    resource = next(item for item in document['resources'] if item['id'] == view['resource_ref'])
+    field = next(item for item in resource['fields'] if item['id'] == condition['field_ref'])
+    values = [item['value'] for item in field.get('options', [])] or [item.get(field['id']) for item in resource['records']]
+    values.append(condition['value'])
+    return [value for index, value in enumerate(values) if value not in (None, '') and
+        not any(scope_value_equal(value, other) for other in values[:index])]
+
+
 def operation_write_set(ops: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Derive actual property writes from checked operations, never caller claims."""
     return [{"seq": item["seq"], "kind": item["kind"], "ref": item["ref"],
              "property": ("title" if item["ref"].startswith("view:") else "label") + "." + item["locale"]
-                         if item["kind"] == "label.set" else scope_property(item['field_ref']) if item['kind'] == 'view.scope.value.set' else "field_refs",
+                         if item["kind"] == "label.set" else 'guard.when.value' if item['kind'] == 'command.guard.value.set'
+                         else scope_property(item['field_ref']) if item['kind'] == 'view.scope.value.set' else "field_refs",
              "before": copy.deepcopy(item["expected"]),
-             "after": copy.deepcopy(item["text"] if item["kind"] == "label.set" else item['value'] if item['kind'] == 'view.scope.value.set' else item["field_refs"])}
+             "after": copy.deepcopy(item["text"] if item["kind"] == "label.set" else item['value'] if item['kind'] in ('view.scope.value.set', 'command.guard.value.set') else item["field_refs"])}
             for item in ops]
 
 
@@ -144,6 +172,17 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
             raise BuilderWorkflowError("semantic operation sequence must be contiguous")
         if operation["ref"] not in write_refs:
             raise BuilderWorkflowError("semantic operation is outside the admitted write scope")
+        if operation['kind'] == 'command.guard.value.set':
+            condition = guard_condition(result, operation['ref'])
+            if digest(condition['value']) != digest(operation['expected']):
+                raise BuilderWorkflowError('semantic guard precondition failed')
+            matching = [value for value in guard_values(result, operation['ref']) if scope_value_equal(value, operation['value'])]
+            if not matching:
+                raise BuilderWorkflowError('guard value must remain within its declared typed domain')
+            value = matching[0]
+            inverse.append({**operation, 'expected': copy.deepcopy(value), 'value': copy.deepcopy(condition['value'])})
+            condition['value'] = copy.deepcopy(value)
+            continue
         if operation['kind'] == 'view.scope.value.set':
             view = _view(result, operation['ref'])
             scoped = scope_filter(result, operation['ref'], operation['field_ref'])
@@ -322,8 +361,8 @@ class SemanticGraphService:
                   "dependency_refs": [], "admitted_write_refs": [], "transaction": None,
                   "read_scope": "full_semantic_source_and_effective_compiled_ui",
                   "inventory_scope": "resources_fields_views_relationships_commands",
-                  "supported_operations": ["label.set", "view.fields.reorder", "view.scope.value.set"],
-                  "supported_operations_text": "label.set, view.fields.reorder, view.scope.value.set"}
+                  "supported_operations": ["label.set", "view.fields.reorder", "view.scope.value.set", "command.guard.value.set"],
+                  "supported_operations_text": "label.set, view.fields.reorder, view.scope.value.set, command.guard.value.set"}
         with _LOCK:
             if not self._file(root, "semantic.webui.json").is_file():
                 packet["status_label"] = "Semantic source is missing"

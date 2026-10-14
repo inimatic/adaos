@@ -95,7 +95,9 @@ def semantic_refs(document: Mapping[str, Any]) -> list[dict[str, Any]]:
                     predicate_fields(child)
         predicate_fields(guard.get('when'))
         add(f"command:{command['id']}", 'command', command['label'],
-            [f"view:{view['id']}", *[field_ref(view['resource_ref'], ref) for ref in fields]])
+            [f"view:{view['id']}", *[field_ref(view['resource_ref'], ref) for ref in fields]],
+            ['guard.when.value'] if isinstance(guard.get('when'), Mapping) and set(guard['when']) == {'field_ref', 'operator', 'value'}
+                and guard['when']['operator'] == 'equals' else [])
     if len(nodes) > 1024 or len({item['ref'] for item in nodes}) != len(nodes):
         raise BuilderWorkflowError('semantic reference inventory exceeds capacity or has duplicate refs')
     for node in nodes:

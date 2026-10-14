@@ -6,6 +6,29 @@ from test_builder_semantic_label_requests import native_label_builder  # noqa: F
 from test_builder_semantic_inspector import graph_project  # noqa: F401
 from adaos.services.builder.semantic_admission import SemanticAdmissionService, PROPOSAL_SCHEMA
 from adaos.services.builder.semantic_proposer import SemanticProposer
+from adaos.services.builder.semantic_graph import guard_values, guard_condition
+
+
+@pytest.mark.parametrize('mode', ['bounded_ops', 'full_document'])
+def test_native_guard_policy_authoring_preserves_every_other_obligation(native_proposer, monkeypatch, mode):
+    module, workflow, root, document = native_proposer
+    admission = SemanticAdmissionService.from_context()
+    before = guard_condition(document, 'command:complete')['value']
+    value = next(item for item in guard_values(document, 'command:complete') if item != before)
+    candidate = json.loads(json.dumps(document))
+    guard_condition(candidate, 'command:complete')['value'] = value
+    output = ({'schema': PROPOSAL_SCHEMA, 'status': 'proposed', 'message': '', 'ops': [
+        {'kind': 'command.guard.value.set', 'ref': 'command:complete', 'value': value}]} if mode == 'bounded_ops' else
+        {'status': 'proposed', 'message': '', 'semantic_document': candidate})
+    proposer = SemanticProposer(admission, submit=lambda **kw: {'job_id': 'native.guard.job'},
+        wait=lambda *a, **kw: {'job_id': 'native.guard.job', 'status': 'succeeded', 'output_text': json.dumps(output)})
+    monkeypatch.setattr(module.sdk_builder_semantic_ui, 'propose', proposer.propose)
+    result = module.chat(text='Change only the complete guard value', webspace_id='builder-host', _meta={
+        'source_message_id': 'native.guard.user', 'builder_semantic_edit_mode': mode,
+        'builder_semantic_write_ref': 'command:complete', 'builder_semantic_write_property': 'guard.when.value',
+        'builder_llm_model': 'gpt-5'})
+    assert result['status'] == 'semantic_proposal_applied', result
+    assert json.loads((root/'semantic.webui.json').read_text()) == candidate
 
 
 @pytest.fixture

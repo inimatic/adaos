@@ -64,6 +64,7 @@ from adaos.services.builder_context import (
 )
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_mcp import task_scope_enabled_tools
+from adaos.services.mcp_tool_scope import effective_mcp_tool_scope
 from adaos.services.skill_factory_sources import (
     SourceSnapshotError,
     materialize_source_snapshot,
@@ -4425,7 +4426,7 @@ def _root_mcp_profile_from_assignment(
             _string_list(mcp.get("scope") or mcp.get("requested_scope")),
             bound_target_id=bound_target_id,
         )
-        if explicit_tools:
+        if 'enabled_tools' in root:
             scoped_tool_set = set(scoped_tools)
             admitted_tools = [
                 tool
@@ -4441,10 +4442,8 @@ def _root_mcp_profile_from_assignment(
                         admitted_tools.append(replacement)
         else:
             admitted_tools = scoped_tools
-        if not admitted_tools:
-            raise ValueError("task-scoped Root MCP lease admits no supported tools")
         profile["enabled_tools"] = admitted_tools
-    elif explicit_tools:
+    elif 'enabled_tools' in root:
         profile["enabled_tools"] = explicit_tools
     for key in ("lease_id", "token_ref", "expires_at"):
         value = str(mcp.get(key) or root.get(key) or "").strip()
@@ -4470,6 +4469,9 @@ def _root_mcp_profile_from_assignment(
         profile["default_tools_approval_mode"] = approval
     if include_private_token and token:
         profile["_bearer_token_value"] = token
+    effective_scope = effective_mcp_tool_scope(profile)
+    if effective_scope.tools is not None:
+        profile['enabled_tools'] = list(effective_scope.tools)
     return profile
 
 
@@ -4506,13 +4508,9 @@ def _model_root_mcp_profile(
     if "read_development_tickets" not in scopes:
         return None
     ticket_tools = task_scope_enabled_tools(["read_development_tickets"])
-    admitted_tools = {
-        str(item).strip()
-        for item in profile.get("enabled_tools") or []
-        if str(item).strip()
-    }
+    admitted_tools = effective_mcp_tool_scope(profile).tools
     profile["enabled_tools"] = [
-        tool for tool in ticket_tools if not admitted_tools or tool in admitted_tools
+        tool for tool in ticket_tools if admitted_tools is None or tool in admitted_tools
     ]
     return profile if profile["enabled_tools"] else None
 
@@ -5360,7 +5358,8 @@ class SubprocessCodexExecutor:
     @staticmethod
     def _root_mcp_config_args(root_mcp: Mapping[str, Any] | None) -> list[str]:
         profile = dict(root_mcp or {})
-        if not profile or profile.get("enabled") is False:
+        effective_scope = effective_mcp_tool_scope(profile)
+        if not effective_scope.enabled:
             return []
         if str(profile.get("transport") or "streamable_http").strip() not in {
             "streamable_http",
@@ -5382,10 +5381,9 @@ class SubprocessCodexExecutor:
         env_var = str(profile.get("bearer_token_env_var") or "").strip()
         if env_var:
             values[f"mcp_servers.{server}.bearer_token_env_var"] = env_var
-        enabled_tools = _string_list(profile.get("enabled_tools"))
-        if 'enabled_tools' in profile:
-            values[f"mcp_servers.{server}.enabled_tools"] = enabled_tools
-        disabled_tools = _string_list(profile.get("disabled_tools"))
+        if effective_scope.tools is not None:
+            values[f"mcp_servers.{server}.enabled_tools"] = list(effective_scope.tools)
+        disabled_tools = list(effective_scope.disabled_tools)
         if disabled_tools:
             values[f"mcp_servers.{server}.disabled_tools"] = disabled_tools
         approval = str(profile.get("default_tools_approval_mode") or "").strip()
@@ -6093,6 +6091,18 @@ class LocalSkillFactoryWorker:
         catalog = PortableContractCatalog(
             self.state_dir / "capability-binding-state" / "portable"
         )
+        discovery = None
+        if discovery_request is not None:
+            from adaos.services.builder.authoring_discovery import qualified_semantic_discovery, installed_binding_admission
+            from adaos.services.capability_binding_state.registry_projection import SemanticRegistryProjection
+            registry_root = self.repo_root / '.adaos/workspace'
+            projection = SemanticRegistryProjection(registry_root, self.state_dir)
+            actual_revision = subprocess.check_output(['git', '-C', str(registry_root), 'rev-parse', 'HEAD'], text=True).strip()
+            discovery = qualified_semantic_discovery(discovery_request, registry_root=registry_root,
+                index=projection.read_index(), registry_revision=actual_revision,
+                local_admit=(lambda candidate: installed_binding_admission(candidate, state_dir=self.state_dir,
+                    application_ref=application_ref, environment_profile=discovery_request['environment_profile'])) if application_ref else None,
+                task_tools=task_tools)
         requirements: list[dict[str, Any]] = []
 
         def registry_ref(record_kind: str, digest: str) -> str:
@@ -6107,6 +6117,20 @@ class LocalSkillFactoryWorker:
                 str(requirement["capability_ref"]),
                 str(requirement["contract_range"]),
             )
+            eligible_for_requirement = None
+            if discovery is not None:
+                query_requirements = discovery_request['requirements']
+                matching_queries = [item for item in query_requirements if item['capability_ref'] == requirement['capability_ref']
+                    and item['contract_range'] == requirement['contract_range']]
+                exact_queries = [item for item in matching_queries if item['requirement_ref'].endswith('.' + requirement['id'])]
+                refs = {item['requirement_ref'] for item in exact_queries or matching_queries}
+                eligible_for_requirement = [row['candidate'] for row in discovery['candidates'] if row['requirement_ref'] in refs]
+                eligible_digests = {candidate['capability_contract']['digest'] for candidate in eligible_for_requirement}
+                compatible_matches = [item for item in matches if item.digest in eligible_digests]
+                # When none are eligible, retain canonical identity for adapter
+                # authoring but never advertise its installed history as reuse.
+                if compatible_matches:
+                    matches = compatible_matches
             if not matches:
                 continue
             selected = matches[0]
@@ -6115,11 +6139,20 @@ class LocalSkillFactoryWorker:
             for binding in catalog.matching_bindings(
                 selected.capability_ref, selected.version
             ):
+                if eligible_for_requirement is not None and not any(candidate['binding_definition']['digest'] == binding.digest
+                        and candidate['capability_contract']['digest'] == selected.digest for candidate in eligible_for_requirement):
+                    continue
                 # Registry history stays canonical, but a compiler needs only
                 # the best currently admitted materialization. Including every
                 # historical package repeats large tool schemas and makes the
                 # model choose a release that resolution has already ranked.
-                deliveries = catalog.deliveries_for_binding(binding.digest)[:1]
+                deliveries = catalog.deliveries_for_binding(binding.digest)
+                if eligible_for_requirement is not None:
+                    admitted_deliveries = {candidate['delivery']['digest'] for candidate in eligible_for_requirement
+                        if candidate['binding_definition']['digest'] == binding.digest}
+                    deliveries = [item for item in deliveries if item.digest in admitted_deliveries]
+                else:
+                    deliveries = deliveries[:1]
                 delivery_values = [item.to_dict() for item in deliveries]
                 binding_value = binding.to_dict()
                 reusable_binding: dict[str, Any] = {
@@ -6231,18 +6264,7 @@ class LocalSkillFactoryWorker:
             )
         if not requirements:
             return None
-        discovery = None
         if discovery_request is not None:
-            from adaos.services.builder.authoring_discovery import qualified_semantic_discovery, installed_binding_admission
-            from adaos.services.capability_binding_state.registry_projection import SemanticRegistryProjection
-            registry_root = self.repo_root / '.adaos/workspace'
-            projection = SemanticRegistryProjection(registry_root, self.state_dir)
-            actual_revision = subprocess.check_output(['git', '-C', str(registry_root), 'rev-parse', 'HEAD'], text=True).strip()
-            discovery = qualified_semantic_discovery(discovery_request, registry_root=registry_root,
-                index=projection.read_index(), registry_revision=actual_revision,
-                local_admit=(lambda candidate: installed_binding_admission(candidate, state_dir=self.state_dir,
-                    application_ref=application_ref, environment_profile=discovery_request['environment_profile'])) if application_ref else None,
-                task_tools=task_tools)
             # Installed history is a canonical authoring reference, not an
             # eligible binding. Do not feed rejected alternatives back to the
             # model beside the compatibility-filtered discovery result.
@@ -6300,6 +6322,7 @@ class LocalSkillFactoryWorker:
             for item in reuse.get("requirements") or []
             if isinstance(item, Mapping)
             and isinstance(item.get("selected_contract"), Mapping)
+            and item.get('reusable_bindings')
         }
         contracts = guide.get("contracts")
         if not isinstance(contracts, dict):
@@ -8223,10 +8246,10 @@ class LocalSkillFactoryWorker:
                     raise ValueError('contract.worker_resume_snapshot_conflict')
             else:
                 _write_json(pinned_path, {'snapshot': selected_snapshot, 'required_ids': selected_required})
-            if root_mcp and root_mcp.get('enabled') is not False:
-                if not root_mcp.get('url') or not isinstance(root_mcp.get('enabled_tools'), list):
-                    raise ContractInputRejected([{'code': 'contract.tool_scope_unbounded'}])
-            platform_tools = [{'type': 'function', 'name': name} for name in (root_mcp or {}).get('enabled_tools', [])]
+            effective_scope = effective_mcp_tool_scope(root_mcp)
+            if effective_scope.tools is None:
+                raise ContractInputRejected([{'code': 'contract.tool_scope_unbounded'}])
+            platform_tools = [{'type': 'function', 'name': name} for name in effective_scope.tools]
             sealed, contract_admission = prepare_component_input({'messages': [{'role': 'user', 'content': prompt}],
                 'tools': platform_tools, 'tool_choice': 'auto' if platform_tools else 'none'},
                 snapshot=selected_snapshot, required_ids=selected_required)
@@ -10215,7 +10238,10 @@ class LocalSkillFactoryWorker:
                     f"prototype resource definition is missing: {prototype_type}"
                 )
             production_type = _production_resource_type(companion, prototype_type)
-            production_definition = copy.deepcopy(dict(definition))
+            from adaos.services.builder.production_resources import lower_local_resource
+            production_definition = lower_local_resource(definition, owner_skill=companion,
+                resource_type=production_type, resource_map={str(item['resource_type']):
+                    _production_resource_type(companion, str(item['resource_type'])) for item in snapshots})['resource_definition']
             production_definition.update(
                 {
                     "resource_type": production_type,
@@ -10621,6 +10647,29 @@ class LocalSkillFactoryWorker:
                 include_workspace_navigation=include_workspace_navigation,
             )
             if target_webui_value is not None:
+                from adaos.services.builder.assignment_discovery import prepare_assignment_discovery
+                discovery_input = prepare_assignment_discovery(webui=target_webui_value, state_dir=self.state_dir,
+                    registry_root=self.repo_root / '.adaos/workspace', application_ref=f'{target_type}:{target_id}',
+                    task_id=str(assignment.get('task_id') or target_id))
+                if discovery_input is not None:
+                    artifacts['semantic_discovery_input'] = discovery_input
+                    # Reconstruct from Core-owned facts on first intake. Resume
+                    # retains its original query; the registry query rejects
+                    # drift rather than silently changing the pinned snapshot.
+                    query_path = input_dir / 'semantic-discovery-query.json'
+                    if discovery_input.get('query'):
+                        owned_query = discovery_input['query']
+                        if query_path.is_file():
+                            retained_query = _read_json(query_path)
+                            for field in ('requirements', 'environment_profile', 'policy_inputs'):
+                                if retained_query[field] != owned_query[field]:
+                                    raise ValueError('authoring.discovery_resume_facts_conflict')
+                            owned_query = retained_query
+                        else:
+                            _write_json(query_path, owned_query)
+                        artifacts['semantic_discovery_query'] = owned_query
+                    assignment['realize_request']['artifacts'].update({key: artifacts[key] for key in
+                        ('semantic_discovery_input', 'semantic_discovery_query') if key in artifacts})
                 from adaos.services.builder.prototype_stage import prototype_builder_metadata
                 if prototype_builder_metadata(target_webui_value).get('component_contract'):
                     # Accepted semantic UI declares the owned C2 fact source.
@@ -10638,11 +10687,15 @@ class LocalSkillFactoryWorker:
                 portable_reuse = self._portable_contract_reuse_bundle(
                     target_webui_value,
                     **({'discovery_request': artifacts['semantic_discovery_query'],
-                        'task_tools': tuple((root_mcp or {}).get('enabled_tools', [])),
+                        'task_tools': effective_mcp_tool_scope(root_mcp).tools or (),
                         'application_ref': f'{target_type}:{target_id}'}
                         if isinstance(artifacts.get('semantic_discovery_query'), Mapping) else {}),
                 )
                 if portable_reuse is not None:
+                    if discovery_input is not None and discovery_input['status'] != 'prepared':
+                        for requirement in portable_reuse['requirements']:
+                            requirement['reusable_bindings'] = []
+                        portable_reuse['semantic_discovery'] = discovery_input
                     implementation_bindings["portable_contract_reuse"] = portable_reuse
                     self._compact_registry_backed_provider_contracts(
                         implementation_bindings,

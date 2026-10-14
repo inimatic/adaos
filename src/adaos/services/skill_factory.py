@@ -2099,6 +2099,17 @@ class SkillFactoryService:
         mcp = _mapping(task.get("mcp"))
         lease = _mapping(task.get("access_lease"))
         realize_request = self._assignment_realize_request(task)
+        from adaos.services.builder.assignment_discovery import discovery_from_assignment_snapshot
+        from adaos.services.runtime_paths import current_control_repo_root
+        repository = current_control_repo_root()
+        if repository is not None:
+            discovery = discovery_from_assignment_snapshot(task=task,
+                state_dir=Path(self.state_dir or current_state_dir()), registry_root=repository/'.adaos/workspace')
+            if discovery is not None:
+                artifacts = realize_request.setdefault('artifacts', {})
+                artifacts['semantic_discovery_input'] = discovery
+                if discovery.get('query'):
+                    artifacts['semantic_discovery_query'] = discovery['query']
         agent_profile = _mapping(_mapping(realize_request.get("artifacts")).get("agent_profile"))
         assignment_mcp = {
             "enabled": mcp.get("enabled") is not False,

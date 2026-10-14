@@ -75,6 +75,7 @@ def test_model_root_mcp_keeps_only_dev_ticket_tools_after_descriptor_prefetch() 
         {
             "enabled": True,
             "server_name": "adaos_task_root",
+            "url": "https://root.invalid/mcp",
             "enabled_tools": task_scope_enabled_tools(
                 ["read_capability_snapshot", "read_development_tickets"]
             ),
@@ -10986,7 +10987,13 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
         "adaos.builder.cbs_compiler_view.v1"
     )
     assert "cbs_compilation" not in packet
-    reuse = bindings["portable_contract_reuse"]
+    # Canonical portable records are authoring references, not proof of
+    # compatibility. The ordinary packet must deny reuse without observed
+    # environment/evidence. Test the archive projector separately below.
+    assert bindings['portable_contract_reuse']['requirements'][0]['reusable_bindings'] == []
+    assert bindings['portable_contract_reuse']['semantic_discovery']
+    reuse = worker._portable_contract_reuse_bundle(webui)
+    worker._compact_registry_backed_provider_contracts(bindings, reuse)
     assert reuse["schema"] == "adaos.builder.portable_contract_reuse.v2"
     assert reuse["authority"] == {
         "canonical_content": "registry_only",
@@ -11076,7 +11083,10 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     assert "google_gmail" not in bindings["binding_rules"]
     assert "skill_manifest" not in gmail_view
     assert "sdk" not in gmail_view
-    assert len(bindings_path.read_bytes()) < 24_000
+    # With no eligible reuse, the ordinary packet keeps provider authoring
+    # rules instead of falsely switching to reuse_shared_delivery.
+    original_bindings = json.loads(bindings_path.read_text(encoding='utf-8'))
+    assert 'google_gmail' in original_bindings['binding_rules']
     prompt = (tmp_path / "input/task.md").read_text(encoding="utf-8")
     assert "installed canonical authority" in prompt
     assert "application-specific presentation adapters" in prompt

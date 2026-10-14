@@ -37,7 +37,7 @@ def cases(repo):
     ]
 
 
-def browser_probe(repo, output, host, scenario, root, case, *, scoped):
+def browser_probe(repo, output, host, scenario, root, case, *, scoped, guard_changed=False):
     from adaos.apps.cli.active_control import resolve_control_token
     from adaos.services.agent_context import get_ctx
     from adaos.sdk.builder import preview
@@ -52,7 +52,9 @@ def browser_probe(repo, output, host, scenario, root, case, *, scoped):
         'ADAOS_E2E_EXPECTED_WEBUI': str(root/'webui.json'), 'ADAOS_E2E_OUTPUT': str(output),
         'ADAOS_E2E_COLLECTION_ID': case['view'], 'ADAOS_E2E_VISIBLE_TEXT': case['visible'], 'ADAOS_E2E_HIDDEN_TEXT': case['hidden'],
         'ADAOS_E2E_CONTRACT_ORACLE': json.dumps(case['browser_oracle'])}
-    script = 'component-contract-scope.mjs' if scoped else 'component-contract-conformance.mjs'
+    if guard_changed:
+        env['ADAOS_E2E_GUARD_VALUE_CHANGED'] = '1'
+    script = 'component-contract-scope.mjs' if scoped and not guard_changed else 'component-contract-conformance.mjs'
     process = subprocess.run(['node', str(repo/'e2e/stand/browser'/script)], cwd=repo, env=env,
         capture_output=True, text=True, encoding='utf-8', timeout=240)
     output.mkdir(exist_ok=True)
@@ -84,6 +86,16 @@ def execute(args):
     http.headers['X-AdaOS-Token'] = resolve_control_token(base_url='http://127.0.0.1:8777')
     runtime, _, handler = installed_runtime(http, repo)
     selected_cases = cases(repo)
+    operation = getattr(args, 'operation', 'scope')
+    if operation == 'guard':
+        for case in selected_cases:
+            command_id = 'complete' if case['id'] == 'task_queue' else 'stock-reserve'
+            case['guard_ref'] = 'command:' + command_id
+            command = next(item for item in case['source']['commands'] if item['id'] == command_id)
+            case['before_guard'] = command['guard']['when']['value']
+            case['after_guard'] = 'done' if case['id'] == 'task_queue' else 'reserved'
+            case['instruction'] = f"Change only {case['guard_ref']} guard.when.value from {case['before_guard']} to {case['after_guard']}. Preserve its field, operator, required inputs, fixed effects, all records and every other property."
+            case['browser_oracle']['beforeChoice'] = 'Open' if case['id'] == 'task_queue' else 'Available'
     from adaos.services.contract_projections import project_context_units, publish_context_units, consume_context_units
     common_units = project_context_units(sdk_symbols=['adaos.sdk.builder.semantic_ui.admit', 'adaos.sdk.resources.query'])
     write(output/'shared-context-publication.json', publish_context_units(common_units))
@@ -92,7 +104,7 @@ def execute(args):
     plan = {'schema': 'adaos.e2e.semantic_contract_qualification.v1', 'model': 'gpt-5', 'reasoning_effort': 'high',
         'max_output_tokens': 16384, 'max_usd': args.max_usd, 'repetitions': args.repetitions, 'runtime': runtime,
         'scope': 'Native prompt/model/proposal, exact preservation, renderer usability floors, writes, replay/undo and local prototype binding substitution; not unconstrained initial generation or production provider interoperability',
-        'cases': [{key: value for key, value in case.items() if key != 'source'} for case in selected_cases],
+        'operation': operation, 'cases': [{key: value for key, value in case.items() if key != 'source'} for case in selected_cases],
         'fixture_digests': {case['id']: digest(case['source']) for case in selected_cases},
         'controls': ['bounded_ops', 'full_document'], 'model_tools': []}
     write(output/'plan.json', plan)
@@ -134,13 +146,16 @@ def execute(args):
                 try:
                     result = prototype.submit_request(case['instruction'], webspace_id=args.host, source_kind='e2e', timeout_seconds=360,
                         metadata={'message_id': message_id, 'builder_selected_target': {'object_type': 'scenario', 'object_id': scenario},
-                            'builder_semantic_edit_mode': mode, 'builder_semantic_write_ref': 'view:'+case['view'],
-                            'builder_semantic_write_property': 'scope_filters.'+case['field']+'.value',
+                            'builder_semantic_edit_mode': mode, 'builder_semantic_write_ref': case['guard_ref'] if operation == 'guard' else 'view:'+case['view'],
+                            'builder_semantic_write_property': 'guard.when.value' if operation == 'guard' else 'scope_filters.'+case['field']+'.value',
                             'builder_llm_model': 'gpt-5', 'builder_llm_reasoning_effort': 'high', 'builder_semantic_max_tokens': 16384})
                     write(trial/'native-result.json', redact_credentials(result))
                     row['status'] = result.get('status')
                     expected = copy.deepcopy(baseline)
-                    next(view for view in expected['views'] if view['id'] == case['view'])['scope_filters'][0]['value'] = case['after']
+                    if operation == 'guard':
+                        next(command for command in expected['commands'] if 'command:'+command['id'] == case['guard_ref'])['guard']['when']['value'] = case['after_guard']
+                    else:
+                        next(view for view in expected['views'] if view['id'] == case['view'])['scope_filters'][0]['value'] = case['after']
                     row['exact_preservation'] = read(root/'semantic.webui.json') == expected
                     row['native_model_authoring'] = result.get('status') == 'semantic_proposal_applied' and result.get('model_calls') == 1
                     if not row['exact_preservation'] or not row['native_model_authoring']:
@@ -150,7 +165,8 @@ def execute(args):
                     prepared = retained['result']['request']
                     replay = semantic_ui.apply(prepared, execution_metrics=result['execution_metrics'])
                     row['replay_ok'] = replay.get('replayed') is True
-                    row['scope_browser'] = browser_probe(repo, trial/'scope-browser', args.host, scenario, root, case, scoped=True)
+                    row['scope_browser'] = browser_probe(repo, trial/'scope-browser', args.host, scenario, root, case,
+                        scoped=True, guard_changed=operation == 'guard')
                     undo = prototype.submit_request('Undo the last semantic change', webspace_id=args.host, source_kind='e2e',
                         metadata={'message_id': message_id+':undo', 'builder_selected_target': {'object_type': 'scenario', 'object_id': scenario}}, timeout_seconds=120)
                     write(trial/'native-undo.json', undo)
@@ -196,6 +212,7 @@ def main():
     parser.add_argument('--max-usd', type=float, default=15)
     parser.add_argument('--prior-usd', type=float, default=0)
     parser.add_argument('--prior-requests', type=int, default=0)
+    parser.add_argument('--operation', choices=['scope', 'guard'], default='scope')
     args = parser.parse_args()
     if not 0 < args.max_usd <= 15 or not 0 <= args.prior_usd < args.max_usd or not 0 <= args.prior_requests <= 32:
         parser.error('Whole-series budget exceeds approved bounds')

@@ -19,7 +19,10 @@ field_refs is the order of existing table columns, not a resource schema change.
 view.scope.value.set changes one explicitly admitted existing permanent filter value;
 it cannot remove the scope, change its field, or widen to undeclared fixture values.
 Read-only dependency descriptors explain current labels; they grant no write authority.
-Do not change ids, records, relationships, commands, guards or other properties.
+command.guard.value.set edits only the value of an admitted existing simple equals
+predicate within its declared typed domain. Preserve its field, operator, required
+inputs, fixed effects, confirmation and every other command obligation.
+Do not change ids, records, relationships or other unadmitted properties.
 If the request is ambiguous, return clarification and no operations. If it requires
 an unadmitted operation, return unsupported and no operations. Do not guess a target.
 Return only the structured result. Core derives all preconditions and validates
@@ -58,6 +61,18 @@ def provider_contract(admission: Mapping[str, Any]) -> dict[str, Any]:
                              and isinstance(value, (int, float)) and not isinstance(value, bool))]
                         fields['value']['enum'] = list(dict.fromkeys(options))
                     admitted.append(selected)
+            continue
+        if kind == 'command.guard.value.set':
+            for mask in admission['write_masks']:
+                if 'guard.when.value' not in mask['properties']:
+                    continue
+                selected = copy.deepcopy(variant)
+                selected['properties']['ref'] = {'type': 'string', 'enum': [mask['ref']]}
+                target = next(item for item in admission['context']['targets'] if item['ref'] == mask['ref'])
+                current = target['values']['guard.when.value']
+                selected['properties']['value'] = {'type': 'boolean' if isinstance(current, bool) else 'number' if isinstance(current, (int, float)) else 'string',
+                    'enum': target['allowed_values']['guard.when.value']}
+                admitted.append(selected)
             continue
         refs = [mask['ref'] for mask in admission['write_masks'] if
                 ('field_refs' in mask['properties'] if kind == 'view.fields.reorder'

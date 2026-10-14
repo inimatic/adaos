@@ -51,7 +51,9 @@ def component_authoring_discovery(document, masks, snapshot, *, editable: bool) 
     views = {item['id']: item for item in document['views']}
     required = set()
     for mask in masks:
-        if mask['ref'].startswith('view:'):
+        if mask['ref'].startswith('command:'):
+            required.update(('ui.actions', 'ui.form'))
+        elif mask['ref'].startswith('view:'):
             view = views[mask['ref'].partition(':')[2]]
             required.add('ui.table' if view['role'] == 'collection' else 'ui.form')
             if view.get('query_controls') or any(prop.startswith('scope_filters.') for prop in mask['properties']):
@@ -89,7 +91,7 @@ def qualified_semantic_discovery(query: Mapping[str, Any], *, registry_root, ind
             local = local_admit(candidate) if local_admit else {'status': 'unavailable', 'findings': [{'code': 'authoring.binding_unavailable'}]}
             # Even a local binding cannot widen the actual task tool allowlist.
             tools = sorted(set(local.get('callable_tools', [])) & set(task_tools)) if local.get('status') == 'admitted' else []
-            rows.append({'candidate': copy.deepcopy(candidate), 'semantic_support': 'supported',
+            rows.append({'requirement_ref': requirement['requirement_ref'], 'candidate': copy.deepcopy(candidate), 'semantic_support': 'supported',
                 'binding_availability': local['status'], 'callable_tools': tools,
                 'findings': copy.deepcopy(local.get('findings', []))})
     result = {'schema': 'adaos.builder.semantic_discovery_admission.v1', 'registry_result': portable,

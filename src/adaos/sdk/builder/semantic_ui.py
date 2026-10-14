@@ -65,8 +65,10 @@ def admit(*, project_ref: str, instruction: str, source_message_id: str, write_r
     from adaos.services.builder.semantic_admission import SemanticAdmissionService
     if operation_kinds is None:
         selected = [prop for properties in (write_properties or {}).values() for prop in properties]
-        operation_kinds = (['view.scope.value.set'] if selected and all(prop.startswith('scope_filters.') for prop in selected)
-            else ['label.set', 'view.fields.reorder'])
+        operation_kinds = (sorted({('view.scope.value.set' if prop.startswith('scope_filters.') else
+            'command.guard.value.set' if prop == 'guard.when.value' else
+            'view.fields.reorder' if prop == 'field_refs' else 'label.set') for prop in selected})
+            if selected else ['label.set', 'view.fields.reorder'])
     return SemanticAdmissionService.from_context().begin(project_ref=project_ref, instruction=instruction,
         source_message_id=source_message_id, write_refs=write_refs, write_properties=write_properties,
         operation_kinds=operation_kinds, max_ops=max_ops)

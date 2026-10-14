@@ -256,7 +256,8 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                         and action.get("params", {}).get("operation_id") == operation
                         and action.get("params", {}).get("context", {}).get("prototype_command_id") == command["id"]
                         and set(action.get('params', {})) <= {'operation_id', 'context', 'payload', 'record_id'}
-                        and action.get('params', {}).get('context') == {'prototype_command_id': command['id']}
+                        and action.get('params', {}).get('context') == {'prototype_command_id': command['id'],
+                            **({'guard_draft': '$event.values'} if command.get('guard') else {})}
                         and (('record_id' not in action.get('params', {})) if operation == 'create'
                              else record_id is not None and action.get('params', {}).get('record_id') == record_id)
                         and action.get("target") == widget.get("dataSource", {}).get("resourceType")

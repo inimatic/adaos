@@ -85,8 +85,17 @@ try {
       await expect(name).toHaveValue(config.rowText)
       await expect(note).toHaveValue('')
       const complete = form.locator(`[data-command-id="${config.mutationCommand}"]`).locator('button').or(form.locator(`button[data-command-id="${config.mutationCommand}"]`)).first()
-      await expect(complete).toBeDisabled()
-      sample.checks.push('guard-rejected-draft')
+      if (process.env.ADAOS_E2E_GUARD_VALUE_CHANGED === '1') {
+        await expect(complete).toBeEnabled()
+        await form.locator('label').filter({ hasText: new RegExp(`^${config.afterChoice}$`) }).locator('input[type=radio]').check()
+        await expect(complete).toBeDisabled()
+        await form.locator('label').filter({ hasText: new RegExp(`^${config.beforeChoice || 'Open'}$`) }).locator('input[type=radio]').check()
+        await expect(complete).toBeEnabled()
+        sample.checks.push('changed-guard-domain', 'guard-reacts-to-draft-state')
+      } else {
+        await expect(complete).toBeDisabled()
+        sample.checks.push('guard-rejected-draft')
+      }
       await name.fill('')
       const save = form.locator(`[data-command-id="${config.saveCommand}"]`).locator('button').or(form.locator(`button[data-command-id="${config.saveCommand}"]`)).first()
       sample.invalidSubmissionMode = await assertInvalidSubmissionGuard({ button: save,

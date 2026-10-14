@@ -2079,6 +2079,9 @@ def _prototype_command_policies(commands: Sequence[Mapping[str, Any]], resource:
     required = {field["id"] for field in resource["fields"] if field["required"]}
     return {str(command["id"]): {**{key: copy.deepcopy(command[key]) for key in
             ("kind", "input_field_refs", "fixed_values", "guard") if key in command},
+            'guard_draft_field_refs': sorted({ref for peer in commands if peer['view_ref'] == command['view_ref']
+                for ref in peer['input_field_refs'] if ref not in peer.get('fixed_values', {})
+                and any(field['id'] == ref and field['editable'] for field in resource['fields'])}),
             "required_field_refs": sorted(required & set(command["input_field_refs"]))}
             for command in commands}
 
@@ -2507,7 +2510,8 @@ def _compile_semantic_prototype_v1(
                         "operation_id": "update"
                         if command["kind"] == "transition"
                         else command["kind"],
-                        "context": {"prototype_command_id": command_id},
+                        "context": {"prototype_command_id": command_id,
+                            **({'guard_draft': '$event.values'} if command.get('guard') else {})},
                         "payload": {
                             field_id: f"$event.values.{field_id}"
                             for field_id in command["input_field_refs"]

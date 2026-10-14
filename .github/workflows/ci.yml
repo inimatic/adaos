@@ -180,10 +180,12 @@ jobs:
           node-version: "22"
       - name: Install locked dependencies
         run: uv sync --locked --extra dev
-      - name: Checkout pinned Client contract consumer
-        run: git submodule update --init --depth 1 src/adaos/integrations/adaos-client
+      - name: Checkout pinned Client and Root contract consumers
+        run: git submodule update --init --depth 1 src/adaos/integrations/adaos-client src/adaos/integrations/adaos-backend
       - name: Check generated component contracts
         run: uv run python scripts/generate_ui_component_contract.py --check
+      - name: Check common remote Root publication against Core declarations
+        run: uv run python scripts/generate_root_context_projection.py --check --output src/adaos/integrations/adaos-backend/backend/platform-context-publication.json
       - name: Install locked Client dependencies
         working-directory: src/adaos/integrations/adaos-client
         run: npm ci
@@ -192,7 +194,15 @@ jobs:
         run: |
           npm run test:boundaries
           npx tsc --noEmit -p tsconfig.app.json
+      - name: Fetch and verify exact native Builder source
+        env:
+          BUILDER_SOURCE_URL: ${{ secrets.ADAOS_MONOREPO_URL || 'https://github.com/inimatic/adaos-registry.git' }}
+        run: uv run python scripts/prepare_builder_ci_source.py --checkout .tmp/ci-builder-source
       - name: Check Builder contracts without providers or external services
+        # Native integration below uses the exact declared package, not an
+        # optional private Workspace or independent qualifier double.
+        env:
+          ADAOS_TEST_BUILDER_SOURCE: ${{ github.workspace }}/.tmp/ci-builder-source/skills/builder_skill
         run: |
           uv run python -m pytest -q --strict-markers -o importmode=importlib \
             --junitxml=reports/builder-contracts.xml \
@@ -209,9 +219,14 @@ jobs:
             tests/test_contract_input_routes.py \
             tests/test_builder_authoring_discovery.py \
             tests/test_builder_worker_contract_input.py \
+            tests/test_skill_env_runtime.py \
+            tests/test_builder_native_semantic_proposer.py \
             tests/test_builder_model_costs.py \
             tests/test_builder_contract_second_consumer.py \
             tests/test_builder_semantic_scope.py \
+            tests/test_builder_semantic_guard.py \
+            tests/test_builder_production_provider_interop.py \
+            tests/test_local_resource_workbench.py \
             tests/test_context_control.py \
             tests/test_prototype_resource_workbench.py \
             tests/test_builder_semantic_prototype.py \

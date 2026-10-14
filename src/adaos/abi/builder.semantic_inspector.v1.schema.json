@@ -16,7 +16,7 @@
     "write_count": {"type": "integer", "minimum": 0, "maximum": 16},
     "read_scope": {"const": "full_semantic_source_and_effective_compiled_ui"},
     "inventory_scope": {"const": "resources_fields_views_relationships_commands"},
-    "supported_operations": {"type": "array", "items": {"enum": ["label.set", "view.fields.reorder", "view.scope.value.set"]}, "maxItems": 3, "uniqueItems": true},
+    "supported_operations": {"type": "array", "items": {"enum": ["label.set", "view.fields.reorder", "view.scope.value.set", "command.guard.value.set"]}, "maxItems": 4, "uniqueItems": true},
     "supported_operations_text": {"type": "string", "maxLength": 240},
     "read_refs": {"$ref": "#/$defs/refs"},
     "dependency_refs": {"$ref": "#/$defs/refs"},
@@ -33,7 +33,7 @@
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "ref": {"type": "string", "pattern": "^(resource|field|view|relationship|command):[A-Za-z0-9_.-]+$", "maxLength": 250},
     "refs": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/ref"}},
-    "property": {"anyOf": [{"enum": ["title.en", "title.ru", "label.en", "label.ru", "field_refs"]}, {"type": "string", "pattern": "^scope_filters\\.[A-Za-z0-9_.-]+\\.value$"}]},
+    "property": {"anyOf": [{"enum": ["title.en", "title.ru", "label.en", "label.ru", "field_refs", "guard.when.value"]}, {"type": "string", "pattern": "^scope_filters\\.[A-Za-z0-9_.-]+\\.value$"}]},
     "node": {
       "type": "object", "additionalProperties": false,
       "required": ["ref", "kind", "label_en", "label_ru", "dependencies", "supported_writes", "dependencies_text", "writes_text"],
@@ -53,7 +53,7 @@
       "required": ["seq", "kind", "ref", "property", "before", "after", "before_text", "after_text"],
       "properties": {
         "seq": {"type": "integer", "minimum": 1, "maximum": 16},
-        "kind": {"enum": ["label.set", "view.fields.reorder", "view.scope.value.set"]},
+        "kind": {"enum": ["label.set", "view.fields.reorder", "view.scope.value.set", "command.guard.value.set"]},
         "ref": {"$ref": "#/$defs/ref"}, "property": {"$ref": "#/$defs/property"},
         "before": {"$ref": "#/$defs/value"}, "after": {"$ref": "#/$defs/value"},
         "before_text": {"type": "string", "maxLength": 5000}, "after_text": {"type": "string", "maxLength": 5000}

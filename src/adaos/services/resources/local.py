@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
+from adaos.services.resources.command_policy import enforce_command_policy, normalize_mutation_payload, validate_command_policy
 
 
 LOCAL_RESOURCE_SCHEMA = "adaos.resource.local_crud.v1"
@@ -160,6 +161,8 @@ def validate_local_resource_bundle(
         "owner_ref": owner_ref,
         "runtime": "local_crud",
     }
+    if metadata.get('command_policy') is not None or metadata.get('prototype_policy') is not None:
+        validate_command_policy(metadata.get('command_policy') or metadata.get('prototype_policy') or {}, record_schema)
     value["resource_definition"] = definition
     value.setdefault("seed_policy", "if_missing")
     return value
@@ -333,6 +336,8 @@ class LocalCrudResourceService:
         record_id: str,
         payload: Mapping[str, Any],
         expected_revision: Any = None,
+        command_id: str | None = None,
+        guard_draft: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._read_registry()
@@ -352,6 +357,7 @@ class LocalCrudResourceService:
             if operation is None:
                 raise ValueError(f"unsupported local resource operation: {resource_type}.{operation_id}")
             operation_kind = _text(operation.get("kind") or operation_id)
+            values = normalize_mutation_payload(operation_kind, payload)
             records = [dict(item) for item in state.get("records") or [] if isinstance(item, Mapping)]
             identifier = _text(record_id or payload.get("id"))
             index = next(
@@ -359,6 +365,12 @@ class LocalCrudResourceService:
                 None,
             )
             current = records[index] if index is not None else None
+            policy = (definition.get('metadata') or {}).get('command_policy') or (definition.get('metadata') or {}).get('prototype_policy') or {}
+            try:
+                enforce_command_policy(policy, operation_kind=operation_kind, command_id=command_id, values=values, current=current,
+                    guard_draft=guard_draft, record_schema=definition['record_schema'])
+            except ValueError as exc:
+                raise LocalResourceConflict(str(exc)) from exc
             if expected_revision is not None and operation_kind in {"update", "delete"}:
                 if current is None:
                     raise KeyError(identifier)
@@ -380,7 +392,7 @@ class LocalCrudResourceService:
                     raise KeyError(identifier)
                 result_record = current
             elif operation_kind == "create":
-                record = dict(payload.get("record")) if isinstance(payload.get("record"), Mapping) else dict(payload)
+                record = dict(values)
                 record.setdefault("id", f"rec.{new_id()}")
                 self._default_revision(definition["record_schema"], record)
                 if any(_record_id(item) == _record_id(record) for item in records):
@@ -393,7 +405,7 @@ class LocalCrudResourceService:
                     raise ValueError("local resource update requires record_id")
                 if current is None or index is None:
                     raise KeyError(identifier)
-                patch = dict(payload.get("patch")) if isinstance(payload.get("patch"), Mapping) else dict(payload)
+                patch = dict(values)
                 patch.pop("id", None)
                 updated = {**current, **patch, "id": identifier}
                 if "revision" in current:
@@ -412,6 +424,9 @@ class LocalCrudResourceService:
                 raise ValueError(f"unsupported local resource operation kind: {operation_kind}")
             if operation_kind in {"create", "update", "delete"}:
                 state["records"] = records
+                candidate_registry = copy.deepcopy(registry)
+                candidate_registry['resources'][resource_type] = state
+                self._validate_relationships(candidate_registry)
                 state["generation"] = int(state.get("generation") or 0) + 1
                 registry["resources"][resource_type] = state
                 self._write_registry(registry)
@@ -423,6 +438,34 @@ class LocalCrudResourceService:
             "generation": int(state.get("generation") or 0),
             "owner_ref": state["owner_ref"],
         }
+
+    @staticmethod
+    def _validate_relationships(registry: Mapping[str, Any]) -> None:
+        """Validate the complete affected state before committing any write."""
+        resources = registry['resources']
+        for state in resources.values():
+            metadata = state['definition'].get('metadata') or {}
+            policy = metadata.get('command_policy') or metadata.get('prototype_policy') or {}
+            for relation in policy.get('relationships', []):
+                target = resources.get(relation['target_resource_type'])
+                if target is None:
+                    raise LocalResourceConflict('relationship target provider is unavailable')
+                if relation['target_field_ref'] not in target['definition']['record_schema']['properties']:
+                    raise LocalResourceConflict('relationship target property is unavailable')
+                def key(value):
+                    if isinstance(value, bool): return ('boolean', value)
+                    if isinstance(value, (int, float)): return ('number', value)
+                    if isinstance(value, str): return ('string', value)
+                    raise LocalResourceConflict('relationship identity must be a typed scalar')
+                target_values = [row.get(relation['target_field_ref']) for row in target['records']]
+                target_keys = [key(value) for value in target_values if value not in (None, '')]
+                if len(set(target_keys)) != len(target_keys):
+                    raise LocalResourceConflict('relationship target identity is not unique')
+                source_keys = [key(row[relation['field_ref']]) for row in state['records'] if row.get(relation['field_ref']) not in (None, '')]
+                if not set(source_keys) <= set(target_keys):
+                    raise LocalResourceConflict('relationship would reference a missing record')
+                if relation.get('unique_source') and len(set(source_keys)) != len(source_keys):
+                    raise LocalResourceConflict('one-to-one relationship source identity is not unique')
 
     def _state(self, resource_type: str) -> dict[str, Any] | None:
         state = self._read_registry()["resources"].get(_text(resource_type))

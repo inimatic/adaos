@@ -1,0 +1,8 @@
+{
+  "schema": "adaos.builder.ci_source_pin.v1",
+  "repository": "https://github.com/inimatic/adaos-registry.git",
+  "revision": "e1e025b2f87b30db4af60d5f8c4e8d9258c3cf3a",
+  "source_path": "skills/builder_skill",
+  "version": "0.4.18",
+  "package_digest": "sha256:e9aa18c6c602b89e798f8b1a15e4c574edc9aea466b7b625cb04a529cac4c435"
+}

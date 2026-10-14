@@ -143,7 +143,14 @@ class PrototypeResourceService:
             raise ValueError("prototype commands must be an owned mapping")
         semantic_defs = _schema("webui.semantic.v1.schema.json")["$defs"]
         fields = record_schema.get("properties") or {}
+        from adaos.services.resources.command_policy import validate_command_policy
+        # Validate the optional draft read scope without turning it into
+        # mutation authority. The legacy policy validator below remains exact.
+        for command in commands.values():
+            if command.get('guard_draft_field_refs') is not None:
+                validate_command_policy({'commands': {'candidate': command}}, record_schema)
         for command_id, command in commands.items():
+            legacy_command = {key: value for key, value in command.items() if key != 'guard_draft_field_refs'}
             Draft202012Validator({"type": "object", "additionalProperties": False,
                 "required": ["kind", "input_field_refs", "fixed_values", "required_field_refs"], "properties": {
                     "kind": {"enum": ["create", "update", "delete", "transition"]},
@@ -152,7 +159,7 @@ class PrototypeResourceService:
                     "fixed_values": {"type": "object"}, "guard": {"type": "object", "additionalProperties": False,
                         "required": ["when", "require_nonempty"], "properties": {"when": {"$ref": "#/$defs/condition"},
                             "require_nonempty": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string"}}}}},
-                "$defs": semantic_defs}).validate(command)
+                "$defs": semantic_defs}).validate(legacy_command)
             refs = set(command["input_field_refs"]) | set(command["fixed_values"])
             if not set(command["required_field_refs"]) <= set(command["input_field_refs"]):
                 raise ValueError("prototype required inputs exceed the command write set")
@@ -384,6 +391,7 @@ class PrototypeResourceService:
         payload: Mapping[str, Any],
         expected_revision: Any = None,
         command_id: str | None = None,
+        guard_draft: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
@@ -421,6 +429,14 @@ class PrototypeResourceService:
                 None,
             )
             command_policies = (definition.get("metadata", {}).get("prototype_policy") or {}).get("commands") or {}
+            if guard_draft is not None:
+                from adaos.services.resources.command_policy import enforce_command_policy
+                try:
+                    enforce_command_policy(definition.get('metadata', {}).get('prototype_policy') or {},
+                        operation_kind=operation_kind, command_id=command_id, values=values, current=current,
+                        guard_draft=guard_draft, record_schema=definition['record_schema'])
+                except ValueError as exc:
+                    raise PrototypeResourceConflict(str(exc)) from exc
             if command_policies and operation_kind in {"create", "update", "delete", "reset"}:
                 command = command_policies.get(_text(command_id))
                 if command is None:
@@ -440,6 +456,11 @@ class PrototypeResourceService:
                 if any(before_effect.get(key) is None or before_effect.get(key) == "" or before_effect.get(key) == []
                        for key in command["required_field_refs"]):
                     raise PrototypeResourceConflict("prototype command required input rejected the mutation")
+                if guard_draft is not None:
+                    before_effect.update({key: value for key, value in guard_draft.items()
+                        if key in command.get('guard_draft_field_refs', [])})
+                    before_effect.update({key: value for key, value in values.items()
+                        if key in command['input_field_refs'] and key not in command['fixed_values']})
                 if guard and self._condition_matches(before_effect, guard["when"]):
                     if any(before_effect.get(key) is None or before_effect.get(key) == "" or before_effect.get(key) == []
                            for key in guard["require_nonempty"]):

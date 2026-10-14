@@ -9,6 +9,9 @@
     "status": {"enum": ["proposed", "clarification", "unsupported"]},
     "message": {"type": "string", "maxLength": 512},
     "ops": {"type": "array", "maxItems": 16, "items": {"anyOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind", "ref", "value"],
+       "properties": {"kind": {"const": "command.guard.value.set"}, "ref": {"type": "string", "pattern": "^command:[A-Za-z0-9_.-]+$", "maxLength": 250},
+         "value": {"type": ["string", "number", "boolean"], "maxLength": 128}}},
       {"type": "object", "additionalProperties": false, "required": ["kind", "ref", "locale", "text"],
        "properties": {"kind": {"const": "label.set"}, "ref": {"type": "string", "maxLength": 250},
          "locale": {"enum": ["en", "ru"]}, "text": {"type": "string", "minLength": 1, "maxLength": 240}}},

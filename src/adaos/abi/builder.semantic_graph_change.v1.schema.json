@@ -28,8 +28,13 @@
     }
   },
   "$defs": {
-    "ref": {"type": "string", "pattern": "^(view:[A-Za-z0-9_.-]+|field:[A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+)$", "maxLength": 250},
-    "op": {"oneOf": [{"$ref": "#/$defs/labelOp"}, {"$ref": "#/$defs/fieldOrderOp"}, {"$ref": "#/$defs/scopeValueOp"}]},
+    "ref": {"type": "string", "pattern": "^(command:[A-Za-z0-9_.-]+|view:[A-Za-z0-9_.-]+|field:[A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+)$", "maxLength": 250},
+    "op": {"oneOf": [{"$ref": "#/$defs/labelOp"}, {"$ref": "#/$defs/fieldOrderOp"}, {"$ref": "#/$defs/scopeValueOp"}, {"$ref": "#/$defs/guardValueOp"}]},
+    "guardValueOp": {"type": "object", "additionalProperties": false,
+      "required": ["seq", "kind", "ref", "expected", "value"],
+      "properties": {"seq": {"type": "integer", "minimum": 1, "maximum": 16},
+        "kind": {"const": "command.guard.value.set"}, "ref": {"type": "string", "pattern": "^command:[A-Za-z0-9_.-]+$", "maxLength": 250},
+        "expected": {"$ref": "#/$defs/scopeValue"}, "value": {"$ref": "#/$defs/scopeValue"}}},
     "scopeValue": {"type": ["string", "number", "boolean"], "maxLength": 128},
     "scopeValueOp": {"type": "object", "additionalProperties": false,
       "required": ["seq", "kind", "ref", "field_ref", "expected", "value"],

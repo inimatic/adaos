@@ -13,14 +13,14 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from .semantic_graph import SemanticGraphService, _read, _label, _view, digest, reduce_graph, verify_baseline, scope_filter, scope_property, scope_values
+from .semantic_graph import SemanticGraphService, _read, _label, _view, digest, reduce_graph, verify_baseline, scope_filter, scope_property, scope_values, guard_condition, guard_values
 from .semantic_inspector import semantic_refs, dependency_refs
 from .semantic_ui import _operation_root
 from .workflow import BuilderWorkflowError, _LOCK
 
 ADMISSION_SCHEMA = 'adaos.builder.semantic_admission.v1'
 PROPOSAL_SCHEMA = 'adaos.builder.semantic_op_proposal.v1'
-SUPPORTED = ('label.set', 'view.fields.reorder', 'view.scope.value.set')
+SUPPORTED = ('label.set', 'view.fields.reorder', 'view.scope.value.set', 'command.guard.value.set')
 
 
 def compiler_digest():
@@ -116,6 +116,7 @@ class SemanticAdmissionService:
                 properties = [value for value in node['supported_writes']
                               if (value == 'field_refs' and 'view.fields.reorder' in kinds)
                               or (value.startswith('scope_filters.') and 'view.scope.value.set' in kinds)
+                              or (value == 'guard.when.value' and 'command.guard.value.set' in kinds)
                               or (value.startswith(('title.', 'label.')) and 'label.set' in kinds)]
                 if not properties:
                     continue
@@ -126,12 +127,19 @@ class SemanticAdmissionService:
                     properties = selected
                 values = {}
                 for prop in properties:
-                    values[prop] = (copy.deepcopy(scope_filter(document, node['ref'], prop[len('scope_filters.'):-len('.value')])['value']) if prop.startswith('scope_filters.')
-                                    else copy.deepcopy(_view(document, node['ref'])['field_refs']) if prop == 'field_refs'
-                                    else _label(document, node['ref'])[prop.partition('.')[2]])
+                    if prop == 'guard.when.value':
+                        values[prop] = copy.deepcopy(guard_condition(document, node['ref'])['value'])
+                    elif prop.startswith('scope_filters.'):
+                        values[prop] = copy.deepcopy(scope_filter(document, node['ref'], prop[len('scope_filters.'):-len('.value')])['value'])
+                    elif prop == 'field_refs':
+                        values[prop] = copy.deepcopy(_view(document, node['ref'])['field_refs'])
+                    else:
+                        values[prop] = _label(document, node['ref'])[prop.partition('.')[2]]
                 masks.append({'ref': node['ref'], 'properties': properties})
                 allowed_values = {prop: copy.deepcopy(scope_values(document, _view(document, node['ref']))[prop[len('scope_filters.'):-len('.value')]])
                     for prop in properties if prop.startswith('scope_filters.')}
+                if 'guard.when.value' in properties:
+                    allowed_values['guard.when.value'] = guard_values(document, node['ref'])
                 descriptors.append({**node, 'values': values, **({'allowed_values': allowed_values} if allowed_values else {})})
             if not masks or (requested_refs is not None and {row['ref'] for row in masks} != set(requested_refs)):
                 raise BuilderWorkflowError('requested write scope includes unsupported or unknown semantic refs')
@@ -210,6 +218,7 @@ class SemanticAdmissionService:
             for seq, proposed in enumerate(proposal['ops'], 1):
                 kind, ref = proposed['kind'], proposed['ref']
                 prop = (('title' if ref.startswith('view:') else 'label') + '.' + proposed.get('locale', '') if kind == 'label.set'
+                    else 'guard.when.value' if kind == 'command.guard.value.set'
                     else scope_property(proposed['field_ref']) if kind == 'view.scope.value.set' else 'field_refs')
                 if kind not in retained['operation_kinds'] or prop not in masks.get(ref, set()):
                     raise BuilderWorkflowError('proposal is outside the Core-admitted property write set')
@@ -218,6 +227,8 @@ class SemanticAdmissionService:
                     op.update(locale=proposed['locale'], expected=_label(working, ref)[proposed['locale']], text=proposed['text'])
                 elif kind == 'view.scope.value.set':
                     op.update(field_ref=proposed['field_ref'], expected=copy.deepcopy(scope_filter(working, ref, proposed['field_ref'])['value']), value=copy.deepcopy(proposed['value']))
+                elif kind == 'command.guard.value.set':
+                    op.update(expected=copy.deepcopy(guard_condition(working, ref)['value']), value=copy.deepcopy(proposed['value']))
                 else:
                     op.update(expected=copy.deepcopy(_view(working, ref)['field_refs']), field_refs=copy.deepcopy(proposed['field_refs']))
                 working = reduce_graph(working, [dict(op, seq=1)], write_refs=[ref])['semantic_document']
@@ -254,7 +265,12 @@ class SemanticAdmissionService:
         for mask in record['write_masks']:
             ref = mask['ref']
             for prop in mask['properties']:
-                if prop == 'field_refs':
+                if prop == 'guard.when.value':
+                    original, updated = guard_condition(before, ref)['value'], guard_condition(after, ref)['value']
+                    if digest(original) != digest(updated):
+                        guard_condition(expected, ref)['value'] = copy.deepcopy(updated)
+                        ops.append({'kind': 'command.guard.value.set', 'ref': ref, 'value': copy.deepcopy(updated)})
+                elif prop == 'field_refs':
                     original, updated = _view(before, ref)['field_refs'], _view(after, ref)['field_refs']
                     if original != updated:
                         _view(expected, ref)['field_refs'] = copy.deepcopy(updated)

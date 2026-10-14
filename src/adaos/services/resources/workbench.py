@@ -1106,6 +1106,8 @@ class ResourceWorkbenchService:
                     record_id=_text(request.get("record_id")),
                     payload=_mapping(request.get("payload")),
                     expected_revision=request.get("expected_revision"),
+                    command_id=_mapping(request.get('context')).get('command_id') or _mapping(request.get('context')).get('prototype_command_id'),
+                    guard_draft=_mapping(request.get('context')).get('guard_draft'),
                 )
             except LocalResourceConflict as exc:
                 raise ResourceConflict(str(exc)) from exc
@@ -1118,6 +1120,7 @@ class ResourceWorkbenchService:
                     payload=_mapping(request.get("payload")),
                     expected_revision=request.get("expected_revision"),
                     command_id=_mapping(request.get("context")).get("prototype_command_id"),
+                    guard_draft=_mapping(request.get('context')).get('guard_draft'),
                 )
             except PrototypeResourceConflict as exc:
                 raise ResourceConflict(str(exc)) from exc
