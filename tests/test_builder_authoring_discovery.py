@@ -110,6 +110,12 @@ def test_ordinary_packet_produces_and_pins_query_without_artifact_injection(tmp_
     assert reuse['requirements'][0]['reusable_bindings'] == []
     assert reuse['semantic_discovery']['registry_result']['requirements'][0]['rejections']
     assert reuse['semantic_discovery']['callable_tools'] == []
+    # A portable candidate without verified local archive bytes cannot replace
+    # the operational authoring contract with a promise of an existing adapter.
+    guide = {'contracts': {'provider': {'semantic_capability': capability.capability_ref.removeprefix('capability:')}},
+        'binding_rules': {'provider': 'authoring rules'}}
+    worker._compact_registry_backed_provider_contracts(guide, reuse)
+    assert 'implementation_mode' not in guide['contracts']['provider']
     worker._build_packet(assignment, workspace, input_dir)
     assert assignment['realize_request']['artifacts']['semantic_discovery_query'] == query
 

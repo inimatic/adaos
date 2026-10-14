@@ -6323,6 +6323,7 @@ class LocalSkillFactoryWorker:
             if isinstance(item, Mapping)
             and isinstance(item.get("selected_contract"), Mapping)
             and item.get('reusable_bindings')
+            and any(binding.get('delivery_interfaces') for binding in item['reusable_bindings'])
         }
         contracts = guide.get("contracts")
         if not isinstance(contracts, dict):
