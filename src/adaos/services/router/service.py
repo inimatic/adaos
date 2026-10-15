@@ -21,7 +21,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_identity import runtime_transition_role
 from .rules_loader import load_rules, watch_rules
-from .builder_chat_notifications import builder_chat_notifications
+from .builder_chat_notifications import builder_chat_notifications, claim_builder_notification
 from .media_routes import build_media_route_refresh_payload, resolve_media_route_state
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
@@ -711,6 +711,14 @@ class RouterService:
             return
         meta = payload.get("_meta") if isinstance(payload, dict) else None
         meta = meta if isinstance(meta, dict) else {}
+        if meta.get("schema") == "adaos.builder.automation_notification.v1":
+            identity = str(meta.get("response_idempotency_key") or "").strip()
+            if identity:
+                mirrored = getattr(self, "_builder_chat_mirrored", None)
+                if mirrored is None:
+                    mirrored = self._builder_chat_mirrored = {}
+                if not claim_builder_notification(mirrored, identity):
+                    return
         is_tg = str(meta.get("io_type") or "").lower() == "telegram"
         chat_id = meta.get("chat_id") if is_tg else None
         is_tg_chat = isinstance(chat_id, str) and bool(chat_id.strip())
@@ -3931,10 +3939,7 @@ class RouterService:
                     mirrored = getattr(self, "_builder_chat_mirrored", None)
                     if mirrored is None:
                         mirrored = self._builder_chat_mirrored = {}
-                    if identity not in mirrored:
-                        mirrored[identity] = None
-                        if len(mirrored) > 1024:
-                            mirrored.pop(next(iter(mirrored)))
+                    if claim_builder_notification(mirrored, identity):
                         for item in items:
                             self.bus.publish(Event(type="ui.notify", source="router.builder.chat", ts=time.time(), payload=item))
 

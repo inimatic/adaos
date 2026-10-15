@@ -5423,6 +5423,29 @@ class BuilderAutomationService:
                     "handled": False,
                     "error": "automation_session_not_found",
                 }
+            if instruction.split(maxsplit=1)[0].casefold() == "/note":
+                if len(instruction.split(maxsplit=1)) != 2:
+                    raise ValueError("automation note text is required")
+                if expected_session_id is not None or expected_iteration is not None:
+                    if (
+                        not expected_session_id
+                        or type(expected_iteration) is not int
+                        or session.get("session_id") != expected_session_id
+                        or int(session.get("iteration") or 0) != expected_iteration
+                    ):
+                        raise ValueError("Automation note does not match the expected session iteration")
+                # The calling chat surface retains the turn. Never refresh,
+                # resume clarification, replace a brief or invalidate delivery.
+                return {
+                    "ok": True,
+                    "handled": True,
+                    "status": "automation_note_recorded",
+                    "message": "Заметка принята без запуска новой итерации.",
+                    "session_id": session.get("session_id"),
+                    "iteration": session.get("iteration"),
+                    "model_calls": 0,
+                    "automation": self.project_session(session),
+                }
             session = self.refresh_session(session)
             previous_failure = (
                 dict(session.get("last_failure") or {})

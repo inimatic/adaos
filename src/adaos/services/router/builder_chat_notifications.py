@@ -13,11 +13,9 @@ def builder_chat_notifications(payload: Mapping[str, Any]) -> tuple[str, list[di
     owner = str(meta.get("conversation_owner") or "")
     if channel != "builder" and owner != "skill:builder_skill":
         return None
-    # Telegram-origin turns already use their reply route. Lifecycle notices
-    # already publish ui.notify independently of the chat projection.
+    # Telegram-origin turns already use their reply route. Lifecycle transcript
+    # events must also be projected: worker ui.notify may not cross its bridge.
     if str(meta.get("io_type") or "").lower() in {"telegram", "tg"}:
-        return None
-    if meta.get("schema") == "adaos.builder.automation_notification.v1":
         return None
     text = str(payload.get("text") or "").strip()
     if not text:
@@ -49,3 +47,13 @@ def builder_chat_notifications(payload: Mapping[str, Any]) -> tuple[str, list[di
             },
         })
     return identity, notifications
+
+
+def claim_builder_notification(seen: dict[str, None], identity: str) -> bool:
+    """Share deduplication across a transcript and its direct lifecycle notice."""
+    if identity in seen:
+        return False
+    seen[identity] = None
+    if len(seen) > 1024:
+        seen.pop(next(iter(seen)))
+    return True

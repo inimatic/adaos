@@ -19,6 +19,15 @@ Builder work is organized around:
 - validation, evidence, and source checkpoints;
 - human acceptance before release or activation.
 
+During Automation, prefix an informational chat message with `/note`, followed
+by the note text. Builder keeps it in the discussion and acknowledges it without
+starting another implementation iteration or changing the current candidate.
+Ordinary follow-up instructions continue to request implementation work.
+
+When a Telegram notification route is configured, Builder mirrors the chat brief,
+replies, and lifecycle messages to that route. Long chat messages are split into
+numbered parts.
+
 ## Public Promise
 
 The public promise should stay modest until the workflow is packaged for
