@@ -17,6 +17,15 @@ def store(
     *,
     requirements: BlobStorageRequirements | None = None,
 ) -> BlobStore:
+    """Acquire the current skill/runtime's isolated logical blob store.
+
+    For server-produced artifacts use store(name).put_bytes(filename, data,
+    media_type='image/png'), returning the same immutable blob receipt as
+    put_upload. The handler must require workspace.write before this mutation;
+    the skill and Application also declare storage.blob. Persist the receipt
+    and admit its digest to an owned read tool before exposing a browser ref.
+    Read verified bytes with read_bytes(digest, name, max_bytes=...).
+    """
     ctx = require_ctx("sdk.data.blob.store")
     require_skill_capability(ctx, "storage.blob")
     return BlobStorageService(ctx).acquire_for_current_skill(

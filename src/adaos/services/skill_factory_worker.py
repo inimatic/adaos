@@ -587,6 +587,14 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
             ),
         },
         "response_contracts": {
+            "owned_blob_store": {
+                "entrypoint": "adaos.sdk.data.blob.store(name='artifacts')",
+                "scope": "Current executing skill and runtime dataset. Skill/Application declare storage.blob; handler requires workspace.write before producing artifacts and workspace.read before reads.",
+                "put_bytes": "store(name).put_bytes(filename: str, data: bytes, media_type='image/png') -> immutable adaos.storage.blob.object.v1 receipt. Supports programmatic PNG/JPEG exports; no upload context or filesystem path is needed. Bytes are stored content-addressed in the same logical store.",
+                "receipt_fields": ["schema", "ref", "digest", "size_bytes", "media_type", "owner_ref", "logical_name"],
+                "read_bytes": "adaos.sdk.data.blob.read_bytes(receipt['digest'], name, max_bytes=67108864) verifies owned bytes. The default read bound is 10 MiB; request a larger bound explicitly when needed.",
+                "browser_export": "Authorize the saved digest in a declared owned read tool returning {ok:true,ref:<same sha256 digest>}. Use /api/tools/<skill>/<read-tool>/attachments/<logical-name>/<digest-hex>/<safe-filename>?webspace_id=<id> with dev=true only for DEV provenance; no internal blob ref or host path belongs in a browser src.",
+            },
             "current_builder_application": {
                 "methods": [
                     "adaos.sdk.applications.get_current_builder_application",
