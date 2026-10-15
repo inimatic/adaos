@@ -5824,6 +5824,11 @@ class BuilderAutomationService:
                     )
             if transition_token:
                 session["pending_workflow_transition"] = transition_token
+            elif instruction != _UNCHANGED_RETRY_INSTRUCTION:
+                # A failed/cancelled derivation can be rehydrated from its task
+                # artifacts. A new ordinary instruction is a new Runtime turn,
+                # not an implicit retry of that old workflow operation.
+                session.pop("pending_workflow_transition", None)
             previous_readiness = session.get("completion_readiness")
             if isinstance(previous_readiness, Mapping):
                 history = [

@@ -1246,6 +1246,22 @@ def test_followup_restores_default_budget_for_legacy_session(tmp_path: Path) -> 
     assert task["realize_request"]["artifacts"]["execution_budget"] == expected
 
 
+def test_normal_followup_does_not_inherit_cancelled_prototype_derivation(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(object_type="scenario", object_id="recipes",
+        implementation_brief="Implement recipe search.")
+    stale = service.get_session("scenario", "recipes")
+    stale["pending_workflow_transition"] = "return_to_prototype"
+    service._save_session(stale)
+    # This is the already rehydrated failed/cancelled session entering submit.
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    followed = service.submit_turn(text="Implement the newly accepted runtime interface.",
+        object_type="scenario", object_id="recipes")
+    assert not followed["session"].get("pending_workflow_transition")
+    task = service.factory.read_task(followed["session"]["current_task_id"])
+    assert not task["realize_request"]["artifacts"].get("workflow_transition")
+
+
 def test_explicit_context_budget_is_a_hard_limit_with_diagnostics() -> None:
     assert _context_budget_window(
         {"max_model_tokens": 12_000, "max_context_tokens": 8_000}
