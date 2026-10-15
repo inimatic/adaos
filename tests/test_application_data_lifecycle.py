@@ -262,6 +262,109 @@ def test_explicit_beta_replacement_reseeds_from_stable_and_retains_old_beta(tmp_
     ]
 
 
+def test_beta_upgrade_preserves_selected_records_and_stable_acceptance_base(tmp_path):
+    state, stable, channel = seed(tmp_path)
+    first = coordinator(tmp_path, 1)
+    first.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    old_beta = tmp_path / "beta1/data"
+    sql(old_beta / "records.sqlite", "INSERT INTO records(id,value) VALUES(2,'held-budget-and-user-photo')")
+    second = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path,
+        application_id="sample", candidate_id="candidate2", release_digest="sha256:" + "2" * 64,
+        stable_digest=DIGEST, beta_source_ref=("trial:candidate1", "sha256:" + "1" * 64),
+        components=(OwnedDataComponent("skill:worker", stable, tmp_path / "beta2/data", stable,
+            {}, manifest(2), old_beta),))
+    calls = []
+    def carry_jobs(key):
+        with pytest.raises(RuntimeChannelConflict, match="fenced"):
+            with channel.execution("trial:candidate1", "sha256:" + "1" * 64):
+                pass
+        calls.append(key)
+        return {"ok": True}
+    assert second.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True},
+        prepare_runtime_state=carry_jobs)["completed"]
+    assert sql(tmp_path / "beta2/data/records.sqlite", "SELECT id,value FROM records ORDER BY id") == [
+        (1, "original"), (2, "held-budget-and-user-photo")]
+    assert sql(stable / "records.sqlite", "SELECT id FROM records") == [(1,)]
+    assert second.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True},
+        prepare_runtime_state=carry_jobs)["completed"]
+    assert len(calls) == 1
+    assert second.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": True})["completed"]
+    assert sql(stable / "records.sqlite", "SELECT id FROM records ORDER BY id") == [(1,), (2,)]
+    assert sql(old_beta / "records.sqlite", "SELECT id FROM records ORDER BY id") == [(1,), (2,)]
+
+
+def test_beta_upgrade_rejects_changed_source_channel(tmp_path):
+    state, stable, _ = seed(tmp_path)
+    lifecycle = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path,
+        application_id="sample", candidate_id="candidate2", release_digest="sha256:" + "2" * 64,
+        stable_digest=DIGEST, beta_source_ref=("trial:another", "sha256:" + "1" * 64),
+        components=(OwnedDataComponent("skill:worker", stable, tmp_path / "beta2/data", stable,
+            {}, manifest(1), tmp_path / "beta1/data"),))
+    with pytest.raises(RuntimeChannelConflict, match="retained upgrade source"):
+        lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    assert not (tmp_path / "beta2/data/records.sqlite").exists()
+
+
+def test_beta_upgrade_carries_blobs_and_state_without_changing_stable_baseline(tmp_path):
+    state, stable, channel = seed(tmp_path)
+    contract = blob_manifest(1)
+    contract["data_lifecycle"]["state_files"] = state_file_manifest()["data_lifecycle"]["state_files"]
+    (stable / "state").mkdir()
+    (stable / "state/state.json").write_text('{"setting":"stable"}')
+    stable_blob = blob(stable, b"original-photo")
+    first = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path,
+        application_id="sample", candidate_id="candidate1", release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST, components=(OwnedDataComponent("skill:worker", stable,
+            tmp_path / "beta1/data", stable, contract, contract),))
+    first.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    old_beta = tmp_path / "beta1/data"
+    (old_beta / "state/state.json").write_text('{"setting":"beta"}')
+    beta_blob = blob(old_beta, b"user-new-result")
+    second = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path,
+        application_id="sample", candidate_id="candidate2", release_digest="sha256:" + "2" * 64,
+        stable_digest=DIGEST, beta_source_ref=("trial:candidate1", "sha256:" + "1" * 64),
+        components=(OwnedDataComponent("skill:worker", stable, tmp_path / "beta2/data", stable,
+            contract, contract, old_beta),))
+    second.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    assert json.loads((tmp_path / "beta2/data/state/state.json").read_text()) == {"setting": "beta"}
+    assert (tmp_path / "beta2/data" / beta_blob.relative_to(old_beta)).read_bytes() == b"user-new-result"
+    assert stable_blob.read_bytes() == b"original-photo"
+    second.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": True})
+    assert json.loads((stable / "state/state.json").read_text()) == {"setting": "beta"}
+
+
+@pytest.mark.parametrize("fail_activation", [False, True])
+def test_beta_upgrade_compensation_restores_source_beta_and_configuration(tmp_path, fail_activation):
+    state, stable, channel = seed(tmp_path)
+    first = coordinator(tmp_path, 1)
+    first.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    config = ApplicationConfigurationStore(state, "sample", "skill:worker")
+    config.update_beta(candidate_id="candidate1", schema=CONFIG["schema"], values={"page_size": 25},
+        credentials={}, expected_revision=config.read()["revision"])
+    original_beta_config = config.read()["beta"]
+    second = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path,
+        application_id="sample", candidate_id="candidate2", release_digest="sha256:" + "2" * 64,
+        stable_digest=DIGEST, beta_source_ref=("trial:candidate1", "sha256:" + "1" * 64),
+        components=(OwnedDataComponent("skill:worker", stable, tmp_path / "beta2/data", stable,
+            {}, manifest(1), tmp_path / "beta1/data"),))
+    def activate(_):
+        if fail_activation:
+            raise SystemExit("interrupted upgrade")
+        return {"ok": True}
+    if fail_activation:
+        with pytest.raises(SystemExit):
+            second.prepare_beta(webspace_id="desktop", activate=activate)
+        second.abort_beta_preparation(verify_source=lambda _: {"ok": True})
+    else:
+        second.prepare_beta(webspace_id="desktop", activate=activate)
+        config.update_beta(candidate_id="candidate2", schema=CONFIG["schema"], values={"page_size": 40},
+            credentials={}, expected_revision=config.read()["revision"])
+        second.reject_beta(webspace_id="desktop", verify_source=lambda _: {"ok": True})
+    assert channel.read()[0].runtime_root_ref == "trial:candidate1"
+    assert config.read()["beta"] == original_beta_config
+    assert sql(stable / "records.sqlite", "SELECT id,value FROM records") == [(1, "original")]
+
+
 def test_publication_interruption_keeps_both_runtimes_fenced_and_retries_exact_effect(tmp_path):
     _state, _stable, channel = seed(tmp_path)
     lifecycle = coordinator(tmp_path, 1)

@@ -35,6 +35,7 @@ class OwnedDataComponent:
     target_root: Path
     stable_manifest: Mapping[str, Any]
     target_manifest: Mapping[str, Any]
+    beta_source_root: Path | None = None
 
 
 _SKILL_MEMORY_PATH = "db/skill_env.json"
@@ -670,7 +671,7 @@ class LocalApplicationDataLifecycle:
 
     def __init__(self, *, state_root: Path, private_root: Path, application_id: str,
                  candidate_id: str, release_digest: str, stable_digest: str | None,
-                 components: tuple[OwnedDataComponent, ...]):
+                 components: tuple[OwnedDataComponent, ...], beta_source_ref: tuple[str, str] | None = None):
         self.state = state_root.resolve()
         self.private = private_root.resolve()
         self.application_id = application_id
@@ -678,6 +679,9 @@ class LocalApplicationDataLifecycle:
         self.release_digest = release_digest
         self.stable_digest = stable_digest
         self.components = components
+        self.beta_source_ref = beta_source_ref
+        if any(item.beta_source_root is not None for item in components) and not beta_source_ref:
+            raise ValueError("Beta source data requires a pinned source channel")
         self.channel = ApplicationRuntimeChannel(self.state, application_id)
         self.data = SQLiteDataTransition(self.private)
         self.state_files = _StateFileTransition(self.private)
@@ -697,7 +701,7 @@ class LocalApplicationDataLifecycle:
         for component in components:
             if not component.component_ref.startswith("skill:") or component.component_ref in self.contracts:
                 raise ValueError("Data lifecycle requires unique owned skill identities")
-            for root in (component.stable_root, component.beta_root, component.target_root):
+            for root in (component.stable_root, component.beta_root, component.target_root, component.beta_source_root):
                 if root is not None and (root.absolute() != root.resolve() or not root.resolve().is_relative_to(self.private)):
                     raise ValueError("Data component escaped the local private root")
                 if root is not None:
@@ -707,7 +711,7 @@ class LocalApplicationDataLifecycle:
                     or component.beta_root.is_relative_to(component.target_root)
                     or component.target_root.is_relative_to(component.beta_root)):
                 raise ValueError("Beta requires an isolated data root")
-            owned_roots.extend(root for root in (component.stable_root, component.beta_root, component.target_root) if root is not None)
+            owned_roots.extend(root for root in (component.stable_root, component.beta_root, component.target_root, component.beta_source_root) if root is not None)
             require_native_tools(component.target_manifest)
             if not _allows_legacy_adoption(
                 component.stable_root, component.target_manifest
@@ -773,10 +777,15 @@ class LocalApplicationDataLifecycle:
         return self.recovery / key / name
 
     def _contract(self):
-        return _digest({"release": self.release_digest, "stable": self.stable_digest,
+        payload = {"release": self.release_digest, "stable": self.stable_digest,
             "components": [{"ref": item.component_ref, "stable_root": str(item.stable_root),
                 "beta_root": str(item.beta_root), "target_root": str(item.target_root),
-                "old": item.stable_manifest, "new": item.target_manifest} for item in self.components]})
+                "old": item.stable_manifest, "new": item.target_manifest,
+                **({"beta_source_root": str(item.beta_source_root)} if item.beta_source_root else {})}
+                for item in self.components]}
+        if self.beta_source_ref:
+            payload["beta_source_ref"] = self.beta_source_ref
+        return _digest(payload)
 
     def _install_new(self, component, mode, name, staged, digest, target):
         marker = self._root(component, mode + "_install") / (name + ".json")
@@ -860,8 +869,13 @@ class LocalApplicationDataLifecycle:
                 if mode == "beta" and current and current.runtime_root_ref == "workspace" and current.release_digest != self.stable_digest:
                     raise RuntimeChannelConflict("Selected Stable release differs from the migration base")
                 if mode == "beta" and current and current.runtime_root_ref.startswith("trial:"):
-                    if not allow_beta_data_reset:
+                    if self.beta_source_ref:
+                        if (current.runtime_root_ref, current.release_digest) != self.beta_source_ref:
+                            raise RuntimeChannelConflict("Selected Beta differs from the retained upgrade source")
+                    elif not allow_beta_data_reset:
                         raise RuntimeChannelConflict("Replacing Beta working data requires explicit data-loss acknowledgement and recovery protection")
+                if mode == "beta" and self.beta_source_ref and (not current or (current.runtime_root_ref, current.release_digest) != self.beta_source_ref):
+                    raise RuntimeChannelConflict("Selected Beta differs from the retained upgrade source")
                 if mode == "stable" and (current.runtime_root_ref != f"trial:{self.candidate_id}" or current.release_digest != self.release_digest):
                     raise RuntimeChannelConflict("Accept only the exact selected Beta")
                 source, root = ("local_trial", f"trial:{self.candidate_id}") if mode == "beta" else ("stable_installation", "workspace")
@@ -879,7 +893,8 @@ class LocalApplicationDataLifecycle:
             return {"ok": True, "operation_id": operation_id, "completed": result["completed"],
                     "runtime_selection": next(value for value in self.channel.read() if value.webspace_id == webspace_id).to_dict()}
 
-    def prepare_beta(self, *, webspace_id: str, activate: Callable[[str], Mapping[str, Any]], allow_beta_data_reset=False):
+    def prepare_beta(self, *, webspace_id: str, activate: Callable[[str], Mapping[str, Any]], allow_beta_data_reset=False,
+                     prepare_runtime_state: Callable[[str], Mapping[str, Any]] | None = None):
         def transfer(key):
             for component in self.components:
                 databases = self.contracts[component.component_ref]
@@ -890,6 +905,8 @@ class LocalApplicationDataLifecycle:
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
                 memory_adapter = self.skill_memory_contracts[component.component_ref]
                 inventory(component.stable_root, databases, state_files=state_files, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
+                if component.beta_source_root:
+                    inventory(component.beta_source_root, databases, state_files=state_files, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
                 inventory(component.beta_root, databases, state_files=state_files, blobs=blob_adapter, skill_memory=memory_adapter, coordination_files=coordination_files, operational_evidence_files=operational_evidence, reconstructible_directories=reconstructible)
                 for name, migrations in databases.items():
                     source = component.stable_root / name if component.stable_root else None
@@ -901,20 +918,29 @@ class LocalApplicationDataLifecycle:
                             connection.execute("PRAGMA user_version=0")
                             connection.commit()
                     snapshot = self.data.snapshot(source, base, operation_key=key + ":base:" + name)
+                    if component.beta_source_root and (component.beta_source_root / name).exists():
+                        base = self._root(component, "beta_source") / name
+                        snapshot = self.data.snapshot(component.beta_source_root / name, base,
+                            operation_key=key + ":beta-source:" + name)
                     staged = self._root(component, "migrated") / name
                     migrated = self.data.migrate(base, staged, snapshot_digest=snapshot["digest"],
                         migrations=migrations, operation_key=key + ":migrate:" + name)
                     self._install_new(component, "beta", name, staged, migrated["digest"], component.beta_root / name)
                 for name, contract in state_files.items():
                     source = component.stable_root / name if component.stable_root else None
+                    if component.beta_source_root:
+                        if source is not None and source.is_file():
+                            self.state_files.snapshot(source, self._root(component, "stable_state_files") / name,
+                                contract=contract, operation_key=key + ":base-state-file:" + name)
+                        source = component.beta_source_root / name
                     if source is None or not source.is_file():
                         continue
-                    staged = self._root(component, "stable_state_files") / name
+                    staged = self._root(component, "beta_source_state_files" if component.beta_source_root else "stable_state_files") / name
                     snapshot = self.state_files.snapshot(
                         source,
                         staged,
                         contract=contract,
-                        operation_key=key + ":base-state-file:" + name,
+                        operation_key=key + (":beta-source-state-file:" if component.beta_source_root else ":base-state-file:") + name,
                     )
                     self._install_state_file_new(
                         component,
@@ -929,13 +955,22 @@ class LocalApplicationDataLifecycle:
                     source = component.stable_root / "files" if component.stable_root else None
                     staged = self._root(component, "stable_blobs") / "files"
                     snapshot = self.blobs.snapshot(source, staged, operation_key=key + ":base:files")
+                    if component.beta_source_root:
+                        staged = self._root(component, "beta_source_blobs") / "files"
+                        snapshot = self.blobs.snapshot(component.beta_source_root / "files", staged,
+                            operation_key=key + ":beta-source:files")
                     self._install_blobs_new(component, "beta", staged, snapshot["digest"], component.beta_root / "files")
                 if memory_adapter:
                     source = component.stable_root / _SKILL_MEMORY_PATH if component.stable_root else None
+                    if component.beta_source_root:
+                        if source is not None and source.is_file():
+                            self.skill_memory.snapshot(source, self._root(component, "stable_skill_memory") / "skill_env.json",
+                                operation_key=key + ":base:skill_memory")
+                        source = component.beta_source_root / _SKILL_MEMORY_PATH
                     if source is not None and source.is_file():
-                        staged = self._root(component, "stable_skill_memory") / "skill_env.json"
+                        staged = self._root(component, "beta_source_skill_memory" if component.beta_source_root else "stable_skill_memory") / "skill_env.json"
                         snapshot = self.skill_memory.snapshot(
-                            source, staged, operation_key=key + ":base:skill_memory"
+                            source, staged, operation_key=key + (":beta-source:skill_memory" if component.beta_source_root else ":base:skill_memory")
                         )
                         self._install_skill_memory_new(
                             component,
@@ -944,7 +979,7 @@ class LocalApplicationDataLifecycle:
                             snapshot["digest"],
                             component.beta_root / _SKILL_MEMORY_PATH,
                         )
-            return {"ok": True, "mode": "stable_snapshot_forward", "contract_digest": self._contract()}
+            return {"ok": True, "mode": "beta_snapshot_forward" if self.beta_source_ref else "stable_snapshot_forward", "contract_digest": self._contract()}
 
         def configure(_key):
             for component in self.components:
@@ -953,6 +988,10 @@ class LocalApplicationDataLifecycle:
                     continue
                 store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
                 record = store.read()
+                if self.beta_source_ref:
+                    before = self._root(component, "beta_source_configuration.json")
+                    if not before.exists():
+                        atomic_write_json(before, record)
                 bound = (record.get("stable") or {}).get("credentials") or {}
                 previous_slots = (component.stable_manifest.get("configuration") or {}).get("credentials") or {}
                 target_slots = target.get("credentials") or {}
@@ -968,9 +1007,42 @@ class LocalApplicationDataLifecycle:
                     expected_revision=record["revision"])
             return {"ok": True}
 
-        return self._run("beta", webspace_id, [TransitionStep("snapshot_migrate_data", transfer),
-            TransitionStep("inherit_configuration", configure), TransitionStep("activate_verify", activate)],
+        steps = [TransitionStep("snapshot_migrate_data", transfer)]
+        if prepare_runtime_state is not None:
+            steps.append(TransitionStep("preserve_runtime_state", prepare_runtime_state))
+        steps += [TransitionStep("inherit_configuration", configure), TransitionStep("activate_verify", activate)]
+        return self._run("beta", webspace_id, steps,
             allow_beta_data_reset=allow_beta_data_reset)
+
+    def _restore_configuration_after_beta(self, component):
+        store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
+        state = store.read()
+        beta = state.get("beta")
+        if self.beta_source_ref:
+            before = self._root(component, "beta_source_configuration.json")
+            if not before.exists():
+                if beta and beta.get("candidate_id") == self.candidate_id:
+                    raise RuntimeChannelConflict("Beta source configuration recovery evidence is missing")
+                return
+            previous = json.loads(before.read_text(encoding="utf-8"))
+            previous_beta = previous.get("beta")
+            if previous_beta and (previous_beta.get("candidate_id"), previous_beta.get("release_digest")) != (
+                    self.beta_source_ref[0].split(":", 1)[1], self.beta_source_ref[1]):
+                raise RuntimeChannelConflict("Retained configuration belongs to another Beta source")
+            with mutation_lock(store.path.with_suffix(".lock")):
+                state = store.read()
+                if state.get("stable") != previous.get("stable"):
+                    raise RuntimeChannelConflict("Stable configuration changed during Beta upgrade")
+                if state.get("beta") == previous_beta:
+                    return
+                if (state.get("beta") or {}).get("candidate_id") != self.candidate_id:
+                    raise RuntimeChannelConflict("Another Candidate owns the active configuration")
+                store._save({**state, "beta": previous_beta})
+            return
+        if beta and beta["active"]:
+            if beta["candidate_id"] != self.candidate_id:
+                raise RuntimeChannelConflict("Another Candidate owns the active configuration")
+            store.deactivate_beta(candidate_id=self.candidate_id, expected_revision=state["revision"])
 
     def accept_beta(self, *, webspace_id: str, publish: Callable[[str], Mapping[str, Any]]):
         def transfer(key):
@@ -1134,22 +1206,17 @@ class LocalApplicationDataLifecycle:
         runner = ApplicationRuntimeTransition(self.channel)
         operation = f"application-beta:{self.application_id}:{self.candidate_id}"
         record = runner.get(operation)
+        source_ref = self.beta_source_ref or ("workspace", self.stable_digest)
         if (not record or record["intent"]["target"]["runtime_root_ref"] != f"trial:{self.candidate_id}"
-                or any(item["runtime_root_ref"] != "workspace" or item["release_digest"] != self.stable_digest
+                or any((item["runtime_root_ref"], item["release_digest"]) != source_ref
                        for item in record["intent"]["expected"])):
-            raise RuntimeChannelConflict("Only a failed Stable-to-Beta preparation can be cancelled")
+            raise RuntimeChannelConflict("Only a failed preparation from the pinned source can be cancelled")
         if runner.get(f"application-stable:{self.application_id}:{self.candidate_id}"):
             raise RuntimeChannelConflict("Stable data adoption has started; recover that exact publication instead")
 
         def configure(_key):
             for component in self.components:
-                store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
-                state = store.read()
-                beta = state.get("beta")
-                if beta and beta["active"]:
-                    if beta["candidate_id"] != self.candidate_id:
-                        raise RuntimeChannelConflict("Another Candidate owns the active configuration")
-                    store.deactivate_beta(candidate_id=self.candidate_id, expected_revision=state["revision"])
+                self._restore_configuration_after_beta(component)
             return {"ok": True, "overrides_retained": True}
 
         return runner.abort(operation, contract_digest=self._contract(), steps=[
@@ -1237,13 +1304,7 @@ class LocalApplicationDataLifecycle:
 
         def configure(_key):
             for component in self.components:
-                store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
-                state = store.read()
-                beta = state.get("beta")
-                if beta and beta["active"]:
-                    if beta["candidate_id"] != self.candidate_id:
-                        raise RuntimeChannelConflict("Another Candidate owns the active configuration")
-                    store.deactivate_beta(candidate_id=self.candidate_id, expected_revision=state["revision"])
+                self._restore_configuration_after_beta(component)
             return {"ok": True, "overrides_retained": True}
 
         return runner.reject_completed(operation, contract_digest=self._contract(), steps=[

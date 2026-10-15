@@ -358,6 +358,30 @@ def setup(tmp_path):
     return owner, service, old, new, activations, lock
 
 
+def test_upgrade_binding_pins_current_beta_without_reinterpreting_stable(setup):
+    owner, service, old, new, _activations, _lock = setup
+    first_runtime = NativeTrialRuntime._resolve_immutable(owner, "candidate-sample", new.release_digest)
+    first = bind_local_data_lifecycle(owner, first_runtime, new)
+    first.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    source = first.components[0].beta_root
+    with closing(sqlite3.connect(source / "entries.sqlite")) as db:
+        db.execute("INSERT INTO entries VALUES(2,'new uploaded photo and held run')")
+        db.commit()
+    second_runtime = SimpleNamespace(root=first_runtime.root.parent / "candidate-upgrade",
+        candidate_id="candidate-upgrade", release_digest=new.release_digest)
+    second = bind_local_data_lifecycle(owner, second_runtime, new, preserve_selected_beta=True)
+    assert second.stable_digest == old.release_digest
+    assert second.beta_source_ref == ("trial:candidate-sample", new.release_digest)
+    assert second.components[0].beta_source_root == source
+    assert second.beta_source_runtime_root == first_runtime.root
+    rebound = bind_local_data_lifecycle(owner, second_runtime, new)
+    assert rebound.beta_source_ref == second.beta_source_ref
+    rebound.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    assert rows(rebound.components[0].beta_root / "entries.sqlite") == [
+        (1, "private stable"), (2, "new uploaded photo and held run")]
+    assert rows(first.components[0].stable_root / "entries.sqlite") == [(1, "private stable")]
+
+
 def _register_component_consumer(
     service: ApplicationService,
     *,

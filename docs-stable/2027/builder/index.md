@@ -28,6 +28,12 @@ When a Telegram notification route is configured, Builder mirrors the chat brief
 replies, and lifecycle messages to that route. Long chat messages are split into
 numbered parts.
 
+When a local Beta is upgraded to another candidate, its declared working data
+and existing image and analysis jobs are carried into the new isolated runtime.
+Checking an existing job keeps its original provider identity. The previous
+Beta data remains available for recovery; preparing an upgrade does not publish
+the application.
+
 ## Public Promise
 
 The public promise should stay modest until the workflow is packaged for

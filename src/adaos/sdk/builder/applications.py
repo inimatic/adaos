@@ -859,8 +859,14 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
         application.application_id,
         release_digest=envelope.release_digest,
     )
-    data = bind_local_data_lifecycle(_ctx(), runtime, release)
+    data = bind_local_data_lifecycle(_ctx(), runtime, release, preserve_selected_beta=True)
     activations = TrialActivationStore(_state_dir() / "artifact_pipeline/trial-activations")
+
+    def preserve_runtime_state(key):
+        from adaos.services.applications.generation_draft_transition import preserve_generation_drafts
+        return preserve_generation_drafts(source_runtime=data.beta_source_runtime_root,
+            target_runtime=runtime.root, recovery=data.recovery / "sdk-drafts",
+            private=data.private, operation_key=key)
 
     def activate(_key):
         try:
@@ -883,7 +889,8 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
     transition = data.prepare_beta(
         webspace_id=webspace_id,
         activate=activate,
-        allow_beta_data_reset=True,
+        allow_beta_data_reset=False,
+        prepare_runtime_state=preserve_runtime_state if data.beta_source_runtime_root else None,
     )
     selection = service.store.get_runtime_selection(webspace_id, application.application_id)
     activation = activations.load(candidate_id)
@@ -893,6 +900,7 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
         "completed": bool(transition.get("completed")),
     }
     migrated_from_stable = bool(data.stable_digest)
+    migrated_from_beta = bool(data.beta_source_ref)
     activation = activations.update(
         candidate_id,
         data_mode="snapshot",
@@ -900,16 +908,22 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
             **dict(activation.get("safety_evidence") or {}),
             "status": "verified",
             "mode": (
-                "stable_snapshot_forward"
+                "beta_snapshot_forward"
+                if migrated_from_beta
+                else "stable_snapshot_forward"
                 if migrated_from_stable
                 else "empty_initialization"
             ),
             "reason": (
-                "Stable data was snapshotted and migrated into the isolated Trial."
+                "Selected Beta data and durable SDK jobs were retained in the upgraded Trial."
+                if migrated_from_beta
+                else "Stable data was snapshotted and migrated into the isolated Trial."
                 if migrated_from_stable
                 else "The first release initialized an isolated Trial data store."
             ),
             "data_transition": transition_proof,
+            **({"beta_source": {"runtime_root_ref": data.beta_source_ref[0],
+                "release_digest": data.beta_source_ref[1]}} if migrated_from_beta else {}),
         },
     )
     home = _sync_local_trial_home(application.application_id, webspace_id=webspace_id)
@@ -1027,6 +1041,10 @@ def abort_local_trial_preparation(candidate_id: str, *, release_digest: str, act
     metadata = Path(_ctx().paths.workspace_dir()) / ".adaos"
 
     def verify(_key):
+        if lifecycle.beta_source_ref:
+            NativeTrialRuntime._resolve_immutable(_ctx(), lifecycle.beta_source_ref[0].split(":", 1)[1],
+                lifecycle.beta_source_ref[1])
+            return {"ok": True, "release_digest": lifecycle.beta_source_ref[1]}
         lock = WorkspaceLock.from_mapping(json.loads((metadata / "workspace.lock.json").read_text(encoding="utf-8")))
         slots = [slot for slot in lock.slots if slot.project_id == release.project_id]
         if lifecycle.stable_digest:

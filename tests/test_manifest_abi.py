@@ -28,6 +28,19 @@ def _load_service_skill_schema() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_declared_tool_deadline_is_admitted_and_used_by_runtime():
+    from adaos.services.skill.manager import SkillManager
+    schema = _load_schema("skill.schema.json")
+    tool = {"name": "finish", "entry": "handlers.main:finish", "timeout_seconds": 180}
+    Draft7Validator({"$ref": "#/$defs/tool", "$defs": schema["$defs"]}).validate(tool)
+    assert SkillManager._tool_timeout_seconds(tool, 30) == 180
+    assert SkillManager._tool_timeout_seconds({"name": "read"}, 30) == 30
+    for invalid in (0, -1, 601, "180"):
+        with pytest.raises(ValidationError):
+            Draft7Validator({"$ref": "#/$defs/tool", "$defs": schema["$defs"]}).validate(
+                {**tool, "timeout_seconds": invalid})
+
+
 @pytest.mark.parametrize(
     "schema_name",
     [

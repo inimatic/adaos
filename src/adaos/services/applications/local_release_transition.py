@@ -77,7 +77,7 @@ def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> di
     return {"ok": True, "hook": hook, "components": receipts}
 
 
-def bind_local_data_lifecycle(owner, runtime, release):
+def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta=False):
     """Caller must admit the local publisher before preparing this exact Candidate.
 
     Retain the original Stable identity before publication can advance the
@@ -134,7 +134,32 @@ def bind_local_data_lifecycle(owner, runtime, release):
             if stable_digest == runtime.release_digest:
                 raise ValueError("Published Candidate has no retained migration binding; explicit recovery required")
             binding = {**identity, "stable_release_digest": stable_digest}
+            if preserve_selected_beta:
+                selections = ApplicationRuntimeChannel(state, application_id).read()
+                if selections is None:
+                    selections = tuple(item for item in store.list_runtime_selections() if item.application_id == application_id)
+                sources = {(item.runtime_root_ref, item.release_digest) for item in selections}
+                if len(sources) > 1:
+                    raise ValueError("Reconcile divergent Application channels before upgrading Beta")
+                if sources:
+                    source_ref, source_digest = next(iter(sources))
+                    if source_ref.startswith("trial:") and source_ref != f"trial:{runtime.candidate_id}":
+                        binding["beta_source"] = {"runtime_root_ref": source_ref, "release_digest": source_digest}
         stable = store.get_release(application_id, stable_digest).project_release if stable_digest else None
+        beta_source = binding.get("beta_source")
+        source_runtime = None
+        source_release = None
+        if beta_source:
+            from adaos.domain.artifact_release import ProjectRelease
+            from .trial_runtime import NativeTrialRuntime
+            source_runtime = NativeTrialRuntime._resolve_immutable(owner,
+                beta_source["runtime_root_ref"].split(":", 1)[1], beta_source["release_digest"])
+            if source_runtime.project_id != application_id:
+                raise ValueError("Beta upgrade source belongs to another Application")
+            source_release = ProjectRelease.from_mapping(json.loads((source_runtime.root / ".adaos/releases" /
+                f"{source_runtime.release_digest.split(':')[1]}.json").read_text(encoding="utf-8"))).seal()
+            if source_release.release_digest != source_runtime.release_digest:
+                raise ValueError("Beta upgrade source release digest mismatch")
         packages = ContentAddressedPackageStore(state / "artifact_pipeline/packages")
         active_lock_path = workspace / ".adaos/workspace.lock.json"
         active_lock = (
@@ -282,6 +307,9 @@ def bind_local_data_lifecycle(owner, runtime, release):
                     ) from exc
                 shared_adoptions[ref] = (active_package, active_manifest)
         components = []
+        source_components = skills(source_release)
+        if source_components.keys() - target.keys() - retained_retirements:
+            raise ValueError("Beta upgrade removes owned components without a data retention contract")
         for ref, (package, manifest) in target.items():
             environment = SkillRuntimeEnvironment(skills_root=workspace / "skills", skill_name=package.artifact_id)
             old = previous.get(ref)
@@ -293,10 +321,14 @@ def bind_local_data_lifecycle(owner, runtime, release):
                     if adopted_shared else None
                 ),
                 beta_environment.data_root(package.version), environment.data_root(package.version),
-                old[1] if old else (adopted_shared[1] if adopted_shared else {}), manifest))
+                old[1] if old else (adopted_shared[1] if adopted_shared else {}), manifest,
+                (SkillRuntimeEnvironment(skills_root=source_runtime.root / "skills", skill_name=package.artifact_id)
+                    .data_root(source_components[ref][0].version)) if ref in source_components else None))
         lifecycle = LocalApplicationDataLifecycle(state_root=state, private_root=workspace.parent,
             application_id=application_id, candidate_id=runtime.candidate_id,
-            release_digest=release.release_digest, stable_digest=stable_digest, components=tuple(components))
+            release_digest=release.release_digest, stable_digest=stable_digest, components=tuple(components),
+            beta_source_ref=(beta_source["runtime_root_ref"], beta_source["release_digest"]) if beta_source else None)
+        lifecycle.beta_source_runtime_root = source_runtime.root if source_runtime else None
         if not binding_path.exists():
             atomic_write_json(binding_path, binding)
         # Adopt legacy selections without changing their channel or revision.
@@ -371,6 +403,7 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
         release_digest=lifecycle.release_digest,
         stable_digest=lifecycle.stable_digest,
         components=original_components,
+        beta_source_ref=lifecycle.beta_source_ref,
     )
     webspace_id = str((activation.get("target") or {}).get("webspace_id") or "").strip()
     if not webspace_id:
@@ -378,6 +411,10 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
     metadata = workspace / ".adaos"
 
     def verify(_key):
+        if lifecycle.beta_source_ref:
+            NativeTrialRuntime._resolve_immutable(owner, lifecycle.beta_source_ref[0].split(":", 1)[1],
+                lifecycle.beta_source_ref[1])
+            return {"ok": True, "release_digest": lifecycle.beta_source_ref[1]}
         lock = WorkspaceLock.from_mapping(json.loads((metadata / "workspace.lock.json").read_text(encoding="utf-8")))
         slots = [slot for slot in lock.slots if slot.project_id == release.project_id]
         store = ApplicationStore(state)

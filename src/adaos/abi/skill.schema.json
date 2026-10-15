@@ -877,6 +877,12 @@
           "$ref": "#/$defs/toolBehavioralGuarantees",
           "description": "Provider-owned, conformance-tested behavioral guarantees that consumers may rely on without inspecting implementation source."
         },
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "description": "Maximum wall time for one tool invocation, in seconds. The runtime uses its default when omitted; a timeout does not cancel an already submitted durable provider job."
+        },
         "side_effects": {
           "type": "string",
           "enum": ["safe", "none", "read", "read_only", "readonly", "ui_navigation", "local_write", "runtime_write", "external_write", "device_control"],
