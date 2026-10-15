@@ -343,7 +343,7 @@
           "original": "Optional explicit original media descriptor, resource reference or image URL.",
           "result": "Optional explicit result media descriptor, resource reference or image URL.",
           "editableMasks": "Boolean; show crop, edit/protect brushes and Save masks. No inference or saving on painting/zooming.",
-          "labels": "Optional localized labels: compare, original, result, fit, download, masks, pan, crop, edit, protect, radius, undo, clear, saveMasks, unsaved, empty, maskHelp, loadError, mismatch.",
+          "labels": "Optional localized labels: compare, original, result, fit, download, masks, permissionMode, elementsMode, rectangleMode, rectangleHelp, pan, crop, edit, protect, radius, undo, clear, saveMasks, unsaved, empty, maskHelp, loadError, mismatch.",
           "downloadFilename": "Optional result download filename; defaults to retouched.png."
         },
         "actions": "on:maskSave provides $event.mask. Bind to a declared scoped resource command or skill tool. A successful action clears the dirty indicator."
@@ -351,7 +351,7 @@
       "data_shape": {
         "kind": "record",
         "example": {"id": "pair-1", "original": {"content_path": "/api/node/media/content/original.png"}, "result": {"content_path": "/api/node/media/content/result.png"}},
-        "masks": "Optional masks:{schema:adaos.image_masks.v1,width,height,crop?:{x,y,width,height},strokes:[{kind:edit|protect,radius,points:[{x,y}]}]}. Coordinates and radius are pixels of the EXIF-oriented original; max 500 strokes, 512 points per stroke. Protection takes precedence when rasterized by the owning skill. Crop is context only, never permission to edit its whole rectangle."
+        "masks": "Optional masks:{schema:adaos.image_masks.v1,width,height,permission_mode?:elements|rectangle,crop?:{x,y,width,height},strokes:[{kind:edit|protect,radius,points:[{x,y}]}]}. Coordinates and radius are pixels of the EXIF-oriented original; max 500 strokes, 512 points per stroke. Missing permission_mode means elements: edit strokes grant permission and crop is context only. Explicit rectangle mode requires a crop and grants permission throughout that rectangle, ignoring edit strokes while retaining them for switching back. Protection takes precedence in both modes when rasterized by the owning skill. The owning skill must validate and implement the selected mode; the viewer does not run AI or rasterize masks."
       },
       "events": ["maskSave"],
       "responsive": {"desktop": "Two equal simultaneous panes with one shared transform.", "compact": "Two simultaneous panes remain side by side; original/result-only modes and zoom buttons allow detailed work."},
