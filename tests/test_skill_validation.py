@@ -115,6 +115,33 @@ def ping():
     assert "schema.invalid" in {issue.code for issue in report.issues}
 
 
+@pytest.mark.parametrize("decorated", [True, False])
+def test_dynamic_validation_checks_declared_tool_module(tmp_path: Path, decorated: bool) -> None:
+    skill_dir = _write_skill(tmp_path, handler="", extra_files={
+        "handlers/retouch.py": "from adaos.sdk.core.decorators import tool\n"
+        + ("@tool('ping')\n" if decorated else "")
+        + "def process():\n    return {'ok': True}\n",
+    })
+    manifest = skill_dir / "skill.yaml"
+    manifest.write_text(manifest.read_text(encoding="utf-8").replace(
+        "handlers.main:ping", "handlers.retouch:process"), encoding="utf-8")
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+    codes = {issue.code for issue in report.issues}
+    assert "import.failed" not in codes
+    assert ("tools.missing_export" in codes) is not decorated
+
+
+def test_dynamic_validation_does_not_accept_export_from_wrong_module(tmp_path: Path) -> None:
+    skill_dir = _write_skill(tmp_path,
+        handler="from adaos.sdk.core.decorators import tool\n@tool\ndef ping():\n    return {}\n",
+        extra_files={"handlers/retouch.py": "def ping():\n    return {}\n"})
+    manifest = skill_dir / "skill.yaml"
+    manifest.write_text(manifest.read_text(encoding="utf-8").replace(
+        "handlers.main:ping", "handlers.retouch:ping"), encoding="utf-8")
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+    assert "tools.missing_export" in {issue.code for issue in report.issues}
+
+
 def test_strict_validation_predicts_heavy_dependency_isolation_failure(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

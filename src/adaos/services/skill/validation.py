@@ -1400,9 +1400,18 @@ def _relative_to(path: Path, root: Path) -> str:
 
 def _dynamic_checks(skill_name: str, skill_dir: Path, install_mode: bool, probe_tools: bool) -> List[Issue]:
     """
-    Импортируем handlers/main.py в ОТДЕЛЬНОМ процессе Python
-    и сверяем экспорт инструментов/подписок.
+    Import declared handler modules in an isolated process and verify the
+    exact decorated callable for every manifest tool, as the runtime resolves it.
     """
+    data = _normalize_spec(_read_yaml(skill_dir / "skill.yaml"))
+    default_module = str((data.get("runtime") or {}).get("module") or "handlers.main")
+    bindings = []
+    for item in data.get("tools") or []:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        name = str(item["name"])
+        module_name, _, attr = str(item.get("entry") or "").partition(":")
+        bindings.append((name, module_name or default_module, attr or name))
     code = f"""
 import os, json, importlib.util, sys, types
 os.environ['ADAOS_VALIDATE'] = '1'
@@ -1418,28 +1427,30 @@ if 'ypy_websocket' not in sys.modules:
     sys.modules['ypy_websocket'] = types.SimpleNamespace(ystore=ystore_mod)
     sys.modules['ypy_websocket.ystore'] = ystore_mod
 from pathlib import Path
+import re
 from adaos.skills.runtime_runner import isolated_skill_import_state, _ensure_skill_module_parents
 skill_root = Path({str(skill_dir.resolve())!r})
+bindings = {bindings!r}
 with isolated_skill_import_state(skill_root):
-    namespace = _ensure_skill_module_parents(skill_root, 'handlers.main')
-    mod_name = namespace + '.handlers.main'
-    module = importlib.import_module(mod_name)
-
-# попытка получить новые публичные реестры (с fallback на старые)
-try:
+    modules = {{}}
+    for module_name in dict.fromkeys([{default_module!r}] + [row[1] for row in bindings]):
+        if not re.fullmatch(r'[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*', module_name):
+            raise ValueError('Invalid tool module: ' + module_name)
+        relative = Path(*module_name.split('.'))
+        candidates = [skill_root / relative.with_suffix('.py'), skill_root / relative / '__init__.py']
+        if not any(p.is_file() and p.resolve().is_relative_to(skill_root) for p in candidates):
+            raise ValueError('Tool module is not owned by this skill: ' + module_name)
+        namespace = _ensure_skill_module_parents(skill_root, module_name)
+        modules[module_name] = importlib.import_module(namespace + '.' + module_name)
     from adaos.sdk.core.decorators import tools_registry, subscriptions
-    mod_tools = (tools_registry.get(mod_name) or {{}})
+    exports = []
+    for name, module_name, attr in bindings:
+        module = modules[module_name]
+        decorated = (tools_registry.get(module.__name__) or {{}}).get(name)
+        if decorated is not None and decorated is getattr(module, attr, None) and callable(decorated):
+            exports.append(name)
     subs = [t for (t, _fn) in subscriptions]
-except Exception:
-    try:
-        from adaos.sdk.core.decorators import _TOOLS, _SUBSCRIPTIONS
-        mod_tools = (_TOOLS.get(mod_name) or {{}})
-        subs = [t for (t, _fn) in _SUBSCRIPTIONS]
-    except Exception:
-        mod_tools, subs = {{}}, []
-
-required_dp = getattr(module, 'REQUIRES_DATA_PROJECTIONS', None)
-exports = list(mod_tools.keys())
+    required_dp = getattr(modules[{default_module!r}], 'REQUIRES_DATA_PROJECTIONS', None)
 print(json.dumps({{"ok": True, "tools": exports, "subs": subs, "requires_data_projections": required_dp}}))
 """
     proc = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True, encoding="utf-8")
@@ -1456,7 +1467,6 @@ print(json.dumps({{"ok": True, "tools": exports, "subs": subs, "requires_data_pr
         issues.append(Issue("error", "introspect.failed", str(payload)))
         return issues
 
-    data = _normalize_spec(_read_yaml(skill_dir / "skill.yaml"))
     declared_tools = [t.get("name") for t in (data.get("tools") or []) if isinstance(t, dict)]
     exported_tools = set(payload.get("tools") or [])
     for name in declared_tools:
