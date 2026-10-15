@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+import hashlib
+import json
+from pathlib import Path
+import time
 
 from .telegram_projection import _telegram_text_chunks
 
@@ -57,3 +61,21 @@ def claim_builder_notification(seen: dict[str, None], identity: str) -> bool:
     if len(seen) > 1024:
         seen.pop(next(iter(seen)))
     return True
+
+
+def record_builder_delivery(base_dir: Path, payload: Mapping[str, Any], **updates: Any) -> None:
+    """Keep a private transport receipt without retaining chat text or credentials."""
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    if meta.get("schema") not in {"adaos.builder.chat_notification.v1", "adaos.builder.automation_notification.v1"}:
+        return
+    identity = str(payload.get("id") or meta.get("response_idempotency_key") or meta.get("source_message_id") or "")
+    if not identity:
+        return
+    root = Path(base_dir) / "state" / "router" / "builder-deliveries"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / (hashlib.sha256(identity.encode()).hexdigest() + ".json")
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        previous = {}
+    path.write_text(json.dumps({**previous, "message_id": identity, "updated_at": time.time(), **updates}, ensure_ascii=False), encoding="utf-8")

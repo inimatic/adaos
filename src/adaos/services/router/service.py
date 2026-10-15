@@ -21,7 +21,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_identity import runtime_transition_role
 from .rules_loader import load_rules, watch_rules
-from .builder_chat_notifications import builder_chat_notifications, claim_builder_notification
+from .builder_chat_notifications import builder_chat_notifications, claim_builder_notification, record_builder_delivery
 from .media_routes import build_media_route_refresh_payload, resolve_media_route_state
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
@@ -831,6 +831,10 @@ class RouterService:
                 pass
         # Multi-target routing: attempt telegram and stdout independently if rules exist
         did_any = False
+        try:
+            record_builder_delivery(self.base_dir, payload, phase="started", telegram_configured=self._has_rule_for("telegram"), telegram_reply=is_tg_chat)
+        except OSError:
+            _log.debug("Builder notification receipt unavailable", exc_info=True)
 
         # Telegram route (if configured in rules)
         if self._has_rule_for("telegram") and not is_tg_chat:
@@ -869,6 +873,10 @@ class RouterService:
                         headers={"Content-Type": "application/json"},
                         timeout=15.0,
                     )
+                    try:
+                        record_builder_delivery(self.base_dir, payload, phase="sent" if 200 <= int(r.status_code) < 300 else "failed", http_status=int(r.status_code), root_base=api_base)
+                    except OSError:
+                        _log.debug("Builder notification receipt unavailable", exc_info=True)
                     if not (200 <= int(r.status_code) < 300):
                         logging.getLogger("adaos.router").warning(
                             "router: telegram send failed",

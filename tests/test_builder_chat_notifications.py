@@ -55,3 +55,16 @@ def test_notification_deduplication_retains_a_bounded_recent_window():
         assert claim_builder_notification(seen, str(index))
     assert len(seen) == 1024 and "0" not in seen
     assert not claim_builder_notification(seen, "1024")
+
+
+def test_delivery_receipt_tracks_transport_without_text_or_unsafe_paths(tmp_path):
+    import json
+    from adaos.services.router.builder_chat_notifications import record_builder_delivery
+    payload = {"id": "../turn/1", "text": "Private portrait brief", "_meta": {"schema": "adaos.builder.chat_notification.v1"}}
+    record_builder_delivery(tmp_path, payload, phase="started")
+    record_builder_delivery(tmp_path, payload, phase="sent", http_status=200)
+    paths = list((tmp_path / "state/router/builder-deliveries").glob("*.json"))
+    assert len(paths) == 1
+    stored = paths[0].read_text(encoding="utf-8")
+    assert "Private portrait brief" not in stored
+    assert json.loads(stored)["http_status"] == 200 and json.loads(stored)["phase"] == "sent"
