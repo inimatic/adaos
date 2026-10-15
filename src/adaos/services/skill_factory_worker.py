@@ -467,6 +467,7 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.data.lifecycle.ensure_database",
     "adaos.sdk.data.skill_env.skill_data_root",
     "adaos.sdk.llm.content.generate",
+    "adaos.sdk.llm.media.image_input",
     "adaos.sdk.llm.content.get",
     "adaos.sdk.llm.images.generate",
     "adaos.sdk.llm.images.edit",
@@ -1181,6 +1182,12 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "status is completed and data exactly validates the caller-supplied "
                     "schema; persist data, not the enclosing draft."
                 ),
+                "image_inputs": {
+                    "constructor": "adaos.sdk.llm.media.image_input(data: bytes, media_type='image/jpeg', detail='high')",
+                    "shape": "images is a list of {media_type, detail, sha256, data_url}; sha256 is the hex digest of the explicitly supplied image bytes. Use the constructor rather than a bare image_url.",
+                    "limits": "At most 4 PNG/JPEG/WebP images; each supplied image <=5 MiB. The entire content request including base64 images, schema and prompt must fit 1 MiB. Use bounded JPEG diagnostic crops/previews for analysis and QA; preserve native-resolution originals separately for edits and exports.",
+                    "identity": "Image bytes and metadata participate in request identity. Reuse a request_id only with identical inputs; get polls without a new paid submission.",
+                },
             },
             "image_edit_draft": {
                 "methods": ["adaos.sdk.llm.images.edit", "adaos.sdk.llm.images.get"],
