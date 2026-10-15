@@ -69,7 +69,18 @@ def _dependency_ids(payload: Mapping[str, Any]) -> list[str]:
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), Mapping) else {}
     skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
     values.extend(skills.get("required") or [])
-    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+    # Project component refs use skill:<id>, while directories and tool routes
+    # use the skill id. Normalize both manifest surfaces before resolving them.
+    identities = []
+    for value in values:
+        identity = str(value).strip()
+        if identity.startswith("skill:"):
+            name = identity.removeprefix("skill:")
+            if name and all(character.isalnum() or character in "_.-" for character in name):
+                identity = name
+        if identity:
+            identities.append(identity)
+    return list(dict.fromkeys(identities))
 
 
 def _dependency_roots(manifest: Path, roots: Iterable[Path | str]) -> list[Path]:

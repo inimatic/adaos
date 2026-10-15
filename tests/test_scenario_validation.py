@@ -80,6 +80,19 @@ def test_scenario_validation_resolves_declared_dev_skill_tools(tmp_path: Path) -
     assert report.errors == []
 
 
+def test_scenario_validation_resolves_typed_project_skill_reference(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "smoke_skill", "check")
+    scenario = _write_scenario(tmp_path, "smoke", depends=["skill:smoke_skill"], route="smoke_skill.check")
+    report = validate_scenario_path(scenario)
+    assert report.ok is True, report.issues
+
+
+def test_scenario_validation_still_rejects_missing_typed_dependency(tmp_path: Path) -> None:
+    scenario = _write_scenario(tmp_path, "broken", depends=["skill:missing_skill"], route="missing_skill.check")
+    report = validate_scenario_path(scenario)
+    assert {issue.code for issue in report.issues if issue.level == "error"} == {"scenario.dependency.missing", "scenario.route.unknown"}
+
+
 def test_scenario_validation_admits_toolless_ui_event_dependency(tmp_path: Path) -> None:
     _write_toolless_skill(tmp_path, "desktop_shell")
     _write_skill(tmp_path, "smoke_skill", "check")
