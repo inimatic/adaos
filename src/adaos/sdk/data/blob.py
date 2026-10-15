@@ -9,7 +9,7 @@ from adaos.domain.blob_storage import BlobStorageBinding, BlobStorageRequirement
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.policy.skill_capabilities import require_skill_capability
 from adaos.services.storage.blob import BlobStore, BlobStorageService
-from adaos.services.storage.upload_context import consume_verified_tool_upload
+from adaos.services.storage.upload_context import MAX_TOOL_ATTACHMENT_BYTES, consume_verified_tool_upload
 
 
 def store(
@@ -49,7 +49,7 @@ def put_upload(name: str = "attachments") -> dict:
     ``media_type``, ``owner_ref``, ``logical_name``, ``field_id`` and
     ``filename``. Persist the browser attachment reference supplied to the form,
     not this internal blob identity. Failed upload/save must retain the prior
-    record value. The ingress rejects empty bodies and bodies over 10 MiB; an
+    record value. The ingress rejects empty bodies and bodies over 64 MiB; an
     application should enforce its narrower MIME and size policy before calling
     this function.
     """
@@ -78,11 +78,13 @@ def read_bytes(ref: str, name: str = "attachments", *, max_bytes: int = 10485760
     objects raise FileNotFoundError; malformed refs, size limits and digest
     mismatches raise ValueError. No URL, filesystem path or credentials are
     accepted. Returns bytes, never a browser attachment URL.
+    The default read bound remains 10 MiB; callers may explicitly request up
+    to the shared 64 MiB attachment ingress limit for large originals.
     """
     if not isinstance(ref, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", ref):
         raise ValueError("invalid blob digest")
-    if type(max_bytes) is not int or not 1 <= max_bytes <= 10485760:
-        raise ValueError("max_bytes must be between 1 and 10485760")
+    if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_TOOL_ATTACHMENT_BYTES:
+        raise ValueError(f"max_bytes must be between 1 and {MAX_TOOL_ATTACHMENT_BYTES}")
     path = store(name).materialize_digest(ref)
     with path.open("rb") as stream:
         content = stream.read(max_bytes + 1)

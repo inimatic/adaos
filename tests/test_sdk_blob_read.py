@@ -26,7 +26,7 @@ def test_read_owned_bytes_is_bounded_and_verified(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("ref,limit", [("/private/file", 10), ("sha256:" + "0" * 64, True),
-    ("sha256:" + "0" * 64, 0), ("sha256:" + "0" * 64, 10485761)])
+    ("sha256:" + "0" * 64, 0), ("sha256:" + "0" * 64, 67108865)])
 def test_invalid_byte_read_never_touches_storage(monkeypatch, ref, limit):
     monkeypatch.setattr(blob, "store", lambda *args: pytest.fail("invalid read reached storage"))
     with pytest.raises(ValueError):
@@ -39,3 +39,16 @@ def test_missing_owned_object_does_not_fall_back(monkeypatch):
     monkeypatch.setattr(blob, "store", lambda name: SimpleNamespace(materialize_digest=missing))
     with pytest.raises(FileNotFoundError):
         blob.read_bytes("sha256:" + "0" * 64)
+
+
+def test_large_original_bytes_are_preserved_with_explicit_read_bound(tmp_path, monkeypatch):
+    from adaos.services.storage.upload_context import VerifiedToolUpload
+    content = b"original-photo" * (2 * 1024 * 1024)
+    upload = VerifiedToolUpload("large-original.webp", "photo", "image/webp", content)
+    path = tmp_path / "large-original.webp"
+    path.write_bytes(upload.content)
+    monkeypatch.setattr(blob, "store", lambda name: SimpleNamespace(materialize_digest=lambda digest: path))
+    assert upload.size_bytes > 25 * 1024 * 1024
+    assert blob.read_bytes(upload.digest, max_bytes=32 * 1024 * 1024) == content
+    with pytest.raises(ValueError, match="size limit"):
+        blob.read_bytes(upload.digest)  # Existing 10 MiB default stays bounded.

@@ -8,6 +8,7 @@ import re
 import time
 
 from adaos.services.agent_context import get_ctx
+from adaos.services.storage.upload_context import MAX_TOOL_ATTACHMENT_BYTES
 
 _log = logging.getLogger("adaos.webui.contract")
 _PARAM_TOKEN_RE = re.compile(r"\$(?:params|address\.params)\.([A-Za-z0-9_.-]+)")
@@ -25,7 +26,7 @@ _DIAGNOSTIC_CATALOG: dict[str, dict[str, str]] = {
     "webui.form.production_attachment_config_invalid": {
         "severity": "error",
         "owner": "skill",
-        "remediation": "For fileStorage=skill, set distinct same-skill qualified uploadTarget/readTarget tools and maxBytes between 1 and 10485760.",
+        "remediation": "For fileStorage=skill, set distinct same-skill qualified uploadTarget/readTarget tools and maxBytes between 1 and 67108864.",
     },
     "webui.form.production_attachment_tool_unknown": {
         "severity": "error",
@@ -325,7 +326,7 @@ def validate_production_attachment_fields(
         valid_max = (
             isinstance(raw_max, int)
             and not isinstance(raw_max, bool)
-            and 1 <= raw_max <= 10485760
+            and 1 <= raw_max <= MAX_TOOL_ATTACHMENT_BYTES
         )
         if (
             not upload
@@ -338,7 +339,7 @@ def validate_production_attachment_fields(
                 _issue(
                     "error",
                     "webui.form.production_attachment_config_invalid",
-                    "Production attachment field requires distinct same-skill qualified upload/read tools and maxBytes <= 10 MiB.",
+                    "Production attachment field requires distinct same-skill qualified upload/read tools and maxBytes <= 64 MiB.",
                     f"{source}:{path}",
                     source=source,
                 )

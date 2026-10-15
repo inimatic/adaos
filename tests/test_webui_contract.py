@@ -277,7 +277,9 @@ def test_production_attachment_field_requires_exact_browser_contract() -> None:
         "webui.form.production_attachment_config_invalid"
     )
     field["readTarget"] = "roster.read_attachment"
-    field["maxBytes"] = 10485761
+    field["maxBytes"] = 32 * 1024 * 1024
+    assert validate_production_attachment_fields(webui) == []
+    field["maxBytes"] = 64 * 1024 * 1024 + 1
     assert validate_production_attachment_fields(webui)[0].code == (
         "webui.form.production_attachment_config_invalid"
     )

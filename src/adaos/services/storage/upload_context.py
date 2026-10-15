@@ -10,7 +10,7 @@ import re
 from typing import Iterator
 
 
-MAX_TOOL_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_TOOL_ATTACHMENT_BYTES = 64 * 1024 * 1024
 _FIELD_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
@@ -48,7 +48,7 @@ class VerifiedToolUpload:
         self.media_type = str(self.media_type or "application/octet-stream").strip().lower()
         self.content = bytes(self.content)
         if not self.content or len(self.content) > MAX_TOOL_ATTACHMENT_BYTES:
-            raise ValueError("attachment must contain between 1 byte and 10 MiB")
+            raise ValueError("attachment must contain between 1 byte and 64 MiB")
 
     @property
     def digest(self) -> str:

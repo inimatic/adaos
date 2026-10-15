@@ -2832,13 +2832,13 @@ async def _read_tool_attachment_body(request: Request) -> bytes:
     if content_length:
         try:
             if int(content_length) > MAX_TOOL_ATTACHMENT_BYTES:
-                raise HTTPException(status_code=413, detail="attachment exceeds 10 MiB")
+                raise HTTPException(status_code=413, detail="attachment exceeds 64 MiB")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid content length") from exc
     content = bytearray()
     async for chunk in request.stream():
         if len(content) + len(chunk) > MAX_TOOL_ATTACHMENT_BYTES:
-            raise HTTPException(status_code=413, detail="attachment exceeds 10 MiB")
+            raise HTTPException(status_code=413, detail="attachment exceeds 64 MiB")
         content.extend(chunk)
     return bytes(content)
 

@@ -212,9 +212,11 @@ def _fake_ctx() -> SimpleNamespace:
     )
 
 
-def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatch) -> None:
+@pytest.mark.parametrize("size", [11, 25 * 1024 * 1024], ids=["small", "large-original"])
+def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatch, size) -> None:
     from adaos.services.storage.upload_context import consume_verified_tool_upload
 
+    content = b"x" * size
     observed: dict[str, object] = {}
 
     async def execute(body, _request, _response, _ctx):
@@ -239,7 +241,7 @@ def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatc
         tool_bridge_module.upload_tool_attachment(
             "roster_skill",
             "upload_attachment",
-            _BinaryRequest(b"image-bytes"),
+            _BinaryRequest(content),
             response,
             field_id="photo",
             filename="portrait.png",
@@ -257,13 +259,24 @@ def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatc
         "filename": "portrait.png",
         "field_id": "photo",
         "media_type": "image/png",
-        "size_bytes": 11,
+        "size_bytes": len(content),
         "digest": result["blob_ref"].rsplit(":", 2)[-2] + ":" + result["blob_ref"].rsplit(":", 1)[-1],
     }
     assert result["ref"].startswith(
         "/api/tools/roster_skill/read_attachment/attachments/portraits/"
     )
     assert result["ref"].endswith("/portrait.png?webspace_id=desktop")
+
+
+def test_binary_attachment_body_rejects_oversized_header_and_chunked_stream(monkeypatch) -> None:
+    from adaos.services.storage import upload_context
+    monkeypatch.setattr(upload_context, "MAX_TOOL_ATTACHMENT_BYTES", 8)
+    for headers in ({"content-length": "9"}, {}):
+        request = _BinaryRequest(b"123456789")
+        request.headers = headers
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(tool_bridge_module._read_tool_attachment_body(request))
+        assert error.value.status_code == 413
 
 
 def test_binary_attachment_upload_rejects_a_forged_tool_receipt(monkeypatch) -> None:
