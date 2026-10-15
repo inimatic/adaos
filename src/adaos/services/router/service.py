@@ -520,6 +520,7 @@ class RouterService:
         self._tg_reply_via_root_http = str(os.getenv("HUB_TG_REPLY_VIA_ROOT_HTTP") or "").strip() == "1"
         self._media_route_webspaces: set[str] = set()
         self._notify_tasks: set[asyncio.Task[None]] = set()
+        self._notification_context = None
         self._voice_chat_append_tasks: set[asyncio.Task[None]] = set()
         self._voice_chat_append_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._voice_chat_persist_tasks: set[asyncio.Task[None]] = set()
@@ -818,7 +819,8 @@ class RouterService:
         except Exception:
             pass
 
-        conf = get_ctx().config
+        notification_ctx = self._notification_context or get_ctx()
+        conf = notification_ctx.config
         this_node = conf.node_id
         if not self._rules:
             try:
@@ -842,11 +844,8 @@ class RouterService:
                 if not hub_id:
                     raise RuntimeError("hub_id unresolved for telegram routing")
                 # Root API base
-                from adaos.services.agent_context import get_ctx as _get_ctx
-
                 # Telegram pairing is zonal; use the node's effective Root,
                 # as startup/binding probes do, instead of a global default.
-                notification_ctx = _get_ctx()
                 root_settings = getattr(notification_ctx.config, "root_settings", None)
                 api_base = getattr(root_settings, "base_url", None) or getattr(notification_ctx.settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
                 url = f"{api_base.rstrip('/')}/io/tg/send"
@@ -874,7 +873,7 @@ class RouterService:
                             extra={"hub_id": hub_id, "status": r.status_code, "body": (r.text or "")[:300]},
                         )
                     else:
-                        logging.getLogger("adaos.router").info(
+                        logging.getLogger(__name__).info(
                             "router: telegram sent", extra={"hub_id": hub_id, "status": r.status_code}
                         )
                 except Exception as pe:
@@ -7185,6 +7184,7 @@ class RouterService:
     async def start(self) -> None:
         if self._started:
             return
+        self._notification_context = get_ctx()
         self._started = True
         if runtime_transition_role() == "candidate":
             logging.getLogger("adaos.router.dialog").info(

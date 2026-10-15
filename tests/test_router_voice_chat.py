@@ -4617,6 +4617,30 @@ async def test_builder_browser_transcript_uses_notification_route_once(monkeypat
     assert all(event.payload["_meta"]["skip_voice_chat"] for event in notices)
 
 
+async def test_notification_delivery_uses_owner_root_after_skill_context_changes(monkeypatch) -> None:
+    owner = SimpleNamespace(config=SimpleNamespace(node_id="owner-node", subnet_id="sn-owner",
+        root_settings=SimpleNamespace(base_url="https://owner-root.example")))
+    ambient = SimpleNamespace(config=SimpleNamespace(node_id="skill-node", subnet_id="sn-skill",
+        root_settings=SimpleNamespace(base_url="https://skill-root.example")))
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: owner)
+    router = RouterService(eventbus=LocalEventBus(), base_dir=Path("."))
+    async def no_bootstrap():
+        return None
+    monkeypatch.setattr(router, "activate_after_promotion", no_bootstrap)
+    monkeypatch.setattr(router, "_compose_handlers", lambda: [])
+    monkeypatch.setattr(router, "_start_rules_watch", lambda: None)
+    await router.start()
+    router._rules = [{"target": {"io_type": "telegram", "node_id": "this"}}]
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: ambient)
+    monkeypatch.setattr(router_service_module, "load_subnet_alias", lambda **_: None)
+    sent = []
+    monkeypatch.setattr(router_service_module.requests, "post", lambda url, **kwargs:
+        sent.append((url, kwargs)) or SimpleNamespace(status_code=200))
+    await router._handle_notify_event(Event(type="ui.notify", source="test", ts=1.0, payload={"text": "Builder completed"}))
+    assert len(sent) == 1 and sent[0][0] == "https://owner-root.example/io/tg/send"
+    assert sent[0][1]["json"]["hub_id"] == "sn-owner"
+
+
 def test_text_fallback_does_not_edit_the_user_message() -> None:
     assert router_service_module._telegram_interaction_consumed_projection(
         {"interaction_id": "interaction.text", "prompt": "Choose"},
