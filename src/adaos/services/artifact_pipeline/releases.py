@@ -246,6 +246,10 @@ def _requirement_from_value(
         artifact_id = value.strip()
         if not artifact_id:
             return None
+        # Scenario declarations may use composition refs (skill:<id>) while
+        # runtime.skills lists use bare ids. Keep the typed requirement itself
+        # canonical so both surfaces resolve to the same package identity.
+        artifact_id = artifact_id.removeprefix(f"{default_kind}:")
         return DependencyRequirement(default_kind, artifact_id, optional=optional)
     if not isinstance(value, Mapping):
         return None
@@ -253,6 +257,7 @@ def _requirement_from_value(
     if not artifact_id:
         return None
     kind = str(value.get("kind") or default_kind).strip().lower()
+    artifact_id = artifact_id.removeprefix(f"{kind}:")
     return DependencyRequirement(
         kind=kind,  # type: ignore[arg-type]
         artifact_id=artifact_id,

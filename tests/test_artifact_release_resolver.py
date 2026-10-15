@@ -62,6 +62,39 @@ runtime:
     assert requirements[2].optional is True
 
 
+def test_qualified_manifest_dependency_and_bare_runtime_id_resolve_once() -> None:
+    requirements = parse_artifact_requirements(
+        {"depends": ["skill:natural_retouch_skill"],
+         "runtime": {"skills": {"required": ["natural_retouch_skill"]}}},
+        kind="scenario",
+    )
+    assert requirements == (DependencyRequirement("skill", "natural_retouch_skill"),)
+    scenario = _package("scenario", "natural_retouch", "0.1.10", "a")
+    skill = _package("skill", "natural_retouch_skill", "0.1.11", "b")
+    plan = build_project_release(
+        project_id="natural_retouch", version="0.1.10", source_ref=_source(),
+        components=(scenario, skill), catalog=PackageCatalog((skill,)),
+        requirements_by_package={scenario.digest: requirements},
+    )
+    assert len(plan.bindings) == 1
+    assert plan.bindings[0].dependency == "skill:natural_retouch_skill"
+    assert plan.reverse_consumers == {"skill:natural_retouch_skill": ("scenario:natural_retouch",)}
+
+
+def test_structured_qualified_dependency_keeps_kind_range_and_optional() -> None:
+    requirements = parse_artifact_requirements(
+        {"depends": [{"kind": "scenario", "id": "scenario:shared", "version": "^1.4.0", "optional": True}]},
+        kind="scenario",
+    )
+    assert requirements == (DependencyRequirement("scenario", "shared", "^1.4.0", True),)
+
+
+@pytest.mark.parametrize("identity", ["scenario:wrong_kind", "project:wrong_kind", "skill:", "skill:skill:nested", "skill:../escape", "torch>=1.13"])
+def test_qualified_manifest_dependency_does_not_admit_invalid_identities(identity: str) -> None:
+    with pytest.raises(DependencyResolutionError):
+        parse_artifact_requirements({"depends": [identity]}, kind="scenario")
+
+
 def test_parse_skill_requirements_keeps_python_dependencies_out_of_project_graph() -> None:
     manifest = yaml.safe_load(
         """
