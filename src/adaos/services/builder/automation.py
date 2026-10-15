@@ -6665,6 +6665,7 @@ class BuilderAutomationService:
         source_has_changes = _preserved_candidate_has_changes(run_root)
         if reason == "blocking_development_feedback" and not source_has_changes:
             materialized = self._materialized_feedback_checkpoint(
+                session=session,
                 run_root=run_root,
                 source_task_id=source_task_id,
                 source_failure=source_failure,
@@ -6749,6 +6750,7 @@ class BuilderAutomationService:
     def _materialized_feedback_checkpoint(
         self,
         *,
+        session: Mapping[str, Any],
         run_root: Path,
         source_task_id: str,
         source_failure: Mapping[str, Any],
@@ -6771,6 +6773,11 @@ class BuilderAutomationService:
         if not isinstance(assignment, Mapping):
             return None
         request = assignment.get("realize_request")
+        # A newly accepted Prototype replaces the old clean materialization.
+        # Dirty candidates already enforce this boundary; clean feedback retries
+        # must not pin a task to a superseded acceptance either.
+        if not self._request_matches_current_prototype_acceptance(session, request):
+            return None
         artifacts = (
             dict(request.get("artifacts") or {})
             if isinstance(request, Mapping)

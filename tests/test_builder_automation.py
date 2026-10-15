@@ -4104,6 +4104,30 @@ def test_blocking_feedback_resumes_clean_materialized_snapshot(
     assert checkpoint["source_continuation_contract"] == source_contract
 
 
+def test_clean_feedback_checkpoint_cannot_cross_prototype_acceptance(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    run_root = service.runs_root / "task.clean-feedback"
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "input" / "assignment.json").write_text(json.dumps({
+        "target": {"type": "scenario", "id": "applications"},
+        "forge": {"source_snapshot": {"digest": "sha256:" + "a" * 64}},
+        "realize_request": {"artifacts": {
+            "continuation_contract": automation_module._continuation_contract(),
+            "prototype_acceptance": {"digest": "sha256:accepted-v1"},
+        }},
+    }), encoding="utf-8")
+    def qualify(accepted: str):
+        return service._materialized_feedback_checkpoint(
+            session={"prototype_acceptance": {"digest": accepted}},
+            run_root=run_root, source_task_id="task.clean-feedback",
+            source_failure={"failure_id": "failure.clean"}, trigger_failure_id=None,
+        )
+    assert qualify("sha256:accepted-v1")["mode"] == "resume_materialized_candidate"
+    assert qualify("sha256:accepted-v2") is None
+
+
 def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_checks(
     tmp_path: Path,
 ) -> None:
