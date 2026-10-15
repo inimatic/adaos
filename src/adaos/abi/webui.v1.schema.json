@@ -620,6 +620,7 @@
         "visual.serviceFrame",
         "visual.sitePreview",
         "visual.image",
+        "visual.imageCompare",
         "visual.metricTile",
         "visual.metricChart",
         "visual.multiMetricArc",

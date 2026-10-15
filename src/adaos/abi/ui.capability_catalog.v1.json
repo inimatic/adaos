@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.7.1",
+  "catalog_version": "3.8.0",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "browser_history": {
@@ -328,6 +328,36 @@
     }
   ],
   "components": [
+    {
+      "id": "visual.imageCompare",
+      "kind": "component",
+      "title": "Image comparison and manual masks",
+      "summary": "Original on the left and result on the right with shared native-pixel zoom and pan, displayed scale, fit/100%, result-only mode, download and optional vector edit/protection masks.",
+      "aliases": {"en": ["image comparison", "retouch", "synchronous zoom", "mask editor"], "ru": ["сравнение изображений", "ретушь", "маски", "синхронное масштабирование"]},
+      "manifest": {
+        "widget_type": "visual.imageCompare",
+        "inputs": {
+          "pairKey": "Optional path inside the dataSource payload to the pair record.",
+          "originalKey": "Pair record path to original media descriptor or URL; defaults to original.",
+          "resultKey": "Pair record path to result media descriptor or URL; defaults to result.",
+          "original": "Optional explicit original media descriptor, resource reference or image URL.",
+          "result": "Optional explicit result media descriptor, resource reference or image URL.",
+          "editableMasks": "Boolean; show crop, edit/protect brushes and Save masks. No inference or saving on painting/zooming.",
+          "labels": "Optional localized labels: compare, original, result, fit, download, masks, pan, crop, edit, protect, radius, undo, clear, saveMasks, unsaved, empty, maskHelp, loadError, mismatch.",
+          "downloadFilename": "Optional result download filename; defaults to retouched.png."
+        },
+        "actions": "on:maskSave provides $event.mask. Bind to a declared scoped resource command or skill tool. A successful action clears the dirty indicator."
+      },
+      "data_shape": {
+        "kind": "record",
+        "example": {"id": "pair-1", "original": {"content_path": "/api/node/media/content/original.png"}, "result": {"content_path": "/api/node/media/content/result.png"}},
+        "masks": "Optional masks:{schema:adaos.image_masks.v1,width,height,crop?:{x,y,width,height},strokes:[{kind:edit|protect,radius,points:[{x,y}]}]}. Coordinates and radius are pixels of the EXIF-oriented original; max 500 strokes, 512 points per stroke. Protection takes precedence when rasterized by the owning skill. Crop is context only, never permission to edit its whole rectangle."
+      },
+      "events": ["maskSave"],
+      "responsive": {"desktop": "Two equal simultaneous panes with one shared transform.", "compact": "Two simultaneous panes remain side by side; original/result-only modes and zoom buttons allow detailed work."},
+      "limitations": ["Original and result must have identical native dimensions; mismatched results are withheld from comparison.", "Masks are manual vector strokes, not automatic segmentation. The owning skill must validate and rasterize them and composite only within the edit mask minus protection.", "A pair identity change resets zoom and local unsaved masks; save before changing the selection."],
+      "postconditions": ["Original is left and result right in comparison mode.", "Zoom percentage represents CSS pixels per original pixel; both panes share zoom and pan.", "Zoom, pan, mode changes and painting make no AI requests.", "Mask save is explicit and dispatched through the declared AdaOS action."]
+    },
     {
       "id": "collection.board",
       "kind": "component",

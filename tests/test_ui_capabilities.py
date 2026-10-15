@@ -94,7 +94,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.7.1"
+    assert catalog["catalog_version"] == "3.8.0"
     assert catalog["navigation_contracts"]["browser_history"]["schema_field"] == (
         "pageSchema.navigationState.bindings"
     )
