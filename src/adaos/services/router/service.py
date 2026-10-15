@@ -603,7 +603,7 @@ class RouterService:
                 continue
         return False
 
-    def _mirror_builder_transcript(self, payload: Mapping[str, Any]) -> None:
+    async def _mirror_builder_transcript(self, payload: Mapping[str, Any]) -> None:
         if not self._has_rule_for("telegram"):
             return
         notification = builder_chat_notifications(payload)
@@ -615,7 +615,9 @@ class RouterService:
             mirrored = self._builder_chat_mirrored = {}
         if claim_builder_notification(mirrored, identity):
             for item in items:
-                self.bus.publish(Event(type="ui.notify", source="router.builder.chat", ts=time.time(), payload=item))
+                # This Router owns the configured route. Dispatch through its
+                # background sender instead of crossing another bus/skill scope.
+                await self._on_event(Event(type="ui.notify", source="router.builder.chat", ts=time.time(), payload=item))
 
     def _event_targets_local_node(self, payload: Any) -> bool:
         if not isinstance(payload, dict):
@@ -865,7 +867,7 @@ class RouterService:
                         url,
                         json=body,
                         headers={"Content-Type": "application/json"},
-                        timeout=3.0,
+                        timeout=15.0,
                     )
                     if not (200 <= int(r.status_code) < 300):
                         logging.getLogger("adaos.router").warning(
@@ -877,7 +879,7 @@ class RouterService:
                             "router: telegram sent", extra={"hub_id": hub_id, "status": r.status_code}
                         )
                 except Exception as pe:
-                    logging.getLogger("adaos.router").warning("router: telegram request failed", extra={"hub_id": hub_id, "error": str(pe)})
+                    logging.getLogger("adaos.router").warning("router: telegram request failed: %s", pe, extra={"hub_id": hub_id})
                     raise
                 did_any = True
             except Exception:
@@ -3244,7 +3246,7 @@ class RouterService:
                 clean_msg["turn_trace_id"] = turn_trace_id
             # Router-owned dialog replies project directly after materialization
             # and intentionally skip io.out.chat.append. Mirror that path too.
-            self._mirror_builder_transcript(clean_msg)
+            await self._mirror_builder_transcript(clean_msg)
             worker_msg = dict(clean_msg)
             worker_meta = dict(meta)
             worker_context_channel = dict(context.get("channel") or {})
@@ -3948,7 +3950,7 @@ class RouterService:
             # Browser Builder turns use the same configured subnet Telegram
             # route as lifecycle notifications, including the user's brief.
             # Publish before skip_voice_chat: user echoes intentionally set it.
-            self._mirror_builder_transcript(payload)
+            await self._mirror_builder_transcript(payload)
 
             try:
                 # All dialog replies use the canonical tg.output transport.  The

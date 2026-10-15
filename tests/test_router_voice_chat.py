@@ -1392,7 +1392,7 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
     dialog_runtime.reset_all()
     router = RouterService(eventbus=bus, base_dir=Path("."))
     async def ignore_notify(_event):
-        return None
+        notices.append(_event)
     monkeypatch.setattr(router, "_handle_notify_event", ignore_notify)
     await router.start()
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
@@ -4602,7 +4602,9 @@ async def test_builder_browser_transcript_uses_notification_route_once(monkeypat
         {"target": {"io_type": "telegram", "node_id": "this"}}])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
     router = RouterService(eventbus=bus, base_dir=Path("."))
-    monkeypatch.setattr(router, "_handle_notify_event", lambda _event: None)
+    async def collect_notify(event):
+        notices.append(event)
+    monkeypatch.setattr(router, "_handle_notify_event", collect_notify)
     await router.start()
     bus.subscribe("ui.notify", lambda event: notices.append(event))
     for role, identity in (("user", "brief-1"), ("hub", "answer-1"), ("user", "brief-1")):
