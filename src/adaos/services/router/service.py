@@ -602,6 +602,20 @@ class RouterService:
                 continue
         return False
 
+    def _mirror_builder_transcript(self, payload: Mapping[str, Any]) -> None:
+        if not self._has_rule_for("telegram"):
+            return
+        notification = builder_chat_notifications(payload)
+        if notification is None:
+            return
+        identity, items = notification
+        mirrored = getattr(self, "_builder_chat_mirrored", None)
+        if mirrored is None:
+            mirrored = self._builder_chat_mirrored = {}
+        if claim_builder_notification(mirrored, identity):
+            for item in items:
+                self.bus.publish(Event(type="ui.notify", source="router.builder.chat", ts=time.time(), payload=item))
+
     def _event_targets_local_node(self, payload: Any) -> bool:
         if not isinstance(payload, dict):
             return True
@@ -3229,6 +3243,9 @@ class RouterService:
             turn_trace_id = str(meta.get("turn_trace_id") or clean_msg.get("turn_trace_id") or "").strip()
             if turn_trace_id:
                 clean_msg["turn_trace_id"] = turn_trace_id
+            # Router-owned dialog replies project directly after materialization
+            # and intentionally skip io.out.chat.append. Mirror that path too.
+            self._mirror_builder_transcript(clean_msg)
             worker_msg = dict(clean_msg)
             worker_meta = dict(meta)
             worker_context_channel = dict(context.get("channel") or {})
@@ -3932,16 +3949,7 @@ class RouterService:
             # Browser Builder turns use the same configured subnet Telegram
             # route as lifecycle notifications, including the user's brief.
             # Publish before skip_voice_chat: user echoes intentionally set it.
-            if self._has_rule_for("telegram"):
-                notification = builder_chat_notifications(payload)
-                if notification is not None:
-                    identity, items = notification
-                    mirrored = getattr(self, "_builder_chat_mirrored", None)
-                    if mirrored is None:
-                        mirrored = self._builder_chat_mirrored = {}
-                    if claim_builder_notification(mirrored, identity):
-                        for item in items:
-                            self.bus.publish(Event(type="ui.notify", source="router.builder.chat", ts=time.time(), payload=item))
+            self._mirror_builder_transcript(payload)
 
             try:
                 # All dialog replies use the canonical tg.output transport.  The

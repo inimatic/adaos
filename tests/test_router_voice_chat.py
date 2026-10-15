@@ -1347,6 +1347,7 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
     doc = _Doc()
     calls: list[tuple[str, str, dict, dict]] = []
     seen_nlu: list[Event] = []
+    notices: list[Event] = []
     webspace_id = "builder-requested-ws"
 
     monkeypatch.setattr(
@@ -1366,7 +1367,8 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
             settings=None,
         ),
     )
-    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [
+        {"target": {"io_type": "telegram", "node_id": "this"}}])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
     monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
     monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
@@ -1389,8 +1391,12 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
     monkeypatch.setattr(router_service_module, "SkillManager", lambda **_kwargs: SimpleNamespace(run_tool=_run_tool))
     dialog_runtime.reset_all()
     router = RouterService(eventbus=bus, base_dir=Path("."))
+    async def ignore_notify(_event):
+        return None
+    monkeypatch.setattr(router, "_handle_notify_event", ignore_notify)
     await router.start()
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+    bus.subscribe("ui.notify", lambda ev: notices.append(ev))
 
     bus.publish(
         Event(
@@ -1421,6 +1427,7 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
     assert state is not None
     assert state.channel_id == "builder"
     assert state.default_skill == "builder_skill"
+    assert any("builder handled" in event.payload.get("text", "") for event in notices), "Directly projected Builder replies must reach Telegram without a nested chat event"
     dialog_runtime.reset_all()
 
 
