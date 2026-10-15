@@ -59,6 +59,33 @@ def publisher(path, **kwargs):
     return {"browser_path": "/media/" + path.name, **kwargs}
 
 
+def test_completed_owned_output_can_be_read_without_network_or_publication(tmp_path):
+    broker = Broker()
+    service = ImageGenerationService(tmp_path, "skill:retouch|user:one", broker, publisher)
+    service.submit(request_id="candidate", model="gpt-image-1", prompt="Preserve texture")
+    with pytest.raises(ValueError, match="not completed"):
+        service.read_bytes("candidate")
+    assert broker.polls == []
+    encoded = encoded_image()
+    broker.job.update(status="succeeded", response={"data": [{"b64_json": encoded}]})
+    service.get("candidate")
+    def no_publish(*args, **kwargs):
+        pytest.fail("local byte read must not publish media")
+    reopened = ImageGenerationService(tmp_path, "skill:retouch|user:one", broker, no_publish)
+    assert reopened.read_bytes("candidate") == base64.b64decode(encoded)
+    assert len(broker.submits) == len(broker.polls) == 1
+    with pytest.raises(ValueError, match="current owner"):
+        ImageGenerationService(tmp_path, "skill:retouch|user:two", broker, no_publish).read_bytes("candidate")
+    for limit in (True, 0, 12582913):
+        with pytest.raises(ValueError, match="max_bytes"):
+            reopened.read_bytes("candidate", max_bytes=limit)
+    with pytest.raises(ValueError, match="size limit"):
+        reopened.read_bytes("candidate", max_bytes=5)
+    next(reopened.root.glob("*.png")).write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="integrity"):
+        reopened.read_bytes("candidate")
+
+
 def test_image_generation_is_owned_durable_idempotent_and_context_stays_local(tmp_path):
     broker = Broker()
     service = ImageGenerationService(tmp_path, "skill:one|user:one", broker, publisher)

@@ -471,6 +471,7 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.llm.content.get",
     "adaos.sdk.llm.images.generate",
     "adaos.sdk.llm.images.edit",
+    "adaos.sdk.llm.images.read_bytes",
     "adaos.sdk.llm.images.get",
     "adaos.sdk.llm.images.list_drafts",
     "adaos.sdk.resources.definition",
@@ -1190,8 +1191,10 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                 },
             },
             "image_edit_draft": {
-                "methods": ["adaos.sdk.llm.images.edit", "adaos.sdk.llm.images.get"],
+                "methods": ["adaos.sdk.llm.images.edit", "adaos.sdk.llm.images.get", "adaos.sdk.llm.images.read_bytes"],
                 "response_contract": "image_draft",
+                "envelope": "edit/get return the draft dict directly. A completed candidate descriptor is draft['media']; there is no nested draft['response']['media'] envelope.",
+                "owned_output_bytes": "After get reports completed, call adaos.sdk.llm.images.read_bytes(request_id, max_bytes=12582912) to obtain verified candidate bytes for same-base compositing. Same actor and executing skill required. This local read never polls/submits, accepts no URL/path and returns no global media path. Pending/failed/missing/tampered/oversized output is an error.",
                 "preferred_model_id": "gpt-image-2.5-sunburst-2026-09-08",
                 "model_admission": "Explicit image model; Root policy, quota and provider availability are checked at submission. Unsupported models are errors, never substituted.",
                 "inputs": {

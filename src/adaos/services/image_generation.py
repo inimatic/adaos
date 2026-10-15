@@ -139,6 +139,29 @@ class ImageGenerationService:
                 atomic_write_json(path, record)
             return self._view(record)
 
+    def read_bytes(self, request_id: str, *, max_bytes: int = MAX_IMAGE_BYTES) -> bytes:
+        """Read a completed owned draft locally, without polling or publishing."""
+        if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_IMAGE_BYTES:
+            raise ValueError(f"max_bytes must be between 1 and {MAX_IMAGE_BYTES}")
+        path = self._path(request_id)
+        with mutation_lock(path.with_suffix(".lock")):
+            if not path.exists():
+                raise ValueError("Image request was not found for the current owner")
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if record.get("status") != "completed":
+                raise ValueError("Image draft is not completed; poll get with the same request_id")
+            asset = record["asset"]
+            digest, suffix = str(asset.get("sha256") or ""), asset.get("suffix")
+            if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) or suffix not in {"png", "jpg", "webp"}:
+                raise ValueError("Generated image asset identity is invalid")
+            with (self.root / f"{digest}.{suffix}").open("rb") as stream:
+                content = stream.read(max_bytes + 1)
+            if len(content) > max_bytes:
+                raise ValueError("Generated image exceeds the requested size limit")
+            if len(content) != asset["size_bytes"] or hashlib.sha256(content).hexdigest() != digest:
+                raise ValueError("Generated image integrity check failed")
+            return content
+
     def _capture(self, record: dict[str, Any], job: Mapping[str, Any]) -> None:
         from PIL import Image
 

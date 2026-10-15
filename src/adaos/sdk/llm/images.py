@@ -39,6 +39,16 @@ def get(request_id: str) -> dict[str, Any]:
     return _service("workspace.read").get(request_id)
 
 
+def read_bytes(request_id: str, *, max_bytes: int = 12582912) -> bytes:
+    """Read verified bytes of a completed owned draft; no provider calls or URLs.
+
+    Requires the same authenticated actor and executing skill as edit/generate.
+    Call get to poll first. A pending/failed/missing draft is an error, never a
+    new submission. max_bytes must be an integer in 1..12582912.
+    """
+    return _service("workspace.read").read_bytes(request_id, max_bytes=max_bytes)
+
+
 def edit(*, request_id: str, model: str, prompt: str, images: list[dict[str, str]],
          mask: dict[str, str] | None = None, size: str = "1024x1024", quality: str = "high",
          output_format: str = "png", background: str = "opaque",
@@ -54,4 +64,4 @@ def list_drafts(*, context: Mapping[str, Any], limit: int = 10) -> list[dict[str
     return _service("workspace.read").list_drafts(context=context, limit=limit)
 
 
-__all__ = ["generate", "edit", "get", "list_drafts"]
+__all__ = ["generate", "edit", "get", "read_bytes", "list_drafts"]
