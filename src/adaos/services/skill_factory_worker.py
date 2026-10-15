@@ -11804,22 +11804,29 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         def identities(document: Mapping[str, Any]) -> set[tuple[str, str, str]]:
             result: set[tuple[str, str, str]] = set()
 
-            def visit(node: Any) -> None:
+            def visit(node: Any, *, action: bool = False) -> None:
                 if isinstance(node, Mapping):
                     node_id = node.get("id")
                     if isinstance(node_id, str) and node_id.strip():
                         result.add(
                             (
                                 node_id.strip(),
-                                str(node.get("type") or "").strip(),
-                                str(node.get("kind") or "").strip(),
+                                "$action" if action else str(node.get("type") or "").strip(),
+                                str(node.get("on") or "").strip() if action else str(node.get("kind") or "").strip(),
                             )
                         )
-                    for item in node.values():
-                        visit(item)
+                    for key, item in node.items():
+                        # Fixture rows, query parameters and initial values are
+                        # transport data, not UI identities. ResourceOperation
+                        # -> callSkill is also an admitted binding substitution;
+                        # preserve its action id/event rather than transport type.
+                        # The accepted-surface validator runs before this coarse
+                        # churn check and still enforces presentation/behavior.
+                        if key not in {"dataSource", "params", "initialState"}:
+                            visit(item, action=key == "actions")
                 elif isinstance(node, list):
                     for item in node:
-                        visit(item)
+                        visit(item, action=action)
 
             visit(document)
             return result

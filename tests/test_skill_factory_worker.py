@@ -5251,6 +5251,40 @@ def test_bounded_dev_ticket_rejects_large_manifest_format_churn(tmp_path: Path) 
         )
 
 
+def test_manifest_churn_counts_ui_not_fixture_rows_and_action_transport(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    manifest = scenario / "webui.json"
+    widgets = [{"id": f"records-{i}", "type": "ui.table", "title": f"Records {i}",
+                "inputs": {"selectionMode": "single"}} for i in range(200)]
+    widgets[0]["dataSource"] = {"kind": "static", "value": [
+        {"id": f"fixture-{i}", "title": f"Example {i}"} for i in range(60)]}
+    for i in range(80):
+        widgets[i]["actions"] = [{"id": f"save-{i}", "on": "submit", "type": "resourceOperation", "target": "prototype.demo"}]
+    document = {"schema": "adaos.webui.v1", "ui": {"application": {"desktop": {"pageSchema": {"widgets": widgets}}}}}
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=workspace, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "accepted fixture UI"], cwd=workspace, check=True, capture_output=True)
+    widgets[0]["dataSource"] = {"kind": "skill", "name": "demo.query", "params": {"id": "$state.selected"}}
+    for i in range(80):
+        widgets[i]["actions"][0].update(type="callSkill", target="demo.save")
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    worker = object.__new__(LocalSkillFactoryWorker)
+    assignment = {"forge": {"sparse_paths": ["scenarios/demo/"]}, "realize_request": {
+        "artifacts": {"execution_budget": {"max_wall_seconds": 300}}}}
+    worker._validate_changed_paths(assignment, worker._changed_from_baseline(workspace), workspace=workspace)
+    # Altering visible renderer roles remains a rewrite, regardless of data IDs.
+    for widget in widgets[:65]:
+        widget["type"] = "ui.form"
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="large declarative manifest rewrite"):
+        worker._validate_changed_paths(assignment, worker._changed_from_baseline(workspace), workspace=workspace)
+
+
 def test_large_scenario_inline_ui_diff_is_admitted_only_as_exact_webui_mirror(
     tmp_path: Path,
 ) -> None:
