@@ -102,6 +102,7 @@ def project_phase_issues(issues: Sequence[Mapping], *, phase: str) -> dict:
 def automation_gate_contract() -> dict:
     """Describe the actual post-return worker gates without granting authorship."""
     return {"schema": "adaos.builder.automation_gate_contract.v1",
+            "requirement_authority": "Use the current Change's typed phase dispositions and verification scope. Retained historical briefs do not reinstate discharged phase restrictions; report ambiguous untyped conflicts instead of silently discarding them.",
             "candidate_return": "Return the implementation and an honest structured outcome. The worker validates after return; do not claim its gates passed.",
             "gates": [{"id": name, "owner": "worker", "prerequisite": prerequisite,
                        "invocation": "automatic_after_candidate_return", "evidence": "output/test_report.json",

@@ -2636,6 +2636,9 @@ def context_packet_prompt_projection(
             continue
         projected_issues.append(
             {
+                **{key: copy.deepcopy(item[key]) for key in (
+                    "kind", "source_ref", "source_message_ids", "applicable_phases", "phase_dispositions",
+                    "effect", "effect_ref", "verification_scope", "owner") if key in item},
                 "issue_id": item.get("issue_id"),
                 "title": str(item.get("title") or "")[:500],
                 "lane": item.get("lane"),
@@ -2644,16 +2647,14 @@ def context_packet_prompt_projection(
                     str(criterion)[:500]
                     for criterion in item.get("acceptance_criteria") or []
                     if str(criterion).strip()
-                ][:8],
+                ],
                 "semantic_refs": [
                     str(ref)
                     for ref in item.get("semantic_refs") or []
                     if str(ref).strip()
-                ][:12],
+                ],
             }
         )
-        if len(projected_issues) >= 20:
-            break
     projected_change = {
         key: change.get(key)
         for key in (
@@ -2693,6 +2694,9 @@ def context_packet_prompt_projection(
             if str(item).strip()
         ][-3:]
     projected_change["issues"] = projected_issues
+    if isinstance(change.get("issue_phase_projection"), Mapping):
+        projected_change["issue_phase_projection"] = {
+            key: copy.deepcopy(item) for key, item in change["issue_phase_projection"].items() if key != "issues"}
     projected_change["acceptance_constraints"] = list(
         change.get("acceptance_constraints") or []
     )[:100]

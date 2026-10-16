@@ -7,6 +7,7 @@ import pytest
 from adaos.services.builder.issue_applicability import project_phase_issues
 from adaos.services.builder.workflow import _normalize_issue, BuilderWorkflowError
 from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, CodexRunResult
+from adaos.services.skill_factory_worker import context_packet_prompt_projection
 
 
 def issue(identity="no-live-calls", **kwargs):
@@ -29,6 +30,18 @@ def test_production_implementation_and_no_paid_test_calls_do_not_conflict():
     rows = [issue("implemented", effect="require", effect_ref="provider.calls", verification_scope="production"),
             issue("tests", effect="forbid", effect_ref="provider.calls", verification_scope="development")]
     assert len(project_phase_issues(rows, phase="automation")["issues"]) == 2
+
+
+def test_final_model_projection_keeps_phase_provenance_and_every_bounded_criterion():
+    rows = [issue(str(i), kind="product_requirement", applicable_phases=["automation"],
+        effect="require", effect_ref=f"operation:{i}", verification_scope="production",
+        source_message_ids=[f"message:{i}"], acceptance_criteria=[f"Criterion {j}" for j in range(20)]) for i in range(25)]
+    phases = project_phase_issues(rows, phase="automation")
+    projected = context_packet_prompt_projection({"change": {"issues": rows, "issue_phase_projection": phases}})
+    delivered = projected["change"]["issues"]
+    assert len(delivered) == 25 and len(delivered[-1]["acceptance_criteria"]) == 20
+    assert delivered[-1]["verification_scope"] == "production" and delivered[-1]["source_message_ids"] == ["message:24"]
+    assert len(projected["change"]["issue_phase_projection"]["transitions"]) == 25
 
 
 def test_contradictory_same_scope_rejected_before_generation():
