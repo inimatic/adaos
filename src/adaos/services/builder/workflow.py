@@ -3316,6 +3316,29 @@ class BuilderWorkflowService:
             _EDIT_CONTEXT_CACHE[cache_key] = copy.deepcopy(result)
             return result
 
+    def traceability(self, object_type: str, object_id: str) -> dict[str, Any]:
+        """Read explicit requirement/compiler links without accepting a candidate."""
+        from .traceability import project_change, digest
+        kind, project_id = _kind(object_type), _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            root = self.project_root(kind, project_id)
+            path = root / "semantic.webui.json"
+            semantic = json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
+            revision = self.current_prototype_revision(kind, project_id)
+            revision_path = root / "ui_revisions" / f"{revision}.json"
+            retained = json.loads(revision_path.read_text(encoding="utf-8-sig")) if revision_path.is_file() else {}
+            source_map = retained.get("source_map") or {}
+            compiler_map_verified = (not source_map or
+                dict(retained.get("semantic_transaction") or {}).get("semantic_digest") == digest(semantic))
+            result = project_change(project_ref=f"{kind}:{project_id}", generation=workflow["generation"],
+                change=workflow.get("change") or {}, semantic_document=semantic,
+                source_map=source_map if compiler_map_verified else {})
+            if not compiler_map_verified:
+                result["gaps"].append({"kind": "compiler_source_map_not_bound_to_current_semantic"})
+            return result
+
     def describe(self, object_type: str, object_id: str) -> dict[str, Any]:
         kind = _kind(object_type)
         project_id = _project_id(object_id)

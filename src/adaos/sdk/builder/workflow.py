@@ -16,6 +16,11 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def get_traceability(object_type: str, object_id: str) -> dict[str, Any]:
+    """Versioned source/Issue/semantic/verification links and explicit gaps."""
+    return dict(_service().traceability(object_type, object_id))
+
+
 def get_prototype_edit_context(object_type: str, object_id: str) -> dict[str, Any]:
     """Read the canonical gate without loading display-only Process projections."""
     return dict(_service().prototype_edit_context(object_type, object_id))
@@ -314,6 +319,7 @@ def update_interaction_context(
 
 
 __all__ = [
+    "get_traceability",
     "get_prototype_edit_context",
     "get_prototype_intake_context",
     "save_specification_delta",
