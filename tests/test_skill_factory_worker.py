@@ -5285,6 +5285,105 @@ def test_manifest_churn_counts_ui_not_fixture_rows_and_action_transport(tmp_path
         worker._validate_changed_paths(assignment, worker._changed_from_baseline(workspace), workspace=workspace)
 
 
+def test_manifest_churn_admits_deletion_heavy_prototype_binding_replacement(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    manifest = scenario / "webui.json"
+    widgets = [
+        {
+            "id": f"records-{index}",
+            "type": "ui.table",
+            "title": f"Records {index}",
+            "inputs": {"selectionMode": "single"},
+            "actions": [
+                {
+                    "id": f"save-{index}",
+                    "on": "submit",
+                    "type": "resourceOperation",
+                    "target": "prototype.demo",
+                }
+            ],
+        }
+        for index in range(60)
+    ]
+    widgets[0]["dataSource"] = {
+        "kind": "static",
+        "value": [
+            {"id": f"fixture-{index}", "title": f"Example {index}"}
+            for index in range(50)
+        ],
+    }
+    document = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"widgets": widgets}}}},
+    }
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "accepted prototype bindings"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+
+    widgets[0]["dataSource"] = {
+        "kind": "skill",
+        "name": "demo.query",
+        "params": {"id": "$state.selected"},
+    }
+    for widget in widgets:
+        widget["actions"][0].update(type="callSkill", target="demo.save")
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    worker = object.__new__(LocalSkillFactoryWorker)
+    assignment = {
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "realize_request": {
+            "artifacts": {"execution_budget": {"max_wall_seconds": 300}}
+        },
+    }
+
+    baseline = worker._baseline_commit(workspace)
+    additions, deletions, _path = subprocess.check_output(
+        ["git", "diff", "--numstat", baseline, "--", "scenarios/demo/webui.json"],
+        cwd=workspace,
+        text=True,
+    ).strip().split("\t")
+    baseline_lines = len(
+        subprocess.check_output(
+            ["git", "show", f"{baseline}:scenarios/demo/webui.json"],
+            cwd=workspace,
+            text=True,
+        ).splitlines()
+    )
+    assert (
+        int(deletions) / baseline_lines
+        > worker_module.MANIFEST_REWRITE_MAX_ADDITIVE_LINE_RATIO
+    )
+    assert (
+        int(deletions) / baseline_lines
+        <= worker_module.MANIFEST_REWRITE_MAX_DELETION_LINE_RATIO
+    )
+    assert (
+        (int(additions) + int(deletions)) / baseline_lines
+        <= worker_module.MANIFEST_REWRITE_MAX_TOTAL_LINE_RATIO
+    )
+    worker._validate_changed_paths(
+        assignment,
+        worker._changed_from_baseline(workspace),
+        workspace=workspace,
+    )
+
+
 def test_large_scenario_inline_ui_diff_is_admitted_only_as_exact_webui_mirror(
     tmp_path: Path,
 ) -> None:

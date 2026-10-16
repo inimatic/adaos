@@ -94,6 +94,7 @@ MANIFEST_REWRITE_DELETION_THRESHOLD = 120
 MANIFEST_REWRITE_DELETION_RATIO = 4.0
 MANIFEST_REWRITE_SHRINK_RATIO = 0.5
 MANIFEST_REWRITE_MAX_ADDITIVE_LINE_RATIO = 0.25
+MANIFEST_REWRITE_MAX_DELETION_LINE_RATIO = 0.30
 MANIFEST_REWRITE_MAX_TOTAL_LINE_RATIO = 0.4
 MANIFEST_REWRITE_MIN_IDENTITY_OVERLAP = 0.85
 MANIFEST_REWRITE_MIN_SIZE_RATIO = 0.7
@@ -11786,7 +11787,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         baseline_lines = max(1, len(before_text.splitlines()))
         if (
             additions / baseline_lines > MANIFEST_REWRITE_MAX_ADDITIVE_LINE_RATIO
-            or deletions / baseline_lines > MANIFEST_REWRITE_MAX_ADDITIVE_LINE_RATIO
+            or deletions / baseline_lines > MANIFEST_REWRITE_MAX_DELETION_LINE_RATIO
             or (additions + deletions) / baseline_lines
             > MANIFEST_REWRITE_MAX_TOTAL_LINE_RATIO
         ):

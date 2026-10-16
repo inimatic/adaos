@@ -14996,9 +14996,107 @@ class BuilderAutomationService:
             ).strip().lower()
             return "локального" if env_type == "dev" else "удалённого"
 
+    @staticmethod
+    def _task_input_transcript_text(session: Mapping[str, Any]) -> str:
+        """Return the user-authored instruction that created the current task."""
+
+        iteration = int(session.get("iteration") or 0)
+        turns = [
+            item
+            for item in session.get("turns") or []
+            if isinstance(item, Mapping)
+            and int(item.get("iteration") or -1) == iteration
+        ]
+        if turns:
+            return str(turns[-1].get("text") or "").strip()
+        return str(session.get("implementation_brief") or "").strip()
+
+    def _notify_task_input_transcript(
+        self, session: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Persist and route the exact Automation brief as a Builder user turn."""
+
+        current = dict(session)
+        task_id = str(current.get("current_task_id") or "").strip()
+        text = self._task_input_transcript_text(current)
+        if (
+            not task_id
+            or not text
+            or str(current.get("input_transcript_task_id") or "").strip()
+            == task_id
+        ):
+            return current
+        object_type = str(current.get("object_type") or "").strip()
+        object_id = str(current.get("object_id") or "").strip()
+        webspace_id = (
+            str(current.get("webspace_id") or "desktop").strip() or "desktop"
+        )
+        topic_id = str(current.get("topic_id") or "").strip() or (
+            f"prompt-project:{object_type}:{object_id}"
+        )
+        conversation_id = str(current.get("conversation_id") or "").strip()
+        try:
+            if not conversation_id:
+                from adaos.services.conversation_links import ensure_builder_topic
+
+                topic = ensure_builder_topic(
+                    webspace_id,
+                    scenario_id=object_id if object_type == "scenario" else None,
+                    project_id=object_id,
+                    title=f"Builder: {object_id}",
+                    meta={
+                        "artifact_kind": object_type,
+                        "artifact_id": object_id,
+                        "context_ref": f"{object_type}:{object_id}",
+                    },
+                )
+                conversation_id = str(topic.get("conversation_id") or "").strip()
+            if not conversation_id:
+                return current
+            current["conversation_id"] = conversation_id
+            current["topic_id"] = topic_id
+            message_id = "builder-automation-input-" + hashlib.sha256(
+                task_id.encode("utf-8")
+            ).hexdigest()[:24]
+            from adaos.sdk.io.out import chat_append
+
+            result = chat_append(
+                text,
+                from_="user",
+                msg_id=message_id,
+                persist=True,
+                _meta={
+                    "schema": "adaos.builder.automation_input.v1",
+                    "automation_session_id": current.get("session_id"),
+                    "task_id": task_id,
+                    "conversation_id": conversation_id,
+                    "conversation_owner": "skill:builder_skill",
+                    "dialog_channel_id": "builder",
+                    "webspace_id": webspace_id,
+                    "thread_id": topic_id,
+                    "topic_id": topic_id,
+                    "conversation_topic_id": topic_id,
+                    "source_message_id": message_id,
+                    # The durable ledger already contains this turn. Router
+                    # still mirrors it to Telegram before honoring this flag.
+                    "skip_voice_chat": True,
+                },
+            )
+            if not result.get("ok"):
+                return current
+            current["input_transcript_task_id"] = task_id
+            current["input_transcript_notified_at"] = _now_iso()
+            self._save_session(current, emit_projection=False)
+        except Exception:
+            _log.debug(
+                "failed to publish Builder Automation input task=%s", task_id,
+                exc_info=True,
+            )
+        return current
+
     def _notify_started_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         """Publish one conversational and subnet-wide start message per task."""
-        current = dict(session)
+        current = self._notify_task_input_transcript(session)
         task_id = str(current.get("current_task_id") or "").strip()
         if (
             not task_id

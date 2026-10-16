@@ -8632,6 +8632,56 @@ def test_started_session_broadcasts_once_without_conversation(
     assert second["started_notified_task_id"] == "task.start.1"
 
 
+def test_started_session_persists_and_routes_exact_automation_input(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _service(tmp_path)
+    appended: list[dict] = []
+    events: list[object] = []
+
+    class _Bus:
+        def publish(self, event) -> None:  # noqa: ANN001
+            events.append(event)
+
+    monkeypatch.setattr(
+        "adaos.services.agent_context.get_ctx",
+        lambda: SimpleNamespace(bus=_Bus()),
+    )
+    monkeypatch.setattr(
+        "adaos.services.conversation_links.ensure_builder_topic",
+        lambda *args, **kwargs: {"conversation_id": "conv.builder.recipes"},
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.io.out.chat_append",
+        lambda text, **kwargs: appended.append({"text": text, **kwargs})
+        or {"ok": True, "persisted": True},
+    )
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "webspace_id": "desktop",
+        "implementation_brief": "Исправить загрузку и показать этапы.",
+        "current_task_id": "task.start.2",
+        "iteration": 0,
+    }
+
+    first = service._notify_started_session(session)
+    second = service._notify_started_session(first)
+
+    assert len(appended) == 1
+    assert appended[0]["text"] == session["implementation_brief"]
+    assert appended[0]["from_"] == "user"
+    assert appended[0]["persist"] is True
+    meta = appended[0]["_meta"]
+    assert meta["dialog_channel_id"] == "builder"
+    assert meta["thread_id"] == "prompt-project:scenario:recipes"
+    assert meta["source_message_id"].startswith("builder-automation-input-")
+    assert second["input_transcript_task_id"] == "task.start.2"
+    assert second["conversation_id"] == "conv.builder.recipes"
+
+
 def test_finalize_prepares_materialized_runtime_then_notifies(
     tmp_path: Path, monkeypatch
 ) -> None:
