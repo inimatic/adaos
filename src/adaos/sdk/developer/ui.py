@@ -78,6 +78,17 @@ def validate_contract(webui: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def expression_contract() -> dict[str, Any]:
+    """Exact versioned WebUI expression vocabulary for generation and repair."""
+    from adaos.services.builder.expression_contract import expression_contract as contract
+    return contract()
+
+
+def expression_findings(value: Any, *, path: str = "value") -> list[dict[str, Any]]:
+    from adaos.services.builder.expression_contract import expression_findings as findings
+    return findings(value, path=path)
+
+
 def migrate_deprecated_interfaces(
     webui: Mapping[str, Any], *, owner: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -112,6 +123,8 @@ def evaluate(
 
 
 __all__ = [
+    "expression_contract",
+    "expression_findings",
     "domain_pack_receipts",
     "domain_packs_for_recipes",
     "evaluate",

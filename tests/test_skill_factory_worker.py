@@ -5207,7 +5207,7 @@ def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> N
     worker._validate_changed_paths(admitted, changed_paths, workspace=workspace)
 
 
-def test_bounded_dev_ticket_rejects_large_manifest_format_churn(tmp_path: Path) -> None:
+def test_bounded_dev_ticket_admits_equal_json_format_churn(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     scenario = workspace / "scenarios" / "demo"
     scenario.mkdir(parents=True)
@@ -5243,6 +5243,10 @@ def test_bounded_dev_ticket_rejects_large_manifest_format_churn(tmp_path: Path) 
         },
     }
 
+    worker._validate_changed_paths(assignment, worker._changed_from_baseline(workspace), workspace=workspace)
+    for widget in document["widgets"]:
+        widget["value"] += 100
+    manifest.write_text(json.dumps(document, indent=4) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="large declarative manifest rewrite"):
         worker._validate_changed_paths(
             assignment,

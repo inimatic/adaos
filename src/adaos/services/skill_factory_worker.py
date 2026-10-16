@@ -12025,6 +12025,18 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     and shrank_substantially
                 )
             ):
+                # Whitespace and object-key order do not change JSON semantics.
+                # This bypass admits no changed value, array order or identity;
+                # normal source/contract and post-test validation still run.
+                if Path(path).suffix.lower() == ".json":
+                    try:
+                        before = json.loads(_git(["show", f"{baseline}:{path}"], cwd=workspace))
+                        after = json.loads(current_path.read_text(encoding="utf-8"))
+                        canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+                        if canonical(before) == canonical(after):
+                            continue
+                    except (RuntimeError, OSError, ValueError, UnicodeError):
+                        pass
                 if cls._is_scoped_webui_widget_edit(
                     assignment,
                     workspace=workspace,
