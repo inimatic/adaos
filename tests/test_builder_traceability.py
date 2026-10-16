@@ -49,6 +49,38 @@ def test_missing_mapping_and_unknown_execution_pins_do_not_become_coverage():
     assert impact["receipts"][0]["status"] == "unqualified"
 
 
+def test_removed_requirement_invalidates_its_evidence_and_preserves_an_independent_requirement():
+    document = {"commands": [{"id": "run"}]}
+    change = {"issues": [{"issue_id": identity, "semantic_refs": ["command:run"]} for identity in ("keep", "remove")]}
+    before = projection(document, change)["graph"]
+    refs = {row["ref"]: row["digest"] for row in before["nodes"] if row["kind"] == "requirement"}
+    after = projection(document, {"issues": change["issues"][:1]}, generation=2)["graph"]
+    receipts = [{"receipt_ref": key, "dependencies": {key: refs[key]}} for key in refs]
+    result = {row["receipt_ref"]: row for row in evidence_impact(before, after, receipts)["receipts"]}
+    assert result["keep"]["status"] == "compatible"
+    assert result["remove"]["status"] == "stale"
+    assert result["remove"]["dependency_causes"] == ["remove"]
+    assert all(row["original_execution_unchanged"] for row in result.values())
+
+
+def test_ambiguous_bare_dependency_ref_cannot_silently_select_another_kind():
+    graph = projection({"commands": [{"id": "run"}]},
+        {"issues": [{"issue_id": "command:run", "semantic_refs": ["command:run"]}]})["graph"]
+    requirement = next(row for row in graph["nodes"] if row["kind"] == "requirement")
+    result = evidence_impact(graph, graph, [{"receipt_ref": "ambiguous", "dependencies": {"command:run": requirement["digest"]}}])
+    assert result["receipts"][0]["status"] == "unqualified"
+
+
+def test_issue_split_and_merge_keep_many_to_many_derivation_without_inventing_verification():
+    change = {"issues": [{"issue_id": "parent"},
+        {"issue_id": "left", "derived_from_issue_ids": ["parent"]},
+        {"issue_id": "right", "derived_from_issue_ids": ["parent"]},
+        {"issue_id": "merged", "derived_from_issue_ids": ["left", "right"]}]}
+    graph = projection({}, change)["graph"]
+    assert len([row for row in graph["edges"] if row["relation"] == "superseded_by"]) == 4
+    assert not any(row["relation"] == "verified_by" for row in graph["edges"])
+
+
 def test_actual_workflow_projection_tracks_two_committed_increments_and_preserves_records(graph_project):
     service, workflow, root, original = graph_project
     records = deepcopy(original["resources"])

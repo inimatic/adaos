@@ -101,8 +101,15 @@ def evidence_impact(previous, current, receipts):
     from adaos.services.traceability import validate_graph
     validate_graph(previous)
     validate_graph(current)
-    previous_versions = {row["ref"]: row["digest"] for row in previous["nodes"]}
-    versions = {row["ref"]: row["digest"] for row in current["nodes"]}
+    def unambiguous_versions(graph):
+        candidates = {}
+        for row in graph["nodes"]:
+            candidates.setdefault(row["ref"], set()).add(row["digest"])
+        # A receipt naming a bare ref cannot select between different kinds or
+        # versions with the same ref. Do not silently accept the last node.
+        return {ref: next(iter(values)) for ref, values in candidates.items() if len(values) == 1}
+    previous_versions = unambiguous_versions(previous)
+    versions = unambiguous_versions(current)
     outcomes = []
     for receipt in receipts:
         dependencies = receipt.get("dependencies") or {}
