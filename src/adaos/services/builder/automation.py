@@ -4765,6 +4765,7 @@ class BuilderAutomationService:
             for item in session.get("task_history") or []
             if str(item).strip()
         ]
+        explicitly_selected = bool(str(source_task_id or "").strip())
         selected_task_id = str(source_task_id or "").strip()
         selected_from_history = False
         if selected_task_id:
@@ -4822,14 +4823,24 @@ class BuilderAutomationService:
                 "checkpoint": None,
             }
 
-        source_failed = str(source_task.get("status") or "").strip() == "failed"
+        source_status = str(source_task.get("status") or "").strip()
+        source_failed = source_status == "failed"
+        source_cancelled_at = str(source_task.get("cancelled_at") or "").strip()
+        explicitly_cancelled = bool(
+            explicitly_selected
+            and source_status == "cancelled"
+            and int(source_task.get("attempts") or 0) > 0
+            and source_cancelled_at
+        )
         record(
-            "source_task_failed",
-            source_failed,
+            "source_task_replayable",
+            source_failed or explicitly_cancelled,
             (
                 "source task is a failed immutable candidate"
                 if source_failed
-                else "source task is not failed and cannot be replayed as a candidate"
+                else "explicitly selected cancelled task has a retained candidate"
+                if explicitly_cancelled
+                else "source task is neither failed nor an explicitly selected retained cancellation"
             ),
         )
         failures = [
@@ -4839,13 +4850,23 @@ class BuilderAutomationService:
         ]
         source_failure = failures[-1] if failures else {}
         failure_id = str(source_failure.get("failure_id") or "").strip()
+        cancellation_identity = (
+            "cancelled:"
+            + hashlib.sha256(
+                f"{selected_task_id}\0{source_cancelled_at}".encode("utf-8")
+            ).hexdigest()
+            if explicitly_cancelled
+            else ""
+        )
         record(
-            "source_failure_identity",
-            bool(failure_id),
+            "source_stop_identity",
+            bool(failure_id or cancellation_identity),
             (
                 "source failure identity is present"
                 if failure_id
-                else "source task has no durable failure identity"
+                else "source cancellation identity is present"
+                if cancellation_identity
+                else "source task has no durable stop identity"
             ),
         )
 
@@ -4858,10 +4879,12 @@ class BuilderAutomationService:
         )
         record(
             "blocking_feedback",
-            bool(blocking_feedback),
+            bool(blocking_feedback) or explicitly_cancelled,
             (
                 "structured blocking development feedback is preserved"
                 if blocking_feedback
+                else "explicit cancellation will be replayed only through full no-model validation"
+                if explicitly_cancelled
                 else "source task has no preserved structured blocking development feedback"
             ),
         )
@@ -5160,7 +5183,8 @@ class BuilderAutomationService:
         if not blockers:
             checkpoint_seed = {
                 "source_task_id": selected_task_id,
-                "failure_id": failure_id,
+                "failure_id": failure_id or None,
+                "cancellation_identity": cancellation_identity or None,
                 "candidate_digest": candidate_digest,
                 "source_snapshot_digest": source_snapshot.get("digest"),
                 "continuation_contract": current_contract,
@@ -5178,10 +5202,14 @@ class BuilderAutomationService:
                 "mode": "validate_preserved_candidate",
                 "model_policy": "forbid",
                 "source_task_id": selected_task_id,
-                "failure_id": failure_id,
+                "failure_id": failure_id or None,
+                "cancellation_identity": cancellation_identity or None,
+                "source_cancelled_at": source_cancelled_at or None,
                 "trigger_failure_id": None,
                 "reason": (
-                    "manifest_scope_requalified_after_guard"
+                    "operator_cancelled_revalidation"
+                    if explicitly_cancelled
+                    else "manifest_scope_requalified_after_guard"
                     if manifest_scope_feedback
                     else "blocking_development_feedback"
                 ),

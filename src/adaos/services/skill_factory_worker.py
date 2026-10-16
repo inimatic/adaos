@@ -9101,8 +9101,17 @@ class LocalSkillFactoryWorker:
             raise ValueError("continuation checkpoint source_task_id is invalid")
 
         source_task = self.factory.read_task(source_task_id)
-        if str(source_task.get("status") or "").strip() != "failed":
-            raise ValueError("continuation source task is not failed")
+        source_status = str(source_task.get("status") or "").strip()
+        continuation_reason = str(checkpoint.get("reason") or "").strip()
+        cancelled_revalidation = bool(
+            source_status == "cancelled"
+            and continuation_reason == "operator_cancelled_revalidation"
+            and int(source_task.get("attempts") or 0) > 0
+            and str(source_task.get("cancelled_at") or "").strip()
+            == str(checkpoint.get("source_cancelled_at") or "").strip()
+        )
+        if source_status != "failed" and not cancelled_revalidation:
+            raise ValueError("continuation source task is not replayable")
         failures = [
             dict(item)
             for item in source_task.get("failure_history") or []
@@ -9110,7 +9119,6 @@ class LocalSkillFactoryWorker:
         ]
         failure = failures[-1] if failures else {}
         failure_message = str(failure.get("message") or "")
-        continuation_reason = str(checkpoint.get("reason") or "").strip()
         token_boundary = _codex_token_boundary_message(failure_message)
         deterministic_validation = (
             continuation_reason
@@ -9150,6 +9158,7 @@ class LocalSkillFactoryWorker:
             and not manifest_scope_requalified
             and not feedback_message
             and not blocking_feedback_message
+            and not cancelled_revalidation
         ):
             raise ValueError(
                 "continuation source task did not stop at an eligible preservation boundary"
@@ -9160,6 +9169,17 @@ class LocalSkillFactoryWorker:
             and expected_failure_id != str(failure.get("failure_id") or "").strip()
         ):
             raise ValueError("continuation checkpoint failure identity does not match")
+        if cancelled_revalidation:
+            expected_cancellation_identity = str(
+                checkpoint.get("cancellation_identity") or ""
+            ).strip()
+            actual_cancellation_identity = "cancelled:" + hashlib.sha256(
+                f"{source_task_id}\0{source_task.get('cancelled_at')}".encode("utf-8")
+            ).hexdigest()
+            if expected_cancellation_identity != actual_cancellation_identity:
+                raise ValueError(
+                    "continuation checkpoint cancellation identity does not match"
+                )
 
         source_run = (self.runs_root / _safe_token(source_task_id)).resolve()
         previous_workspace = (source_run / "workspace").resolve()

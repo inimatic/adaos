@@ -9656,6 +9656,94 @@ def test_worker_skips_candidate_already_absorbed_by_refreshed_snapshot(
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
 
 
+def test_worker_restores_explicit_cancelled_candidate_for_full_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.cancelled-candidate"
+    cancelled_at = "2026-10-16T00:01:00+00:00"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "webui.json"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    contract = {"schema": "adaos.builder.continuation_contract.v1"}
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "task_id": source_task_id,
+                "target": {"type": "skill", "id": "demo"},
+                "forge": {
+                    "sparse_paths": ["skills/demo/"],
+                    "source_snapshot": {"digest": "sha256:same"},
+                },
+                "realize_request": {
+                    "artifacts": {"continuation_contract": contract}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, _task_id: {
+            "task_id": source_task_id,
+            "status": "cancelled",
+            "attempts": 1,
+            "cancelled_at": cancelled_at,
+            "failure_history": [],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    identity = "cancelled:" + hashlib.sha256(
+        f"{source_task_id}\0{cancelled_at}".encode("utf-8")
+    ).hexdigest()
+    assignment = {
+        "task_id": "task.current",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": contract,
+                "continuation_checkpoint": {
+                    "mode": "validate_preserved_candidate",
+                    "model_policy": "forbid",
+                    "source_task_id": source_task_id,
+                    "reason": "operator_cancelled_revalidation",
+                    "source_cancelled_at": cancelled_at,
+                    "cancellation_identity": identity,
+                    "continuation_contract": contract,
+                },
+            }
+        },
+    }
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored is not None
+    assert restored["source_task_id"] == source_task_id
+    assert restored["changed_paths"] == ["skills/demo/webui.json"]
+    assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
+
+
 def test_worker_resumes_blocking_feedback_from_materialized_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

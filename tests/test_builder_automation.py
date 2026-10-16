@@ -4358,6 +4358,84 @@ def test_preserved_candidate_preflight_keeps_durable_lineage_after_package_repla
     assert admission["checkpoint"]["model_policy"] == "forbid"
 
 
+def test_preserved_candidate_preflight_admits_explicit_cancelled_task_for_validation(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.cancelled-after-tests"
+    run_root = service.runs_root / task_id
+    workspace = run_root / "workspace"
+    source = service.dev_scenarios_root / "recipes"
+    shutil.copytree(source, workspace / "scenarios" / "recipes")
+    LocalSkillFactoryWorker(
+        state_dir=service.state_dir,
+        repo_root=service.repo_root,
+        dev_skills_root=service.dev_skills_root,
+        dev_scenarios_root=service.dev_scenarios_root,
+        runs_root=service.runs_root,
+    )._init_git_workspace(workspace, "realize/cancelled-after-tests")
+    (workspace / "scenarios" / "recipes" / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {"candidate": True}}),
+        encoding="utf-8",
+    )
+    current_publication = Path(service.workspace_service.scenarios_root) / "recipes"
+    shutil.copytree(source, current_publication)
+    snapshot = automation_module.capture_source_snapshot(
+        state_dir=service.state_dir,
+        artifacts=[("scenario", "recipes", source)],
+        attachments=[
+            (
+                "current_publication",
+                current_publication,
+                "scenarios/recipes/.builder_current_publication",
+            )
+        ],
+        created_at="2026-10-16T00:00:00+00:00",
+    )
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "target": {"type": "scenario", "id": "recipes"},
+                "forge": {"source_snapshot": snapshot},
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_contract": automation_module._continuation_contract()
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "cancelled",
+            "attempts": 1,
+            "cancelled_at": "2026-10-16T00:01:00+00:00",
+            "failure_history": [],
+        }
+    )
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "task_history": [task_id],
+    }
+
+    admission = service._preserved_candidate_admission(
+        session,
+        source_task_id=task_id,
+    )
+
+    assert admission["eligible"] is True, admission
+    checkpoint = admission["checkpoint"]
+    assert checkpoint["model_policy"] == "forbid"
+    assert checkpoint["reason"] == "operator_cancelled_revalidation"
+    assert checkpoint["source_cancelled_at"] == "2026-10-16T00:01:00+00:00"
+    assert checkpoint["cancellation_identity"].startswith("cancelled:")
+
+
 def test_preserved_candidate_validation_submits_successor_with_no_model_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
