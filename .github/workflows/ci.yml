@@ -220,6 +220,19 @@ jobs:
         env:
           BUILDER_SOURCE_URL: ${{ secrets.ADAOS_MONOREPO_URL || 'https://github.com/inimatic/adaos-registry.git' }}
         run: uv run python scripts/prepare_builder_ci_source.py --checkout .tmp/ci-builder-source
+      - name: Qualify the complete pinned native Builder test suite
+        env:
+          ADAOS_BASE_DIR: ${{ github.workspace }}/.tmp/ci-native-builder-runtime
+          ADAOS_TESTING: '1'
+        run: |
+          uv run python scripts/run_private_contract_check.py --label native-builder \
+            --require-complete \
+            --junit .tmp/private-contract-checks/native-builder.xml \
+            --public-junit reports/native-builder.xml -- \
+            python -m pytest -q -o addopts='' \
+            .tmp/ci-builder-source/skills/builder_skill/tests/test_builder_skill.py \
+            --basetemp=.tmp/ci-native-builder-pytest \
+            --junitxml=.tmp/private-contract-checks/native-builder.xml
       - name: Check Builder contracts without providers or external services
         # Native integration below uses the exact declared package, not an
         # optional private Workspace or independent qualifier double.
@@ -321,7 +334,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: builder-context-delivery-usability-contracts
-          path: reports/builder-contracts.xml
+          path: |
+            reports/builder-contracts.xml
+            reports/native-builder.xml
           retention-days: 7
 
   bump_patch_version:
