@@ -2062,6 +2062,12 @@ def test_local_worker_does_not_apply_result_after_task_cancellation(
     )
     assert task["status"] == "cancelled"
     assert not task.get("result")
+    from adaos.services.context_control import ContextControlService
+    receipts = list((tmp_path / "runs").glob("*/runtime/codex-output-evidence.json"))
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+    retained = ContextControlService(state_dir).get_artifact(receipt["ref"])
+    assert retained["final_message"] == "late result" and retained["input_evidence_ref"]
 
 
 def test_local_worker_materializes_and_syncs_all_companion_skills(

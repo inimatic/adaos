@@ -61,3 +61,33 @@ def test_worker_generation_and_repair_submit_final_admitted_developer_facts_and_
         worker._execute_codex(task_id='task.contract', assignment=assignment, workspace=tmp_path,
             prompt='Changed pins', output_dir=tmp_path/'attempt/output')
     assert len(calls) == 2
+
+
+def test_paid_output_and_validation_are_acknowledged_before_next_attempt_overwrites_them(tmp_path):
+    from adaos.services.context_control import ContextControlService
+    import base64
+    output = tmp_path / 'attempt/output'
+    output.mkdir(parents=True)
+    raw = 'Естественная кожа 👩🏽‍💻'.encode('utf-8')
+    (output/'last_message.md').write_bytes(raw)
+    (output/'test_report.json').write_text('{"ok":false,"errors":["prior failure"]}', encoding='utf-8')
+    state_dir = tmp_path/'state'
+    LocalSkillFactoryWorker._archive_model_output('paid-task', output, 1, state_dir=state_dir)
+    receipt = json.loads((output/'model-attempts/001/receipt.json').read_text())
+    saved = ContextControlService(state_dir).get_artifact(receipt['evidence_receipt']['ref'])
+    assert base64.b64decode(saved['content_base64']['last_message.md']) == raw
+    assert 'prior failure' in base64.b64decode(saved['content_base64']['test_report.json']).decode()
+
+
+def test_unacknowledged_input_never_reaches_executor(tmp_path, monkeypatch):
+    from adaos.services.builder import llm_input_attribution
+    calls = []
+    def fail(*args, **kwargs):
+        raise OSError('injected disk full')
+    monkeypatch.setattr(llm_input_attribution, 'retain_llm_evidence', fail)
+    worker = LocalSkillFactoryWorker(state_dir=tmp_path/'state', repo_root=tmp_path/'repo',
+        dev_skills_root=tmp_path/'skills', dev_scenarios_root=tmp_path/'scenarios',
+        executor=lambda **kw: calls.append(kw) or CodexRunResult(returncode=0))
+    with pytest.raises(OSError, match='disk full'):
+        worker._execute_codex(task_id='no-paid-call', workspace=tmp_path, prompt='Task', output_dir=tmp_path/'attempt/output')
+    assert calls == []

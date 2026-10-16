@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import copy
 import hashlib
 import inspect
@@ -7044,10 +7045,13 @@ class LocalSkillFactoryWorker:
         prompt = (input_dir / "task.md").read_text(encoding="utf-8")
         repair_prompt = _deterministic_repair_prompt(prompt, errors)
         attempt = len(previous_repairs) + 1
-        result = self.executor(
-            workspace=workspace, prompt=repair_prompt, output_dir=output_dir
+        result = self._execute_codex(
+            task_id=task_id, assignment=assignment,
+            workspace=workspace, prompt=repair_prompt, output_dir=output_dir,
+            agent_profile=dict((assignment.get("codex") or {}).get("agent_profile") or {}),
+            root_mcp=_root_mcp_profile_from_assignment(assignment, include_private_token=True),
         )
-        self._record_codex_attempt(runtime_dir, result, attempt=attempt)
+        self._record_codex_attempt(runtime_dir, result, attempt=attempt, state_dir=self.state_dir)
         if result.returncode:
             raise RuntimeError(
                 f"Codex repair exited with code {result.returncode}: "
@@ -7382,8 +7386,8 @@ class LocalSkillFactoryWorker:
                         descriptor_working_set=descriptor_working_set,
                     ),
                 )
+                self._record_codex_attempt(runtime_dir, codex_result, attempt=0, state_dir=self.state_dir)
                 self._ensure_task_active(task_id)
-                self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
                 if codex_result.returncode:
                     raise RuntimeError(
                         f"Codex exited with code {codex_result.returncode}: "
@@ -7583,10 +7587,10 @@ class LocalSkillFactoryWorker:
                     agent_profile=agent_profile,
                     root_mcp=repair_root_mcp,
                 )
-                self._ensure_task_active(task_id)
                 self._record_codex_attempt(
-                    runtime_dir, codex_result, attempt=repair_attempt + 1
+                    runtime_dir, codex_result, attempt=repair_attempt + 1, state_dir=self.state_dir
                 )
+                self._ensure_task_active(task_id)
                 if codex_result.returncode:
                     raise RuntimeError(
                         f"Codex repair exited with code {codex_result.returncode}: "
@@ -8213,9 +8217,10 @@ class LocalSkillFactoryWorker:
         }
 
     @staticmethod
-    def _archive_model_output(task_id: str, output_dir: Path, attempt: int) -> None:
+    def _archive_model_output(task_id: str, output_dir: Path, attempt: int, *, state_dir=None) -> None:
         archive = output_dir / "model-attempts" / f"{attempt:03}"
         artifacts = {}
+        retained_bytes = {}
         for name in (
             "codex-live.jsonl",
             "codex-live.stderr.log",
@@ -8240,7 +8245,12 @@ class LocalSkillFactoryWorker:
                 "bytes": len(raw),
                 "sha256": hashlib.sha256(raw).hexdigest(),
             }
+            retained_bytes[name] = base64.b64encode(raw).decode("ascii")
         if artifacts:
+            from adaos.services.builder.llm_input_attribution import retain_llm_evidence
+            evidence = retain_llm_evidence({"schema": "adaos.builder.codex_attempt_archive.v1",
+                "task_id": task_id, "attempt": attempt, "artifacts": artifacts, "content_base64": retained_bytes},
+                state_dir=state_dir)
             _write_json(
                 archive / "receipt.json",
                 {
@@ -8248,6 +8258,7 @@ class LocalSkillFactoryWorker:
                     "task_id": task_id,
                     "attempt": attempt,
                     "artifacts": artifacts,
+                    "evidence_receipt": evidence,
                 },
             )
 
@@ -8325,12 +8336,13 @@ class LocalSkillFactoryWorker:
         if attempt > 1:
             # Keep the preceding response and failed checks before the executor
             # replaces compatibility live paths with the next repair attempt.
-            self._archive_model_output(task_id, output_dir, attempt - 1)
+            self._archive_model_output(task_id, output_dir, attempt - 1, state_dir=self.state_dir)
         prompt_path = input_root / f"{attempt:03}.prompt.md"
         raw_prompt = prompt.encode("utf-8")
         with prompt_path.open("xb") as stream:
             stream.write(raw_prompt)
         from adaos.services.builder.llm_input_attribution import retain_llm_evidence
+        from adaos.services.log_redaction import redact_log_value
         scope = effective_mcp_tool_scope(root_mcp)
         parent_path = input_root / f"{attempt - 1:03}.prompt.json"
         parent = _read_json(parent_path) if parent_path.is_file() else {}
@@ -8338,7 +8350,8 @@ class LocalSkillFactoryWorker:
             "schema": "adaos.builder.codex_attempt_input.v1", "task_id": task_id, "attempt": attempt,
             "parent_evidence_ref": dict(parent.get("evidence_receipt") or {}).get("ref"),
             "prompt": prompt, "developer_instructions": developer_instructions,
-            "assignment": dict(assignment or {}),
+            "assignment": redact_log_value({key: value for key, value in (assignment or {}).items()
+                if key in {"task_id", "target", "forge", "realize_request"}}),
             "mcp_scope": {"enabled": scope.enabled, "tools": list(scope.tools) if scope.tools is not None else None,
                           "disabled_tools": list(scope.disabled_tools)},
             "model": (agent_profile or {}).get("model"),
@@ -8451,11 +8464,21 @@ class LocalSkillFactoryWorker:
 
     @staticmethod
     def _record_codex_attempt(
-        runtime_dir: Path, result: CodexRunResult, *, attempt: int
+        runtime_dir: Path, result: CodexRunResult, *, attempt: int, state_dir=None
     ) -> None:
         from adaos.services.codex_profiles import execution_profile_from_command
 
         suffix = "" if attempt == 0 else f"-repair-{attempt}"
+        from adaos.services.builder.llm_input_attribution import retain_llm_evidence
+        input_paths = sorted((runtime_dir.parent / "input/model-attempts").glob("*.prompt.json"))
+        input_evidence = _read_json(input_paths[-1]) if input_paths else {}
+        receipt = retain_llm_evidence({"schema": "adaos.builder.codex_attempt_output.v1",
+            "attempt": input_evidence.get("attempt", attempt + 1), "compatibility_repair_index": attempt,
+            "input_evidence_ref": dict(input_evidence.get("evidence_receipt") or {}).get("ref"),
+            "returncode": result.returncode, "events": result.events, "final_message": result.final_message,
+            "stderr": result.stderr, "execution_profile": execution_profile_from_command(result.command), "sdk_snapshot": result.sdk_snapshot,
+            "token_budget": result.token_budget}, state_dir=state_dir)
+        _write_json(runtime_dir / f"codex-output-evidence{suffix}.json", receipt)
         _write_json(
             runtime_dir / f"codex-execution-profile{suffix}.json",
             execution_profile_from_command(result.command),
