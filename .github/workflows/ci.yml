@@ -271,6 +271,7 @@ jobs:
             tests/test_builder_browser_feedback.py \
             tests/test_materialization_identity.py \
             tests/test_skill_env_runtime.py \
+            tests/test_cbs_provider_authoring.py \
             tests/test_builder_native_semantic_proposer.py \
             tests/test_builder_model_costs.py \
             tests/test_builder_contract_second_consumer.py \

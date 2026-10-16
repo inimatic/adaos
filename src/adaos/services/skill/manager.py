@@ -4294,6 +4294,11 @@ class SkillManager:
         raise NotImplementedError(f"runtime type '{runtime_type}' is not supported")
 
     def _stage_skill_sources(self, source: Path, slot: SkillSlotPaths, *, sealed_source: bool = False) -> Path:
+        if (source / "contracts/provider.cbs.yaml").is_file():
+            # Source installs must obey the same compiler-owned CBS parity as
+            # immutable packages before replacing a prepared slot's bytes.
+            from adaos.services.artifact_pipeline.packages import artifact_source_snapshot
+            artifact_source_snapshot(source)
         destination_root = slot.src_dir
         namespace_root = destination_root / "skills"
         # A materialized content-addressed package need not live in a directory

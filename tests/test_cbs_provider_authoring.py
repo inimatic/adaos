@@ -39,6 +39,27 @@ def _source() -> ArtifactSourceRef:
     )
 
 
+def test_runtime_source_staging_cannot_bypass_compiler_owned_contract_parity(tmp_path):
+    from types import SimpleNamespace
+    from adaos.services.artifact_pipeline.cbs_authoring import compile_cbs_provider_files
+    from adaos.services.skill.manager import SkillManager
+    source = _skill(tmp_path / "source", name="mail_skill", physical_member="handlers/main.py")
+    files = {path.relative_to(source).as_posix(): path.read_bytes() for path in source.rglob("*") if path.is_file()}
+    compiled = compile_cbs_provider_files(files, kind="skill")
+    for name, content in compiled.generated_files.items():
+        (source / name).write_bytes(content)
+    manifest = source / "skill.yaml"
+    manifest.write_text(manifest.read_text(encoding="utf-8").replace("query: {type: string}", "query: {type: boolean}"), encoding="utf-8")
+    slot = SimpleNamespace(src_dir=tmp_path / "slot/src")
+    slot.src_dir.mkdir(parents=True)
+    prior = slot.src_dir / "keep.txt"
+    prior.write_text("previous prepared candidate", encoding="utf-8")
+    manager = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=SimpleNamespace())
+    with pytest.raises(PackageBuildError, match="compiler-owned CBS outputs differ"):
+        manager._stage_skill_sources(source, slot)
+    assert prior.read_text(encoding="utf-8") == "previous prepared candidate"
+
+
 def _descriptor(*, physical_member: str) -> str:
     return f"""\
 schema: adaos.cbs.provider_authoring.v1
