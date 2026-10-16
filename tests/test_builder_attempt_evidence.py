@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -27,12 +28,15 @@ def test_native_input_retains_exact_base_and_parent_across_restarts(evidence_bui
     raw = '{ "ui": {"title":"Портрет 👩🏽‍💻"}}\r\n'.encode("utf-8")
     (root / "webui.json").write_bytes(raw)
     messages = [{"role": "user", "content": "Сохрани кожу 👩🏽‍💻" * 3000}]
+    primary = module._write_llm_job_request_artifact(session=session, job_id="primary-request", request_id="primary-request",
+        model="fixture-model", messages=messages, generation_options={"max_tokens": 100})
     receipt = module._write_llm_job_request_artifact(session=session, job_id="repair", request_id="repair",
         parent_request_id="primary-request", parent_job_id="primary-job", model="fixture-model",
         messages=messages, generation_options={"max_tokens": 100}, stage="repair")
     saved = ContextControlService(state_dir=tmp_path / "private").get_artifact(receipt["evidence_receipt"]["ref"])
     assert saved["messages"] == messages
     assert saved["parent_request_id"] == "primary-request" and saved["parent_job_id"] == "primary-job"
+    assert saved["parent_evidence_ref"] == primary["evidence_receipt"]["ref"]
     assert saved["source_inputs"]["webui.json"] == {"sha256": hashlib.sha256(raw).hexdigest(), "content": raw.decode("utf-8")}
     assert receipt["evidence_receipt"]["automatic_gc"] is False
     assert json.loads((root / receipt["path"]).read_text(encoding="utf-8"))["evidence_receipt"] == receipt["evidence_receipt"]
@@ -63,3 +67,11 @@ def test_missing_project_journal_never_permits_unattributed_new_call(evidence_bu
     with pytest.raises(RuntimeError, match="before_model_submit"):
         module._write_llm_job_request_artifact(session={}, job_id="job", request_id="req", model="fixture",
             messages=[{"role": "user", "content": "Task"}], generation_options={})
+
+
+def test_unbalanced_large_response_is_rejected_with_bounded_parse_work(evidence_builder):
+    module, _, _ = evidence_builder
+    started = time.monotonic()
+    assert module._balanced_json_object('Незавершённый ответ {' * 30000) is None
+    assert time.monotonic() - started < 3
+    assert module._extract_json_object('prefix {"literal":"{ bracket }", "value":2} suffix')["value"] == 2
