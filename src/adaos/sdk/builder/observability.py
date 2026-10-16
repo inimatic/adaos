@@ -13,4 +13,10 @@ def llm_input_attribution(**kwargs: Any) -> dict[str, Any]:
     return build_llm_input_attribution(**kwargs)
 
 
-__all__ = ["llm_input_attribution"]
+def retain_llm_evidence(value: Any) -> dict[str, Any]:
+    """Retain exact private attempt evidence and verify its durable receipt."""
+    from adaos.services.builder.llm_input_attribution import retain_llm_evidence as retain
+    return retain(value)
+
+
+__all__ = ["llm_input_attribution", "retain_llm_evidence"]

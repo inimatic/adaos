@@ -8330,6 +8330,20 @@ class LocalSkillFactoryWorker:
         raw_prompt = prompt.encode("utf-8")
         with prompt_path.open("xb") as stream:
             stream.write(raw_prompt)
+        from adaos.services.builder.llm_input_attribution import retain_llm_evidence
+        scope = effective_mcp_tool_scope(root_mcp)
+        parent_path = input_root / f"{attempt - 1:03}.prompt.json"
+        parent = _read_json(parent_path) if parent_path.is_file() else {}
+        attempt_evidence = retain_llm_evidence({
+            "schema": "adaos.builder.codex_attempt_input.v1", "task_id": task_id, "attempt": attempt,
+            "parent_evidence_ref": dict(parent.get("evidence_receipt") or {}).get("ref"),
+            "prompt": prompt, "developer_instructions": developer_instructions,
+            "assignment": dict(assignment or {}),
+            "mcp_scope": {"enabled": scope.enabled, "tools": list(scope.tools) if scope.tools is not None else None,
+                          "disabled_tools": list(scope.disabled_tools)},
+            "model": (agent_profile or {}).get("model"),
+            "contract_input_admission": contract_admission,
+        }, state_dir=self.state_dir)
         _write_json(
             prompt_path.with_suffix(".json"),
             {
@@ -8341,6 +8355,7 @@ class LocalSkillFactoryWorker:
                 "final_input_budget": final_budget,
                 "contract_input_admission": contract_admission,
                 "developer_instructions": developer_instructions,
+                "evidence_receipt": attempt_evidence,
             },
         )
         _write_json(output_dir.parent / "runtime" / "final-input-budget.json", final_budget)

@@ -284,4 +284,20 @@ def build_llm_input_attribution(
     }
 
 
-__all__ = ["SCHEMA", "build_llm_input_attribution"]
+def retain_llm_evidence(value: Mapping[str, Any], *, state_dir=None) -> dict[str, Any]:
+    """Acknowledge exact private evidence through the existing verified CAS.
+
+    A caller must retain this reference in its attempt journal before submitting
+    another paid effect. These objects have no automatic collection policy.
+    They are not exported into platform publications or model context.
+    """
+    from adaos.services.context_control import ContextControlService
+    service = ContextControlService(state_dir=state_dir)
+    receipt = service.put_artifact(dict(value))
+    if service.get_artifact(receipt["ref"]) != dict(value):
+        raise ValueError("Builder evidence acknowledgement does not match submitted evidence")
+    return {**receipt, "retention_owner": "builder.attempt", "automatic_gc": False,
+            "visibility": "private_runtime"}
+
+
+__all__ = ["SCHEMA", "build_llm_input_attribution", "retain_llm_evidence"]

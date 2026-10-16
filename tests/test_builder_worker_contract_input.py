@@ -50,6 +50,12 @@ def test_worker_generation_and_repair_submit_final_admitted_developer_facts_and_
     assert all(json.loads(call['developer_instructions'])['platform_contracts']['callable_tools'] == ['get_descriptor_item'] for call in calls)
     receipts = list((tmp_path/'attempt/input/model-attempts').glob('*.json'))
     assert len(receipts) == 2 and all(json.loads(path.read_text())['contract_input_admission']['status'] == 'admitted' for path in receipts)
+    from adaos.services.context_control import ContextControlService
+    contexts = ContextControlService(tmp_path/'state')
+    saved = [contexts.get_artifact(json.loads(path.read_text())['evidence_receipt']['ref']) for path in sorted(receipts)]
+    assert saved[1]['parent_evidence_ref'] == json.loads(sorted(receipts)[0].read_text())['evidence_receipt']['ref']
+    assert saved[0]['prompt'] == calls[0]['prompt'] and saved[1]['prompt'] == calls[1]['prompt']
+    assert saved[1]['assignment'] == assignment
     assignment['realize_request']['artifacts']['component_contract_input']['required_ids'] = ['ui.form']
     with pytest.raises(ValueError, match='resume_snapshot_conflict'):
         worker._execute_codex(task_id='task.contract', assignment=assignment, workspace=tmp_path,
