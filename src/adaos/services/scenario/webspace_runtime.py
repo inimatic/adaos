@@ -3697,6 +3697,7 @@ def _load_scenario_switch_content(scenario_id: str, *, space: str) -> Dict[str, 
 
 def _scenario_exists_in_webspace(scenario_id: str, *, space: str, webspace_id: str | None = None) -> bool:
     if webspace_id:
+        from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
         from adaos.services.applications.runtime_selection import (
             selected_application,
             selected_trial,
@@ -3716,6 +3717,10 @@ def _scenario_exists_in_webspace(scenario_id: str, *, space: str, webspace_id: s
             if selected is not None:
                 selected.verified_source(selected.component("scenario", scenario_id))
                 return True
+        except TrialRuntimeUnavailable:
+            # An unavailable selected Trial is a degraded desktop, not a failed
+            # catalog. Do not fall back to a same-named development source.
+            return False
         except AttributeError:
             # Recovery/diagnostic callers may provide a deliberately minimal
             # context without Application paths. The scenario loader remains
