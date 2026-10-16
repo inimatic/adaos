@@ -1,4 +1,12 @@
-from adaos.services.router.builder_chat_notifications import builder_chat_notifications, claim_builder_notification
+import json
+import time
+
+from adaos.services.router.builder_chat_notifications import (
+    builder_chat_notifications,
+    claim_builder_notification,
+    pending_latest_automation_notifications,
+    record_builder_delivery,
+)
 
 
 def test_user_brief_is_complete_and_chunked_for_telegram():
@@ -58,8 +66,6 @@ def test_notification_deduplication_retains_a_bounded_recent_window():
 
 
 def test_delivery_receipt_tracks_transport_without_text_or_unsafe_paths(tmp_path):
-    import json
-    from adaos.services.router.builder_chat_notifications import record_builder_delivery
     payload = {"id": "../turn/1", "text": "Private portrait brief", "_meta": {"schema": "adaos.builder.chat_notification.v1"}}
     record_builder_delivery(tmp_path, payload, phase="started")
     record_builder_delivery(tmp_path, payload, phase="sent", http_status=200)
@@ -68,3 +74,81 @@ def test_delivery_receipt_tracks_transport_without_text_or_unsafe_paths(tmp_path
     stored = paths[0].read_text(encoding="utf-8")
     assert "Private portrait brief" not in stored
     assert json.loads(stored)["http_status"] == 200 and json.loads(stored)["phase"] == "sent"
+
+
+def test_reconciliation_recovers_only_undelivered_messages_from_latest_task(tmp_path):
+    def message(task_id, sequence, schema, text, *, from_="hub"):
+        identity = f"builder-automation:{sequence}:{task_id}"
+        return {
+            "id": identity,
+            "from": from_,
+            "text": text,
+            "seq": sequence,
+            "ts": float(sequence),
+            "_meta": {
+                "schema": schema,
+                "dialog_channel_id": "builder",
+                "task_id": task_id,
+                "source_message_id": identity,
+                "response_idempotency_key": identity,
+            },
+        }
+
+    old = message("task.old", 1, "adaos.builder.automation_notification.v1", "old")
+    brief = message(
+        "task.new", 2, "adaos.builder.automation_input.v1", "exact brief", from_="user"
+    )
+    started = message(
+        "task.new", 3, "adaos.builder.automation_notification.v1", "started"
+    )
+    completed = message(
+        "task.new", 4, "adaos.builder.automation_notification.v1", "completed"
+    )
+    record_builder_delivery(
+        tmp_path,
+        {
+            "id": started["_meta"]["response_idempotency_key"],
+            "_meta": {"schema": "adaos.builder.automation_notification.v1"},
+        },
+        phase="sent",
+    )
+
+    pending = pending_latest_automation_notifications(
+        tmp_path, [completed, old, started, brief], now=100.0, settle_seconds=0
+    )
+
+    assert [item["text"].split("\n", 1)[1] for item in pending] == [
+        "exact brief",
+        "completed",
+    ]
+
+
+def test_reconciliation_waits_for_live_delivery_and_retries_stale_started(tmp_path):
+    message = {
+        "id": "m-1",
+        "from": "user",
+        "text": "brief",
+        "seq": 1,
+        "ts": 1.0,
+        "_meta": {
+            "schema": "adaos.builder.automation_input.v1",
+            "dialog_channel_id": "builder",
+            "task_id": "task.new",
+            "source_message_id": "turn-1",
+        },
+    }
+    projected = builder_chat_notifications(message)[1][0]
+    record_builder_delivery(tmp_path, projected, phase="started")
+    assert pending_latest_automation_notifications(
+        tmp_path, [message], now=time.time(), settle_seconds=0
+    ) == []
+
+    receipt = next((tmp_path / "state/router/builder-deliveries").glob("*.json"))
+    value = json.loads(receipt.read_text(encoding="utf-8"))
+    value["updated_at"] = 1.0
+    receipt.write_text(json.dumps(value), encoding="utf-8")
+    assert len(
+        pending_latest_automation_notifications(
+            tmp_path, [message], now=100.0, settle_seconds=0
+        )
+    ) == 1

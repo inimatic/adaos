@@ -21,7 +21,12 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_identity import runtime_transition_role
 from .rules_loader import load_rules, watch_rules
-from .builder_chat_notifications import builder_chat_notifications, claim_builder_notification, record_builder_delivery
+from .builder_chat_notifications import (
+    builder_chat_notifications,
+    claim_builder_notification,
+    pending_latest_automation_notifications,
+    record_builder_delivery,
+)
 from .media_routes import build_media_route_refresh_payload, resolve_media_route_state
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
@@ -520,6 +525,7 @@ class RouterService:
         self._tg_reply_via_root_http = str(os.getenv("HUB_TG_REPLY_VIA_ROOT_HTTP") or "").strip() == "1"
         self._media_route_webspaces: set[str] = set()
         self._notify_tasks: set[asyncio.Task[None]] = set()
+        self._builder_chat_reconcile_task: asyncio.Task[None] | None = None
         self._notification_context = None
         self._voice_chat_append_tasks: set[asyncio.Task[None]] = set()
         self._voice_chat_append_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -618,6 +624,43 @@ class RouterService:
                 # This Router owns the configured route. Dispatch through its
                 # background sender instead of crossing another bus/skill scope.
                 await self._on_event(Event(type="ui.notify", source="router.builder.chat", ts=time.time(), payload=item))
+
+    async def _reconcile_builder_transcript(self) -> None:
+        if not self._conversation_store_active or not self._has_rule_for("telegram"):
+            return
+        try:
+            messages = await asyncio.to_thread(
+                conversation_store.list_messages,
+                "conv.skill.builder_skill.default",
+                limit=80,
+                ascending=False,
+            )
+        except Exception:
+            _log.debug("Builder transcript reconciliation read failed", exc_info=True)
+            return
+        if not isinstance(messages, list):
+            return
+        for item in pending_latest_automation_notifications(self.base_dir, messages):
+            await self._on_event(
+                Event(
+                    type="ui.notify",
+                    source="router.builder.chat.reconcile",
+                    ts=time.time(),
+                    payload=item,
+                )
+            )
+
+    async def _builder_transcript_reconcile_loop(self) -> None:
+        try:
+            interval = max(
+                2.0,
+                float(os.getenv("ADAOS_BUILDER_CHAT_RECONCILE_INTERVAL_S") or "10"),
+            )
+        except (TypeError, ValueError):
+            interval = 10.0
+        while self._started:
+            await self._reconcile_builder_transcript()
+            await asyncio.sleep(interval)
 
     def _event_targets_local_node(self, payload: Any) -> bool:
         if not isinstance(payload, dict):
@@ -7207,6 +7250,10 @@ class RouterService:
                 self.bus.subscribe(event_type, handler)
             self._subscribed = True
         self._start_rules_watch()
+        self._builder_chat_reconcile_task = asyncio.create_task(
+            self._builder_transcript_reconcile_loop(),
+            name="router-builder-chat-reconcile",
+        )
 
     async def activate_after_promotion(self) -> None:
         if self._conversation_store_active:
@@ -7224,6 +7271,14 @@ class RouterService:
         self._conversation_store_active = True
 
     async def stop(self) -> None:
+        self._started = False
+        if self._builder_chat_reconcile_task is not None:
+            self._builder_chat_reconcile_task.cancel()
+            try:
+                await self._builder_chat_reconcile_task
+            except asyncio.CancelledError:
+                pass
+            self._builder_chat_reconcile_task = None
         if self._stop_watch:
             try:
                 self._stop_watch()
