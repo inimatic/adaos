@@ -2043,6 +2043,24 @@ def test_context_packet_is_bounded_stable_and_persistable(
     assert persisted["workflow"]["change"]["context_packet_digest"] == first["digest"]
 
 
+def test_context_packet_admits_phase_scope_before_model_and_retains_transition(workflow_project):
+    service, _ = workflow_project
+    service.transition("scenario", "recipes", "plan_change_set", metadata={
+        "change_set_id": "CH-typed", "request": "Implement the accepted Prototype",
+        "issues": [{"issue_id": "prototype-safety", "title": "No real model calls in Prototype",
+            "lane": "automation", "kind": "phase_constraint", "applicable_phases": ["prototype"],
+            "effect": "forbid", "effect_ref": "provider.calls", "verification_scope": "prototype",
+            "acceptance_criteria": ["Prototype is model-free"]},
+            {"issue_id": "production", "title": "Implement the provider", "lane": "automation",
+             "acceptance_criteria": ["Production has an authorized provider binding"]}]})
+    before = service.describe("scenario", "recipes")
+    packet = service.build_context_packet("scenario", "recipes", execution_phase="automation")
+    assert [row["issue_id"] for row in packet["change"]["issues"]] == ["production"]
+    assert packet["change"]["issue_phase_projection"]["transitions"][0]["action"] == "discharge"
+    assert len(packet["facets"]["constraints"]["issue_acceptance"]) == 1
+    assert service.describe("scenario", "recipes")["generation"] == before["generation"]
+
+
 def test_large_context_packet_is_externalized_and_hydrated(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

@@ -8262,7 +8262,10 @@ class LocalSkillFactoryWorker:
         agent_profile: Mapping[str, Any] | None = None,
         root_mcp: Mapping[str, Any] | None = None,
     ) -> CodexRunResult:
-        prompt = OUTCOME_INSTRUCTION + "\n" + prompt
+        from adaos.services.builder.issue_applicability import automation_gate_contract
+        prompt = (OUTCOME_INSTRUCTION + "\n" + json.dumps(
+            {"automation_gate_contract": automation_gate_contract()}, ensure_ascii=False
+        ) + "\n" + prompt)
         # This is the last admission boundary: repairs and continuations already
         # exist here, unlike the earlier capsule plan and packet projection.
         artifacts = dict(dict((assignment or {}).get("realize_request") or {}).get("artifacts") or {})

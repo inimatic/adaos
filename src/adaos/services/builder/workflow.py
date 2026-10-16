@@ -519,7 +519,13 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
         raise BuilderWorkflowError(
             "issue structural_status must be active, split, or merged"
         )
+    from .issue_applicability import normalize_issue_applicability
+    try:
+        applicability = normalize_issue_applicability(value)
+    except ValueError as exc:
+        raise BuilderWorkflowError(str(exc)) from exc
     return {
+        **applicability,
         "issue_id": issue_id,
         "title": title,
         "lane": lane,
@@ -6376,6 +6382,12 @@ class BuilderWorkflowService:
                 ]
             else:
                 scoped_issues = all_issues
+            from .issue_applicability import project_phase_issues, automation_gate_contract
+            try:
+                phase_projection = project_phase_issues(scoped_issues, phase=phase)
+            except ValueError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
+            scoped_issues = phase_projection["issues"]
             active_reviews = [
                 copy.deepcopy(dict(item))
                 for item in workflow.get("reviews") or []
@@ -6969,6 +6981,7 @@ class BuilderWorkflowService:
                     "actor": "builder",
                     "phase": phase,
                     "observed_phase": observed_phase,
+                    "gate_contract": automation_gate_contract() if phase == "automation" else None,
                 },
             }
             required = list(
@@ -7020,6 +7033,7 @@ class BuilderWorkflowService:
                     "gate": change.get("gate"),
                     "status": change.get("status"),
                     "issues": scoped_issues,
+                    "issue_phase_projection": phase_projection,
                     "specification_delta": copy.deepcopy(
                         change.get("specification_delta")
                     ),
