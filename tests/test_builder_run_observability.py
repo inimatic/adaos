@@ -99,6 +99,15 @@ def test_conflicting_attempt_receipts_do_not_look_complete_or_charge_twice():
     assert metrics['attempt_observations'][0]['status'] == 'conflict'
 
 
+def test_late_complementary_receipt_completes_one_attempt_without_new_charge():
+    observed = {'root_job_id': 'same', 'usage': {'input_tokens': 100, 'output_tokens': 50}}
+    late = {**observed, 'usage': {**observed['usage'], 'cached_input_tokens': 30}, 'cost': {'estimated_usd': .3},
+            'timing': {'execution_ms': 200, 'queue_ms': 20}}
+    metrics = execution_metrics_from_llm({'telemetry': {'attempt_observations': [observed, late, late]}})
+    assert metrics['llm_calls'] == 1 and metrics['cost_usd'] == .3 and metrics['usage_complete']
+    assert metrics['root_execution_ms'] == 200 and metrics['root_queue_ms'] == 20
+
+
 @pytest.mark.parametrize('values', [{'input_tokens': 100, 'cached_input_tokens': 101},
                                   {'output_tokens': 50, 'reasoning_tokens': 51}])
 def test_overlapping_token_subsets_cannot_exceed_the_total(values):

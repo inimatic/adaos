@@ -293,8 +293,11 @@ def retain_llm_evidence(value: Mapping[str, Any], *, state_dir=None) -> dict[str
     """
     from adaos.services.context_control import ContextControlService
     service = ContextControlService(state_dir=state_dir)
-    receipt = service.put_artifact(dict(value))
-    if service.get_artifact(receipt["ref"]) != dict(value):
+    # Capture the JSON wire representation, including tuple -> array conversion.
+    # Reject non-JSON numbers instead of making an unverifiable acknowledgement.
+    wire_value = json.loads(json.dumps(dict(value), ensure_ascii=False, allow_nan=False))
+    receipt = service.put_artifact(wire_value)
+    if service.get_artifact(receipt["ref"]) != wire_value:
         raise ValueError("Builder evidence acknowledgement does not match submitted evidence")
     return {**receipt, "retention_owner": "builder.attempt", "automatic_gc": False,
             "visibility": "private_runtime"}

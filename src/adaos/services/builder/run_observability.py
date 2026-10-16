@@ -55,15 +55,29 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
         # Native Builder records disjoint receipts before presenting its legacy
         # aggregate. Never add that aggregate to its own constituent attempts.
         unique = {}
+        def merge_facts(before, after):
+            merged = copy.deepcopy(before)
+            for key, value in after.items():
+                if key not in merged:
+                    merged[key] = copy.deepcopy(value)
+                elif isinstance(merged[key], Mapping) and isinstance(value, Mapping):
+                    merged[key] = merge_facts(merged[key], value)
+                elif merged[key] != value or type(merged[key]) is not type(value):
+                    raise ValueError('conflicting attempt facts')
+            return merged
         for row in observed_attempts:
             if not isinstance(row, Mapping) or not row.get('root_job_id'):
                 continue
             identity = str(row['root_job_id'])
             if identity not in unique:
                 unique[identity] = dict(row)
-            elif unique[identity] != dict(row):
-                # Conflicting/revised facts require reconciliation, not guessing.
-                unique[identity] = {'root_job_id': identity, 'conflict': True}
+            else:
+                try:
+                    if unique[identity].get('conflict'):
+                        raise ValueError('unreconciled conflict')
+                    unique[identity] = merge_facts(unique[identity], dict(row))
+                except ValueError:
+                    unique[identity] = {'root_job_id': identity, 'conflict': True}
         if unique:
             if len(unique) > 16:
                 raise ValidationError('Builder attempt observations exceed the retained run bound')
@@ -77,10 +91,10 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
                     if key in {'root_job_id', 'usage', 'cost', 'provider', 'timing'}}, 'model': row.get('model')})
                 attempts.append({'job_id': identity, 'status': 'conflict' if row.get('conflict') else 'observed',
                     **{key: single[key] for key in ('model', 'input_tokens', 'cached_input_tokens', 'output_tokens',
-                        'reasoning_tokens', 'cost_usd', 'cost_basis') if key in single}})
+                        'reasoning_tokens', 'cost_usd', 'cost_basis', 'root_execution_ms', 'root_queue_ms') if key in single}})
             # Only a complete set may be presented as the total. Retain known
             # subtotals in attempts, where unknown receipts stay visible.
-            for key in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens'):
+            for key in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens', 'root_execution_ms', 'root_queue_ms'):
                 metrics.pop(key, None)
                 if all(key in row for row in attempts):
                     metrics[key] = sum(row[key] for row in attempts)

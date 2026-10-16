@@ -60,7 +60,9 @@
         "output_tokens": { "type": "integer", "minimum": 0 },
         "reasoning_tokens": { "type": "integer", "minimum": 0 },
         "cost_usd": { "type": "number", "minimum": 0 },
-        "cost_basis": { "enum": ["estimate", "metered", "invoiced"] }
+        "cost_basis": { "enum": ["estimate", "metered", "invoiced"] },
+        "root_execution_ms": { "type": "number", "minimum": 0 },
+        "root_queue_ms": { "type": "number", "minimum": 0 }
       },
       "dependentRequired": { "cost_usd": ["cost_basis"] }
     },
