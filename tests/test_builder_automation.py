@@ -14304,5 +14304,21 @@ def test_worker_phase_notices_include_failure_and_skip_unchanged_state(tmp_path,
     service._notify_execution_state_change(failed, session)
     assert len(notices) == 2
     assert notices[0]['status'] == 'phase.in_progress'
-    assert notices[1]['status'] == 'phase.failed'
+    assert notices[1]['status'].startswith('phase.failed.')
     assert 'Required Image Edit contract is unavailable' in notices[1]['message']
+
+
+def test_meaningful_progress_in_same_phase_has_distinct_stable_conversation_identity(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    notices = []
+    monkeypatch.setattr(BuilderAutomationService, '_publish_lifecycle_notification',
+                        lambda self, session, **kwargs: notices.append(kwargs) or True)
+    old = {'object_id': 'recipes', 'current_task_id': 'task.1', 'status': 'in_progress',
+           'progress': {'message': 'Начал реализацию 👩🏽‍💻'}}
+    new = {**old, 'progress': {'message': 'Исправляю проверенную ошибку 👩🏽‍💻'}}
+    service._notify_execution_state_change(old, None)
+    service._notify_execution_state_change(new, old)
+    service._notify_execution_state_change(new, {**new, 'updated_at': 'restart-read'})
+    assert len(notices) == 2 and notices[0]['status'] != notices[1]['status']
+    service._notify_execution_state_change(new, None)  # Durable canonical event will deduplicate the same key.
+    assert notices[2]['status'] == notices[1]['status']

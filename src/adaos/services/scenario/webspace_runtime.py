@@ -378,7 +378,10 @@ def canonical_materialization_identity(
     ).hexdigest()[:12]
     version_token = revision_token or source_token or "current"
     if revision_token and source_token:
-        version_token = f"{revision_token}.{source_token[:12]}"
+        # Fingerprints often begin with "automation:sha256:". Truncating the
+        # prefix makes different content at one revision share a cache identity.
+        source_key = hashlib.sha256(source_token.encode("utf-8")).hexdigest()[:16]
+        version_token = f"{revision_token}.{source_key}"
     policy_token = _normalize_materialization_token(policy_fingerprint, fallback="")
     dependencies_token = _normalize_materialization_token(dependencies_fingerprint, fallback="")
     application_token = str(application_id or "").strip()

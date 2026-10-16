@@ -819,6 +819,7 @@ def release_candidate_runtime(
 
 
 __all__ = [
+    "plan_increment",
     "get_clarification",
     "get_diagnostics",
     "answer_clarification",
@@ -837,3 +838,9 @@ __all__ = [
     "trial_verification_evidence",
     "validate_preserved_candidate",
 ]
+
+
+def plan_increment(**kwargs: Any) -> dict[str, Any]:
+    """Inspect B/C/N reuse without executing, accepting or resuming a task."""
+    from adaos.services.builder.retained_work import plan_increment as plan
+    return plan(**kwargs)

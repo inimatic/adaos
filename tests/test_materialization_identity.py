@@ -1,10 +1,47 @@
 from types import SimpleNamespace
+import asyncio
+import logging
 
 import pytest
 
 from adaos.services.applications import runtime_selection
 from adaos.services.scenario import webspace_runtime
 from adaos.services.scenario.webspace_runtime import canonical_materialization_identity
+
+
+def test_prefixed_content_fingerprints_cannot_share_revision_cache_identity():
+    first = canonical_materialization_identity(webspace_id="desktop-dev", scenario_id="retouch", revision="same-task",
+        source_fingerprint="automation:sha256:" + "a" * 64)
+    second = canonical_materialization_identity(webspace_id="desktop-dev", scenario_id="retouch", revision="same-task",
+        source_fingerprint="automation:sha256:" + "b" * 64)
+    assert first["source_fingerprint"] != second["source_fingerprint"]
+    assert first["key"] != second["key"] and first["key_hash"] != second["key_hash"]
+
+
+def test_builder_owner_derives_fingerprint_from_exact_decorated_content(monkeypatch):
+    from adaos.services.scenario.webspace_components.builder_publication import WebspaceBuilderPublicationService
+    from adaos.services.resources.prototype import prototype_webui_digest
+    content = {"ui": {"application": {"desktop": {"pageSchema": {"title": "active: reviewed", "_adaos": {"releaseStage": "ALPHA"}}}}}}
+    service = WebspaceBuilderPublicationService()
+    monkeypatch.setattr(service, "preview_content_override", lambda *a, **kw: (content, "dev"))
+    state = SimpleNamespace(is_dev=True, source_mode="dev", kind="dev", effective_home_scenario="fixture",
+        home_scenario="fixture", current_scenario_overlay="fixture", current_scenario="fixture", ui_overlay={})
+    captured = []
+    async def resolve(*args, **kwargs):
+        return state, "fixture", "explicit"
+    async def rebuild(*args, **kwargs):
+        captured.append(kwargs)
+        return {"ok": True, "accepted": True}
+    operations = SimpleNamespace(resolve_rebuild_scenario_target=resolve,
+        preflight_validated_scenario=lambda *a, **kw: ("fixture", "explicit", {"ok": True}),
+        workspace_index=SimpleNamespace(get_workspace=lambda *a: state, set_workspace_manifest=lambda *a, **kw: state),
+        canonical_materialization_identity=canonical_materialization_identity,
+        payload_command_trace=lambda value: {},
+        rebuild_webspace_from_sources=rebuild, elapsed_ms=lambda *a: 0, logger=logging.getLogger("test.materialization"))
+    result = asyncio.run(service.apply_revision_materialization("fixture-dev", scenario_id="fixture",
+        revision="paid-task", preview_stage="automation", operations=operations))
+    assert result["materialization_identity"]["source_fingerprint"].endswith(prototype_webui_digest(content).removeprefix("sha256:"))
+    assert captured[0]["materialization_identity"] == result["materialization_identity"]
 
 
 def test_canonical_materialization_identity_is_access_scoped() -> None:

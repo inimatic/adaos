@@ -199,6 +199,8 @@ class BuilderBrowserFeedbackService:
         context_packet_digest: str | None = None,
         runtime_url: str | None = None,
         space_kind: str = "development",
+        require_materialization_identity: bool = False,
+        expected_materialization_identity: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         env_type = current_env_type()
         if env_type != "dev":
@@ -240,6 +242,13 @@ class BuilderBrowserFeedbackService:
         if not webui_path.is_file():
             raise RuntimeError(f"candidate WebUI is missing: {webui_path}")
         source_digest = _file_digest(webui_path)
+        semantic_digest = _file_digest(webui_path.parent / "semantic.webui.json")
+        expected_materialization = {}
+        if require_materialization_identity:
+            identity = dict(expected_materialization_identity or {})
+            if identity.get("revision") != str(task_id) or not identity.get("source_fingerprint"):
+                raise ValueError("Browser gate requires the trusted materialization owner's exact revision and fingerprint")
+            expected_materialization = {key: identity[key] for key in ("revision", "source_fingerprint")}
         record_editor_workflows = _record_editor_workflows(source)
         record_editor_commands = [
             str(item["open_command"]) for item in record_editor_workflows
@@ -261,6 +270,7 @@ class BuilderBrowserFeedbackService:
             "ADAOS_E2E_CLIENT_URL": str(self.client_url),
             "ADAOS_E2E_OUTPUT": str(output),
             "ADAOS_E2E_SOURCE_DIGEST": str(source_digest or ""),
+            "ADAOS_E2E_EXPECTED_MATERIALIZATION": json.dumps(expected_materialization),
             "ADAOS_E2E_TIMEOUT_MS": str(max(30, int(self.timeout_seconds)) * 1000),
             "ADAOS_E2E_COMMAND_SEQUENCE": ",".join(record_editor_commands),
             "ADAOS_E2E_RECORD_EDITOR_COMMANDS": ",".join(record_editor_commands),
@@ -313,6 +323,22 @@ class BuilderBrowserFeedbackService:
                 "failure": "browser_feedback_timeout" if timed_out else "browser_feedback_report_missing",
             }
 
+        source_unchanged = (_file_digest(webui_path) == source_digest
+            and _file_digest(webui_path.parent / "semantic.webui.json") == semantic_digest)
+        if not source_unchanged:
+            report["passed"] = False
+            report["failure"] = "candidate_changed_during_browser_observation"
+            atomic_write_json(report_path, report)
+        if expected_materialization:
+            samples = report.get("samples") or []
+            if len(samples) != 2 or any(
+                not isinstance(sample, Mapping) or any(
+                    dict(sample.get("observed_materialization") or {}).get(key) != value
+                    for key, value in expected_materialization.items()) for sample in samples):
+                report["passed"] = False
+                report["failure"] = "browser_materialization_identity_mismatch"
+                atomic_write_json(report_path, report)
+
         evidence: list[dict[str, Any]] = []
         for path in sorted(output.iterdir()):
             if not path.is_file():
@@ -361,6 +387,9 @@ class BuilderBrowserFeedbackService:
             "source": {
                 "path": webui_path.resolve().as_posix(),
                 "digest": source_digest,
+                "semantic_digest": semantic_digest,
+                "unchanged_during_observation": source_unchanged,
+                "expected_materialization": expected_materialization,
                 "context_packet_digest": str(context_packet_digest or "").strip() or None,
             },
             "runtime_contract": {

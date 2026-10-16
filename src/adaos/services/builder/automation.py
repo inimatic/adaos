@@ -5223,6 +5223,28 @@ class BuilderAutomationService:
             }
             if manifest_scope_feedback:
                 checkpoint["allow_large_manifest_rewrite"] = True
+        from adaos.services.builder.retained_work import plan_increment
+        reuse_plan = plan_increment(base=None, candidate=None, current=None)
+        if workspace_available and source_in_lineage and target_matches and expected_type == "scenario":
+            # Read the original Git base, paid candidate and admitted DEV source
+            # independently. This diagnostic never relaxes the checks above.
+            try:
+                baseline = subprocess.check_output(["git", "rev-list", "--max-parents=0", "HEAD"],
+                    cwd=workspace, text=True, encoding="utf-8").splitlines()[-1]
+                current_root = self.dev_scenarios_root / expected_id
+                name = "semantic.webui.json" if (current_root / "semantic.webui.json").is_file() else "webui.json"
+                relative = f"scenarios/{expected_id}/{name}"
+                base = json.loads(subprocess.check_output(["git", "show", f"{baseline}:{relative}"],
+                    cwd=workspace, encoding="utf-8", stderr=subprocess.DEVNULL))
+                candidate = json.loads((workspace / relative).read_text(encoding="utf-8-sig"))
+                current = json.loads((current_root / name).read_text(encoding="utf-8-sig"))
+                old_change = dict(dict(source_artifacts.get("development_context") or {}).get("change") or {})
+                new_change = dict(self._workflow().describe(expected_type, expected_id).get("change") or {})
+                reuse_plan = plan_increment(base=base, candidate=candidate, current=current,
+                    old_contract=source_contract, new_contract=current_contract,
+                    old_obligations=old_change.get("issues"), new_obligations=new_change.get("issues"), scope=name)
+            except (OSError, ValueError, IndexError, subprocess.SubprocessError, KeyError):
+                pass  # Missing historical bytes remain explicit missing evidence.
         return {
             "schema": "adaos.builder.preserved_candidate_preflight.v1",
             "eligible": not blockers,
@@ -5231,6 +5253,7 @@ class BuilderAutomationService:
             "checks": checks,
             "blockers": blockers,
             "checkpoint": checkpoint,
+            "reuse_plan": reuse_plan,
         }
 
     def preflight_preserved_candidate(
@@ -5474,6 +5497,11 @@ class BuilderAutomationService:
                     "model_calls": 0,
                     "automation": self.project_session(session),
                 }
+            incoming = str(conversation_id or "").strip()
+            if incoming and (not session.get("conversation_id") or session.get("conversation_binding_source") == "generated_builder_topic"):
+                session["conversation_id"] = incoming
+                session["conversation_binding_source"] = "explicit_ingress"
+                self._save_session(session, emit_projection=False)
             session = self.refresh_session(session)
             previous_failure = (
                 dict(session.get("last_failure") or {})
@@ -8570,9 +8598,11 @@ class BuilderAutomationService:
         incoming_conversation_id = str(conversation_id or "").strip()
         if (
             incoming_conversation_id
-            and not str(session.get("conversation_id") or "").strip()
+            and (not str(session.get("conversation_id") or "").strip()
+                 or session.get("conversation_binding_source") == "generated_builder_topic")
         ):
             session["conversation_id"] = incoming_conversation_id
+            session["conversation_binding_source"] = "explicit_ingress"
             session["updated_at"] = _now_iso()
             self._save_session(session)
         current = self.refresh_session(session)
@@ -12607,6 +12637,8 @@ class BuilderAutomationService:
                                         or ""
                                     ),
                                     source_path=self.dev_scenarios_root / object_id,
+                                    require_materialization_identity=True,
+                                    expected_materialization_identity=readiness["materialization"].get("materialization_identity"),
                                     context_packet_digest=str(
                                         current.get("context_packet_digest") or ""
                                     )
@@ -15079,6 +15111,7 @@ class BuilderAutomationService:
                     },
                 )
                 conversation_id = str(topic.get("conversation_id") or "").strip()
+                current["conversation_binding_source"] = "generated_builder_topic"
             if not conversation_id:
                 return current
             current["conversation_id"] = conversation_id
@@ -15974,16 +16007,23 @@ class BuilderAutomationService:
         task_id = str(session.get('current_task_id') or '')
         if status not in labels or not task_id:
             return
-        if previous and previous.get('status') == status and previous.get('current_task_id') == task_id:
-            return
         progress = session.get('progress') if isinstance(session.get('progress'), Mapping) else {}
         failure = session.get('last_failure') if isinstance(session.get('last_failure'), Mapping) else {}
         detail = str(progress.get('message') or failure.get('message') or '').strip()
+        previous_progress = (previous or {}).get('progress') or {}
+        previous_failure = (previous or {}).get('last_failure') or {}
+        previous_detail = str(previous_progress.get('message') or previous_failure.get('message') or '').strip()
+        if (previous and previous.get('status') == status and previous.get('current_task_id') == task_id
+                and previous_detail == detail):
+            return
         message = f"Builder {labels[status]}: {session.get('object_id')}."
         if detail:
             message += f"\n{detail[:2500]}"
         try:
-            self._publish_lifecycle_notification(session, status=f'phase.{status}', message=message)
+            event_status = f'phase.{status}'
+            if detail:
+                event_status += '.' + hashlib.sha256(detail.encode('utf-8')).hexdigest()[:16]
+            self._publish_lifecycle_notification(session, status=event_status, message=message)
         except Exception:
             _log.debug('failed to publish Builder phase task=%s status=%s', task_id, status, exc_info=True)
 

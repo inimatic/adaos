@@ -735,6 +735,9 @@ class WebspaceBuilderPublicationService:
                     "webspace_identity_update": identity_update,
                 }
 
+        if not source_fingerprint and content_override:
+            from adaos.services.resources.prototype import prototype_webui_digest
+            source_fingerprint = f"{str(preview_stage or 'builder')}:{prototype_webui_digest(content_override)}"
         identity = operations.canonical_materialization_identity(
             webspace_id=webspace_id,
             scenario_id=resolved_scenario_id,

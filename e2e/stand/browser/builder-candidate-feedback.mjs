@@ -16,6 +16,7 @@ const output = path.resolve(process.env.ADAOS_E2E_OUTPUT || 'e2e/artifacts/build
 const hub = String(process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777').replace(/\/$/, '')
 const client = String(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
 const sourceDigest = String(process.env.ADAOS_E2E_SOURCE_DIGEST || '').trim()
+const expectedMaterialization = JSON.parse(process.env.ADAOS_E2E_EXPECTED_MATERIALIZATION || '{}')
 const spaceKind = String(process.env.ADAOS_E2E_SPACE_KIND || 'development').trim()
 const timeoutMs = Number(process.env.ADAOS_E2E_TIMEOUT_MS || 90_000)
 const authoritativeRuntimeOrigin = new URL(hub).origin
@@ -528,6 +529,16 @@ try {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
         return sync?.materializationReady && sync.materialization?.currentScenario === expected
       }, scenario, { timeout: startupTimeoutMs })
+      sample.observed_materialization = await page.evaluate(() => {
+        const value = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization || {}
+        return { revision: value.materializationRevision, source_fingerprint: value.sourceFingerprint,
+          application_id: value.applicationId, release_digest: value.applicationReleaseDigest }
+      })
+      for (const [key, value] of Object.entries(expectedMaterialization)) {
+        if (sample.observed_materialization[key] !== value) {
+          throw new Error(`Candidate materialization identity mismatch: ${key}`)
+        }
+      }
       await page.waitForFunction(() => {
         return [...document.querySelectorAll('[data-webui-widget-id]')]
           .some(element => element.getClientRects().length > 0)
