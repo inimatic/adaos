@@ -248,6 +248,9 @@ jobs:
             tests/test_builder_authoring_discovery.py \
             tests/test_builder_worker_contract_input.py \
             tests/test_builder_issue_applicability.py \
+            tests/test_builder_attempt_evidence.py \
+            tests/test_builder_compatibility_regressions.py \
+            tests/test_builder_run_observability.py \
             tests/test_skill_env_runtime.py \
             tests/test_builder_native_semantic_proposer.py \
             tests/test_builder_model_costs.py \
