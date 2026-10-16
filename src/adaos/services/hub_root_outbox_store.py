@@ -8,6 +8,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from adaos.services.artifact_pipeline.storage import atomic_write_json, read_atomic_json
 from adaos.services.runtime_paths import current_state_dir
 
 _LOCK = threading.RLock()
@@ -29,35 +30,36 @@ def outbox_store_path(name: str) -> Path:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_json(path, payload)
 
 
 def load_outbox_items(name: str) -> deque[tuple[str, bytes, dict[str, Any] | None]]:
     path = outbox_store_path(name)
     with _LOCK:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+            payload = read_atomic_json(path)
+        except FileNotFoundError:
             return deque()
+        except (json.JSONDecodeError, UnicodeError) as exc:
+            raise ValueError("outbox_store_corrupt: explicit recovery required") from exc
     items = payload.get("items") if isinstance(payload, dict) else None
     if not isinstance(items, list):
-        return deque()
+        raise ValueError("outbox_store_corrupt: items must be a list")
     result: deque[tuple[str, bytes, dict[str, Any] | None]] = deque()
     for raw in items:
         if not isinstance(raw, dict):
-            continue
+            raise ValueError("outbox_store_corrupt: invalid item")
         subject = str(raw.get("subject") or "").strip()
         data_b64 = raw.get("data_b64")
         if not subject or not isinstance(data_b64, str):
-            continue
+            raise ValueError("outbox_store_corrupt: missing subject or payload")
         try:
-            data = base64.b64decode(data_b64.encode("ascii"))
+            data = base64.b64decode(data_b64.encode("ascii"), validate=True)
         except Exception:
-            continue
+            raise ValueError("outbox_store_corrupt: invalid payload encoding") from None
         meta = raw.get("meta")
+        if meta is not None and not isinstance(meta, dict):
+            raise ValueError("outbox_store_corrupt: invalid metadata")
         result.append((subject, data, dict(meta) if isinstance(meta, dict) else None))
     return result
 
@@ -67,14 +69,14 @@ def save_outbox_items(name: str, items: Any) -> int:
     serialized: list[dict[str, Any]] = []
     for item in list(items or []):
         if not isinstance(item, tuple):
-            continue
+            raise ValueError("outbox item must be a tuple")
         if len(item) < 2:
-            continue
+            raise ValueError("outbox item must contain subject and payload")
         subject = str(item[0] or "").strip()
         data = bytes(item[1] or b"")
         meta = item[2] if len(item) >= 3 and isinstance(item[2], dict) else None
         if not subject:
-            continue
+            raise ValueError("outbox subject is required")
         serialized.append(
             {
                 "subject": subject,
@@ -84,6 +86,9 @@ def save_outbox_items(name: str, items: Any) -> int:
         )
     payload = {"items": serialized, "updated_at": time.time()}
     with _LOCK:
+        # A failed startup read must never turn retained messages into an empty
+        # queue on the next save. Preserve corrupt bytes for explicit recovery.
+        load_outbox_items(name)
         _write_json(path, payload)
     return len(serialized)
 

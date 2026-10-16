@@ -368,10 +368,14 @@ async def _run_nats_root_transport(
                 try:
                     if not hasattr(service, "_tg_output_pending"):
                         setattr(service, "_tg_output_pending", load_outbox_items("telegram"))
+                        setattr(service, "_tg_output_persisted_size", len(service._tg_output_pending))
+                        setattr(service, "_tg_output_persist_error", None)
                     setattr(service, "_tg_output_persist_path", outbox_store_path("telegram"))
                 except Exception:
                     try:
                         setattr(service, "_tg_output_pending", deque())
+                        setattr(service, "_tg_output_persist_error", "load_failed:explicit_recovery_required")
+                        service._log.error("Telegram outbox could not be loaded; retained bytes require explicit recovery")
                     except Exception:
                         pass
                 if realtime_enabled and realtime_remote_candidates:
@@ -2176,16 +2180,16 @@ async def _run_nats_root_transport(
                                     "telegram",
                                     size=size0,
                                     max_size=max_outbox0,
-                                    durable_store=True,
+                                    durable_store=not bool(getattr(service, "_tg_output_persist_error", None)),
                                     persist_path=persist_path0,
-                                    persisted_size=size0,
+                                    persisted_size=int(getattr(service, "_tg_output_persisted_size", 0)),
                                     drained=drained,
                                     dropped=dropped,
                                     publish_ok=publish_ok,
                                     publish_fail=publish_fail,
                                     connected=bool(getattr(service, "_tg_output_nats_nc", None)),
                                     operation_key=operation_key,
-                                    last_error=last_error,
+                                    last_error=last_error or getattr(service, "_tg_output_persist_error", None),
                                 )
                             except Exception:
                                 pass
@@ -2195,8 +2199,11 @@ async def _run_nats_root_transport(
                                 q0 = getattr(service, "_tg_output_pending", None)
                                 if q0 is None:
                                     return
-                                save_outbox_items("telegram", q0)
+                                persisted = save_outbox_items("telegram", q0)
+                                setattr(service, "_tg_output_persisted_size", persisted)
+                                setattr(service, "_tg_output_persist_error", None)
                             except Exception:
+                                setattr(service, "_tg_output_persist_error", "persist_failed")
                                 try:
                                     _report_tg_outbox(last_error="persist_failed")
                                 except Exception:
