@@ -538,11 +538,25 @@ class ContextControlService:
         path = self.artifact_root / f"{digest.removeprefix('sha256:')}.json"
         if not path.is_file():
             atomic_write_bytes(path, payload)
+        # An existing filename is not an acknowledgement that its bytes are
+        # intact. Preserve corrupt evidence rather than overwriting it silently.
+        self._verified_artifact_bytes(path, digest.removeprefix("sha256:"))
         return {
             "ref": f"artifact://context/sha256/{digest.removeprefix('sha256:')}",
             "digest": digest,
             "bytes": len(payload),
         }
+
+    @staticmethod
+    def _verified_artifact_bytes(path: Path, expected_digest: str) -> bytes:
+        payload = path.read_bytes()
+        actual_digest = hashlib.sha256(payload).hexdigest()
+        if actual_digest != expected_digest:
+            raise ContextConflict(
+                "context artifact digest mismatch: "
+                f"expected sha256:{expected_digest}, observed sha256:{actual_digest}"
+            )
+        return payload
 
     def get_artifact(self, artifact_ref: str) -> Any:
         digest = _text(artifact_ref).rsplit("/", 1)[-1]
@@ -551,7 +565,8 @@ class ContextControlService:
         path = self.artifact_root / f"{digest.lower()}.json"
         if not path.is_file():
             raise KeyError(f"context artifact is unavailable: {artifact_ref}")
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = self._verified_artifact_bytes(path, digest.lower())
+        return json.loads(payload.decode("utf-8"))
 
     def register_capsule(self, capsule: Mapping[str, Any], *, bind: bool = False) -> dict[str, Any]:
         request = dict(capsule)

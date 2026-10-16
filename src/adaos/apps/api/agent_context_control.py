@@ -66,7 +66,7 @@ def get_capsule(
 ) -> dict[str, Any]:
     try:
         return {"ok": True, "capsule": service.get_capsule(capsule_id, include_content=include_content)}
-    except KeyError as exc:
+    except (KeyError, ContextConflict) as exc:
         _raise(exc)
 
 
@@ -169,7 +169,7 @@ def create_plan(body: dict[str, Any], service: ContextControlService = Depends(_
 def get_plan(plan_id: str, service: ContextControlService = Depends(_get_service)) -> dict[str, Any]:
     try:
         return {"ok": True, "plan": service.get_plan(plan_id)}
-    except KeyError as exc:
+    except (KeyError, ContextConflict) as exc:
         _raise(exc)
 
 
@@ -195,13 +195,19 @@ def list_receipts(
     limit: int = Query(default=200, ge=1, le=2000),
     service: ContextControlService = Depends(_get_service),
 ) -> dict[str, Any]:
-    items = service.list_receipts(run_ref=run_ref, limit=limit)
-    return {"ok": True, "items": items, "count": len(items)}
+    try:
+        items = service.list_receipts(run_ref=run_ref, limit=limit)
+        return {"ok": True, "items": items, "count": len(items)}
+    except ContextConflict as exc:
+        _raise(exc)
 
 
 @router.get("/inspect/{run_ref:path}")
 def inspect_run(run_ref: str, service: ContextControlService = Depends(_get_service)) -> dict[str, Any]:
-    return {"ok": True, "inspection": service.inspect(run_ref)}
+    try:
+        return {"ok": True, "inspection": service.inspect(run_ref)}
+    except ContextConflict as exc:
+        _raise(exc)
 
 
 @router.get("/memory-candidates")
