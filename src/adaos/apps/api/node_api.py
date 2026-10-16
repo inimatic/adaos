@@ -6071,6 +6071,9 @@ async def node_yjs_webspaces() -> dict[str, Any]:
             "accepted": False,
             "error": "hub_role_required",
         }
+    # Runtime source validation can wait on worker-owned selection locks and
+    # disk I/O. Never perform that synchronous catalog scan on the HTTP/Yjs loop.
+    catalog = await asyncio.to_thread(WebspaceService().list, mode="mixed")
     items = [
         {
             "id": item.id,
@@ -6093,7 +6096,7 @@ async def node_yjs_webspaces() -> dict[str, Any]:
             "validation_reason": getattr(item, "validation_reason", None),
             "recommended_action": getattr(item, "recommended_action", None),
         }
-        for item in WebspaceService().list(mode="mixed")
+        for item in catalog
     ]
     return {
         "ok": True,
