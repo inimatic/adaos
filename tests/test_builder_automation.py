@@ -195,6 +195,32 @@ def test_retry_failed_platform_checkpoint_recovers_without_model() -> None:
     assert result["checkpoint_digest"] == checkpoint["checkpoint_digest"]
 
 
+@pytest.mark.parametrize("defect", [None, "wrong_task", "missing_result", "paid_retry", "missing_command"])
+def test_retry_environment_interruption_can_only_resume_the_original_validated_result(defect):
+    session = {"status": "failed", "current_task_id": "task.retained", "task": {"status": "completed"},
+        "last_result": {"summary": "validated"}, "last_failure": {"failure_class": "environment_interruption",
+            "details": {"preserved_task_id": "task.retained", "model_rerun_required": False,
+                        "recovery_command": "recover_validated_result"}}}
+    if defect == "wrong_task": session["last_failure"]["details"]["preserved_task_id"] = "task.other"
+    if defect == "missing_result": session.pop("last_result")
+    if defect == "paid_retry": session["last_failure"]["details"]["model_rerun_required"] = True
+    if defect == "missing_command": session["last_failure"]["details"].pop("recovery_command")
+    calls = []
+    class Service(BuilderAutomationService):
+        def get_session(self, *args): return session
+        def refresh_session(self, value): return value
+        def recover_validated_result(self, **kwargs):
+            calls.append(kwargs)
+            return {"ok": True, "status": "completed"}
+    service = object.__new__(Service)
+    if defect:
+        with pytest.raises(ValueError, match="paid retry is not permitted"):
+            service.retry_failed(object_type="scenario", object_id="recipes")
+        assert calls == []
+    else:
+        result = service.retry_failed(object_type="scenario", object_id="recipes")
+        assert calls == [{"object_type": "scenario", "object_id": "recipes"}]
+        assert result["resumed_environment_interruption"] and result["model_started"] is False
 def _service(tmp_path: Path) -> BuilderAutomationService:
     repo_root = Path(__file__).resolve().parents[1]
     dev_skills = tmp_path / "dev" / "skills"

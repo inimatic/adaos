@@ -6238,6 +6238,19 @@ class BuilderAutomationService:
                 if isinstance(observed_details.get("checkpoint"), Mapping)
                 else {}
             )
+            if observed_failure.get("failure_class") == "environment_interruption":
+                # An ordinary Continue/Retry must not turn an environment
+                # interruption into another paid source-implementation attempt.
+                task = dict(observed.get("task") or {})
+                if not (observed.get("status") == "failed"
+                        and task.get("status") == "completed" and observed.get("last_result")
+                        and observed_details.get("preserved_task_id") == observed.get("current_task_id")
+                        and observed_details.get("model_rerun_required") is False
+                        and observed_details.get("recovery_command") == "recover_validated_result"):
+                    raise ValueError("environment interruption requires its original validated result; a paid retry is not permitted")
+                recovered = self.recover_validated_result(object_type=kind, object_id=project_id)
+                recovered.update(retried_unchanged_request=True, resumed_environment_interruption=True, model_started=False)
+                return recovered
             exact_platform_resume = bool(
                 str(observed.get("status") or "").strip() == "failed"
                 and str(observed_failure.get("failure_class") or "").strip()
