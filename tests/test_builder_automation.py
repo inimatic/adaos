@@ -11647,6 +11647,41 @@ def test_finalize_records_reconciliation_failure_as_durable_gate_failure(
     assert transitions == ["automation_failed"]
 
 
+@pytest.mark.parametrize("error_number,reason", [(28, "storage_capacity"), (30, "storage_read_only"), (111, "runtime_unavailable")])
+def test_environment_interruption_preserves_result_and_disables_paid_source_repair(tmp_path, monkeypatch, error_number, reason):
+    import errno
+    from adaos.services.development_tickets import DevelopmentTicketService
+    error_number = {28: errno.ENOSPC, 30: errno.EROFS, 111: errno.ECONNREFUSED}[error_number]
+    service = _service(tmp_path)
+    events = []
+    monkeypatch.setattr(BuilderAutomationService, "_publish_lifecycle_notification",
+        lambda self, session, **kwargs: events.append(kwargs))
+    monkeypatch.setattr(BuilderAutomationService, "_reconcile_completed_workflow",
+        lambda *args: (_ for _ in ()).throw(OSError(error_number, "injected environment fault")))
+    monkeypatch.setattr(BuilderAutomationService, "_sync_linked_development_ticket_tasks", lambda self, value: dict(value))
+    session = {"session_id": "automation.scenario.recipes", "object_type": "scenario", "object_id": "recipes",
+        "webspace_id": "owned-test", "current_task_id": "task.retained", "change_id": "change-retained",
+        "status": "commit_ready", "last_result": {"summary": "validated paid result"},
+        "task": {"task_id": "task.retained", "status": "completed", "result": {"summary": "validated paid result"}}}
+    service._save_session(session)
+    service._finalize_completed_session(session)
+    from dataclasses import replace
+    # A fresh service reads the durable interruption, without in-memory state.
+    retained = replace(service).get_session("scenario", "recipes")
+    assert retained["last_result"] == session["last_result"]
+    assert retained["last_failure"]["failure_class"] == "environment_interruption"
+    assert retained["last_failure"]["details"]["reason"] == reason
+    assert retained["last_failure"]["details"]["model_rerun_required"] is False
+    ticket_id = retained["completion_readiness"]["publication_gate_failure"]["ticket_id"]
+    ticket = DevelopmentTicketService(state_dir=service.state_dir).get_ticket(ticket_id)
+    assert ticket["policy"]["run_policy"] == "await_environment_recovery"
+    assert ticket["policy"]["autonomous_repair_eligible"] is False
+    assert any("Проверенный результат сохранён" in event["message"] for event in events)
+    before = len(events)
+    service._save_session(retained)
+    assert len(events) == before  # Reopen does not repeat the interruption.
+
+
 def test_finalize_preserves_checkpoint_when_builder_host_becomes_inactive(
     tmp_path: Path,
     monkeypatch,

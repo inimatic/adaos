@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import errno
 import hashlib
 import json
 import logging
@@ -13250,6 +13251,23 @@ class BuilderAutomationService:
                 "message": readiness["error"],
                 "updated_at": readiness["completed_at"],
             }
+            environment_reason = None
+            if isinstance(exc, OSError):
+                if exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)} or getattr(exc, "winerror", None) in {39, 112}:
+                    environment_reason = ("storage_capacity", "Недостаточно места для завершения. Освободите место на диске.")
+                elif exc.errno == errno.EROFS:
+                    environment_reason = ("storage_read_only", "Хранилище недоступно для записи. Восстановите доступ к нему.")
+                elif exc.errno in {errno.ECONNREFUSED, errno.ENETUNREACH, errno.ETIMEDOUT} or getattr(exc, "winerror", None) == 10061:
+                    environment_reason = ("runtime_unavailable", "Не удалось связаться с runtime. Восстановите его доступность.")
+            if environment_reason:
+                reason, instruction = environment_reason
+                message = (f"{instruction} Проверенный результат сохранён. "
+                    "Затем продолжите Automation: восстановление этого результата не требует нового вызова модели.")
+                current["progress"]["message"] = message
+                current["last_failure"].update(failure_class="environment_interruption", retryable=True,
+                    message=message, details={"reason": reason, "errno": exc.errno,
+                        "requires_user_action": True, "preserved_task_id": current.get("current_task_id"),
+                        "recovery_command": "recover_validated_result", "model_rerun_required": False})
             current["updated_at"] = readiness["completed_at"]
             self._save_session(current)
             if pending_transition != "return_to_prototype":
@@ -14465,6 +14483,7 @@ class BuilderAutomationService:
             "activation introduces permissions but has no explicit permission decision"
             in str(error or "").lower()
         )
+        environment_wait = dict(session.get("last_failure") or {}).get("failure_class") == "environment_interruption"
         permission_ids = (
             self._declared_trial_permission_ids(session)
             if permission_decision_required
@@ -14495,15 +14514,18 @@ class BuilderAutomationService:
             session_id=str(session.get("session_id") or "").strip() or None,
             webspace_id=str(session.get("webspace_id") or "desktop").strip()
             or "desktop",
-            autonomous_repair_eligible=not permission_decision_required,
-            design_time_fixable=not permission_decision_required,
+            autonomous_repair_eligible=not (permission_decision_required or environment_wait),
+            design_time_fixable=not (permission_decision_required or environment_wait),
             run_policy=(
                 "await_user_permission_decision"
                 if permission_decision_required
+                else "await_environment_recovery" if environment_wait
                 else "block_publication"
             ),
             metadata={
                 "requires_user_decision": permission_decision_required,
+                "requires_user_action": permission_decision_required or environment_wait,
+                "environment_interruption": copy.deepcopy(dict(session.get("last_failure") or {}).get("details")) if environment_wait else None,
                 "decision_kind": (
                     "trial_permission"
                     if permission_decision_required

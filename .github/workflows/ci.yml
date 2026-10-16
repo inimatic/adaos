@@ -311,7 +311,7 @@ jobs:
         run: |
           uv run python -m pytest -q \
             tests/test_builder_automation.py \
-            -k 'preserved_candidate_preflight or worker_phase_notices or meaningful_progress or backfills_conversation or backfills_missing_conversation or validated_result_recovery_retries_snapshot or retry_replays_its_queued_task or automation_worker_executes_its_submitted_task'
+            -k 'preserved_candidate_preflight or worker_phase_notices or meaningful_progress or backfills_conversation or backfills_missing_conversation or validated_result_recovery_retries_snapshot or retry_replays_its_queued_task or automation_worker_executes_its_submitted_task or environment_interruption_preserves'
           uv run python -m pytest -q \
             tests/test_skill_factory_worker.py::test_local_worker_does_not_apply_result_after_task_cancellation \
             tests/test_skill_factory_worker.py::test_local_worker_repairs_preserved_precommit_result_once \
