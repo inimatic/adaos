@@ -9068,18 +9068,33 @@ class BuilderAutomationService:
         ):
             budget_status = "not_applicable"
             billable_status = "not_applicable"
+        # A missing receipt is not a zero-token execution. Only a terminal,
+        # admitted model-free path can supply that zero without provider facts.
+        zero_model = budget_status == "not_applicable"
+        def observed_count(name: str):
+            value = usage.get(name)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+            return 0 if zero_model else None
+        observed_tokens = observed_count("model_tokens")
+        budget_tokens_known = (observed_tokens is not None if budget_metric != "fresh_plus_output" else
+            all(observed_count(key) is not None for key in ("input_tokens", "cached_input_tokens", "output_tokens")))
+        if not budget_tokens_known:
+            budget_status = "unknown"
+            overrun_tokens = 0
         return {
             "declared": declared,
+            "usage_state": "zero_model" if zero_model else "partial" if usage and not budget_tokens_known else "observed" if usage else "unknown",
             "observed": {
-                "model_tokens": observed_model_tokens,
-                "input_tokens": int(usage.get("input_tokens") or 0),
-                "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
-                "output_tokens": int(usage.get("output_tokens") or 0),
-                "reasoning_tokens": int(usage.get("reasoning_tokens") or 0),
+                "model_tokens": observed_tokens,
+                "input_tokens": observed_count("input_tokens"),
+                "cached_input_tokens": observed_count("cached_input_tokens"),
+                "output_tokens": observed_count("output_tokens"),
+                "reasoning_tokens": observed_count("reasoning_tokens"),
                 "budget_metric": budget_metric,
-                "budget_tokens": observed_budget_tokens,
-                "billable_tokens": observed_model_tokens,
-                "attempts": int(usage.get("attempts") or 0),
+                "budget_tokens": observed_budget_tokens if budget_tokens_known else None,
+                "billable_tokens": observed_tokens,
+                "attempts": observed_count("attempts"),
                 "wall_seconds": wall_seconds,
                 "terminal": status in _TERMINAL_STATUSES,
             },

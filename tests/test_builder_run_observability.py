@@ -113,3 +113,30 @@ def test_late_complementary_receipt_completes_one_attempt_without_new_charge():
 def test_overlapping_token_subsets_cannot_exceed_the_total(values):
     with pytest.raises(ValidationError, match='exceeds'):
         validate_execution_metrics({'source': 'builder.llm_result', **values})
+def test_automation_missing_receipt_is_unknown_and_only_proven_model_free_work_is_zero():
+    from adaos.services.builder.automation import BuilderAutomationService
+    task = {"created_at": "2026-10-17T00:00:00Z"}
+    unknown = BuilderAutomationService._budget_usage_projection(status="failed", task=task, local_run={},
+        declared_budget={"max_model_tokens": 1000})
+    assert unknown["usage_state"] == "unknown"
+    assert unknown["observed"]["model_tokens"] is None
+    assert unknown["observed"]["budget_tokens"] is None
+    assert unknown["observed"]["attempts"] is None
+    model_free = BuilderAutomationService._budget_usage_projection(status="completed", task=task, local_run={},
+        declared_budget={"max_model_tokens": 1000}, execution_strategy="validation_only")
+    assert model_free["usage_state"] == "zero_model"
+    assert model_free["observed"]["model_tokens"] == model_free["observed"]["budget_tokens"] == 0
+
+
+def test_automation_does_not_fill_absent_reasoning_or_cached_usage_with_zero():
+    from adaos.services.builder.automation import BuilderAutomationService
+    result = BuilderAutomationService._budget_usage_projection(status="failed", task={}, local_run={},
+        usage_receipt={"input_tokens": 5, "output_tokens": 2, "model_tokens": 7},
+        declared_budget={"max_model_tokens": 1000, "token_budget_metric": "fresh_plus_output"})
+    assert result["observed"]["model_tokens"] == 7
+    assert result["observed"]["cached_input_tokens"] is None
+    assert result["observed"]["reasoning_tokens"] is None
+    assert result["observed"]["budget_tokens"] is None
+    assert result["status"] == "unknown" and result["usage_state"] == "partial"
+
+
