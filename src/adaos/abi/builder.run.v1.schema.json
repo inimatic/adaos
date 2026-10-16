@@ -38,12 +38,29 @@
         "reasoning_tokens": { "type": "integer", "minimum": 0 },
         "llm_calls": { "type": "integer", "minimum": 0 },
         "repair_attempts": { "type": "integer", "minimum": 0 },
+        "usage_complete": { "type": "boolean" },
+        "attempt_observations": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/attempt_observation" } },
         "cost_usd": { "type": "number", "minimum": 0 },
         "cost_basis": { "enum": ["estimate", "metered", "invoiced", "zero_model"] },
         "root_execution_ms": { "type": "number", "minimum": 0 },
         "root_queue_ms": { "type": "number", "minimum": 0 },
         "client_wait_ms": { "type": "number", "minimum": 0 },
         "source_refs": { "type": "array", "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
+      },
+      "dependentRequired": { "cost_usd": ["cost_basis"] }
+    },
+    "attempt_observation": {
+      "type": "object", "additionalProperties": false, "required": ["job_id", "status"],
+      "properties": {
+        "job_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "status": { "enum": ["observed", "conflict"] },
+        "model": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "cached_input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "reasoning_tokens": { "type": "integer", "minimum": 0 },
+        "cost_usd": { "type": "number", "minimum": 0 },
+        "cost_basis": { "enum": ["estimate", "metered", "invoiced"] }
       },
       "dependentRequired": { "cost_usd": ["cost_basis"] }
     },

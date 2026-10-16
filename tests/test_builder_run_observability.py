@@ -66,3 +66,41 @@ def test_partial_repair_cost_never_looks_like_a_complete_total():
     result['telemetry']['repair']['cost'] = {'estimated_usd': .8}
     metrics = execution_metrics_from_llm(result)
     assert metrics['cost_usd'] == 2 and metrics['cost_basis'] == 'estimate'
+
+
+def test_disjoint_attempts_do_not_double_count_native_aggregate_and_repeated_jobs():
+    primary = {'root_job_id': 'a', 'usage': {'input_tokens': 100, 'cached_input_tokens': 30,
+               'output_tokens': 80, 'reasoning_tokens': 50}, 'cost': {'estimated_usd': .2}}
+    repair = {'root_job_id': 'b', 'usage': {'input_tokens': 200, 'cached_input_tokens': 40,
+              'output_tokens': 90, 'reasoning_tokens': 60}, 'cost': {'estimated_usd': .3}}
+    metrics = execution_metrics_from_llm({'telemetry': {'usage': {'input_tokens': 300, 'output_tokens': 170},
+        'attempt_observations': [primary, repair, repair]}})
+    assert metrics['llm_calls'] == 2 and metrics['input_tokens'] == 300 and metrics['output_tokens'] == 170
+    assert metrics['cached_input_tokens'] == 70 and metrics['reasoning_tokens'] == 110
+    assert metrics['cost_usd'] == .5 and metrics['usage_complete']
+    assert len(metrics['attempt_observations']) == 2
+
+
+def test_missing_repair_usage_stays_unknown_with_expandable_known_facts():
+    result = {'telemetry': {'attempt_observations': [
+        {'root_job_id': 'a', 'usage': {'input_tokens': 100, 'output_tokens': 50}, 'cost': {'estimated_usd': .2}},
+        {'root_job_id': 'b'}]}}
+    metrics = execution_metrics_from_llm(result)
+    assert not metrics['usage_complete'] and 'cost_usd' not in metrics and 'input_tokens' not in metrics
+    assert metrics['attempt_observations'][0]['cost_usd'] == .2
+    assert project_run({'execution_metrics': metrics})['measurement_label'] == 'Partial'
+
+
+def test_conflicting_attempt_receipts_do_not_look_complete_or_charge_twice():
+    metrics = execution_metrics_from_llm({'telemetry': {'attempt_observations': [
+        {'root_job_id': 'same', 'usage': {'input_tokens': 100, 'output_tokens': 50}},
+        {'root_job_id': 'same', 'usage': {'input_tokens': 200, 'output_tokens': 50}}]}})
+    assert metrics['llm_calls'] == 1 and not metrics['usage_complete']
+    assert metrics['attempt_observations'][0]['status'] == 'conflict'
+
+
+@pytest.mark.parametrize('values', [{'input_tokens': 100, 'cached_input_tokens': 101},
+                                  {'output_tokens': 50, 'reasoning_tokens': 51}])
+def test_overlapping_token_subsets_cannot_exceed_the_total(values):
+    with pytest.raises(ValidationError, match='exceeds'):
+        validate_execution_metrics({'source': 'builder.llm_result', **values})

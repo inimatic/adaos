@@ -14,7 +14,7 @@ from jsonschema import Draft202012Validator, ValidationError
 @lru_cache(maxsize=1)
 def _validator():
     schema = json.loads((Path(__file__).resolve().parents[2] / 'abi/builder.run.v1.schema.json').read_text(encoding='utf-8'))
-    return Draft202012Validator(schema['$defs']['execution_metrics'])
+    return Draft202012Validator({'$ref': '#/$defs/execution_metrics', '$defs': schema['$defs']})
 
 
 def validate_execution_metrics(value):
@@ -26,6 +26,9 @@ def validate_execution_metrics(value):
     if value.get('cost_basis') == 'zero_model' and (value.get('source') != 'core.semantic_graph'
             or value.get('llm_calls') != 0 or value.get('cost_usd') != 0):
         raise ValidationError('zero_model requires explicit zero-call Core evidence')
+    for total, subset in (('input_tokens', 'cached_input_tokens'), ('output_tokens', 'reasoning_tokens')):
+        if total in value and subset in value and value[subset] > value[total]:
+            raise ValidationError(f'{subset} exceeds its containing {total}')
     return copy.deepcopy(dict(value))
 
 
@@ -47,11 +50,51 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             metrics[name] = value
     repair = mapping(telemetry.get('repair'))
+    observed_attempts = telemetry.get('attempt_observations')
+    if isinstance(observed_attempts, list) and observed_attempts:
+        # Native Builder records disjoint receipts before presenting its legacy
+        # aggregate. Never add that aggregate to its own constituent attempts.
+        unique = {}
+        for row in observed_attempts:
+            if not isinstance(row, Mapping) or not row.get('root_job_id'):
+                continue
+            identity = str(row['root_job_id'])
+            if identity not in unique:
+                unique[identity] = dict(row)
+            elif unique[identity] != dict(row):
+                # Conflicting/revised facts require reconciliation, not guessing.
+                unique[identity] = {'root_job_id': identity, 'conflict': True}
+        if unique:
+            if len(unique) > 16:
+                raise ValidationError('Builder attempt observations exceed the retained run bound')
+            metrics['llm_calls'] = len(unique)
+            metrics['repair_attempts'] = max(0, len(unique) - 1)
+            metrics['source_refs'] = [f'llm_job:{identity}' for identity in unique]
+            attempts = []
+            for identity, row in unique.items():
+                single = execution_metrics_from_llm({'telemetry': {
+                    key: value for key, value in row.items()
+                    if key in {'root_job_id', 'usage', 'cost', 'provider', 'timing'}}, 'model': row.get('model')})
+                attempts.append({'job_id': identity, 'status': 'conflict' if row.get('conflict') else 'observed',
+                    **{key: single[key] for key in ('model', 'input_tokens', 'cached_input_tokens', 'output_tokens',
+                        'reasoning_tokens', 'cost_usd', 'cost_basis') if key in single}})
+            # Only a complete set may be presented as the total. Retain known
+            # subtotals in attempts, where unknown receipts stay visible.
+            for key in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens'):
+                metrics.pop(key, None)
+                if all(key in row for row in attempts):
+                    metrics[key] = sum(row[key] for row in attempts)
+            if all('cost_usd' in row for row in attempts) and len({row['cost_basis'] for row in attempts}) == 1:
+                metrics.update(cost_usd=sum(row['cost_usd'] for row in attempts), cost_basis=attempts[0]['cost_basis'])
+            metrics['attempt_observations'] = attempts
+            metrics['usage_complete'] = all({'input_tokens', 'output_tokens'} <= row.keys() for row in attempts)
+            return validate_execution_metrics(metrics)
     jobs = list(dict.fromkeys(str(item) for item in (telemetry.get('root_job_id'), repair.get('root_job_id')) if item))
     if jobs:
         metrics['llm_calls'] = len(jobs)
         metrics['repair_attempts'] = int(bool(repair.get('root_job_id')) and repair.get('root_job_id') != telemetry.get('root_job_id'))
         metrics['source_refs'] = [f'llm_job:{item}' for item in jobs]
+        metrics['usage_complete'] = len(jobs) == 1 and {'input_tokens', 'output_tokens'} <= usage.keys()
     timing = mapping(telemetry.get('timing'))
     for target, value in [('root_execution_ms', timing.get('execution_ms')), ('root_queue_ms', timing.get('queue_ms')),
                           ('client_wait_ms', telemetry.get('wait_elapsed_ms'))]:
@@ -90,7 +133,7 @@ def project_run(value: Mapping, *, request=None, source_message_ids=()):
                effort_label=metrics.get('reasoning_effort') or '—',
                cost_label=(f"${metrics['cost_usd']:.8g} ({metrics['cost_basis']})" if 'cost_usd' in metrics else '—'),
                root_time_label=(f"{metrics['root_execution_ms']:g} ms" if 'root_execution_ms' in metrics else '—'),
-               measurement_label=('Recorded' if {'input_tokens', 'output_tokens', 'llm_calls', 'cost_usd'} <= metrics.keys()
+               measurement_label=('Recorded' if metrics.get('usage_complete', True) and {'input_tokens', 'output_tokens', 'llm_calls', 'cost_usd'} <= metrics.keys()
                                   else 'Partial') if metrics else 'Not recorded')
     for name in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens', 'llm_calls', 'repair_attempts', 'root_queue_ms', 'client_wait_ms'):
         row[name + '_label'] = str(metrics[name]) if name in metrics else '—'

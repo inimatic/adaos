@@ -19,4 +19,9 @@ def retain_llm_evidence(value: Any) -> dict[str, Any]:
     return retain(value)
 
 
-__all__ = ["llm_input_attribution", "retain_llm_evidence"]
+def execution_metrics_from_llm(result: Any, *, reasoning_effort=None) -> dict[str, Any]:
+    from adaos.services.builder.run_observability import execution_metrics_from_llm as project
+    return project(result, reasoning_effort=reasoning_effort)
+
+
+__all__ = ["llm_input_attribution", "retain_llm_evidence", "execution_metrics_from_llm"]
