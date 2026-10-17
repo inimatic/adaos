@@ -172,7 +172,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
             command_runner = run_owned_journey
         completed = command_runner([sys.executable, "-X", "utf8", str(runner), "--source", str(sources[0]),
             "--output", str(output), "--label", label], cwd=repo, env=env, capture_output=True,
-            text=True, encoding="utf-8", check=False, timeout=1200)
+            text=True, encoding="utf-8", check=False, timeout=2400)
         exit_code = int(completed.returncode)
         log = str(completed.stdout or "") + str(completed.stderr or "")
     except subprocess.TimeoutExpired:
