@@ -5512,8 +5512,14 @@ class BuilderAutomationService:
                 r"(?:продолжи(?:ть)?|продолжай|возобнови(?:ть)?|возобновляй|resume|continue|retry)(?:\s+(?:работу|выполнение|automation))?[.!]?",
                 instruction, re.IGNORECASE))
             retained_result = ((session.get("task") or {}).get("status") == "completed" and bool(session.get("last_result")))
-            if (resume_only and session.get("status") == "failed"
-                and (retained_result or (session.get("last_failure") or {}).get("failure_class") == "environment_interruption")):
+            interrupted_finalizer = bool(
+                resume_only and session.get('status') == 'commit_ready' and retained_result
+                and session.get('current_task_id')
+                and session.get('finalizing_task_id') == session['current_task_id']
+                and (session.get('task') or {}).get('task_id') == session['current_task_id']
+                and not self._detached_worker_is_active(str(session.get('session_id') or '')))
+            if (resume_only and (interrupted_finalizer or session.get("status") == "failed"
+                and (retained_result or (session.get("last_failure") or {}).get("failure_class") == "environment_interruption"))):
                 if expected_session_id is not None or expected_iteration is not None:
                     if (session.get("session_id") != expected_session_id
                         or type(expected_iteration) is not int or session.get("iteration") != expected_iteration):
