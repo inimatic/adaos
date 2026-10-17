@@ -283,6 +283,7 @@ jobs:
             tests/test_builder_interrupted_finalization.py \
             tests/test_builder_journey_profiles.py \
             tests/test_retouch_verification.py \
+            tests/test_review_builder_snapshot_candidate.py \
             tests/test_builder_ui_patch_validation.py \
             tests/test_forge_read_recovery.py \
             tests/test_builder_chat_notifications.py \

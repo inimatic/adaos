@@ -42,6 +42,12 @@ def require_test_ownership(scenario, draft, project=None):
         raise ValueError("Existing scenario must be explicitly marked as an owned test")
 
 
+def require_completed_candidate(task, *, scenario, revision):
+    if (task.get('task_id') != revision or task.get('status') != 'completed'
+            or task.get('target') != {'type':'scenario', 'id':scenario}):
+        raise ValueError('Candidate observation requires the exact completed Factory task for this scenario')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scenario")
@@ -56,6 +62,8 @@ def main():
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--profile", choices=("knowledge-library.v1",))
     parser.add_argument("--client-url", default="http://127.0.0.1:8100/")
+    parser.add_argument('--candidate-qualification', action='store_true',
+                        help='Observe an exact completed TEST Factory candidate; does not accept its workflow')
     args = parser.parse_args()
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev":
@@ -66,6 +74,8 @@ def main():
         parser.error("Functional journeys require an Automation snapshot")
     if args.profile and args.probe != 'application-journey':
         parser.error('Registered plan qualification requires the application journey probe')
+    if args.candidate_qualification and (not args.profile or args.stage != 'automation'):
+        parser.error('Candidate observation requires an explicit TEST application profile and Automation snapshot')
     if args.probe == "application-journey":
         if not args.plan or not args.checkpoint:
             parser.error("Application journeys require a plan and TEST ownership checkpoint")
@@ -146,8 +156,22 @@ def main():
                                                    "rev-parse", "HEAD"], text=True).strip(),
     }
     _write_json(output / "pin.json", receipt)
-    selected = preview.select_target("scenario", args.scenario, stage=args.stage, revision=args.revision,
-                                     source_webspace_id=args.host, via_owner=True)
+    candidate_owner = None
+    candidate_materialization = None
+    if args.candidate_qualification:
+        from adaos.services.builder.automation import BuilderAutomationService
+        candidate_owner = BuilderAutomationService.from_context()
+        require_completed_candidate(candidate_owner.factory.read_task(args.revision),
+                                    scenario=args.scenario, revision=args.revision)
+        candidate_materialization = candidate_owner._materialize_candidate_for_browser_feedback(
+            {'object_type':'scenario','object_id':args.scenario,'current_task_id':args.revision},
+            webspace_id=args.host)
+        selected = {'ok':candidate_materialization['ok'],
+                    'preview_webspace_id':candidate_materialization['preview_webspace_id'],
+                    'materialization':candidate_materialization}
+    else:
+        selected = preview.select_target("scenario", args.scenario, stage=args.stage, revision=args.revision,
+                                         source_webspace_id=args.host, via_owner=True)
     _write_json(output / "selection.json", redact_value(selected))
     if not selected.get("ok"):
         raise ValueError("Pinned snapshot materialization failed")
@@ -175,8 +199,13 @@ def main():
                    ADAOS_E2E_CHECKPOINT=str(args.checkpoint.resolve()))
     script = {"review": "prototype-review.mjs", "equipment-journey": "equipment-automation.mjs",
               "equipment-repeat": "equipment-repeat.mjs", "application-journey": "application-journey.mjs"}[args.probe]
-    result = subprocess.run(["node", str(Path(__file__).with_name("browser") / script)],
-                            env=env, capture_output=True, text=True, encoding="utf-8")
+    try:
+        result = subprocess.run(["node", str(Path(__file__).with_name("browser") / script)],
+                                env=env, capture_output=True, text=True, encoding="utf-8")
+    finally:
+        if candidate_materialization and candidate_materialization.get('temporary_preview_override'):
+            restored = candidate_owner._restore_preview_after_browser_feedback(candidate_materialization)
+            _write_json(output/'preview-restoration.json', redact_value(restored))
     (output / "browser.log").write_text(result.stdout + result.stderr, encoding="utf-8")
     receipt.update(browser_exit_code=result.returncode, preview_webspace_id=selected["preview_webspace_id"])
     if args.profile:
@@ -190,7 +219,8 @@ def main():
         qualification.update(task_id=args.revision, scenario_id=args.scenario,
             implementation_before=profile_sources_before, implementation_after=after,
             verifier_before=profile_verifier_before, verifier_after=verifier_after,
-            pin=receipt, new_provider_submissions=0)
+            pin=receipt, new_provider_submissions=0,
+            workflow_acceptance='excluded; candidate observation' if args.candidate_qualification else 'existing preview')
         _write_json(output / 'registered-profile-receipt.json', qualification)
         if not qualification['passed']:
             result.returncode = 1
