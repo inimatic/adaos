@@ -968,10 +968,16 @@ def _submit_budgeted_root_job(payload, *, request_id, timeout, submit_started,
         from adaos.services.builder.spend_ledger import BuilderSpendLedger
         ledger = BuilderSpendLedger()
         exact_input = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
-        reservation = ledger.reserve(spend_scope, request_id=request_id, run_id=spend_run_id or request_id,
-            input_digest='sha256:' + hashlib.sha256(exact_input.encode()).hexdigest(), reserve_usd=spend_reserve_usd)
+        from adaos.sdk.llm.errors import SubmissionNotAdmitted
+        try:
+            reservation = ledger.reserve(spend_scope, request_id=request_id, run_id=spend_run_id or request_id,
+                input_digest='sha256:' + hashlib.sha256(exact_input.encode()).hexdigest(), reserve_usd=spend_reserve_usd)
+        except ValueError as exc:
+            if str(exc) != 'builder_usd_reservation_limit':
+                raise
+            raise SubmissionNotAdmitted(str(exc), request_id=request_id) from exc
         if reservation is None:
-            raise ValueError('Explicit spend_scope has no authorized USD account')
+            raise SubmissionNotAdmitted('Explicit spend_scope has no authorized USD account', request_id=request_id)
     # An ambiguous submit failure deliberately leaves the reservation held.
     result = _submit_root_job(payload, request_id=request_id, timeout=timeout, submit_started=submit_started)
     if reservation:

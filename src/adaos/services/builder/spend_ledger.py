@@ -149,7 +149,11 @@ class BuilderSpendLedger:
                 raise ValueError('Conflicting cost facts require explicit reconciliation')
             db.execute('INSERT INTO receipts VALUES(?,?,?)', (receipt_ref, request_id, facts))
             if amount is not None and rank[basis] >= rank[row['cost_basis']]:
-                next_status = 'reconciled' if complete and basis in {'metered','invoiced'} else 'uncertain'
+                # A delayed partial copy of the same fact cannot revoke a
+                # complete measured receipt already joined by this owner.
+                retains_complete = (row['status'] == 'reconciled'
+                    and rank[basis] == rank[row['cost_basis']] and amount == row['observed_units'])
+                next_status = 'reconciled' if retains_complete or complete and basis in {'metered','invoiced'} else 'uncertain'
                 db.execute('UPDATE attempts SET observed_units=?,cost_basis=?,status=? WHERE request_id=?',
                            (amount, basis, next_status, request_id))
             elif row['status'] != 'reconciled':

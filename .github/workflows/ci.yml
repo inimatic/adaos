@@ -275,6 +275,8 @@ jobs:
             tests/test_builder_traceability.py \
             tests/test_builder_feedback_episode.py \
             tests/test_builder_browser_feedback.py \
+            tests/test_builder_application_journeys.py \
+            tests/test_retouch_artifact_verification.py \
             tests/test_materialization_identity.py \
             tests/test_skill_env_runtime.py \
             tests/test_cbs_provider_authoring.py \

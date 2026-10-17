@@ -1,0 +1,123 @@
+import copy
+import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from adaos.services.builder.application_journeys import RETOUCH_OBLIGATIONS, qualify_reports
+from adaos.services.builder.application_journeys import evaluate_retouch, file_digest
+from adaos.services.builder.automation import BuilderAutomationService
+
+
+def sample():
+    return {"passed": True, "checks": [{"id": key, "passed": True} for key in RETOUCH_OBLIGATIONS],
+        "specification": {"source_digest": "source", "obligations": list(RETOUCH_OBLIGATIONS)},
+        "observed_materializations": [{"revision": "task", "source_fingerprint": "fingerprint"}],
+        "client_assets": [{"path": "/main.js", "digest": "sha256:asset", "size_bytes": 100}],
+        "final_audit": {"external_model_calls": 0, "source_digest": "source"},
+        "independent_pixel_verification": {"passed": True}}
+
+
+def qualify(reports):
+    return qualify_reports(reports, expected_materialization={"revision": "task", "source_fingerprint": "fingerprint"},
+                           source_digest="source")
+
+
+@pytest.mark.parametrize("mutation", ["missing_check", "failed_check", "duplicate_check", "missing_layout",
+    "missing_materialization", "stale_materialization", "source_drift", "missing_asset", "unhashed_asset",
+    "missing_audit", "fixture_source_drift", "provider_call", "supervisor", "pixel_failure", "report_red",
+    "runner_error", "missing_spec_obligation"])
+def test_green_runner_cannot_hide_missing_obligations_or_execution_dependencies(mutation):
+    reports = {"wide": sample(), "compact": sample()}
+    row = reports["wide"]
+    if mutation == "missing_check": row["checks"].pop()
+    if mutation == "failed_check": row["checks"][0]["passed"] = False
+    if mutation == "duplicate_check": row["checks"].append(copy.deepcopy(row["checks"][0]))
+    if mutation == "missing_layout": reports.pop("compact")
+    if mutation == "missing_materialization": row.pop("observed_materializations")
+    if mutation == "stale_materialization": row["observed_materializations"][0]["revision"] = "previous-task"
+    if mutation == "source_drift": row["specification"]["source_digest"] = "changed"
+    if mutation == "missing_asset": row["client_assets"] = []
+    if mutation == "unhashed_asset": row["client_assets"][0].pop("digest")
+    if mutation == "missing_audit": row.pop("final_audit")
+    if mutation == "fixture_source_drift": row["final_audit"]["source_digest"] = "other"
+    if mutation == "provider_call": row["final_audit"]["external_model_calls"] = 1
+    if mutation == "supervisor": row["supervisor_interventions"] = ["manually closed modal"]
+    if mutation == "pixel_failure": row["independent_pixel_verification"]["passed"] = False
+    if mutation == "report_red": row["passed"] = False
+    if mutation == "runner_error": row["errors"] = ["unexpected fixture outage"]
+    if mutation == "missing_spec_obligation": row["specification"]["obligations"].pop()
+    result = qualify(reports)
+    assert not result["ok"] and not result["repairable"]
+
+
+def test_complete_observations_pass_without_supervisor_intervention():
+    result = qualify({"wide": sample(), "compact": sample()})
+    assert result == {"ok": True, "failures": [], "repairable": False}
+
+
+def test_only_observed_candidate_assertion_enters_existing_bounded_repair():
+    reports = {"wide": sample(), "compact": sample()}
+    reports["wide"].update(passed=False, active="analysis-one-submit-editable-plan",
+        failure="expect(locator).not.toBeVisible: parameter modal hides progress",
+        failure_kind="candidate_postcondition")
+    result = qualify(reports)
+    assert not result["ok"] and result["repairable"]
+    assert BuilderAutomationService._browser_feedback_is_repairable({"application_journey": result})
+    reports["compact"]["errors"] = ["fixture unavailable"]
+    result = qualify(reports)
+    assert not result["repairable"]
+    assert not BuilderAutomationService._browser_feedback_is_repairable({"application_journey": result})
+
+
+def test_empty_materialization_expectation_is_not_acceptance():
+    result = qualify_reports({"wide": sample(), "compact": sample()}, expected_materialization={}, source_digest="source")
+    assert not result["ok"]
+
+
+@pytest.mark.parametrize('fault', [None, 'source_changed', 'nonzero_exit', 'postcondition'])
+def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_receipt(tmp_path, fault):
+    repo = Path(__file__).resolve().parents[1]
+    source = tmp_path / 'natural_retouch_skill'
+    (source / 'handlers').mkdir(parents=True)
+    (source / 'handlers/retouch.py').write_text('# immutable candidate fixture', encoding='utf-8')
+    source_digest = 'sha256:' + hashlib.sha256(json.dumps({'retouch.py': file_digest(source / 'handlers/retouch.py')}, sort_keys=True).encode()).hexdigest()
+    materialization = {'revision': 'task', 'source_fingerprint': 'fingerprint'}
+    def runner(command, **kwargs):
+        output = Path(command[command.index('--output') + 1])
+        declared = json.loads((output / 'verification-spec.json').read_text(encoding='utf-8'))
+        assert len(declared['specifications']) == len(RETOUCH_OBLIGATIONS) + 1
+        assert json.loads(kwargs['env']['ADAOS_E2E_EXPECTED_MATERIALIZATION']) == materialization
+        for layout in ('wide', 'compact'):
+            row = sample(); row['specification']['source_digest'] = source_digest
+            row['final_audit']['source_digest'] = source_digest
+            if fault == 'postcondition':
+                row.update(passed=False, active='budget-admission-failure-visible',
+                           failure='expect(response.ok).toBe(false)', failure_kind='candidate_postcondition')
+                row['checks'] = row['checks'][:5]
+            (output / layout).mkdir()
+            (output / layout / 'journey.json').write_text(json.dumps(row), encoding='utf-8')
+        return SimpleNamespace(returncode=1 if fault in {'nonzero_exit', 'postcondition'} else 0, stdout='qualified', stderr='')
+    result = evaluate_retouch(repo_root=repo, scenario_id='natural_retouch', task_id='task',
+        implementation_paths=[source], environment={}, implementation_snapshot={'candidate': 'before'},
+        expected_materialization=materialization,
+        source_message_ids=['m.canonical.user-request'],
+        semantic_document={'views': [{'id': ref.split(':', 1)[1]} for ref in set(RETOUCH_OBLIGATIONS.values()) if ref.startswith('view:')],
+                           'commands': [{'id': 'cmd_add_photo'}]},
+        snapshot_reader=lambda: {'candidate': 'after' if fault == 'source_changed' else 'before'}, command_runner=runner)
+    assert result['ok'] is (fault is None)
+    assert result['repairable'] is (fault == 'postcondition')
+    assert Path(result['receipt_path']).is_file()
+    nodes = result['traceability']['graph']['nodes']
+    assert any(row['kind'] == 'source_message' and row['ref'] == 'm.canonical.user-request' for row in nodes)
+    assert not result['traceability']['gaps']
+    assert any(row['relation'] == 'verified_by' and row['metadata'].get('authority') == 'explicit_constraint_requirement_refs'
+               for row in result['traceability']['graph']['edges'])
+    if fault != 'source_changed':
+        behavior = result['traceability']['receipt']
+        assert set(behavior['dependencies']) >= {'behavior:implementation', 'behavior:runtime', 'behavior:state', 'behavior:environment'}
+        assert behavior['outcome'] == ('failed' if fault in {'postcondition', 'nonzero_exit'} else 'passed')
+    else:
+        assert 'receipt' not in result['traceability']

@@ -81,7 +81,13 @@ def project_change(*, project_ref, generation, change, semantic_document=None, s
         if constraint.get("status") == "superseded":
             continue
         ref = str(constraint["constraint_id"])
-        target = node("verification_spec", ref, constraint, {"authority": "accepted_review", "proof": "expected_postcondition_only"})
+        target = node("verification_spec", ref, constraint, {"authority": constraint.get("authority", "accepted_review"), "proof": "expected_postcondition_only"})
+        for requirement_ref in constraint.get('requirement_refs', []):
+            requirement = identities.get(('requirement', requirement_ref))
+            if requirement:
+                edge(requirement, target, 'verified_by', {'authority': 'explicit_constraint_requirement_refs'})
+            else:
+                gaps.append({'constraint_id': ref, 'kind': 'unresolved_requirement_ref', 'ref': requirement_ref})
         semantic_ref = constraint.get("target_ref")
         source = identities.get(("semantic", semantic_ref))
         if source:

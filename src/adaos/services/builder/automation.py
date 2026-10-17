@@ -12384,6 +12384,9 @@ class BuilderAutomationService:
 
         if bool(receipt.get("timed_out")) or int(receipt.get("exit_code") or 0) == 124:
             return False
+        journey = receipt.get("application_journey")
+        if isinstance(journey, Mapping) and journey.get("ok") is False:
+            return journey.get("repairable") is True and not journey.get("timed_out")
         report = (
             receipt.get("report")
             if isinstance(receipt.get("report"), Mapping)
@@ -12723,6 +12726,8 @@ class BuilderAutomationService:
                                     require_materialization_identity=True,
                                     expected_materialization_identity=readiness["materialization"].get("materialization_identity"),
                                     implementation_paths=[self.dev_skills_root / skill_id for skill_id in self._session_companion_skill_ids(current)],
+                                    change=self._workflow().describe("scenario", object_id).get("change") or {},
+                                    source_message_ids=dict(current.get("ui_change_authorization") or {}).get("source_message_ids") or (),
                                     context_packet_digest=str(
                                         current.get("context_packet_digest") or ""
                                     )

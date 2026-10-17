@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from adaos.sdk.core._ctx import require_ctx
+from adaos.sdk.llm.errors import SubmissionNotAdmitted
 
 
 def _service():
@@ -40,4 +41,4 @@ def get(request_id: str) -> dict[str, Any]:
     return _service().get(request_id)
 
 
-__all__ = ["generate", "get"]
+__all__ = ["generate", "get", "SubmissionNotAdmitted"]

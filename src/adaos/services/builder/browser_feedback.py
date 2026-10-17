@@ -221,6 +221,8 @@ class BuilderBrowserFeedbackService:
         require_materialization_identity: bool = False,
         expected_materialization_identity: Mapping[str, Any] | None = None,
         implementation_paths: Sequence[Path] = (),
+        change: Mapping[str, Any] | None = None,
+        source_message_ids: Sequence[str] = (),
     ) -> dict[str, Any]:
         env_type = current_env_type()
         if env_type != "dev":
@@ -408,6 +410,19 @@ class BuilderBrowserFeedbackService:
             and authoritative_data_settled
             and exit_code == 0
         )
+        application_journey = None
+        if passed and scenario == "natural_retouch":
+            from .application_journeys import evaluate_retouch
+            application_journey = evaluate_retouch(repo_root=self.repo_root, scenario_id=scenario,
+                task_id=str(task_id), implementation_paths=implementation_paths, environment=env,
+                implementation_snapshot=implementation_before, expected_materialization=expected_materialization,
+                change=change, semantic_document=json.loads((webui_path.parent / "semantic.webui.json").read_text(encoding="utf-8-sig")),
+                source_message_ids=source_message_ids,
+                snapshot_reader=lambda: _implementation_snapshot(implementation_roots), command_runner=self.command_runner)
+            if not application_journey["ok"]:
+                passed = False
+                report["passed"] = False
+                report["failure"] = "application_journey_failed"
         atomic_write_json(report_path, report)
         for item in evidence:
             if item['name'] == 'report.json':
@@ -442,6 +457,11 @@ class BuilderBrowserFeedbackService:
             "evidence": evidence,
             "created_at": _now_iso(),
         }
+        if application_journey is not None:
+            receipt["application_journey"] = application_journey
+            receipt["evidence"].append({"name": "application-journey-receipt.json",
+                "path": application_journey.get("receipt_path"), "sha256": application_journey.get("receipt_digest"),
+                "visibility": "local_qualification", "media_type": "application/json"})
         from .traceability import project_change, make_behavioral_receipt, attach_behavioral_execution
         state_pinned = bool(samples) and all(sample.get('state_snapshots') and
             all(checkpoint.get('snapshot') is not None for checkpoint in sample['state_snapshots']) for sample in samples)
@@ -483,6 +503,9 @@ class BuilderBrowserFeedbackService:
 def browser_feedback_failures(receipt: Mapping[str, Any]) -> list[str]:
     report = receipt.get("report") if isinstance(receipt.get("report"), Mapping) else {}
     failures: list[str] = []
+    journey = receipt.get("application_journey") or {}
+    for failure in journey.get("failures") or []:
+        failures.append(f"Application journey {failure.get('layout', '')} / {failure.get('active', '')}: {failure.get('failure')}")
     for sample in report.get("samples") or []:
         if not isinstance(sample, Mapping):
             continue

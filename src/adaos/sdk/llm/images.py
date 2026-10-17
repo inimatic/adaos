@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from adaos.sdk import access
 from adaos.sdk.core._ctx import require_ctx
+from adaos.sdk.llm.errors import SubmissionNotAdmitted
 
 
 def _service(capability: str):
@@ -69,4 +70,4 @@ def list_drafts(*, context: Mapping[str, Any], limit: int = 10) -> list[dict[str
     return _service("workspace.read").list_drafts(context=context, limit=limit)
 
 
-__all__ = ["generate", "edit", "get", "read_bytes", "list_drafts"]
+__all__ = ["generate", "edit", "get", "read_bytes", "list_drafts", "SubmissionNotAdmitted"]

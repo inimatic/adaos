@@ -96,6 +96,14 @@ def test_unconfigured_scope_never_looks_like_zero_usage(ledger):
     assert ledger.snapshot('not-authorized')['status'] == 'not_configured'
 
 
+def test_late_partial_copy_does_not_revoke_complete_metering(ledger):
+    reserve(ledger)
+    ledger.observe('request', receipt_ref='complete', usd=.25, basis='metered', complete=True)
+    ledger.observe('request', receipt_ref='delayed-partial', usd=.25, basis='metered', complete=False)
+    result = ledger.snapshot('project')
+    assert result['committed_usd'] == .25 and result['usage_complete']
+
+
 def test_sdk_blocks_before_transport_and_preserves_an_ambiguous_attempt(ledger, monkeypatch):
     from adaos.sdk.llm import llm_client
     import adaos.services.builder.spend_ledger as owner
@@ -109,10 +117,13 @@ def test_sdk_blocks_before_transport_and_preserves_an_ambiguous_attempt(ledger, 
         with pytest.raises(TimeoutError):
             llm_client.submit_response_job([{'role': 'user', 'content': 'task'}], request_id=f'r{index}',
                 spend_scope='project', spend_run_id='run')
-    with pytest.raises(ValueError, match='reservation_limit'):
+    from adaos.sdk.llm.errors import SubmissionNotAdmitted
+    with pytest.raises(SubmissionNotAdmitted, match='reservation_limit') as denied:
         llm_client.submit_response_job([{'role': 'user', 'content': 'task'}], request_id='r6',
             spend_scope='project', spend_run_id='run')
     assert len(calls) == 5 and ledger.snapshot('project')['committed_usd'] == 10
+    assert denied.value.admission['provider_transport_started'] is False
+    assert denied.value.admission['request_id'] == 'r6'
 
 
 def test_sdk_joins_success_and_repeated_poll_receipts_without_double_counting(ledger, monkeypatch):
