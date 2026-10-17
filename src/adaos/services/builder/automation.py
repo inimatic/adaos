@@ -1653,6 +1653,7 @@ class BuilderAutomationService:
             self.browser_feedback_service = BuilderBrowserFeedbackService(
                 state_dir=self.state_dir,
                 repo_root=self.repo_root,
+                client_url=str(os.getenv('ADAOS_BUILDER_CLIENT_URL') or 'http://127.0.0.1:8100/'),
             )
         return self.browser_feedback_service
 

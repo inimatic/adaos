@@ -14,6 +14,13 @@ from adaos.services.builder.browser_feedback import (
 from adaos.services.skill_factory_worker import _browser_feedback_prompt_projection
 
 
+def test_observer_can_use_a_separately_pinned_client_without_changing_the_working_desktop(tmp_path,monkeypatch):
+    monkeypatch.setenv('ADAOS_BUILDER_CLIENT_URL','http://127.0.0.1:8101/')
+    service=BuilderAutomationService(state_dir=tmp_path/'state',repo_root=tmp_path,
+        dev_skills_root=tmp_path/'skills',dev_scenarios_root=tmp_path/'scenarios')
+    assert service._browser_feedback().client_url=='http://127.0.0.1:8101/'
+
+
 @pytest.mark.parametrize("defect", ["source_mutation", "companion_mutation", "stale_materialization", "none"])
 def test_browser_receipt_cannot_accept_changed_source_or_wrong_loaded_revision(tmp_path, monkeypatch, defect):
     source = tmp_path / "scenario"
