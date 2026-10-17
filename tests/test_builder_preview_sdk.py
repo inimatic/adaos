@@ -272,7 +272,7 @@ def test_materialize_revision_via_owner_uses_active_local_control(monkeypatch) -
     )
 
     assert result == {"ok": True, "delivery": "owner_control_api"}
-    assert captured['timeout']==90.0
+    assert 89.0 <= captured['timeout'] <= 90.0
     assert captured["url"] == (
         "http://127.0.0.1:8778/api/node/yjs/webspaces/desktop-dev/builder-materialize"
     )

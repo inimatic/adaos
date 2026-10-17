@@ -152,6 +152,11 @@ def test_journey_timeout_terminates_only_its_owned_process_family(tmp_path):
         assert marker.is_file()
         child_id = int(marker.read_text())
         if psutil.pid_exists(child_id):
+            # SIGKILL delivery is asynchronous on POSIX. Observe termination
+            # within a bound rather than racing the kernel immediately after
+            # the parent was reaped; a live orphan must still fail this check.
+            psutil.wait_procs([psutil.Process(child_id)], timeout=3)
+        if psutil.pid_exists(child_id):
             assert psutil.Process(child_id).status() == psutil.STATUS_ZOMBIE
         assert sibling.poll() is None
     finally:
