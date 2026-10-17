@@ -9,7 +9,7 @@ import pytest
 from adaos.e2e.retouch_verification import verify_downloads
 
 
-@pytest.mark.parametrize('fault', [None, 'protected', 'overlay', 'download', 'escape'])
+@pytest.mark.parametrize('fault', [None, 'protected', 'overlay', 'download', 'escape','missing_owner'])
 def test_downloaded_bytes_are_checked_independently_of_application_qa(tmp_path, fault):
     owned, output = tmp_path / 'owned', tmp_path / 'artifacts'
     (owned / 'data').mkdir(parents=True); output.mkdir()
@@ -33,10 +33,17 @@ def test_downloaded_bytes_are_checked_independently_of_application_qa(tmp_path, 
         'strokes': [{'kind': 'protect', 'points': [{'x': 50, 'y': 50}], 'radius': 8}]}
     run = {'status': 'completed', 'snapshot': {'photo_sha256': 'input', 'mask': mask}, 'exports': exports}
     with sqlite3.connect(owned / 'data/retouch.sqlite3') as db:
-        db.execute('CREATE TABLE records(kind,body)'); db.execute('CREATE TABLE assets(digest,base)')
-        db.execute('INSERT INTO records VALUES(?,?)', ('runs', json.dumps(run)))
+        # Match the real Store contract: run IDs and retained download ownership
+        # remain available when a user has several completed iterations.
+        db.execute('CREATE TABLE records(kind,id,body)'); db.execute('CREATE TABLE assets(digest,base)')
+        db.execute('INSERT INTO records VALUES(?,?,?)', ('runs','run.checked', json.dumps(run)))
+        for fmt in ('PNG','JPEG'):
+            download={'filename':'result.'+fmt.lower(),'format':fmt,'run_id':'run.checked'}
+            if fault=='missing_owner' and fmt=='PNG':download.pop('run_id')
+            db.execute('INSERT INTO records VALUES(?,?,?)',('downloads',fmt,json.dumps(download)))
         db.execute('INSERT INTO assets VALUES(?,?)', ('input', encode(base, 'PNG')))
-    report = {'downloads': [{'filename': 'result.png'}, {'filename': 'result.jpeg'}]}
+    report = {'downloads': [{'filename': 'result.'+row['format'].lower(),
+                             'digest':'sha256:'+row['sha256']} for row in exports]}
     if fault == 'download': (output / 'result.png').write_bytes(encode(base, 'PNG'))
     if fault == 'escape': report['downloads'][0]['filename'] = '../result.png'
     if fault:
