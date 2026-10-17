@@ -150,6 +150,19 @@ def test_known_repair_without_observation_prevents_complete_accounting(observati
     assert set(metrics['source_refs']) == {'llm_job:primary', 'llm_job:repair'}
 
 
+@pytest.mark.parametrize('observations', [None, [], [{'root_job_id': 'primary',
+    'usage': {'input_tokens': 100, 'output_tokens': 50}, 'cost': {'estimated_usd': .2}}]])
+def test_nested_repair_history_cannot_disappear_from_identity_union(observations):
+    telemetry = {'root_job_id': 'primary', 'cost': {'estimated_usd': .2},
+        'repair': {'root_job_id': 'repair2', 'cost': {'estimated_usd': .3}, 'history': [
+            {'root_job_id': 'repair1', 'history': [{'root_job_id': 'repair1'}]}]},
+        'attempt_observations': observations}
+    metrics = execution_metrics_from_llm({'telemetry': telemetry})
+    assert metrics['llm_calls'] == 3 and metrics['repair_attempts'] == 2
+    assert set(metrics['source_refs']) == {'llm_job:primary', 'llm_job:repair1', 'llm_job:repair2'}
+    assert metrics['usage_complete'] is False and 'cost_usd' not in metrics
+
+
 def test_partial_fresh_usage_cannot_hide_proven_billable_overrun():
     from adaos.services.builder.automation import BuilderAutomationService
     result = BuilderAutomationService._budget_usage_projection(status='failed', task={}, local_run={},

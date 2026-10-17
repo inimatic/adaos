@@ -50,6 +50,21 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             metrics[name] = value
     repair = mapping(telemetry.get('repair'))
+    known_jobs = {}
+    pending = [telemetry, repair]
+    seen = set()
+    while pending:
+        source = pending.pop(0)
+        if id(source) in seen:
+            continue
+        seen.add(id(source))
+        if source.get('root_job_id'):
+            known_jobs[str(source['root_job_id'])] = None
+        history = source.get('history')
+        if isinstance(history, list):
+            pending.extend(row for row in history if isinstance(row, Mapping))
+        if len(known_jobs) > 16 or len(seen) > 64:
+            raise ValidationError('Builder attempt identities exceed the retained run bound')
     observed_attempts = telemetry.get('attempt_observations')
     if isinstance(observed_attempts, list) and observed_attempts:
         # Native Builder records disjoint receipts before presenting its legacy
@@ -57,8 +72,7 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
         # Identity comes from every retained source, not just the receipts that
         # happened to arrive first. The legacy usage can be an aggregate and
         # must not be assigned to any of these missing constituent receipts.
-        unique = {str(identity): {'root_job_id': str(identity)}
-                  for identity in (telemetry.get('root_job_id'), repair.get('root_job_id')) if identity}
+        unique = {identity: {'root_job_id': identity} for identity in known_jobs}
         def merge_facts(before, after):
             merged = copy.deepcopy(before)
             for key, value in after.items():
@@ -107,10 +121,10 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
             metrics['attempt_observations'] = attempts
             metrics['usage_complete'] = all({'input_tokens', 'output_tokens'} <= row.keys() for row in attempts)
             return validate_execution_metrics(metrics)
-    jobs = list(dict.fromkeys(str(item) for item in (telemetry.get('root_job_id'), repair.get('root_job_id')) if item))
+    jobs = list(known_jobs)
     if jobs:
         metrics['llm_calls'] = len(jobs)
-        metrics['repair_attempts'] = int(bool(repair.get('root_job_id')) and repair.get('root_job_id') != telemetry.get('root_job_id'))
+        metrics['repair_attempts'] = max(0, len(jobs) - 1)
         metrics['source_refs'] = [f'llm_job:{item}' for item in jobs]
         metrics['usage_complete'] = len(jobs) == 1 and {'input_tokens', 'output_tokens'} <= usage.keys()
     timing = mapping(telemetry.get('timing'))
@@ -131,6 +145,8 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
         repair_cost = measured_cost(repair.get('cost'))
         # A known primary charge is not the total cost of a partially metered repair.
         cost = (cost[0] + repair_cost[0], cost[1]) if cost and repair_cost and cost[1] == repair_cost[1] else None
+    if len(jobs) > 2:
+        cost = None
     if cost:
         metrics.update(cost_usd=cost[0], cost_basis=cost[1])
     return validate_execution_metrics(metrics)
