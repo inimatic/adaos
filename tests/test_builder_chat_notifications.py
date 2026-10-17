@@ -152,3 +152,12 @@ def test_reconciliation_waits_for_live_delivery_and_retries_stale_started(tmp_pa
             tmp_path, [message], now=100.0, settle_seconds=0
         )
     ) == 1
+
+
+def test_late_http_acceptance_cannot_overwrite_bot_delivery(tmp_path):
+    payload = {"id": "late.ack", "_meta": {"schema": "adaos.builder.chat_notification.v1"}}
+    record_builder_delivery(tmp_path, payload, phase="delivered", receipt={"external_message_ids": ["904"]})
+    record_builder_delivery(tmp_path, payload, phase="accepted", http_status=202)
+    value = json.loads(next((tmp_path / "state/router/builder-deliveries").glob("*.json")).read_text(encoding="utf-8"))
+    assert value["phase"] == "delivered" and value["http_status"] == 202
+    assert value["receipt"]["external_message_ids"] == ["904"]

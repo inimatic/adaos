@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import time
 
+from adaos.services.artifact_pipeline.storage import atomic_write_json
+from adaos.services.mutation_lock import mutation_lock
 from .telegram_projection import _telegram_text_chunks
 
 
@@ -74,11 +76,12 @@ def record_builder_delivery(base_dir: Path, payload: Mapping[str, Any], **update
     root = Path(base_dir) / "state" / "router" / "builder-deliveries"
     root.mkdir(parents=True, exist_ok=True)
     path = root / (hashlib.sha256(identity.encode()).hexdigest() + ".json")
-    try:
+    with mutation_lock(path.with_suffix(".lock")):
         previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    except (OSError, ValueError):
-        previous = {}
-    path.write_text(json.dumps({**previous, "message_id": identity, "updated_at": time.time(), **updates}, ensure_ascii=False), encoding="utf-8")
+        # Root's HTTP acknowledgement can arrive after the terminal Bot receipt.
+        if previous.get("phase") == "delivered" and updates.get("phase") != "delivered":
+            updates = {key: value for key, value in updates.items() if key != "phase"}
+        atomic_write_json(path, {**previous, "message_id": identity, "updated_at": time.time(), **updates})
 
 
 def pending_latest_automation_notifications(
@@ -157,7 +160,7 @@ def pending_latest_automation_notifications(
 
     def _settled(receipt: Mapping[str, Any]) -> bool:
         phase = str(receipt.get("phase") or "").strip().lower()
-        if phase == "sent":
+        if phase in {"sent", "accepted", "delivered"}:
             return True
         if phase != "started":
             return False

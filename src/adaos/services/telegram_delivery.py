@@ -103,9 +103,11 @@ def claim_outbound(
     operation_key: str,
     *,
     hub_id: str,
-    bot_id: str,
-    chat_id: str,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
     message_count: int,
+    routing_mode: str | None = None,
+    content_digest: str | None = None,
     response_envelope_id: str | None = None,
     durable_attempt_id: str | None = None,
     now: str | None = None,
@@ -120,6 +122,10 @@ def claim_outbound(
         "response_envelope_id": str(response_envelope_id or "").strip() or None,
         "durable_attempt_id": str(durable_attempt_id or "").strip() or None,
     }
+    if routing_mode is not None:
+        immutable.update(routing_mode=routing_mode, bot_id=bot_id, chat_id=chat_id)
+    if content_digest is not None:
+        immutable["content_digest"] = content_digest
     payload_digest = "sha256:" + hashlib.sha256(_dump(immutable).encode("utf-8")).hexdigest()
     timestamp = now or _now()
     record = _validate(
@@ -195,9 +201,18 @@ def complete_outbound(
             con.rollback()
             raise TelegramDeliveryError(f"Telegram delivery attempt not found: {attempt_id}")
         attempt = _validate(_load(row["payload_json"]))
-        if attempt["status"] in {"delivered", "failed"}:
+        if receipt and receipt.get("operation_key") is not None and receipt["operation_key"] != attempt["operation_key"]:
+            raise TelegramDeliveryError("Telegram receipt operation key mismatch")
+        if delivered and not (receipt or {}).get("external_message_ids"):
+            raise TelegramDeliveryError("Telegram delivery needs external message identifiers")
+        if attempt["status"] == "delivered" or (attempt["status"] == "failed" and not delivered):
             con.rollback()
             return attempt
+        if attempt["status"] == "failed":
+            attempt["receipt_history"] = [{
+                "receipt": attempt["receipt"], "error": attempt["error"],
+                "completed_at": attempt["completed_at"],
+            }]
         attempt["status"] = "delivered" if delivered else "failed"
         attempt["receipt"] = copy.deepcopy(dict(receipt or {})) or None
         attempt["error"] = None if delivered else str(error or "telegram_delivery_failed")[:4000]

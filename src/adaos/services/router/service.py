@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 from pathlib import Path
 import asyncio
+import hashlib
 import copy
 import json
 import time
@@ -739,6 +740,9 @@ class RouterService:
             "completed_at": str(payload.get("completed_at") or "").strip() or None,
         }
         try:
+            claimed = telegram_delivery.get_attempt(attempt_id)
+            if not claimed or claimed["operation_key"] != payload.get("operation_key"):
+                raise telegram_delivery.TelegramDeliveryError("Telegram receipt operation key mismatch")
             attempt = telegram_delivery.complete_outbound(
                 attempt_id,
                 delivered=delivered,
@@ -748,6 +752,13 @@ class RouterService:
         except Exception:
             _log.warning("router: unknown Telegram delivery receipt attempt=%s", attempt_id, exc_info=True)
             return
+        if attempt["operation_key"].startswith("builder-notify:"):
+            record_builder_delivery(
+                self.base_dir,
+                {"id": attempt["operation_key"][len("builder-notify:"):],
+                 "_meta": {"schema": "adaos.builder.chat_notification.v1"}},
+                phase=attempt["status"], delivery_attempt_id=attempt_id, receipt=attempt.get("receipt"),
+            )
         durable_attempt_id = str(attempt.get("durable_attempt_id") or "").strip()
         if durable_attempt_id:
             try:
@@ -908,6 +919,26 @@ class RouterService:
                     alias = conf.subnet_id
                 prefixed_text = f"[{alias}]: {text}" if alias else text
                 body = {"hub_id": hub_id, "text": prefixed_text}
+                if meta.get("schema") in {
+                    "adaos.builder.chat_notification.v1", "adaos.builder.automation_notification.v1"
+                }:
+                    identity = str(payload.get("id") or meta.get("response_idempotency_key") or meta.get("source_message_id") or "")
+                    if not identity:
+                        raise ValueError("Builder notification requires a stable delivery identity")
+                    attempt = telegram_delivery.claim_outbound(
+                        f"builder-notify:{identity}", hub_id=hub_id, routing_mode="hub_pairing",
+                        message_count=1,
+                        content_digest="sha256:" + hashlib.sha256(prefixed_text.encode("utf-8")).hexdigest(),
+                    )
+                    if attempt["status"] == "delivered":
+                        record_builder_delivery(self.base_dir, payload, phase="delivered", receipt=attempt["receipt"])
+                        return
+                    body["_protocol"] = {
+                        "delivery_attempt_id": attempt["attempt_id"],
+                        "operation_key": attempt["operation_key"],
+                        "receipt_subject": f"tg.receipt.{hub_id}",
+                    }
+                    record_builder_delivery(self.base_dir, payload, delivery_attempt_id=attempt["attempt_id"])
                 try:
                     r = await asyncio.to_thread(
                         requests.post,
@@ -917,7 +948,7 @@ class RouterService:
                         timeout=15.0,
                     )
                     try:
-                        record_builder_delivery(self.base_dir, payload, phase="sent" if 200 <= int(r.status_code) < 300 else "failed", http_status=int(r.status_code), root_base=api_base)
+                        record_builder_delivery(self.base_dir, payload, phase="accepted" if 200 <= int(r.status_code) < 300 else "failed", http_status=int(r.status_code), root_base=api_base)
                     except OSError:
                         _log.debug("Builder notification receipt unavailable", exc_info=True)
                     if not (200 <= int(r.status_code) < 300):

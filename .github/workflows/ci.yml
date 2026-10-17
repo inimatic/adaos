@@ -267,6 +267,8 @@ jobs:
             tests/test_builder_llm_input_attribution.py \
             tests/test_builder_compatibility_regressions.py \
             tests/test_builder_run_observability.py \
+            tests/test_builder_chat_notifications.py \
+            tests/test_telegram_delivery.py \
             tests/test_builder_spend_ledger.py \
             tests/test_builder_retained_work.py \
             tests/test_builder_traceability.py \
