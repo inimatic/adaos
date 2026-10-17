@@ -42,6 +42,8 @@ _LOADED_OWNER_DIGEST = _file_digest(Path(__file__))
 def _verifier_snapshot(script_path: Path, *, loaded_owner: bool = False) -> dict[str, Any]:
     return {'python_owner': _LOADED_OWNER_DIGEST if loaded_owner else _file_digest(Path(__file__)),
             'registered_profiles': _file_digest(Path(__file__).with_name('journey_profiles.py')),
+            'failure_normalizer': _file_digest(Path(__file__).with_name('browser_failure_analysis.py')),
+            'constraint_analyzer': _file_digest(Path(__file__).with_name('failure_analysis.py')),
             'browser_runner': _file_digest(script_path),
             **{name: _file_digest(script_path.parent / name)
                for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs')}}
@@ -520,6 +522,23 @@ class BuilderBrowserFeedbackService:
                     ref: {'passed': bool(value), 'evidence_ref': 'artifact:browser/' + receipt['report_digest']} for ref, value in verdicts.items()})
             receipt['behavioral_traceability'].update(receipt=observed, graph=attach_behavioral_execution(graph, observed))
         receipt_path = output / "receipt.json"
+        if not passed:
+            from .browser_failure_analysis import analyze_browser_receipt
+            try:
+                analysis = analyze_browser_receipt(receipt, evidence_ref=receipt_path.resolve().as_posix())
+            except ValueError as exc:
+                receipt['fault_attribution'] = {'classification':'insufficient_evidence',
+                    'next_action':'inspect_evidence','confidence':'unknown',
+                    'reason':str(exc),'source_rewrite_authorized':False}
+            else:
+                analysis_path = output / 'failure-analysis.json'
+                atomic_write_json(analysis_path, analysis)
+                receipt['fault_attribution'] = {key:analysis[key] for key in
+                    ('classification','next_action','confidence','source_rewrite_authorized')}
+                receipt['fault_attribution']['analysis_ref'] = analysis_path.resolve().as_posix()
+                receipt['evidence'].append({'name':analysis_path.name,'path':analysis_path.resolve().as_posix(),
+                    'sha256':_file_digest(analysis_path),'media_type':'application/json',
+                    'visibility':'local_qualification'})
         atomic_write_json(receipt_path, receipt)
         receipt["receipt_path"] = receipt_path.resolve().as_posix()
         receipt["receipt_digest"] = _file_digest(receipt_path)

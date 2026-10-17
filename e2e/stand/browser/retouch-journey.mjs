@@ -4,7 +4,7 @@ import { chromium, expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { isExpectedFixtureRestartReadError, fetchOwnedReadWithOneRetry } from './controlled-faults.mjs'
+import { isExpectedFixtureRestartReadError, fetchOwnedReadWithOneRetry, observePending } from './controlled-faults.mjs'
 
 const expect = baseExpect.configure({ timeout: 30_000 })
 const env = process.env
@@ -218,7 +218,7 @@ async function upload(name) {
   await field('e_add_photo', 'filename').fill(name)
   await field('e_add_photo', 'format').fill('JPEG')
   await field('e_add_photo', 'date').fill('2026-10-17')
-  const receipt = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname.endsWith('/upload_attachment/attachments'))
+  const receipt = observePending(page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname.endsWith('/upload_attachment/attachments')))
   await host('e_add_photo').locator('input[type=file]').setInputFiles({ name, mimeType: 'image/jpeg', buffer: sample })
   expect((await receipt).ok()).toBe(true)
   const result = await responseFor(() => button('e_add_photo', 'cmd_add_photo').click(), 'mutate_record')
@@ -415,7 +415,7 @@ try {
     const differenceBytes = await compare().locator('.difference-map').first().evaluate(async node =>
       [...new Uint8Array(await (await fetch(node.src)).arrayBuffer())])
     await fs.writeFile(path.join(output, 'difference-map.png'), Buffer.from(differenceBytes))
-    const download = page.waitForEvent('download')
+    const download = observePending(page.waitForEvent('download'))
     await compare().getByRole('button', { name: /^(Скачать результат|Download result)$/ }).click()
     const file = await download, name = file.suggestedFilename(), saved = path.join(output, name)
     await file.saveAs(saved); const bytes = await fs.readFile(saved)
@@ -423,7 +423,7 @@ try {
     expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([320, 240])
     report.downloads.push({ filename: name, digest: hash(bytes), size: bytes.length })
     await host('v_results').locator(`[data-record-id="${run.id}-jpeg"]`).click(); await primary()
-    const jpegDownload = page.waitForEvent('download')
+    const jpegDownload = observePending(page.waitForEvent('download'))
     await compare().getByRole('button', { name: /^(Скачать результат|Download result)$/ }).click()
     const jpeg = await jpegDownload, jpegName = jpeg.suggestedFilename(), jpegPath = path.join(output, jpegName)
     await jpeg.saveAs(jpegPath); const jpegBytes = await fs.readFile(jpegPath)
@@ -546,7 +546,8 @@ try {
     await expect(provenance).toContainText('Убрать тестовый прыщ; сохранить поры, родинки и геометрию.')
     await expect(provenance).not.toContainText(nextGoal)
     await expect(provenance).toContainText(new RegExp('(?:Сила|Strength)[\\s:]*'+(variant==='edited'?'31':'30'),'iu'))
-    const download=page.waitForEvent('download')
+    await primary()
+    const download=observePending(page.waitForEvent('download'))
     await compare().getByRole('button',{name:/^(Скачать результат|Download result)$/}).click()
     const file=await download,pathToOld=path.join(output,'history-original.png');await file.saveAs(pathToOld)
     const oldDigest=hash(await fs.readFile(pathToOld));expect(oldDigest).toBe(report.downloads[0].digest)

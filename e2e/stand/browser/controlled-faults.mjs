@@ -1,4 +1,11 @@
 // Only deliberately interrupted reads of the owned fixture are expected.
+// Attach ownership immediately, while preserving the exact rejection for await.
+// This prevents an event timeout from killing Node before its evidence finally.
+export function observePending(pending) {
+  void pending.catch(() => {})
+  return pending
+}
+
 export function isExpectedFixtureRestartReadError({ restartWindow, message, method, tool }) {
   if (!restartWindow || !/ECONNREFUSED|ECONNRESET/.test(message)) return false
   if (method === 'GET') return true // This caller already restricted the route to owned attachments.

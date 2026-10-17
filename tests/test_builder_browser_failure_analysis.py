@@ -45,12 +45,15 @@ def test_another_layout_passing_is_not_recovery_of_the_failed_layout():
     assert result['critical_violation']['recovered'] is False
 
 
-@pytest.mark.parametrize('missing', ['verifier', 'state', 'environment', 'task'])
+@pytest.mark.parametrize('missing', ['verifier', 'state', 'environment', 'task','outcome','empty_snapshot','missing_verifier_input'])
 def test_legacy_unknown_dependencies_require_actual_enrichment_not_todays_verifier(missing):
     receipt = sample()
     if missing == 'verifier': receipt.pop('verifier')
     if missing == 'state': receipt['report']['samples'][0].pop('state_snapshots')
     if missing == 'environment': receipt['report']['samples'][0].pop('runtime_identity')
     if missing == 'task': receipt.pop('task_id')
+    if missing == 'outcome': receipt.pop('ok')
+    if missing == 'empty_snapshot': receipt['report']['samples'][0]['state_snapshots'][0]['snapshot']=None
+    if missing == 'missing_verifier_input': receipt['verifier']['before']['runner']=None
     with pytest.raises(ValueError, match='Retained'):
         analyze_browser_receipt(receipt, evidence_ref='artifact:receipt')

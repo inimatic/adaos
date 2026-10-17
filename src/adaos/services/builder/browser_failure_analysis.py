@@ -15,10 +15,11 @@ def analyze_browser_receipt(receipt, *, evidence_ref):
     source = receipt.get('source') or {}
     verifier = receipt.get('verifier') or {}
     samples = (receipt.get('report') or {}).get('samples') or []
-    if (not evidence_ref or not receipt.get('task_id') or not source.get('digest')
-            or not verifier.get('before') or not samples
+    if (not evidence_ref or type(receipt.get('ok')) is not bool or not receipt.get('task_id') or not source.get('digest')
+            or not verifier.get('before') or not all(verifier['before'].values()) or not samples
             or any(not row.get('state_snapshots') or not row.get('environment')
-                   or not row.get('runtime_identity') for row in samples)):
+                   or not row.get('runtime_identity')
+                   or any(point.get('snapshot') is None for point in row.get('state_snapshots') or []) for row in samples)):
         raise ValueError('Retained source, verifier, observed state/environment and task evidence are required')
     episode = {'task_id': receipt['task_id'],
         'execution_ref': 'browser:' + receipt['task_id'] + ':' + str(receipt.get('attempt')),

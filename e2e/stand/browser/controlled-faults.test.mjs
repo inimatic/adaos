@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {spawnSync} from 'node:child_process'
 import {isExpectedFixtureRestartReadError as expected, isOptionalLocalDiscoveryRequest as discovery, fetchOwnedReadWithOneRetry as fetchRead} from './controlled-faults.mjs'
 
 test('a reset owned read recovers once and retains sanitized retry evidence', async () => {
@@ -56,4 +57,23 @@ test('only bounded read-only loopback discovery may use an alternate authority',
     'http://localhost:8777/api/ping?token=secret', 'http://user@localhost:8777/api/ping', 'invalid']) {
     assert.equal(discovery({url, method: 'GET'}), false, url)
   }
+})
+
+test('a timed-out event remains observable after another action, without killing evidence capture',()=>{
+  const module=JSON.stringify(new URL('./controlled-faults.mjs',import.meta.url).href)
+  const guarded=spawnSync(process.execPath,['--unhandled-rejections=strict','--input-type=module','-e',`
+    import {observePending} from ${module};
+    const event=observePending(Promise.reject(new Error('event timeout')));
+    await new Promise(resolve=>setTimeout(resolve,5));
+    let observed=false;try{await event}catch(error){observed=error.message==='event timeout'}
+    if(!observed)process.exit(2);
+  `],{encoding:'utf8'})
+  assert.equal(guarded.status,0,guarded.stderr)
+  const unowned=spawnSync(process.execPath,['--unhandled-rejections=strict','--input-type=module','-e',`
+    const event=Promise.reject(new Error('event timeout'));
+    await new Promise(resolve=>setTimeout(resolve,5));
+    try{await event}catch{}
+  `],{encoding:'utf8'})
+  assert.notEqual(unowned.status,0)
+  assert.match(unowned.stderr,/event timeout/)
 })
