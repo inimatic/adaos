@@ -30,4 +30,17 @@ def read_llm_evidence(receipt: Any) -> dict[str, Any]:
     return read(receipt)
 
 
-__all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm"]
+def configure_usd_budget(scope: str, **kwargs: Any) -> dict[str, Any]:
+    """Configure one explicitly authorized project experiment allowance."""
+    from adaos.services.builder.spend_ledger import BuilderSpendLedger
+    return BuilderSpendLedger().configure(scope, **kwargs)
+
+
+def usd_budget(scope: str, *, run_id=None) -> dict[str, Any]:
+    """Read commitments, disjoint attempts and unknown charges without inference."""
+    from adaos.services.builder.spend_ledger import BuilderSpendLedger
+    return BuilderSpendLedger().snapshot(scope, run_id=run_id)
+
+
+__all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm",
+           "configure_usd_budget", "usd_budget"]

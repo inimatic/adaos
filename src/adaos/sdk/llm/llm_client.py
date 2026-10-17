@@ -714,12 +714,27 @@ def send_response(
     profile_scope: str | None = None,
     timeout: float | None = None,
     prefer_global: bool = False,
+    spend_scope: str | None = None,
+    spend_run_id: str | None = None,
+    spend_reserve_usd: float | None = None,
 ) -> Dict[str, Any]:
     """
     Send a message batch to the Root LLM proxy (Responses API wrapper).
 
     Returns dict with raw response plus convenience "output_text" field.
     """
+    if spend_scope:
+        # A budgeted synchronous caller uses the same durable attempt owner;
+        # no legacy direct-response path can bypass its reservation boundary.
+        job = submit_response_job(messages, model=model, temperature=temperature, max_tokens=max_tokens,
+            top_p=top_p, reasoning=reasoning, text=text, tools=tools, tool_choice=tool_choice,
+            max_tool_calls=max_tool_calls, parallel_tool_calls=parallel_tool_calls, request_id=request_id,
+            stream=stream, prompt_cache_key=prompt_cache_key, prompt_cache_retention=prompt_cache_retention,
+            stream_protocol=stream_protocol, patch_stream=patch_stream, profile_scope=profile_scope,
+            timeout=timeout, spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
+        if job.get('status') != 'succeeded':
+            job = wait_response_job(job['job_id'], base_url=job.get('_client', {}).get('base_url'), timeout_s=timeout or 600)
+        return job
     root_payload, normalized_messages = _llm_root_payload(
         messages,
         model=model,
@@ -813,6 +828,9 @@ def submit_response_job(
     provider_timeout_s: float | None = None,
     provider_max_attempts: int | None = None,
     timeout: float | None = None,
+    spend_scope: str | None = None,
+    spend_run_id: str | None = None,
+    spend_reserve_usd: float | None = None,
 ) -> Dict[str, Any]:
     """
     Submit a Responses API request as an asynchronous Root LLM job.
@@ -843,12 +861,14 @@ def submit_response_job(
         provider_timeout_s=provider_timeout_s,
         provider_max_attempts=provider_max_attempts,
     )
-    return _submit_root_job(root_payload, request_id=request_id, timeout=timeout, submit_started=submit_started)
+    return _submit_budgeted_root_job(root_payload, request_id=request_id, timeout=timeout, submit_started=submit_started,
+        spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
 
 
 def submit_image_job(*, request_id: str, model: str, prompt: str, size: str = "1024x1024",
                      quality: str = "low", output_format: str = "png", background: str = "opaque",
-                     timeout: float | None = None) -> Dict[str, Any]:
+                     timeout: float | None = None, spend_scope: str | None = None,
+                     spend_run_id: str | None = None, spend_reserve_usd: float | None = None) -> Dict[str, Any]:
     """Submit one image to the same subscribed durable Root broker.
 
     The image model is explicit, never inferred from a text-generation profile.
@@ -869,14 +889,16 @@ def submit_image_job(*, request_id: str, model: str, prompt: str, size: str = "1
     payload = {"api": "images.generate", "model": model, "request_id": request_id,
                "image": {"prompt": prompt, "size": size, "quality": quality,
                          "output_format": output_format, "background": background}}
-    return _submit_root_job(payload, request_id=request_id, timeout=timeout, submit_started=time.perf_counter())
+    return _submit_budgeted_root_job(payload, request_id=request_id, timeout=timeout, submit_started=time.perf_counter(),
+        spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
 
 
 def submit_image_edit_job(*, request_id: str, model: str, prompt: str,
                           images: list[dict[str, str]], mask: dict[str, str] | None = None,
                           size: str = "1024x1024", quality: str = "high",
                           output_format: str = "png", background: str = "opaque",
-                          timeout: float | None = None) -> Dict[str, Any]:
+                          timeout: float | None = None, spend_scope: str | None = None,
+                          spend_run_id: str | None = None, spend_reserve_usd: float | None = None) -> Dict[str, Any]:
     """Edit supplied images through the owned, durable Root image contract.
 
     Inputs are bounded inline references, never provider credentials or arbitrary
@@ -933,8 +955,48 @@ def submit_image_edit_job(*, request_id: str, model: str, prompt: str,
              "output_format": output_format, "background": background}
     if mask is not None:
         image["mask"] = mask
-    return _submit_root_job({"api": "images.edit", "model": model, "request_id": request_id, "image": image},
-                            request_id=request_id, timeout=timeout, submit_started=time.perf_counter())
+    return _submit_budgeted_root_job({"api": "images.edit", "model": model, "request_id": request_id, "image": image},
+        request_id=request_id, timeout=timeout, submit_started=time.perf_counter(),
+        spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
+
+
+def _submit_budgeted_root_job(payload, *, request_id, timeout, submit_started,
+                              spend_scope=None, spend_run_id=None, spend_reserve_usd=None):
+    ledger = reservation = None
+    if spend_scope:
+        import hashlib
+        from adaos.services.builder.spend_ledger import BuilderSpendLedger
+        ledger = BuilderSpendLedger()
+        exact_input = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        reservation = ledger.reserve(spend_scope, request_id=request_id, run_id=spend_run_id or request_id,
+            input_digest='sha256:' + hashlib.sha256(exact_input.encode()).hexdigest(), reserve_usd=spend_reserve_usd)
+        if reservation is None:
+            raise ValueError('Explicit spend_scope has no authorized USD account')
+    # An ambiguous submit failure deliberately leaves the reservation held.
+    result = _submit_root_job(payload, request_id=request_id, timeout=timeout, submit_started=submit_started)
+    if reservation:
+        base = result.get('_client', {}).get('base_url')
+        job_id = result.get('job_id') or result.get('id')
+        if not base or not job_id:
+            raise RuntimeError('Budgeted submission returned no durable provider job ownership; reserve retained')
+        ledger.link_job(request_id, job_id=job_id, provider_base=base)
+        _observe_job_spend(result, base)
+        result.setdefault('_client', {})['spend'] = ledger.snapshot(spend_scope, run_id=spend_run_id or request_id)
+    return result
+
+
+def _observe_job_spend(job, base_url):
+    from adaos.services.builder.spend_ledger import BuilderSpendLedger
+    from adaos.services.runtime_paths import current_state_dir
+    if not (Path(current_state_dir()) / 'builder' / 'spend.sqlite3').is_file():
+        return
+    try:
+        BuilderSpendLedger().observe_job(job, provider_base=base_url)
+    except Exception as exc:
+        # Provider output remains recoverable. A failed join never releases its
+        # reservation or conceals the fact that accounting is still incomplete.
+        job.setdefault('_client', {})['spend_reconciliation_error'] = type(exc).__name__
+        _LOG.warning('Root spend observation remains unresolved job_id=%s error=%s', job.get('job_id'), type(exc).__name__)
 
 
 def _submit_root_job(root_payload: Mapping[str, Any], *, request_id: str | None,
@@ -1250,6 +1312,7 @@ def get_response_job(
             _llm_proxy_protocol(data, base_url=candidate_base_url, fallback=index > 0, attempts=attempts)
             data.setdefault("_client", {})["base_url"] = candidate_base_url
             data["output_text"] = _extract_job_output_text(data)
+            _observe_job_spend(data, candidate_base_url)
             return data
         except Exception as exc:
             last_exc = exc

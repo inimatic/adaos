@@ -265,6 +265,7 @@ jobs:
             tests/test_builder_attempt_evidence.py \
             tests/test_builder_compatibility_regressions.py \
             tests/test_builder_run_observability.py \
+            tests/test_builder_spend_ledger.py \
             tests/test_builder_retained_work.py \
             tests/test_builder_traceability.py \
             tests/test_builder_feedback_episode.py \

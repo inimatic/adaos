@@ -507,6 +507,28 @@ def automation_status(
     )
 
 
+class BuilderUsdBudgetRequest(BaseModel):
+    scope: str = Field(min_length=1, max_length=300)
+    limit_usd: float = Field(gt=0, allow_inf_nan=False)
+    default_reserve_usd: float = Field(gt=0, allow_inf_nan=False)
+    authorization_ref: str = Field(min_length=1, max_length=500)
+
+
+@router.post('/spend/configure')
+def configure_spend(body: BuilderUsdBudgetRequest) -> dict[str, Any]:
+    from adaos.services.builder.spend_ledger import BuilderSpendLedger
+    try:
+        return BuilderSpendLedger().configure(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get('/spend')
+def read_spend(scope: str, run_id: str | None = None) -> dict[str, Any]:
+    from adaos.services.builder.spend_ledger import BuilderSpendLedger
+    return BuilderSpendLedger().snapshot(scope, run_id=run_id)
+
+
 @router.post("/automation/recover-validated")
 def recover_validated_automation(
     body: BuilderAutomationRecoveryRequest,
