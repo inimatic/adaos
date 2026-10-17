@@ -2061,17 +2061,33 @@ def test_context_packet_admits_phase_scope_before_model_and_retains_transition(w
     assert service.describe("scenario", "recipes")["generation"] == before["generation"]
 
 
-def test_plan_rejects_excess_criteria_without_accepting_a_truncated_change(workflow_project):
+def test_plan_partitions_excess_criteria_with_source_coverage_and_roundtrip(workflow_project):
     service, _ = workflow_project
-    before = service.describe('scenario', 'recipes')
-    with pytest.raises(BuilderWorkflowError, match='acceptance_criteria.*20'):
-        service.transition('scenario', 'recipes', 'plan_change_set', metadata={
+    original = [f'Criterion {i}' for i in range(21)]
+    service.transition('scenario', 'recipes', 'plan_change_set', metadata={
             'change_set_id': 'CH-too-many', 'request': 'Keep every criterion',
             'issues': [{'issue_id': 'all', 'title': 'No requirement loss', 'lane': 'automation',
-                        'acceptance_criteria': [f'Criterion {i}' for i in range(21)]}]})
+                        'source_message_ids':['message:original'], 'acceptance_criteria': original}]})
     after = service.describe('scenario', 'recipes')
-    assert after['generation'] == before['generation']
-    assert after['change'] == before['change']
+    issues = after['change']['issues']
+    assert issues[0]['source_acceptance_criteria'] == original
+    assert issues[0]['structural_status'] == 'split'
+    assert [criterion for row in issues[1:] for criterion in row['acceptance_criteria']] == original
+    assert all(row['source_message_ids']==['message:original'] for row in issues)
+    assert service.describe('scenario', 'recipes')['change']['issues'] == issues
+    packet = service.build_context_packet('scenario','recipes',execution_phase='automation')
+    assert {row['issue_id'] for row in packet['change']['issues']} >= {'all~part001','all~part002'}
+
+
+def test_oversized_decomposition_fails_atomically_without_acceptance(workflow_project):
+    service, _ = workflow_project
+    before = service.describe('scenario', 'recipes')
+    with pytest.raises(BuilderWorkflowError, match='at most 50'):
+        service.transition('scenario','recipes','plan_change_set',metadata={
+            'change_set_id':'too-large','request':'Keep everything',
+            'issues':[{'issue_id':'all','title':'Too many','lane':'automation',
+                       'acceptance_criteria':[f'Criterion {i}' for i in range(981)]}]})
+    assert service.describe('scenario','recipes')['generation']==before['generation']
 
 
 @pytest.mark.parametrize('field,bound', [('semantic_refs',100),('source_message_ids',100),

@@ -73,10 +73,23 @@ def project_change(*, project_ref, generation, change, semantic_document=None, s
             gaps.append({"issue_id": ref, "kind": "semantic_mapping_missing"})
     for issue in change.get("issues", []):
         target = identities[("requirement", str(issue["issue_id"]))]
+        for identity, text in zip(issue.get('source_criterion_ids', []), issue.get('source_acceptance_criteria', [])):
+            source = node('source_criterion', identity, {'text': text, 'source_issue_id': issue['issue_id']},
+                          {'proof': 'canonical_source_only; behavioral_acceptance_not_implied'})
+            edge(source, target, 'derived_from', {'authority': 'lossless_issue_partition'})
         for previous in issue.get("derived_from_issue_ids", []):
             source = identities.get(("requirement", previous))
             if source:
                 edge(source, target, "superseded_by", {"authority": "issue_structure"})
+    for issue in change.get('issues', []):
+        target = identities[('requirement', str(issue['issue_id']))]
+        for criterion in issue.get('criterion_ids', []):
+            source = identities.get(('source_criterion', criterion))
+            if source:
+                edge(source, target, 'derived_from', {'authority': 'lossless_issue_partition',
+                     'proof': 'declared_obligation; no inferred behavioral acceptance'})
+            else:
+                gaps.append({'issue_id': issue['issue_id'], 'kind': 'unresolved_source_criterion', 'ref': criterion})
     for constraint in change.get("acceptance_constraints", []):
         if constraint.get("status") == "superseded":
             continue

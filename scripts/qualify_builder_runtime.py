@@ -20,6 +20,7 @@ from adaos.apps.cli.app import Settings, init_ctx
 from adaos.apps.cli.active_control import resolve_control_token
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.manager import _runtime_preparation_identity
 from adaos.services.builder.delivery_qualification import qualify_message_hook, qualify_native_proposal_boundary
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore, build_artifact_package, artifact_source_snapshot
 from adaos.domain.artifact_release import ArtifactPackageRef
@@ -71,6 +72,10 @@ previous = manager.active_runtime_package_identity('builder_skill')
 environment = manager._runtime_env('builder_skill')
 previous_source = environment.build_slot_paths(previous['version'], previous['slot']).src_dir / 'skills/builder_skill'
 previous_source_digest = artifact_source_snapshot(previous_source)['digest']
+previous_metadata = environment.read_version_metadata(previous['version']).get('slots', {}).get(previous['slot'], {})
+if previous_metadata.get('preparation_identity') != _runtime_preparation_identity():
+    raise ValueError('Rollback slot was prepared under a different Core/interpreter. '
+                     'Prepare its retained exact source before switching the active candidate.')
 candidate_slot = environment.select_inactive_slot(package.version)
 slot_path = environment.build_slot_paths(package.version, candidate_slot).root.resolve()
 runtime_root = (Path(ctx.paths.skills_dir()) / '.runtime/builder_skill').resolve()
@@ -97,6 +102,9 @@ def activate(version, slot, gate):
     response = session.post('http://127.0.0.1:8777/api/skills/runtime/activate', json={
         'name': 'builder_skill', 'version': version, 'slot': slot, 'auto_prepare': False,
         'webspace_id': 'test_ctxqual_be8422f1050250', **pins}, timeout=180)
+    if not response.ok:
+        atomic_write_json(delivery / ('runtime-error-' + gate + '.json'), {
+            'gate': gate, 'status_code': response.status_code, 'body': response.json()})
     response.raise_for_status()
     observed = manager.active_runtime_package_identity('builder_skill')
     if observed['version'] != version or observed['slot'] != slot:
@@ -117,8 +125,12 @@ try:
         raise ValueError('Active native entry differs from materialized package')
     activate(previous['version'], previous['slot'], 'rollback-exact-previous')
     activate(package.version, prepared.slot, 'reactivate-candidate')
-except BaseException:
-    activate(previous['version'], previous['slot'], 'failure-restores-previous')
+except BaseException as failure:
+    try:
+        activate(previous['version'], previous['slot'], 'failure-restores-previous')
+    except Exception as rollback_failure:
+        raise RuntimeError(f'Qualification failed ({failure}); exact rollback also failed '
+                           f'({rollback_failure}). Inspect retained runtime-error receipts.') from failure
     raise
 result = {'schema': 'adaos.builder.runtime_delivery_qualification.v1', 'ok': True,
     'package': package.to_dict(), 'previous': previous, 'rows': rows,

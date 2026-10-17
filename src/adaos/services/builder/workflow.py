@@ -538,8 +538,14 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
         if len(refs) > maximum:
             raise BuilderWorkflowError(f'change set issue {field} exceeds {maximum} items')
         return refs
+    from .issue_planning import normalize_provenance
+    try:
+        provenance = normalize_provenance(value)
+    except ValueError as exc:
+        raise BuilderWorkflowError(str(exc)) from exc
     return {
         **applicability,
+        **provenance,
         "issue_id": issue_id,
         "title": title,
         "lane": lane,
@@ -574,6 +580,11 @@ def _normalize_change_set(value: Any) -> dict[str, Any] | None:
             raise BuilderWorkflowError(f"duplicate change set issue_id: {issue_id}")
         seen.add(issue_id)
         issues.append(issue)
+    from .issue_planning import verify_decomposition
+    try:
+        verify_decomposition(issues)
+    except ValueError as exc:
+        raise BuilderWorkflowError(str(exc)) from exc
     route = str(value.get("route") or "").strip().lower()
     if route not in {"prototype_first", "automation_direct"}:
         route = (
@@ -7296,6 +7307,11 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     f"change set supports at most {_MAX_CHANGE_ISSUES} issues"
                 )
+            from .issue_planning import decompose_issues
+            try:
+                raw_issues = decompose_issues(raw_issues, maximum=_MAX_CHANGE_ISSUES)
+            except ValueError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
             issues = [
                 _normalize_issue(item, index=index)
                 for index, item in enumerate(raw_issues, start=1)
@@ -7371,6 +7387,12 @@ class BuilderWorkflowService:
                     f"change set supports at most {_MAX_CHANGE_ISSUES} issues"
                 )
             known_ids = {str(item.get("issue_id") or "") for item in existing_issues}
+            from .issue_planning import decompose_issues, verify_decomposition
+            try:
+                raw_issues = decompose_issues(raw_issues,
+                    maximum=_MAX_CHANGE_ISSUES-len(existing_issues), reserved_ids=known_ids)
+            except ValueError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
             additions: list[dict[str, Any]] = []
             for index, item in enumerate(raw_issues, start=len(existing_issues) + 1):
                 issue = _normalize_issue(item, index=index)
@@ -7380,6 +7402,10 @@ class BuilderWorkflowService:
                     )
                 known_ids.add(issue["issue_id"])
                 additions.append(issue)
+            try:
+                verify_decomposition([*existing_issues, *additions])
+            except ValueError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
             current["issues"] = [*existing_issues, *additions]
             addendum = str(metadata.get("request") or "").strip()
             if addendum:

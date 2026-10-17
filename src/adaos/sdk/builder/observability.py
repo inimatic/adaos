@@ -44,5 +44,21 @@ def usd_budget(scope: str, *, run_id=None) -> dict[str, Any]:
     return BuilderSpendLedger().snapshot(scope, run_id=run_id)
 
 
+def analyze_failure(*, episode, constraints, observations, hypotheses=()) -> dict[str, Any]:
+    """Pure guarded-constraint RCA; returns evidence, hypotheses and unknowns.
+
+    This diagnostic does not grant a source rewrite or certify an Application.
+    """
+    from adaos.services.builder.failure_analysis import analyze_constraints
+    return analyze_constraints(episode=episode, constraints=constraints,
+                               observations=observations, hypotheses=hypotheses)
+
+
+def qualify_failure_replay(before, after, *, changed_factor, hypothesis) -> dict[str, Any]:
+    """Qualify a retained one-factor replay; never starts a model or a job."""
+    from adaos.services.builder.failure_analysis import qualify_replay
+    return qualify_replay(before, after, changed_factor=changed_factor, hypothesis=hypothesis)
+
+
 __all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm",
-           "configure_usd_budget", "usd_budget"]
+           "configure_usd_budget", "usd_budget", "analyze_failure", "qualify_failure_replay"]

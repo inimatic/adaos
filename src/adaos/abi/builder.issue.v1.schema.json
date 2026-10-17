@@ -18,6 +18,21 @@
       "maxItems": 20,
       "items": { "type": "string", "minLength": 1, "maxLength": 500 }
     },
+    "criterion_ids": {
+      "description": "Canonical source criterion identities of an automatically partitioned child; declared coverage only.",
+      "type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "source_criterion_ids": {
+      "description": "Stable identities retained by the non-executable split parent.",
+      "type": "array", "minItems": 21, "maxItems": 980, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "source_acceptance_criteria": {
+      "description": "Verbatim original criteria retained for review; every criterion must map to an executable child before acceptance.",
+      "type": "array", "minItems": 21, "maxItems": 980,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
     "semantic_refs": {
       "type": "array",
       "maxItems": 100,

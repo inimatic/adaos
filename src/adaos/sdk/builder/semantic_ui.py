@@ -37,6 +37,24 @@ def recognizes_label_request(instruction: str) -> bool:
     return parse_request(instruction) is not None
 
 
+def patch_contract() -> dict[str, Any]:
+    """Read exact UI patch selectors, expression schema and validation scope."""
+    from adaos.services.builder.ui_patch_validation import patch_contract as contract
+    return contract()
+
+
+def validate_patch(document, operations, *, expected_digest, write_refs) -> dict[str, Any]:
+    """Preview at most eight UI property changes without writing source."""
+    from adaos.services.builder.ui_patch_validation import preview_patch
+    return preview_patch(document, operations, expected_digest=expected_digest,write_refs=write_refs)
+
+
+def validate_tool_arguments(arguments, input_schema) -> dict[str, Any]:
+    """Validate concrete arguments using the exact tool input schema, no call."""
+    from adaos.services.builder.ui_patch_validation import validate_tool_arguments as validate
+    return validate(arguments,input_schema)
+
+
 def prepare_label_request(*, project_ref: str, instruction: str, source_message_id: str,
                           expected_revision: str | None = None) -> dict[str, Any]:
     from adaos.services.builder.semantic_graph import SemanticGraphService
@@ -112,4 +130,5 @@ def proposal_observation(*, project_ref: str, admission_id: str) -> dict[str, An
 
 
 __all__ = ["apply", "replay", "verify_source", "recognizes_label_request", "prepare_label_request",
-           "recognizes_request", "prepare_request", "inspect", "record_turn_timing", "admit", "prepare_proposal", "propose", "proposal_observation"]
+           "recognizes_request", "prepare_request", "inspect", "record_turn_timing", "admit", "prepare_proposal", "propose", "proposal_observation",
+           "patch_contract", "validate_patch", "validate_tool_arguments"]

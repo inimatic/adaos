@@ -500,6 +500,7 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
     from adaos.sdk.core.exporter import export as sdk_export
     from adaos.services.applications.data_lifecycle import automation_data_contract
     from adaos.services.skill.data_route_contract import automation_stream_contract
+    from adaos.services.builder.ui_patch_validation import patch_contract
 
     exported = sdk_export(
         level="std",
@@ -557,6 +558,13 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
         "manifest_contracts": {
             "owned_skill_data_lifecycle": automation_data_contract(),
             "skill_stream_data_routes": automation_stream_contract(),
+        },
+        "development_validation": {
+            "ui_patch": {"entrypoint":"adaos.sdk.builder.semantic_ui.validate_patch",
+                         "contract":patch_contract(), "origin_validation":True},
+            "tool_arguments": {"entrypoint":"adaos.sdk.builder.semantic_ui.validate_tool_arguments",
+                               "input":"concrete arguments and the exact admitted tool input schema",
+                               "effects":"none; no tool call or capability grant"},
         },
         "runtime_rules": {
             "authorization": (
@@ -2651,7 +2659,8 @@ def context_packet_prompt_projection(
             {
                 **{key: copy.deepcopy(item[key]) for key in (
                     "kind", "source_ref", "source_message_ids", "applicable_phases", "phase_dispositions",
-                    "effect", "effect_ref", "verification_scope", "owner") if key in item},
+                    "effect", "effect_ref", "verification_scope", "owner", "criterion_ids",
+                    "structural_status", "derived_from_issue_ids", "superseded_by_issue_ids") if key in item},
                 "issue_id": item.get("issue_id"),
                 "title": str(item.get("title") or "")[:500],
                 "lane": item.get("lane"),
