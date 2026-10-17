@@ -131,6 +131,7 @@ def main():
             for row in metadata.get('components', []) if row.get('ref', '').startswith('skill:'))
         profile_sources_before = _implementation_snapshot(profile_sources)
         profile_verifier_paths = [Path(__file__), Path('e2e/stand/browser/application-journey.mjs'),
+            Path('e2e/stand/browser/application-navigation.mjs'),
             Path(definition['profile']['plan']), Path('src/adaos/services/builder/journey_profiles.py')]
         def verifier_snapshot():
             return {str(path): 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()

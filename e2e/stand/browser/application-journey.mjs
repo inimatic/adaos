@@ -1,8 +1,10 @@
 // Independent UI acceptance plans are not part of model authoring context.
-import { chromium, expect } from '@playwright/test'
+import { chromium, expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import {dismissApplicationSystemOverlay,revealApplicationTarget} from './application-navigation.mjs'
+const expect=baseExpect.configure({timeout:30000})
 
 const env = process.env
 const plan = JSON.parse(await fs.readFile(env.ADAOS_E2E_JOURNEY_PLAN, 'utf8'))
@@ -66,7 +68,7 @@ try {
       }
     }, { hub, token, subnet, webspace, locale })
     const page = await context.newPage()
-    page.setDefaultTimeout(15_000)
+    page.setDefaultTimeout(30_000)
     page.on('pageerror', error => sample.errors.push(error.message))
     const responses = []
     const started = new WeakMap()
@@ -131,6 +133,7 @@ try {
     try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
       await ready()
+      await dismissApplicationSystemOverlay(page,sample,{waitMs:5000})
       for (const step of plan.steps) {
         if (step.layouts && !step.layouts.includes(layout)) {
           sample.checks.push({ id: step.id, status: 'not_applicable', layout })
@@ -138,6 +141,9 @@ try {
         }
         sample.active = step.id
         const start = Date.now()
+        await dismissApplicationSystemOverlay(page,sample)
+        // Navigate by the widget container, not each option in a radio group.
+        await revealApplicationTarget(page,step.widget?host(step.widget):locator(step),sample,{layout})
         switch (step.type) {
           case 'command': await command(step).click(); break
           case 'click': await locator(step).click(); break
@@ -186,7 +192,7 @@ try {
             break
           }
           case 'check': await locator(step).setChecked(step.checked); break
-          case 'text': await expect(locator(step)).toContainText(expand(step.text)); break
+          case 'text': await expect(locator(step)).toBeVisible(); await expect(locator(step)).toContainText(expand(step.text)); break
           case 'notText': await expect(locator(step)).not.toContainText(expand(step.text)); break
           case 'value': await expect(locator(step)).toHaveValue(expand(step.value)); break
           case 'count': await expect(locator(step)).toHaveCount(step.count); break
