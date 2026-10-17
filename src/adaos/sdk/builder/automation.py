@@ -28,6 +28,18 @@ def standard_prompt_version() -> str:
     return str(STANDARD_PROMPT_VERSION)
 
 
+def control_reply(result: Mapping[str, Any], *, object_type: str, object_id: str, locale: str = "ru") -> dict[str, Any]:
+    """Read-only, bounded chat projection with authenticated evidence drill-down.
+
+    Full service/SDK envelopes remain compatible for internal owners. Apply
+    this projection before returning an ordinary control result over the wire.
+    No model, submit, recovery or ledger operation is performed here.
+    """
+    from adaos.services.builder.control_reply import control_reply as project
+
+    return project(result, object_type=object_type, object_id=object_id, locale=locale)
+
+
 def _foreground_result(
     service: Any,
     result: Mapping[str, Any],

@@ -32,6 +32,8 @@ RETOUCH_OBLIGATIONS = {
     "compare-zoom-pan-difference-download": "view:d_result_preview",
     "adopt-incremented-original": "view:v_results",
     "unknown-cancel-reservation-isolation": "view:d_photo_editor",
+    "completed-mask-reanalysis": "view:d_photo_editor",
+    "result-input-history": "view:v_results",
 }
 RETOUCH_CASES = ('exact/wide', 'exact/compact', 'edited/wide', 'edited/compact')
 COST_CASES = ('measured-current-run', 'other-run-isolation',
@@ -136,7 +138,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     sources = [Path(path) for path in implementation_paths
                if Path(path).name == "natural_retouch_skill" and (Path(path) / "handlers/retouch.py").is_file()]
     if len(sources) != 1 or not expected_materialization:
-        return {"ok": False, "profile": "natural-retouch.v3", "repairable": False,
+        return {"ok": False, "profile": "natural-retouch.v4", "repairable": False,
                 "failures": [{"failure": "trusted_application_source_or_materialization_missing"}]}
     repo = Path(repo_root).resolve()
     label = "builder-retouch-" + uuid.uuid4().hex
@@ -191,7 +193,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
         cost_report = {}
     browser_outcome = qualify_reports(reports, expected_materialization=expected_materialization, source_digest=source_digest)
     cost_outcome = qualify_cost_report(cost_report, source_digest=source_digest)
-    receipt = {"schema": "adaos.builder.application_journey_receipt.v1", "profile": "natural-retouch.v3",
+    receipt = {"schema": "adaos.builder.application_journey_receipt.v1", "profile": "natural-retouch.v4",
                "scope": "Client + real handlers/SQLite/CPU; synthetic Broker and blob/access boundaries. Live provider quality and admission excluded.",
                "task_id": task_id, "reports": reports, "exit_code": exit_code, "timed_out": timed_out,
                'cost_authority': cost_report,

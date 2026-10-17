@@ -47,7 +47,8 @@ const specification = {
   obligations: ['loading-error-empty', 'upload-jpeg-lossless', 'local-draft-preservation', 'goal-parameters-no-submit',
     'rectangle-protection', 'budget-admission-failure-visible', 'analysis-one-submit-editable-plan', 'approval-progress-reopen-idempotence',
     'completed-run-cost-authority',
-    'compare-zoom-pan-difference-download', 'adopt-incremented-original', 'unknown-cancel-reservation-isolation'],
+    'compare-zoom-pan-difference-download', 'adopt-incremented-original', 'unknown-cancel-reservation-isolation',
+    'completed-mask-reanalysis', 'result-input-history'],
 }
 await fs.writeFile(path.join(output, 'verification-spec.json'), JSON.stringify(specification, null, 2))
 const report = { schema: 'adaos.e2e.retouch_journey.v1', specification_digest: hash(specification),
@@ -478,6 +479,88 @@ try {
     return { cancelled_run_id: uncertain.id, failed_run_id: failed.id,
       held_after_cancel_usd: cancelled.budget.committed_usd, usage_complete: final.budget.usage_complete }
   })
+  await step('completed-mask-reanalysis', async () => {
+    await fixture('/control', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fail_phase:null})})
+    await selectPhoto(photo); await tab('retouch'); await primary()
+    const originalRun = run
+    const oldFacts = await audit(), oldSaved = oldFacts.runs.find(r=>r.id===originalRun.id)
+    await compare().getByRole('button',{name:'100%',exact:true}).click()
+    await compare().getByRole('button',{name:/^(Защита|protect)$/i}).click()
+    await compare().locator('input[type=number]').fill('8')
+    const stage=compare().locator('.stage').first(); await stage.scrollIntoViewIfNeeded()
+    const b=await stage.boundingBox()
+    await page.mouse.click(b.x+b.width/2+50,b.y+b.height/2+30)
+    await responseFor(()=>compare().getByRole('button',{name:/^(Сохранить маски|Save masks)$/}).click(),'save_mask')
+    await reveal('run_tracker_details')
+    let savedTracker=''
+    const changedInputs=/устар|вход[а-яё\s]+измен|не\s+проанализирован|измен.{0,60}маск|маск.{0,60}измен|changed|out.?of.?date|new analysis|новый анализ/iu
+    await expect.poll(async()=>{
+      savedTracker=await host('run_tracker_details').innerText()
+      return changedInputs.test(savedTracker)
+    }).toBe(true)
+    const beforeCheck=await audit()
+    await command('check_analysis','completed')
+    const banner=host('run_confirm_banner')
+    const ackAfter=await banner.isVisible()?await banner.innerText():''
+    expect(ackAfter).not.toMatch(/Запрос отправляется|проверяем состояние выбранного|sending request/iu)
+    expect((await audit()).jobs).toEqual(beforeCheck.jobs)
+    const newRun=(await parameters({start:true,strength:variant==='edited'?'31':'30'})).item
+    expect(newRun.id).not.toBe(originalRun.id)
+    expect(newRun.status).toBe('analysis_queued')
+    await command('check_analysis','awaiting_approval')
+    await command('approve_plan','edit_queued')
+    await command('continue_run','qa_queued')
+    await command('continue_run','completed')
+    const final=await audit()
+    expect(final.runs.find(r=>r.id===originalRun.id)).toEqual(oldSaved)
+    expect(final.runs.find(r=>r.id===newRun.id).status).toBe('completed')
+    expect(final.jobs.length).toBe(oldFacts.jobs.length+3)
+    expect(final.jobs.every(j=>j.submits===1)).toBe(true)
+    await page.reload({waitUntil:'domcontentloaded'});await ready();await selectPhoto(photo)
+    expect((await audit()).jobs).toEqual(final.jobs)
+    report.revision_probe={original_run_id:originalRun.id,new_run_id:newRun.id,
+      tracker_after_mask:savedTracker,ack_after_response:ackAfter,
+      completed_with_new_mask:true,old_run_unchanged:true,no_duplicate_submits:true}
+    return report.revision_probe
+  })
+
+  await step('result-input-history', async () => {
+    const baseline = await audit(), oldRun = baseline.runs.find(r=>r.id===run.id)
+    await tab('retouch');await reveal('retouch_run_commands')
+    await button('retouch_run_commands','analyze').click()
+    const nextGoal='Смягчить только тестовое пятно; сохранить исходный рисунок ткани.'
+    await field('e_set_goal','retouch_goal').fill(nextGoal)
+    await responseFor(()=>button('e_set_goal','save_goal_local').click(),'mutate_record')
+    await parameters({strength:'37'})
+    expect((await audit()).jobs).toEqual(baseline.jobs)
+    await reveal('run_tracker_details')
+    await expect(host('run_tracker_details')).toContainText(/устар|вход[а-яё\s]+измен|не\s+проанализирован|changed|new analysis|новый анализ/iu)
+    const newest=(await parameters({start:true,strength:'37'})).item
+    expect(newest.id).not.toBe(run.id)
+    await command('check_analysis','awaiting_approval');await command('approve_plan','edit_queued')
+    await command('continue_run','qa_queued');await command('continue_run','completed')
+    await tab('results');await primary()
+    const provenance=page.locator('[data-webui-label="Параметры выбранного результата"], [data-webui-label="Selected result inputs"]').filter({visible:true}).last()
+    await host('v_results').locator(`[data-record-id="${run.id}-png"]`).click()
+    await expect(provenance).toBeVisible()
+    await expect(provenance).toContainText('Убрать тестовый прыщ; сохранить поры, родинки и геометрию.')
+    await expect(provenance).not.toContainText(nextGoal)
+    await expect(provenance).toContainText(new RegExp('(?:Сила|Strength)[\\s:]*'+(variant==='edited'?'31':'30'),'iu'))
+    const download=page.waitForEvent('download')
+    await compare().getByRole('button',{name:/^(Скачать результат|Download result)$/}).click()
+    const file=await download,pathToOld=path.join(output,'history-original.png');await file.saveAs(pathToOld)
+    const oldDigest=hash(await fs.readFile(pathToOld));expect(oldDigest).toBe(report.downloads[0].digest)
+    await host('v_results').locator(`[data-record-id="${newest.id}-png"]`).click()
+    await expect(provenance).toContainText(nextGoal)
+    await expect(provenance).toContainText(/(?:Сила|Strength)[\s:]*37/iu)
+    const final=await audit()
+    expect(final.runs.find(r=>r.id===run.id)).toEqual(oldRun)
+    expect(final.jobs.length).toBe(baseline.jobs.length+3)
+    expect(final.jobs.every(j=>j.submits===1)).toBe(true)
+    return {old_run_id:run.id,new_run_id:newest.id,old_result_digest:oldDigest,
+      older_input_summary_visible:true,new_input_summary_visible:true,old_run_unchanged:true}
+  })
+
   report.passed = report.checks.length === specification.obligations.length && !report.errors.length
   report.incomplete_obligations = specification.obligations.filter(id => !report.checks.some(check => check.id === id))
   report.passed = report.passed && !report.incomplete_obligations.length
