@@ -42,3 +42,13 @@ def test_unicode_oversized_messages_have_explicit_shortening_and_full_evidence_r
     assert reply["shortened_fields"] == ["result.message"]
     assert reply["next_action"] == "resume_validated"
     assert reply["evidence"]["diagnostics"]["arguments"]["page_size"] == 50
+
+
+@pytest.mark.parametrize('locale,expected', [('ru','Задача принята'),('en','Task accepted')])
+def test_queue_acknowledgement_is_a_localized_stage_instead_of_an_instruction_echo(locale,expected):
+    source={'ok':True,'message':'Private instruction '*10000,'session':{'status':'queued'}}
+    reply=control_reply(source,object_type='scenario',object_id='photo',locale=locale)
+    assert reply['message'].startswith(expected)
+    assert len(reply['message']) < 150 and 'Private instruction' not in reply['message']
+    assert source['message']=='Private instruction '*10000
+    assert reply['model_started'] is None

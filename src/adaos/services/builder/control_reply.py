@@ -79,6 +79,22 @@ def control_reply(result: Mapping, *, object_type: str, object_id: str, locale: 
     else:
         next_action = "wait" if status != "unknown" else "inspect_state"
     reply["next_action"] = next_action
+    # Queue acknowledgements used to repeat the entire instruction. The
+    # instruction is already retained in the canonical topic and task packet;
+    # the control message should explain the current stage in the user's locale.
+    stages = {
+        'queued': ('Задача принята и ожидает выполнения.', 'Task accepted and queued.'),
+        'workspace_preparing': ('Готовлю отдельное рабочее окружение.', 'Preparing an isolated workspace.'),
+        'in_progress': ('Builder выполняет доработку. Следующий этап — проверка результата.',
+                        'Builder is implementing the change. Result validation follows.'),
+        'tests_running': ('Проверяю код, контракты и интерфейс. Результат ещё не принят.',
+                          'Checking code, contracts and interface. The result is not accepted yet.'),
+        'commit_ready': ('Код прошёл локальную проверку; проверяю доставку и браузерные сценарии.',
+                         'Local code checks passed; checking delivery and browser journeys.'),
+    }
+    if status in stages and next_action == 'wait' and not reply.get('error'):
+        reply['message'] = stages[status][1 if locale == 'en' else 0]
+        reply['message_source'] = 'localized_stage_contract; instruction_retained_in_canonical_topic'
     if not reply.get("message"):
         messages = {
             "wait": ("Запрос принят. Работа продолжается; о следующем этапе сообщу в этом чате.",
