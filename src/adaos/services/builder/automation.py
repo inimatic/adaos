@@ -12726,7 +12726,7 @@ class BuilderAutomationService:
                                     require_materialization_identity=True,
                                     expected_materialization_identity=readiness["materialization"].get("materialization_identity"),
                                     implementation_paths=[self.dev_skills_root / skill_id for skill_id in self._session_companion_skill_ids(current)],
-                                    change=self._workflow().describe("scenario", object_id).get("change") or {},
+                                    change=(self._workflow().describe("scenario", object_id).get("change") or {}) if object_id == "natural_retouch" else None,
                                     source_message_ids=dict(current.get("ui_change_authorization") or {}).get("source_message_ids") or (),
                                     context_packet_digest=str(
                                         current.get("context_packet_digest") or ""

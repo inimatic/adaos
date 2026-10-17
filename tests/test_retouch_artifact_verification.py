@@ -3,8 +3,7 @@ import io
 import json
 import sqlite3
 
-import numpy as np
-from PIL import Image
+from PIL import Image, ImageChops
 import pytest
 
 from adaos.e2e.retouch_verification import verify_downloads
@@ -24,11 +23,11 @@ def test_downloaded_bytes_are_checked_independently_of_application_qa(tmp_path, 
         raw = encode(result, fmt)
         (output / ('result.' + fmt.lower())).write_bytes(raw)
         exports.append({'format': fmt, 'sha256': hashlib.sha256(raw).hexdigest()})
-    changed = np.any(np.asarray(base) != np.asarray(result), axis=2)
-    overlay = np.zeros((240, 320, 4), dtype=np.uint8)
-    overlay[:, :, 3] = np.where(changed, 0, 128)
-    if fault == 'overlay': overlay[50, 50, 3] = 0
-    Image.fromarray(overlay).save(output / 'difference-map.png')
+    overlay = Image.new('RGBA', base.size, (0, 0, 0, 128))
+    overlay.putpixel((100, 100), (0, 0, 0, 0))
+    if fault == 'protected': overlay.putpixel((0, 0), (0, 0, 0, 0))
+    if fault == 'overlay': overlay.putpixel((50, 50), (0, 0, 0, 0))
+    overlay.save(output / 'difference-map.png')
     mask = {'permission_mode': 'rectangle', 'context_border_px': 24,
         'crop': {'x': 0, 'y': 0, 'width': 320, 'height': 240},
         'strokes': [{'kind': 'protect', 'points': [{'x': 50, 'y': 50}], 'radius': 8}]}
