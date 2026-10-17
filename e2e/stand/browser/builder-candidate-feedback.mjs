@@ -442,6 +442,7 @@ try {
     await context.addInitScript(({ hub, token, subnet, webspace }) => {
       window.__ADAOS_DEBUG__ = true
       window.__ADAOS_BASE__ = hub
+      window.__ADAOS_FIXED_RUNTIME_BASE__ = hub
       window.__ADAOS_TOKEN__ = token
       for (const [key, value] of Object.entries({
         adaos_device_id: 'builder-browser-feedback',

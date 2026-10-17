@@ -66,6 +66,35 @@ def test_browser_runner_dismisses_system_overlays_before_candidate_checks() -> N
     assert "system-overlay-dismissed" in script
 
 
+@pytest.mark.parametrize('mutate_verifier',[False,True])
+def test_verifier_change_cannot_accept_or_request_application_rewrite(tmp_path,monkeypatch,mutate_verifier):
+    source=tmp_path/'candidate';source.mkdir()
+    (source/'webui.json').write_text('{"schema":"adaos.webui.v1","ui":{}}',encoding='utf-8')
+    script=tmp_path/'observer'/'builder-candidate-feedback.mjs';script.parent.mkdir()
+    script.write_text('// original observer',encoding='utf-8')
+    for name in ('controlled-faults.mjs','diagnostic-redaction.mjs'):
+        (script.parent/name).write_text('// original contract',encoding='utf-8')
+    monkeypatch.setattr(BuilderBrowserFeedbackService,'script_path',property(lambda self:script))
+    monkeypatch.setattr('adaos.services.builder.browser_feedback.current_env_type',lambda:'dev')
+    monkeypatch.setattr('adaos.services.builder.browser_feedback.resolve_control_token',lambda **kw:'fixture')
+    def runner(*args,**kwargs):
+        output=Path(kwargs['env']['ADAOS_E2E_OUTPUT'])
+        (output/'report.json').write_text(json.dumps({'passed':True,'samples':[
+            {'layout':layout,'authoritative_data_settled':True,'hard_failures':[]}
+            for layout in ('wide','compact')]}),encoding='utf-8')
+        if mutate_verifier:script.write_text('// different observer',encoding='utf-8')
+        return SimpleNamespace(returncode=0,stdout='',stderr='')
+    service=BuilderBrowserFeedbackService(state_dir=tmp_path/'state',repo_root=Path(__file__).resolve().parents[1],command_runner=runner)
+    receipt=service.evaluate(scenario_id='fixture',webspace_id='fixture',subnet_id='fixture',
+        task_id='exact-task',source_path=source,runtime_url='http://127.0.0.1:8777')
+    assert receipt['ok'] is (not mutate_verifier)
+    assert receipt['source']['unchanged_during_observation'] is True
+    assert receipt['verifier']['unchanged_during_observation'] is (not mutate_verifier)
+    if mutate_verifier:
+        assert receipt['failure_class']=='verifier_failure'
+        assert receipt['report']['failure']=='browser_verifier_changed_during_observation'
+
+
 def test_browser_runner_pins_the_authoritative_runtime_origin() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (
@@ -74,6 +103,7 @@ def test_browser_runner_pins_the_authoritative_runtime_origin() -> None:
 
     assert "const authoritativeRuntimeOrigin = new URL(hub).origin" in script
     assert "adaos_hub_base: hub" in script
+    assert "window.__ADAOS_FIXED_RUNTIME_BASE__ = hub" in script
     assert "try_local_hub: '1'" in script
     assert "adaos_try_local_hub: '1'" in script
     assert "foreign_api_origins: []" in script

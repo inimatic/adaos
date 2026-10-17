@@ -36,6 +36,16 @@ def _file_digest(path: Path) -> str | None:
         return None
 
 
+_LOADED_OWNER_DIGEST = _file_digest(Path(__file__))
+
+
+def _verifier_snapshot(script_path: Path, *, loaded_owner: bool = False) -> dict[str, Any]:
+    return {'python_owner': _LOADED_OWNER_DIGEST if loaded_owner else _file_digest(Path(__file__)),
+            'browser_runner': _file_digest(script_path),
+            **{name: _file_digest(script_path.parent / name)
+               for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs')}}
+
+
 def _implementation_snapshot(paths: Sequence[Path]) -> dict[str, Any]:
     """Hash executable inputs, excluding mutable Builder journals and records."""
     ignored = {'.git', '.runtime', '__pycache__', 'node_modules', 'data', 'internal', 'ui_revisions'}
@@ -264,6 +274,7 @@ class BuilderBrowserFeedbackService:
         if not webui_path.is_file():
             raise RuntimeError(f"candidate WebUI is missing: {webui_path}")
         source_digest = _file_digest(webui_path)
+        verifier_before = _verifier_snapshot(self.script_path, loaded_owner=True)
         implementation_roots = [webui_path.parent, *implementation_paths]
         implementation_before = _implementation_snapshot(implementation_roots)
         semantic_digest = _file_digest(webui_path.parent / "semantic.webui.json")
@@ -360,6 +371,12 @@ class BuilderBrowserFeedbackService:
         source_unchanged = (_file_digest(webui_path) == source_digest
             and _file_digest(webui_path.parent / "semantic.webui.json") == semantic_digest
             and _implementation_snapshot(implementation_roots) == implementation_before)
+        verifier_after = _verifier_snapshot(self.script_path)
+        verifier_unchanged = verifier_before == verifier_after and all(verifier_before.values())
+        if not verifier_unchanged:
+            report['passed'] = False
+            report['failure'] = 'browser_verifier_changed_during_observation'
+            atomic_write_json(report_path, report)
         if not source_unchanged:
             report["passed"] = False
             report["failure"] = "candidate_changed_during_browser_observation"
@@ -456,6 +473,10 @@ class BuilderBrowserFeedbackService:
             "timed_out": timed_out,
             "evidence": evidence,
             "created_at": _now_iso(),
+            'verifier': {'before': verifier_before, 'after': verifier_after,
+                         'unchanged_during_observation': bool(verifier_unchanged)},
+            'failure_class': None if passed else 'verifier_failure' if not verifier_unchanged else
+                             'environment_or_postcondition; inspect_retained_report',
         }
         if application_journey is not None:
             receipt["application_journey"] = application_journey
@@ -474,8 +495,9 @@ class BuilderBrowserFeedbackService:
                     and all(asset.get('digest') and not asset.get('error') for asset in sample['client_assets'])
                     for sample in samples) else None,
             'state': [sample['state_snapshots'] for sample in samples] if state_pinned else None,
-            'environment': [{'layout': sample.get('layout'), 'viewport': sample.get('viewport'),
-                             **sample['environment']} for sample in samples]
+            'environment': {'verifier': verifier_before, 'samples':[
+                            {'layout': sample.get('layout'), 'viewport': sample.get('viewport'),
+                             **sample['environment']} for sample in samples]}
                 if samples and all(sample.get('environment') for sample in samples) else None,
         }
         graph = project_change(project_ref='scenario:' + scenario, generation=attempt,
