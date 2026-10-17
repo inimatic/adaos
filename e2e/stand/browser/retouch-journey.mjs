@@ -46,6 +46,7 @@ const specification = {
   scope: 'Synthetic Broker/blob/context boundaries; real Client, handler validation, SQLite, CPU masks/exports. No provider quality or Core admission claim.',
   obligations: ['loading-error-empty', 'upload-jpeg-lossless', 'local-draft-preservation', 'goal-parameters-no-submit',
     'rectangle-protection', 'budget-admission-failure-visible', 'analysis-one-submit-editable-plan', 'approval-progress-reopen-idempotence',
+    'completed-run-cost-authority',
     'compare-zoom-pan-difference-download', 'adopt-incremented-original', 'unknown-cancel-reservation-isolation'],
 }
 await fs.writeFile(path.join(output, 'verification-spec.json'), JSON.stringify(specification, null, 2))
@@ -361,6 +362,21 @@ try {
     const final = await audit(); expect(final.jobs.length).toBe(3); expect(final.jobs.every(j => j.submits === 1)).toBe(true)
     expect(final.runs.find(item => item.id === identity).checks.protected_pixels_equal).toBe(true)
     return { run_id: identity, jobs: final.jobs }
+  })
+  await step('completed-run-cost-authority', async () => {
+    const facts = await audit()
+    const attempts = facts.budget.attempts.filter(row => row.run_id === run.id)
+    expect(attempts).toHaveLength(3)
+    expect(attempts.every(row => row.status === 'reconciled' && row.cost_basis === 'metered')).toBe(true)
+    const expected = attempts.reduce((sum, row) => sum + row.observed_usd, 0)
+    await reveal('retouch_run_state')
+    let text = ''
+    await expect.poll(async () => {
+      text = await host('retouch_run_state').innerText()
+      const match = text.match(/(?:confirmed spend|подтвержд[её]нный расход):\s*(\d+(?:[.,]\d+)?)\s*USD/iu)
+      return match ? Number(match[1].replace(',', '.')) : null
+    }).toBe(expected)
+    return { run_id: run.id, confirmed_sdk_usd: expected, visible_text: text }
   })
   await step('compare-zoom-pan-difference-download', async () => {
     await tab('results')

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from adaos.services.builder.application_journeys import RETOUCH_OBLIGATIONS, RETOUCH_CASES, qualify_reports
+from adaos.services.builder.application_journeys import RETOUCH_OBLIGATIONS, RETOUCH_CASES, COST_CASES, qualify_reports, qualify_cost_report
 from adaos.services.builder.application_journeys import evaluate_retouch, file_digest
 from adaos.services.builder.automation import BuilderAutomationService
 
@@ -87,7 +87,15 @@ def test_empty_materialization_expectation_is_not_acceptance():
     assert not result["ok"]
 
 
-@pytest.mark.parametrize('fault', [None, 'source_changed', 'nonzero_exit', 'postcondition', 'missing_source', 'legacy_gap'])
+def cost_sample(source='source'):
+    return {'completed': True, 'source_digest': source, 'external_model_calls': 0, 'passed': True,
+        'environment': {'python': '3.11', 'platform': 'test', 'pillow': '12.3', 'numpy': 'test'}, 'run_id': 'run',
+        'attempts': [{'request_id': str(i), 'run_id': 'run', 'status': 'reconciled', 'cost_basis': 'metered', 'observed_usd': .01} for i in range(3)],
+        'cases': [{'id': name, 'passed': True, 'observed_usd': .03, 'observed_known_usd': .03,
+                   'text': 'confirmed spend: unknown; confirmed part: 0.03 USD' if name == COST_CASES[-1] else 'confirmed spend: 0.03 USD'} for name in COST_CASES]}
+
+
+@pytest.mark.parametrize('fault', [None, 'source_changed', 'nonzero_exit', 'postcondition', 'missing_source', 'legacy_gap', 'cost_postcondition'])
 def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_receipt(tmp_path, fault):
     repo = Path(__file__).resolve().parents[1]
     source = tmp_path / 'natural_retouch_skill'
@@ -98,7 +106,7 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
     def runner(command, **kwargs):
         output = Path(command[command.index('--output') + 1])
         declared = json.loads((output / 'verification-spec.json').read_text(encoding='utf-8'))
-        assert len(declared['specifications']) == len(RETOUCH_OBLIGATIONS) + 1
+        assert len(declared['specifications']) == len(RETOUCH_OBLIGATIONS) + len(COST_CASES) + 1
         assert json.loads(kwargs['env']['ADAOS_E2E_EXPECTED_MATERIALIZATION']) == materialization
         for layout in RETOUCH_CASES:
             row = sample(); row['specification']['source_digest'] = source_digest
@@ -111,7 +119,13 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
                 row['checks'] = row['checks'][:5]
             (output / layout).mkdir(parents=True)
             (output / layout / 'journey.json').write_text(json.dumps(row), encoding='utf-8')
-        return SimpleNamespace(returncode=1 if fault in {'nonzero_exit', 'postcondition'} else 0, stdout='qualified', stderr='')
+        cost = cost_sample(source_digest)
+        if fault == 'cost_postcondition':
+            cost['cases'][0].update(passed=False, observed_usd=None, text='confirmed spend: unknown')
+            cost['passed'] = False
+        (output / 'cost-authority').mkdir()
+        (output / 'cost-authority/report.json').write_text(json.dumps(cost), encoding='utf8')
+        return SimpleNamespace(returncode=1 if fault in {'nonzero_exit', 'postcondition', 'cost_postcondition'} else 0, stdout='qualified', stderr='')
     result = evaluate_retouch(repo_root=repo, scenario_id='natural_retouch', task_id='task',
         implementation_paths=[source], environment={}, implementation_snapshot={'candidate': 'before'},
         expected_materialization=materialization,
@@ -121,12 +135,12 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
                            'commands': [{'id': 'cmd_add_photo'}]},
         snapshot_reader=lambda: {'candidate': 'after' if fault == 'source_changed' else 'before'}, command_runner=runner)
     assert result['ok'] is (fault in {None, 'legacy_gap'})
-    assert result['repairable'] is (fault == 'postcondition')
+    assert result['repairable'] is (fault in {'postcondition', 'cost_postcondition'})
     assert Path(result['receipt_path']).is_file()
     nodes = result['traceability']['graph']['nodes']
     assert any(row['kind'] == 'source_message' and row['ref'] == 'm.canonical.user-request' for row in nodes) is (fault != 'missing_source')
     coverage = result['verification_coverage']
-    assert len(coverage['verified_requirement_refs']) == (len(RETOUCH_OBLIGATIONS) if fault in {None, 'legacy_gap'} else 0)
+    assert len(coverage['verified_requirement_refs']) == (len(RETOUCH_OBLIGATIONS) + len(COST_CASES) if fault in {None, 'legacy_gap'} else 0)
     assert coverage['project_requirements_complete'] is (fault is None)
     assert bool(result['traceability']['gaps']) is (fault in {'legacy_gap', 'missing_source'})
     if fault == 'legacy_gap':
@@ -136,8 +150,23 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
     if fault != 'source_changed':
         behavior = result['traceability']['receipt']
         assert set(behavior['dependencies']) >= {'behavior:implementation', 'behavior:runtime', 'behavior:state', 'behavior:environment'}
-        assert behavior['outcome'] == ('failed' if fault in {'postcondition', 'nonzero_exit', 'missing_source'} else 'passed')
+        assert behavior['outcome'] == ('failed' if fault in {'postcondition', 'nonzero_exit', 'missing_source', 'cost_postcondition'} else 'passed')
     else:
         assert 'receipt' not in result['traceability']
+
+
+@pytest.mark.parametrize('fault', ['missing_case', 'missing_source', 'missing_environment', 'missing_metering', 'wrong_metering_basis', 'green_flag_lies', 'cross_run_meter', 'known_wrong_cost'])
+def test_cost_verifier_cannot_accept_green_flags_without_authority_or_complete_cases(fault):
+    report = cost_sample()
+    if fault == 'missing_case': report['cases'].pop()
+    if fault == 'missing_source': report['source_digest'] = 'different'
+    if fault == 'missing_environment': report.pop('environment')
+    if fault == 'missing_metering': report['attempts'].pop()
+    if fault == 'wrong_metering_basis': report['attempts'][0]['cost_basis'] = 'estimate'
+    if fault == 'green_flag_lies': report['cases'][0]['observed_usd'] = None
+    if fault == 'cross_run_meter': report['attempts'][0]['run_id'] = 'other'
+    if fault == 'known_wrong_cost': report['cases'][0]['observed_usd'] = .73
+    result = qualify_cost_report(report, source_digest='source')
+    assert not result['ok'] and not result['repairable']
 
 

@@ -130,4 +130,18 @@ for variant, layout in itertools.product(args.variants, args.layouts):
     (output / "qualification.json").write_text(json.dumps({"schema": "adaos.e2e.retouch_qualification.v1",
         "scope": "owned synthetic fixture; provider quality and Core admission excluded", "results": results,
         "passed": all(row["exit_code"] == 0 and not row["restart_errors"] for row in results)}, indent=2), encoding="utf-8")
-if not all(row["exit_code"] == 0 and not row["restart_errors"] for row in results): sys.exit(1)
+from adaos.services.builder.application_journeys import run_owned_journey
+try:
+    cost = run_owned_journey([sys.executable, '-X', 'utf8', 'e2e/stand/qualify-retouch-cost.py',
+        '--source', str(args.source.resolve()), '--owned-root', str(repo / '.tmp/retouch-browser-fixtures' / args.label / 'cost-authority'),
+        '--output', str(output / 'cost-authority')], cwd=repo, env=os.environ.copy(), timeout=90)
+    cost_exit = cost.returncode
+    print(cost.stdout, end='', flush=True)
+    if cost.stderr: print(cost.stderr[-1500:], file=sys.stderr, flush=True)
+except subprocess.TimeoutExpired:
+    cost_exit = 124
+passed = all(row['exit_code'] == 0 and not row['restart_errors'] for row in results) and cost_exit == 0
+(output / 'qualification.json').write_text(json.dumps({'schema': 'adaos.e2e.retouch_qualification.v2',
+    'results': results, 'cost_authority': {'exit_code': cost_exit, 'report': str(output / 'cost-authority/report.json')},
+    'passed': passed}, indent=2), encoding='utf-8')
+if not passed: sys.exit(1)

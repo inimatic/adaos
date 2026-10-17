@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -27,11 +28,43 @@ RETOUCH_OBLIGATIONS = {
     "budget-admission-failure-visible": "view:e_edit_params",
     "analysis-one-submit-editable-plan": "view:e_edit_params",
     "approval-progress-reopen-idempotence": "view:d_photo_editor",
+    "completed-run-cost-authority": "view:d_photo_editor",
     "compare-zoom-pan-difference-download": "view:d_result_preview",
     "adopt-incremented-original": "view:v_results",
     "unknown-cancel-reservation-isolation": "view:d_photo_editor",
 }
 RETOUCH_CASES = ('exact/wide', 'exact/compact', 'edited/wide', 'edited/compact')
+COST_CASES = ('measured-current-run', 'other-run-isolation',
+              'other-run-unknown-must-not-hide-known-current-cost', 'partial-confirmed-with-unknown')
+
+
+def qualify_cost_report(report, *, source_digest):
+    cases = report.get('cases') or []
+    attempts = report.get('attempts') or []
+    def amount(value): return type(value) in (int, float) and math.isfinite(value) and value >= 0
+    metered = (len(attempts) == 3 and bool(report.get('run_id'))
+        and len({row.get('request_id') for row in attempts}) == 3
+        and all(row.get('run_id') == report.get('run_id') and row.get('status') == 'reconciled'
+                and row.get('cost_basis') == 'metered' and amount(row.get('observed_usd')) for row in attempts))
+    total = sum(row.get('observed_usd', 0) for row in attempts) if metered else None
+    def observed(row):
+        value = row.get('observed_known_usd') if row.get('id') == COST_CASES[-1] else row.get('observed_usd')
+        valid = amount(value) and total is not None and abs(value - total) < 1e-9
+        return valid and (row.get('id') != COST_CASES[-1] or 'confirmed spend: unknown' in row.get('text', ''))
+    complete = (report.get('completed') is True and report.get('source_digest') == source_digest
+        and bool(source_digest) and report.get('external_model_calls') == 0
+        and all(report.get('environment', {}).get(k) for k in ('python', 'platform', 'pillow', 'numpy'))
+        and len(cases) == len(COST_CASES) and {row.get('id') for row in cases} == set(COST_CASES)
+        and all(type(row.get('passed')) is bool for row in cases) and metered
+        and all(row.get('passed') == observed(row) for row in cases)
+        and report.get('passed') == all(row.get('passed') is True for row in cases))
+    failures = [{'layout': 'cost-authority', 'active': row.get('id'),
+                 'failure': 'Selected-run SDK metering is not faithfully displayed: ' + str(row.get('text') or '')[:900]}
+                for row in cases if row.get('passed') is not True]
+    ok = complete and report.get('passed') is True and not failures
+    if not complete:
+        failures.append({'layout': 'cost-authority', 'failure': 'Cost verifier dependencies or cases incomplete'})
+    return {'ok': bool(ok), 'repairable': bool(complete and not ok), 'failures': failures}
 
 
 def file_digest(path):
@@ -103,7 +136,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     sources = [Path(path) for path in implementation_paths
                if Path(path).name == "natural_retouch_skill" and (Path(path) / "handlers/retouch.py").is_file()]
     if len(sources) != 1 or not expected_materialization:
-        return {"ok": False, "profile": "natural-retouch.v2", "repairable": False,
+        return {"ok": False, "profile": "natural-retouch.v3", "repairable": False,
                 "failures": [{"failure": "trusted_application_source_or_materialization_missing"}]}
     repo = Path(repo_root).resolve()
     label = "builder-retouch-" + uuid.uuid4().hex
@@ -113,6 +146,10 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
               "expected": identity, "scope": "owned synthetic provider boundary; live quality excluded",
               "authority": "trusted_application_journey_profile", "requirement_refs": ["retouch.journey." + identity]}
              for identity, target in RETOUCH_OBLIGATIONS.items()]
+    specs.extend({'constraint_id': 'retouch.cost.' + identity, 'kind': 'owned_handler_cost_postcondition',
+        'target_ref': 'view:d_photo_editor', 'expected': identity,
+        'authority': 'trusted_application_cost_projection_profile', 'requirement_refs': ['retouch.requirement.cost.' + identity]}
+        for identity in COST_CASES)
     specs.append({"constraint_id": "retouch.execution_integrity", "kind": "execution_owner_postcondition",
                   "authority": "trusted_application_journey_profile",
                   "expected": "runner_zero_exit_and_complete_unassisted_qualification"})
@@ -120,7 +157,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
                       "cases": list(RETOUCH_CASES),
                       "expected_materialization": dict(expected_materialization)})
     runner = repo / "e2e/stand/qualify-retouch-browser.py"
-    trusted_files = [runner, repo / 'e2e/stand/serve-retouch-fixture.py',
+    trusted_files = [runner, repo / 'e2e/stand/qualify-retouch-cost.py', repo / 'e2e/stand/serve-retouch-fixture.py',
         repo / 'e2e/stand/browser/retouch-journey.mjs', repo / 'src/adaos/e2e/retouch_fixture.py',
         repo / 'e2e/stand/browser/controlled-faults.mjs', repo / 'src/adaos/e2e/retouch_verification.py',
         repo / 'src/adaos/services/builder/spend_ledger.py', repo / 'src/adaos/sdk/llm/errors.py', Path(__file__)]
@@ -148,10 +185,21 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     # Same digest algorithm as the fixture, computed independently by the owner.
     source_digest = "sha256:" + hashlib.sha256(json.dumps({p.name: file_digest(p)
         for p in sorted((sources[0] / "handlers").glob("*.py"))}, sort_keys=True).encode()).hexdigest()
-    receipt = {"schema": "adaos.builder.application_journey_receipt.v1", "profile": "natural-retouch.v2",
+    try:
+        cost_report = json.loads((output / 'cost-authority/report.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        cost_report = {}
+    browser_outcome = qualify_reports(reports, expected_materialization=expected_materialization, source_digest=source_digest)
+    cost_outcome = qualify_cost_report(cost_report, source_digest=source_digest)
+    receipt = {"schema": "adaos.builder.application_journey_receipt.v1", "profile": "natural-retouch.v3",
                "scope": "Client + real handlers/SQLite/CPU; synthetic Broker and blob/access boundaries. Live provider quality and admission excluded.",
                "task_id": task_id, "reports": reports, "exit_code": exit_code, "timed_out": timed_out,
-               **qualify_reports(reports, expected_materialization=expected_materialization, source_digest=source_digest)}
+               'cost_authority': cost_report,
+               'ok': browser_outcome['ok'] and cost_outcome['ok'],
+               'repairable': (not (browser_outcome['ok'] and cost_outcome['ok'])
+                   and (browser_outcome['ok'] or browser_outcome['repairable'])
+                   and (cost_outcome['ok'] or cost_outcome['repairable'])),
+               'failures': [*browser_outcome['failures'], *cost_outcome['failures']]}
     receipt["ok"] = receipt["ok"] and exit_code == 0 and not timed_out
     receipt["repairable"] = receipt["repairable"] and not timed_out
     unchanged = snapshot_reader is not None and snapshot_reader() == implementation_snapshot
@@ -160,8 +208,8 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     if not unchanged:
         receipt.update(ok=False, repairable=False)
         receipt["failures"].append({"failure": "candidate_changed_during_application_journey"})
-    state = [{"layout": layout, "initial_checks": row.get("checks"), "final_audit": row.get("final_audit")}
-             for layout, row in reports.items()]
+    state = {'browser': [{"layout": layout, "initial_checks": row.get("checks"), "final_audit": row.get("final_audit")}
+             for layout, row in reports.items()], 'cost_authority': cost_report}
     context = {"implementation": implementation_snapshot,
                "runtime": {"expected_materialization": expected_materialization,
                            "source_digest": source_digest,
@@ -174,6 +222,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
                "environment": {"cases": list(RETOUCH_CASES),
                                "observed": {layout: {'browser': row.get('browser_environment'),
                                    'fixture': row.get('final_audit', {}).get('environment')} for layout, row in reports.items()},
+                               'cost_authority': cost_report.get('environment'),
                                "fixture": "loopback-only; external connect denied",
                                "hub": env.get("ADAOS_E2E_HUB_URL"), "client": env.get("ADAOS_E2E_CLIENT_URL")}}
     graph = project_change(project_ref="scenario:" + scenario_id, generation=1,
@@ -181,7 +230,10 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
             *[{"issue_id": "retouch.journey." + identity, "title": identity,
                "source_message_ids": list(source_message_ids), "semantic_refs": [target],
                "acceptance_criteria": [identity], "verification_scope": "synthetic_retouch_mechanics_only"}
-              for identity, target in RETOUCH_OBLIGATIONS.items()]],
+              for identity, target in RETOUCH_OBLIGATIONS.items()],
+            *[{'issue_id': 'retouch.requirement.cost.' + identity, 'title': identity,
+               'source_message_ids': list(source_message_ids), 'semantic_refs': ['view:d_photo_editor'],
+               'acceptance_criteria': [identity], 'verification_scope': 'owned_cost_projection_only'} for identity in COST_CASES]],
             "acceptance_constraints": [*(change or {}).get("acceptance_constraints", []), *specs]},
         semantic_document=semantic_document, behavioral_context=context)
     if not source_message_ids:
@@ -191,6 +243,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     # A registered business profile does not silently certify every inherited
     # project Issue. Preserve legacy gaps and disclose the exact coverage set.
     verified_requirements = {'retouch.journey.' + identity for identity in RETOUCH_OBLIGATIONS}
+    verified_requirements.update('retouch.requirement.cost.' + identity for identity in COST_CASES)
     declared_requirements = {str(issue.get('issue_id')) for issue in (change or {}).get('issues', [])
                              if isinstance(issue, dict) and issue.get('issue_id')}
     receipt['verification_coverage'] = {
@@ -212,7 +265,11 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
             and (spec['expected'] != 'compare-zoom-pan-difference-download'
                  or row.get('independent_pixel_verification', {}).get('passed') is True) for row in reports.values()),
             "evidence_ref": "artifact:" + str(output.relative_to(repo)).replace("\\", "/")}
-            for spec in specs if spec['constraint_id'] != 'retouch.execution_integrity'}
+            for spec in specs if spec['constraint_id'] != 'retouch.execution_integrity'
+            and not spec['constraint_id'].startswith('retouch.cost.')}
+        observations.update({'retouch.cost.' + identity: {'passed': any(row.get('id') == identity and row.get('passed') is True
+            for row in cost_report.get('cases', [])), 'evidence_ref': 'artifact:' + str((output / 'cost-authority/report.json').relative_to(repo)).replace('\\', '/')}
+            for identity in COST_CASES})
         observations['retouch.execution_integrity'] = {'passed': receipt['ok'],
             'evidence_ref': 'artifact:' + str(output.relative_to(repo)).replace('\\', '/')}
         behavior = make_behavioral_receipt(graph["graph"], verification_refs=list(observations),
