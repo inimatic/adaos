@@ -95,7 +95,15 @@ def _run_until_settled(
         sleep(max(0.05, float(poll_interval_seconds)))
 
 
-def run(session_id: str) -> int:
+def _recover_validated_session(service: BuilderAutomationService, session_id: str) -> dict:
+    session = service._find_session_by_id(session_id)
+    if not session:
+        raise ValueError("automation_session_not_found")
+    result = service.recover_validated_result(object_type=session["object_type"], object_id=session["object_id"])
+    return dict(result.get("session") or {})
+
+
+def run(session_id: str, *, recovery_only: bool = False) -> int:
     worker_root = _worker_root_from_environment(session_id)
     if worker_root is not None:
         _write_worker_handshake(worker_root, session_id, status="booting")
@@ -111,7 +119,8 @@ def run(session_id: str) -> int:
         )
         _write_worker_handshake(worker_root, session_id, status="ready")
         result_path = worker_root / "result.json"
-        session = _run_until_settled(service, str(session_id))
+        session = (_recover_validated_session(service, str(session_id)) if recovery_only
+                   else _run_until_settled(service, str(session_id)))
         payload = {
             "schema": "adaos.builder.automation_worker_result.v1",
             "session_id": str(session_id),
@@ -142,8 +151,9 @@ def run(session_id: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one persisted Builder Automation worker.")
     parser.add_argument("--session-id", required=True)
+    parser.add_argument("--recover-validated-result", action="store_true")
     args = parser.parse_args(list(argv) if argv is not None else None)
-    return run(str(args.session_id))
+    return run(str(args.session_id), recovery_only=args.recover_validated_result)
 
 
 if __name__ == "__main__":

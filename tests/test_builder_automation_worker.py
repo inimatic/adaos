@@ -7,6 +7,7 @@ from adaos.services.builder.automation_worker import (
     _run_until_settled,
     _worker_root_from_environment,
     _write_worker_handshake,
+    _recover_validated_session,
 )
 
 
@@ -88,3 +89,18 @@ def test_worker_publishes_booting_handshake_from_environment(tmp_path, monkeypat
     payload = json.loads((worker_root / "ready.json").read_text(encoding="utf-8"))
     assert payload["status"] == "booting"
     assert payload["session_id"] == "automation.skill.demo"
+
+
+def test_recovery_worker_only_calls_the_validated_result_owner():
+    calls = []
+    class Service:
+        def _find_session_by_id(self, identity):
+            return {"session_id": identity, "object_type": "scenario", "object_id": "retouch"}
+        def recover_validated_result(self, **kwargs):
+            calls.append(kwargs)
+            return {"session": {"status": "completed", "current_task_id": "task.retained"}}
+        def _run_worker(self, *args):
+            raise AssertionError("a recovery worker must not run the implementation worker")
+    result = _recover_validated_session(Service(), "automation.scenario.retouch")
+    assert calls == [{"object_type": "scenario", "object_id": "retouch"}]
+    assert result["current_task_id"] == "task.retained"

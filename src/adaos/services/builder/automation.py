@@ -7590,8 +7590,18 @@ class BuilderAutomationService:
                 "updated_at": _now_iso(),
             }
             current["updated_at"] = current["progress"]["updated_at"]
+            if current.get("last_failure"):
+                current.setdefault("recovery_history", []).append({
+                    "task_id": task_id, "failure": current.pop("last_failure"), "resumed_at": current["updated_at"],
+                })
             self._save_session(current)
 
+        if self.background:
+            self._launch_worker(str(current["session_id"]), recovery_only=True)
+            return {"ok": True, "status": "automation_recovery_queued", "recovered": False,
+                    "model_started": False, "worker": recovered_result,
+                    "message": "Восстановление сохранённого результата выполняется. Новая модельная итерация не запускается.",
+                    "session": current, "automation": self.project_session(current)}
         self._finalize_completed_session(current)
         reconciled = self.get_session(object_type, object_id) or current
         return {
@@ -11398,15 +11408,18 @@ class BuilderAutomationService:
             )
         return submitted
 
-    def _launch_worker(self, session_id: str) -> None:
+    def _launch_worker(self, session_id: str, *, recovery_only: bool = False) -> None:
         if self.background:
             if self._detached_worker_is_active(session_id):
                 return
-            self._launch_worker_process(session_id)
+            if recovery_only:
+                self._launch_worker_process(session_id, recovery_only=True)
+            else:
+                self._launch_worker_process(session_id)
         else:
             self._run_worker(session_id)
 
-    def _launch_worker_process(self, session_id: str) -> dict[str, Any]:
+    def _launch_worker_process(self, session_id: str, *, recovery_only: bool = False) -> dict[str, Any]:
         """Launch a durable worker outside the potentially ephemeral skill call.
 
         Skill tools are process-isolated and may return before a daemon thread
@@ -11436,6 +11449,8 @@ class BuilderAutomationService:
             "--session-id",
             str(session_id),
         ]
+        if recovery_only:
+            command.append("--recover-validated-result")
         command, priority_creationflags, resource_policy = (
             _automation_worker_resource_policy(command)
         )

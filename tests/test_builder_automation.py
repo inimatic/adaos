@@ -13151,6 +13151,27 @@ def test_validated_result_recovery_reuses_completed_task_after_live_readiness_fa
     assert finalized[0]["reuse_confirmed_checkpoints"] is True
 
 
+def test_background_validated_recovery_acknowledges_before_finalization(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    service.background = True
+    session = {"session_id": "automation.scenario.recipes", "object_type": "scenario", "object_id": "recipes", "current_task_id": "task.retained",
+               "status": "failed", "task": {"status": "completed"}, "last_result": {"summary": "validated"},
+               "last_failure": {"stage": "candidate_materialization", "message": "owner unavailable"}}
+    service._save_session(session)
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    launches = []
+    monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda self, identity, **kw: launches.append((identity, kw)))
+    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", lambda *args: pytest.fail("HTTP request must not finalize"))
+    service.worker_factory = lambda: pytest.fail("recovery must not run a model")
+    result = service.recover_validated_result(object_type="scenario", object_id="recipes")
+    assert result["ok"] and result["status"] == "automation_recovery_queued"
+    assert result["recovered"] is False and result["model_started"] is False
+    assert launches == [(result["session"]["session_id"], {"recovery_only": True})]
+    assert "last_failure" not in result["session"]
+    assert result["session"]["recovery_history"][0]["failure"]["message"] == "owner unavailable"
+    assert result["session"]["current_task_id"] == "task.retained"
+
+
 def test_validated_result_recovery_binds_attended_permission_decision_without_codex(
     tmp_path: Path,
     monkeypatch,
