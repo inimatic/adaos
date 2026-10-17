@@ -135,29 +135,3 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
         assert 'receipt' not in result['traceability']
 
 
-def test_journey_timeout_terminates_only_its_owned_process_family(tmp_path):
-    import os
-    import subprocess
-    import sys
-    import psutil
-    from adaos.services.builder.application_journeys import run_owned_journey
-    marker = tmp_path / 'child-pid'
-    program = ("import subprocess,sys,time;from pathlib import Path;"
-               "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
-               f"Path({str(marker)!r}).write_text(str(child.pid));time.sleep(60)")
-    sibling = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(60)'])
-    try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            run_owned_journey([sys.executable, '-c', program], cwd=tmp_path, env=os.environ.copy(), timeout=1)
-        assert marker.is_file()
-        child_id = int(marker.read_text())
-        if psutil.pid_exists(child_id):
-            # SIGKILL delivery is asynchronous on POSIX. Observe termination
-            # within a bound rather than racing the kernel immediately after
-            # the parent was reaped; a live orphan must still fail this check.
-            psutil.wait_procs([psutil.Process(child_id)], timeout=3)
-        if psutil.pid_exists(child_id):
-            assert psutil.Process(child_id).status() == psutil.STATUS_ZOMBIE
-        assert sibling.poll() is None
-    finally:
-        sibling.terminate(); sibling.wait(timeout=5)

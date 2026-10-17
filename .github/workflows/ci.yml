@@ -186,6 +186,8 @@ jobs:
         run: uv sync --locked --extra dev
       - name: Verify controlled browser fault attribution
         run: node --test e2e/stand/browser/controlled-faults.test.mjs
+      - name: Verify owned journey timeout without private consumers
+        run: uv run python -m pytest -q -o addopts='' tests/test_owned_journey_processes.py --basetemp=.tmp/ci-owned-journey-processes
       - name: Resolve exact contract consumer pins
         id: consumer-pins
         run: |
