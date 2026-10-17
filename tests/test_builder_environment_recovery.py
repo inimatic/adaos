@@ -55,12 +55,15 @@ def test_structured_exception_chain_preserves_native_cause_and_ignores_strings()
     assert environment_interruption(cycle) is None
 
 
-@pytest.mark.parametrize("failure,expected_calls", [("refused", 3), ("exhausted", 7), ("timeout", 1), ("ambiguous", 1), ("http", 1)])
+@pytest.mark.parametrize("failure,expected_calls", [("refused", 3), ("exhausted", 6), ("cold_restart", 13), ("timeout", 1), ("ambiguous", 1), ("http", 1)])
 def test_owner_materialization_retries_only_proven_unaccepted_connections(monkeypatch, failure, expected_calls):
     calls, delays = [], []
+    clock = [0.0]
     class Session:
         def post(self, url, **kw):
             calls.append(kw)
+            if failure == "cold_restart" and clock[0] < 37:
+                raise requests.ConnectionError(ConnectionRefusedError(errno.ECONNREFUSED, "cold owner"))
             if failure in {"refused", "exhausted"} and (failure == "exhausted" or len(calls) < 3):
                 raise requests.ConnectionError(ConnectionRefusedError(errno.ECONNREFUSED, "not accepted"))
             if failure == "timeout": raise requests.ReadTimeout("owner may have accepted")
@@ -69,13 +72,18 @@ def test_owner_materialization_retries_only_proven_unaccepted_connections(monkey
             return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"ok": True})
         def close(self): pass
     monkeypatch.setattr(requests, "Session", Session)
-    monkeypatch.setattr(preview.time, "sleep", delays.append)
+    def sleep(delay):
+        delays.append(delay)
+        clock[0] += delay
+    monkeypatch.setattr(preview, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep))
     monkeypatch.setattr("adaos.apps.cli.active_control.resolve_control_base_url", lambda **_: "http://127.0.0.1:8777")
     monkeypatch.setattr("adaos.apps.cli.active_control.resolve_control_token", lambda **_: "test-token")
-    operation = lambda: preview.materialize_revision_via_owner("owned-test", scenario_id="photo", revision="task.retained")
-    if failure == "refused": assert operation() == {"ok": True}
+    budget = 90 if failure == "cold_restart" else 10
+    operation = lambda: preview.materialize_revision_via_owner("owned-test", scenario_id="photo", revision="task.retained", timeout_s=budget)
+    if failure in {"refused", "cold_restart"}: assert operation() == {"ok": True}
     else:
         with pytest.raises(requests.RequestException): operation()
     assert len(calls) == expected_calls
     assert all(call["json"] == calls[0]["json"] for call in calls)
-    assert sum(delays) <= 15.5
+    assert sum(delays) <= budget
+    assert all(1 <= call['timeout'] <= budget for call in calls)

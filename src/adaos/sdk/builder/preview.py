@@ -1057,21 +1057,26 @@ def materialize_revision_via_owner(
     session.trust_env = False
     try:
         from adaos.services.builder.environment_recovery import connection_was_refused
-        for retry in range(7):
+        wait_budget = max(1.0, min(float(timeout_s), 120.0))
+        deadline = time.monotonic() + wait_budget
+        retry = 0
+        while True:
             try:
                 response = session.post(
                     f"{base_url.rstrip('/')}/api/node/yjs/webspaces/{webspace_id}/builder-materialize",
                     headers={"X-AdaOS-Token": token, "Accept": "application/json"},
                     json=body,
-                    timeout=max(1.0, min(float(timeout_s), 120.0)),
+                    timeout=max(1.0, deadline - time.monotonic()),
                 )
                 break
             except requests.ConnectionError as exc:
                 # A refused socket accepted no HTTP command. Read timeouts and
                 # all ambiguous outcomes remain subject to owner reconciliation.
-                if retry == 6 or not connection_was_refused(exc):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not connection_was_refused(exc):
                     raise
-                time.sleep(min(0.5 * 2 ** retry, 4.0))
+                time.sleep(min(0.5 * 2 ** min(retry, 4), 4.0, remaining))
+                retry += 1
         response.raise_for_status()
         result = response.json()
     finally:
