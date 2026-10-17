@@ -6,6 +6,20 @@ export function isExpectedFixtureRestartReadError({ restartWindow, message, meth
     .some(name => tool === `natural_retouch_skill:${name}`)
 }
 
+// The caller admits only its loopback fixture routes. A reset read may be
+// retried once; mutations and unknown submission outcomes must never be replayed.
+export async function fetchOwnedReadWithOneRetry(operation, { method, tool }, onRetry) {
+  try { return await operation() } catch (error) {
+    const message = String(error.message || error).split('\n')[0]
+    const read = method === 'GET' || method === 'POST' &&
+      ['query_records', 'run_state', 'comparison', 'adoption_status', 'read_attachment']
+        .some(name => tool === `natural_retouch_skill:${name}`)
+    if (!read || !/\bECONNRESET\b/.test(message)) throw error
+    onRetry?.({ method, tool, message })
+    return operation()
+  }
+}
+
 // Client discovery probes alternate local runtime slots before choosing one.
 // They do not authorize application reads or mutations on another authority.
 export function isOptionalLocalDiscoveryRequest({url, method}) {

@@ -4,7 +4,7 @@ import { chromium, expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { isExpectedFixtureRestartReadError } from './controlled-faults.mjs'
+import { isExpectedFixtureRestartReadError, fetchOwnedReadWithOneRetry } from './controlled-faults.mjs'
 
 const expect = baseExpect.configure({ timeout: 30_000 })
 const env = process.env
@@ -88,7 +88,13 @@ await context.route('**/api/tools/**', async route => {
   try {
     const headers = { ...request.headers(), 'X-Retouch-Fixture-Token': fixtureToken }
     delete headers['x-adaos-token']; delete headers.authorization; delete headers.cookie
-    const response = await route.fetch({ url: endpoint.base_url + url.pathname + url.search, headers, timeout: 60_000 })
+    const response = await fetchOwnedReadWithOneRetry(
+      () => route.fetch({ url: endpoint.base_url + url.pathname + url.search, headers, timeout: 60_000 }),
+      { method: request.method(), tool: body?.tool }, fault => {
+        report.route_retries ||= []
+        report.route_retries.push({ ...fault, message: fault.message.replaceAll(fixtureToken, '[redacted]'),
+          path: url.pathname, kind: 'owned_read_connection_reset', maximum_retries: 1 })
+      })
     const bytes = await response.body()
     report.calls.push({ path: url.pathname, tool: body?.tool, command: body?.arguments?.command,
       request_digest: body ? hash(body) : null, status: response.status(), duration_ms: Date.now() - start,
@@ -177,7 +183,12 @@ async function responseFor(action, tool, command, { allowFailure = false } = {})
 }
 async function command(id, expected) {
   await reveal('retouch_run_commands')
-  const result = await responseFor(() => button('retouch_run_commands', id).click(), 'run_command', id)
+  const expectedFailure = typeof expected === 'string' && expected.endsWith('_failed')
+  const result = await responseFor(() => button('retouch_run_commands', id).click(), 'run_command', id, { allowFailure: expectedFailure })
+  if (expectedFailure && result.ok === false) {
+    expect(typeof result.error).toBe('string')
+    expect(String(result.human_message || result.message || '').trim().length).toBeGreaterThan(0)
+  }
   if (expected) expect(result.item?.status).toBe(expected)
   return result.item
 }
@@ -357,6 +368,12 @@ try {
     const saved = await audit(), identity = run.id
     await page.reload({ waitUntil: 'domcontentloaded' }); await ready(); await selectPhoto(photo)
     expect((await audit()).jobs).toEqual(saved.jobs)
+    await reveal('tracker_actions')
+    await responseFor(() => button('tracker_actions', 'refresh_state').click(), 'run_command', 'refresh')
+    const refreshed = await audit()
+    expect(refreshed.jobs.length, 'Refresh status is advertised as no new request: it may poll existing jobs, but must never submit the next paid QA or edit phase. Use Continue processing for that explicit transition.').toBe(saved.jobs.length)
+    expect(refreshed.jobs.map(({ request_id, kind, submits }) => ({ request_id, kind, submits })))
+      .toEqual(saved.jobs.map(({ request_id, kind, submits }) => ({ request_id, kind, submits })))
     run = await command('continue_run', 'qa_queued'); expect(run.id).toBe(identity)
     run = await command('continue_run', 'completed'); expect(run.id).toBe(identity)
     const final = await audit(); expect(final.jobs.length).toBe(3); expect(final.jobs.every(j => j.submits === 1)).toBe(true)

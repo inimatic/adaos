@@ -95,15 +95,21 @@ def cost_sample(source='source'):
                    'text': 'confirmed spend: unknown; confirmed part: 0.03 USD' if name == COST_CASES[-1] else 'confirmed spend: 0.03 USD'} for name in COST_CASES]}
 
 
-@pytest.mark.parametrize('fault', [None, 'source_changed', 'nonzero_exit', 'postcondition', 'missing_source', 'legacy_gap', 'cost_postcondition'])
-def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_receipt(tmp_path, fault):
+@pytest.mark.parametrize('fault', [None, 'source_changed', 'verifier_source_changed', 'nonzero_exit', 'postcondition', 'missing_source', 'legacy_gap', 'cost_postcondition'])
+def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_receipt(tmp_path, monkeypatch, fault):
     repo = Path(__file__).resolve().parents[1]
     source = tmp_path / 'natural_retouch_skill'
     (source / 'handlers').mkdir(parents=True)
     (source / 'handlers/retouch.py').write_text('# immutable candidate fixture', encoding='utf-8')
     source_digest = 'sha256:' + hashlib.sha256(json.dumps({'retouch.py': file_digest(source / 'handlers/retouch.py')}, sort_keys=True).encode()).hexdigest()
     materialization = {'revision': 'task', 'source_fingerprint': 'fingerprint'}
+    verification_ran = False
+    if fault == 'verifier_source_changed':
+        from adaos.services.builder import application_journeys
+        monkeypatch.setattr(application_journeys, 'file_digest', lambda path:
+            'sha256:changed-verifier' if verification_ran and Path(path).name == 'retouch-journey.mjs' else file_digest(path))
     def runner(command, **kwargs):
+        nonlocal verification_ran
         output = Path(command[command.index('--output') + 1])
         declared = json.loads((output / 'verification-spec.json').read_text(encoding='utf-8'))
         assert len(declared['specifications']) == len(RETOUCH_OBLIGATIONS) + len(COST_CASES) + 1
@@ -125,6 +131,7 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
             cost['passed'] = False
         (output / 'cost-authority').mkdir()
         (output / 'cost-authority/report.json').write_text(json.dumps(cost), encoding='utf8')
+        verification_ran = True
         return SimpleNamespace(returncode=1 if fault in {'nonzero_exit', 'postcondition', 'cost_postcondition'} else 0, stdout='qualified', stderr='')
     result = evaluate_retouch(repo_root=repo, scenario_id='natural_retouch', task_id='task',
         implementation_paths=[source], environment={}, implementation_snapshot={'candidate': 'before'},
@@ -147,12 +154,16 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
         assert coverage['unverified_project_requirement_refs'] == ['legacy.unmapped']
     assert any(row['relation'] == 'verified_by' and row['metadata'].get('authority') == 'explicit_constraint_requirement_refs'
                for row in result['traceability']['graph']['edges'])
-    if fault != 'source_changed':
+    if fault not in {'source_changed', 'verifier_source_changed'}:
         behavior = result['traceability']['receipt']
         assert set(behavior['dependencies']) >= {'behavior:implementation', 'behavior:runtime', 'behavior:state', 'behavior:environment'}
         assert behavior['outcome'] == ('failed' if fault in {'postcondition', 'nonzero_exit', 'missing_source', 'cost_postcondition'} else 'passed')
     else:
         assert 'receipt' not in result['traceability']
+        reason = 'trusted_verifier_changed_during_application_journey' if fault == 'verifier_source_changed' else 'candidate_changed_during_application_journey'
+        assert any(row['failure'] == reason for row in result['failures'])
+        other = 'candidate_changed_during_application_journey' if fault == 'verifier_source_changed' else 'trusted_verifier_changed_during_application_journey'
+        assert not any(row['failure'] == other for row in result['failures'])
 
 
 @pytest.mark.parametrize('fault', ['missing_case', 'missing_source', 'missing_environment', 'missing_metering', 'wrong_metering_basis', 'green_flag_lies', 'cross_run_meter', 'known_wrong_cost'])

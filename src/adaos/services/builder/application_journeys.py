@@ -202,12 +202,15 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
                'failures': [*browser_outcome['failures'], *cost_outcome['failures']]}
     receipt["ok"] = receipt["ok"] and exit_code == 0 and not timed_out
     receipt["repairable"] = receipt["repairable"] and not timed_out
-    unchanged = snapshot_reader is not None and snapshot_reader() == implementation_snapshot
+    candidate_unchanged = snapshot_reader is not None and snapshot_reader() == implementation_snapshot
     trusted_unchanged = all(file_digest(repo / name) == value for name, value in trusted_closure.items())
-    unchanged = unchanged and trusted_unchanged
+    unchanged = candidate_unchanged and trusted_unchanged
     if not unchanged:
         receipt.update(ok=False, repairable=False)
-        receipt["failures"].append({"failure": "candidate_changed_during_application_journey"})
+        if not candidate_unchanged:
+            receipt["failures"].append({"failure": "candidate_changed_during_application_journey"})
+        if not trusted_unchanged:
+            receipt["failures"].append({"failure": "trusted_verifier_changed_during_application_journey"})
     state = {'browser': [{"layout": layout, "initial_checks": row.get("checks"), "final_audit": row.get("final_audit")}
              for layout, row in reports.items()], 'cost_authority': cost_report}
     context = {"implementation": implementation_snapshot,
