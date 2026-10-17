@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import itertools
 import os
 from pathlib import Path
 import socket
@@ -20,6 +21,7 @@ parser.add_argument("--source", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--label", required=True)
 parser.add_argument("--layouts", nargs="+", choices=["wide", "compact"], default=["wide", "compact"])
+parser.add_argument("--variants", nargs="+", choices=["exact", "edited"], default=["exact", "edited"])
 args = parser.parse_args()
 repo = Path.cwd().resolve(); output = args.output.resolve()
 if not output.is_relative_to(repo / "e2e/artifacts") or output == repo / "e2e/artifacts":
@@ -43,8 +45,8 @@ def stop_owned(process):
         process.wait(timeout=10)
     except (psutil.NoSuchProcess, ProcessLookupError): pass
 
-for layout in args.layouts:
-    owned = repo / ".tmp/retouch-browser-fixtures" / args.label / layout
+for variant, layout in itertools.product(args.variants, args.layouts):
+    owned = repo / ".tmp/retouch-browser-fixtures" / args.label / variant / layout
     if owned.exists(): raise ValueError("Fixture already exists; use a fresh trial label")
     owned.mkdir(parents=True)
     with socket.socket() as reserved:
@@ -90,7 +92,8 @@ for layout in args.layouts:
         monitor = threading.Thread(target=restart_monitor, daemon=True); monitor.start()
         environment = os.environ.copy()
         environment.update(ADAOS_E2E_LAYOUT=layout, ADAOS_E2E_RETOUCH_FIXTURE=str(owned),
-            ADAOS_E2E_OUTPUT=str(output / layout), ADAOS_E2E_HUB_TOKEN=token, ADAOS_E2E_RESTART_FIXTURE="1")
+            ADAOS_E2E_OUTPUT=str(output / variant / layout), ADAOS_E2E_HUB_TOKEN=token,
+            ADAOS_E2E_RESTART_FIXTURE="1", ADAOS_E2E_RETOUCH_VARIANT=variant)
         with (owned / "browser-stdout.log").open("w", encoding="utf-8") as browser_out, (owned / "browser-stderr.log").open("w", encoding="utf-8") as browser_err:
             browser_process = subprocess.Popen(["node", "e2e/stand/browser/retouch-journey.mjs"], cwd=repo,
                 env=environment, stdout=browser_out, stderr=browser_err, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -105,14 +108,14 @@ for layout in args.layouts:
         if len(text) > offset: print(text[offset:], end="", flush=True)
         errors = (owned / "browser-stderr.log").read_text(encoding="utf-8")
         if errors: print(errors[-1500:], file=sys.stderr, flush=True)
-        result = {"layout": layout, "exit_code": browser_process.returncode, "restart_errors": restart_errors,
-                  "fixture_root": str(owned), "report": str(output / layout / "journey.json")}
+        result = {"variant": variant, "layout": layout, "exit_code": browser_process.returncode, "restart_errors": restart_errors,
+                  "fixture_root": str(owned), "report": str(output / variant / layout / "journey.json")}
         if browser_process.returncode == 0:
             from adaos.e2e.retouch_verification import verify_downloads
-            report_path = output / layout / "journey.json"
+            report_path = output / variant / layout / "journey.json"
             report = json.loads(report_path.read_text(encoding="utf-8"))
             try:
-                report["independent_pixel_verification"] = verify_downloads(owned_root=owned, output=output / layout, report=report)
+                report["independent_pixel_verification"] = verify_downloads(owned_root=owned, output=output / variant / layout, report=report)
             except Exception as exc:
                 report["passed"] = False
                 report["independent_pixel_verification"] = {"passed": False, "error": f"{type(exc).__name__}: {exc}"}

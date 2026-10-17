@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from adaos.services.builder.application_journeys import RETOUCH_OBLIGATIONS, qualify_reports
+from adaos.services.builder.application_journeys import RETOUCH_OBLIGATIONS, RETOUCH_CASES, qualify_reports
 from adaos.services.builder.application_journeys import evaluate_retouch, file_digest
 from adaos.services.builder.automation import BuilderAutomationService
 
@@ -21,7 +21,13 @@ def sample():
 
 
 def qualify(reports):
-    return qualify_reports(reports, expected_materialization={"revision": "task", "source_fingerprint": "fingerprint"},
+    expanded = {}
+    for case in RETOUCH_CASES:
+        variant, layout = case.split('/')
+        if layout in reports:
+            expanded[case] = copy.deepcopy(reports[layout])
+            expanded[case]['specification'].update(variant=variant, layout=layout)
+    return qualify_reports(expanded, expected_materialization={"revision": "task", "source_fingerprint": "fingerprint"},
                            source_digest="source")
 
 
@@ -90,14 +96,16 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
         declared = json.loads((output / 'verification-spec.json').read_text(encoding='utf-8'))
         assert len(declared['specifications']) == len(RETOUCH_OBLIGATIONS) + 1
         assert json.loads(kwargs['env']['ADAOS_E2E_EXPECTED_MATERIALIZATION']) == materialization
-        for layout in ('wide', 'compact'):
+        for layout in RETOUCH_CASES:
             row = sample(); row['specification']['source_digest'] = source_digest
+            variant, viewport = layout.split('/')
+            row['specification'].update(variant=variant, layout=viewport)
             row['final_audit']['source_digest'] = source_digest
             if fault == 'postcondition':
                 row.update(passed=False, active='budget-admission-failure-visible',
                            failure='expect(response.ok).toBe(false)', failure_kind='candidate_postcondition')
                 row['checks'] = row['checks'][:5]
-            (output / layout).mkdir()
+            (output / layout).mkdir(parents=True)
             (output / layout / 'journey.json').write_text(json.dumps(row), encoding='utf-8')
         return SimpleNamespace(returncode=1 if fault in {'nonzero_exit', 'postcondition'} else 0, stdout='qualified', stderr='')
     result = evaluate_retouch(repo_root=repo, scenario_id='natural_retouch', task_id='task',

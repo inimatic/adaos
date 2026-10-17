@@ -31,6 +31,7 @@ RETOUCH_OBLIGATIONS = {
     "adopt-incremented-original": "view:v_results",
     "unknown-cancel-reservation-isolation": "view:d_photo_editor",
 }
+RETOUCH_CASES = ('exact/wide', 'exact/compact', 'edited/wide', 'edited/compact')
 
 
 def file_digest(path):
@@ -40,7 +41,7 @@ def file_digest(path):
 def qualify_reports(reports, *, expected_materialization, source_digest):
     """Fail closed on a green runner with missing postconditions or dependencies."""
     failures, repairable_failures = [], []
-    for layout in ("wide", "compact"):
+    for layout in RETOUCH_CASES:
         report = reports.get(layout) or {}
         checks = report.get("checks") or []
         present = {row.get("id") for row in checks if row.get("passed") is True}
@@ -49,7 +50,10 @@ def qualify_reports(reports, *, expected_materialization, source_digest):
             for observed in report.get("observed_materializations") or [])
         source_ok = bool(source_digest) and report.get("specification", {}).get("source_digest") == source_digest
         assets = report.get("client_assets") or []
+        expected_variant, expected_layout = layout.split('/')
         dependencies_ok = (identity_ok and source_ok and bool(assets)
+                           and report.get('specification', {}).get('variant') == expected_variant
+                           and report.get('specification', {}).get('layout') == expected_layout
                            and all(row.get('digest') and row.get('size_bytes', 0) > 0 for row in assets)
                            and report.get("final_audit", {}).get("source_digest") == source_digest
                            and not report.get("errors"))
@@ -81,7 +85,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     sources = [Path(path) for path in implementation_paths
                if Path(path).name == "natural_retouch_skill" and (Path(path) / "handlers/retouch.py").is_file()]
     if len(sources) != 1 or not expected_materialization:
-        return {"ok": False, "profile": "natural-retouch.v1", "repairable": False,
+        return {"ok": False, "profile": "natural-retouch.v2", "repairable": False,
                 "failures": [{"failure": "trusted_application_source_or_materialization_missing"}]}
     repo = Path(repo_root).resolve()
     label = "builder-retouch-" + uuid.uuid4().hex
@@ -107,14 +111,14 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     try:
         completed = command_runner([sys.executable, "-X", "utf8", str(runner), "--source", str(sources[0]),
             "--output", str(output), "--label", label], cwd=repo, env=env, capture_output=True,
-            text=True, encoding="utf-8", check=False, timeout=900)
+            text=True, encoding="utf-8", check=False, timeout=1200)
         exit_code = int(completed.returncode)
         log = str(completed.stdout or "") + str(completed.stderr or "")
     except subprocess.TimeoutExpired:
         exit_code, log, timed_out = 124, "Application browser journey timed out", True
     (output / "browser.log").write_text(redact_log_text(log), encoding="utf-8")
     reports = {}
-    for layout in ("wide", "compact"):
+    for layout in RETOUCH_CASES:
         try:
             reports[layout] = json.loads((output / layout / "journey.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -122,7 +126,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     # Same digest algorithm as the fixture, computed independently by the owner.
     source_digest = "sha256:" + hashlib.sha256(json.dumps({p.name: file_digest(p)
         for p in sorted((sources[0] / "handlers").glob("*.py"))}, sort_keys=True).encode()).hexdigest()
-    receipt = {"schema": "adaos.builder.application_journey_receipt.v1", "profile": "natural-retouch.v1",
+    receipt = {"schema": "adaos.builder.application_journey_receipt.v1", "profile": "natural-retouch.v2",
                "scope": "Client + real handlers/SQLite/CPU; synthetic Broker and blob/access boundaries. Live provider quality and admission excluded.",
                "task_id": task_id, "reports": reports, "exit_code": exit_code, "timed_out": timed_out,
                **qualify_reports(reports, expected_materialization=expected_materialization, source_digest=source_digest)}
@@ -143,7 +147,7 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
                            "runner_closure": trusted_closure,
                            "observed": {layout: row.get('runtime') for layout, row in reports.items()}},
                "state": state,
-               "environment": {"layouts": ["wide", "compact"], "fixture": "loopback-only; external connect denied",
+               "environment": {"cases": list(RETOUCH_CASES), "fixture": "loopback-only; external connect denied",
                                "hub": env.get("ADAOS_E2E_HUB_URL"), "client": env.get("ADAOS_E2E_CLIENT_URL")}}
     graph = project_change(project_ref="scenario:" + scenario_id, generation=1,
         change={**(change or {}), "issues": [*(change or {}).get('issues', []),

@@ -8,7 +8,9 @@ import crypto from 'node:crypto'
 const expect = baseExpect.configure({ timeout: 30_000 })
 const env = process.env
 const layout = env.ADAOS_E2E_LAYOUT
+const variant = env.ADAOS_E2E_RETOUCH_VARIANT || 'exact'
 if (!['wide', 'compact'].includes(layout)) throw Error('Explicit wide/compact layout required')
+if (!['exact', 'edited'].includes(variant)) throw Error('Unknown refusal retry variant')
 const fixtureRoot = path.resolve(env.ADAOS_E2E_RETOUCH_FIXTURE)
 const scratch = path.resolve('.tmp') + path.sep
 if (!fixtureRoot.startsWith(scratch)) throw Error('Owned fixture must be under repository .tmp')
@@ -38,7 +40,7 @@ const fixture = async (pathname, options = {}) => {
 }
 const audit = async () => (await fixture('/audit')).json()
 const specification = {
-  schema: 'adaos.e2e.retouch_journey_spec.v1', layout, source_digest: endpoint.source_digest,
+  schema: 'adaos.e2e.retouch_journey_spec.v1', layout, variant, source_digest: endpoint.source_digest,
   runner_digest: hash(await fs.readFile(new URL(import.meta.url), 'utf8')),
   scope: 'Synthetic Broker/blob/context boundaries; real Client, handler validation, SQLite, CPU masks/exports. No provider quality or Core admission claim.',
   obligations: ['loading-error-empty', 'upload-jpeg-lossless', 'local-draft-preservation', 'goal-parameters-no-submit',
@@ -177,7 +179,7 @@ async function step(id, action) {
   console.log(`${layout}: ${id} passed`)
 }
 const sample = Buffer.from(await (await fixture('/sample-image')).arrayBuffer())
-let photo, run
+let photo, run, queuedAfterRefusal
 async function selectPhoto(item) {
   await tab('photos')
   await host('v_photos').locator(`[data-record-id=${JSON.stringify(item.id)}]`).click()
@@ -295,9 +297,17 @@ try {
     await fixture('/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ exhaust_budget: false }) })
     // Retrying the same draft after a proven pre-submit refusal must work,
     // without a stale settings revision or an ambiguous phantom job.
+    if (variant === 'edited') {
+      await field('e_edit_params', 'strength').fill('31')
+      const retried = await responseFor(() => button('e_edit_params', 'start_analysis').click(), 'run_command', 'analyze')
+      queuedAfterRefusal = retried.item
+      expect(queuedAfterRefusal.status).toBe('analysis_queued')
+      expect((await audit()).jobs.length).toBe(1)
+    }
   })
   await step('analysis-one-submit-editable-plan', async () => {
-    if (await host('e_edit_params').isVisible()) {
+    if (queuedAfterRefusal) run = queuedAfterRefusal
+    else if (await host('e_edit_params').isVisible()) {
       run = (await responseFor(() => button('e_edit_params', 'start_analysis').click(), 'run_command', 'analyze')).item
     } else run = (await parameters({ start: true })).item
     expect(run.status).toBe('analysis_queued')
@@ -338,7 +348,7 @@ try {
     run = await command('continue_run', 'qa_queued'); expect(run.id).toBe(identity)
     run = await command('continue_run', 'completed'); expect(run.id).toBe(identity)
     const final = await audit(); expect(final.jobs.length).toBe(3); expect(final.jobs.every(j => j.submits === 1)).toBe(true)
-    expect(final.runs[0].checks.protected_pixels_equal).toBe(true)
+    expect(final.runs.find(item => item.id === identity).checks.protected_pixels_equal).toBe(true)
     return { run_id: identity, jobs: final.jobs }
   })
   await step('compare-zoom-pan-difference-download', async () => {

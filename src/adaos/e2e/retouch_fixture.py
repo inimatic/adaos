@@ -168,8 +168,8 @@ class RetouchFixture:
             jobs = [dict(row) for row in db.execute("SELECT request_id,kind,input_digest,polls,submits FROM fixture_jobs ORDER BY rowid")]
             calls = [dict(row) for row in db.execute("SELECT * FROM fixture_calls ORDER BY seq")]
             runs = []
-            for row in db.execute("SELECT body FROM records WHERE kind='runs' ORDER BY rowid"):
-                run = json.loads(row[0])
+            for row in db.execute("SELECT id,revision,body FROM records WHERE kind='runs' ORDER BY rowid"):
+                run = {**json.loads(row["body"]), "id": row["id"], "revision": row["revision"]}
                 runs.append({**{key: run.get(key) for key in ("id", "photo_id", "revision", "status", "stage", "plan_revision", "plan_audit", "checks", "approved", "qa", "cost")},
                     "snapshot_digest": digest(self.module.dumps(run["snapshot"]).encode()),
                     "jobs": {phase: {key: job.get(key) for key in ("request_id", "status", "error")}
