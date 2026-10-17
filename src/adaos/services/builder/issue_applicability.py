@@ -102,6 +102,7 @@ def project_phase_issues(issues: Sequence[Mapping], *, phase: str) -> dict:
 def automation_gate_contract() -> dict:
     """Describe the actual post-return worker gates without granting authorship."""
     return {"schema": "adaos.builder.automation_gate_contract.v1",
+            "prototype_acceptance_authority": "acceptance_stage identifies the reviewed phase. Prototype disclosures and local examples describe that phase; pending Automation clauses still require production behavior checks. Preserve inherited text and its provenance, resolve ambiguous scope against the current typed Change and explicit application brief, and report unresolved conflicts. A Prototype review does not certify Automation behavior or create a production API prohibition.",
             "requirement_authority": "Use the current Change's typed phase dispositions and verification scope. Retained historical briefs do not reinstate discharged phase restrictions; report ambiguous untyped conflicts instead of silently discarding them.",
             "candidate_return": "Return the implementation and an honest structured outcome. The worker validates after return; do not claim its gates passed.",
             "gates": [{"id": name, "owner": "worker", "prerequisite": prerequisite,

@@ -2532,6 +2532,7 @@ def _prototype_acceptance_prompt_projection(value: Any) -> dict[str, Any]:
         for key in (
             "schema",
             "acceptance_id",
+            "acceptance_stage",
             "change_id",
             "decision",
             "revision",
@@ -9979,6 +9980,7 @@ class LocalSkillFactoryWorker:
             handoff["automation_requirements"] = copy.deepcopy(
                 accepted.get("automation_requirements") or []
             )
+            handoff['acceptance_stage'] = accepted.get('acceptance_stage')
         handoff["completion"] = self._prototype_resource_completion(
             workspace,
             target_id=target_id,
@@ -10474,6 +10476,7 @@ class LocalSkillFactoryWorker:
         return {
             "schema": "adaos.builder.resource_implementation_handoff.v1",
             "acceptance_id": acceptance.get("acceptance_id"),
+            "acceptance_stage": acceptance.get("acceptance_stage"),
             "project_ref": project_ref,
             "change_id": change_id,
             "revision": revision,
