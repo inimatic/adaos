@@ -87,7 +87,7 @@ def test_empty_materialization_expectation_is_not_acceptance():
     assert not result["ok"]
 
 
-@pytest.mark.parametrize('fault', [None, 'source_changed', 'nonzero_exit', 'postcondition'])
+@pytest.mark.parametrize('fault', [None, 'source_changed', 'nonzero_exit', 'postcondition', 'missing_source', 'legacy_gap'])
 def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_receipt(tmp_path, fault):
     repo = Path(__file__).resolve().parents[1]
     source = tmp_path / 'natural_retouch_skill'
@@ -115,22 +115,28 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
     result = evaluate_retouch(repo_root=repo, scenario_id='natural_retouch', task_id='task',
         implementation_paths=[source], environment={}, implementation_snapshot={'candidate': 'before'},
         expected_materialization=materialization,
-        source_message_ids=['m.canonical.user-request'],
+        source_message_ids=[] if fault == 'missing_source' else ['m.canonical.user-request'],
+        change={'issues': [{'issue_id': 'legacy.unmapped', 'title': 'unverified historical requirement'}]} if fault == 'legacy_gap' else None,
         semantic_document={'views': [{'id': ref.split(':', 1)[1]} for ref in set(RETOUCH_OBLIGATIONS.values()) if ref.startswith('view:')],
                            'commands': [{'id': 'cmd_add_photo'}]},
         snapshot_reader=lambda: {'candidate': 'after' if fault == 'source_changed' else 'before'}, command_runner=runner)
-    assert result['ok'] is (fault is None)
+    assert result['ok'] is (fault in {None, 'legacy_gap'})
     assert result['repairable'] is (fault == 'postcondition')
     assert Path(result['receipt_path']).is_file()
     nodes = result['traceability']['graph']['nodes']
-    assert any(row['kind'] == 'source_message' and row['ref'] == 'm.canonical.user-request' for row in nodes)
-    assert not result['traceability']['gaps']
+    assert any(row['kind'] == 'source_message' and row['ref'] == 'm.canonical.user-request' for row in nodes) is (fault != 'missing_source')
+    coverage = result['verification_coverage']
+    assert len(coverage['verified_requirement_refs']) == (len(RETOUCH_OBLIGATIONS) if fault in {None, 'legacy_gap'} else 0)
+    assert coverage['project_requirements_complete'] is (fault is None)
+    assert bool(result['traceability']['gaps']) is (fault in {'legacy_gap', 'missing_source'})
+    if fault == 'legacy_gap':
+        assert coverage['unverified_project_requirement_refs'] == ['legacy.unmapped']
     assert any(row['relation'] == 'verified_by' and row['metadata'].get('authority') == 'explicit_constraint_requirement_refs'
                for row in result['traceability']['graph']['edges'])
     if fault != 'source_changed':
         behavior = result['traceability']['receipt']
         assert set(behavior['dependencies']) >= {'behavior:implementation', 'behavior:runtime', 'behavior:state', 'behavior:environment'}
-        assert behavior['outcome'] == ('failed' if fault in {'postcondition', 'nonzero_exit'} else 'passed')
+        assert behavior['outcome'] == ('failed' if fault in {'postcondition', 'nonzero_exit', 'missing_source'} else 'passed')
     else:
         assert 'receipt' not in result['traceability']
 

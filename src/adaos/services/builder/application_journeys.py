@@ -186,6 +186,22 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
         semantic_document=semantic_document, behavioral_context=context)
     if not source_message_ids:
         graph['gaps'].append({'kind': 'application_journey_canonical_source_missing'})
+        receipt.update(ok=False, repairable=False)
+        receipt['failures'].append({'failure': 'application_journey_canonical_source_missing'})
+    # A registered business profile does not silently certify every inherited
+    # project Issue. Preserve legacy gaps and disclose the exact coverage set.
+    verified_requirements = {'retouch.journey.' + identity for identity in RETOUCH_OBLIGATIONS}
+    declared_requirements = {str(issue.get('issue_id')) for issue in (change or {}).get('issues', [])
+                             if isinstance(issue, dict) and issue.get('issue_id')}
+    receipt['verification_coverage'] = {
+        'authority': 'registered_profile_only',
+        'canonical_source_message_ids': list(source_message_ids),
+        'verified_requirement_refs': sorted(verified_requirements) if receipt['ok'] else [],
+        'unverified_project_requirement_refs': sorted(declared_requirements - verified_requirements),
+        'project_requirements_complete': bool(receipt['ok'] and not (declared_requirements - verified_requirements)
+                                              and not graph['gaps']),
+        'retained_gaps': graph['gaps'],
+    }
     receipt["traceability"] = graph
     if unchanged and all(row and row.get("checks") and row.get("client_assets") and row.get("final_audit")
         and not row.get("errors") and row.get("specification", {}).get("source_digest") == source_digest
