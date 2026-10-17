@@ -60,5 +60,11 @@ def qualify_failure_replay(before, after, *, changed_factor, hypothesis) -> dict
     return qualify_replay(before, after, changed_factor=changed_factor, hypothesis=hypothesis)
 
 
+def analyze_browser_failure(receipt, *, evidence_ref: str) -> dict[str, Any]:
+    """Normalize retained browser-owner facts; incomplete legacy evidence fails closed."""
+    from adaos.services.builder.browser_failure_analysis import analyze_browser_receipt
+    return analyze_browser_receipt(receipt, evidence_ref=evidence_ref)
+
+
 __all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm",
-           "configure_usd_budget", "usd_budget", "analyze_failure", "qualify_failure_replay"]
+           "configure_usd_budget", "usd_budget", "analyze_failure", "qualify_failure_replay", "analyze_browser_failure"]

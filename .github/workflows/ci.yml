@@ -279,6 +279,7 @@ jobs:
             tests/test_sdk_llm_execution.py \
             tests/test_builder_issue_planning.py \
             tests/test_builder_failure_analysis.py \
+            tests/test_builder_browser_failure_analysis.py \
             tests/test_builder_ui_patch_validation.py \
             tests/test_forge_read_recovery.py \
             tests/test_builder_chat_notifications.py \
