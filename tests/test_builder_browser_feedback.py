@@ -16,9 +16,11 @@ from adaos.services.skill_factory_worker import _browser_feedback_prompt_project
 
 def test_observer_can_use_a_separately_pinned_client_without_changing_the_working_desktop(tmp_path,monkeypatch):
     monkeypatch.setenv('ADAOS_BUILDER_CLIENT_URL','http://127.0.0.1:8101/')
+    monkeypatch.setenv('ADAOS_BUILDER_CLIENT_SOURCE',str(tmp_path/'qualified-client'))
     service=BuilderAutomationService(state_dir=tmp_path/'state',repo_root=tmp_path,
         dev_skills_root=tmp_path/'skills',dev_scenarios_root=tmp_path/'scenarios')
     assert service._browser_feedback().client_url=='http://127.0.0.1:8101/'
+    assert service._browser_feedback().client_source_root==tmp_path/'qualified-client'
 
 
 @pytest.mark.parametrize("defect", ["source_mutation", "companion_mutation", "stale_materialization", "none"])

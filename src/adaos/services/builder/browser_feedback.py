@@ -206,6 +206,7 @@ class BuilderBrowserFeedbackService:
     command_runner: Callable[..., Any] = subprocess.run
     client_url: str = "http://127.0.0.1:8100/"
     timeout_seconds: int = 180
+    client_source_root: Path | None = None
 
     @property
     def root(self) -> Path:
@@ -412,7 +413,7 @@ class BuilderBrowserFeedbackService:
         catalog_path = (
             Path(self.repo_root) / "src" / "adaos" / "abi" / "ui.capability_catalog.v1.json"
         )
-        client_path = Path(self.repo_root) / "src" / "adaos" / "integrations" / "adaos-client"
+        client_path = self.client_source_root or (Path(self.repo_root) / "src" / "adaos" / "integrations" / "adaos-client")
         samples = [
             item for item in report.get("samples") or [] if isinstance(item, Mapping)
         ]
@@ -464,6 +465,8 @@ class BuilderBrowserFeedbackService:
             },
             "runtime_contract": {
                 "client_revision": _git_revision(client_path),
+                "client_revision_basis": "declared observer source; loaded assets recorded separately",
+                "client_url": str(self.client_url),
                 "webui_abi_digest": _file_digest(abi_path),
                 "capability_catalog_digest": _file_digest(catalog_path),
             },
