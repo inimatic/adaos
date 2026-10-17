@@ -27,7 +27,7 @@ from adaos.services.node_config import load_config
 from adaos.services.webspace_id import coerce_webspace_id
 from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
-__all__ = ["chat_append", "say", "media_route", "telegram_photo", "stream_publish", "stream_variable_publish"]
+__all__ = ["chat_append", "chat_message_receipt", "say", "media_route", "telegram_photo", "stream_publish", "stream_variable_publish"]
 
 
 def _publish(topic: str, payload: dict, *, source: str) -> None:
@@ -330,6 +330,24 @@ def chat_append(
         payload["id"] = stored["id"]
     _publish("io.out.chat.append", payload, source="sdk.io.out")
     return {"ok": True, **({"persisted": True} if persist else {})}
+
+
+def chat_message_receipt(message_id: str, *, conversation_id: str, thread_id: str,
+                         webspace_id: str, channel_id: str, owner: str, role: str,
+                         text: str) -> Mapping[str, bool]:
+    """Read exact durable acknowledgement independently of live delivery.
+
+    Returns no message content. A pending/failed projection is not a failed
+    write; missing, redacted, foreign or conflicting messages are unconfirmed.
+    This does not append, publish, replay an action or certify Telegram delivery.
+    """
+    from adaos.services import conversation_store
+    if not all(isinstance(value,str) and value.strip() for value in
+               (message_id,conversation_id,webspace_id,channel_id,owner,role,text)):
+        return {'ok':False,'persisted':False}
+    acknowledged=conversation_store.confirm_message(message_id,conversation_id=conversation_id,
+        thread_id=thread_id,webspace_id=webspace_id,channel_id=channel_id,owner=owner,role=role,text=text)
+    return {'ok':acknowledged,'persisted':acknowledged}
 
 
 @tool(

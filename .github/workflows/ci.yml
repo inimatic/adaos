@@ -275,6 +275,7 @@ jobs:
             tests/test_builder_run_observability.py \
             tests/test_builder_environment_recovery.py \
             tests/test_builder_control_reply.py \
+            tests/test_sdk_io_out.py \
             tests/test_builder_issue_planning.py \
             tests/test_builder_failure_analysis.py \
             tests/test_builder_ui_patch_validation.py \

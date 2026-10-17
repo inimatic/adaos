@@ -51,6 +51,40 @@ def test_durable_chat_reuses_canonical_progress_id_for_projection(monkeypatch):
     assert projected[0]['id'] == 'm.canonical.job'
 
 
+def test_durable_receipt_is_available_while_live_projection_is_still_running(monkeypatch):
+    from threading import Event,Thread
+    entered,release=Event(),Event()
+    monkeypatch.setattr(out,'_publish',lambda *args,**kw:(entered.set(),release.wait(10)))
+    identity='m.late.'+uuid4().hex
+    scope=dict(conversation_id='conv.late.'+uuid4().hex,owner='skill:test',webspace_id='test',
+               channel_id='test',thread_id='project:one',role='user',text='Exact authorized request')
+    meta={**scope,'conversation_owner':scope['owner'],'dialog_channel_id':scope['channel_id']}
+    worker=Thread(target=lambda:out.chat_append(scope['text'],from_='user',msg_id=identity,persist=True,_meta=meta),daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(5),'The canonical commit must precede live projection'
+        assert worker.is_alive()
+        assert out.chat_message_receipt(identity,**scope)=={'ok':True,'persisted':True}
+        for field in ('conversation_id','thread_id','webspace_id','channel_id','owner','role','text'):
+            assert out.chat_message_receipt(identity,**{**scope,field:'foreign'})=={'ok':False,'persisted':False}
+        from adaos.services import conversation_store
+        with conversation_store._sql().connect() as con:
+            con.execute("UPDATE conversation_messages SET redaction_state='redacted' WHERE message_id=?",(identity,))
+            con.commit()
+        assert not out.chat_message_receipt(identity,**scope)['persisted']
+    finally:
+        release.set();worker.join(5)
+    assert not worker.is_alive()
+
+
+def test_unavailable_durable_message_cannot_acknowledge_ingress(monkeypatch):
+    from adaos.services import conversation_store
+    scope=dict(conversation_id='conv.test',owner='skill:test',webspace_id='test',
+               channel_id='test',thread_id='project:one',role='user',text='Exact request')
+    monkeypatch.setattr(conversation_store,'confirm_message',lambda *args,**kwargs:False)
+    assert not out.chat_message_receipt('m.missing',**scope)['persisted']
+
+
 def test_coerce_webspace_id_unwraps_nested_and_stringified_values() -> None:
     assert coerce_webspace_id({"webspace_id": "default"}, fallback="fallback") == "default"
     assert coerce_webspace_id("{'webspace_id': 'default'}", fallback="fallback") == "default"

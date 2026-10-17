@@ -4830,6 +4830,21 @@ def get_message(message_id: str) -> dict[str, Any] | None:
     return _row_to_message(row) if row is not None else None
 
 
+def confirm_message(message_id: str, *, conversation_id: str, thread_id: str,
+                    webspace_id: str, channel_id: str, owner: str, role: str,
+                    text: str) -> bool:
+    """Verify committed ingress against authoritative columns, no payload read."""
+    if not ensure_schema():
+        return False
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        row=con.execute("""SELECT message_id FROM conversation_messages
+            WHERE message_id=? AND conversation_id=? AND COALESCE(thread_id,'')=?
+              AND webspace_id=? AND channel_id=? AND owner=? AND role=? AND text=?
+              AND redaction_state='active'""",
+            (message_id,conversation_id,thread_id or '',webspace_id,channel_id,owner,role,text)).fetchone()
+    return row is not None
+
+
 def upsert_job_message(
     *,
     job_id: str,
