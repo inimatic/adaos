@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import pytest
 
 from adaos.services.builder.traceability import project_change, evidence_impact
 from adaos.services.traceability import validate_graph
@@ -79,6 +80,46 @@ def test_issue_split_and_merge_keep_many_to_many_derivation_without_inventing_ve
     graph = projection({}, change)["graph"]
     assert len([row for row in graph["edges"] if row["relation"] == "superseded_by"]) == 4
     assert not any(row["relation"] == "verified_by" for row in graph["edges"])
+
+
+def behavioral_graph(**changes):
+    context = {axis: {'identity': axis + '-v1'} for axis in ('implementation','runtime','state','environment')}
+    context.update(changes)
+    return project_change(project_ref='scenario:retouch', generation=1,
+        change={'acceptance_constraints': [{'constraint_id': 'goal-plan-result', 'target_ref': 'command:start', 'kind': 'journey'}]},
+        semantic_document={'commands': [{'id': 'start'}]}, behavioral_context=context)['graph']
+
+
+def test_behavioral_acceptance_requires_full_closure_and_keeps_the_execution_immutable():
+    from adaos.services.builder.traceability import make_behavioral_receipt, attach_behavioral_execution
+    graph = behavioral_graph()
+    receipt = make_behavioral_receipt(graph, verification_refs=['goal-plan-result'], execution_ref='browser:run-1',
+        observations={'goal-plan-result': {'passed': True, 'evidence_ref': 'artifact:actual-browser-result'}})
+    before = deepcopy(receipt)
+    assert evidence_impact(graph, graph, [receipt])['receipts'][0]['reuse_admissible']
+    linked = attach_behavioral_execution(graph, receipt)
+    assert {'executed_by','accepted_by'} <= {row['relation'] for row in linked['edges']}
+    assert receipt == before
+    for axis in ('implementation','runtime','state','environment'):
+        changed = behavioral_graph(**{axis: {'identity': axis + '-v2'}})
+        impact = evidence_impact(graph, changed, [receipt])['receipts'][0]
+        assert impact['status'] == 'stale' and not impact['reuse_admissible']
+        assert impact['dependency_causes'] == ['behavior:' + axis]
+    assert receipt == before
+
+
+def test_behavioral_receipts_cannot_omit_dependencies_or_promote_authoring_status():
+    from adaos.services.builder.traceability import make_behavioral_receipt
+    graph = behavioral_graph()
+    with pytest.raises(ValueError, match='closure is incomplete'):
+        make_behavioral_receipt(behavioral_graph(state=None), verification_refs=['goal-plan-result'],
+            execution_ref='browser:run', observations={'goal-plan-result': {'passed': True, 'evidence_ref': 'artifact:actual'}})
+    with pytest.raises(ValueError, match='preregistered'):
+        make_behavioral_receipt(graph, verification_refs=['goal-plan-result'], execution_ref='authoring:completed', observations={})
+    legacy = {'receipt_ref': 'old', 'dependencies': {'behavior:implementation': next(
+        row['digest'] for row in graph['nodes'] if row['ref'] == 'behavior:implementation')}}
+    impact = evidence_impact(graph, graph, [legacy])['receipts'][0]
+    assert impact['status'] == 'compatible' and not impact['reuse_admissible']
 
 
 def test_actual_workflow_projection_tracks_two_committed_increments_and_preserves_records(graph_project):

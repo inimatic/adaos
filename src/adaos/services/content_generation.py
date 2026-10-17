@@ -115,7 +115,9 @@ class ContentGenerationService:
     def submit(self, *, request_id: str, purpose: str, prompt: str, schema: Mapping[str, Any],
                data: Any = None, model: str | None = None, reasoning: Mapping[str, Any] | None = None,
                temperature: float | None = None, max_output_tokens: int | None = None,
-               context: Mapping[str, Any] | None = None, images: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
+               context: Mapping[str, Any] | None = None, images: list[Mapping[str, Any]] | None = None,
+               spend_scope: str | None = None, spend_run_id: str | None = None,
+               spend_reserve_usd: float | None = None) -> dict[str, Any]:
         from adaos.sdk.llm.media import validate_image_input
 
         if len(images or []) > 4:
@@ -129,6 +131,12 @@ class ContentGenerationService:
         request = {"purpose": purpose, "prompt": prompt, "schema": dict(schema), "data": data,
                    "model": model, "reasoning": reasoning, "temperature": temperature, "max_output_tokens": max_output_tokens,
                    "context": dict(context or {}), "images": image_inputs}
+        spend = {key: value for key, value in {'spend_scope': spend_scope, 'spend_run_id': spend_run_id,
+                 'spend_reserve_usd': spend_reserve_usd}.items() if value is not None}
+        if spend:
+            if not spend_scope:
+                raise ValueError('A spend scope is required for budgeted content')
+            request['spend'] = spend
         encoded = json.dumps(request, ensure_ascii=False, allow_nan=False)
         if len(encoded.encode("utf-8")) > 1024 * 1024:
             raise ValueError("Content request including encoded images exceeds 1 MiB; split the input, it will not be truncated")
@@ -155,7 +163,7 @@ class ContentGenerationService:
                      *[{"type": "input_image", "image_url": item["data_url"], "detail": item["detail"]} for item in image_inputs]]}],
                 model=model, reasoning=reasoning, temperature=temperature, max_tokens=max_output_tokens,
                 text={"format": {"type": "json_schema", "name": "content_draft", "strict": True, "schema": envelope}},
-                request_id=record["root_request_id"], profile_scope="runtime")
+                request_id=record["root_request_id"], profile_scope="runtime", **spend)
             if not isinstance(job, Mapping) or not job.get("job_id"):
                 raise ValueError("Root did not return a durable job identity; retry the same request_id")
             record["job"] = {"job_id": job.get("job_id"), "base_url": (job.get("_client") or {}).get("base_url")}

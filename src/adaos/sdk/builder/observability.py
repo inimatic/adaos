@@ -32,6 +32,8 @@ def read_llm_evidence(receipt: Any) -> dict[str, Any]:
 
 def configure_usd_budget(scope: str, **kwargs: Any) -> dict[str, Any]:
     """Configure one explicitly authorized project experiment allowance."""
+    from adaos.sdk import access
+    access.require('applications.develop')
     from adaos.services.builder.spend_ledger import BuilderSpendLedger
     return BuilderSpendLedger().configure(scope, **kwargs)
 

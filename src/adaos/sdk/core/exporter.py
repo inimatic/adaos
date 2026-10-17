@@ -30,6 +30,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.builder.applications",
     "adaos.sdk.builder.prototype",
     "adaos.sdk.builder.semantic_ui",
+    "adaos.sdk.builder.observability",
     "adaos.sdk.chat",
     "adaos.sdk.control_plane",
     "adaos.sdk.conversation",
@@ -56,6 +57,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.workflow",
 )
 _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
+    "adaos.sdk.builder.observability": "Read source-attributed attempt observations and durable project USD commitments. Unknown provider charges retain their reservation; estimates are not invoices.",
     "adaos.sdk.builder.prototype": "Author and inspect governed declarative Prototype context and submit owned Builder requests.",
     "adaos.sdk.builder.semantic_ui": "Inspect semantic refs and obtain Core-issued bounded edit admissions; retained pins, exact write masks, replay and undo never grant production bindings.",
     "adaos.sdk.access": "Read verified caller and invocation identity and require caller capabilities in the current skill scope.",

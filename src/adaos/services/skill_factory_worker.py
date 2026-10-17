@@ -456,6 +456,7 @@ def _write_compact_json(path: Path, payload: Any) -> None:
 
 
 _IMPLEMENTATION_SDK_SYMBOLS = {
+    "adaos.sdk.builder.observability.usd_budget",
     "adaos.sdk.access.caller",
     "adaos.sdk.access.invocation",
     "adaos.sdk.access.require",
@@ -1199,6 +1200,16 @@ def _implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "limits": "At most 4 PNG/JPEG/WebP images; each supplied image <=5 MiB. The entire content request including base64 images, schema and prompt must fit 1 MiB. Use bounded JPEG diagnostic crops/previews for analysis and QA; preserve native-resolution originals separately for edits and exports.",
                     "identity": "Image bytes and metadata participate in request identity. Reuse a request_id only with identical inputs; get polls without a new paid submission.",
                 },
+            },
+            "usd_budget": {
+                "methods": ["adaos.sdk.builder.observability.usd_budget"],
+                "submit_methods": ["adaos.sdk.llm.content.generate", "adaos.sdk.llm.images.generate", "adaos.sdk.llm.images.edit"],
+                "submit_parameters": "spend_scope: str | None; spend_run_id: str | None; spend_reserve_usd: float | None",
+                "admission": "An explicitly configured scope reserves before Root submit. All primary/repair/analysis/image/QA attempts share that scope and use distinct stable request IDs. A missing configured account blocks a budgeted submit.",
+                "identity": "Budget parameters participate in durable draft identity. Poll get with the same request_id; never resubmit under a new identity to recover an uncertain call.",
+                "reconciliation": "Timeout, cancellation, failure and estimates retain unknown reserves. Only a complete metered/invoiced receipt releases unused reserve. Late receipts join once; a cost conflict stays unresolved.",
+                "view_fields": ["scope", "status", "limit_usd", "committed_usd", "available_usd", "usage_complete", "attempts", "authorization_ref", "basis"],
+                "ownership": "Core owns configuration and durable accounting. Applications read and submit against an authorized account; never reset or clone its ledger. Codex allowances are separate when explicitly excluded by the user.",
             },
             "image_edit_draft": {
                 "methods": ["adaos.sdk.llm.images.edit", "adaos.sdk.llm.images.get", "adaos.sdk.llm.images.read_bytes"],
@@ -11018,6 +11029,19 @@ placeholder files or invented enum values. Exact repair feedback field mask:
             if target_type == "scenario" and accepted_revision
             else ""
         )
+        from adaos.services.builder.ui_change_authorization import authorized_ui_change
+        ui_change = authorized_ui_change(assignment.get('constraints') or {},
+            project_id=target_id, prototype_revision=accepted_revision)
+        if ui_change:
+            accepted_prototype_instruction = (
+                f" The design baseline is Prototype revision {accepted_revision}. "
+                "Core admitted an explicit revision-bound UI change for this task: "
+                + json.dumps(ui_change, ensure_ascii=False)
+                + ". Implement the authorized navigation/presentation changes in those candidate UI files. "
+                "Preserve existing domain behavior, data, contracts, source identities and unrelated UI. "
+                "The immutable ui_revisions baseline remains audit evidence. Independent runtime/browser gates still apply. "
+                "No publication or activation authority is implied by this UI scope."
+            )
         if surgical_ui:
             if qualified_repair_complete:
                 required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
@@ -12115,7 +12139,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         artifacts = request.get("artifacts") if isinstance(request, Mapping) else {}
         revision = _accepted_prototype_revision(artifacts)
         constraints = assignment.get("constraints") or {}
-        if not revision or bool(constraints.get("allow_semantic_ui_delta")):
+        from adaos.services.builder.ui_change_authorization import authorized_ui_change
+        if not revision or authorized_ui_change(constraints,
+                project_id=str(target.get('id') or ''), prototype_revision=revision):
             return
         scenario_id = str(target.get("id") or "").strip()
         webui_path = f"scenarios/{scenario_id}/webui.json"

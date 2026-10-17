@@ -28,10 +28,13 @@ def _service(capability: str):
 
 
 def generate(*, request_id: str, model: str, prompt: str, size: str = "1024x1024", quality: str = "low",
-             output_format: str = "png", background: str = "opaque", context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+             output_format: str = "png", background: str = "opaque", context: Mapping[str, Any] | None = None,
+             spend_scope: str | None = None, spend_run_id: str | None = None,
+             spend_reserve_usd: float | None = None) -> dict[str, Any]:
     """Submit once with an explicit image model. Context is local and not sent to the provider."""
     return _service("workspace.write").submit(request_id=request_id, model=model, prompt=prompt, size=size,
-        quality=quality, output_format=output_format, background=background, context=context)
+        quality=quality, output_format=output_format, background=background, context=context,
+        spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
 
 
 def get(request_id: str) -> dict[str, Any]:
@@ -52,11 +55,13 @@ def read_bytes(request_id: str, *, max_bytes: int = 12582912) -> bytes:
 def edit(*, request_id: str, model: str, prompt: str, images: list[dict[str, str]],
          mask: dict[str, str] | None = None, size: str = "1024x1024", quality: str = "high",
          output_format: str = "png", background: str = "opaque",
-         context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+         context: Mapping[str, Any] | None = None, spend_scope: str | None = None,
+         spend_run_id: str | None = None, spend_reserve_usd: float | None = None) -> dict[str, Any]:
     """Submit an owned image edit once; polling uses get with the same identity."""
     return _service("workspace.write").submit(request_id=request_id, model=model, prompt=prompt,
         images=images, mask=mask, size=size, quality=quality, output_format=output_format,
-        background=background, context=context)
+        background=background, context=context, spend_scope=spend_scope,
+        spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
 
 
 def list_drafts(*, context: Mapping[str, Any], limit: int = 10) -> list[dict[str, Any]]:

@@ -141,6 +141,7 @@ def submit(
     expected_iteration: int | None = None,
     execution_budget: Mapping[str, Any] | None = None,
     agent_profile: Mapping[str, Any] | None = None,
+    ui_change_authorization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Submit one follow-up instruction and include the current projection."""
 
@@ -161,6 +162,7 @@ def submit(
             expected_iteration=expected_iteration,
             execution_budget=execution_budget,
             agent_profile=agent_profile,
+            **({'ui_change_authorization': ui_change_authorization} if ui_change_authorization is not None else {}),
         )
         or {}
     )

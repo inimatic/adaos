@@ -2074,6 +2074,19 @@ def test_plan_rejects_excess_criteria_without_accepting_a_truncated_change(workf
     assert after['change'] == before['change']
 
 
+@pytest.mark.parametrize('field,bound', [('semantic_refs',100),('source_message_ids',100),
+    ('derived_from_issue_ids',50),('superseded_by_issue_ids',50)])
+def test_plan_does_not_silently_trim_issue_provenance_or_semantic_links(workflow_project, field, bound):
+    service, _ = workflow_project
+    before = service.describe('scenario', 'recipes')
+    with pytest.raises(BuilderWorkflowError, match=field + ' exceeds'):
+        service.transition('scenario','recipes','plan_change_set',metadata={
+            'change_set_id':'too-many-refs','request':'Keep provenance',
+            'issues':[{'issue_id':'all','title':'No lost links','lane':'automation','acceptance_criteria':['Preserve links'],
+                       field:[f'ref:{i}' for i in range(bound + 1)]}]})
+    assert service.describe('scenario','recipes')['generation'] == before['generation']
+
+
 def test_large_context_packet_is_externalized_and_hydrated(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

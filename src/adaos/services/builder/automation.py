@@ -5457,6 +5457,7 @@ class BuilderAutomationService:
         expected_iteration: int | None = None,
         agent_profile: Mapping[str, Any] | None = None,
         clarification_response: Mapping[str, Any] | None = None,
+        ui_change_authorization: Mapping[str, Any] | None = None,
         _continuation_checkpoint_override: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
@@ -5504,6 +5505,17 @@ class BuilderAutomationService:
                 session["conversation_binding_source"] = "explicit_ingress"
                 self._save_session(session, emit_projection=False)
             session = self.refresh_session(session)
+            if ui_change_authorization is not None:
+                from .ui_change_authorization import admit_ui_change
+                if session.get('object_type') != 'scenario':
+                    raise ValueError('UI change authorization requires a scenario task')
+                session['ui_change_authorization'] = admit_ui_change(ui_change_authorization,
+                    project_id=str(session['object_id']),
+                    prototype_revision=str(dict(session.get('prototype_acceptance') or {}).get('revision')
+                                           or session.get('source_prototype_version') or ''))
+            elif (instruction != _UNCHANGED_RETRY_INSTRUCTION
+                  and not isinstance(session.get('pending_browser_feedback'), Mapping)):
+                session.pop('ui_change_authorization', None)
             previous_failure = (
                 dict(session.get("last_failure") or {})
                 if isinstance(session.get("last_failure"), Mapping)
@@ -8797,11 +8809,16 @@ class BuilderAutomationService:
     def project_session(session: Mapping[str, Any]) -> dict[str, Any]:
         status = str(session.get("status") or "starting").strip() or "starting"
         task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
+        current_task_id = str(session.get('current_task_id') or task.get('task_id') or '').strip()
         result = (
             session.get("last_result")
             if isinstance(session.get("last_result"), Mapping)
             else {}
         )
+        result_task_id = str(result.get('task_id') or dict(result.get('provenance') or {}).get('task_id')
+            or str(result.get('local_run_ref') or '').removeprefix('skill-factory-run:')).strip()
+        if current_task_id and result_task_id and result_task_id != current_task_id:
+            result = {}
         provenance = (
             result.get("provenance")
             if isinstance(result.get("provenance"), Mapping)
@@ -8812,6 +8829,9 @@ class BuilderAutomationService:
             if isinstance(session.get("codex_usage_accounting"), Mapping)
             else {}
         )
+        if (current_task_id and usage_receipt.get('task_id')
+                and usage_receipt['task_id'] != current_task_id):
+            usage_receipt = {}
         forge = task.get("forge") if isinstance(task.get("forge"), Mapping) else {}
         failure = (
             session.get("last_failure")
@@ -8873,9 +8893,6 @@ class BuilderAutomationService:
         awaiting_input = (
             bool(clarification) and clarification.get("status") != "completed"
         )
-        current_task_id = str(
-            session.get("current_task_id") or task.get("task_id") or ""
-        ).strip()
         local_run_ref = str(result.get("local_run_ref") or "").strip()
         if (
             not local_run_ref
@@ -9115,7 +9132,7 @@ class BuilderAutomationService:
                 "terminal": status in _TERMINAL_STATUSES,
             },
             "status": budget_status,
-            "overrun_tokens": overrun_tokens,
+            "overrun_tokens": overrun_tokens if budget_tokens_known else None,
             "billable_limit_tokens": declared_billable_tokens,
             "billable_status": billable_status,
             "billable_overrun_tokens": billable_overrun_tokens,
@@ -11040,6 +11057,8 @@ class BuilderAutomationService:
             and not accepted_prototype_validation,
             "local_process_debug": True,
         }
+        if session.get('ui_change_authorization'):
+            realization_constraints['ui_change_authorization'] = copy.deepcopy(session['ui_change_authorization'])
         if is_dev_ticket_repair:
             realization_constraints.update(
                 {
@@ -12670,6 +12689,7 @@ class BuilderAutomationService:
                                     source_path=self.dev_scenarios_root / object_id,
                                     require_materialization_identity=True,
                                     expected_materialization_identity=readiness["materialization"].get("materialization_identity"),
+                                    implementation_paths=[self.dev_skills_root / skill_id for skill_id in self._session_companion_skill_ids(current)],
                                     context_packet_digest=str(
                                         current.get("context_packet_digest") or ""
                                     )

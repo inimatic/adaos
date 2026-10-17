@@ -528,6 +528,16 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
         applicability = normalize_issue_applicability(value)
     except ValueError as exc:
         raise BuilderWorkflowError(str(exc)) from exc
+    def bounded_refs(field: str, maximum: int) -> list[str]:
+        raw = value.get(field, [])
+        if raw is None:
+            raw = []
+        if not isinstance(raw, (list, tuple)):
+            raise BuilderWorkflowError(f'change set issue {field} must be a list')
+        refs = list(dict.fromkeys(str(item).strip() for item in raw if str(item).strip()))
+        if len(refs) > maximum:
+            raise BuilderWorkflowError(f'change set issue {field} exceeds {maximum} items')
+        return refs
     return {
         **applicability,
         "issue_id": issue_id,
@@ -541,35 +551,11 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
             if value.get("confidence") is not None
             else None
         ),
-        "semantic_refs": list(
-            dict.fromkeys(
-                str(item).strip()
-                for item in value.get("semantic_refs") or []
-                if str(item).strip()
-            )
-        )[:100],
-        "source_message_ids": list(
-            dict.fromkeys(
-                str(item).strip()
-                for item in value.get("source_message_ids") or []
-                if str(item).strip()
-            )
-        )[:100],
+        "semantic_refs": bounded_refs('semantic_refs', 100),
+        "source_message_ids": bounded_refs('source_message_ids', 100),
         "structural_status": structural_status,
-        "derived_from_issue_ids": list(
-            dict.fromkeys(
-                str(item).strip()
-                for item in value.get("derived_from_issue_ids") or []
-                if str(item).strip()
-            )
-        )[:50],
-        "superseded_by_issue_ids": list(
-            dict.fromkeys(
-                str(item).strip()
-                for item in value.get("superseded_by_issue_ids") or []
-                if str(item).strip()
-            )
-        )[:50],
+        "derived_from_issue_ids": bounded_refs('derived_from_issue_ids', 50),
+        "superseded_by_issue_ids": bounded_refs('superseded_by_issue_ids', 50),
     }
 
 

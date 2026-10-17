@@ -46,6 +46,17 @@ def test_durable_draft_preserves_input_and_unicode_without_regeneration(tmp_path
         request(service, prompt="Changed")
 
 
+def test_public_content_budget_reaches_root_and_is_part_of_recovery_identity(tmp_path):
+    service, calls = setup_service(tmp_path)
+    budget = {'spend_scope': 'experiment', 'spend_run_id': 'retouch-1', 'spend_reserve_usd': 2}
+    request(service, **budget)
+    request(service, **budget)
+    assert len(calls) == 1
+    assert {key: calls[0][1][key] for key in budget} == budget
+    with pytest.raises(ValueError, match='different content'):
+        request(service, **{**budget, 'spend_scope': 'another-account'})
+
+
 @pytest.mark.parametrize("result,expected", [
     ({"status": "succeeded", "output_text": '{"status":"completed","data":{},"message":""}'}, "invalid_output"),
     ({"status": "succeeded", "output_text": '{"status":"out_of_scope","data":null,"message":"Only notes"}'}, "out_of_scope"),

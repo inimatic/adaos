@@ -160,5 +160,17 @@ def test_partial_fresh_usage_cannot_hide_proven_billable_overrun():
     assert result['observed']['budget_tokens'] is None
     assert result['status'] == result['billable_status'] == 'exceeded'
     assert result['billable_overrun_tokens'] == 100
+    assert result['overrun_tokens'] is None
+
+
+def test_new_iteration_does_not_present_previous_task_summary_or_usage_as_current():
+    from adaos.services.builder.automation import BuilderAutomationService
+    projected = BuilderAutomationService.project_session({'status': 'in_progress', 'current_task_id': 'new',
+        'last_result': {'local_run_ref': 'skill-factory-run:old', 'summary': 'Previous task completed'},
+        'codex_usage_accounting': {'task_id': 'old', 'model_tokens': 700, 'input_tokens': 500, 'output_tokens': 200},
+        'execution_budget': {'max_model_tokens': 1000}})
+    assert projected['summary'] is None
+    assert projected['budget_usage']['observed']['model_tokens'] is None
+    assert projected['task_id'] == 'new'
 
 

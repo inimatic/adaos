@@ -261,8 +261,10 @@ jobs:
             tests/test_builder_authoring_discovery.py \
             tests/test_builder_worker_contract_input.py \
             tests/test_builder_issue_applicability.py \
+            tests/test_builder_ui_change_authorization.py \
             tests/test_builder_workflow.py \
             tests/test_builder_attempt_evidence.py \
+            tests/test_builder_llm_input_attribution.py \
             tests/test_builder_compatibility_regressions.py \
             tests/test_builder_run_observability.py \
             tests/test_builder_spend_ledger.py \
@@ -291,6 +293,8 @@ jobs:
             tests/test_e2e_composition_metrics.py \
             tests/test_e2e_dollar_budget.py \
             tests/test_llm_client.py \
+            tests/test_content_generation.py \
+            tests/test_image_generation.py \
             tests/test_llm_wait_phase_timing.py \
             tests/test_e2e_blind_ux.py \
             tests/test_e2e_png_transport.py \
@@ -317,6 +321,7 @@ jobs:
           uv run python -m pytest -q \
             tests/test_skill_factory_worker.py::test_local_worker_does_not_apply_result_after_task_cancellation \
             tests/test_skill_factory_worker.py::test_local_worker_repairs_preserved_precommit_result_once \
+            tests/test_skill_factory_worker.py::test_automation_preserves_accepted_semantic_webui_surface \
             tests/test_codex_profiles.py
       - name: Install locked browser-test dependencies
         working-directory: e2e/stand/browser

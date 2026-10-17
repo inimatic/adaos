@@ -38,6 +38,18 @@ class Broker:
         return copy.deepcopy(self.job)
 
 
+def test_public_image_budget_reaches_root_and_cannot_drift_on_retry(tmp_path):
+    broker = Broker()
+    service = ImageGenerationService(tmp_path, 'skill:test|user:test', broker, lambda *args, **kwargs: {})
+    args = dict(request_id='edit-1', model='gpt-image-1', prompt='Correct blemishes',
+        images=[{'image_url':'fixture-owned-input'}], spend_scope='experiment', spend_run_id='retouch-1', spend_reserve_usd=2)
+    service.submit(**args); service.submit(**args)
+    assert len(broker.submits) == 1
+    assert broker.submits[0]['spend_scope'] == 'experiment'
+    with pytest.raises(ValueError, match='different image request'):
+        service.submit(**{**args, 'spend_scope': 'another-account'})
+
+
 def test_edit_binds_source_and_mask_and_recovers_without_resubmitting(tmp_path):
     broker = Broker()
     service = ImageGenerationService(tmp_path, "skill:retouch|user:owner", broker, publisher)

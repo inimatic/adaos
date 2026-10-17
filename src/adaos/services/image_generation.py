@@ -59,11 +59,19 @@ class ImageGenerationService:
     def submit(self, *, request_id: str, model: str, prompt: str, size: str = "1024x1024",
                quality: str = "low", output_format: str = "png", background: str = "opaque",
                context: Mapping[str, Any] | None = None,
-               images: list[dict[str, str]] | None = None, mask: dict[str, str] | None = None) -> dict[str, Any]:
+               images: list[dict[str, str]] | None = None, mask: dict[str, str] | None = None,
+               spend_scope: str | None = None, spend_run_id: str | None = None,
+               spend_reserve_usd: float | None = None) -> dict[str, Any]:
         from PIL import Image
 
         Image.init()  # Verify local decoder availability before starting a paid job.
         request = dict(model=model, prompt=prompt, size=size, quality=quality, output_format=output_format, background=background)
+        spend = {key: value for key, value in {'spend_scope': spend_scope, 'spend_run_id': spend_run_id,
+                 'spend_reserve_usd': spend_reserve_usd}.items() if value is not None}
+        if spend:
+            if not spend_scope:
+                raise ValueError('A spend scope is required for budgeted images')
+            request.update(spend)
         if images is not None:
             request['images'] = images
             if mask is not None:

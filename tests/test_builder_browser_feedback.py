@@ -14,11 +14,14 @@ from adaos.services.builder.browser_feedback import (
 from adaos.services.skill_factory_worker import _browser_feedback_prompt_projection
 
 
-@pytest.mark.parametrize("defect", ["source_mutation", "stale_materialization", "none"])
+@pytest.mark.parametrize("defect", ["source_mutation", "companion_mutation", "stale_materialization", "none"])
 def test_browser_receipt_cannot_accept_changed_source_or_wrong_loaded_revision(tmp_path, monkeypatch, defect):
     source = tmp_path / "scenario"
     source.mkdir()
     (source / "webui.json").write_text('{"schema":"adaos.webui.v1","ui":{}}', encoding="utf-8")
+    companion = tmp_path / 'skill'
+    companion.mkdir()
+    (companion / 'handler.py').write_text('VERSION = 1', encoding='utf-8')
     monkeypatch.setattr("adaos.services.builder.browser_feedback.current_env_type", lambda: "dev")
     monkeypatch.setattr("adaos.services.builder.browser_feedback.resolve_control_token", lambda **kw: "fixture")
     def runner(*args, **kwargs):
@@ -27,6 +30,8 @@ def test_browser_receipt_cannot_accept_changed_source_or_wrong_loaded_revision(t
         assert expected["revision"] == "exact-task"
         if defect == "source_mutation":
             (source / "webui.json").write_text('{"changed":true}', encoding="utf-8")
+        if defect == 'companion_mutation':
+            (companion / 'handler.py').write_text('VERSION = 2', encoding='utf-8')
         observed = {**expected, "revision": "old-task"} if defect == "stale_materialization" else expected
         output = Path(env["ADAOS_E2E_OUTPUT"])
         (output / "report.json").write_text(json.dumps({"passed": True, "samples": [
@@ -36,7 +41,8 @@ def test_browser_receipt_cannot_accept_changed_source_or_wrong_loaded_revision(t
     service = BuilderBrowserFeedbackService(state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1], command_runner=runner)
     receipt = service.evaluate(scenario_id="fixture", webspace_id="fixture-preview", subnet_id="fixture",
         task_id="exact-task", source_path=source, runtime_url="http://127.0.0.1:8777", require_materialization_identity=True,
-        expected_materialization_identity={"revision": "exact-task", "source_fingerprint": "automation:trusted-content-hash"})
+        expected_materialization_identity={"revision": "exact-task", "source_fingerprint": "automation:trusted-content-hash"},
+        implementation_paths=[companion])
     assert receipt["ok"] is (defect == "none")
     if defect != "none":
         assert receipt["report"]["failure"] in {"candidate_changed_during_browser_observation", "browser_materialization_identity_mismatch"}

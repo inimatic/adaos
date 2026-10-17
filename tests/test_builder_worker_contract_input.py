@@ -7,6 +7,17 @@ from adaos.services.mcp_tool_scope import effective_mcp_tool_scope
 from adaos.services.skill_factory_worker import SubprocessCodexExecutor
 
 
+def test_worker_budget_contracts_cover_the_actual_public_generation_facades():
+    from adaos.services.skill_factory_worker import _implementation_sdk_contract_bundle
+    bundle = _implementation_sdk_contract_bundle()
+    contracts = {row['name']: row for row in bundle['contracts']}
+    for name in ('adaos.sdk.llm.content.generate','adaos.sdk.llm.images.generate','adaos.sdk.llm.images.edit'):
+        for parameter in ('spend_scope','spend_run_id','spend_reserve_usd'):
+            assert parameter in contracts[name]['signature']
+    assert 'adaos.sdk.builder.observability.usd_budget' in contracts
+    assert 'usd_budget' in bundle['response_contracts']
+
+
 @pytest.mark.parametrize('profile', [
     {'enabled': False, 'url': 'http://root.invalid/mcp', 'enabled_tools': ['get_descriptor_item']},
     {'url': 'http://root.invalid/mcp', 'enabled_tools': ['get_descriptor_item'], 'disabled_tools': ['get_descriptor_item']},

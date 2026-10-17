@@ -5594,6 +5594,18 @@ def test_automation_preserves_accepted_semantic_webui_surface(tmp_path: Path) ->
         worker._validate_changed_paths(
             assignment, worker._changed_from_baseline(workspace), workspace=workspace
         )
+    # A legacy flag is not authority to discard the accepted design boundary.
+    assignment['constraints']['allow_semantic_ui_delta'] = True
+    with pytest.raises(ValueError, match='accepted semantic UI surface'):
+        worker._validate_changed_paths(assignment, worker._changed_from_baseline(workspace), workspace=workspace)
+    from adaos.services.builder.ui_change_authorization import admit_ui_change
+    assignment['constraints']['ui_change_authorization'] = admit_ui_change(
+        {'reason': 'Explicitly revise the candidate UI', 'source_message_ids': ['canonical-user-turn']},
+        project_id='demo', prototype_revision='001')
+    worker._validate_changed_paths(assignment, worker._changed_from_baseline(workspace), workspace=workspace)
+    assignment['constraints']['ui_change_authorization']['base_prototype_revision'] = 'different'
+    with pytest.raises(ValueError, match='accepted semantic UI surface'):
+        worker._validate_changed_paths(assignment, worker._changed_from_baseline(workspace), workspace=workspace)
 
 
 def test_automation_cannot_edit_accepted_semantic_document(tmp_path: Path) -> None:

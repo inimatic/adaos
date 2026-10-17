@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from adaos.e2e.prototype_context_ablation import native_builder
-from adaos.services.builder.llm_input_attribution import retain_llm_evidence
+from adaos.services.builder.llm_input_attribution import retain_llm_evidence, read_llm_evidence
 from adaos.services.context_control import ContextControlService
 
 
@@ -18,6 +18,8 @@ def evidence_builder(tmp_path, monkeypatch):
     module = native_builder(source / "handlers/main.py")
     monkeypatch.setattr(module.sdk_builder_observability, "retain_llm_evidence",
                         lambda value: retain_llm_evidence(value, state_dir=tmp_path / "private"))
+    monkeypatch.setattr(module.sdk_builder_observability, "read_llm_evidence",
+                        lambda receipt: read_llm_evidence(receipt, state_dir=tmp_path / "private"))
     project = tmp_path / "project"
     project.mkdir()
     return module, {"id": "evidence-test", "scenario_id": "evidence-test", "artifact_root": str(project)}, project

@@ -219,6 +219,25 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
     widgets: states.length,
     states,
   })
+  // Hash actual runtime values and controller state, not just loading flags.
+  // A later behavioral proof must remain bound to this concrete state.
+  const snapshot = await page.evaluate(async () => {
+    const host = [...document.querySelectorAll('[data-webui-widget-id]')]
+      .map(element => window.ng?.getComponent(element)).find(component => component?.pageData && component?.pageState)
+    if (!host || !(host.pageData.runtimeDataSourceLastValue instanceof Map)) return null
+    const hash = async value => {
+      const bytes = new TextEncoder().encode(JSON.stringify(value))
+      return 'sha256:' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+        .map(byte => byte.toString(16).padStart(2, '0')).join('')
+    }
+    try {
+      return {controller_digest: await hash(host.pageState.getSnapshot()),
+        data_sources: await Promise.all([...host.pageData.runtimeDataSourceLastValue.entries()]
+          .map(async ([key, row]) => ({identity_digest: await hash(key), value_digest: await hash(row.value)})))}
+    } catch { return null }
+  })
+  sample.state_snapshots ||= []
+  sample.state_snapshots.push({checkpoint, snapshot})
   if (pending.length) {
     sample.hard_failures.push(
       `Data did not settle at ${checkpoint}: ${pending.map(item => `${item.id}=${item.state}`).join(', ')}`,
@@ -438,6 +457,7 @@ try {
     }, { hub, token, subnet, webspace })
 
     const page = await context.newPage()
+    await context.tracing.start({screenshots: true, snapshots: true, sources: true})
     page.setDefaultTimeout(interactionTimeoutMs)
     page.setDefaultNavigationTimeout(startupTimeoutMs)
     const sample = {
@@ -451,8 +471,16 @@ try {
       tool_calls: [],
       hard_failures: [],
       warnings: [],
+      environment: {browser_version: browser.version(), runner: 'builder-candidate-feedback'},
     }
     report.samples.push(sample)
+    const runtimeStatus = await context.request.get(`${hub}/api/status`, {
+      headers: {'X-AdaOS-Token': token}, timeout: interactionTimeoutMs,
+    })
+    if (runtimeStatus.ok()) {
+      const status = await runtimeStatus.json()
+      sample.runtime_identity = {core: status.adaos, runtime: status.runtime}
+    }
     const responseDiagnosticTasks = []
     const toolRequestStartedAt = new WeakMap()
     page.on('request', request => {
@@ -490,6 +518,20 @@ try {
                 ...diagnostic,
                 http_status: response.status(),
                 duration_ms: startedAt ? Date.now() - startedAt : null,
+                started_at: startedAt ? new Date(startedAt).toISOString() : null,
+                correlation_ids: (() => {
+                  const found = []
+                  const walk = (value, depth = 0) => {
+                    if (!value || typeof value !== 'object' || depth > 8 || found.length >= 48) return
+                    for (const [key, child] of Object.entries(value)) {
+                      if (/^(root_job_id|job_id|run_id|task_id|request_id|receipt_ref|source_message_id)$/.test(key)
+                        && typeof child === 'string') found.push({kind: key, value: child.slice(0, 500)})
+                      else if (child && typeof child === 'object') walk(child, depth + 1)
+                    }
+                  }
+                  try { walk(JSON.parse(bodyText)) } catch {}
+                  return found
+                })(),
               })
             })
             .catch(() => {}),
@@ -1094,6 +1136,9 @@ try {
       } catch {}
     } finally {
       await Promise.allSettled(responseDiagnosticTasks)
+      const trace = `private-trace-${layout}.zip`
+      await context.tracing.stop({path: path.join(output, trace)})
+      sample.trace = {path: trace, visibility: 'private_local', format: 'playwright-trace'}
       await context.close()
     }
   }

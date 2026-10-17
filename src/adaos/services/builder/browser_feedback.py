@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from adaos.apps.cli.active_control import (
     resolve_control_base_url,
@@ -34,6 +34,25 @@ def _file_digest(path: Path) -> str | None:
         return _digest_bytes(path.read_bytes())
     except OSError:
         return None
+
+
+def _implementation_snapshot(paths: Sequence[Path]) -> dict[str, Any]:
+    """Hash executable inputs, excluding mutable Builder journals and records."""
+    ignored = {'.git', '.runtime', '__pycache__', 'node_modules', 'data', 'internal', 'ui_revisions'}
+    result = {}
+    for index, root in enumerate(paths):
+        root = Path(root)
+        if not root.exists():
+            result[f'{index}/<missing>'] = None
+            continue
+        candidates = [root] if root.is_file() else root.rglob('*')
+        for path in candidates:
+            relative = path.relative_to(root) if root.is_dir() else Path(path.name)
+            if (path.is_file() and not ignored.intersection(relative.parts)
+                    and path.name not in {'prompt_state.json', 'prototype.brief.json'}
+                    and path.suffix in {'.py','.json','.yaml','.yml','.mjs','.js','.ts','.css','.html'}):
+                result[f'{index}/{relative.as_posix()}'] = _file_digest(path)
+    return result
 
 
 def _safe_token(value: Any, *, fallback: str = "candidate") -> str:
@@ -201,6 +220,7 @@ class BuilderBrowserFeedbackService:
         space_kind: str = "development",
         require_materialization_identity: bool = False,
         expected_materialization_identity: Mapping[str, Any] | None = None,
+        implementation_paths: Sequence[Path] = (),
     ) -> dict[str, Any]:
         env_type = current_env_type()
         if env_type != "dev":
@@ -242,6 +262,8 @@ class BuilderBrowserFeedbackService:
         if not webui_path.is_file():
             raise RuntimeError(f"candidate WebUI is missing: {webui_path}")
         source_digest = _file_digest(webui_path)
+        implementation_roots = [webui_path.parent, *implementation_paths]
+        implementation_before = _implementation_snapshot(implementation_roots)
         semantic_digest = _file_digest(webui_path.parent / "semantic.webui.json")
         expected_materialization = {}
         if require_materialization_identity:
@@ -255,6 +277,16 @@ class BuilderBrowserFeedbackService:
         ]
         attempt, output = _next_attempt(self.root / task)
         output.mkdir(parents=True, exist_ok=False)
+        verification_specs = [
+            {'constraint_id': identity, 'kind': 'browser_postcondition', 'expected': expected}
+            for identity, expected in (
+                ('browser.source_unchanged', implementation_before),
+                ('browser.materialization_exact', expected_materialization),
+                ('browser.data_authority', 'Every observed runtime data source settles authoritatively'),
+                ('browser.runner_checks', 'No runner failure; browser process exits successfully'),
+                ('browser.wide_compact', ['wide', 'compact']))]
+        atomic_write_json(output / 'verification-spec.json', {'specifications': verification_specs,
+            'scope': 'Generic browser gate; complete application journey requires its own specifications'})
 
         control_url = str(runtime_url or resolve_control_base_url(prefer_local=True)).rstrip("/")
         token = resolve_control_token(base_url=control_url)
@@ -324,7 +356,8 @@ class BuilderBrowserFeedbackService:
             }
 
         source_unchanged = (_file_digest(webui_path) == source_digest
-            and _file_digest(webui_path.parent / "semantic.webui.json") == semantic_digest)
+            and _file_digest(webui_path.parent / "semantic.webui.json") == semantic_digest
+            and _implementation_snapshot(implementation_roots) == implementation_before)
         if not source_unchanged:
             report["passed"] = False
             report["failure"] = "candidate_changed_during_browser_observation"
@@ -349,9 +382,10 @@ class BuilderBrowserFeedbackService:
                     "path": path.resolve().as_posix(),
                     "sha256": _file_digest(path),
                     "bytes": path.stat().st_size,
-                    "media_type": "image/png" if path.suffix.lower() == ".png" else "application/json"
+                    "media_type": "application/zip" if path.suffix.lower() == '.zip' else "image/png" if path.suffix.lower() == ".png" else "application/json"
                     if path.suffix.lower() == ".json"
                     else "text/plain",
+                    'visibility': 'private_local' if path.suffix.lower() == '.zip' else 'local_qualification',
                 }
             )
 
@@ -374,6 +408,10 @@ class BuilderBrowserFeedbackService:
             and authoritative_data_settled
             and exit_code == 0
         )
+        atomic_write_json(report_path, report)
+        for item in evidence:
+            if item['name'] == 'report.json':
+                item.update(sha256=_file_digest(report_path), bytes=report_path.stat().st_size)
         receipt = {
             "schema": BROWSER_FEEDBACK_SCHEMA,
             "ok": passed,
@@ -404,6 +442,34 @@ class BuilderBrowserFeedbackService:
             "evidence": evidence,
             "created_at": _now_iso(),
         }
+        from .traceability import project_change, make_behavioral_receipt, attach_behavioral_execution
+        state_pinned = bool(samples) and all(sample.get('state_snapshots') and
+            all(checkpoint.get('snapshot') is not None for checkpoint in sample['state_snapshots']) for sample in samples)
+        context = {
+            'implementation': implementation_before if all(implementation_before.values()) else None,
+            'runtime': {'materialization': expected_materialization, **receipt['runtime_contract'],
+                        'loaded': [sample['runtime_identity'] for sample in samples]}
+                if expected_materialization and samples and all(sample.get('runtime_identity') for sample in samples) else None,
+            'state': [sample['state_snapshots'] for sample in samples] if state_pinned else None,
+            'environment': [{'layout': sample.get('layout'), 'viewport': sample.get('viewport'),
+                             **sample['environment']} for sample in samples]
+                if samples and all(sample.get('environment') for sample in samples) else None,
+        }
+        graph = project_change(project_ref='scenario:' + scenario, generation=attempt,
+            change={'acceptance_constraints': verification_specs}, behavioral_context=context)['graph']
+        missing_axes = [key for key, value in context.items() if value is None]
+        receipt['behavioral_traceability'] = {'graph': graph, 'qualification': 'incomplete' if missing_axes else 'observed',
+            'missing_axes': missing_axes, 'scope': 'Generic browser gate; application journey acceptance is not implied'}
+        if not missing_axes:
+            verdicts = {'browser.source_unchanged': source_unchanged,
+                'browser.materialization_exact': bool(expected_materialization) and not report.get('failure') == 'browser_materialization_identity_mismatch',
+                'browser.data_authority': authoritative_data_settled,
+                'browser.runner_checks': bool(report.get('passed')) and exit_code == 0,
+                'browser.wide_compact': {sample.get('layout') for sample in samples} == {'wide','compact'}}
+            observed = make_behavioral_receipt(graph, verification_refs=list(verdicts),
+                execution_ref='browser:' + str(task_id) + ':' + str(attempt), observations={
+                    ref: {'passed': bool(value), 'evidence_ref': 'artifact:browser/' + receipt['report_digest']} for ref, value in verdicts.items()})
+            receipt['behavioral_traceability'].update(receipt=observed, graph=attach_behavioral_execution(graph, observed))
         receipt_path = output / "receipt.json"
         atomic_write_json(receipt_path, receipt)
         receipt["receipt_path"] = receipt_path.resolve().as_posix()
