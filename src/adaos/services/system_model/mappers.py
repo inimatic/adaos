@@ -632,6 +632,7 @@ def canonical_object_from_device_endpoint(payload: Any) -> CanonicalObject:
                     "device_display_name": device_display_name,
                     "endpoint_display_name": endpoint_display_name,
                     "hostname": identity.get("hostname"),
+                    "os_name": identity.get("os_name"),
                     "node_names": identity.get("node_names"),
                     "base_url": identity.get("base_url"),
                 }

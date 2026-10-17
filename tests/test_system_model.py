@@ -612,6 +612,7 @@ def test_canonical_object_from_device_endpoint_accepts_device_record_shape() -> 
                 "link_id": "member-2",
                 "node_id": "member-2",
                 "hostname": "kitchen-member",
+                "os_name": "linux",
                 "node_names": ["Kitchen East"],
                 "base_url": "http://member-2.local",
             },
@@ -649,6 +650,7 @@ def test_canonical_object_from_device_endpoint_accepts_device_record_shape() -> 
     assert obj["runtime"]["connected_to_hub"] is True
     assert obj["runtime"]["route_mode"] == "p2p"
     assert obj["actual_state"]["device_ref"] == "member:member-2"
+    assert obj["actual_state"]["os_name"] == "linux"
 
 
 def test_canonical_object_from_subnet_directory_node_maps_capacity_and_presence() -> None:

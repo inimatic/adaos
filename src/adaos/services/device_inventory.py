@@ -612,6 +612,8 @@ class DeviceInventoryService:
                 continue
             policy = _mapping(entry.get("endpoint_policy"))
             manifest = _mapping(entry.get("endpoint_manifest"))
+            diagnostic_report = _mapping(entry.get("diagnostic_report"))
+            manifest_runtime = _mapping(manifest.get("runtime"))
             version_info = endpoint_version_info(entry)
             effective_name = _effective_name(
                 policy_entry=entry,
@@ -627,7 +629,12 @@ class DeviceInventoryService:
                         "link_id": endpoint_id,
                         "browser_device_id": None,
                         "node_id": endpoint_id,
-                        "hostname": None,
+                        "hostname": _text_or_none(
+                            diagnostic_report.get("hostname") or manifest_runtime.get("hostname")
+                        ),
+                        "os_name": _text_or_none(
+                            diagnostic_report.get("os") or manifest_runtime.get("os")
+                        ),
                         "node_names": [],
                         "base_url": None,
                         "endpoint_id": endpoint_id,
@@ -675,7 +682,7 @@ class DeviceInventoryService:
                         "aggregated_at": now,
                         "endpoint_policy": policy or None,
                         "endpoint_manifest": manifest or None,
-                        "diagnostic_report": _mapping(entry.get("diagnostic_report")) or None,
+                        "diagnostic_report": diagnostic_report or None,
                         "endpoint_health": _mapping(entry.get("endpoint_health")) or None,
                         "service_state": _mapping(entry.get("service_state")) or None,
                         "version_info": version_info,
