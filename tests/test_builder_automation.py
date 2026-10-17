@@ -11673,17 +11673,21 @@ def test_finalize_records_reconciliation_failure_as_durable_gate_failure(
     assert transitions == ["automation_failed"]
 
 
-@pytest.mark.parametrize("error_number,reason", [(28, "storage_capacity"), (30, "storage_read_only"), (111, "runtime_unavailable")])
-def test_environment_interruption_preserves_result_and_disables_paid_source_repair(tmp_path, monkeypatch, error_number, reason):
+@pytest.mark.parametrize("error_number,reason,wrapped", [(28, "storage_capacity", False), (30, "storage_read_only", False), (111, "runtime_unavailable", False), (111, "runtime_unavailable", True)])
+def test_environment_interruption_preserves_result_and_disables_paid_source_repair(tmp_path, monkeypatch, error_number, reason, wrapped):
     import errno
     from adaos.services.development_tickets import DevelopmentTicketService
     error_number = {28: errno.ENOSPC, 30: errno.EROFS, 111: errno.ECONNREFUSED}[error_number]
+    environment_error = OSError(error_number, "injected environment fault")
+    if wrapped:
+        import requests
+        environment_error = requests.ConnectionError(environment_error)
     service = _service(tmp_path)
     events = []
     monkeypatch.setattr(BuilderAutomationService, "_publish_lifecycle_notification",
         lambda self, session, **kwargs: events.append(kwargs))
     monkeypatch.setattr(BuilderAutomationService, "_reconcile_completed_workflow",
-        lambda *args: (_ for _ in ()).throw(OSError(error_number, "injected environment fault")))
+        lambda *args: (_ for _ in ()).throw(environment_error))
     monkeypatch.setattr(BuilderAutomationService, "_sync_linked_development_ticket_tasks", lambda self, value: dict(value))
     session = {"session_id": "automation.scenario.recipes", "object_type": "scenario", "object_id": "recipes",
         "webspace_id": "owned-test", "current_task_id": "task.retained", "change_id": "change-retained",

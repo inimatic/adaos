@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import errno
 import hashlib
 import json
 import logging
@@ -36,6 +35,7 @@ from adaos.services.builder.workflow import (
     BuilderWorkflowService,
     ui_spatial_target_refs,
 )
+from adaos.services.builder.environment_recovery import environment_interruption
 from adaos.services.context_control import ContextControlService
 from adaos.services.builder_context import automation_core_projection, context_strategy
 from adaos.services.resources.prototype import prototype_webui_digest
@@ -5505,6 +5505,24 @@ class BuilderAutomationService:
                 session["conversation_binding_source"] = "explicit_ingress"
                 self._save_session(session, emit_projection=False)
             session = self.refresh_session(session)
+            resume_only = bool(re.fullmatch(
+                r"(?:продолжи(?:ть)?|продолжай|возобнови(?:ть)?|возобновляй|resume|continue|retry)(?:\s+(?:работу|выполнение|automation))?[.!]?",
+                instruction, re.IGNORECASE))
+            retained_result = ((session.get("task") or {}).get("status") == "completed" and bool(session.get("last_result")))
+            if (resume_only and session.get("status") == "failed"
+                and (retained_result or (session.get("last_failure") or {}).get("failure_class") == "environment_interruption")):
+                if expected_session_id is not None or expected_iteration is not None:
+                    if (session.get("session_id") != expected_session_id
+                        or type(expected_iteration) is not int or session.get("iteration") != expected_iteration):
+                        raise ValueError("Automation follow-up does not match the expected session iteration")
+                if (session.get("last_failure") or {}).get("failure_class") == "environment_interruption":
+                    return self.retry_failed(object_type=str(session["object_type"]), object_id=str(session["object_id"]),
+                                             webspace_id=webspace_id or "desktop", conversation_id=conversation_id)
+                # Older checkpoints may predate cause-aware classification.
+                # The recovery owner still verifies the retained task and gates.
+                recovered = self.recover_validated_result(object_type=str(session["object_type"]), object_id=str(session["object_id"]))
+                recovered.update(resumed_exact_checkpoint=True, model_started=False)
+                return recovered
             if ui_change_authorization is not None:
                 from .ui_change_authorization import admit_ui_change
                 if session.get('object_type') != 'scenario':
@@ -13286,21 +13304,14 @@ class BuilderAutomationService:
                 "message": readiness["error"],
                 "updated_at": readiness["completed_at"],
             }
-            environment_reason = None
-            if isinstance(exc, OSError):
-                if exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)} or getattr(exc, "winerror", None) in {39, 112}:
-                    environment_reason = ("storage_capacity", "Недостаточно места для завершения. Освободите место на диске.")
-                elif exc.errno == errno.EROFS:
-                    environment_reason = ("storage_read_only", "Хранилище недоступно для записи. Восстановите доступ к нему.")
-                elif exc.errno in {errno.ECONNREFUSED, errno.ENETUNREACH, errno.ETIMEDOUT} or getattr(exc, "winerror", None) == 10061:
-                    environment_reason = ("runtime_unavailable", "Не удалось связаться с runtime. Восстановите его доступность.")
+            environment_reason = environment_interruption(exc)
             if environment_reason:
-                reason, instruction = environment_reason
+                reason, instruction = environment_reason["reason"], environment_reason["instruction"]
                 message = (f"{instruction} Проверенный результат сохранён. "
                     "Затем продолжите Automation: восстановление этого результата не требует нового вызова модели.")
                 current["progress"]["message"] = message
                 current["last_failure"].update(failure_class="environment_interruption", retryable=True,
-                    message=message, details={"reason": reason, "errno": exc.errno,
+                    message=message, details={"reason": reason, "errno": environment_reason["errno"],
                         "requires_user_action": True, "preserved_task_id": current.get("current_task_id"),
                         "recovery_command": "recover_validated_result", "model_rerun_required": False})
             current["updated_at"] = readiness["completed_at"]
