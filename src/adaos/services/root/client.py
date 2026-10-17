@@ -743,16 +743,28 @@ class RootHttpClient:
         params: dict[str, Any] = {"name": name}
         if node_id:
             params["node_id"] = node_id
-        return dict(
-            self._request(
-                "GET",
-                f"/v1/{kind}/draft",
-                params=params,
-                verify=(self.verify if verify is None else verify),
-                cert=(self.cert if cert is None else cert),
-                timeout=timeout,
-            )
-        )
+        # This is an idempotent read before a transactional Forge write. A
+        # transient ingress failure must not discard an already validated
+        # candidate. Writes retain their separate reconciliation protocol.
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        for attempt in range(3):
+            try:
+                return dict(
+                    self._request(
+                        "GET",
+                        f"/v1/{kind}/draft",
+                        params=params,
+                        verify=(self.verify if verify is None else verify),
+                        cert=(self.cert if cert is None else cert),
+                        timeout=max(0.1, deadline - time.monotonic()),
+                    )
+                )
+            except RootHttpError as exc:
+                remaining = deadline - time.monotonic()
+                if attempt == 2 or exc.status_code not in {0, 502, 503, 504} or remaining <= 0:
+                    raise
+                _ROOT_HTTP_LOG.warning("forge draft read retry kind=%s status=%s attempt=%s", kind, exc.status_code, attempt + 1)
+                time.sleep(min(0.25 * 2 ** attempt, remaining))
 
     def get_skill_draft_info(self, **kw) -> dict:
         kw["kind"] = "skills"

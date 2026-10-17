@@ -5518,6 +5518,10 @@ class BuilderAutomationService:
                 if (session.get("last_failure") or {}).get("failure_class") == "environment_interruption":
                     return self.retry_failed(object_type=str(session["object_type"]), object_id=str(session["object_id"]),
                                              webspace_id=webspace_id or "desktop", conversation_id=conversation_id)
+                if (session.get("last_failure") or {}).get("stage") == "forge_checkpoint":
+                    recovered = self.reconcile_checkpoint(object_type=str(session["object_type"]), object_id=str(session["object_id"]))
+                    recovered.update(resumed_exact_checkpoint=True, model_started=False)
+                    return recovered
                 # Older checkpoints may predate cause-aware classification.
                 # The recovery owner still verifies the retained task and gates.
                 recovered = self.recover_validated_result(object_type=str(session["object_type"]), object_id=str(session["object_id"]))
@@ -6270,6 +6274,10 @@ class BuilderAutomationService:
                 if isinstance(observed_failure.get("details"), Mapping)
                 else {}
             )
+            if observed.get("status") == "failed" and observed_failure.get("stage") == "forge_checkpoint":
+                recovered = self.reconcile_checkpoint(object_type=kind, object_id=project_id)
+                recovered.update(retried_unchanged_request=True, model_started=False)
+                return recovered
             classification = (
                 dict(observed_details.get("classification") or {})
                 if isinstance(observed_details.get("classification"), Mapping)
@@ -7080,6 +7088,12 @@ class BuilderAutomationService:
             current["updated_at"] = _now_iso()
             self._save_session(current)
 
+        if self.background:
+            self._launch_worker(str(current["session_id"]), recovery_only=True)
+            return {"ok": True, "status": "automation_recovery_queued", "reconciled": False,
+                    "model_started": False, "change_id": reconciliation_id,
+                    "message": "Продолжается сохранение проверенного результата в Forge. Модель повторно не запускается.",
+                    "session": current, "automation": self.project_session(current)}
         self._finalize_completed_session(current)
         reconciled = self.get_session(object_type, object_id) or current
         return {
@@ -13338,6 +13352,12 @@ class BuilderAutomationService:
                 "message": readiness["error"],
                 "updated_at": readiness["completed_at"],
             }
+            if failed_gate == "forge_checkpoint":
+                current["last_failure"]["details"] = {
+                    "preserved_task_id": current.get("current_task_id"),
+                    "recovery_command": "reconcile_checkpoint", "model_rerun_required": False,
+                    "checkpoints": copy.deepcopy(readiness.get("vcs_checkpoints") or []),
+                }
             environment_reason = environment_interruption(exc)
             if environment_reason:
                 reason, instruction = environment_reason["reason"], environment_reason["instruction"]
@@ -13767,6 +13787,7 @@ class BuilderAutomationService:
                     dict(service.checkpoint_artifact(**checkpoint_kwargs) or {})
                 )
             except Exception as exc:
+                from adaos.services.root.service import CheckpointPreflightUnavailable
                 checkpoints.append(
                     {
                         "ok": False,
@@ -13774,6 +13795,8 @@ class BuilderAutomationService:
                         "name": artifact_id,
                         "message": message,
                         "error": f"{type(exc).__name__}: {exc}",
+                        **({"recovery": dict(exc.recovery_context)}
+                           if isinstance(exc, CheckpointPreflightUnavailable) else {}),
                     }
                 )
         if change_id and conversation_id:

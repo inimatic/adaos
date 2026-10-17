@@ -513,6 +513,23 @@ class RootServiceError(RuntimeError):
     """Raised when developer workflow operations fail."""
 
 
+class CheckpointPreflightUnavailable(RootServiceError):
+    """Owner-proven failure before a new write or during read reconciliation."""
+
+    def __init__(self, *, unresolved_write: bool, cause: Exception):
+        super().__init__(
+            "Checkpoint outcome is unresolved; Forge reconciliation must succeed before another write"
+            if unresolved_write else
+            "Forge checkpoint preflight is unavailable; state-changing write was not started")
+        self.recovery_context = {
+            "schema": "adaos.forge.checkpoint_recovery.v1",
+            "owner": "forge_checkpoint", "phase": "reconciliation" if unresolved_write else "preflight",
+            "write_outcome": "unresolved" if unresolved_write else "not_started",
+            "cause_type": type(cause).__name__, "status_code": getattr(cause, "status_code", None),
+            "recovery_command": "reconcile_checkpoint", "model_rerun_required": False,
+        }
+
+
 class TemplateResolutionError(RootServiceError):
     """Raised when a requested scaffold template cannot be resolved."""
 
@@ -4402,13 +4419,7 @@ class RootDeveloperService:
             except Exception as exc:
                 missing = isinstance(exc, FileNotFoundError) or getattr(exc, "status_code", None) == 404
                 if not missing:
-                    if intent:
-                        raise RootServiceError(
-                            "Checkpoint outcome is unresolved; Forge reconciliation must succeed before another write"
-                        ) from exc
-                    raise RootServiceError(
-                        "Forge checkpoint preflight is unavailable; state-changing write was not started"
-                    ) from exc
+                    raise CheckpointPreflightUnavailable(unresolved_write=bool(intent), cause=exc) from exc
                 draft_info = {}
             draft_metadata = _normalize_draft_metadata(
                 draft_info.get("metadata") if isinstance(draft_info.get("metadata"), Mapping) else {}

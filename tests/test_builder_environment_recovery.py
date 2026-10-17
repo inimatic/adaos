@@ -87,3 +87,26 @@ def test_owner_materialization_retries_only_proven_unaccepted_connections(monkey
     assert all(call["json"] == calls[0]["json"] for call in calls)
     assert sum(delays) <= budget
     assert all(1 <= call['timeout'] <= budget for call in calls)
+
+
+@pytest.mark.parametrize('entry', ['Continue', 'retry'])
+def test_forge_failure_uses_existing_exact_reconciliation_without_model(entry):
+    state = {'session_id': 'session', 'iteration': 13, 'object_type': 'scenario', 'object_id': 'photo',
+             'status': 'failed', 'current_task_id': 'task.same', 'task': {'status': 'completed'},
+             'last_result': {'status': 'completed'}, 'last_failure': {'stage': 'forge_checkpoint'}}
+    calls = []
+    class Service(BuilderAutomationService):
+        def get_session(self, *args): return state
+        def refresh_session(self, value): return value
+        def reconcile_checkpoint(self, **kwargs):
+            calls.append(kwargs)
+            return {'ok': True, 'status': 'automation_recovery_queued'}
+        def recover_validated_result(self, **kwargs): raise AssertionError('Forge owns reconciliation')
+    service = object.__new__(Service)
+    if entry == 'Continue':
+        result = service.submit_turn(text=entry, object_type='scenario', object_id='photo',
+                                     expected_session_id='session', expected_iteration=13)
+    else:
+        result = service.retry_failed(object_type='scenario', object_id='photo')
+    assert calls == [{'object_type': 'scenario', 'object_id': 'photo'}]
+    assert result['model_started'] is False
