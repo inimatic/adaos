@@ -3173,14 +3173,36 @@ def _browser_feedback_prompt_projection(value: Any) -> dict[str, Any] | None:
                 },
             }
         )
+    # A business journey is a child receipt of the generic gate. Keep its
+    # diagnosis visible even when generic screenshots exhaust the path budget.
+    journey = value.get("application_journey")
+    application_journey = None
+    if isinstance(journey, Mapping):
+        application_journey = {
+            key: journey.get(key)
+            for key in ("profile", "ok", "repairable", "exit_code", "timed_out", "receipt_path", "receipt_digest")
+            if journey.get(key) is not None
+        }
+        application_journey["failures"] = [bounded_fields(item)
+            for item in (journey.get("failures") or []) if isinstance(item, Mapping)][:16]
+        application_journey["cases"] = [
+            {"case": str(case)[:128],
+             **{key: row.get(key) for key in ("passed", "active", "failure_kind")},
+             "completed_checks": [str(check.get("id"))[:128]
+                 for check in row.get("checks") or []
+                 if isinstance(check, Mapping) and check.get("passed") is True][:32]}
+            for case, row in list((journey.get("reports") or {}).items())[:16]
+            if isinstance(row, Mapping)
+        ]
+    evidence_items = [item for item in value.get("evidence") or [] if isinstance(item, Mapping)]
+    evidence_items.sort(key=lambda item: item.get("name") != "application-journey-receipt.json")
     evidence = [
         {
             key: item.get(key)
             for key in ("name", "path", "sha256", "bytes", "media_type")
             if item.get(key) not in (None, "")
         }
-        for item in value.get("evidence") or []
-        if isinstance(item, Mapping)
+        for item in evidence_items
     ][:12]
     return {
         "schema": value.get("schema"),
@@ -3194,6 +3216,7 @@ def _browser_feedback_prompt_projection(value: Any) -> dict[str, Any] | None:
         "receipt_path": value.get("receipt_path"),
         "receipt_digest": value.get("receipt_digest"),
         "samples": samples,
+        "application_journey": application_journey,
         "evidence": evidence,
     }
 

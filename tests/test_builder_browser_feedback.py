@@ -555,3 +555,32 @@ def test_failed_browser_feedback_queues_one_bounded_repair(
     assert submitted[-1]["expected_iteration"] == 2
     assert "compact: Page overflows horizontally" in submitted[-1]["text"]
     assert service._queue_browser_feedback_repair(current, {}, receipt) is False
+
+
+def test_child_journey_diagnosis_and_receipt_survive_generic_evidence_budget():
+    from adaos.services.builder.automation import BuilderAutomationService
+    path = 'D:/git/inimatic/adaos/e2e/artifacts/journey/receipt.json'
+    receipt = {'application_journey': {
+        'profile': 'natural-retouch.v2', 'ok': False, 'repairable': True,
+        'receipt_path': path, 'receipt_digest': 'sha256:child',
+        'failures': [{'layout': 'edited/compact', 'active': 'compare-zoom-pan-difference-download',
+                      'failure': 'expect(viewer).toBeVisible', 'dependencies_complete': True,
+                      'secret': 'never-project'}],
+        'reports': {'edited/compact': {'passed': False, 'active': 'compare-zoom-pan-difference-download',
+            'failure_kind': 'candidate_postcondition', 'checks': [{'id': 'approval-progress-reopen-idempotence', 'passed': True}],
+            'final_audit': {'private_application_values': 'never-project'}}}},
+        'evidence': [{'name': str(i), 'path': 'generic-' + str(i)} for i in range(20)] +
+                    [{'name': 'application-journey-receipt.json', 'path': path, 'sha256': 'sha256:child'}]}
+    projection = _browser_feedback_prompt_projection(receipt)
+    child = projection['application_journey']
+    assert child['failures'][0]['active'] == 'compare-zoom-pan-difference-download'
+    assert child['failures'][0]['secret'] == '[redacted]'
+    assert child['cases'][0]['completed_checks'] == ['approval-progress-reopen-idempotence']
+    assert child['receipt_digest'] == 'sha256:child'
+    assert 'never-project' not in str(projection)
+    assert len(projection['evidence']) == 12
+    assert projection['evidence'][0]['path'] == path
+    instruction = BuilderAutomationService._browser_feedback_repair_instruction(receipt)
+    assert 'compare-zoom-pan-difference-download' in instruction
+    assert 'e2e/artifacts/journey/receipt.json' in instruction
+    assert 'D:/git' not in instruction

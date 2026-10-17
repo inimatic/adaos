@@ -12465,10 +12465,12 @@ class BuilderAutomationService:
         rendered = "\n".join(f"- {item}" for item in failures[:16])
         if not rendered:
             rendered = "- The independently executed browser gate did not pass."
+        evidence_items = [item for item in receipt.get("evidence") or [] if isinstance(item, Mapping)]
+        evidence_items.sort(key=lambda item: item.get("name") != "application-journey-receipt.json")
         evidence = [
             portable_evidence_ref(item.get("path"))
-            for item in receipt.get("evidence") or []
-            if isinstance(item, Mapping) and str(item.get("path") or "").strip()
+            for item in evidence_items
+            if str(item.get("path") or "").strip()
         ][:8]
         evidence_text = "\n".join(f"- {item}" for item in evidence)
         return (
