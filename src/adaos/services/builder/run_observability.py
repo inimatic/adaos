@@ -54,7 +54,11 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
     if isinstance(observed_attempts, list) and observed_attempts:
         # Native Builder records disjoint receipts before presenting its legacy
         # aggregate. Never add that aggregate to its own constituent attempts.
-        unique = {}
+        # Identity comes from every retained source, not just the receipts that
+        # happened to arrive first. The legacy usage can be an aggregate and
+        # must not be assigned to any of these missing constituent receipts.
+        unique = {str(identity): {'root_job_id': str(identity)}
+                  for identity in (telemetry.get('root_job_id'), repair.get('root_job_id')) if identity}
         def merge_facts(before, after):
             merged = copy.deepcopy(before)
             for key, value in after.items():

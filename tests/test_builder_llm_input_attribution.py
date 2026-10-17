@@ -184,3 +184,17 @@ def test_known_text_overflow_still_blocks_when_an_image_is_present():
         )
     assert blocked.value.receipt["status"] == "blocked"
     assert not blocked.value.receipt["full_input_covered"]
+
+
+def test_parent_evidence_read_verifies_acknowledgement_and_bytes(tmp_path):
+    from adaos.services.builder.llm_input_attribution import retain_llm_evidence, read_llm_evidence
+    from adaos.services.context_control import ContextControlService
+    evidence = {'request_id': 'primary', 'messages': [{'role': 'user', 'content': 'Exact input'}]}
+    receipt = retain_llm_evidence(evidence, state_dir=tmp_path)
+    assert read_llm_evidence(receipt, state_dir=tmp_path) == evidence
+    with pytest.raises(ValueError, match='identity mismatch'):
+        read_llm_evidence({**receipt, 'digest': 'sha256:' + '0' * 64}, state_dir=tmp_path)
+    service = ContextControlService(state_dir=tmp_path)
+    (service.artifact_root / (receipt['digest'][7:] + '.json')).write_text('{}', encoding='utf-8')
+    with pytest.raises(Exception, match='digest mismatch'):
+        read_llm_evidence(receipt, state_dir=tmp_path)

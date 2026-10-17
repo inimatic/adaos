@@ -9094,7 +9094,9 @@ class BuilderAutomationService:
         budget_tokens_known = (observed_tokens is not None if budget_metric != "fresh_plus_output" else
             all(observed_count(key) is not None for key in ("input_tokens", "cached_input_tokens", "output_tokens")))
         if not budget_tokens_known:
-            budget_status = "unknown"
+            # Missing cache facts make the fresh-token metric unknown; they
+            # cannot erase an independently proven billable-token violation.
+            budget_status = "exceeded" if billable_status == "exceeded" else "unknown"
             overrun_tokens = 0
         return {
             "declared": declared,

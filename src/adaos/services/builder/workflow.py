@@ -506,9 +506,13 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
         raise BuilderWorkflowError(
             "change set issue acceptance_criteria must be a list"
         )
+    if len(raw_criteria) > 20:
+        raise BuilderWorkflowError(
+            "change set issue acceptance_criteria exceeds 20 items; split the Issue before planning"
+        )
     criteria = [
         _bounded_text(item, field="acceptance criterion", max_length=500)
-        for item in raw_criteria[:20]
+        for item in raw_criteria
     ]
     if not criteria:
         raise BuilderWorkflowError(

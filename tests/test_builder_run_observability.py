@@ -140,3 +140,25 @@ def test_automation_does_not_fill_absent_reasoning_or_cached_usage_with_zero():
     assert result["status"] == "unknown" and result["usage_state"] == "partial"
 
 
+@pytest.mark.parametrize('observations', [[], [{'root_job_id': 'primary',
+    'usage': {'input_tokens': 100, 'output_tokens': 50}, 'cost': {'estimated_usd': .2}}]])
+def test_known_repair_without_observation_prevents_complete_accounting(observations):
+    metrics = execution_metrics_from_llm({'telemetry': {'root_job_id': 'primary',
+        'repair': {'root_job_id': 'repair'}, 'attempt_observations': observations}})
+    assert metrics['llm_calls'] == 2 and metrics['repair_attempts'] == 1
+    assert not metrics['usage_complete'] and 'cost_usd' not in metrics
+    assert set(metrics['source_refs']) == {'llm_job:primary', 'llm_job:repair'}
+
+
+def test_partial_fresh_usage_cannot_hide_proven_billable_overrun():
+    from adaos.services.builder.automation import BuilderAutomationService
+    result = BuilderAutomationService._budget_usage_projection(status='failed', task={}, local_run={},
+        usage_receipt={'input_tokens': 180, 'output_tokens': 20, 'model_tokens': 200},
+        declared_budget={'max_model_tokens': 1000, 'max_billable_tokens': 100,
+                         'token_budget_metric': 'fresh_plus_output'})
+    assert result['usage_state'] == 'partial'
+    assert result['observed']['budget_tokens'] is None
+    assert result['status'] == result['billable_status'] == 'exceeded'
+    assert result['billable_overrun_tokens'] == 100
+
+

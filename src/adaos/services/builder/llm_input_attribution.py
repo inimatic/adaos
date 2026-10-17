@@ -303,4 +303,17 @@ def retain_llm_evidence(value: Mapping[str, Any], *, state_dir=None) -> dict[str
             "visibility": "private_runtime"}
 
 
-__all__ = ["SCHEMA", "build_llm_input_attribution", "retain_llm_evidence"]
+def read_llm_evidence(receipt: Mapping[str, Any], *, state_dir=None) -> dict[str, Any]:
+    """Read and verify a private acknowledgement before reusing its lineage."""
+    from adaos.services.context_control import ContextControlService
+    ref = str(receipt.get("ref") or "")
+    if (not ref.startswith("artifact://context/sha256/")
+            or receipt.get("digest") != "sha256:" + ref.rsplit("/", 1)[-1]):
+        raise ValueError("Builder evidence receipt identity mismatch")
+    value = ContextControlService(state_dir=state_dir).get_artifact(ref)
+    if not isinstance(value, dict):
+        raise ValueError("Builder attempt evidence must be an object")
+    return value
+
+
+__all__ = ["SCHEMA", "build_llm_input_attribution", "retain_llm_evidence", "read_llm_evidence"]

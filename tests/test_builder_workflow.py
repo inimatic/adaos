@@ -2061,6 +2061,19 @@ def test_context_packet_admits_phase_scope_before_model_and_retains_transition(w
     assert service.describe("scenario", "recipes")["generation"] == before["generation"]
 
 
+def test_plan_rejects_excess_criteria_without_accepting_a_truncated_change(workflow_project):
+    service, _ = workflow_project
+    before = service.describe('scenario', 'recipes')
+    with pytest.raises(BuilderWorkflowError, match='acceptance_criteria.*20'):
+        service.transition('scenario', 'recipes', 'plan_change_set', metadata={
+            'change_set_id': 'CH-too-many', 'request': 'Keep every criterion',
+            'issues': [{'issue_id': 'all', 'title': 'No requirement loss', 'lane': 'automation',
+                        'acceptance_criteria': [f'Criterion {i}' for i in range(21)]}]})
+    after = service.describe('scenario', 'recipes')
+    assert after['generation'] == before['generation']
+    assert after['change'] == before['change']
+
+
 def test_large_context_packet_is_externalized_and_hydrated(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

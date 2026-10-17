@@ -24,4 +24,10 @@ def execution_metrics_from_llm(result: Any, *, reasoning_effort=None) -> dict[st
     return project(result, reasoning_effort=reasoning_effort)
 
 
-__all__ = ["llm_input_attribution", "retain_llm_evidence", "execution_metrics_from_llm"]
+def read_llm_evidence(receipt: Any) -> dict[str, Any]:
+    """Verify the retained bytes for an acknowledged private attempt input."""
+    from adaos.services.builder.llm_input_attribution import read_llm_evidence as read
+    return read(receipt)
+
+
+__all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm"]
