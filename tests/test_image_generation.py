@@ -50,6 +50,27 @@ def test_public_image_budget_reaches_root_and_cannot_drift_on_retry(tmp_path):
         service.submit(**{**args, 'spend_scope': 'another-account'})
 
 
+def test_local_image_refusal_retains_public_identity_and_explicit_retry(tmp_path):
+    from adaos.sdk.llm.errors import SubmissionNotAdmitted
+    broker = Broker()
+    original = broker.submit_image_job
+    def denied(**kwargs):
+        raise SubmissionNotAdmitted('builder_usd_reservation_limit', request_id=kwargs['request_id'])
+    broker.submit_image_job = denied
+    service = ImageGenerationService(tmp_path, 'skill:test|user:test', broker, lambda *args, **kwargs: {})
+    args = dict(request_id='draft', model='gpt-image-1', prompt='Preserve texture')
+    with pytest.raises(SubmissionNotAdmitted) as caught: service.submit(**args)
+    proof = caught.value.admission
+    assert proof['request_id'] == 'draft' and proof['root_request_id'].startswith('image-')
+    assert service.get('draft')['status'] == 'not_admitted'
+    assert service.get('draft')['last_admission_refusal'] == proof
+    assert broker.submits == broker.polls == []
+    broker.submit_image_job = original
+    assert service.submit(**args)['status'] == 'queued'
+    assert service.get('draft')['admission_refusals'] == 1
+    assert len(broker.submits) == 1
+
+
 def test_edit_binds_source_and_mask_and_recovers_without_resubmitting(tmp_path):
     broker = Broker()
     service = ImageGenerationService(tmp_path, "skill:retouch|user:owner", broker, publisher)

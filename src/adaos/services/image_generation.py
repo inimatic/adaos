@@ -97,7 +97,9 @@ class ImageGenerationService:
                           "root_request_id": "image-" + _digest([str(self.root), request_id])}
                 atomic_write_json(path, record)
             submit = self.broker.submit_image_edit_job if images is not None else self.broker.submit_image_job
-            job = submit(request_id=record["root_request_id"], **request)
+            from adaos.services.llm_admission import retain_local_admission
+            with retain_local_admission(path, record, request_id):
+                job = submit(request_id=record["root_request_id"], **request)
             if not isinstance(job, Mapping) or not job.get("job_id"):
                 raise ValueError("Root did not return a durable job; retry only the same request_id")
             record["job"] = {"job_id": job["job_id"], "base_url": (job.get("_client") or {}).get("base_url")}
@@ -199,7 +201,7 @@ class ImageGenerationService:
 
     @staticmethod
     def _summary(record: Mapping[str, Any]) -> dict[str, Any]:
-        return {key: record.get(key) for key in ("request_id", "root_request_id", "input_digest", "created_at", "status", "model", "usage", "metering_status", "context", "message")}
+        return {key: record.get(key) for key in ("request_id", "root_request_id", "input_digest", "created_at", "status", "model", "usage", "metering_status", "context", "message", "last_admission_refusal", "admission_refusals")}
 
     def _view(self, record: Mapping[str, Any]) -> dict[str, Any]:
         view = self._summary(record)

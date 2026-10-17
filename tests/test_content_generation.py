@@ -57,6 +57,25 @@ def test_public_content_budget_reaches_root_and_is_part_of_recovery_identity(tmp
         request(service, **{**budget, 'spend_scope': 'another-account'})
 
 
+def test_local_refusal_is_durable_and_bound_to_public_draft_identity(tmp_path):
+    from adaos.sdk.llm.errors import SubmissionNotAdmitted
+    service, calls = setup_service(tmp_path)
+    original = service.broker.submit_response_job
+    def denied(*args, **kwargs):
+        raise SubmissionNotAdmitted('builder_usd_reservation_limit', request_id=kwargs['request_id'])
+    service.broker.submit_response_job = denied
+    with pytest.raises(SubmissionNotAdmitted) as caught: request(service)
+    proof = caught.value.admission
+    assert proof['request_id'] == 'draft-1' and proof['root_request_id'].startswith('content-')
+    assert service.get('draft-1')['status'] == 'not_admitted'
+    assert service.get('draft-1')['last_admission_refusal'] == proof
+    assert calls == []
+    service.broker.submit_response_job = original
+    assert request(service)['status'] == 'queued'
+    assert request(service)['admission_refusals'] == 1
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("result,expected", [
     ({"status": "succeeded", "output_text": '{"status":"completed","data":{},"message":""}'}, "invalid_output"),
     ({"status": "succeeded", "output_text": '{"status":"out_of_scope","data":null,"message":"Only notes"}'}, "out_of_scope"),

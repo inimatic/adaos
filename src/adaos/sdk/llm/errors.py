@@ -8,8 +8,10 @@ class SubmissionNotAdmitted(ValueError):
     rejections and other exceptions do not establish the same fact.
     """
 
-    def __init__(self, reason: str, *, request_id: str):
+    def __init__(self, reason: str, *, request_id: str, root_request_id: str | None = None):
         super().__init__(reason)
         self.request_id = request_id
         self.admission = {"schema": "adaos.llm.local_admission.v1", "status": "not_admitted",
                           "provider_transport_started": False, "request_id": request_id, "reason": reason}
+        if root_request_id:
+            self.admission['root_request_id'] = root_request_id
