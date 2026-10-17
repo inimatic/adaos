@@ -14,6 +14,7 @@ import io
 import json
 from pathlib import Path
 import time
+import sys
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
@@ -177,6 +178,8 @@ class RetouchFixture:
         return {"schema": "adaos.e2e.retouch_fixture_audit.v1", "source_digest": self.source_digest,
                 "scope": "fixture handlers + SQLite + Client; Core authorization and provider quality excluded",
                 "external_model_calls": 0, "jobs": jobs, "calls": calls, "runs": runs,
+                "environment": {"python": sys.version.split()[0], "platform": sys.platform,
+                                "pillow": Image.__version__, "numpy": self.module.imaging.np.__version__},
                 "budget": self.ledger.snapshot(self.module.pipeline.SPEND_SCOPE)}
 
 

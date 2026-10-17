@@ -184,6 +184,8 @@ jobs:
           node-version: "22"
       - name: Install locked dependencies
         run: uv sync --locked --extra dev
+      - name: Verify controlled browser fault attribution
+        run: node --test e2e/stand/browser/controlled-faults.test.mjs
       - name: Resolve exact contract consumer pins
         id: consumer-pins
         run: |

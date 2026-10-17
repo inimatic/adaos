@@ -16,7 +16,9 @@ def sample():
         "specification": {"source_digest": "source", "obligations": list(RETOUCH_OBLIGATIONS)},
         "observed_materializations": [{"revision": "task", "source_fingerprint": "fingerprint"}],
         "client_assets": [{"path": "/main.js", "digest": "sha256:asset", "size_bytes": 100}],
-        "final_audit": {"external_model_calls": 0, "source_digest": "source"},
+        "browser_environment": {"browser_version": "verified-browser", "viewport": {"width": 1440, "height": 1000}},
+        "final_audit": {"external_model_calls": 0, "source_digest": "source",
+                        "environment": {"python": "3.11", "platform": "test", "pillow": "12.3", "numpy": "test"}},
         "independent_pixel_verification": {"passed": True}}
 
 
@@ -34,7 +36,7 @@ def qualify(reports):
 @pytest.mark.parametrize("mutation", ["missing_check", "failed_check", "duplicate_check", "missing_layout",
     "missing_materialization", "stale_materialization", "source_drift", "missing_asset", "unhashed_asset",
     "missing_audit", "fixture_source_drift", "provider_call", "supervisor", "pixel_failure", "report_red",
-    "runner_error", "missing_spec_obligation"])
+    "runner_error", "missing_spec_obligation", "missing_browser_environment", "missing_fixture_environment"])
 def test_green_runner_cannot_hide_missing_obligations_or_execution_dependencies(mutation):
     reports = {"wide": sample(), "compact": sample()}
     row = reports["wide"]
@@ -55,6 +57,8 @@ def test_green_runner_cannot_hide_missing_obligations_or_execution_dependencies(
     if mutation == "report_red": row["passed"] = False
     if mutation == "runner_error": row["errors"] = ["unexpected fixture outage"]
     if mutation == "missing_spec_obligation": row["specification"]["obligations"].pop()
+    if mutation == "missing_browser_environment": row.pop('browser_environment')
+    if mutation == "missing_fixture_environment": row['final_audit'].pop('environment')
     result = qualify(reports)
     assert not result["ok"] and not result["repairable"]
 
@@ -129,3 +133,26 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
         assert behavior['outcome'] == ('failed' if fault in {'postcondition', 'nonzero_exit'} else 'passed')
     else:
         assert 'receipt' not in result['traceability']
+
+
+def test_journey_timeout_terminates_only_its_owned_process_family(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import psutil
+    from adaos.services.builder.application_journeys import run_owned_journey
+    marker = tmp_path / 'child-pid'
+    program = ("import subprocess,sys,time;from pathlib import Path;"
+               "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+               f"Path({str(marker)!r}).write_text(str(child.pid));time.sleep(60)")
+    sibling = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(60)'])
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_owned_journey([sys.executable, '-c', program], cwd=tmp_path, env=os.environ.copy(), timeout=1)
+        assert marker.is_file()
+        child_id = int(marker.read_text())
+        if psutil.pid_exists(child_id):
+            assert psutil.Process(child_id).status() == psutil.STATUS_ZOMBIE
+        assert sibling.poll() is None
+    finally:
+        sibling.terminate(); sibling.wait(timeout=5)

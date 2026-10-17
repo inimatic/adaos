@@ -38,6 +38,20 @@ def file_digest(path):
     return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def run_owned_journey(command, *, cwd, env, timeout, **options):
+    """Use the existing DEV process-family owner for timeout cleanup."""
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding='utf-8', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        from adaos.services.developer_project_validation import _terminate_process_tree
+        _terminate_process_tree(process)
+        stdout, stderr = process.communicate(timeout=10)
+        raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def qualify_reports(reports, *, expected_materialization, source_digest):
     """Fail closed on a green runner with missing postconditions or dependencies."""
     failures, repairable_failures = [], []
@@ -56,6 +70,10 @@ def qualify_reports(reports, *, expected_materialization, source_digest):
                            and report.get('specification', {}).get('layout') == expected_layout
                            and all(row.get('digest') and row.get('size_bytes', 0) > 0 for row in assets)
                            and report.get("final_audit", {}).get("source_digest") == source_digest
+                           and bool(report.get('browser_environment', {}).get('browser_version'))
+                           and bool(report.get('browser_environment', {}).get('viewport'))
+                           and all(report.get('final_audit', {}).get('environment', {}).get(key)
+                                   for key in ('python', 'platform', 'pillow', 'numpy'))
                            and not report.get("errors"))
         complete = present == set(RETOUCH_OBLIGATIONS) and len(checks) == len(RETOUCH_OBLIGATIONS)
         passed = (report.get("passed") is True and dependencies_ok and complete
@@ -99,16 +117,20 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
                   "authority": "trusted_application_journey_profile",
                   "expected": "runner_zero_exit_and_complete_unassisted_qualification"})
     atomic_write_json(output / "verification-spec.json", {"specifications": specs,
+                      "cases": list(RETOUCH_CASES),
                       "expected_materialization": dict(expected_materialization)})
     runner = repo / "e2e/stand/qualify-retouch-browser.py"
     trusted_files = [runner, repo / 'e2e/stand/serve-retouch-fixture.py',
         repo / 'e2e/stand/browser/retouch-journey.mjs', repo / 'src/adaos/e2e/retouch_fixture.py',
-        repo / 'src/adaos/e2e/retouch_verification.py', Path(__file__)]
+        repo / 'e2e/stand/browser/controlled-faults.mjs', repo / 'src/adaos/e2e/retouch_verification.py',
+        repo / 'src/adaos/services/builder/spend_ledger.py', repo / 'src/adaos/sdk/llm/errors.py', Path(__file__)]
     trusted_closure = {str(path.relative_to(repo)).replace('\\', '/'): file_digest(path)
                        for path in trusted_files if path.is_relative_to(repo)}
     env = {**environment, "ADAOS_E2E_EXPECTED_MATERIALIZATION": json.dumps(expected_materialization)}
     timed_out = False
     try:
+        if command_runner is subprocess.run:
+            command_runner = run_owned_journey
         completed = command_runner([sys.executable, "-X", "utf8", str(runner), "--source", str(sources[0]),
             "--output", str(output), "--label", label], cwd=repo, env=env, capture_output=True,
             text=True, encoding="utf-8", check=False, timeout=1200)
@@ -145,9 +167,14 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
                            "source_digest": source_digest,
                            "clients": {layout: row.get("client_assets") for layout, row in reports.items()},
                            "runner_closure": trusted_closure,
-                           "observed": {layout: row.get('runtime') for layout, row in reports.items()}},
+                           "observed": {layout: {key: (row.get('runtime') or {}).get(key)
+                               for key in ('buildId', 'zone', 'rootBase', 'hubBase', 'subnetId')}
+                               for layout, row in reports.items()}},
                "state": state,
-               "environment": {"cases": list(RETOUCH_CASES), "fixture": "loopback-only; external connect denied",
+               "environment": {"cases": list(RETOUCH_CASES),
+                               "observed": {layout: {'browser': row.get('browser_environment'),
+                                   'fixture': row.get('final_audit', {}).get('environment')} for layout, row in reports.items()},
+                               "fixture": "loopback-only; external connect denied",
                                "hub": env.get("ADAOS_E2E_HUB_URL"), "client": env.get("ADAOS_E2E_CLIENT_URL")}}
     graph = project_change(project_ref="scenario:" + scenario_id, generation=1,
         change={**(change or {}), "issues": [*(change or {}).get('issues', []),

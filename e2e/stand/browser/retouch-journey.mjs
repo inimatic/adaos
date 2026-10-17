@@ -4,6 +4,7 @@ import { chromium, expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { isExpectedFixtureRestartReadError } from './controlled-faults.mjs'
 
 const expect = baseExpect.configure({ timeout: 30_000 })
 const env = process.env
@@ -53,7 +54,10 @@ const report = { schema: 'adaos.e2e.retouch_journey.v1', specification_digest: h
 const before = await audit()
 if (before.jobs.length || before.runs.length) throw Error('A fresh fixture is required for each layout/trial')
 const browser = await chromium.launch({ headless: true })
-const context = await browser.newContext({ viewport: layout === 'wide' ? { width: 1440, height: 1000 } : { width: 390, height: 844 } })
+const viewport = layout === 'wide' ? { width: 1440, height: 1000 } : { width: 390, height: 844 }
+const context = await browser.newContext({ viewport })
+report.browser_environment = { browser_version: browser.version(), viewport,
+  node_version: process.version, platform: process.platform, architecture: process.arch }
 await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
 await context.addInitScript(({ hub, token, subnet }) => {
   window.__ADAOS_DEBUG__ = true; window.__ADAOS_BASE__ = hub; window.__ADAOS_TOKEN__ = token
@@ -92,7 +96,9 @@ await context.route('**/api/tools/**', async route => {
   } catch (error) {
     // Do not retain Playwright's verbose call log: it contains transport headers.
     const message = String(error.message).split('\n')[0].replaceAll(fixtureToken, '[redacted]')
-    if (restartWindow && message.includes('ECONNREFUSED')) {
+    const fault = { restartWindow, message, method: request.method(), tool: body?.tool }
+    report.route_failures ||= []; report.route_failures.push({ ...fault, path: url.pathname, command: body?.arguments?.command })
+    if (isExpectedFixtureRestartReadError(fault)) {
       report.expected_faults ||= []
       report.expected_faults.push({ kind: 'owned_fixture_restart', path: url.pathname,
         tool: body?.tool, command: body?.arguments?.command, message })
@@ -139,7 +145,12 @@ async function tab(id) {
   await control.click()
 }
 async function ready() {
-  await page.waitForFunction(() => window.__ADAOS_DEBUG_STATE__?.()?.sync?.materializationReady, undefined, { timeout: 90_000 })
+  await page.waitForFunction(({scenario, expected}) => {
+    const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync, value = sync?.materialization || {}
+    const identity = {revision: value.materializationRevision, source_fingerprint: value.sourceFingerprint}
+    return sync?.materializationReady && value.currentScenario === scenario
+      && Object.entries(expected).every(([key, value]) => identity[key] === value)
+  }, {scenario, expected: expectedMaterialization}, { timeout: 90_000 })
   const observed = await page.evaluate(() => {
     const value = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization || {}
     return { revision: value.materializationRevision, source_fingerprint: value.sourceFingerprint,
@@ -354,6 +365,7 @@ try {
   await step('compare-zoom-pan-difference-download', async () => {
     await tab('results')
     await host('v_results').locator(`[data-record-id="${run.id}-png"]`).click(); await primary()
+    await expect(compare()).toBeVisible()
     await compare().getByRole('button', { name: /^(Сравнить|Compare)$/ }).click()
     const images = compare().locator('.comparison-image'); await expect(images).toHaveCount(2)
     await expect.poll(() => images.evaluateAll(nodes => nodes.every(n => n.complete && n.naturalWidth === 320))).toBe(true)
