@@ -7086,6 +7086,11 @@ class BuilderAutomationService:
             current["finalizing_task_id"] = task_id or None
             current.pop("last_failure", None)
             current["updated_at"] = _now_iso()
+            current["progress"] = {
+                "task_id": task_id, "status": "commit_ready", "stage": "checkpoint_reconciliation",
+                "message": "Reconciling the saved Forge checkpoint without repeating model work",
+                "updated_at": current["updated_at"],
+            }
             self._save_session(current)
 
         if self.background:

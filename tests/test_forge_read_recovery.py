@@ -87,3 +87,5 @@ def test_checkpoint_reconciliation_queues_existing_no_model_worker_in_background
     assert launches == [('session', {'recovery_only': True})]
     assert current['current_task_id'] == 'task.same' and current['change_id'] == 'change.same'
     assert current['reconciliation_history'][-1]['mode'] == 'retry_exact'
+    assert current['progress']['status'] == current['status'] == 'commit_ready'
+    assert current['progress']['stage'] == 'checkpoint_reconciliation'
