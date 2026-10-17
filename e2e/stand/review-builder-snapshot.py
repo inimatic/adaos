@@ -54,6 +54,8 @@ def main():
     parser.add_argument("--probe", choices=("review", "equipment-journey", "equipment-repeat", "application-journey"), default="review")
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--profile", choices=("knowledge-library.v1",))
+    parser.add_argument("--client-url", default="http://127.0.0.1:8100/")
     args = parser.parse_args()
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev":
@@ -62,6 +64,8 @@ def main():
         parser.error("Requires an exact numeric UI revision")
     if args.probe != "review" and args.stage != "automation":
         parser.error("Functional journeys require an Automation snapshot")
+    if args.profile and args.probe != 'application-journey':
+        parser.error('Registered plan qualification requires the application journey probe')
     if args.probe == "application-journey":
         if not args.plan or not args.checkpoint:
             parser.error("Application journeys require a plan and TEST ownership checkpoint")
@@ -73,6 +77,11 @@ def main():
                 or not any(item.get("primary_ref") == f"scenario:{args.scenario}"
                            for item in checkpoint["context"].get("owned_artifacts", []))):
             parser.error("Invalid journey or TEST ownership")
+        if args.profile:
+            from adaos.services.builder.journey_profiles import profile_definition
+            definition = profile_definition(repo_root=Path.cwd(), profile_id=args.profile)
+            if plan != definition['plan']:
+                parser.error('A registered profile requires its exact platform-owned acceptance plan')
     root = (Path.cwd() / "e2e/artifacts/builder").resolve()
     output = args.output.resolve()
     if not output.is_relative_to(root) or output == root:
@@ -102,6 +111,21 @@ def main():
         snapshot = BuilderWorkflowService.from_context().automation_snapshot_root("scenario", args.scenario)
         metadata, ui = read_automation_snapshot(snapshot, args.scenario, args.revision)
         files["automation-snapshot.json"] = metadata
+    profile_sources_before = None
+    profile_verifier_before = None
+    if args.profile:
+        from adaos.services.builder.browser_feedback import _implementation_snapshot
+        workflow_owner = BuilderWorkflowService.from_context()
+        profile_sources = [workflow_owner.dev_scenarios_root / args.scenario]
+        profile_sources.extend(workflow_owner.dev_skills_root / row['ref'].split(':',1)[1]
+            for row in metadata.get('components', []) if row.get('ref', '').startswith('skill:'))
+        profile_sources_before = _implementation_snapshot(profile_sources)
+        profile_verifier_paths = [Path(__file__), Path('e2e/stand/browser/application-journey.mjs'),
+            Path(definition['profile']['plan']), Path('src/adaos/services/builder/journey_profiles.py')]
+        def verifier_snapshot():
+            return {str(path): 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in profile_verifier_paths}
+        profile_verifier_before = verifier_snapshot()
     output.mkdir(parents=True, exist_ok=False)
     for name, content in files.items():
         _write_json(output / "source" / name, content)
@@ -128,13 +152,21 @@ def main():
     if not selected.get("ok"):
         raise ValueError("Pinned snapshot materialization failed")
     receipt["preview_webspace_id"] = selected["preview_webspace_id"]
+    if args.profile:
+        from adaos.services.builder.journey_profiles import require_owned_plan_target
+        identity = selected.get('materialization', {}).get('materialization_identity') or {}
+        if identity.get('revision') != args.revision or not identity.get('source_fingerprint'):
+            raise ValueError('The materialization owner did not provide an exact source fingerprint')
+        receipt['expected_materialization'] = {key: identity[key] for key in ('revision', 'source_fingerprint')}
+        require_owned_plan_target(profile_id=args.profile, scenario_id=args.scenario, task_id=args.revision,
+            webspace_id=selected['preview_webspace_id'], checkpoint=checkpoint, pin=receipt)
     _write_json(output / "pin.json", receipt)
     hub = "http://127.0.0.1:8777"
     env = {**os.environ, "ADAOS_E2E_SCENARIO_ID": args.scenario,
            "ADAOS_E2E_WEBSPACE_ID": selected["preview_webspace_id"],
            "ADAOS_E2E_SUBNET_ID": args.subnet, "ADAOS_E2E_LOCALE": args.locale,
            "ADAOS_E2E_HUB_URL": hub, "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
-           "ADAOS_E2E_CLIENT_URL": "http://127.0.0.1:8100/", "ADAOS_E2E_REVIEW_STAGE": args.stage,
+           "ADAOS_E2E_CLIENT_URL": args.client_url, "ADAOS_E2E_REVIEW_STAGE": args.stage,
            "ADAOS_E2E_EXPECTED_WEBUI": str(ui_path),
            "ADAOS_E2E_SNAPSHOT_PIN": str(output / "pin.json"),
            "ADAOS_E2E_OUTPUT": str(output / "browser")}
@@ -147,6 +179,21 @@ def main():
                             env=env, capture_output=True, text=True, encoding="utf-8")
     (output / "browser.log").write_text(result.stdout + result.stderr, encoding="utf-8")
     receipt.update(browser_exit_code=result.returncode, preview_webspace_id=selected["preview_webspace_id"])
+    if args.profile:
+        from adaos.services.builder.journey_profiles import qualify_owned_plan_report
+        report = json.loads((output / 'browser/journey.json').read_text(encoding='utf-8'))
+        after = _implementation_snapshot(profile_sources)
+        verifier_after = verifier_snapshot()
+        qualification = qualify_owned_plan_report(repo_root=Path.cwd(), profile_id=args.profile,
+            report=report, pin=receipt, source_unchanged=after == profile_sources_before,
+            verifier_unchanged=verifier_after == profile_verifier_before)
+        qualification.update(task_id=args.revision, scenario_id=args.scenario,
+            implementation_before=profile_sources_before, implementation_after=after,
+            verifier_before=profile_verifier_before, verifier_after=verifier_after,
+            pin=receipt, new_provider_submissions=0)
+        _write_json(output / 'registered-profile-receipt.json', qualification)
+        if not qualification['passed']:
+            result.returncode = 1
     _write_json(output / "pin.json", receipt)
     print(json.dumps(receipt, ensure_ascii=False, indent=2))
     raise SystemExit(result.returncode)

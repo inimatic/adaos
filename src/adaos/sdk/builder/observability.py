@@ -66,5 +66,12 @@ def analyze_browser_failure(receipt, *, evidence_ref: str) -> dict[str, Any]:
     return analyze_browser_receipt(receipt, evidence_ref=evidence_ref)
 
 
+def application_journey_profiles() -> list[dict[str, Any]]:
+    """Describe platform-registered profiles, scopes and explicit TEST boundaries."""
+    from adaos.services.builder.journey_profiles import registered_profiles
+    return registered_profiles()
+
+
 __all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm",
-           "configure_usd_budget", "usd_budget", "analyze_failure", "qualify_failure_replay", "analyze_browser_failure"]
+           "configure_usd_budget", "usd_budget", "analyze_failure", "qualify_failure_replay", "analyze_browser_failure",
+           "application_journey_profiles"]

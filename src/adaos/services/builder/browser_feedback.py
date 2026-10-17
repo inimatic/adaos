@@ -41,6 +41,7 @@ _LOADED_OWNER_DIGEST = _file_digest(Path(__file__))
 
 def _verifier_snapshot(script_path: Path, *, loaded_owner: bool = False) -> dict[str, Any]:
     return {'python_owner': _LOADED_OWNER_DIGEST if loaded_owner else _file_digest(Path(__file__)),
+            'registered_profiles': _file_digest(Path(__file__).with_name('journey_profiles.py')),
             'browser_runner': _file_digest(script_path),
             **{name: _file_digest(script_path.parent / name)
                for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs')}}
@@ -429,9 +430,9 @@ class BuilderBrowserFeedbackService:
             and exit_code == 0
         )
         application_journey = None
-        if passed and scenario == "natural_retouch":
-            from .application_journeys import evaluate_retouch
-            application_journey = evaluate_retouch(repo_root=self.repo_root, scenario_id=scenario,
+        from .journey_profiles import automatic_profile_for, evaluate_registered_application
+        if passed and automatic_profile_for(scenario) is not None:
+            application_journey = evaluate_registered_application(repo_root=self.repo_root, scenario_id=scenario,
                 task_id=str(task_id), implementation_paths=implementation_paths, environment=env,
                 implementation_snapshot=implementation_before, expected_materialization=expected_materialization,
                 change=change, semantic_document=json.loads((webui_path.parent / "semantic.webui.json").read_text(encoding="utf-8-sig")),

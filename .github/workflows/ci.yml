@@ -281,6 +281,7 @@ jobs:
             tests/test_builder_failure_analysis.py \
             tests/test_builder_browser_failure_analysis.py \
             tests/test_builder_interrupted_finalization.py \
+            tests/test_builder_journey_profiles.py \
             tests/test_builder_ui_patch_validation.py \
             tests/test_forge_read_recovery.py \
             tests/test_builder_chat_notifications.py \

@@ -2,6 +2,7 @@
 import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import crypto from 'node:crypto'
 
 const env = process.env
 const plan = JSON.parse(await fs.readFile(env.ADAOS_E2E_JOURNEY_PLAN, 'utf8'))
@@ -49,11 +50,14 @@ const browser = await chromium.launch({ headless: true })
 try {
   for (const [layout, viewport] of Object.entries({ wide: { width: 1440, height: 1000 }, compact: { width: 390, height: 844 } })) {
     const sample = { layout, startedAt: Date.now(), checks: [], errors: [], requests: [], network: [], marker: `E2E-${layout}-${Date.now()}` }
+    sample.browser_environment = { browser_version: browser.version(), viewport, node_version: process.version }
+    sample.client_assets = []; sample.foreign_api_origins = []; sample.observed_materializations = []
     report.samples.push(sample)
     const context = await browser.newContext({ viewport })
     await context.addInitScript(({ hub, token, subnet, webspace, locale }) => {
       window.__ADAOS_DEBUG__ = true
       window.__ADAOS_BASE__ = hub
+      window.__ADAOS_FIXED_RUNTIME_BASE__ = hub
       window.__ADAOS_TOKEN__ = token
       for (const [key, value] of Object.entries({ adaos_device_id: 'e2e-application-journey', adaos_webspace_id: webspace,
         adaos_hub_base: hub, adaos_local_hub_base: hub, adaos_try_local_hub: '1', adaos_hub_token: token,
@@ -69,6 +73,10 @@ try {
     page.on('request', request => {
       started.set(request, Date.now())
       const pathname = new URL(request.url()).pathname
+      const origin = new URL(request.url()).origin
+      if (pathname.startsWith('/api/') && origin !== new URL(hub).origin && !sample.foreign_api_origins.includes(origin)) {
+        sample.foreign_api_origins.push(origin)
+      }
       if (pathname === '/api/tools/call') {
         sample.requests.push({ kind: 'tool', elapsedMs: Date.now() - sample.startedAt, body: request.postDataJSON() })
       } else if (pathname.includes('/attachments')) {
@@ -78,6 +86,10 @@ try {
     })
     page.on('response', response => {
       const pathname = new URL(response.url()).pathname
+      if (new URL(response.url()).origin === url.origin && /\.(m?js|css)$/.test(pathname) && response.ok()) {
+        responses.push(response.body().then(raw => sample.client_assets.push({path: pathname, size_bytes: raw.length,
+          digest: 'sha256:' + crypto.createHash('sha256').update(raw).digest('hex')})).catch(error => sample.errors.push('Asset capture: ' + error.message)))
+      }
       if (pathname.includes('/attachments')) {
         sample.network.push({ kind: 'attachment', method: response.request().method(), pathname,
           status: response.status(), elapsedMs: Date.now() - started.get(response.request()) })
@@ -106,6 +118,14 @@ try {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
         return sync?.providerSynced && sync?.materializationReady && sync.materialization.currentScenario === id
       }, scenario, { timeout: 60_000 })
+      sample.observed_materialization = await page.evaluate(() => {
+        const materialization = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization || {}
+        return {revision: materialization.materializationRevision, source_fingerprint: materialization.sourceFingerprint}
+      })
+      sample.observed_materializations.push(sample.observed_materialization)
+      for (const [key,value] of Object.entries(pin.expected_materialization || {revision: pin.revision})) {
+        expect(sample.observed_materialization[key]).toBe(value)
+      }
       await page.evaluate(() => document.fonts.ready)
     }
     try {
