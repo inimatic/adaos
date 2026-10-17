@@ -7350,6 +7350,10 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(
         webspace_id="prompt-dev",
     )
 
+    predecessor = service.get_session('scenario', 'recipes')
+    predecessor['browser_feedback_repair_count'] = 2
+    service._save_session(predecessor)
+
     turn = service.submit_turn(
         text="Add filtering by cooking time.", webspace_id="prompt-dev"
     )
@@ -7359,6 +7363,8 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(
     status = service.status(object_type="scenario", object_id="recipes")
     assert status["session"]["status"] == "completed"
     assert status["session"]["iteration"] == 1
+    assert status['session']['browser_feedback_repair_count'] == 0
+    assert status['session']['browser_feedback_repair_episodes'][-1]['repair_count'] == 2
     assert status["session"]["turns"][0]["text"] == "Add filtering by cooking time."
     assert len(status["session"]["task_history"]) == 2
     assert status["session"]["change_id"] != started["session"]["change_id"]

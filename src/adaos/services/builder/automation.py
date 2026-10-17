@@ -5868,6 +5868,18 @@ class BuilderAutomationService:
                     )
                     session["agent_profile_history"] = history[-50:]
                     session["agent_profile"] = next_profile
+            if session.get('status') == 'completed':
+                # A newly admitted user increment has its own bounded repair
+                # episode. Keep the predecessor's expense/history, but do not
+                # spend its already consumed repair allowance a second time.
+                previous_repairs = int(session.get('browser_feedback_repair_count') or 0)
+                if previous_repairs:
+                    history = list(session.get('browser_feedback_repair_episodes') or [])
+                    history.append({'task_id': session.get('current_task_id'),
+                                    'repair_count': previous_repairs, 'ended_at': _now_iso()})
+                    session['browser_feedback_repair_episodes'] = history[-50:]
+                session['browser_feedback_repair_count'] = 0
+                session.pop('pending_browser_feedback', None)
             session["iteration"] = int(session.get("iteration") or 0) + 1
             changed_at = _now_iso()
             previous_change_id = str(session.get("change_id") or "").strip()
