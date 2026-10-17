@@ -469,6 +469,7 @@ try {
       request_failures: [],
       foreign_api_origins: [],
       tool_calls: [],
+      client_assets: [],
       hard_failures: [],
       warnings: [],
       environment: {browser_version: browser.version(), runner: 'builder-candidate-feedback'},
@@ -507,6 +508,12 @@ try {
         target = new URL(response.url())
       } catch {
         return
+      }
+      if (target.origin === new URL(client).origin && /\.(m?js|css)$/.test(target.pathname) && response.ok()) {
+        responseDiagnosticTasks.push(response.body().then(bytes => {
+          sample.client_assets.push({path: target.pathname, size_bytes: bytes.length,
+            digest: 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex')})
+        }).catch(error => sample.client_assets.push({path: target.pathname, error: String(error.message || error)})))
       }
       if (target.pathname === '/api/tools/call') {
         const startedAt = toolRequestStartedAt.get(request)
@@ -1136,6 +1143,7 @@ try {
       } catch {}
     } finally {
       await Promise.allSettled(responseDiagnosticTasks)
+      sample.client_assets.sort((a, b) => a.path.localeCompare(b.path) || String(a.digest).localeCompare(String(b.digest)))
       const trace = `private-trace-${layout}.zip`
       await context.tracing.stop({path: path.join(output, trace)})
       sample.trace = {path: trace, visibility: 'private_local', format: 'playwright-trace'}

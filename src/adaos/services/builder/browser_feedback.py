@@ -448,8 +448,11 @@ class BuilderBrowserFeedbackService:
         context = {
             'implementation': implementation_before if all(implementation_before.values()) else None,
             'runtime': {'materialization': expected_materialization, **receipt['runtime_contract'],
-                        'loaded': [sample['runtime_identity'] for sample in samples]}
-                if expected_materialization and samples and all(sample.get('runtime_identity') for sample in samples) else None,
+                        'loaded': [sample['runtime_identity'] for sample in samples],
+                        'client_assets': [sample['client_assets'] for sample in samples]}
+                if expected_materialization and samples and all(sample.get('runtime_identity') and sample.get('client_assets')
+                    and all(asset.get('digest') and not asset.get('error') for asset in sample['client_assets'])
+                    for sample in samples) else None,
             'state': [sample['state_snapshots'] for sample in samples] if state_pinned else None,
             'environment': [{'layout': sample.get('layout'), 'viewport': sample.get('viewport'),
                              **sample['environment']} for sample in samples]
