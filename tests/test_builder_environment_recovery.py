@@ -9,6 +9,15 @@ from adaos.services.builder.environment_recovery import environment_interruption
 from adaos.sdk.builder import preview
 
 
+def test_foreign_runtime_authority_alone_does_not_start_model_repair():
+    receipt = {"report": {"samples": [{"hard_failures": [
+        "Unexpected API authority http://localhost:8777; expected http://127.0.0.1:8777"
+    ]}]}}
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
+    receipt["report"]["samples"][0]["hard_failures"].append("Widget comparison is unsupported")
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is True
+
+
 @pytest.mark.parametrize("text", ["Продолжи", "Возобновляй работу", "Continue."])
 @pytest.mark.parametrize("legacy", [False, True])
 def test_ordinary_chat_resumes_validated_task_without_new_model(text, legacy):

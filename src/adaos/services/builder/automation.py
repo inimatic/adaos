@@ -12434,6 +12434,10 @@ class BuilderAutomationService:
         ]
         if not hard_failures:
             return False
+        # An unexpected runtime authority needs transport/Client diagnosis.
+        # This observation alone provides no source-level repair instruction.
+        if all(failure.startswith("Unexpected API authority ") for failure in hard_failures):
+            return False
         # A Playwright wait expiring does not establish a source-level defect.
         # Preserve the candidate for runtime diagnosis instead of paying for a
         # speculative rewrite (even if the runner itself exited normally).

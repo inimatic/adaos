@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { redactDiagnosticValue } from './diagnostic-redaction.mjs'
+import { isOptionalLocalDiscoveryRequest } from './controlled-faults.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') {
   throw new Error('Builder candidate browser feedback requires ENV_TYPE=dev')
@@ -489,6 +490,7 @@ try {
         const target = new URL(request.url())
         if ((target.pathname.startsWith('/api/') || target.pathname.startsWith('/v1/'))
           && target.origin !== authoritativeRuntimeOrigin
+          && !isOptionalLocalDiscoveryRequest({url: request.url(), method: request.method()})
           && !sample.foreign_api_origins.includes(target.origin)) {
           sample.foreign_api_origins.push(target.origin)
         }
@@ -1155,13 +1157,7 @@ try {
 }
 
 function isOptionalLoopbackDiscoveryProbe(failure) {
-  if (failure.status !== 0) return false
-  const target = new URL(failure.url)
-  if (!['127.0.0.1', 'localhost'].includes(target.hostname)) return false
-  if (target.pathname === '/api/ping') return true
-  return target.pathname === '/api/node/status'
-    && target.searchParams.get('profile') === 'probe'
-    && ['8777', '8778'].includes(target.port)
+  return failure.status === 0 && isOptionalLocalDiscoveryRequest(failure)
 }
 
 for (const sample of report.samples) {
