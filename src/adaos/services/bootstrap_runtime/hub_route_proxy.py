@@ -596,6 +596,11 @@ def _hub_route_local_http_timeout(path: str, headers: Any | None = None) -> tupl
         return (3.0, 300.0)
     if path_norm.startswith("/api/media/files/"):
         return (3.0, 300.0)
+    if re.fullmatch(r"/api/component-updates/[^/]+/accept-trial", path_norm):
+        # Acceptance snapshots data and activates owned services. Leave time
+        # for the upstream result to arrive before Root's explicit deadline.
+        requested_timeout_s = _hub_route_requested_timeout_s(headers)
+        return (1.5, max(1.0, requested_timeout_s - 5.0) if requested_timeout_s else 55.0)
     if path_norm in _LONG_RUNNING_CONTROL_PATHS:
         requested_timeout_s = _hub_route_requested_timeout_s(headers)
         if requested_timeout_s is not None:

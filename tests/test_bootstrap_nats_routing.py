@@ -955,6 +955,15 @@ def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
     assert _hub_route_proxy._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
 
 
+def test_trial_acceptance_uses_the_callers_publication_budget_without_retrying():
+    path = '/api/component-updates/cupdate.exact/accept-trial'
+    assert _hub_route_proxy._hub_route_local_http_timeout(path) == (1.5, 55.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout(path+'?trace=1', {'X-AdaOS-Timeout-Ms':'180000'}) == (1.5, 175.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout(path, {'x-adaos-timeout-ms':'900000'}) == (1.5, 595.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout('/api/component-updates/cupdate.exact/respond') == (1.5, 2.5)
+    assert not _hub_route_proxy._hub_route_should_retry_http_upstream_error(method='POST', path=path, error_kind='ReadTimeout', body=b'{"confirmed":true}')
+
+
 def test_hub_route_local_http_timeout_allows_skill_file_upload_to_finish() -> None:
     assert _hub_route_proxy._hub_route_local_http_timeout("/api/skills/new_face_vision_skill/files/meta.jsonl") == (
         3.0,
