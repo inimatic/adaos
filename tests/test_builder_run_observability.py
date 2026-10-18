@@ -176,6 +176,18 @@ def test_partial_fresh_usage_cannot_hide_proven_billable_overrun():
     assert result['overrun_tokens'] is None
 
 
+def test_public_sdk_projects_run_evidence_without_runtime_context():
+    from adaos.sdk.builder.workflow import project_run
+    value = {"run_id": "run:fixture", "activity": "automation_started",
+             "execution_metrics": {"llm_calls": 0}}
+    projected = project_run(value, request="Retain source", source_message_ids=["message:1"])
+    assert projected["id"] == "run:fixture"
+    assert projected["model_label"] == "Core (no LLM)"
+    assert projected["request"] == "Retain source"
+    assert projected["source_message_ids"] == ["message:1"]
+    assert "id" not in value
+
+
 def test_new_iteration_does_not_present_previous_task_summary_or_usage_as_current():
     from adaos.services.builder.automation import BuilderAutomationService
     projected = BuilderAutomationService.project_session({'status': 'in_progress', 'current_task_id': 'new',

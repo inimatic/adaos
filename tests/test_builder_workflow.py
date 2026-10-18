@@ -1813,9 +1813,11 @@ def test_automation_followup_reuses_immutable_acceptance_after_source_changes(
     assert admitted["digest"] == acceptance["digest"]
 
 
+@pytest.mark.parametrize("head_revision", [None, "001"])
 def test_automation_direct_change_does_not_invent_prototype_acceptance(
     workflow_project: tuple[BuilderWorkflowService, Path],
     monkeypatch: pytest.MonkeyPatch,
+    head_revision: str | None,
 ) -> None:
     service, _root = workflow_project
     monkeypatch.setattr(
@@ -1824,7 +1826,7 @@ def test_automation_direct_change_does_not_invent_prototype_acceptance(
         lambda *_args: {
             "active_phase": "automation",
             "prototype": {
-                "head_revision": None,
+                "head_revision": head_revision,
                 "stable": False,
                 "acceptance_required": False,
                 "acceptance": None,
@@ -1843,6 +1845,20 @@ def test_automation_direct_change_does_not_invent_prototype_acceptance(
     admitted = service.require_current_prototype_acceptance("scenario", "recipes")
 
     assert admitted is None
+
+
+def test_automation_direct_does_not_bypass_required_prototype_acceptance(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _root = workflow_project
+    monkeypatch.setattr(BuilderWorkflowService, "describe", lambda *_args: {
+        "prototype": {"head_revision": "001", "stable": False,
+                      "acceptance_required": True, "acceptance": None},
+        "change": {"change_id": "CH-direct", "route": "automation_direct"},
+    })
+    with pytest.raises(ValueError, match="Prototype revision must be accepted"):
+        service.require_current_prototype_acceptance("scenario", "recipes")
 
 
 def test_automation_transition_uses_canonical_acceptance_admission(
