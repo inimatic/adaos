@@ -86,6 +86,31 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
     assert entries[0]["scenario_id"] == "reading_list"
 
 
+def test_trial_launcher_publishes_its_owned_icon_before_app_mount(tmp_path,monkeypatch):
+    import json
+    source=tmp_path/'owned-service';(source/'assets').mkdir(parents=True)
+    (source/'assets/icon.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>')
+    (source/'webui.json').write_text(json.dumps({'resources':{
+        'owned.icon':{'kind':'image','scope':'skill','path':'assets/icon.svg','fallback':'book-outline'},
+        'unrelated.resource':{'kind':'image','path':'assets/private.svg'},
+    }}))
+    package=SimpleNamespace(kind='skill',artifact_id='owned-service')
+    runtime=SimpleNamespace(packages=[package],verified_source=lambda item:source)
+    monkeypatch.setattr(runtime_selection.NativeTrialRuntime,'resolve',lambda *args:runtime)
+    entries=[{'icon':'resource:owned.icon','availability':{'status':'ready'},'runtime_selection':{'runtime_root_ref':'trial:candidate','release_digest':'sha256:owned'}}]
+    published=runtime_selection.trial_launcher_icon_resources(get_ctx(),entries)
+    assert list(published)==['owned.icon']
+    assert published['owned.icon']['owner']=='skill:owned-service'
+    assert published['owned.icon']['url'].startswith('/assets/blobs/sha256/')
+    (source/'assets/icon.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"><circle r="6"/></svg>')
+    updated=runtime_selection.trial_launcher_icon_resources(get_ctx(),entries)
+    assert updated['owned.icon']['cacheKey']!=published['owned.icon']['cacheKey']
+    (source/'assets/icon.svg').unlink()
+    missing=runtime_selection.trial_launcher_icon_resources(get_ctx(),entries)
+    assert missing['owned.icon']['fallback']=='book-outline'
+    assert not missing['owned.icon'].get('url') and not missing['owned.icon'].get('path')
+
+
 def test_selected_application_cache_tracks_selection_and_installation_generation(
     monkeypatch,
 ) -> None:

@@ -786,3 +786,40 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
                                                  "candidate": {"id": release.accepted_candidate_id,
                                                                "release_digest": selection.release_digest}}})
     return entries
+
+
+def trial_launcher_icon_resources(ctx: AgentContext, entries: list[dict]) -> dict:
+    """Publish only declared launcher icons, without mounting an Application UI."""
+    from adaos.services.browser_assets import BrowserAssetPublishError, publish_owner_resource_descriptor
+
+    resources = {}
+    for entry in entries:
+        icon = str(entry.get("icon") or "")
+        selection = entry.get("runtime_selection") or {}
+        if not icon.startswith("resource:") or entry.get("availability", {}).get("status") != "ready":
+            continue
+        resource_id = icon.removeprefix("resource:")
+        root_ref = str(selection.get("runtime_root_ref") or "")
+        if not root_ref.startswith("trial:"):
+            continue
+        runtime = NativeTrialRuntime.resolve(ctx, root_ref.removeprefix("trial:"), selection["release_digest"])
+        for package in runtime.packages:
+            source = runtime.verified_source(package)
+            path = source / "webui.json"
+            if not path.is_file():
+                continue
+            content = json.loads(path.read_text(encoding="utf-8"))
+            declared = content.get("resources") or (content.get("catalog") or {}).get("resources") or ((content.get("ui") or {}).get("application") or {}).get("resources") or {}
+            if resource_id not in declared:
+                continue
+            try:
+                resources[resource_id] = publish_owner_resource_descriptor(
+                    resource_id, declared[resource_id], owner_kind=package.kind,
+                    owner_id=package.artifact_id, package_dir=source,
+                    default_scope=package.kind, ctx=ctx,
+                )
+            except BrowserAssetPublishError:
+                resources[resource_id] = {"kind": "image", "owner": f"{package.kind}:{package.artifact_id}",
+                                          "fallback": declared[resource_id].get("fallback") or "apps-outline"}
+            break
+    return resources

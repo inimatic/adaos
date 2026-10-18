@@ -160,6 +160,7 @@ class WebspaceResolutionService:
         from adaos.services.applications.runtime_selection import (
             selected_trial,
             trial_launcher_entries,
+            trial_launcher_icon_resources,
         )
 
         effective_decls = [
@@ -192,12 +193,14 @@ class WebspaceResolutionService:
         elif not effective_fingerprint:
             effective_fingerprint = operations.fingerprint_json_like(effective_decls)
 
+        launchers = trial_launcher_entries(runtime.ctx, webspace_id)
         return effective_decls, effective_fingerprint, {
             "prepared": True,
             "trial_active": trial is not None,
             "scenario_content": scenario_content,
             "materialization_identity": effective_identity,
-            "trial_apps": trial_launcher_entries(runtime.ctx, webspace_id),
+            "trial_apps": launchers,
+            "trial_icon_resources": trial_launcher_icon_resources(runtime.ctx, launchers),
             "materialization": operations.scenario_materialization_contract(
                 scenario_id,
                 source_mode=source_mode,
@@ -346,10 +349,12 @@ class WebspaceResolutionService:
             metadata["trial_apps"] = operations.clone_json_like(
                 external_inputs.get("trial_apps") or []
             )
+            metadata["trial_icon_resources"] = operations.clone_json_like(external_inputs.get("trial_icon_resources") or {})
         else:
-            from adaos.services.applications.runtime_selection import trial_launcher_entries
+            from adaos.services.applications.runtime_selection import trial_launcher_entries, trial_launcher_icon_resources
 
             metadata["trial_apps"] = trial_launcher_entries(runtime.ctx, webspace_id)
+            metadata["trial_icon_resources"] = trial_launcher_icon_resources(runtime.ctx, metadata["trial_apps"])
         metadata["legacy_scenario_fallback"] = legacy_fallback
         prepared_materialization = (
             external_inputs.get("materialization")
@@ -751,6 +756,7 @@ class WebspaceResolutionService:
             **operations.materialized_system_resource_descriptors(),
             **scenario_resources,
             **skill_resources,
+            **inputs.metadata.get("trial_icon_resources", {}),
         }
         live_catalog = operations.coerce_dict((inputs.live_state or {}).get("catalog") or {})
         merged_apps = operations.preserve_live_remote_catalog_entries(
