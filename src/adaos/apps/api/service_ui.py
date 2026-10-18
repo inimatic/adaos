@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
@@ -44,6 +45,16 @@ def _presented_token(request: Request) -> str | None:
 
 def _authorize(request: Request) -> None:
     ensure_token(_presented_token(request))
+    # Browser shells may live on another origin (for example inimatic.com).
+    # An explicit credential header proves possession; cookies and URL tokens
+    # must retain the same-origin CSRF checks below.
+    explicit = resolve_presented_token(
+        x_adaos_token=request.headers.get("x-adaos-token"),
+        authorization=request.headers.get("authorization"),
+    )
+    if explicit:
+        ensure_token(explicit)
+        return
     fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
     if fetch_site == "cross-site":
         raise HTTPException(status_code=403, detail="cross-site service UI access is forbidden")
@@ -58,8 +69,16 @@ def _authorize(request: Request) -> None:
             raise HTTPException(status_code=403, detail="service UI origin is forbidden")
 
 
-def _service_spec(name: str) -> ServiceSpec:
-    supervisor = get_service_supervisor()
+async def _ui_supervisor(name: str):
+    from adaos.services.skill.service_supervisor import resolve_service_supervisor
+    try:
+        return await resolve_service_supervisor(name, get_service_supervisor())
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Application runtime is transitioning or unavailable; reopen the selected version") from exc
+
+
+def _service_spec(name: str, supervisor=None) -> ServiceSpec:
+    supervisor = supervisor or get_service_supervisor()
     spec = supervisor._specs.get(name)  # Core gateway and supervisor share this trust boundary.
     if spec is None or not spec.ui_enabled:
         raise HTTPException(status_code=404, detail="service UI surface not found")
@@ -68,11 +87,11 @@ def _service_spec(name: str) -> ServiceSpec:
     return spec
 
 
-async def _ensure_service_started(name: str, *, refresh: bool = True) -> ServiceSpec:
-    supervisor = get_service_supervisor()
+async def _ensure_service_started(name: str, *, refresh: bool = True, supervisor=None) -> ServiceSpec:
+    supervisor = supervisor or await _ui_supervisor(name)
     if refresh:
         await supervisor.refresh_discovered()
-    spec = _service_spec(name)
+    spec = _service_spec(name, supervisor)
     try:
         await supervisor.start(name)
     except Exception as exc:
@@ -118,7 +137,7 @@ def _proxy_location(name: str, location: str, spec: ServiceSpec) -> str:
 @router.get("/services/{name}/ui-surface")
 async def service_ui_surface(name: str, request: Request) -> dict[str, Any]:
     _authorize(request)
-    supervisor = get_service_supervisor()
+    supervisor = await _ui_supervisor(name)
     await supervisor.refresh_discovered()
     surface = supervisor.ui_surface(name, check_health=True)
     if surface is None:
@@ -133,8 +152,9 @@ async def service_ui_bootstrap(
     fragment: str | None = None,
 ) -> Response:
     _authorize(request)
-    await get_service_supervisor().refresh_discovered()
-    spec = _service_spec(name)
+    supervisor = await _ui_supervisor(name)
+    await supervisor.refresh_discovered()
+    spec = _service_spec(name, supervisor)
     if spec.ui_embedding not in {"external", "same-origin"}:
         raise HTTPException(status_code=403, detail="service UI embedding is disabled")
     ui_fragment = str(fragment or "")
@@ -145,7 +165,7 @@ async def service_ui_bootstrap(
             or any(ord(char) < 32 or ord(char) == 127 for char in ui_fragment)
         ):
             raise HTTPException(status_code=400, detail="invalid service UI fragment")
-    await _ensure_service_started(name, refresh=False)
+    await _ensure_service_started(name, refresh=False, supervisor=supervisor)
     response = RedirectResponse(
         f"/api/services/{name}/ui/{ui_fragment}",
         status_code=303,
@@ -170,10 +190,15 @@ async def service_ui_bootstrap(
 )
 async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
     _authorize(request)
-    spec = await _ensure_service_started(name)
-    status = get_service_supervisor().status(name, check_health=True) or {}
+    supervisor = await _ui_supervisor(name)
+    spec = await _ensure_service_started(name, supervisor=supervisor)
+    status = await asyncio.to_thread(supervisor.status, name, check_health=True) or {}
     if not bool(status.get("health_ok")):
-        raise HTTPException(status_code=503, detail="service UI is unavailable")
+        raise HTTPException(status_code=503, detail={
+            "code": "service_unavailable",
+            "message": "Не удалось подключиться к приложению на вашем узле AdaOS. Повторите подключение.",
+            "retryable": True,
+        })
     body = await request.body()
     if len(body) > spec.ui_max_request_bytes:
         raise HTTPException(status_code=413, detail="service UI request exceeds the admitted limit")
@@ -183,7 +208,16 @@ async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
         if key.lower() in _REQUEST_HEADERS and key.lower() not in _HOP_HEADERS
     }
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=15.0) as client:
+        # Admitted HTTP service endpoints need neither a system proxy nor a
+        # TLS trust-store load on every request. On Windows those synchronous
+        # lookups can block the event loop for seconds per chat poll. Preserve
+        # certificate verification if an HTTPS endpoint is introduced later.
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=45.0,
+            trust_env=False,
+            verify=urlsplit(spec.base_url).scheme.lower() != "http",
+        ) as client:
             upstream = await client.request(
                 request.method,
                 _upstream_url(spec, path, request),

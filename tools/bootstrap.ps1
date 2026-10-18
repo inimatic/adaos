@@ -7,6 +7,7 @@ param(
     [switch]$Dev,
     [switch]$BuildVendoredYPy,
     [switch]$NoVoice,
+    [switch]$NoPairingOutput,
     [ValidateSet("auto", "always", "never")]
     [string]$InstallService = "auto",
     [string]$ServeHost = "127.0.0.1",
@@ -17,6 +18,8 @@ param(
     [string]$ZoneId = "",
     [ValidateSet("en", "ru")]
     [string]$Language = $(if ($env:ADAOS_LANG) { $env:ADAOS_LANG } else { "en" }),
+    [ValidateSet("default", "base")]
+    [string]$Preset = "default",
     [string]$WorkspaceRegistryRepo = $env:ADAOS_WORKSPACE_REGISTRY_REPO
 )
 
@@ -171,9 +174,9 @@ function Wait-ForAutostartActivation {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         try {
-            $as = Invoke-Adaos autostart status --json 2>$null | Out-String
-            if (-not [string]::IsNullOrWhiteSpace($as)) {
-                $asObj = $as | ConvertFrom-Json
+            $result = Invoke-AdaosForBootstrap autostart status --json
+            if ($result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($result.Output)) {
+                $asObj = $result.Output | ConvertFrom-Json
                 $active = $asObj.active
                 $listening = $asObj.listening
                 if (($active -eq $true) -and ($listening -ne $false)) {
@@ -192,10 +195,10 @@ function Show-AutostartDiagnostics {
     Write-Host "Autostart diagnostics:"
     $asObj = $null
     try {
-        $as = Invoke-Adaos autostart status --json 2>$null | Out-String
-        if (-not [string]::IsNullOrWhiteSpace($as)) {
-            Write-Host $as.Trim()
-            $asObj = $as | ConvertFrom-Json
+        $result = Invoke-AdaosForBootstrap autostart status --json
+        if ($result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($result.Output)) {
+            Write-Host $result.Output.Trim()
+            $asObj = $result.Output | ConvertFrom-Json
         }
         else {
             Write-Host "  autostart status json: unavailable"
@@ -242,6 +245,7 @@ if (-not $pyCands -or $pyCands.Count -eq 0) {
             -Dev:$Dev `
             -BuildVendoredYPy:$BuildVendoredYPy `
             -NoVoice:$NoVoice `
+            -NoPairingOutput:$NoPairingOutput `
             -InstallService $InstallService `
             -ServeHost $ServeHost `
             -ServePort $ServePort `
@@ -249,7 +253,8 @@ if (-not $pyCands -or $pyCands.Count -eq 0) {
             -RootUrl $RootUrl `
             -Rev $Rev `
             -ZoneId $ZoneId `
-            -Language $Language
+            -Language $Language `
+            -Preset $Preset
         exit $LASTEXITCODE
     }
     Write-Host "No supported Python found. Install Python >=3.11.9,<3.12 and re-run (or run tools\\bootstrap_uv.ps1)." -ForegroundColor Red
@@ -415,6 +420,28 @@ function Invoke-Adaos {
     & .\.venv\Scripts\python.exe -m adaos @Args
 }
 
+function Invoke-AdaosForBootstrap {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Args
+    )
+    # Windows PowerShell 5.1 promotes native stderr records to PowerShell errors.
+    # AdaOS writes diagnostic logs to stderr even when a command succeeds.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = Invoke-Adaos @Args 2>$null | Out-String
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    return [PSCustomObject]@{
+        ExitCode = $exitCode
+        Output = $output
+    }
+}
+
 Write-Host "Detecting git availability (adaos git autodetect)..."
 try { Invoke-Adaos git autodetect | Out-Null } catch { }
 
@@ -452,18 +479,19 @@ if ($desiredRole -eq "hub") {
 }
 
 function Configure-RasaNlu {
-    if ($NoVoice) {
+    if ($NoVoice -or $Preset -eq "base") {
         $env:ADAOS_NLU_RASA = "0"
         Write-EnvVar -Key "ADAOS_NLU_RASA" -Value "0" -EnvFile ".env"
-        Write-Host "Rasa NLU service disabled by -NoVoice."
+        $reason = if ($NoVoice) { "-NoVoice" } else { "the base preset" }
+        Write-Host "Optional Rasa NLU service disabled by $reason."
         return
     }
     Write-Host "Rasa NLU will be prepared as an optional AdaOS service-skill."
 }
 
 Write-Host "Installing default webspace content (adaos install)..."
-$installArgs = @("install", "--language", $Language)
-if ($NoVoice) {
+$installArgs = @("install", "--preset", $Preset, "--language", $Language)
+if ($NoVoice -or $Preset -eq "base") {
     $installArgs += "--no-rasa-nlu"
     $installArgs += "--no-train-nlu"
 }
@@ -634,8 +662,9 @@ Write-Host ("Starting AdaOS API ({0}:{1}) ..." -f $ServeHost, $ServePort)
 $serviceInstalled = $false
 if ($InstallService -ne "never") {
     try {
-        $autostartEnableOutput = Invoke-Adaos autostart enable --host $ServeHost --port $ServePort 2>&1 | Out-String
-        if ($LASTEXITCODE -eq 0) {
+        $autostartEnableResult = Invoke-AdaosForBootstrap autostart enable --host $ServeHost --port $ServePort
+        $autostartEnableOutput = $autostartEnableResult.Output
+        if ($autostartEnableResult.ExitCode -eq 0) {
             $serviceInstalled = $true
             Write-Host "Autostart installed (adaos autostart enable)."
         }
@@ -680,26 +709,28 @@ $st = Wait-AdaosReady -TimeoutSec 120
 $deepLink = $null
 $tgPairCode = $null
 $ownerAuth = $null
-try {
-    Write-Host "Generating Telegram pairing link..."
-    $tg = Invoke-Adaos dev telegram 2>$null | Out-String
-    if (-not [string]::IsNullOrWhiteSpace($tg)) {
-        $codeLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*pair_code:\s*" } | Select-Object -First 1
-        if ($codeLine) { $tgPairCode = ($codeLine -replace "^\s*pair_code:\s*", "").Trim() }
-        $deepLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*deep_link:\s*" } | Select-Object -First 1
-        if ($deepLine) { $deepLink = ($deepLine -replace "^\s*deep_link:\s*", "").Trim() }
+if (-not $NoPairingOutput) {
+    try {
+        Write-Host "Generating Telegram pairing link..."
+        $tg = Invoke-Adaos dev telegram 2>$null | Out-String
+        if (-not [string]::IsNullOrWhiteSpace($tg)) {
+            $codeLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*pair_code:\s*" } | Select-Object -First 1
+            if ($codeLine) { $tgPairCode = ($codeLine -replace "^\s*pair_code:\s*", "").Trim() }
+            $deepLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*deep_link:\s*" } | Select-Object -First 1
+            if ($deepLine) { $deepLink = ($deepLine -replace "^\s*deep_link:\s*", "").Trim() }
+        }
     }
-}
-catch { }
+    catch { }
 
-try {
-    Write-Host "Generating Owner browser pairing code..."
-    $ownerJson = Invoke-Adaos dev root login --print-only --json 2>$null | Out-String
-    if (-not [string]::IsNullOrWhiteSpace($ownerJson)) {
-        $ownerAuth = $ownerJson | ConvertFrom-Json
+    try {
+        Write-Host "Generating Owner browser pairing code..."
+        $ownerJson = Invoke-Adaos dev root login --print-only --json 2>$null | Out-String
+        if (-not [string]::IsNullOrWhiteSpace($ownerJson)) {
+            $ownerAuth = $ownerJson | ConvertFrom-Json
+        }
     }
+    catch { }
 }
-catch { }
 if ($st) {
     Write-Host ("READY: node_id={0} subnet_id={1} role={2} route={3} connected={4}" -f $st.node_id, $st.subnet_id, $st.role, $st.route_mode, $st.connected_to_hub) -ForegroundColor Green
 }

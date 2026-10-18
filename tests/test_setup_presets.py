@@ -57,6 +57,16 @@ def test_default_application_order_includes_voice_provider() -> None:
     ]
 
 
+def test_base_preset_only_requires_published_management_applications() -> None:
+    preset = get_preset("base")
+
+    assert preset.name == "base"
+    assert preset.projects == ("web_desktop", "applications")
+    assert preset.applications == ("web_desktop", "applications")
+    assert preset.scenarios == ("web_desktop", "applications")
+    assert "voice_chat_skill" in preset.skills
+
+
 def test_default_application_runtime_is_authoritative(monkeypatch) -> None:
     calls: list[tuple[object, bool]] = []
 

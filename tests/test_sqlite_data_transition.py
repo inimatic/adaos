@@ -99,6 +99,26 @@ def test_checked_column_migrates_existing_rows_and_reopens_with_same_ledger(tmp_
     assert rows(staged) == [(1, "private original", 4)]
 
 
+def test_fenced_upgrade_preserves_extended_relational_sdk_ledger(tmp_path):
+    """An installed SDK database must retain its five-column migration ledger."""
+    adapter, stable = seed(tmp_path)
+    first = RelationalMigration(1, "initial", ("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)",), idempotent=True)
+    write(stable, "CREATE TABLE adaos_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL, staged INTEGER NOT NULL)")
+    write(stable, "INSERT INTO adaos_schema_migrations VALUES (1, ?, ?, ?, 0)", first.name, first.checksum, "original-timestamp")
+    second = RelationalMigration(2, "chat_ref", ("ALTER TABLE records ADD COLUMN chat_ref TEXT",))
+    with pytest.raises(ValueError, match="fenced"):
+        initialize_sqlite_schema(stable, [first, second])
+    snapshot, staged = tmp_path / "snapshot.sqlite", tmp_path / "staged.sqlite"
+    proof = adapter.snapshot(stable, snapshot, operation_key="extended-ledger-snapshot")
+    adapter.migrate(snapshot, staged, snapshot_digest=proof["digest"], migrations=[first, second], operation_key="extended-ledger-migration")
+    history = rows(staged, "SELECT version,checksum,applied_at,staged FROM adaos_schema_migrations ORDER BY version")
+    assert history[0] == (1, first.checksum, "original-timestamp", 0)
+    assert history[1][:2] == (2, second.checksum) and history[1][2].endswith("Z") and history[1][3] == 0
+    assert rows(staged) == [(1, "private original", None)]
+    assert initialize_sqlite_schema(staged, [first, second])["applied_versions"] == []
+    assert rows(stable, "SELECT version FROM adaos_schema_migrations") == [(1,)]
+
+
 def test_checked_column_rejects_existing_violations_and_rolls_back(tmp_path):
     adapter, stable = seed(tmp_path)
     snapshot, staged = tmp_path / "snapshot.sqlite", tmp_path / "staged.sqlite"

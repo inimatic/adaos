@@ -2718,13 +2718,30 @@ class SkillManager:
                 raise RuntimeError('exact_runtime_source_version_incompatible')
         selected_package = str(slot_meta.get('package_digest') or '')
         if selected_package:
-            from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore, build_artifact_package
+            from adaos.services.artifact_pipeline.packages import (
+                ContentAddressedPackageStore,
+                build_artifact_package,
+                package_manifests_content_equivalent,
+            )
             packages = ContentAddressedPackageStore(Path(self.ctx.paths.state_dir()) / 'artifact_pipeline/packages')
             if not allow_prepare or packages.has(selected_package):
                 verified = packages.verify(selected_package)
                 rebuilt = build_artifact_package(slot_source_root, kind='skill', source_ref=verified.ref.source_ref)
-                if (verified.ref.artifact_id != name or verified.ref.version != str(target_version)
-                        or rebuilt.ref.digest != selected_package):
+                policy_changed = (
+                    verified.ref.build_policy_digest != rebuilt.ref.build_policy_digest
+                )
+                payload_matches = package_manifests_content_equivalent(
+                    verified.package_manifest,
+                    rebuilt.package_manifest,
+                )
+                if (
+                    verified.ref.artifact_id != name
+                    or verified.ref.version != str(target_version)
+                    or (
+                        rebuilt.ref.digest != selected_package
+                        and not (policy_changed and payload_matches)
+                    )
+                ):
                     raise RuntimeError('exact_runtime_package_source_incompatible')
         target_manifest = self._read_json_dict(manifest_path)
         self._ensure_core_compatible(target_manifest, skill_name=name, stage="activate")

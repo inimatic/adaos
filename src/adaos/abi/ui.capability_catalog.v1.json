@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.8.1",
+  "catalog_version": "3.8.2",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "browser_history": {
@@ -1149,6 +1149,33 @@
       ]
     },
     {
+      "id": "collection.projectList",
+      "kind": "component",
+      "title": "Project and chat navigation",
+      "summary": "Native project/chat navigation for an owner-admitted project-conversation service; bounded chat search, archive and CRUD.",
+      "manifest": {"widget_type":"collection.projectList","abi":"webui.v1.schema.json#/$defs/projectConversationInputs","connection":"Declare service/session and protocol=adaos.project-conversation.v2. Share the identical connection with ui.projectConversation and item.conversationContext. Selection/drafts are local projections; server validates project/chat ownership. Do not invent this protocol for a skill that does not implement it."},
+      "responsive": {"desktop":"Navigation region beside conversation","compact":"Keyboard-accessible drawer"},
+      "postconditions": ["Chat refs include the parent project; duplicate names do not determine identity.","Declarative service names grant no authority."]
+    },
+    {
+      "id": "ui.projectConversation",
+      "kind": "component",
+      "title": "Project conversation",
+      "summary": "Native bounded chat with isolated drafts, per-chat model/reasoning/tools and shared Markdown/math/copy presentation.",
+      "manifest": {"widget_type":"ui.projectConversation","abi":"webui.v1.schema.json#/$defs/projectConversationInputs","connection":"Owner implements adaos.project-conversation.v2. Declare content:{format:markdown,copy:true,plainCopy:true}; optional icon is an admitted resource reference. Profiles use revision CAS, provider capabilities and immutable run snapshots. No credentials, app-specific URLs, bots or universal effort enum in the page."},
+      "responsive": {"desktop":"Dedicated main region with bounded scroll history","compact":"Wrapping controls and pinned composer"},
+      "postconditions": ["Late results and uploads retain the originating chat.","Copy preserves original Markdown and reports clipboard denial.","Read/share/automatic outputs require separately admitted owner operations."]
+    },
+    {
+      "id": "item.conversationContext",
+      "kind": "component",
+      "title": "Chat context inspector",
+      "summary": "Project library, explicit chat source membership, revisioned memory/context, extraction versions and opt-in original-document retention.",
+      "manifest": {"widget_type":"item.conversationContext","abi":"webui.v1.schema.json#/$defs/projectConversationInputs","connection":"Share the native project-conversation connection. The owner stores and validates source/version membership and budgets. Project-shared memory requires explicit consent; chat-derived memory remains isolated. Uploaded text alone is neither RAG nor original-file archival."},
+      "responsive": {"desktop":"Optional inspector region","compact":"Focus-trapped context panel"},
+      "postconditions": ["Selected sources and memory revisions are inspectable.","A source deletion revokes readable versions/originals; history retention is explicit."]
+    },
+    {
       "id": "ui.chat",
       "kind": "component",
       "title": "Conversation surface",
@@ -1167,7 +1194,8 @@
           "agent": "fixed requires id/label; select requires a registry source. Current recipient and history.allAgents are independent. A fixed owner never follows the global dialog selector.",
           "history": "mode=auto loads one bounded older cursor page on upward scroll; maxMessages bounds retained client history. Platform streams use conversation.history.more; application feeds declare on=history.more using $event.cursor and return messages/has_more_before/before_cursor through the same source with owner invalidation. Without either provider there is no fabricated pager. allAgents is opt-in for an authorized aggregate feed, not a broadcast recipient.",
           "attachments": "Omit unless the owner supports uploaded references through a declared on=send action; the legacy voice.chat.user transport is not an attachment ingestion API. Declare uploadTarget/readTarget, accept, maxFiles/maxBytes. on=send receives attachments:[{ref,name,mime,size_bytes}], text, meta and retry-stable request_id. Never embed bytes in message context.",
-          "model": "Declare one canonical source, valuePath and optionsPath. Bind widget.actions on=model.change with $event.value to the owner's authorized setting mutation. Settings and chat must share the same read-model. Running jobs retain their admitted model.",
+          "model": "Canonical source/valuePath/optionsPath; profilePath and revisionPath together enable the shared model/reasoning picker. Models advertise capabilities:{efforts,default,web_search,source}, capability_revision and availability. on=model.change receives value, profile, expected_revision, capability_revision for an owner CAS mutation. Unknown reasoning metadata permits provider default only. Runs retain admitted profiles.",
+          "content": "presentation.content:{format:markdown,copy:true,plainCopy:true} enables shared sanitized Markdown/math and exact-message Copy. Original Markdown stays canonical. Raw HTML and remote images never execute/fetch on render. Copy denial has actionable feedback; optional plain copy uses derived rendered text.",
           "voice": "Opt-in shared microphone control; Voice application is not a dependency.",
           "run": "Source may publish run:{id,status,label?}; accepted/queued/started/running/progress/input_required/resumed/completed/failed/cancelled/unknown are factual events. No fabricated timed stage labels.",
           "presentation": "floating opts into the Client shell's single persistent drag/resize/minimize session. Window geometry and minimized-button position are independent. The resolved owner, routing scope, current addressee and visible bounded tail are snapshotted at detach; unrelated scenario state does not transfer authority. It is not a browser popup or a permission grant."

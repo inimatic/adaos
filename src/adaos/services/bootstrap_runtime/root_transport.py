@@ -489,7 +489,18 @@ class RootTransportService:
                 except Exception:
                     pass
             try:
-                force_bridge_rearm = bool(_force_bridge_rearm) or nc is None or bool(close_diag.get("timeout"))
+                # A graceful NATS close can leave the outer bridge coroutine
+                # alive while its reader task is already terminal. Reusing
+                # that coroutine makes a manual reconnect report
+                # ``already_running`` without restoring route authority.
+                # Replace the bridge whenever this request actually closed an
+                # owned client; lifecycle replacement prevents owner overlap.
+                force_bridge_rearm = (
+                    bool(_force_bridge_rearm)
+                    or nc is None
+                    or bool(close_diag.get("attempted"))
+                    or bool(close_diag.get("timeout"))
+                )
                 bridge_diag = self.ensure_bridge_task(
                     force_rearm=force_bridge_rearm,
                     reason=(

@@ -24,6 +24,9 @@ from adaos.services.artifact_pipeline import (
     build_artifact_package,
     verify_artifact_package,
 )
+from adaos.services.artifact_pipeline.packages import (
+    package_manifests_content_equivalent,
+)
 from adaos.services.builder.governed import builder_change_definition
 
 
@@ -34,6 +37,29 @@ def _source() -> ArtifactSourceRef:
         revision="0123456789abcdef0123456789abcdef01234567",
         path_scope=("scenarios/recipes/",),
     )
+
+
+def test_package_content_equivalence_allows_only_build_policy_change() -> None:
+    expected = {
+        "schema": "adaos.artifact.component_package.v1",
+        "artifact_id": "example_skill",
+        "version": "1.0.0",
+        "build_policy_digest": "sha256:" + "1" * 64,
+        "files": [
+            {
+                "path": "skill.yaml",
+                "size": 10,
+                "digest": "sha256:" + "2" * 64,
+            }
+        ],
+    }
+    rebuilt = json.loads(json.dumps(expected))
+    rebuilt["build_policy_digest"] = "sha256:" + "3" * 64
+
+    assert package_manifests_content_equivalent(expected, rebuilt) is True
+
+    rebuilt["files"][0]["digest"] = "sha256:" + "4" * 64
+    assert package_manifests_content_equivalent(expected, rebuilt) is False
 
 
 def _scenario(root: Path) -> Path:

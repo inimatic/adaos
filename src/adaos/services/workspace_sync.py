@@ -32,6 +32,45 @@ _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _BOOTSTRAP_SCENARIOS = ("web_desktop",)
 
 
+def _materialize_archive_registry_metadata(ctx, workspace_root: Path) -> dict[str, Any]:
+    """Refresh the registry indexes needed by a node without Git.
+
+    Project, scenario, and skill archive installers fetch their own source
+    subpaths.  The immutable Application catalog lives at the registry root,
+    so it must be refreshed explicitly before release discovery can run.
+    """
+
+    from adaos.config.const import REGISTRY_URL
+    from adaos.services.git.archive import extract_github_zip_subpaths
+
+    settings = getattr(ctx, "settings", None)
+    repo_url = str(
+        os.getenv("ADAOS_WORKSPACE_REGISTRY_REPO")
+        or getattr(settings, "scenarios_monorepo_url", None)
+        or getattr(settings, "skills_monorepo_url", None)
+        or REGISTRY_URL
+    ).strip()
+    branch = str(
+        os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH")
+        or getattr(settings, "scenarios_monorepo_branch", None)
+        or getattr(settings, "skills_monorepo_branch", None)
+        or "main"
+    ).strip()
+    extract_github_zip_subpaths(
+        repo_url=repo_url,
+        branch=branch,
+        dest_root=workspace_root,
+        subpaths=("registry.json", "semantic"),
+    )
+    return {
+        "ok": True,
+        "mode": "archive",
+        "repository": repo_url,
+        "branch": branch,
+        "paths": ["registry.json", "semantic"],
+    }
+
+
 def _import_semantic_registry(ctx, workspace_root: Path) -> dict[str, Any]:
     from adaos.services.capability_binding_state.registry_projection import (
         SemanticRegistryProjection,
@@ -739,6 +778,7 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
     except Exception:
         av = None
 
+    archive_registry_metadata: dict[str, Any] | None = None
     if av is None or av.enabled:
         try:
             source_alignment = _align_production_workspace_source(ctx, workspace_root)
@@ -747,6 +787,18 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
                 "ok": False,
                 "error": f"workspace source alignment failed: {exc}",
                 "source_alignment": {"ok": False, "error": str(exc)},
+            }
+    else:
+        try:
+            archive_registry_metadata = _materialize_archive_registry_metadata(
+                ctx, workspace_root
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"archive registry metadata refresh failed: {exc}",
+                "archive_registry_metadata": {"ok": False, "error": str(exc)},
+                "source_alignment": source_alignment,
             }
 
     skill_rows = SqliteSkillRegistry(ctx.sql).list()
@@ -868,6 +920,7 @@ def _sync_workspace_sparse_to_registry_unlocked(ctx) -> dict[str, Any]:
             "warnings": warnings,
             "reconcile": reconcile_result,
             "semantic_registry": semantic_registry,
+            "archive_registry_metadata": archive_registry_metadata,
             "patterns": desired,
             "source_alignment": source_alignment,
         }

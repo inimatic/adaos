@@ -519,12 +519,25 @@ class AdaOSComponentLifecycleHooks:
                 except Exception as exc:
                     raise RuntimeError("skill_service_baseline_failed") from exc
                 try:
-                    slot = self._skill_manager().activate_runtime(
-                        component_id,
-                        version=version,
-                        package_digest=package_digest,
-                        package_manifest_digest=manifest_digest,
-                    )
+                    manager = self._skill_manager()
+                    prepared_slot: str | None = None
+                    if package_digest is not None or manifest_digest is not None:
+                        prepared = manager.prepare_runtime(
+                            component_id,
+                            version_override=version,
+                            run_tests=False,
+                            package_digest=package_digest,
+                            package_manifest_digest=manifest_digest,
+                        )
+                        prepared_slot = str(prepared.slot or "").strip().upper() or None
+                    activation_kwargs: dict[str, Any] = {
+                        "version": version,
+                        "package_digest": package_digest,
+                        "package_manifest_digest": manifest_digest,
+                    }
+                    if prepared_slot is not None:
+                        activation_kwargs["slot"] = prepared_slot
+                    slot = manager.activate_runtime(component_id, **activation_kwargs)
                 except Exception as exc:
                     cause_code = normalized_error_code(
                         getattr(exc, "code", None) or str(exc),

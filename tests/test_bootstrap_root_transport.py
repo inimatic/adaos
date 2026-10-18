@@ -170,3 +170,53 @@ async def test_root_transport_watchdog_allows_initial_connect_without_authority(
     assert reconnect_called is False
 
     await lifecycle.stop()
+
+
+async def test_root_transport_manual_reconnect_replaces_bridge_after_graceful_close() -> None:
+    lifecycle = BootstrapLifecycleCoordinator()
+    bridge_started = 0
+
+    async def _bridge() -> None:
+        nonlocal bridge_started
+        bridge_started += 1
+        await asyncio.Event().wait()
+
+    class _NatsClient:
+        async def close(self) -> None:
+            return None
+
+    transport = RootTransportService(
+        lifecycle=lifecycle,
+        role=lambda: "hub",
+        candidate_passive=lambda: False,
+        reconnect=lambda **kwargs: asyncio.sleep(0, result={}),
+        watchdog_interval=lambda: 1.0,
+        record_event=lambda *args, **kwargs: None,
+        logger=logging.getLogger("test.bootstrap.root_transport"),
+    )
+    transport.bridge_factory = _bridge
+    transport.start_bridge_task(_bridge)
+    transport.nats_client = _NatsClient()
+    await asyncio.sleep(0)
+
+    result = await transport.request_reconnect(
+        type(
+            "Operations",
+            (),
+            {
+                "configure_strategy": staticmethod(lambda **kwargs: None),
+                "record_event": staticmethod(lambda *args, **kwargs: None),
+                "strategy_snapshot": staticmethod(lambda: {}),
+            },
+        )(),
+    )
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if bridge_started == 2:
+            break
+
+    assert result["bridge"]["state"] == "rearmed"
+    assert result["bridge"]["cancelled_previous"] is True
+    assert bridge_started == 2
+
+    await lifecycle.stop()

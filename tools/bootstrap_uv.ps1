@@ -5,6 +5,7 @@ param(
   [switch]$Dev,
   [switch]$BuildVendoredYPy,
   [switch]$NoVoice,
+  [switch]$NoPairingOutput,
   [ValidateSet("auto", "always", "never")]
   [string]$InstallService = "auto",
   [string]$ServeHost = "127.0.0.1",
@@ -15,6 +16,8 @@ param(
   [string]$ZoneId = "",
   [ValidateSet("en", "ru")]
   [string]$Language = $(if ($env:ADAOS_LANG) { $env:ADAOS_LANG } else { "en" }),
+  [ValidateSet("default", "base")]
+  [string]$Preset = "default",
   [string]$WorkspaceRegistryRepo = $env:ADAOS_WORKSPACE_REGISTRY_REPO
 )
 
@@ -40,6 +43,21 @@ $Language = $Language.Trim().ToLower()
 function Have($cmd) {
   try { Get-Command $cmd -ErrorAction Stop | Out-Null; return $true }
   catch { return $false }
+}
+
+function Expand-ZipPortable {
+  param(
+    [Parameter(Mandatory = $true)][string]$ArchivePath,
+    [Parameter(Mandatory = $true)][string]$Destination
+  )
+  $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+  if ($tar) {
+    & $tar.Source -xf $ArchivePath -C $Destination
+    if ($LASTEXITCODE -eq 0) { return }
+    Write-Warning ("tar.exe could not extract the archive (exit code {0}); trying the Windows PowerShell fallback" -f $LASTEXITCODE)
+  }
+  Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $Destination)
 }
 
 function Write-EnvVar {
@@ -115,9 +133,9 @@ function Wait-ForAutostartActivation {
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   while ((Get-Date) -lt $deadline) {
     try {
-      $as = Invoke-Adaos autostart status --json 2>$null | Out-String
-      if (-not [string]::IsNullOrWhiteSpace($as)) {
-        $asObj = $as | ConvertFrom-Json
+      $result = Invoke-AdaosForBootstrap autostart status --json
+      if ($result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($result.Output)) {
+        $asObj = $result.Output | ConvertFrom-Json
         $active = $asObj.active
         $listening = $asObj.listening
         if (($active -eq $true) -and ($listening -ne $false)) {
@@ -135,10 +153,10 @@ function Show-AutostartDiagnostics {
   Write-Host "Autostart diagnostics:"
   $asObj = $null
   try {
-    $as = Invoke-Adaos autostart status --json 2>$null | Out-String
-    if (-not [string]::IsNullOrWhiteSpace($as)) {
-      Write-Host $as.Trim()
-      $asObj = $as | ConvertFrom-Json
+    $result = Invoke-AdaosForBootstrap autostart status --json
+    if ($result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($result.Output)) {
+      Write-Host $result.Output.Trim()
+      $asObj = $result.Output | ConvertFrom-Json
     } else {
       Write-Host "  autostart status json: unavailable"
     }
@@ -186,13 +204,70 @@ function Resolve-EffectiveRootUrl {
   return $normalizedRoot
 }
 
+function Install-UvOnWindows {
+  $architecture = [string]$env:PROCESSOR_ARCHITECTURE
+  $artifact = switch ($architecture.ToUpperInvariant()) {
+    "ARM64" { "uv-aarch64-pc-windows-msvc.zip" }
+    "X86" { "uv-i686-pc-windows-msvc.zip" }
+    default { "uv-x86_64-pc-windows-msvc.zip" }
+  }
+  $temporary = Join-Path $env:TEMP ("adaos_uv_{0}" -f [Guid]::NewGuid().ToString("N"))
+  $archive = Join-Path $temporary $artifact
+  $extracted = Join-Path $temporary "extracted"
+  $installDirectory = Join-Path $HOME ".local\bin"
+  New-Item -ItemType Directory -Force -Path $temporary, $extracted, $installDirectory | Out-Null
+  try {
+    $uri = "https://github.com/astral-sh/uv/releases/latest/download/$artifact"
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $archive
+    }
+    catch {
+      $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+      if (-not $curl) { throw }
+      Write-Warning ("PowerShell uv download failed; retrying with curl: {0}" -f $_.Exception.Message)
+      & $curl.Source --fail --location --silent --show-error --ssl-no-revoke --output $archive $uri
+      if ($LASTEXITCODE -ne 0) { throw "curl failed to download uv (exit code $LASTEXITCODE)" }
+    }
+    if (-not (Test-Path -LiteralPath $archive) -or (Get-Item -LiteralPath $archive).Length -eq 0) {
+      throw "uv download completed without an archive"
+    }
+    Expand-ZipPortable -ArchivePath $archive -Destination $extracted
+    $binaries = @(Get-ChildItem -LiteralPath $extracted -Recurse -File -Filter "uv*.exe")
+    if (-not ($binaries | Where-Object { $_.Name -eq "uv.exe" })) {
+      throw "downloaded uv archive does not contain uv.exe"
+    }
+    foreach ($binary in $binaries) {
+      Copy-Item -LiteralPath $binary.FullName -Destination (Join-Path $installDirectory $binary.Name) -Force
+    }
+  }
+  finally {
+    Remove-Item -Recurse -Force -LiteralPath $temporary -ErrorAction SilentlyContinue
+  }
+  $env:Path = "$installDirectory;$env:Path"
+}
+
 # 1) Install uv if missing
 Ensure-RequiredSubmodules
 
+if ($env:OS -eq "Windows_NT" -and [string]::IsNullOrWhiteSpace($env:UV_SYSTEM_CERTS)) {
+  # Use the Windows certificate store for uv downloads. This also avoids the
+  # connection failures seen with uv's bundled roots in minimal Windows images.
+  $env:UV_SYSTEM_CERTS = "1"
+}
+
+$localUvBin = Join-Path $HOME ".local\bin"
+if (Test-Path (Join-Path $localUvBin "uv.exe")) {
+  $env:Path = "$localUvBin;$env:Path"
+}
 if (-not (Have "uv")) {
   Write-Host "Installing uv..."
-  Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1 | Invoke-Expression
-  $env:Path = "$HOME\.local\bin;$env:Path"
+  if ($env:OS -eq "Windows_NT") {
+    Install-UvOnWindows
+  }
+  else {
+    Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1 | Invoke-Expression
+    $env:Path = "$HOME\.local\bin;$env:Path"
+  }
 }
 
 # Python >=3.11.9,<3.12 only (uv-managed)
@@ -228,9 +303,13 @@ if ($BuildVendoredYPy) {
   }
 } else {
   Write-Host "Creating user environment from precompiled dependencies..."
-  uv venv --python $env:UV_PYTHON .venv
-  if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
   $adaosPython = Join-Path $PWD ".venv\Scripts\python.exe"
+  if (Test-Path -LiteralPath $adaosPython) {
+    Write-Host "Reusing existing .venv from an earlier bootstrap attempt."
+  } else {
+    uv venv --python $env:UV_PYTHON .venv
+    if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
+  }
   $yPyWheelhouse = Join-Path $PWD ".adaos\bootstrap\wheels"
   & $adaosPython tools\install_patched_y_py.py --installer uv --wheelhouse $yPyWheelhouse
   if ($LASTEXITCODE -ne 0) { throw "published patched y-py wheel installation failed" }
@@ -279,11 +358,34 @@ function Invoke-Adaos {
   & .\.venv\Scripts\python.exe -m adaos @Args
 }
 
+function Invoke-AdaosForBootstrap {
+  param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Args
+  )
+  # Windows PowerShell 5.1 promotes native stderr records to PowerShell errors.
+  # AdaOS writes diagnostic logs to stderr even when a command succeeds.
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = Invoke-Adaos @Args 2>$null | Out-String
+    $exitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  return [PSCustomObject]@{
+    ExitCode = $exitCode
+    Output = $output
+  }
+}
+
 function Configure-RasaNlu {
-  if ($NoVoice) {
+  if ($NoVoice -or $Preset -eq "base") {
     $env:ADAOS_NLU_RASA = "0"
     Write-EnvVar -Key "ADAOS_NLU_RASA" -Value "0" -EnvFile ".env"
-    Write-Host "Rasa NLU service disabled by -NoVoice."
+    $reason = if ($NoVoice) { "-NoVoice" } else { "the base preset" }
+    Write-Host "Optional Rasa NLU service disabled by $reason."
     return
   }
   Write-Host "Rasa NLU will be prepared as an optional AdaOS service-skill."
@@ -349,8 +451,8 @@ if ($desiredRole -eq "hub") {
 }
 
 Write-Host "Installing default webspace content (adaos install)..."
-$installArgs = @("install", "--language", $Language)
-if ($NoVoice) {
+$installArgs = @("install", "--preset", $Preset, "--language", $Language)
+if ($NoVoice -or $Preset -eq "base") {
   $installArgs += "--no-rasa-nlu"
   $installArgs += "--no-train-nlu"
 }
@@ -505,8 +607,9 @@ Write-Host ("Starting AdaOS API ({0}:{1}) ..." -f $ServeHost, $ServePort)
 $serviceInstalled = $false
 if ($InstallService -ne "never") {
   try {
-    $autostartEnableOutput = Invoke-Adaos autostart enable --host $ServeHost --port $ServePort 2>&1 | Out-String
-    if ($LASTEXITCODE -eq 0) {
+    $autostartEnableResult = Invoke-AdaosForBootstrap autostart enable --host $ServeHost --port $ServePort
+    $autostartEnableOutput = $autostartEnableResult.Output
+    if ($autostartEnableResult.ExitCode -eq 0) {
       $serviceInstalled = $true
       Write-Host "Autostart installed (adaos autostart enable)."
     }
@@ -547,24 +650,28 @@ $st = Wait-AdaosReady -TimeoutSec 120
 $deepLink = $null
 $tgPairCode = $null
 $ownerAuth = $null
-try {
-  Write-Host "Generating Telegram pairing link..."
-  $tg = Invoke-Adaos dev telegram 2>$null | Out-String
-  if (-not [string]::IsNullOrWhiteSpace($tg)) {
-    $codeLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*pair_code:\s*" } | Select-Object -First 1
-    if ($codeLine) { $tgPairCode = ($codeLine -replace "^\s*pair_code:\s*", "").Trim() }
-    $deepLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*deep_link:\s*" } | Select-Object -First 1
-    if ($deepLine) { $deepLink = ($deepLine -replace "^\s*deep_link:\s*", "").Trim() }
+if (-not $NoPairingOutput) {
+  try {
+    Write-Host "Generating Telegram pairing link..."
+    $tg = Invoke-Adaos dev telegram 2>$null | Out-String
+    if (-not [string]::IsNullOrWhiteSpace($tg)) {
+      $codeLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*pair_code:\s*" } | Select-Object -First 1
+      if ($codeLine) { $tgPairCode = ($codeLine -replace "^\s*pair_code:\s*", "").Trim() }
+      $deepLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*deep_link:\s*" } | Select-Object -First 1
+      if ($deepLine) { $deepLink = ($deepLine -replace "^\s*deep_link:\s*", "").Trim() }
+    }
   }
-} catch { }
+  catch { }
 
-try {
-  Write-Host "Generating Owner browser pairing code..."
-  $ownerJson = Invoke-Adaos dev root login --print-only --json 2>$null | Out-String
-  if (-not [string]::IsNullOrWhiteSpace($ownerJson)) {
-    $ownerAuth = $ownerJson | ConvertFrom-Json
+  try {
+    Write-Host "Generating Owner browser pairing code..."
+    $ownerJson = Invoke-Adaos dev root login --print-only --json 2>$null | Out-String
+    if (-not [string]::IsNullOrWhiteSpace($ownerJson)) {
+      $ownerAuth = $ownerJson | ConvertFrom-Json
+    }
   }
-} catch { }
+  catch { }
+}
 
 if ($st) {
   Write-Host ("READY: node_id={0} subnet_id={1} role={2} route={3} connected={4}" -f $st.node_id, $st.subnet_id, $st.role, $st.route_mode, $st.connected_to_hub) -ForegroundColor Green

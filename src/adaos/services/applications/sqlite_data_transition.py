@@ -91,7 +91,17 @@ def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[Relation
                     connection.execute(statement)
                 finally:
                     connection.set_authorizer(None)
-            connection.execute("INSERT INTO adaos_schema_migrations (version,name,checksum) VALUES (?,?,?)", (item.version, item.name, item.checksum))
+            # Relational SDK ledgers also carry these required metadata
+            # columns. Preserve their immutable checksums and satisfy that
+            # existing shape when staging a later Application migration.
+            ledger_columns = {row[1] for row in connection.execute("PRAGMA table_info(adaos_schema_migrations)")}
+            fields = ["version", "name", "checksum"]
+            values = [item.version, item.name, item.checksum]
+            for field, value in (("applied_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), ("staged", 0)):
+                if field in ledger_columns:
+                    fields.append(field)
+                    values.append(value)
+            connection.execute(f"INSERT INTO adaos_schema_migrations ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})", values)
         if pending:
             _integrity(connection)
         connection.commit()

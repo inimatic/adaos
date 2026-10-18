@@ -187,6 +187,25 @@ class PackageVerificationError(RuntimeError):
     pass
 
 
+def package_manifests_content_equivalent(
+    expected: Mapping[str, Any],
+    rebuilt: Mapping[str, Any],
+) -> bool:
+    """Compare package payload identity across builder policy revisions.
+
+    A verified package can outlive the exact build-policy revision that created
+    it. Rebuilding the materialized bytes with a newer policy changes the
+    package digest even when every packaged file and all component provenance
+    remain identical. Only the policy digest is allowed to differ here.
+    """
+
+    expected_payload = dict(expected)
+    rebuilt_payload = dict(rebuilt)
+    expected_payload.pop("build_policy_digest", None)
+    rebuilt_payload.pop("build_policy_digest", None)
+    return expected_payload == rebuilt_payload
+
+
 @dataclass(frozen=True, slots=True)
 class PackageLimits:
     max_files: int = 10_000

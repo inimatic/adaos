@@ -221,6 +221,44 @@ def _decode_audio_from_request(body: bytes, content_type: str | None) -> bytes:
     return body
 
 
+def transcribe_audio_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Transcribe a bounded JSON audio payload inside the node runtime."""
+    try:
+        import vosk  # type: ignore
+    except Exception as exc:
+        raise HTTPException(status_code=501, detail=f"vosk is not available: {exc}")
+
+    audio_b64 = str(payload.get("audio_b64") or payload.get("wav_b64") or "").strip()
+    if not audio_b64:
+        raise HTTPException(status_code=400, detail="missing audio_b64")
+    if len(audio_b64) > 3 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="audio payload is too large")
+    language = _resolve_lang(str(payload.get("lang") or ""))
+    model_id = str(payload.get("model_id") or "").strip()
+    model_path = _ensure_model(language, model_id=model_id or None)
+    wrapped = json.dumps({"audio_b64": audio_b64}).encode("utf-8")
+    pcm = _read_wav_mono16k(_decode_audio_from_request(wrapped, "application/json"))
+    try:
+        started = time.perf_counter()
+        model = _load_model(vosk, model_path)
+        rec = vosk.KaldiRecognizer(model, 16000)
+        rec.SetWords(False)
+        rec.AcceptWaveform(pcm)
+        result = json.loads(rec.FinalResult() or "{}")
+        return {
+            "ok": True,
+            "text": str(result.get("text") or "").strip(),
+            "provider": "vosk",
+            "model_id": model_path.name,
+            "language": language,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/transcribe", dependencies=[Depends(require_token)])
 async def stt_transcribe(
     request: Request,
@@ -231,11 +269,6 @@ async def stt_transcribe(
 
     Accepts a raw WAV body (mono, 16kHz, 16-bit PCM) and returns `{ ok, text }`.
     """
-    try:
-        import vosk  # type: ignore
-    except Exception as exc:
-        raise HTTPException(status_code=501, detail=f"vosk is not available: {exc}")
-
     language = _resolve_lang(lang)
     try:
         body = await request.body()
@@ -247,32 +280,12 @@ async def stt_transcribe(
     obj = _try_parse_json(body)
     if isinstance(obj, dict) and isinstance(obj.get("lang"), str) and obj.get("lang").strip():
         language = _resolve_lang(obj.get("lang"))
-    model_id = str(obj.get("model_id") or "").strip() if isinstance(obj, dict) else ""
-    model_path = _ensure_model(language, model_id=model_id or None)
-    body = _decode_audio_from_request(body, ct)
-    pcm = _read_wav_mono16k(body)
-
-    try:
-        started = time.perf_counter()
-        model = _load_model(vosk, model_path)
-        # Use the model-native rate (16k) regardless of input; the frontend
-        # encodes 16kHz WAV, and we also accept other rates for debugging.
-        rec = vosk.KaldiRecognizer(model, 16000)
-        rec.SetWords(False)
-        rec.AcceptWaveform(pcm)
-        import json
-
-        res = json.loads(rec.FinalResult() or "{}")
-        text = (res.get("text") or "").strip()
-        return {
-            "ok": True,
-            "text": text,
-            "provider": "vosk",
-            "model_id": model_path.name,
-            "language": language,
-            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    decoded = _decode_audio_from_request(body, ct)
+    audio_b64 = base64.b64encode(decoded).decode("ascii")
+    request_payload: dict[str, object] = {
+        "audio_b64": audio_b64,
+        "lang": language,
+    }
+    if isinstance(obj, dict) and obj.get("model_id"):
+        request_payload["model_id"] = str(obj.get("model_id"))
+    return transcribe_audio_payload(request_payload)

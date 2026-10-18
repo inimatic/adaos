@@ -49,8 +49,35 @@ DEFAULT_PRESET = InstallPreset(
 )
 
 
+BASE_PRESET = InstallPreset(
+    name="base",
+    projects=(
+        "web_desktop",
+        "applications",
+    ),
+    applications=(
+        "web_desktop",
+        "applications",
+    ),
+    scenarios=(
+        "web_desktop",
+        "applications",
+    ),
+    skills=(
+        "web_desktop_runtime_skill",
+        "web_desktop_skill",
+        "greet_on_boot_skill",
+        "pair_new_device_skill",
+        "browsers_skill",
+        "voice_chat_skill",
+    ),
+)
+
+
 def get_preset(name: str | None) -> InstallPreset:
     normalized = (name or "default").strip().lower()
-    if normalized in {"default", "base"}:
+    if normalized == "default":
         return DEFAULT_PRESET
+    if normalized == "base":
+        return BASE_PRESET
     raise ValueError(f"unknown preset: {name}")

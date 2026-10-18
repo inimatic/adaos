@@ -8,7 +8,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
-from adaos.services.skill.service_supervisor import get_service_supervisor
+from adaos.services.skill.service_supervisor import get_service_supervisor, resolve_service_supervisor
 
 _log = logging.getLogger("adaos.skill.service.runtime")
 _RUNTIME_RECOVERY_KIND = "runtime.recovery.service_supervisor_failure"
@@ -170,7 +170,7 @@ async def _restart_if_service(skill_name: str | None, *, reason: str, force_disc
     if not skill_name:
         return False
     try:
-        supervisor = get_service_supervisor()
+        supervisor = await resolve_service_supervisor(skill_name, get_service_supervisor())
         if not await _is_managed_service(supervisor, skill_name, force_discovery=force_discovery):
             return False
         await supervisor.restart(skill_name)
@@ -253,7 +253,7 @@ async def _stop_if_service(skill_name: str | None, *, reason: str) -> bool:
     if not skill_name:
         return False
     try:
-        supervisor = get_service_supervisor()
+        supervisor = await resolve_service_supervisor(skill_name, get_service_supervisor())
         if not await _is_managed_service(supervisor, skill_name):
             return False
         await supervisor.stop(skill_name)
@@ -327,6 +327,7 @@ async def _open_service_diagnostics(*, skill_name: str | None, operation: str, p
     }
     if skill_name:
         try:
+            supervisor = await resolve_service_supervisor(skill_name, supervisor)
             diagnostics["status"] = supervisor.status(skill_name, check_health=True)
         except Exception as exc:
             diagnostics["status_error"] = f"{type(exc).__name__}: {exc}"
