@@ -645,6 +645,49 @@ def test_executor_journals_multi_component_nodes_retries_and_is_idempotent(
     )
 
 
+@pytest.mark.parametrize('uncertain', [False, True])
+def test_failed_noop_observation_invalidates_active_claim_and_next_plan_repairs(tmp_path, uncertain):
+    release_plan = _release((("skill", "media_center_coordinator", "a"),))
+    package = release_plan.packages[0]
+    desired = ProjectDeployment(
+        deployment_id="media-center-home", project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest), subnet_id="home", revision=1,
+        placements=(ComponentPlacementPolicy(component_ref=package.key, mode="singleton"),),
+        status="planned", created_at=_NOW, updated_at=_NOW,
+    )
+    inventory = (_node("node-a"),)
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.save_deployment(desired, expected_revision=0, actor_ref="user:owner", reason="fixture")
+    current = ComponentActivation(activation_id="activation.fixture", deployment_id=desired.deployment_id,
+        component_ref=package.key, node_id="node-a", release_digest=desired.release_digest,
+        package_digest=package.digest, generation=1, status="active", health={"ready": True},
+        created_at=_NOW, updated_at=_NOW)
+    store.put_activation(current)
+    planner = ProjectDeploymentPlanner()
+    plan = planner.plan(desired, release_plan=release_plan, inventory=inventory,
+        activations=(current,), local_node_id="node-a")
+    assert plan.changes[0].action == "noop"
+    class FailedObservation(FakeDeploymentAdapter):
+        def execute_phase(self, **kwargs):
+            if not uncertain and kwargs["phase"] == "observe":
+                self.calls.append({"phase": "observe"})
+                raise RuntimeError("observed component health did not report ready")
+            return super().execute_phase(**kwargs)
+    adapter = FailedObservation(uncertain_phase="observe" if uncertain else None)
+    operation = ProjectDeploymentExecutor(store=store, adapter=adapter).execute(plan,
+        desired=desired, release_plan=release_plan, inventory=inventory,
+        principal=_principal(plan.required_approvals), idempotency_key="failed-observation")
+    observed = store.get_activation(current.activation_id)
+    assert observed.status == ("uncertain" if uncertain else "failed")
+    assert observed.package_digest == current.package_digest
+    assert observed.health["ready"] is False
+    assert observed.evidence["failed_observation_operation_ref"] == operation.operation_id
+    repair = planner.plan(desired, release_plan=release_plan, inventory=inventory,
+        activations=(observed,), local_node_id="node-a")
+    assert repair.changes[0].action == "update"
+    assert [call["phase"] for call in adapter.calls] == ["observe"]
+
+
 def test_executor_does_not_retry_or_rollback_uncertain_state(tmp_path: Path) -> None:
     release_plan = _release((("skill", "media_center_coordinator", "a"),))
     desired = ProjectDeployment(

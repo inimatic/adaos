@@ -506,6 +506,20 @@ class ProjectDeploymentExecutor:
                 ),
             )
             if result.state in {"failed", "uncertain"}:
+                if change.action == "noop" and phase == "observe" and current_activation is not None:
+                    # An old placement receipt cannot keep asserting active
+                    # after an exact observation has failed. Preserve identity
+                    # and failure provenance so the next reviewed plan repairs
+                    # the component instead of repeating an endless noop.
+                    self.store.put_activation(replace(
+                        current_activation,
+                        status="uncertain" if result.uncertain else "failed",
+                        health={"ready": False, "observation_verified": False},
+                        evidence={**current_activation.evidence,
+                                  "failed_observation_operation_ref": operation.operation_id,
+                                  "failed_observation_error": dict(result.error)},
+                        updated_at=utc_now(),
+                    ))
                 if (
                     result.state == "failed"
                     and change.action != "noop"
