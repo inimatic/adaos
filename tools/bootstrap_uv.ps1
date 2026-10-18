@@ -187,13 +187,61 @@ function Resolve-EffectiveRootUrl {
   return $normalizedRoot
 }
 
+function Install-UvOnWindows {
+  $architecture = [string]$env:PROCESSOR_ARCHITECTURE
+  $artifact = switch ($architecture.ToUpperInvariant()) {
+    "ARM64" { "uv-aarch64-pc-windows-msvc.zip" }
+    "X86" { "uv-i686-pc-windows-msvc.zip" }
+    default { "uv-x86_64-pc-windows-msvc.zip" }
+  }
+  $temporary = Join-Path $env:TEMP ("adaos_uv_{0}" -f [Guid]::NewGuid().ToString("N"))
+  $archive = Join-Path $temporary $artifact
+  $extracted = Join-Path $temporary "extracted"
+  $installDirectory = Join-Path $HOME ".local\bin"
+  New-Item -ItemType Directory -Force -Path $temporary, $extracted, $installDirectory | Out-Null
+  try {
+    $uri = "https://github.com/astral-sh/uv/releases/latest/download/$artifact"
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $archive
+    }
+    catch {
+      $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+      if (-not $curl) { throw }
+      Write-Warning ("PowerShell uv download failed; retrying with curl: {0}" -f $_.Exception.Message)
+      & $curl.Source --fail --location --silent --show-error --ssl-no-revoke --output $archive $uri
+      if ($LASTEXITCODE -ne 0) { throw "curl failed to download uv (exit code $LASTEXITCODE)" }
+    }
+    if (-not (Test-Path -LiteralPath $archive) -or (Get-Item -LiteralPath $archive).Length -eq 0) {
+      throw "uv download completed without an archive"
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $extracted)
+    $binaries = @(Get-ChildItem -LiteralPath $extracted -Recurse -File -Filter "uv*.exe")
+    if (-not ($binaries | Where-Object { $_.Name -eq "uv.exe" })) {
+      throw "downloaded uv archive does not contain uv.exe"
+    }
+    foreach ($binary in $binaries) {
+      Copy-Item -LiteralPath $binary.FullName -Destination (Join-Path $installDirectory $binary.Name) -Force
+    }
+  }
+  finally {
+    Remove-Item -Recurse -Force -LiteralPath $temporary -ErrorAction SilentlyContinue
+  }
+  $env:Path = "$installDirectory;$env:Path"
+}
+
 # 1) Install uv if missing
 Ensure-RequiredSubmodules
 
 if (-not (Have "uv")) {
   Write-Host "Installing uv..."
-  Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1 | Invoke-Expression
-  $env:Path = "$HOME\.local\bin;$env:Path"
+  if ($env:OS -eq "Windows_NT") {
+    Install-UvOnWindows
+  }
+  else {
+    Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1 | Invoke-Expression
+    $env:Path = "$HOME\.local\bin;$env:Path"
+  }
 }
 
 # Python >=3.11.9,<3.12 only (uv-managed)
