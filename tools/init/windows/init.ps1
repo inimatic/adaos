@@ -222,7 +222,10 @@ try {
     Write-Info ("Downloading source archive: {0}" -f $zipUrl)
     Invoke-DownloadWithRetry -Uri $zipUrl -OutFile $zipPath
     Write-Info "Extracting..."
-    Expand-Archive -LiteralPath $zipPath -DestinationPath $tmp -Force
+    # Use the framework API directly. Minimal Windows images may advertise the
+    # Archive module while failing to load it, which makes Expand-Archive unusable.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $tmp)
 
     $extracted = Get-ChildItem -LiteralPath $tmp -Directory | Where-Object { $_.Name -like "$RepoName-*" } | Select-Object -First 1
     if (-not $extracted) { throw "Failed to locate extracted directory in $tmp" }
