@@ -79,6 +79,61 @@ def test_service_operation_lock_serializes_independent_event_loops():
     assert second_entered.is_set() is True
 
 
+@pytest.mark.parametrize('failure', [None, 'pending_transition', 'selection_changed', 'hook_failed', 'legacy'])
+def test_service_restart_rehydrates_storage_before_launch_without_bypassing_cutover(monkeypatch, tmp_path, failure):
+    from contextlib import contextmanager
+    from adaos.services.skill import service_supervisor as mod
+    from adaos.services.skill import manager as manager_module
+    from adaos.services.applications import runtime_selection
+
+    supervisor = mod.ServiceSkillSupervisor()
+    source = tmp_path / 'selected_slot'
+    _write_service_skill(source, port=18199)
+    with (source / 'skill.yaml').open('a', encoding='utf-8') as stream:
+        stream.write('lifecycle:\n  rehydrate: resume_owned_storage\n')
+    spec = mod._resolve_service_spec('slot_service', source, mod._read_skill_manifest(source))
+    marker = tmp_path / 'draining.lock'
+    marker.write_text('stopped previous Core', encoding='utf-8')
+    calls = []
+
+    @contextmanager
+    def admission(_ctx, _name):
+        if failure == 'pending_transition':
+            raise RuntimeError('pending data cutover')
+        calls.append('admitted')
+        yield
+        calls.append('released')
+
+    class Manager:
+        def __init__(self, **_):
+            pass
+
+        def rehydrate_active_runtime(self, name, **_):
+            assert name == 'slot_service' and calls == ['admitted']
+            if failure == 'hook_failed':
+                return {'ok': False}
+            marker.unlink()
+            calls.append('resumed')
+            return {'ok': True, 'skipped': False}
+
+    monkeypatch.setattr(runtime_selection, 'application_execution', admission)
+    monkeypatch.setattr(mod, '_active_runtime_skill_root', lambda *_: None if failure == 'legacy' else tmp_path / 'different_slot' if failure == 'selection_changed' else source)
+    monkeypatch.setattr(manager_module, 'SkillManager', Manager)
+    if failure == 'legacy':
+        command, _, _ = supervisor._service_launch_plan('slot_service', spec, Path(sys.executable))
+        assert command and marker.exists()
+        assert calls == ['admitted', 'released']
+    elif failure:
+        with pytest.raises(RuntimeError):
+            supervisor._service_launch_plan('slot_service', spec, Path(sys.executable))
+        assert marker.exists()
+        assert 'resumed' not in calls
+    else:
+        command, _, _ = supervisor._service_launch_plan('slot_service', spec, Path(sys.executable))
+        assert command and not marker.exists()
+        assert calls == ['admitted', 'resumed', 'released']
+
+
 def test_service_startup_readiness_timeout_is_explicit(monkeypatch, tmp_path):
     from adaos.services.skill import service_supervisor as mod
 

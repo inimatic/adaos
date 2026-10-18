@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
@@ -181,7 +182,7 @@ async def service_ui_bootstrap(
 async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
     _authorize(request)
     spec = await _ensure_service_started(name)
-    status = get_service_supervisor().status(name, check_health=True) or {}
+    status = await asyncio.to_thread(get_service_supervisor().status, name, check_health=True) or {}
     if not bool(status.get("health_ok")):
         raise HTTPException(status_code=503, detail={
             "code": "service_unavailable",
@@ -203,7 +204,7 @@ async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
         # certificate verification if an HTTPS endpoint is introduced later.
         async with httpx.AsyncClient(
             follow_redirects=False,
-            timeout=15.0,
+            timeout=45.0,
             trust_env=False,
             verify=urlsplit(spec.base_url).scheme.lower() != "http",
         ) as client:

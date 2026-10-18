@@ -1071,6 +1071,49 @@ class ServiceSkillSupervisor:
             )
         return values
 
+    def _rehydrate_service_runtime(self, name: str, spec: ServiceSpec) -> None:
+        """Resume a selected service's owned storage before spawning its process.
+
+        Core shutdown runs drain/dispose even when the selected slot does not
+        change. Activation hooks alone therefore cannot resume a restarted
+        service. Keep this hook inside Application execution admission so a
+        pending data cutover retains its writer fence.
+        """
+        manifest = _read_skill_manifest(spec.skill_root)
+        lifecycle = manifest.get("lifecycle") or {}
+        if not isinstance(lifecycle, Mapping) or not lifecycle.get("rehydrate"):
+            return
+
+        from adaos.adapters.db import SqliteSkillRegistry
+        from adaos.services.agent_context import use_ctx
+        from adaos.services.applications.runtime_selection import application_execution
+        from adaos.services.skill.manager import SkillManager
+
+        skills_root = _path_value(self._ctx.paths.skills_dir)
+        with use_ctx(self._ctx), application_execution(self._ctx, name):
+            selected = _active_runtime_skill_root(skills_root, name)
+            if selected is None and _infer_runtime_bucket_root(spec.skill_root, name) is None:
+                # Legacy workspace-only services have no governed slot hook.
+                return
+            if selected is None or selected.resolve() != spec.skill_root.resolve():
+                raise RuntimeError("Service runtime selection changed before startup")
+            manager = SkillManager(
+                repo=self._ctx.skills_repo,
+                registry=SqliteSkillRegistry(self._ctx.sql),
+                git=self._ctx.git,
+                paths=self._ctx.paths,
+                bus=getattr(self._ctx, "bus", None),
+                caps=self._ctx.caps,
+                settings=self._ctx.settings,
+            )
+            result = manager.rehydrate_active_runtime(
+                name,
+                reason="service_process_start",
+                event_type="skill.service.starting",
+            )
+            if not result.get("ok") or result.get("skipped"):
+                raise RuntimeError("Service runtime rehydration did not complete")
+
     def _service_launch_plan(
         self,
         name: str,
@@ -1079,6 +1122,7 @@ class ServiceSkillSupervisor:
     ) -> tuple[list[str], dict[str, str], Path]:
         """Prepare filesystem and storage-backed process inputs off the owner loop."""
 
+        self._rehydrate_service_runtime(name, spec)
         env = os.environ.copy()
         env["ADAOS_SERVICE_SKILL"] = name
         env["ADAOS_SERVICE_HOST"] = spec.host

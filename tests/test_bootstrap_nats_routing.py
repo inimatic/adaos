@@ -955,6 +955,16 @@ def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
     assert _hub_route_proxy._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
 
 
+def test_service_ui_routing_preserves_deadline_without_replaying_mutations():
+    path = '/api/services/context_chat_service/ui/api/projects'
+    assert _hub_route_proxy._hub_route_local_http_timeout(path) == (1.5, 12.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout(path, {'X-AdaOS-Timeout-Ms': '120000'}) == (1.5, 115.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout(path, {'X-AdaOS-Timeout-Ms': '900000'}) == (1.5, 595.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout('/api/services/context_chat_service/status') == (1.5, 2.5)
+    for method in ('POST', 'PATCH', 'DELETE'):
+        assert not _hub_route_proxy._hub_route_should_retry_http_upstream_error(method=method, path=path, error_kind='ReadTimeout')
+
+
 def test_trial_acceptance_uses_the_callers_publication_budget_without_retrying():
     path = '/api/component-updates/cupdate.exact/accept-trial'
     assert _hub_route_proxy._hub_route_local_http_timeout(path) == (1.5, 55.0)
