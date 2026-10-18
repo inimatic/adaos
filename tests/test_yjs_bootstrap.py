@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import threading
 
 import y_py as Y
 from ypy_websocket.ystore import YDocNotFound
@@ -380,7 +382,10 @@ def test_bootstrap_empty_store_preserves_provided_doc_without_corruption_recover
 
     class _ProjectingManager:
         def project_scenario_to_doc(self, ydoc: Y.YDoc, scenario_id: str, *, space: str = "workspace") -> None:
-            assert ydoc is provided_doc
+            # A local class has a cyclic MRO. Capturing the native document in
+            # this method would keep it alive until arbitrary-thread cyclic GC.
+            # The caller retains the document, so its integer identity is stable.
+            assert id(ydoc) == provided_doc_identity
             assert ydoc.get_map("private_test").get("owner_marker") == "preserved"
             with ydoc.begin_transaction() as txn:
                 ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
@@ -390,6 +395,7 @@ def test_bootstrap_empty_store_preserves_provided_doc_without_corruption_recover
 
     store = _EmptyStore()
     provided_doc = Y.YDoc()
+    provided_doc_identity = id(provided_doc)
     with provided_doc.begin_transaction() as txn:
         provided_doc.get_map("private_test").set(txn, "owner_marker", "preserved")
     monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _ProjectingManager())
@@ -403,6 +409,15 @@ def test_bootstrap_empty_store_preserves_provided_doc_without_corruption_recover
     assert provided_doc.get_map("ui").get("current_scenario") == "todo_list"
     assert provided_doc.get_map("private_test").get("owner_marker") == "preserved"
     assert store.write_calls > 0
+
+
+def test_empty_store_probe_releases_native_doc_before_foreign_collection(monkeypatch) -> None:
+    with monkeypatch.context() as scoped:
+        test_bootstrap_empty_store_preserves_provided_doc_without_corruption_recovery(scoped)
+    worker = threading.Thread(target=gc.collect)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
 
 
 def test_bootstrap_requires_fresh_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
