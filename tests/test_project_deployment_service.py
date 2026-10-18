@@ -330,6 +330,30 @@ class StaticReleaseProvider:
         return self.release_plan
 
 
+def test_local_admission_is_bound_into_immutable_plan_before_submit(tmp_path):
+    release_plan = _release((("skill", "media_center_coordinator", "a"),))
+    desired = ProjectDeployment(
+        deployment_id="media-center-home", project_ref="project:media_center",
+        release_digest=str(release_plan.release.release_digest), subnet_id="home", revision=1,
+        placements=(ComponentPlacementPolicy(component_ref="skill:media_center_coordinator", mode="singleton"),),
+        status="planned", created_at=_NOW, updated_at=_NOW,
+    )
+    blocker = "blocked:skill:media_center_coordinator:workspace_lock_package_conflict"
+    runtime = ProjectDeploymentRuntime(
+        store=ProjectDeploymentStore(state_dir=tmp_path), releases=StaticReleaseProvider(release_plan),
+        inventory=StaticInventoryProvider((_node("node-a"),)), adapter=FakeDeploymentAdapter(),
+        local_node_id="node-a", local_admission_policy=lambda _plan: (blocker,),
+    )
+    principal = DeploymentPrincipal.create(actor_ref="test", permissions=(
+        "project.deployment.manage", "project.deployment.inspect", "project.deployment.apply"))
+    runtime.define(desired, expected_revision=0, principal=principal, reason="fixture")
+    plan = runtime.plan(desired.deployment_id, principal=principal)
+    assert plan.status == "blocked" and blocker in plan.warnings
+    assert runtime.store.get_plan(plan.plan_digest).plan_digest == plan.plan_digest
+    with pytest.raises(ProjectDeploymentExecutionError, match="blocked deployment plan"):
+        runtime.submit(plan.plan_digest, principal=principal, idempotency_key="blocked-fixture")
+
+
 class StaticInventoryProvider:
     def __init__(self, records: tuple[NodeInventoryRecord, ...]) -> None:
         self.records = records

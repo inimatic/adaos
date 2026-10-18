@@ -783,6 +783,11 @@ def configure_default_distributed_runtimes(
                 component_refs=(item.key for item in release_plan.release.components),
             )
         )
+        from .workspace_admission import workspace_admission_warnings
+
+        deployment.local_admission_policy = lambda plan: workspace_admission_warnings(
+            Path(current.paths.workspace_dir()), plan.changes, str(conf.node_id)
+        )
         deployment.recover_incomplete()
 
         def execute_topology_tool(

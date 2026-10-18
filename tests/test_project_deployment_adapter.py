@@ -126,6 +126,61 @@ def _change(action: str, package=None) -> DeploymentPlanChange:
     )
 
 
+def test_local_admission_failure_and_rollback_preserve_previous_target(tmp_path: Path) -> None:
+    from adaos.domain.artifact_release import WorkspaceLock
+    import json
+
+    package = _package(tmp_path)
+    workspace = tmp_path / "workspace"
+    target = workspace / "skills/test_worker"
+    target.mkdir(parents=True)
+    (target / "skill.yaml").write_text("prior-working-source", encoding="utf-8")
+    locked = replace(package.ref, digest="sha256:" + "f" * 64)
+    lock = WorkspaceLock(lock_revision=1, updated_at=_NOW, components=(locked,))
+    (workspace / ".adaos").mkdir()
+    (workspace / ".adaos/workspace.lock.json").write_text(json.dumps(lock.to_dict()))
+    adapter = LocalComponentDeploymentAdapter(
+        local_node_id="node-a", workspace_root=workspace,
+        state_root=tmp_path / "state", package_store=ContentAddressedPackageStore(tmp_path / "packages"),
+        fetch_package=lambda _ref: package.archive_bytes, hooks=NoopComponentLifecycleHooks(),
+    )
+    root = tmp_path / "operation"
+    root.mkdir()
+    change = _change("install", package)
+    with pytest.raises(ProjectDeploymentExecutionError, match="workspace_lock_package_conflict"):
+        adapter._phase_activate(root=root, state={}, change=change, package=package.ref)
+    receipt = adapter._phase_rollback(root=root, change=change, package=package.ref)
+    assert receipt["preserved_existing"] is True
+    assert (target / "skill.yaml").read_text() == "prior-working-source"
+    assert not (root / "failed").exists()
+
+
+def test_new_target_created_by_failed_activation_is_compensated(tmp_path: Path) -> None:
+    class FailingHooks(NoopComponentLifecycleHooks):
+        def activate(self, **_kwargs):
+            raise RuntimeError("controlled activation failure")
+
+    package = _package(tmp_path)
+    store = ContentAddressedPackageStore(tmp_path / "packages")
+    store.put(package.archive_bytes)
+    adapter = LocalComponentDeploymentAdapter(
+        local_node_id="node-a", workspace_root=tmp_path / "workspace",
+        state_root=tmp_path / "state", package_store=store,
+        fetch_package=lambda _ref: package.archive_bytes, hooks=FailingHooks(),
+    )
+    root = tmp_path / "operation"
+    root.mkdir()
+    change = _change("install", package)
+    adapter._phase_stage(root=root, package=package.ref)
+    with pytest.raises(RuntimeError, match="controlled activation failure"):
+        adapter._phase_activate(root=root, state={}, change=change, package=package.ref)
+    target = tmp_path / "workspace/skills/test_worker"
+    assert target.exists()
+    adapter._phase_rollback(root=root, change=change, package=package.ref)
+    assert not target.exists()
+    assert (root / "failed/skill.yaml").exists()
+
+
 def test_local_adapter_materializes_exact_component_and_removes_only_component(
     tmp_path: Path,
 ) -> None:

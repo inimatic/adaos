@@ -79,6 +79,21 @@ jobs:
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread
 
+      - name: Verify deployment authority, Workspace admission and rollback
+        run: |
+          mkdir -p .tmp reports
+          uv run python -m pytest -q -o addopts='' \
+            tests/test_deployment_workspace_admission.py \
+            tests/test_deployment_failure_provenance.py \
+            tests/test_project_deployment_adapter.py \
+            tests/test_project_deployment_default_runtime.py \
+            tests/test_project_deployment_service.py \
+            tests/test_project_deployment_materialization.py \
+            tests/test_project_deployment_authority.py \
+            tests/test_project_deployment_contracts.py \
+            tests/test_skills_loader_importlib.py \
+            --basetemp=.tmp/ci-deployment-authority \
+            --junitxml=reports/deployment-authority.xml
       - name: Enforce bounded MCP collections and output budgets
         run: |
           uv run python tools/mcp_output_profiler.py \

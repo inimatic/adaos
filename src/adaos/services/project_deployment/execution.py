@@ -144,6 +144,31 @@ def _safe_error(exc: BaseException, *, code: str) -> dict[str, Any]:
     detail = _safe_payload(str(exc))
     if detail and detail != "<redacted>" and detail != error["message"]:
         error["detail"] = detail
+    # A fixed wrapper code alone hides the stage that failed. Retain bounded
+    # Core-owned frame identities from the exception chain, never exception
+    # arguments, source lines, local values, filenames or skill source identities.
+    frames: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    for _ in range(4):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        trace = current.__traceback__
+        owned: list[dict[str, Any]] = []
+        while trace is not None:
+            module = str(trace.tb_frame.f_globals.get("__name__") or "")
+            if module.startswith("adaos."):
+                owned.append({"module": module[:180],
+                              "function": trace.tb_frame.f_code.co_name[:120],
+                              "line": int(trace.tb_lineno)})
+            trace = trace.tb_next
+        frames.extend(owned[-4:])
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    if frames:
+        error["origin_frames"] = _safe_payload(frames)
     return error
 
 

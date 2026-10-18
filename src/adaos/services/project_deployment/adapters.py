@@ -422,6 +422,7 @@ class LocalComponentDeploymentAdapter:
 
     def _phase_observe(self, **kwargs: Any) -> Mapping[str, Any]:
         change: DeploymentPlanChange = kwargs["change"]
+        self._require_workspace_admission(change)
         package = self._require_package(kwargs["package"])
         verified = self.package_store.verify(package.digest)
         if verified.ref != package:
@@ -477,6 +478,7 @@ class LocalComponentDeploymentAdapter:
         root: Path = kwargs["root"]
         state: Mapping[str, Any] = kwargs["state"]
         change: DeploymentPlanChange = kwargs["change"]
+        self._require_workspace_admission(change)
         package = self._require_package(kwargs["package"])
         prior = dict(state.get("phases") or {}).get("activate")
         target = self._target(change, package)
@@ -489,6 +491,11 @@ class LocalComponentDeploymentAdapter:
             )
         backup = root / "backup"
         target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(root / "activation-intent.json", {
+            "schema": "adaos.project.component_activation_intent.v1",
+            "package_digest": package.digest,
+            "had_prior_target": target.exists(),
+        })
         if target.exists():
             if backup.exists():
                 raise ProjectDeploymentExecutionError("component backup already exists")
@@ -517,6 +524,7 @@ class LocalComponentDeploymentAdapter:
 
     def _phase_health(self, **kwargs: Any) -> Mapping[str, Any]:
         change: DeploymentPlanChange = kwargs["change"]
+        self._require_workspace_admission(change)
         package = self._require_package(kwargs["package"])
         materialization = self._verify_materialized_target(
             package,
@@ -539,6 +547,15 @@ class LocalComponentDeploymentAdapter:
         receipt["materialization"] = materialization
         return receipt
 
+    def _require_workspace_admission(self, change: DeploymentPlanChange) -> None:
+        from .workspace_admission import workspace_admission_warnings
+
+        warnings = workspace_admission_warnings(
+            self.workspace_root, (change,), self.local_node_id
+        )
+        if warnings:
+            raise ProjectDeploymentExecutionError(warnings[0])
+
     def _phase_commit(self, **kwargs: Any) -> Mapping[str, Any]:
         root: Path = kwargs["root"]
         package = self._require_package(kwargs["package"])
@@ -553,6 +570,15 @@ class LocalComponentDeploymentAdapter:
         package: ArtifactPackageRef | None = kwargs["package"]
         target = self._target(change, package)
         backup = root / "backup"
+        if not backup.exists():
+            intent = _read(root / "activation-intent.json")
+            # Fetch/verify/admission failures did not replace the target. Never
+            # turn their compensating rollback into removal of a working app.
+            if (not intent or intent.get("had_prior_target") is True
+                    or (root / "staged").exists()):
+                return {"rolled_back": True, "previous_restored": False,
+                        "preserved_existing": target.exists(),
+                        "reason": "activation_target_not_replaced"}
         if target.exists():
             failed = root / "failed"
             if failed.exists():
