@@ -94,6 +94,14 @@ jobs:
             tests/test_skills_loader_importlib.py \
             --basetemp=.tmp/ci-deployment-authority \
             --junitxml=reports/deployment-authority.xml
+      - name: Verify Application data snapshots, replay and cutover
+        run: |
+          uv run python -m pytest -q -o addopts='' \
+            tests/test_sqlite_data_transition.py \
+            tests/test_application_data_lifecycle.py \
+            tests/test_local_release_transition.py \
+            --basetemp=.tmp/ci-application-data \
+            --junitxml=reports/application-data.xml
       - name: Enforce bounded MCP collections and output budgets
         run: |
           uv run python tools/mcp_output_profiler.py \

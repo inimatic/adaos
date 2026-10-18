@@ -922,9 +922,15 @@ class LocalApplicationDataLifecycle:
                         base = self._root(component, "beta_source") / name
                         snapshot = self.data.snapshot(component.beta_source_root / name, base,
                             operation_key=key + ":beta-source:" + name)
-                    staged = self._root(component, "migrated") / name
-                    migrated = self.data.migrate(base, staged, snapshot_digest=snapshot["digest"],
-                        migrations=migrations, operation_key=key + ":migrate:" + name)
+                    if migrations:
+                        staged = self._root(component, "migrated") / name
+                        migrated = self.data.migrate(base, staged, snapshot_digest=snapshot["digest"],
+                            migrations=migrations, operation_key=key + ":migrate:" + name)
+                    else:
+                        # No schema effect needs a third retained full copy.
+                        # Install still makes an independent writable database.
+                        staged = base
+                        migrated = self.data.verify_unmigrated_snapshot(base, snapshot_digest=snapshot["digest"])
                     self._install_new(component, "beta", name, staged, migrated["digest"], component.beta_root / name)
                 for name, contract in state_files.items():
                     source = component.stable_root / name if component.stable_root else None
@@ -1060,11 +1066,15 @@ class LocalApplicationDataLifecycle:
                 for name in databases:
                     base = self._root(component, "stable") / name
                     if component.stable_root and (component.stable_root / name).exists():
-                        old = self.data.snapshot(component.stable_root / name, self._root(component, "stable_before_accept") / name,
-                                                 operation_key=key + ":before:" + name)
                         receipt = json.loads(base.with_suffix(base.suffix + ".receipt.json").read_text(encoding="utf-8"))
-                        if old["digest"] != receipt["digest"]:
-                            raise RuntimeChannelConflict("Stable data changed while Beta was selected; explicit reconciliation required")
+                        try:
+                            self.data.verify_snapshot_unchanged(component.stable_root / name, base,
+                                self._root(component, "stable_before_accept") / name,
+                                baseline_digest=receipt["digest"], operation_key=key + ":before:" + name)
+                        except ValueError as exc:
+                            if str(exc).startswith("Stable data changed while Beta was selected"):
+                                raise RuntimeChannelConflict(str(exc)) from exc
+                            raise
                     accepted = self._root(component, "accepted") / name
                     snapshot = self.data.snapshot(component.beta_root / name, accepted, operation_key=key + ":accepted:" + name)
                     target = component.target_root / name

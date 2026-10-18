@@ -43,6 +43,91 @@ def test_two_forward_cycles_preserve_stable_and_beta_writes(tmp_path):
     assert "private original" not in str(result)
 
 
+def test_verified_empty_chain_reuses_snapshot_without_mutation_or_writable_alias(tmp_path):
+    adapter, stable = seed(tmp_path)
+    snapshot, beta = tmp_path / "snapshot.sqlite", tmp_path / "beta.sqlite"
+    receipt = adapter.snapshot(stable, snapshot, operation_key="empty-chain")
+    original = snapshot.read_bytes()
+    result = adapter.verify_unmigrated_snapshot(snapshot, snapshot_digest=receipt["digest"])
+    assert result["mode"] == "verified_empty_migration_chain"
+    assert snapshot.read_bytes() == original
+    adapter.install(snapshot, beta, staged_digest=result["digest"])
+    write(beta, "INSERT INTO records VALUES (2, 'beta only')")
+    assert len(rows(snapshot)) == len(rows(stable)) == 1
+    assert len(rows(beta)) == 2
+
+
+def test_empty_chain_cannot_discard_installed_migration_history(tmp_path):
+    adapter, stable = seed(tmp_path)
+    initialize_sqlite_schema(stable, [RelationalMigration(1, "existing", ("CREATE TABLE another(id INTEGER)",))], development=True)
+    snapshot = tmp_path / "snapshot.sqlite"
+    receipt = adapter.snapshot(stable, snapshot, operation_key="existing-chain")
+    with pytest.raises(ValueError, match="full migration chain"):
+        adapter.verify_unmigrated_snapshot(snapshot, snapshot_digest=receipt["digest"])
+
+
+def test_unchanged_verification_retains_proof_and_baseline_not_duplicate(tmp_path):
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / "baseline.sqlite", tmp_path / "checked.sqlite"
+    snapshot = adapter.snapshot(stable, baseline, operation_key="base")
+    proof = adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=snapshot["digest"], operation_key="before")
+    assert proof["digest"] == snapshot["digest"]
+    assert baseline.exists() and not checked.exists()
+    assert checked.with_suffix(".sqlite.unchanged.json").is_file()
+    write(stable, "INSERT INTO records VALUES (2, 'adopted')")
+    assert adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=snapshot["digest"], operation_key="before") == proof
+    assert len(rows(baseline)) == 1 and len(rows(stable)) == 2
+
+
+def test_changed_stable_is_rejected_and_verification_copy_is_retained(tmp_path):
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / "baseline.sqlite", tmp_path / "checked.sqlite"
+    snapshot = adapter.snapshot(stable, baseline, operation_key="base")
+    write(stable, "INSERT INTO records VALUES (2, 'unexpected write')")
+    with pytest.raises(ValueError, match="Stable data changed"):
+        adapter.verify_snapshot_unchanged(stable, baseline, checked,
+            baseline_digest=snapshot["digest"], operation_key="before")
+    assert len(rows(checked)) == 2 and len(rows(baseline)) == 1
+    assert not checked.with_suffix(".sqlite.unchanged.json").exists()
+
+
+def test_equality_proof_survives_interruption_before_duplicate_retirement(tmp_path, monkeypatch):
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / "baseline.sqlite", tmp_path / "checked.sqlite"
+    snapshot = adapter.snapshot(stable, baseline, operation_key="base")
+    retire = adapter._retire_verified_duplicate
+    def interrupted(*args):
+        raise OSError("injected interruption")
+    monkeypatch.setattr(adapter, "_retire_verified_duplicate", interrupted)
+    with pytest.raises(OSError, match="interruption"):
+        adapter.verify_snapshot_unchanged(stable, baseline, checked,
+            baseline_digest=snapshot["digest"], operation_key="before")
+    assert checked.exists()
+    monkeypatch.setattr(adapter, "_retire_verified_duplicate", retire)
+    write(stable, "INSERT INTO records VALUES (2, 'adopted')")
+    assert adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=snapshot["digest"], operation_key="before")["ok"]
+    assert not checked.exists()
+
+
+def test_equality_proof_never_retires_a_changed_duplicate(tmp_path, monkeypatch):
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / "baseline.sqlite", tmp_path / "checked.sqlite"
+    snapshot = adapter.snapshot(stable, baseline, operation_key="base")
+    retire = adapter._retire_verified_duplicate
+    monkeypatch.setattr(adapter, "_retire_verified_duplicate", lambda *args: None)
+    adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=snapshot["digest"], operation_key="before")
+    write(checked, "INSERT INTO records VALUES (2, 'tampered')")
+    monkeypatch.setattr(adapter, "_retire_verified_duplicate", retire)
+    with pytest.raises(ValueError, match="changed before retirement"):
+        adapter.verify_snapshot_unchanged(stable, baseline, checked,
+            baseline_digest=snapshot["digest"], operation_key="before")
+    assert checked.exists()
+
+
 def test_new_beta_uses_stable_not_previous_beta_and_replay_does_not_reseed(tmp_path):
     adapter, stable = seed(tmp_path)
     snapshot = tmp_path / "snapshot.sqlite"

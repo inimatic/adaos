@@ -153,6 +153,74 @@ class SQLiteDataTransition:
                 _apply_migrations(connection, ordered, allow_existing=True)
         return self._build(destination, identity, build)
 
+    def verify_unmigrated_snapshot(self, snapshot: Path, *, snapshot_digest: str) -> dict:
+        """Reuse an immutable snapshot only for an explicitly empty migration chain.
+
+        The caller still installs an independent writable Beta database. Never
+        alias a live database, create a hard link, or omit an installed ledger.
+        """
+        snapshot = self._path(snapshot)
+        if _hash(snapshot) != snapshot_digest:
+            raise ValueError("Migration snapshot identity mismatch")
+        with _read(snapshot) as connection:
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "adaos_schema_migrations" in tables and connection.execute(
+                "SELECT version, checksum FROM adaos_schema_migrations LIMIT 1"
+            ).fetchone() is not None:
+                raise ValueError("Migration history differs from the immutable full migration chain")
+        return {"ok": True, "digest": snapshot_digest, "bytes": snapshot.stat().st_size,
+                "mode": "verified_empty_migration_chain"}
+
+    def verify_snapshot_unchanged(self, source: Path, baseline: Path, destination: Path,
+                                  *, baseline_digest: str, operation_key: str) -> dict:
+        """Retain a durable equality proof instead of a second identical backup.
+
+        The consistent validation snapshot is still required, including WAL.
+        Only this operation's duplicate is retired after a matching immutable
+        baseline and a durable proof exist. A changed source is retained for
+        diagnosis. Replays after adoption use the proof, not the now-adopted DB.
+        """
+        source, baseline, destination = (self._path(path) for path in (source, baseline, destination))
+        if len({source, baseline, destination}) != 3 or _hash(baseline) != baseline_digest:
+            raise ValueError("Stable verification baseline identity mismatch")
+        if not operation_key or len(operation_key) > 256:
+            raise ValueError("A bounded operation key is required")
+        identity = {"kind": "unchanged_snapshot", "operation_key": operation_key,
+                    "source": str(source.relative_to(self.root)),
+                    "baseline": str(baseline.relative_to(self.root)), "digest": baseline_digest}
+        proof_path = destination.with_suffix(destination.suffix + ".unchanged.json")
+        with mutation_lock(proof_path.with_suffix(".lock")):
+            if proof_path.exists():
+                proof = json.loads(proof_path.read_text(encoding="utf-8"))
+                if proof.get("identity") != identity or proof.get("digest") != baseline_digest:
+                    raise ValueError("Retained SQLite equality proof changed")
+            else:
+                checked = self.snapshot(source, destination, operation_key=operation_key)
+                if checked["digest"] != baseline_digest:
+                    raise ValueError("Stable data changed while Beta was selected; explicit reconciliation required")
+                proof = {"ok": True, "identity": identity, "digest": baseline_digest,
+                         "bytes": checked["bytes"], "mode": "verified_identical_snapshot"}
+                atomic_write_json(proof_path, proof)
+            self._retire_verified_duplicate(destination, source, operation_key, baseline_digest)
+            return proof
+
+    def _retire_verified_duplicate(self, destination: Path, source: Path,
+                                   operation_key: str, digest: str) -> None:
+        metadata = destination.with_suffix(destination.suffix + ".receipt.json")
+        with mutation_lock(metadata.with_suffix(".lock")):
+            if not destination.exists() and not metadata.exists():
+                return
+            receipt = json.loads(metadata.read_text(encoding="utf-8"))
+            identity = {"kind": "snapshot", "operation_key": operation_key,
+                        "source": str(source.relative_to(self.root))}
+            if receipt.get("identity") != identity or receipt.get("digest") != digest:
+                raise ValueError("SQLite validation snapshot cannot be retired without exact ownership")
+            if destination.exists():
+                if _hash(destination) != digest:
+                    raise ValueError("SQLite validation snapshot changed before retirement")
+                destination.unlink()
+            metadata.unlink()
+
     @staticmethod
     def _statement_authorizer():
         altered = None
