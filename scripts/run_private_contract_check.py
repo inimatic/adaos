@@ -44,6 +44,27 @@ def public_junit(source: Path, destination: Path) -> dict:
     return counts
 
 
+def diagnostic_counts(source: Path) -> dict[str, int]:
+    """Only fixed public error categories; never exception text or private IDs."""
+    allowed = ('PytestUnraisableExceptionWarning', 'PytestUnhandledThreadExceptionWarning',
+               'CancelledError', 'TimeoutError', 'FileNotFoundError', 'PermissionError',
+               'AttributeError', 'TypeError', 'ValueError', 'RuntimeError',
+               'AssertionError', 'ExceptionGroup')
+    counts: dict[str, int] = {}
+    for case in ET.parse(source).getroot().iter('testcase'):
+        for tag in ('error', 'failure'):
+            item = case.find(tag)
+            if item is None:
+                continue
+            # Match exception syntax only; arbitrary XML values never become keys.
+            raw = ' '.join((item.get('type', ''), item.get('message', ''), item.text or ''))
+            category = next((name for name in allowed
+                             if re.search(r'(?<![A-Za-z_])' + name + r'(?=[:\s])', raw)), 'unclassified')
+            key = tag + ':' + category
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--label', required=True)
@@ -72,6 +93,8 @@ def main() -> int:
     if args.junit:
         try:
             summary.update(public_junit(args.junit, args.public_junit))
+            if summary['errors'] or summary['failures']:
+                summary['diagnostic_counts'] = diagnostic_counts(args.junit)
             if args.require_complete and summary['skipped']:
                 summary['receipt'] = 'incomplete'
                 status = status or 1

@@ -45,3 +45,14 @@ def test_required_cohort_cannot_succeed_with_skipped_tests(tmp_path):
     assert result.returncode == 1
     assert '"receipt": "incomplete"' in result.stdout
     assert 'PRIVATE' not in result.stdout + result.stderr
+
+
+def test_diagnostic_categories_never_publish_private_exception_data(tmp_path):
+    source = tmp_path / 'private.xml'
+    source.write_text('''<testsuites><testsuite><testcase name="PRIVATE">
+        <error type="PRIVATE" message="teardown: pytest.PytestUnraisableExceptionWarning: PRIVATE">
+        PRIVATE source code and paths</error></testcase><testcase name="PRIVATE">
+        <failure type="PRIVATE" message="PRIVATE">PRIVATE</failure></testcase></testsuite></testsuites>''')
+    categories = module.diagnostic_counts(source)
+    assert categories == {'error:PytestUnraisableExceptionWarning': 1, 'failure:unclassified': 1}
+    assert 'PRIVATE' not in str(categories)
