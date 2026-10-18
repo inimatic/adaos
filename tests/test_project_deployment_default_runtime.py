@@ -138,6 +138,30 @@ def test_async_bridge_runs_when_activation_is_called_from_an_event_loop() -> Non
     assert asyncio.run(invoke()) == "ready"
 
 
+@pytest.mark.parametrize("service_only,reason,expected_ok", [
+    (True, "service_process_owns_handlers", True),
+    (False, "service_process_owns_handlers", False),
+    (True, "reactivation_preflight_no_in_process_handlers", False),
+])
+def test_service_reload_gate_requires_explicit_exact_service_receipt(
+    monkeypatch, service_only, reason, expected_ok
+) -> None:
+    async def reload(_self, _root, name, **kwargs):
+        assert name == "isolated_service"
+        assert kwargs == {"expected_version": "1.0.1", "expected_slot": "A"}
+        return {"ok": False, "service_process_only": service_only, "reason": reason,
+                "service_readiness_verified": False, "handlers": []}
+
+    monkeypatch.setattr("adaos.services.skills_loader_importlib.ImportlibSkillsLoader.reload_skill_handlers", reload)
+    ctx = SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: Path("unused")))
+    receipt = AdaOSComponentLifecycleHooks(ctx)._reload_skill_handlers(
+        "isolated_service", version="1.0.1", slot="A"
+    )
+    assert receipt["ok"] is expected_ok
+    assert receipt["service_readiness_verified"] is False
+    assert receipt["handlers"] == []
+
+
 def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
     events: list[tuple[str, str]] = []
     manifest_digest = "sha256:" + "a" * 64

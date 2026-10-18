@@ -305,7 +305,15 @@ class AdaOSComponentLifecycleHooks:
                 expected_slot=slot,
             )
         )
-        return dict(receipt or {})
+        result = dict(receipt or {})
+        if (
+            result.get("service_process_only") is True
+            and result.get("reason") == "service_process_owns_handlers"
+        ):
+            # Activation still must converge and verify the exact service process
+            # below. Only the irrelevant in-Core import step is satisfied here.
+            result["ok"] = True
+        return result
 
     def _publish_skill_activation(
         self,

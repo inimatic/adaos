@@ -798,7 +798,49 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 "subscriptions": subscriptions,
                 "handlers": [],
             }
-        runtime_handlers = await asyncio.to_thread(self._discover_runtime_handlers, root)
+        runtime_handlers = list(await asyncio.to_thread(self._discover_runtime_handlers, root))
+        service_handlers = [
+            handler
+            for handler, name in runtime_handlers
+            if name == target and not self._handler_runs_in_process(handler)
+        ]
+        if service_handlers and len(service_handlers) == sum(
+            name == target for _handler, name in runtime_handlers
+        ):
+            # This is an exact selected service generation, not a missing handler.
+            # Its code belongs to the service supervisor and must never be imported
+            # into Core merely to satisfy deployment's in-process reload gate.
+            # Do not turn this receipt into a service-readiness claim.
+            fenced_version = str(await asyncio.to_thread(environment.resolve_active_version) or "").strip()
+            fenced_slot = str(await asyncio.to_thread(environment.read_active_slot, fenced_version) or "").strip().upper()
+            fenced_metadata = await asyncio.to_thread(
+                _runtime_slot_metadata, environment, fenced_version, fenced_slot
+            )
+            if (
+                fenced_version != active_version
+                or fenced_slot != active_slot
+                or fenced_metadata != active_metadata
+            ):
+                return {
+                    "ok": False,
+                    "reason": "runtime_selection_changed_during_reactivation",
+                    "skill": target,
+                    "preserved_previous_generation": True,
+                    "handlers": [],
+                }
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "service_process_owns_handlers",
+                "service_process_only": True,
+                "service_readiness_verified": False,
+                "skill": target,
+                "selection": selection,
+                "source_manifest_digest": active_source_digest or None,
+                "package_digest": active_package_digest or None,
+                "package_manifest_digest": active_package_manifest_digest or None,
+                "handlers": [],
+            }
         handlers = [
             handler
             for handler, name in runtime_handlers
