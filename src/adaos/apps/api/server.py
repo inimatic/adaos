@@ -4156,20 +4156,30 @@ async def status():
     }
 
 
+async def _selected_service_supervisor(name: str):
+    from adaos.services.skill.service_supervisor import resolve_service_supervisor
+    try:
+        return await resolve_service_supervisor(name, get_service_supervisor())
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Application runtime is transitioning or unavailable") from exc
+
+
 @app.get("/api/services", dependencies=[Depends(require_token)])
 async def list_services(check_health: bool = False) -> dict:
     supervisor = get_service_supervisor()
     await supervisor.refresh_discovered()
     names = supervisor.list()
-    return {
-        "ok": True,
-        "services": [supervisor.status(name, check_health=check_health) for name in names],
-    }
+    services = []
+    for name in names:
+        selected = await _selected_service_supervisor(name)
+        await selected.refresh_discovered()
+        services.append(selected.status(name, check_health=check_health))
+    return {"ok": True, "services": services}
 
 
 @app.get("/api/services/{name}", dependencies=[Depends(require_token)])
 async def get_service_status(name: str, check_health: bool = False) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     await supervisor.refresh_discovered()
     status = supervisor.status(name, check_health=check_health)
     if not status:
@@ -4179,7 +4189,7 @@ async def get_service_status(name: str, check_health: bool = False) -> dict:
 
 @app.post("/api/services/{name}/start", dependencies=[Depends(require_token)])
 async def start_service(name: str) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     await supervisor.refresh_discovered(force=True)
     try:
         await supervisor.start(name)
@@ -4190,7 +4200,7 @@ async def start_service(name: str) -> dict:
 
 @app.post("/api/services/{name}/stop", dependencies=[Depends(require_token)])
 async def stop_service(name: str) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     await supervisor.refresh_discovered()
     # stop is idempotent; 404 only if not configured at all
     if not supervisor.status(name):
@@ -4201,7 +4211,7 @@ async def stop_service(name: str) -> dict:
 
 @app.post("/api/services/{name}/restart", dependencies=[Depends(require_token)])
 async def restart_service(name: str) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     await supervisor.refresh_discovered(force=True)
     try:
         await supervisor.restart(name)
@@ -4218,7 +4228,7 @@ class ServiceResourcePressureRequest(BaseModel):
 
 @app.post("/api/services/{name}/resource-pressure", dependencies=[Depends(require_token)])
 async def quarantine_service_resource_pressure(name: str, body: ServiceResourcePressureRequest) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     try:
         return await supervisor.quarantine_resource_pressure(
             name,
@@ -4238,7 +4248,7 @@ class ServiceIssueRequest(BaseModel):
 
 @app.get("/api/services/{name}/issues", dependencies=[Depends(require_token)])
 async def get_service_issues(name: str) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     try:
         issues = supervisor.issues(name)
     except KeyError:
@@ -4248,7 +4258,7 @@ async def get_service_issues(name: str) -> dict:
 
 @app.post("/api/services/{name}/issue", dependencies=[Depends(require_token)])
 async def inject_service_issue(name: str, body: ServiceIssueRequest) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     try:
         await supervisor.inject_issue(name, issue_type=body.type, message=body.message, details=body.details or {})
     except KeyError:
@@ -4263,7 +4273,7 @@ class ServiceSelfHealRequest(BaseModel):
 
 @app.post("/api/services/{name}/self-heal", dependencies=[Depends(require_token)])
 async def service_self_heal(name: str, body: ServiceSelfHealRequest) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     try:
         result = await supervisor.self_heal(name, reason=body.reason, issue=body.issue)
     except KeyError:
@@ -4273,7 +4283,7 @@ async def service_self_heal(name: str, body: ServiceSelfHealRequest) -> dict:
 
 @app.get("/api/services/{name}/doctor/requests", dependencies=[Depends(require_token)])
 async def get_service_doctor_requests(name: str) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     try:
         items = supervisor.doctor_requests(name)
     except KeyError:
@@ -4288,7 +4298,7 @@ class ServiceDoctorRequest(BaseModel):
 
 @app.post("/api/services/{name}/doctor/request", dependencies=[Depends(require_token)])
 async def request_service_doctor(name: str, body: ServiceDoctorRequest) -> dict:
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     try:
         result = await supervisor.request_doctor(name, reason=body.reason, issue=body.issue)
     except KeyError:
@@ -4303,13 +4313,13 @@ async def get_service_doctor_reports(name: str) -> dict:
 
     Reports are stored at: state/services/<skill>/doctor_reports.json
     """
-    supervisor = get_service_supervisor()
+    supervisor = await _selected_service_supervisor(name)
     status = supervisor.status(name)
     if not status:
         raise HTTPException(status_code=404, detail="service not found")
 
     # Reuse supervisor state dir logic indirectly via ctx paths.
-    ctx = get_ctx()
+    ctx = getattr(supervisor, "_ctx", None) or get_ctx()
     state_raw = ctx.paths.state_dir()
     state_dir = Path(state_raw() if callable(state_raw) else state_raw)
     path = state_dir / "services" / name / "doctor_reports.json"

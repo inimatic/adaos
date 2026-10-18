@@ -70,14 +70,9 @@ def _authorize(request: Request) -> None:
 
 
 async def _ui_supervisor(name: str):
-    supervisor = get_service_supervisor()
-    if not hasattr(supervisor, "_ctx"):
-        return supervisor  # Explicit test/provider facade.
-    from adaos.services.skill.service_supervisor import selected_application_service_supervisor, retire_application_service_supervisors
+    from adaos.services.skill.service_supervisor import resolve_service_supervisor
     try:
-        selected = await asyncio.to_thread(selected_application_service_supervisor, name, supervisor)
-        await retire_application_service_supervisors(name, selected, supervisor)
-        return selected
+        return await resolve_service_supervisor(name, get_service_supervisor())
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail="Application runtime is transitioning or unavailable; reopen the selected version") from exc
 

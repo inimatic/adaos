@@ -76,3 +76,57 @@ def test_retirement_stops_only_obsolete_supervisors_of_this_application(selected
     asyncio.run(services.retire_application_service_supervisors('owned-service',active,default))
     assert stopped==['owned']
     assert list(services._APPLICATION_SUPERVISORS.values())==[other]
+
+
+def test_trial_selection_retires_workspace_process_and_watchdog_before_start(selected):
+    import asyncio
+    default,*_=selected
+    default._activated_services={'owned-service','other-service'}
+    stopped=[]
+    async def stop(name):
+        default._activated_services.discard(name)
+        stopped.append(name)
+    default.stop=stop
+    active=asyncio.run(services.resolve_service_supervisor('owned-service',default))
+    assert active is not default
+    assert stopped==['owned-service']
+    assert default._activated_services=={'other-service'}
+    asyncio.run(services.resolve_service_supervisor('owned-service',default))
+    assert stopped==['owned-service']
+
+
+def test_same_core_listener_from_another_application_namespace_cannot_be_adopted():
+    supervisor=services.ServiceSkillSupervisor.__new__(services.ServiceSkillSupervisor)
+    expected={'ADAOS_APPLICATION_ID':'owned-app','ADAOS_APPLICATION_RELEASE_DIGEST':'new-release','ADAOS_APPLICATION_RUNTIME_ROOT':'trial:new'}
+    supervisor._application_services={'owned-service':expected}
+    listener={'ownership_verified':True,'workdir_matches':True,'owner_application':{**expected,'ADAOS_APPLICATION_RUNTIME_ROOT':'workspace'}}
+    assert not supervisor._listener_matches_application('owned-service',listener)
+    listener['owner_application']=expected
+    assert supervisor._listener_matches_application('owned-service',listener)
+    listener['workdir_matches']=False
+    assert not supervisor._listener_matches_application('owned-service',listener)
+
+
+def test_named_api_controls_use_selected_supervisor_and_fail_closed(monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from adaos.apps.api import server
+    default=SimpleNamespace()
+    calls=[]
+    async def refresh(**kwargs): pass
+    async def start(name): calls.append(('start',name))
+    async def restart(name): calls.append(('restart',name))
+    active=SimpleNamespace(refresh_discovered=refresh,start=start,restart=restart)
+    async def resolve(name,provided):
+        assert name=='owned-service' and provided is default
+        return active
+    monkeypatch.setattr(server,'get_service_supervisor',lambda:default)
+    monkeypatch.setattr(services,'resolve_service_supervisor',resolve)
+    asyncio.run(server.start_service('owned-service'))
+    asyncio.run(server.restart_service('owned-service'))
+    assert calls==[('start','owned-service'),('restart','owned-service')]
+    async def unavailable(*args):raise runtime_channel.RuntimeChannelConflict('transitioning')
+    monkeypatch.setattr(services,'resolve_service_supervisor',unavailable)
+    with pytest.raises(HTTPException) as failure:asyncio.run(server.start_service('owned-service'))
+    assert failure.value.status_code==503
+    assert len(calls)==2
