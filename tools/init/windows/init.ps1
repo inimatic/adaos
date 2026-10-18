@@ -235,10 +235,15 @@ try {
     }
 
     if (Test-DirectoryHasItems $Dest) {
-      if (-not $Force) {
+      if (Test-AdaosSourceTree $Dest) {
+        Write-Warn ("Refreshing the existing AdaOS archive install while preserving its local runtime data: {0}" -f $Dest)
+      }
+      elseif ($Force) {
+        Remove-Item -Recurse -Force -LiteralPath $Dest
+      }
+      else {
         throw "Refusing to overwrite non-empty destination in archive mode: $Dest. Use -Force to replace it, or install with git."
       }
-      Remove-Item -Recurse -Force -LiteralPath $Dest
     }
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
     foreach ($item in $extractedItems) {
