@@ -253,7 +253,8 @@ if (-not $pyCands -or $pyCands.Count -eq 0) {
             -RootUrl $RootUrl `
             -Rev $Rev `
             -ZoneId $ZoneId `
-            -Language $Language
+            -Language $Language `
+            -Preset $Preset
         exit $LASTEXITCODE
     }
     Write-Host "No supported Python found. Install Python >=3.11.9,<3.12 and re-run (or run tools\\bootstrap_uv.ps1)." -ForegroundColor Red
