@@ -4060,6 +4060,84 @@ def test_process_events_command_runs_go_home_before_ack(monkeypatch) -> None:
     assert responses[-1]["data"]["scenario_id"] == "web_desktop"
 
 
+def test_process_events_command_transcribes_desktop_audio_and_binds_output_owner(monkeypatch) -> None:
+    from adaos.apps.api import stt_api as stt_module
+
+    published: list[tuple[str, dict[str, object] | None]] = []
+    responses: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        gateway_module,
+        "_make_publish_bus",
+        lambda *args, **kwargs: (lambda topic, extra=None: published.append((topic, extra))),
+    )
+    monkeypatch.setattr(
+        stt_module,
+        "transcribe_audio_payload",
+        lambda payload: {"ok": True, "text": "проверь статус", "provider": "vosk"},
+    )
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="dialog.user_audio",
+            cmd_id="cmd-audio-1",
+            payload={
+                "audio_b64": "wav-data",
+                "webspace_id": "desktop",
+                "_meta": {"client_message_id": "voice-1", "voice_output_owner": {"kind": "browser", "endpoint_id": "spoofed"}},
+            },
+            device_id="desktop-endpoint-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+            client_label="AdaOS Desktop",
+        )
+    )
+
+    assert published[0][0] == "dialog.user_message"
+    event = published[0][1]
+    assert event is not None
+    assert event["text"] == "проверь статус"
+    assert "audio_b64" not in event
+    assert event["_meta"]["voice_output_owner"] == {
+        "kind": "desktop",
+        "endpoint_id": "desktop-endpoint-1",
+        "label": "AdaOS Desktop",
+    }
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["text"] == "проверь статус"
+
+
+def test_process_events_command_returns_platform_notifications(monkeypatch) -> None:
+    from adaos.services import platform_notifications as notification_module
+
+    responses: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        notification_module,
+        "platform_notifications_snapshot",
+        lambda *, webspace_id: {"webspace_id": webspace_id, "items": [{"id": "n-1", "message": "Ready"}]},
+    )
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="platform.notifications.get",
+            cmd_id="cmd-notifications-1",
+            payload={"webspace_id": "another-webspace"},
+            device_id="desktop-endpoint-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["items"][0]["id"] == "n-1"
+    assert responses[-1]["data"]["webspace_id"] == "desktop"
+
+
 def test_process_events_command_publishes_generic_skill_event(monkeypatch) -> None:
     published: list[object] = []
     responses: list[dict[str, object]] = []

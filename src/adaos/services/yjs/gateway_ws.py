@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 if TYPE_CHECKING:
     from typing import Awaitable, Callable
 
-from fastapi import APIRouter, Header, WebSocket
+from fastapi import APIRouter, Header, HTTPException, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 
 try:
@@ -10830,6 +10830,58 @@ async def process_events_command(
         event_payload["webspace_id"] = payload.get("webspace_id")
         _publish_bus("voice.chat.open", event_payload)
         await _ack()
+        return None
+
+    if kind == "platform.notifications.get":
+        try:
+            from adaos.services.platform_notifications import platform_notifications_snapshot
+
+            result = await asyncio.to_thread(
+                platform_notifications_snapshot,
+                webspace_id=webspace_id,
+            )
+            await _ack(data=result)
+        except Exception:
+            _log.warning("platform notification snapshot failed webspace=%s", webspace_id, exc_info=True)
+            await _ack(False, error="notification_snapshot_unavailable")
+        return None
+
+    if kind == "dialog.user_audio":
+        try:
+            from adaos.apps.api.stt_api import transcribe_audio_payload
+
+            result = await asyncio.to_thread(transcribe_audio_payload, dict(payload or {}))
+            text = str(result.get("text") or "").strip()
+            if not text:
+                await _ack(False, data=result, error="speech_not_recognized")
+                return None
+            event_payload = dict(payload or {})
+            event_payload.pop("audio_b64", None)
+            event_payload.pop("wav_b64", None)
+            event_payload["text"] = text
+            event_payload["webspace_id"] = webspace_id
+            meta = dict(event_payload.get("_meta") or {})
+            endpoint_id = str(device_id or "desktop:unknown").strip() or "desktop:unknown"
+            owner = {"kind": "desktop", "endpoint_id": endpoint_id, "label": str(client_label or "AdaOS Desktop")}
+            meta.update(
+                {
+                    "dialog_event_kind": "dialog.user_message",
+                    "canonical_event_kind": "dialog.user_message",
+                    "input_event_kind": "dialog.user_audio",
+                    "voice_listening_mode": "push-to-talk",
+                    "capture_backend": "adaos_desktop_webview",
+                    "voice_input_owner": owner,
+                    "voice_output_owner": owner,
+                }
+            )
+            event_payload["_meta"] = meta
+            _publish_bus("dialog.user_message", event_payload)
+            await _ack(data={**result, "text": text})
+        except HTTPException as exc:
+            await _ack(False, error=str(exc.detail or "voice_transcription_failed"))
+        except Exception:
+            _log.warning("desktop voice transcription failed device=%s", device_id, exc_info=True)
+            await _ack(False, error="voice_transcription_failed")
         return None
 
     if kind in {"voice.chat.user", "dialog.user_message"}:
