@@ -15,6 +15,8 @@ INPUTS = {'$ref': '#/$defs/projectConversationInputs', '$defs': SCHEMA['$defs']}
     {'service': 'chat_service', 'session': 'chat', 'pollMs': 1},
     {'service': 'chat_service', 'session': 'chat', 'account': {'label': 'Provider', 'authOrigin': 'javascript:alert(1)', 'usageUrl': 'https://provider.invalid/usage'}},
     {'service': 'chat_service', 'session': 'chat', 'token': 'must-not-be-in-a-page'},
+    {'service': 'chat_service', 'session': 'chat', 'maxFileBytes': 10485761},
+    {'service': 'chat_service', 'session': 'chat', 'tools': ['arbitrary_tool']},
 ])
 def test_native_connection_rejects_urls_credentials_and_unbounded_polling(invalid):
     assert list(Draft202012Validator(INPUTS).iter_errors({'connection': invalid}))
@@ -23,7 +25,7 @@ def test_native_connection_rejects_urls_credentials_and_unbounded_polling(invali
 def test_native_widgets_and_connection_contract_are_registered():
     assert not list(Draft202012Validator(INPUTS).iter_errors({'connection': {
         'service': 'project_chat', 'session': 'private-chat', 'pollMs': 2500,
-        'contextStateKey': 'contextOpen', 'maxFileBytes': 2097152, 'accept': ['.txt', '.docx'],
+        'contextStateKey': 'contextOpen', 'maxFileBytes': 10485760, 'accept': ['.txt', '.docx', '.xlsx'], 'tools': ['files', 'web_search'],
         'account': {'label': 'ChatGPT', 'buttonLabel': 'Continue with ChatGPT',
                     'authOrigin': 'https://auth.openai.com', 'usageUrl': 'https://chatgpt.com/settings/usage'},
     }}))
