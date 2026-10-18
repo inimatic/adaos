@@ -618,6 +618,9 @@
         "visual.taigaTree",
         "visual.frameViewer",
         "visual.serviceFrame",
+        "collection.projectList",
+        "ui.projectConversation",
+        "item.conversationContext",
         "visual.sitePreview",
         "visual.image",
         "visual.imageCompare",
@@ -876,6 +879,10 @@
               "inputs": { "$ref": "#/$defs/frameViewerInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["collection.projectList", "ui.projectConversation", "item.conversationContext"] } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/projectConversationInputs" } } }
         },
         {
           "if": { "properties": { "type": { "const": "visual.serviceFrame" } } },
@@ -1383,6 +1390,10 @@
               "inputs": { "$ref": "#/$defs/frameViewerInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["collection.projectList", "ui.projectConversation", "item.conversationContext"] } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/projectConversationInputs" } } }
         },
         {
           "if": { "properties": { "type": { "const": "visual.serviceFrame" } } },
@@ -2756,6 +2767,40 @@
         },
         "title": { "type": "string", "minLength": 1 },
         "minHeight": { "type": "integer", "minimum": 240, "maximum": 1200 }
+      }
+    },
+
+    "projectConversationInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connection"],
+      "description": "Native project list, conversation and context widgets share one declared service session. Durable data follows the adaos.project-conversation.v1 service protocol; selection and drafts remain browser-local.",
+      "properties": {
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["service", "session"],
+          "properties": {
+            "service": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+            "session": { "type": "string", "pattern": "^[a-zA-Z0-9_.-]{1,128}$" },
+            "title": { "type": "string", "maxLength": 160 },
+            "subtitle": { "type": "string", "maxLength": 500 },
+            "contextStateKey": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_]{0,127}$" },
+            "pollMs": { "type": "integer", "minimum": 1500, "maximum": 30000 },
+            "maxFileBytes": { "type": "integer", "minimum": 1, "maximum": 2097152 },
+            "accept": { "type": "array", "items": { "type": "string", "pattern": "^\\.[a-zA-Z0-9]+$" } },
+            "account": {
+              "type": "object", "additionalProperties": false,
+              "required": ["label", "authOrigin", "usageUrl"],
+              "properties": {
+                "label": { "type": "string", "maxLength": 160 },
+                "buttonLabel": { "type": "string", "maxLength": 160 },
+                "authOrigin": { "type": "string", "pattern": "^https://[a-zA-Z0-9.-]+$" },
+                "usageUrl": { "type": "string", "pattern": "^https://" }
+              }
+            }
+          }
+        }
       }
     },
 

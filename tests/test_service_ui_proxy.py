@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from adaos.apps.api import service_ui
 from adaos.services.skill.service_supervisor import _resolve_service_spec
@@ -82,7 +83,35 @@ class _Supervisor:
         }
 
 
+@pytest.mark.parametrize('credential', ['X-AdaOS-Token', 'Authorization'])
+def test_native_shell_uses_explicit_credentials_without_third_party_cookies(monkeypatch, credential):
+    monkeypatch.setenv('ADAOS_TOKEN', 'native-shell-token')
+    app = FastAPI()
+
+    @app.get('/native')
+    def native(request: service_ui.Request):
+        service_ui._authorize(request)
+        return {'ok': True}
+
+    client = TestClient(app)
+    headers = {'Origin': 'https://inimatic.com', 'Sec-Fetch-Site': 'cross-site',
+               credential: 'Bearer native-shell-token' if credential == 'Authorization' else 'native-shell-token'}
+    assert client.get('/native', headers=headers).status_code == 200
+    assert client.get('/native', headers={**headers, credential: 'wrong'}).status_code == 401
+    # URL/cookie credentials must never acquire the native header exemption.
+    unsafe = {'Origin': 'https://inimatic.com', 'Sec-Fetch-Site': 'cross-site'}
+    assert client.get('/native?token=native-shell-token', headers=unsafe).status_code == 403
+    assert client.get('/native?token=native-shell-token', headers={**unsafe, 'Authorization': 'nonsense'}).status_code == 403
+    client.cookies.set('adaos_service_ui', 'native-shell-token')
+    assert client.get('/native', headers=unsafe).status_code == 403
+
+
 def test_service_ui_proxy_requires_auth_and_replaces_provider_frame_policy(monkeypatch, tmp_path) -> None:
+    # Loopback service traffic must not be sent to the user's external proxy.
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _UiHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

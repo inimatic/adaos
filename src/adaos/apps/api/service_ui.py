@@ -44,6 +44,16 @@ def _presented_token(request: Request) -> str | None:
 
 def _authorize(request: Request) -> None:
     ensure_token(_presented_token(request))
+    # Browser shells may live on another origin (for example inimatic.com).
+    # An explicit credential header proves possession; cookies and URL tokens
+    # must retain the same-origin CSRF checks below.
+    explicit = resolve_presented_token(
+        x_adaos_token=request.headers.get("x-adaos-token"),
+        authorization=request.headers.get("authorization"),
+    )
+    if explicit:
+        ensure_token(explicit)
+        return
     fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
     if fetch_site == "cross-site":
         raise HTTPException(status_code=403, detail="cross-site service UI access is forbidden")
@@ -173,7 +183,11 @@ async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
     spec = await _ensure_service_started(name)
     status = get_service_supervisor().status(name, check_health=True) or {}
     if not bool(status.get("health_ok")):
-        raise HTTPException(status_code=503, detail="service UI is unavailable")
+        raise HTTPException(status_code=503, detail={
+            "code": "service_unavailable",
+            "message": "Не удалось подключиться к приложению на вашем узле AdaOS. Повторите подключение.",
+            "retryable": True,
+        })
     body = await request.body()
     if len(body) > spec.ui_max_request_bytes:
         raise HTTPException(status_code=413, detail="service UI request exceeds the admitted limit")
@@ -183,7 +197,16 @@ async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
         if key.lower() in _REQUEST_HEADERS and key.lower() not in _HOP_HEADERS
     }
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=15.0) as client:
+        # Admitted HTTP service endpoints need neither a system proxy nor a
+        # TLS trust-store load on every request. On Windows those synchronous
+        # lookups can block the event loop for seconds per chat poll. Preserve
+        # certificate verification if an HTTPS endpoint is introduced later.
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=15.0,
+            trust_env=False,
+            verify=urlsplit(spec.base_url).scheme.lower() != "http",
+        ) as client:
             upstream = await client.request(
                 request.method,
                 _upstream_url(spec, path, request),
