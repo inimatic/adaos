@@ -8,6 +8,11 @@ your node. It uses your connected personal ChatGPT account for text responses.
 Available models and tools depend on that account and the provider. Connecting
 an account does not import chats, memory or Projects from the ChatGPT website.
 
+This release supports one installation owner's workspace. Separate private
+project lists and ChatGPT connections for other subnet users are not implemented.
+Guest access is not a supported mode. The beta is not qualified for a shared
+subnet with separate user workspaces.
+
 ## Start a Conversation
 
 Open Context Chat, connect your account using the provider's sign-in page, and
