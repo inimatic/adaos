@@ -6997,7 +6997,8 @@ def test_trial_catalog_survives_resolution_cache_and_stays_in_selected_webspace(
         webspace_id="production", scenario_id="web_desktop", source_mode="workspace",
         scenario_application={"desktop": {"pageSchema": {"id": "desktop"}}},
         metadata={"trial_apps": [{"id": "scenario:example", "scenario_id": "example",
-                                   "title": "Example", "release_stage": "beta"}]},
+                                   "title": "Example", "release_stage": "beta"}],
+                  "trial_icon_resources": {"example.icon": {"url": "/assets/icon-v1.svg", "cacheKey": "v1"}}},
     )
     first = runtime.resolve_webspace(inputs)
     assert runtime._last_resolver_debug["core_cache_bypass"] == "runtime_selection"
@@ -7006,6 +7007,10 @@ def test_trial_catalog_survives_resolution_cache_and_stays_in_selected_webspace(
     for resolved in (first, second):
         assert any(row["id"] == "scenario:example" for row in resolved.catalog["apps"])
         assert "scenario:example" in resolved.installed["apps"]
+        assert resolved.catalog["resources"]["example.icon"]["cacheKey"]=="v1"
+    changed=runtime.resolve_webspace(replace(inputs,metadata={**inputs.metadata,
+        "trial_icon_resources":{"example.icon":{"url":"/assets/icon-v2.svg","cacheKey":"v2"}}}))
+    assert changed.catalog["resources"]["example.icon"]["cacheKey"]=="v2"
     other = runtime.resolve_webspace(replace(inputs, webspace_id="other", metadata={}))
     assert not any(row["id"] == "scenario:example" for row in other.catalog["apps"])
     removed = runtime.resolve_webspace(replace(inputs, metadata={}))

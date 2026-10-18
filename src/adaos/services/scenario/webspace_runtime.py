@@ -2751,6 +2751,7 @@ def _resolver_cache_keys(inputs: WebspaceResolverInputs) -> Dict[str, str]:
         "scenario_catalog": inputs.scenario_catalog,
         "scenario_registry": inputs.scenario_registry,
         "trial_apps": inputs.metadata.get("trial_apps", []),
+        "trial_icon_resources": inputs.metadata.get("trial_icon_resources", {}),
     }
     skill_decls_fingerprint = str(getattr(inputs, "skill_decls_fingerprint", "") or "").strip()
     return {
@@ -4072,7 +4073,10 @@ def _scenario_switch_materialization_identity(
         webspace_id=target_webspace,
         scenario_id=target_scenario,
         source_fingerprint=source_fingerprint,
-        policy_fingerprint=f"skills:{skill_fingerprint}" if skill_fingerprint else None,
+        # Resolver output changed without a package-byte change: retain old
+        # disk snapshots for recovery, but compile the new launcher resource
+        # projection under a different policy identity.
+        policy_fingerprint=f"resolver:2:skills:{skill_fingerprint or ''}",
         dependencies_fingerprint=dependencies_fingerprint,
         revision=selected.candidate_id if selected is not None else None,
         application_id=application_id,
