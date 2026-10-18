@@ -1130,6 +1130,36 @@ class _Sql:
         return sqlite3.connect(self.path)
 
 
+def test_archive_registry_metadata_refreshes_root_indexes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    observed: dict[str, object] = {}
+
+    def _extract(**kwargs):
+        observed.update(kwargs)
+
+    monkeypatch.setenv(
+        "ADAOS_WORKSPACE_REGISTRY_REPO", "https://github.com/example/registry.git"
+    )
+    monkeypatch.setenv("ADAOS_WORKSPACE_REGISTRY_BRANCH", "stable")
+    monkeypatch.setattr(
+        "adaos.services.git.archive.extract_github_zip_subpaths", _extract
+    )
+
+    result = workspace_sync_module._materialize_archive_registry_metadata(
+        SimpleNamespace(settings=SimpleNamespace()), workspace
+    )
+
+    assert result["ok"] is True
+    assert observed == {
+        "repo_url": "https://github.com/example/registry.git",
+        "branch": "stable",
+        "dest_root": workspace,
+        "subpaths": ("registry.json", "semantic"),
+    }
+
+
 def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tmp_path: Path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

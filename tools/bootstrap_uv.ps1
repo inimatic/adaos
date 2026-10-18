@@ -16,6 +16,8 @@ param(
   [string]$ZoneId = "",
   [ValidateSet("en", "ru")]
   [string]$Language = $(if ($env:ADAOS_LANG) { $env:ADAOS_LANG } else { "en" }),
+  [ValidateSet("default", "base")]
+  [string]$Preset = "default",
   [string]$WorkspaceRegistryRepo = $env:ADAOS_WORKSPACE_REGISTRY_REPO
 )
 
@@ -41,6 +43,21 @@ $Language = $Language.Trim().ToLower()
 function Have($cmd) {
   try { Get-Command $cmd -ErrorAction Stop | Out-Null; return $true }
   catch { return $false }
+}
+
+function Expand-ZipPortable {
+  param(
+    [Parameter(Mandatory = $true)][string]$ArchivePath,
+    [Parameter(Mandatory = $true)][string]$Destination
+  )
+  $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+  if ($tar) {
+    & $tar.Source -xf $ArchivePath -C $Destination
+    if ($LASTEXITCODE -eq 0) { return }
+    Write-Warning ("tar.exe could not extract the archive (exit code {0}); trying the Windows PowerShell fallback" -f $LASTEXITCODE)
+  }
+  Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $Destination)
 }
 
 function Write-EnvVar {
@@ -214,8 +231,7 @@ function Install-UvOnWindows {
     if (-not (Test-Path -LiteralPath $archive) -or (Get-Item -LiteralPath $archive).Length -eq 0) {
       throw "uv download completed without an archive"
     }
-    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $extracted)
+    Expand-ZipPortable -ArchivePath $archive -Destination $extracted
     $binaries = @(Get-ChildItem -LiteralPath $extracted -Recurse -File -Filter "uv*.exe")
     if (-not ($binaries | Where-Object { $_.Name -eq "uv.exe" })) {
       throw "downloaded uv archive does not contain uv.exe"
@@ -239,6 +255,10 @@ if ($env:OS -eq "Windows_NT" -and [string]::IsNullOrWhiteSpace($env:UV_SYSTEM_CE
   $env:UV_SYSTEM_CERTS = "1"
 }
 
+$localUvBin = Join-Path $HOME ".local\bin"
+if (Test-Path (Join-Path $localUvBin "uv.exe")) {
+  $env:Path = "$localUvBin;$env:Path"
+}
 if (-not (Have "uv")) {
   Write-Host "Installing uv..."
   if ($env:OS -eq "Windows_NT") {
@@ -404,7 +424,7 @@ if ($desiredRole -eq "hub") {
 }
 
 Write-Host "Installing default webspace content (adaos install)..."
-$installArgs = @("install", "--language", $Language)
+$installArgs = @("install", "--preset", $Preset, "--language", $Language)
 if ($NoVoice) {
   $installArgs += "--no-rasa-nlu"
   $installArgs += "--no-train-nlu"

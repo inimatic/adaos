@@ -30,6 +30,8 @@ param(
   [string]$ZoneId = "",
   [ValidateSet("en", "ru")]
   [string]$Language = "",
+  [ValidateSet("default", "base")]
+  [string]$Preset = "default",
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$BootstrapArgs
 )
@@ -94,6 +96,20 @@ function Invoke-DownloadWithRetry {
     }
   }
   throw ("Failed to download {0} after {1} attempts: {2}" -f $Uri, $Attempts, $lastError.Exception.Message)
+}
+function Expand-ZipPortable {
+  param(
+    [Parameter(Mandatory = $true)][string]$ArchivePath,
+    [Parameter(Mandatory = $true)][string]$Destination
+  )
+  $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+  if ($tar) {
+    & $tar.Source -xf $ArchivePath -C $Destination
+    if ($LASTEXITCODE -eq 0) { return }
+    Write-Warn ("tar.exe could not extract the archive (exit code {0}); trying the Windows PowerShell fallback" -f $LASTEXITCODE)
+  }
+  Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $Destination)
 }
 function Ensure-Origin([string]$Path, [string]$Url) {
   $currentOrigin = ""
@@ -222,10 +238,9 @@ try {
     Write-Info ("Downloading source archive: {0}" -f $zipUrl)
     Invoke-DownloadWithRetry -Uri $zipUrl -OutFile $zipPath
     Write-Info "Extracting..."
-    # Use the framework API directly. Minimal Windows images may advertise the
-    # Archive module while failing to load it, which makes Expand-Archive unusable.
-    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $tmp)
+    # tar.exe is an inbox Windows component on the supported OS baseline. The
+    # framework path is only a compatibility fallback for stripped images.
+    Expand-ZipPortable -ArchivePath $zipPath -Destination $tmp
 
     $extracted = Get-ChildItem -LiteralPath $tmp -Directory | Where-Object { $_.Name -like "$RepoName-*" } | Select-Object -First 1
     if (-not $extracted) { throw "Failed to locate extracted directory in $tmp" }
@@ -305,6 +320,7 @@ if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
 if (-not [string]::IsNullOrWhiteSpace($Language)) {
   $bootstrapParams["Language"] = $Language
 }
+$bootstrapParams["Preset"] = $Preset
 if (-not [string]::IsNullOrWhiteSpace($Rev)) {
   $bootstrapParams["Rev"] = $Rev
 }

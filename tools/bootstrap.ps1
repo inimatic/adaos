@@ -18,6 +18,8 @@ param(
     [string]$ZoneId = "",
     [ValidateSet("en", "ru")]
     [string]$Language = $(if ($env:ADAOS_LANG) { $env:ADAOS_LANG } else { "en" }),
+    [ValidateSet("default", "base")]
+    [string]$Preset = "default",
     [string]$WorkspaceRegistryRepo = $env:ADAOS_WORKSPACE_REGISTRY_REPO
 )
 
@@ -464,7 +466,7 @@ function Configure-RasaNlu {
 }
 
 Write-Host "Installing default webspace content (adaos install)..."
-$installArgs = @("install", "--language", $Language)
+$installArgs = @("install", "--preset", $Preset, "--language", $Language)
 if ($NoVoice) {
     $installArgs += "--no-rasa-nlu"
     $installArgs += "--no-train-nlu"
