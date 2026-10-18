@@ -303,9 +303,13 @@ if ($BuildVendoredYPy) {
   }
 } else {
   Write-Host "Creating user environment from precompiled dependencies..."
-  uv venv --python $env:UV_PYTHON .venv
-  if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
   $adaosPython = Join-Path $PWD ".venv\Scripts\python.exe"
+  if (Test-Path -LiteralPath $adaosPython) {
+    Write-Host "Reusing existing .venv from an earlier bootstrap attempt."
+  } else {
+    uv venv --python $env:UV_PYTHON .venv
+    if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
+  }
   $yPyWheelhouse = Join-Path $PWD ".adaos\bootstrap\wheels"
   & $adaosPython tools\install_patched_y_py.py --installer uv --wheelhouse $yPyWheelhouse
   if ($LASTEXITCODE -ne 0) { throw "published patched y-py wheel installation failed" }
