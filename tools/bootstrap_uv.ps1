@@ -233,6 +233,12 @@ function Install-UvOnWindows {
 # 1) Install uv if missing
 Ensure-RequiredSubmodules
 
+if ($env:OS -eq "Windows_NT" -and [string]::IsNullOrWhiteSpace($env:UV_SYSTEM_CERTS)) {
+  # Use the Windows certificate store for uv downloads. This also avoids the
+  # connection failures seen with uv's bundled roots in minimal Windows images.
+  $env:UV_SYSTEM_CERTS = "1"
+}
+
 if (-not (Have "uv")) {
   Write-Host "Installing uv..."
   if ($env:OS -eq "Windows_NT") {
