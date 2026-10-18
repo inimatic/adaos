@@ -5,6 +5,7 @@ param(
   [switch]$Dev,
   [switch]$BuildVendoredYPy,
   [switch]$NoVoice,
+  [switch]$NoPairingOutput,
   [ValidateSet("auto", "always", "never")]
   [string]$InstallService = "auto",
   [string]$ServeHost = "127.0.0.1",
@@ -547,24 +548,28 @@ $st = Wait-AdaosReady -TimeoutSec 120
 $deepLink = $null
 $tgPairCode = $null
 $ownerAuth = $null
-try {
-  Write-Host "Generating Telegram pairing link..."
-  $tg = Invoke-Adaos dev telegram 2>$null | Out-String
-  if (-not [string]::IsNullOrWhiteSpace($tg)) {
-    $codeLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*pair_code:\s*" } | Select-Object -First 1
-    if ($codeLine) { $tgPairCode = ($codeLine -replace "^\s*pair_code:\s*", "").Trim() }
-    $deepLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*deep_link:\s*" } | Select-Object -First 1
-    if ($deepLine) { $deepLink = ($deepLine -replace "^\s*deep_link:\s*", "").Trim() }
+if (-not $NoPairingOutput) {
+  try {
+    Write-Host "Generating Telegram pairing link..."
+    $tg = Invoke-Adaos dev telegram 2>$null | Out-String
+    if (-not [string]::IsNullOrWhiteSpace($tg)) {
+      $codeLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*pair_code:\s*" } | Select-Object -First 1
+      if ($codeLine) { $tgPairCode = ($codeLine -replace "^\s*pair_code:\s*", "").Trim() }
+      $deepLine = ($tg -split "`r?`n") | Where-Object { $_ -match "^\s*deep_link:\s*" } | Select-Object -First 1
+      if ($deepLine) { $deepLink = ($deepLine -replace "^\s*deep_link:\s*", "").Trim() }
+    }
   }
-} catch { }
+  catch { }
 
-try {
-  Write-Host "Generating Owner browser pairing code..."
-  $ownerJson = Invoke-Adaos dev root login --print-only --json 2>$null | Out-String
-  if (-not [string]::IsNullOrWhiteSpace($ownerJson)) {
-    $ownerAuth = $ownerJson | ConvertFrom-Json
+  try {
+    Write-Host "Generating Owner browser pairing code..."
+    $ownerJson = Invoke-Adaos dev root login --print-only --json 2>$null | Out-String
+    if (-not [string]::IsNullOrWhiteSpace($ownerJson)) {
+      $ownerAuth = $ownerJson | ConvertFrom-Json
+    }
   }
-} catch { }
+  catch { }
+}
 
 if ($st) {
   Write-Host ("READY: node_id={0} subnet_id={1} role={2} route={3} connected={4}" -f $st.node_id, $st.subnet_id, $st.role, $st.route_mode, $st.connected_to_hub) -ForegroundColor Green

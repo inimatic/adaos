@@ -20,6 +20,7 @@ param(
   [string]$Role = "",
   [switch]$Dev,
   [switch]$NoVoice,
+  [switch]$NoPairingOutput,
   [ValidateSet("auto", "always", "never")]
   [string]$InstallService = "auto",
   [string]$ServeHost = "",
@@ -27,6 +28,8 @@ param(
   [int]$ControlPort = 0,
   [string]$RootUrl = "",
   [string]$ZoneId = "",
+  [ValidateSet("en", "ru")]
+  [string]$Language = "",
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$BootstrapArgs
 )
@@ -50,6 +53,32 @@ function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
   if ($LASTEXITCODE -ne 0) {
     throw ("Command failed with exit code {0}: {1} {2}" -f $LASTEXITCODE, $FilePath, ($Arguments -join " "))
   }
+}
+function Invoke-DownloadWithRetry {
+  param(
+    [Parameter(Mandatory = $true)][string]$Uri,
+    [Parameter(Mandatory = $true)][string]$OutFile,
+    [int]$Attempts = 4
+  )
+  $lastError = $null
+  for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+    try {
+      Remove-Item -Force -LiteralPath $OutFile -ErrorAction SilentlyContinue
+      Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile
+      if ((Test-Path -LiteralPath $OutFile) -and (Get-Item -LiteralPath $OutFile).Length -gt 0) {
+        return
+      }
+      throw "download completed without a file"
+    }
+    catch {
+      $lastError = $_
+      if ($attempt -ge $Attempts) { break }
+      $delay = [Math]::Min(12, [Math]::Pow(2, $attempt))
+      Write-Warn ("Download attempt {0}/{1} failed; retrying in {2}s: {3}" -f $attempt, $Attempts, $delay, $_.Exception.Message)
+      Start-Sleep -Seconds $delay
+    }
+  }
+  throw ("Failed to download {0} after {1} attempts: {2}" -f $Uri, $Attempts, $lastError.Exception.Message)
 }
 function Ensure-Origin([string]$Path, [string]$Url) {
   $currentOrigin = ""
@@ -176,7 +205,7 @@ try {
   else {
     Write-Info "Using stable archive source (Git metadata and submodules are intentionally absent)."
     Write-Info ("Downloading source archive: {0}" -f $zipUrl)
-    Invoke-WebRequest -UseBasicParsing -Uri $zipUrl -OutFile $zipPath
+    Invoke-DownloadWithRetry -Uri $zipUrl -OutFile $zipPath
     Write-Info "Extracting..."
     Expand-Archive -LiteralPath $zipPath -DestinationPath $tmp -Force
 
@@ -229,6 +258,9 @@ if ($Dev) {
 if ($NoVoice) {
   $bootstrapParams["NoVoice"] = $true
 }
+if ($NoPairingOutput -and (Select-String -LiteralPath $bootstrapPath -SimpleMatch '$NoPairingOutput' -Quiet)) {
+  $bootstrapParams["NoPairingOutput"] = $true
+}
 if ($PSBoundParameters.ContainsKey("InstallService")) {
   $bootstrapParams["InstallService"] = $InstallService
 }
@@ -246,6 +278,9 @@ if (-not [string]::IsNullOrWhiteSpace($RootUrl)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
   $bootstrapParams["ZoneId"] = $ZoneId
+}
+if (-not [string]::IsNullOrWhiteSpace($Language)) {
+  $bootstrapParams["Language"] = $Language
 }
 if (-not [string]::IsNullOrWhiteSpace($Rev)) {
   $bootstrapParams["Rev"] = $Rev
