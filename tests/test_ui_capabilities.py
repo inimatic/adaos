@@ -1,6 +1,22 @@
 from __future__ import annotations
 
 
+def test_details_read_state_contract_is_selected_for_existing_record_widgets():
+    from adaos.services.ui_capabilities import selected_ui_capabilities
+
+    result = selected_ui_capabilities('Keep the existing operational status record', limit=1,
+        source_webui={'ui': {'application': {'desktop': {'pageSchema': {'widgets': [
+            {'id': 'status', 'type': 'item.details', 'inputs': {'fields': []}},
+        ]}}}}})
+    details = next(item for item in result['items'] if item['id'] == 'item.details')
+    contract = details['manifest']['read_state']
+    for binding in ('showReadState', 'preserveLastValue', 'readStatePath', 'refreshLabel'):
+        assert binding in contract
+    assert 'only this exact source' in contract
+    assert 'does not poll' in contract
+    assert 'ok=true' in contract
+
+
 def test_existing_component_contracts_survive_unrelated_keyword_ranking():
     from adaos.services.ui_capabilities import selected_ui_capabilities
 
