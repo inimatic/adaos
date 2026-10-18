@@ -174,9 +174,9 @@ function Wait-ForAutostartActivation {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         try {
-            $as = Invoke-Adaos autostart status --json 2>$null | Out-String
-            if (-not [string]::IsNullOrWhiteSpace($as)) {
-                $asObj = $as | ConvertFrom-Json
+            $result = Invoke-AdaosForBootstrap autostart status --json
+            if ($result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($result.Output)) {
+                $asObj = $result.Output | ConvertFrom-Json
                 $active = $asObj.active
                 $listening = $asObj.listening
                 if (($active -eq $true) -and ($listening -ne $false)) {
@@ -195,10 +195,10 @@ function Show-AutostartDiagnostics {
     Write-Host "Autostart diagnostics:"
     $asObj = $null
     try {
-        $as = Invoke-Adaos autostart status --json 2>$null | Out-String
-        if (-not [string]::IsNullOrWhiteSpace($as)) {
-            Write-Host $as.Trim()
-            $asObj = $as | ConvertFrom-Json
+        $result = Invoke-AdaosForBootstrap autostart status --json
+        if ($result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($result.Output)) {
+            Write-Host $result.Output.Trim()
+            $asObj = $result.Output | ConvertFrom-Json
         }
         else {
             Write-Host "  autostart status json: unavailable"
@@ -418,6 +418,28 @@ function Invoke-Adaos {
         [string[]]$Args
     )
     & .\.venv\Scripts\python.exe -m adaos @Args
+}
+
+function Invoke-AdaosForBootstrap {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Args
+    )
+    # Windows PowerShell 5.1 promotes native stderr records to PowerShell errors.
+    # AdaOS writes diagnostic logs to stderr even when a command succeeds.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = Invoke-Adaos @Args 2>$null | Out-String
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    return [PSCustomObject]@{
+        ExitCode = $exitCode
+        Output = $output
+    }
 }
 
 Write-Host "Detecting git availability (adaos git autodetect)..."
@@ -640,8 +662,9 @@ Write-Host ("Starting AdaOS API ({0}:{1}) ..." -f $ServeHost, $ServePort)
 $serviceInstalled = $false
 if ($InstallService -ne "never") {
     try {
-        $autostartEnableOutput = Invoke-Adaos autostart enable --host $ServeHost --port $ServePort 2>&1 | Out-String
-        if ($LASTEXITCODE -eq 0) {
+        $autostartEnableResult = Invoke-AdaosForBootstrap autostart enable --host $ServeHost --port $ServePort
+        $autostartEnableOutput = $autostartEnableResult.Output
+        if ($autostartEnableResult.ExitCode -eq 0) {
             $serviceInstalled = $true
             Write-Host "Autostart installed (adaos autostart enable)."
         }
