@@ -2933,8 +2933,12 @@ class BuilderWorkflowService:
         if (
             automation_direct
             and not acceptance_required
-            and not prototype.get("head_revision")
+            and not acceptance
         ):
+            # Refinement of an installed Application can retain its imported
+            # UI revision as lineage. It is not a new Prototype approval gate.
+            # Explicit/strict Prototype acceptance remains authoritative above
+            # this compatibility path through acceptance_required.
             return None
         if not prototype.get("head_revision") or not bool(prototype.get("stable")):
             raise BuilderWorkflowError(
