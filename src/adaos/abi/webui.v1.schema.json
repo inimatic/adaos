@@ -2308,13 +2308,16 @@
             "source": { "$ref": "#/$defs/dataSource" },
             "valuePath": { "type": "string", "minLength": 1 },
             "optionsPath": { "type": "string", "minLength": 1 },
-            "label": { "type": "string" }
-          }
+            "label": { "type": "string" },
+            "profilePath": { "type": "string", "minLength": 1, "description": "Owner read-model path to {model,effort_mode,effort,tools,account_binding}; capabilities remain model-specific. model.change receives profile, expected_revision and capability_revision." },
+            "revisionPath": { "type": "string", "minLength": 1 }
+          },
+          "dependentRequired": { "profilePath": ["revisionPath"], "revisionPath": ["profilePath"] }
         },
         "presentation": {
           "type": "object", "additionalProperties": false,
           "description": "floating=true allows the Client shell to detach this resolved conversation into its single persistent drag/resize/minimize session. Window and minimized-button positions are independent. It preserves the declared authority and scope; it is not a popup or a permission grant.",
-          "properties": { "floating": { "type": "boolean", "default": false } }
+          "properties": { "floating": { "type": "boolean", "default": false }, "content": { "$ref": "#/$defs/chatContentPresentation" } }
         }
       }
     },
@@ -2770,6 +2773,11 @@
       }
     },
 
+    "chatContentPresentation": {
+      "type": "object", "additionalProperties": false, "required": ["format", "copy"],
+      "description": "Shared sanitized Markdown/math, structured citation sources and exact-message clipboard actions. Remote images and raw HTML never fetch/execute on render. Copy preserves canonical Markdown; plainCopy offers a derived text variant. Read/share require later owner bindings and are not enabled by this declaration.",
+      "properties": { "format": { "const": "markdown" }, "copy": { "type": "boolean" }, "plainCopy": { "type": "boolean" } }
+    },
     "projectConversationInputs": {
       "type": "object",
       "additionalProperties": false,
@@ -2782,6 +2790,9 @@
           "required": ["service", "session"],
           "properties": {
             "service": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+            "protocol": { "const": "adaos.project-conversation.v2", "description": "Project library with isolated chats, CAS model/tool profiles and revisioned source/memory/run context. Legacy v1 remains the default when omitted." },
+            "content": { "$ref": "#/$defs/chatContentPresentation" },
+            "icon": { "type": "string", "pattern": "^(?:[a-z0-9]+(?:-[a-z0-9]+)*|resource:[A-Za-z0-9][A-Za-z0-9_.-]{0,127})$" },
             "session": { "type": "string", "pattern": "^[a-zA-Z0-9_.-]{1,128}$" },
             "title": { "type": "string", "maxLength": 160 },
             "subtitle": { "type": "string", "maxLength": 500 },

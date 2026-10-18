@@ -69,8 +69,21 @@ def _authorize(request: Request) -> None:
             raise HTTPException(status_code=403, detail="service UI origin is forbidden")
 
 
-def _service_spec(name: str) -> ServiceSpec:
+async def _ui_supervisor(name: str):
     supervisor = get_service_supervisor()
+    if not hasattr(supervisor, "_ctx"):
+        return supervisor  # Explicit test/provider facade.
+    from adaos.services.skill.service_supervisor import selected_application_service_supervisor, retire_application_service_supervisors
+    try:
+        selected = await asyncio.to_thread(selected_application_service_supervisor, name, supervisor)
+        await retire_application_service_supervisors(name, selected, supervisor)
+        return selected
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Application runtime is transitioning or unavailable; reopen the selected version") from exc
+
+
+def _service_spec(name: str, supervisor=None) -> ServiceSpec:
+    supervisor = supervisor or get_service_supervisor()
     spec = supervisor._specs.get(name)  # Core gateway and supervisor share this trust boundary.
     if spec is None or not spec.ui_enabled:
         raise HTTPException(status_code=404, detail="service UI surface not found")
@@ -79,11 +92,11 @@ def _service_spec(name: str) -> ServiceSpec:
     return spec
 
 
-async def _ensure_service_started(name: str, *, refresh: bool = True) -> ServiceSpec:
-    supervisor = get_service_supervisor()
+async def _ensure_service_started(name: str, *, refresh: bool = True, supervisor=None) -> ServiceSpec:
+    supervisor = supervisor or await _ui_supervisor(name)
     if refresh:
         await supervisor.refresh_discovered()
-    spec = _service_spec(name)
+    spec = _service_spec(name, supervisor)
     try:
         await supervisor.start(name)
     except Exception as exc:
@@ -129,7 +142,7 @@ def _proxy_location(name: str, location: str, spec: ServiceSpec) -> str:
 @router.get("/services/{name}/ui-surface")
 async def service_ui_surface(name: str, request: Request) -> dict[str, Any]:
     _authorize(request)
-    supervisor = get_service_supervisor()
+    supervisor = await _ui_supervisor(name)
     await supervisor.refresh_discovered()
     surface = supervisor.ui_surface(name, check_health=True)
     if surface is None:
@@ -144,8 +157,9 @@ async def service_ui_bootstrap(
     fragment: str | None = None,
 ) -> Response:
     _authorize(request)
-    await get_service_supervisor().refresh_discovered()
-    spec = _service_spec(name)
+    supervisor = await _ui_supervisor(name)
+    await supervisor.refresh_discovered()
+    spec = _service_spec(name, supervisor)
     if spec.ui_embedding not in {"external", "same-origin"}:
         raise HTTPException(status_code=403, detail="service UI embedding is disabled")
     ui_fragment = str(fragment or "")
@@ -156,7 +170,7 @@ async def service_ui_bootstrap(
             or any(ord(char) < 32 or ord(char) == 127 for char in ui_fragment)
         ):
             raise HTTPException(status_code=400, detail="invalid service UI fragment")
-    await _ensure_service_started(name, refresh=False)
+    await _ensure_service_started(name, refresh=False, supervisor=supervisor)
     response = RedirectResponse(
         f"/api/services/{name}/ui/{ui_fragment}",
         status_code=303,
@@ -181,8 +195,9 @@ async def service_ui_bootstrap(
 )
 async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
     _authorize(request)
-    spec = await _ensure_service_started(name)
-    status = await asyncio.to_thread(get_service_supervisor().status, name, check_health=True) or {}
+    supervisor = await _ui_supervisor(name)
+    spec = await _ensure_service_started(name, supervisor=supervisor)
+    status = await asyncio.to_thread(supervisor.status, name, check_health=True) or {}
     if not bool(status.get("health_ok")):
         raise HTTPException(status_code=503, detail={
             "code": "service_unavailable",

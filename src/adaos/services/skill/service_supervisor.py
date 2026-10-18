@@ -861,6 +861,7 @@ class ServiceSkillSupervisor:
         self._process_states: dict[str, dict[str, Any]] = {}
         self._health_states: dict[str, dict[str, Any]] = {}
         self._specs: dict[str, ServiceSpec] = {}
+        self._application_services: dict[str, dict[str, str]] = {}
         self._task: asyncio.Task | None = None
         self._health_task: asyncio.Task | None = None
         self._membership = DistributedServiceMembershipSupervisor(self._ctx)
@@ -1124,6 +1125,9 @@ class ServiceSkillSupervisor:
 
         self._rehydrate_service_runtime(name, spec)
         env = os.environ.copy()
+        for key in ("ADAOS_APPLICATION_ID", "ADAOS_APPLICATION_RELEASE_DIGEST", "ADAOS_APPLICATION_RUNTIME_ROOT"):
+            env.pop(key, None)
+        env.update(getattr(self, "_application_services", {}).get(name, {}))
         env["ADAOS_SERVICE_SKILL"] = name
         env["ADAOS_SERVICE_HOST"] = spec.host
         env["ADAOS_SERVICE_PORT"] = str(spec.port)
@@ -1826,6 +1830,12 @@ class ServiceSkillSupervisor:
 
     async def shutdown(self) -> None:
         self._shutdown_requested = True
+        if self is _SUPERVISOR:
+            with _APPLICATION_SUPERVISORS_LOCK:
+                children = list(_APPLICATION_SUPERVISORS.values())
+                _APPLICATION_SUPERVISORS.clear()
+            for child in children:
+                await child.shutdown()
         if self._task:
             try:
                 self._task.cancel()
@@ -2783,6 +2793,84 @@ def service_supervisor_runtime_summary() -> dict[str, Any]:
 
 
 _SUPERVISOR: ServiceSkillSupervisor | None = None
+_APPLICATION_SUPERVISORS: dict[tuple[str, str, str, str], ServiceSkillSupervisor] = {}
+_APPLICATION_SUPERVISORS_LOCK = threading.Lock()
+
+
+def selected_application_service_supervisor(name: str, default: ServiceSkillSupervisor) -> ServiceSkillSupervisor:
+    """Resolve the authoritative Application channel, never a browser source path.
+
+    A service name is global, but a selected Beta has isolated code/data. Its
+    supervisor must use that verified context for discovery, lifecycle and env.
+    Workspace services retain the existing supervisor; pending/retired runtimes
+    fail admission rather than reopening a stale database.
+    """
+    from adaos.services.applications.store import ApplicationStore
+    from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
+    from adaos.services.applications.trial_runtime import NativeTrialRuntime
+    from adaos.services.agent_context import use_ctx
+
+    ctx = default._ctx
+    state_dir = Path(getattr(ctx, "authority_state_dir", None) or ctx.paths.state_dir())
+    store = ApplicationStore(state_dir)
+    matches = {}
+    selections = store.list_runtime_selections()
+    for selection in selections:
+        if not store.release_has_component(selection.application_id, selection.release_digest, kind="skill", artifact_id=name):
+            continue
+        channel = ApplicationRuntimeChannel(state_dir, selection.application_id)
+        current = channel.read()
+        # JSON-only legacy selections are still checked by execution admission.
+        selected = current or (selection,)
+        for item in selected:
+            identity = (item.application_id, item.runtime_root_ref, item.release_digest)
+            matches[identity] = item
+    if not matches:
+        return default
+    if len(matches) != 1:
+        raise RuntimeChannelConflict("Service has conflicting Application runtime authorities")
+    identity, selection = next(iter(matches.items()))
+    channel = ApplicationRuntimeChannel(state_dir, selection.application_id)
+    legacy = tuple(item for item in selections if item.application_id == selection.application_id)
+    with channel.execution(selection.runtime_root_ref, selection.release_digest, legacy=legacy):
+        projection = {"ADAOS_APPLICATION_ID": selection.application_id,
+                      "ADAOS_APPLICATION_RELEASE_DIGEST": selection.release_digest,
+                      "ADAOS_APPLICATION_RUNTIME_ROOT": selection.runtime_root_ref}
+        if selection.runtime_root_ref == "workspace":
+            if not hasattr(default, "_application_services"):
+                default._application_services = {}
+            default._application_services[name] = projection
+            return default
+        if not selection.runtime_root_ref.startswith("trial:"):
+            raise RuntimeChannelConflict("Unsupported Application service runtime")
+        runtime = NativeTrialRuntime.resolve(ctx, selection.runtime_root_ref.removeprefix("trial:"), selection.release_digest)
+        runtime.ready_manager(name)
+        cache_key = (str(state_dir.resolve()), *identity)
+        with _APPLICATION_SUPERVISORS_LOCK:
+            supervisor = _APPLICATION_SUPERVISORS.get(cache_key)
+            if supervisor is None or supervisor._shutdown_requested:
+                with use_ctx(runtime.context()):
+                    supervisor = ServiceSkillSupervisor()
+                _APPLICATION_SUPERVISORS[cache_key] = supervisor
+            if not hasattr(supervisor, "_application_services"):
+                supervisor._application_services = {}
+            supervisor._application_services[name] = projection
+            return supervisor
+
+
+async def retire_application_service_supervisors(name: str, active: ServiceSkillSupervisor, default: ServiceSkillSupervisor) -> None:
+    """Retire earlier supervisors of this Application without touching others."""
+    projection = getattr(active, "_application_services", {}).get(name)
+    if not projection:
+        return
+    state = str(Path(getattr(default._ctx, "authority_state_dir", None) or default._ctx.paths.state_dir()).resolve())
+    owner = projection["ADAOS_APPLICATION_ID"]
+    with _APPLICATION_SUPERVISORS_LOCK:
+        obsolete = [key for key, supervisor in _APPLICATION_SUPERVISORS.items()
+                    if key[:2] == (state, owner) and supervisor is not active]
+        supervisors = [_APPLICATION_SUPERVISORS.pop(key) for key in obsolete]
+    for supervisor in supervisors:
+        await supervisor.shutdown()
 
 
 def get_service_supervisor() -> ServiceSkillSupervisor:
