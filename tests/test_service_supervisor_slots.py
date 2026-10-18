@@ -781,11 +781,14 @@ def test_service_supervisor_injects_owner_scoped_storage_locations_only_into_pro
     assert '"owner_ref":"skill:storage_service"' in environment["ADAOS_SERVICE_RELATIONAL_BINDING"]
 
 
-def test_service_supervisor_pythonpath_includes_package_root(tmp_path):
+def test_service_supervisor_pythonpath_includes_package_root(tmp_path, monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.skill import service_supervisor as mod
 
     ctx = get_ctx()
+    # A checkout can have any directory name. The package provider models the
+    # actual adaos package, not a coincidentally named repository directory.
+    monkeypatch.setattr(ctx.paths, "_package", Path(mod.__file__).resolve().parents[2])
     skill_root = tmp_path / "skills" / "demo_service"
     skill_root.mkdir(parents=True)
 
