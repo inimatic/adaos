@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import time
@@ -249,18 +250,40 @@ def _install_default_application_lifecycle(
             raise RuntimeError(
                 f"{application_id}: no exact stable Application release is available"
             )
-        idempotency_key = (
+        base_idempotency_key = (
             f"bootstrap-default:{application_id}:{release_digest.removeprefix('sha256:')}"
         )
-        operation = applications_sdk.plan_install(
-            application_id,
-            release_digest=release_digest,
-            expected_revision=0,
-            actor_ref=actor_ref,
-            subnet_ref=subnet_ref,
-            capability="applications.plan",
-            idempotency_key=idempotency_key,
-        )
+        idempotency_key = base_idempotency_key
+        operation: dict[str, object] = {}
+        for _attempt in range(16):
+            operation = applications_sdk.plan_install(
+                application_id,
+                release_digest=release_digest,
+                expected_revision=0,
+                actor_ref=actor_ref,
+                subnet_ref=subnet_ref,
+                capability="applications.plan",
+                idempotency_key=idempotency_key,
+            )
+            operation_status = str(operation.get("status") or "planned").strip()
+            if operation_status == "planned":
+                break
+            if operation_status not in {"failed", "unknown"}:
+                raise RuntimeError(
+                    f"{application_id}: bootstrap install is blocked by "
+                    f"operation status {operation_status or 'unknown'}"
+                )
+            retry_identity = hashlib.sha256(
+                (
+                    f"{idempotency_key}\0{operation.get('operation_id')}\0"
+                    f"{operation.get('revision', 0)}"
+                ).encode("utf-8")
+            ).hexdigest()[:20]
+            idempotency_key = f"{base_idempotency_key}:retry:{retry_identity}"
+        else:
+            raise RuntimeError(
+                f"{application_id}: bootstrap install retry chain exhausted"
+            )
         conflicts = list((operation.get("plan") or {}).get("conflicts") or [])
         if conflicts:
             raise RuntimeError(
@@ -278,8 +301,11 @@ def _install_default_application_lifecycle(
         )
         status = str(receipt.get("status") or "").strip()
         if status != "succeeded":
+            detail = receipt.get("result") or receipt
             raise RuntimeError(
-                f"{application_id}: Application install finished with {status or 'unknown'}"
+                f"{application_id}: Application install finished with "
+                f"{status or 'unknown'}: "
+                + json.dumps(detail, ensure_ascii=False, sort_keys=True)[:2000]
             )
         installation = (receipt.get("result") or {}).get("installation") or {}
         results.append(

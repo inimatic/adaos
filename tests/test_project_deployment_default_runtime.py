@@ -143,15 +143,32 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
     manifest_digest = "sha256:" + "a" * 64
 
     class Manager:
+        def prepare_runtime(
+            self,
+            component_id: str,
+            *,
+            version_override: str,
+            run_tests: bool,
+            package_digest: str | None,
+            package_manifest_digest: str | None,
+        ) -> SimpleNamespace:
+            events.append(("prepare", f"{component_id}:{version_override}"))
+            assert run_tests is False
+            assert package_digest == "sha256:" + "b" * 64
+            assert package_manifest_digest == manifest_digest
+            return SimpleNamespace(slot="B")
+
         def activate_runtime(
             self,
             component_id: str,
             *,
             version: str,
+            slot: str | None = None,
             package_digest: str | None = None,
             package_manifest_digest: str | None = None,
         ) -> str:
             events.append(("slot", f"{component_id}:{version}"))
+            assert slot == "B"
             assert package_digest == "sha256:" + "b" * 64
             assert package_manifest_digest == manifest_digest
             return "B"
@@ -204,6 +221,7 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
     )
 
     assert events == [
+        ("prepare", "media_center_skill:0.8.23"),
         ("slot", "media_center_skill:0.8.23"),
         ("handlers", "media_center_skill"),
         ("event", "media_center_skill"),
