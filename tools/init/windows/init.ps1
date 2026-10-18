@@ -64,7 +64,22 @@ function Invoke-DownloadWithRetry {
   for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
     try {
       Remove-Item -Force -LiteralPath $OutFile -ErrorAction SilentlyContinue
-      Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile
+      try {
+        Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile
+      }
+      catch {
+        # Fresh Windows images can have a valid TLS chain while their certificate
+        # revocation endpoint is temporarily unreachable. curl keeps certificate
+        # validation enabled and only relaxes that one Windows-specific check.
+        $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+        if (-not $curl) { throw }
+        Write-Warn ("PowerShell download failed; retrying with curl: {0}" -f $_.Exception.Message)
+        Remove-Item -Force -LiteralPath $OutFile -ErrorAction SilentlyContinue
+        & $curl.Source --fail --location --silent --show-error --ssl-no-revoke --output $OutFile $Uri
+        if ($LASTEXITCODE -ne 0) {
+          throw ("curl failed with exit code {0}" -f $LASTEXITCODE)
+        }
+      }
       if ((Test-Path -LiteralPath $OutFile) -and (Get-Item -LiteralPath $OutFile).Length -gt 0) {
         return
       }
