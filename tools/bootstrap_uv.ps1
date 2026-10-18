@@ -359,10 +359,11 @@ function Invoke-Adaos {
 }
 
 function Configure-RasaNlu {
-  if ($NoVoice) {
+  if ($NoVoice -or $Preset -eq "base") {
     $env:ADAOS_NLU_RASA = "0"
     Write-EnvVar -Key "ADAOS_NLU_RASA" -Value "0" -EnvFile ".env"
-    Write-Host "Rasa NLU service disabled by -NoVoice."
+    $reason = if ($NoVoice) { "-NoVoice" } else { "the base preset" }
+    Write-Host "Optional Rasa NLU service disabled by $reason."
     return
   }
   Write-Host "Rasa NLU will be prepared as an optional AdaOS service-skill."
@@ -429,7 +430,7 @@ if ($desiredRole -eq "hub") {
 
 Write-Host "Installing default webspace content (adaos install)..."
 $installArgs = @("install", "--preset", $Preset, "--language", $Language)
-if ($NoVoice) {
+if ($NoVoice -or $Preset -eq "base") {
   $installArgs += "--no-rasa-nlu"
   $installArgs += "--no-train-nlu"
 }
