@@ -126,6 +126,7 @@ class WorkspaceActivationManager:
         workspace_root: Path,
         package_store: ContentAddressedPackageStore,
         state_root: Path | None = None,
+        workspace_local_staging: bool = False,
         delayed_verification_seconds: float | None = None,
         attestation_admission: ArtifactAttestationAdmission | None = None,
     ) -> None:
@@ -135,8 +136,12 @@ class WorkspaceActivationManager:
         self.state_root = Path(state_root or self.metadata_root).expanduser().resolve()
         self.lock_path = self.metadata_root / "workspace.lock.json"
         self.operations_root = self.state_root / "artifact_pipeline" / "operations"
-        self.staging_root = self.state_root / "artifact_pipeline" / "staging"
-        self.backups_root = self.state_root / "artifact_pipeline" / "backups"
+        # Trial authority can remain in node state while its Workspace lives
+        # on an enrolled volume. Atomic install/rollback moves must stay on
+        # the Workspace filesystem, never fall back to cross-device copies.
+        materialization_root = self.metadata_root if workspace_local_staging else self.state_root
+        self.staging_root = materialization_root / "artifact_pipeline" / "staging"
+        self.backups_root = materialization_root / "artifact_pipeline" / "backups"
         self.lock_history_root = self.metadata_root / "lock-history"
         self.releases_root = self.metadata_root / "releases"
         self.writer_lock_path = self.metadata_root / ".workspace-writer.lock"

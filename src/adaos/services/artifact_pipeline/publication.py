@@ -2232,6 +2232,7 @@ class ArtifactPublicationService:
             workspace_root=trial_workspace,
             package_store=self.package_store,
             state_root=self.state_root / "trials" / candidate_id / "state",
+            workspace_local_staging=True,
         )
         trial_idempotency_key = str(
             idempotency_key or f"candidate-trial:{candidate.digest}"
@@ -2526,6 +2527,7 @@ class ArtifactPublicationService:
             workspace_root=trial_workspace,
             package_store=self.package_store,
             state_root=self.state_root / "trials" / candidate_id / "state",
+            workspace_local_staging=True,
         )
         trial_idempotency_key = str(
             idempotency_key or f"candidate-trial:{candidate.digest}"
@@ -2796,6 +2798,7 @@ class ArtifactPublicationService:
             workspace_root=target,
             package_store=self.package_store,
             state_root=self.state_root / "trials" / token / "state",
+            workspace_local_staging=True,
         )
         generation = int(runtime_binding.get("reconciliation_generation") or 0) + 1
         activation = manager.activate(

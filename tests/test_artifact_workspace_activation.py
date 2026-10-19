@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import copy
 import io
 import shutil
 import threading
 import time
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -237,6 +239,54 @@ def _activate(manager: WorkspaceActivationManager, plan, **kwargs):
             },
         )
     return manager.activate(plan, **kwargs)
+
+
+def _exercise_workspace_local_staging(tmp_path: Path, workspace: Path) -> None:
+    first = _built_scenario(tmp_path, version="1.0.0", marker="volume-first")
+    second = _built_scenario(tmp_path, version="1.0.1", marker="volume-second")
+    store = ContentAddressedPackageStore(tmp_path / "packages")
+    for built in (first, second):
+        store.put(built.archive_bytes)
+    manager = WorkspaceActivationManager(workspace_root=workspace, package_store=store,
+        state_root=tmp_path / "authority", workspace_local_staging=True)
+    assert manager.operations_root.is_relative_to(tmp_path / "authority")
+    assert manager.staging_root.is_relative_to(workspace)
+    assert manager.backups_root.is_relative_to(workspace)
+    initial = _activate(manager, _plan(first), idempotency_key="volume-first")
+    with pytest.raises(ActivationError, match="health check failed"):
+        _activate(manager, _plan(second), idempotency_key="volume-failed-upgrade",
+                  health_check=lambda _lock: False)
+    assert manager.load_lock() == initial.workspace_lock
+    target = workspace / "scenarios/recipes/webui.json"
+    assert json.loads(target.read_text()) == {"marker": "volume-first"}
+    failed = json.loads(manager.operation_path(manager.operation_id("volume-failed-upgrade")).read_text())
+    assert failed["status"] == "failed"
+    upgraded = _activate(manager, _plan(second), idempotency_key="volume-successful-upgrade")
+    assert json.loads(target.read_text()) == {"marker": "volume-second"}
+    replay = _activate(manager, _plan(second), idempotency_key="volume-successful-upgrade")
+    assert replay.idempotent_replay is True
+    assert replay.workspace_lock == upgraded.workspace_lock
+    # Recovery after a process restart uses the same local staging layout.
+    reopened = WorkspaceActivationManager(workspace_root=workspace, package_store=store,
+        state_root=tmp_path / "authority", workspace_local_staging=True)
+    assert reopened.staging_root == manager.staging_root
+    assert reopened.backups_root == manager.backups_root
+    assert reopened.load_lock() == upgraded.workspace_lock
+
+
+def test_workspace_local_staging_keeps_atomic_effects_with_workspace(tmp_path: Path) -> None:
+    _exercise_workspace_local_staging(tmp_path, tmp_path / "volume/workspace")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires two real POSIX filesystems")
+def test_workspace_local_staging_across_real_filesystems(tmp_path: Path) -> None:
+    volume = Path(os.environ.get("ADAOS_TEST_VOLUME_ROOT", "/dev/shm"))
+    if not volume.is_dir() or volume.stat().st_dev == tmp_path.stat().st_dev:
+        pytest.skip("a separate fixture filesystem is unavailable")
+    with tempfile.TemporaryDirectory(prefix="adaos-activation-test-", dir=volume) as fixture:
+        workspace = Path(fixture) / "workspace"
+        _exercise_workspace_local_staging(tmp_path, workspace)
+        assert (workspace / ".adaos/artifact_pipeline/staging").stat().st_dev != tmp_path.stat().st_dev
 
 
 def test_activation_installs_empty_workspace_and_is_idempotent(tmp_path: Path) -> None:

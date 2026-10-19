@@ -619,6 +619,9 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert prepared.trial_workspace == (
         workspace.parent / "trials" / prepared.candidate.candidate_id
     )
+    assert (prepared.trial_workspace / ".adaos/artifact_pipeline/staging").is_dir()
+    assert not (service.state_root / "trials" / prepared.candidate.candidate_id
+                / "state/artifact_pipeline/staging").exists()
     assert prepared.trial_activation["schema"] == "adaos.trial.activation.v1"
     assert prepared.trial_activation["status"] == "active"
     assert prepared.trial_activation["target"]["webspace_id"] == "desktop"
