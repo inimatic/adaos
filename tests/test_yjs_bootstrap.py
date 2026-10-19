@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 
+import pytest
 import y_py as Y
 from ypy_websocket.ystore import YDocNotFound
 
 from adaos.services.yjs import bootstrap as bootstrap_module
 from adaos.services.yjs.webspace import default_webspace_id
+
+
+@pytest.fixture(autouse=True)
+def _collect_thread_affine_documents_on_test_thread():
+    yield
+    gc.collect()
 
 
 class _FakeStore:
