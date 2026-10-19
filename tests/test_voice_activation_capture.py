@@ -26,4 +26,3 @@ def test_activation_descriptor_uses_installed_agent_aliases(monkeypatch):
     with pytest.raises(HTTPException) as failure:
         voice_activation_descriptor("en-US")
     assert failure.value.status_code == 503
-
