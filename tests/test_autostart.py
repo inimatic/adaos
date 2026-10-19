@@ -10,6 +10,33 @@ from adaos.apps.autostart_runner import _slot_launch_spec
 from adaos.services.autostart import default_spec, disable, enable, status
 
 
+@pytest.mark.parametrize(
+    "argv,managed,child,same_base,expected",
+    [
+        (["python.exe", "-m", "adaos.services.realtime_sidecar"], "1", "1", True, "realtime_sidecar"),
+        (["adaosd.exe", "realtime-sidecar"], "1", "1", True, "realtime_sidecar"),
+        (["python.exe", "-m", "adaos.services.realtime_sidecar"], "1", "1", False, None),
+        (["python.exe", "-m", "adaos.services.realtime_sidecar"], "0", "1", True, None),
+        (["adaosd.exe", "realtime-sidecar"], "1", "0", True, None),
+        (["python.exe", "-c", "print('adaos.services.realtime_sidecar')"], "1", "1", True, None),
+        (["unrelated.exe", "realtime-sidecar"], "1", "1", True, None),
+    ],
+)
+def test_managed_orphan_sidecar_matches_only_its_installation(tmp_path, argv, managed, child, same_base, expected):
+    from adaos.services import autostart
+
+    base = tmp_path / "node"
+    process = SimpleNamespace(
+        cmdline=lambda: argv,
+        environ=lambda: {
+            "ADAOS_BASE_DIR": str(base if same_base else tmp_path / "another-node"),
+            "ADAOS_AUTOSTART_MANAGED": managed,
+            "ADAOS_REALTIME_CHILD": child,
+        },
+    )
+    assert autostart._autostart_process_match_reason(process, base_dir=base, wrapper=base / "bin" / "adaos-autostart.ps1") == expected
+
+
 class _FakePaths:
     def __init__(self, base_dir: Path) -> None:
         self._base_dir = base_dir
@@ -579,6 +606,8 @@ def test_restart_service_uses_unit_name_on_linux(monkeypatch, tmp_path: Path) ->
     import adaos.services.autostart as autostart
 
     monkeypatch.setattr(autostart.sys, "platform", "linux")
+    monkeypatch.setattr(autostart, "_is_windows", lambda: False)
+    monkeypatch.setattr(autostart, "_is_linux", lambda: True)
     monkeypatch.setattr(
         autostart,
         "status",

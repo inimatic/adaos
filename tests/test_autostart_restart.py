@@ -29,6 +29,8 @@ def test_linux_restart_service_times_out_with_status_details(monkeypatch, tmp_pa
     import adaos.services.autostart as autostart
 
     monkeypatch.setattr(autostart.sys, "platform", "linux")
+    monkeypatch.setattr(autostart, "_is_windows", lambda: False)
+    monkeypatch.setattr(autostart, "_is_linux", lambda: True)
     monkeypatch.setattr(autostart, "_linux_restart_wait_timeout", lambda scope, service_name: 45.0)
     monkeypatch.setattr(
         autostart,
@@ -88,6 +90,8 @@ def test_linux_restart_service_waits_for_slow_systemd_restart(monkeypatch, tmp_p
     import adaos.services.autostart as autostart
 
     monkeypatch.setattr(autostart.sys, "platform", "linux")
+    monkeypatch.setattr(autostart, "_is_windows", lambda: False)
+    monkeypatch.setattr(autostart, "_is_linux", lambda: True)
     monkeypatch.setattr(autostart, "_linux_restart_wait_timeout", lambda scope, service_name: 120.0)
     monkeypatch.setattr(
         autostart,

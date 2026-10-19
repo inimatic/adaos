@@ -762,13 +762,27 @@ def _autostart_process_match_reason(proc: psutil.Process, *, base_dir: Path, wra
     if _cmdline_references_path(cmdline, wrapper):
         return "wrapper"
     joined = " ".join(part.lower() for part in cmdline)
-    if "adaos.apps.supervisor" not in joined and "adaos.apps.autostart_runner" not in joined:
+    python_sidecar = any(
+        cmdline[index] == "-m" and cmdline[index + 1] == "adaos.services.realtime_sidecar"
+        for index in range(max(0, len(cmdline) - 1))
+    )
+    go_sidecar = (
+        len(cmdline) >= 2
+        and Path(cmdline[0]).name.lower() in {"adaosd", "adaosd.exe"}
+        and cmdline[1] == "realtime-sidecar"
+    )
+    sidecar = python_sidecar or go_sidecar
+    if "adaos.apps.supervisor" not in joined and "adaos.apps.autostart_runner" not in joined and not sidecar:
         return None
     env = _safe_proc_environ(proc)
     if str(env.get("ADAOS_AUTOSTART_MANAGED") or "").strip() != "1":
         return None
     if not _env_base_dir_matches(env, base_dir):
         return None
+    if sidecar:
+        # A task/wrapper may already have exited. Its managed sidecar still
+        # belongs to this installation and can retain log/database handles.
+        return "realtime_sidecar" if str(env.get("ADAOS_REALTIME_CHILD") or "").strip() == "1" else None
     if "adaos.apps.supervisor" in joined:
         return "supervisor"
     return "autostart_runner"
