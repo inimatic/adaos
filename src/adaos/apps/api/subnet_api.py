@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from adaos.apps.api.auth import require_token
 from adaos.services.agent_context import get_ctx
+from adaos.services.access_links import authorize_link
 from adaos.services.subnet_kv_file_http import get_subnet_kv
 from adaos.services.subnet_registry_mem import LEASE_SECONDS_DEFAULT, DOWN_GRACE_SECONDS
 from adaos.services.registry.subnet_directory import get_directory
@@ -124,6 +125,9 @@ async def register(body: RegisterRequest):
 
     if body.subnet_id != conf.subnet_id:
         raise HTTPException(status_code=400, detail="subnet mismatch")
+    allowed, reason = authorize_link("member", body.node_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=f"device_{reason}")
 
     # Добавляем/обновляем запись в persistent directory
     became_online = _register_directory_node(
@@ -152,6 +156,9 @@ async def heartbeat(body: HeartbeatRequest):
     conf = get_ctx().config
     if conf.role != "hub":
         raise HTTPException(status_code=403, detail="only hub node accepts heartbeats")
+    allowed, reason = authorize_link("member", body.node_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=f"device_{reason}")
 
     known = _heartbeat_directory_node(
         body.node_id,

@@ -1570,6 +1570,12 @@ class RootHttpClient:
             )
         )
 
+    def node_departure(self, *, payload: Mapping[str, Any]) -> dict:
+        return dict(self._request(
+            "POST", "/v1/hub/node-departure", json=dict(payload),
+            verify=self.verify, cert=self.cert, timeout=20.0,
+        ))
+
     def hub_control_report(
         self,
         *,

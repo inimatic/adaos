@@ -204,9 +204,13 @@ class SubnetDirectory:
                 self.live[nid] = st
 
     def is_online(self, node_id: str) -> bool:
+        from adaos.services.access_links import member_departure
+        if member_departure(node_id):
+            return False
         return bool((self.live.get(node_id) or {}).get("online", False))
 
     def find_nodes_with_skill(self, name: str, require_online: bool = True) -> List[Dict[str, Any]]:
+        from adaos.services.access_links import member_departure
         nodes = self.repo.nodes_with_skill(name)
         known_ids = {str(item.get("node_id") or "") for item in nodes}
         for node_id, overlay in self._registration_overlay.items():
@@ -215,9 +219,12 @@ class SubnetDirectory:
                 nodes.append(dict(overlay))
         if require_online:
             nodes = [n for n in nodes if self.is_online(n.get("node_id", ""))]
-        return [n for n in nodes if str(n.get("node_state") or "ready") == "ready"]
+        return [n for n in nodes if str(n.get("node_state") or "ready") == "ready" and not member_departure(str(n.get("node_id") or ""))]
 
     def get_node_base_url(self, node_id: str) -> Optional[str]:
+        from adaos.services.access_links import member_departure
+        if member_departure(node_id):
+            return None
         n = self._registration_overlay.get(node_id) or self.repo.get_node(node_id)
         return n.get("base_url") if n else None
 
@@ -229,6 +236,9 @@ class SubnetDirectory:
             return None
         item = dict(node)
         item["online"] = self.is_online(node_id)
+        from adaos.services.access_links import member_departure
+        if receipt := member_departure(node_id):
+            item.update(receipt, node_state="deleted", online=False)
         overlay_capacity = overlay.get("capacity") if isinstance(overlay, dict) else None
         item["capacity"] = dict(overlay_capacity) if isinstance(overlay_capacity, dict) else {
             "io": self.repo.io_for_node(node_id),
@@ -249,6 +259,9 @@ class SubnetDirectory:
             n = {**persisted.get(node_id, {}), **(overlay or {})}
             node = dict(n)
             node["online"] = self.is_online(node_id)
+            from adaos.services.access_links import member_departure
+            if receipt := member_departure(node_id):
+                node.update(receipt, node_state="deleted", online=False)
             overlay_capacity = overlay.get("capacity") if isinstance(overlay, dict) else None
             node["capacity"] = dict(overlay_capacity) if isinstance(overlay_capacity, dict) else {
                 "io": self.repo.io_for_node(node_id),

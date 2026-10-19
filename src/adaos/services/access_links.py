@@ -352,6 +352,12 @@ def _normalize_endpoint_assignment(value: Any, *, fallback_role: Any = None, upd
 
 def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     data = dict(raw or {})
+    departure = member_departure(entry_id) if kind == "member" else None
+    if departure:
+        # This separate durable tombstone survives stale registry writes and
+        # heartbeats from the departing process. Reinstallation needs a new ID.
+        data.update(departure)
+        data.update(revoked=True, admission_policy="deny", online=False, connection_state="deleted")
     now = _now_ts()
     lifetime_mode = str(data.get("lifetime_mode") or "permanent").strip().lower() or "permanent"
     expires_at = data.get("expires_at")
@@ -408,6 +414,12 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "user_agent": str(data.get("user_agent") or "").strip() or None,
         "media_control": _mapping_or_none(data.get("media_control")),
         "parent_device_ref": str(data.get("parent_device_ref") or "").strip() or None,
+        "endpoint_kind": str(data.get("endpoint_kind") or "").strip() or None,
+        "endpoint_id": str(data.get("endpoint_id") or "").strip() or None,
+        "lifecycle_state": str(data.get("lifecycle_state") or "").strip() or None,
+        "departure_operation_id": str(data.get("departure_operation_id") or "").strip() or None,
+        "departure_reason": str(data.get("departure_reason") or "").strip() or None,
+        "deleted_at": float(data.get("deleted_at") or 0.0) or None,
     }
     if kind == "redevice":
         endpoint_assignment = _normalize_endpoint_assignment(
@@ -804,6 +816,8 @@ def list_links(kind: LinkKind | None = None) -> list[dict[str, Any]]:
 
 
 def authorize_link(kind: LinkKind, entry_id: str) -> tuple[bool, str | None]:
+    if kind == "member" and member_departure(entry_id):
+        return False, "deleted"
     entry = get_link(kind, entry_id)
     if entry is None:
         return True, None
@@ -1046,6 +1060,8 @@ def touch_member_link(
     token = str(node_id or "").strip()
     if not token:
         return None
+    if member_departure(token):
+        return _normalize_entry("member", token, {})
     registry = _load_registry()
     entry = _get_entry(registry, "member", token) or _normalize_entry("member", token, {})
     previous = dict(entry)
@@ -1594,6 +1610,8 @@ def set_link_lifetime(kind: LinkKind, entry_id: str, preset: str) -> dict[str, A
     token = str(entry_id or "").strip()
     if not token:
         raise ValueError("entry id is required")
+    if kind == "member" and member_departure(token):
+        raise ValueError("deleted member requires a new node identity")
     preset_token = str(preset or "").strip().lower() or "permanent"
     ttl_map = {
         "1h": 3600.0,
@@ -1624,6 +1642,40 @@ def set_link_lifetime(kind: LinkKind, entry_id: str, preset: str) -> dict[str, A
     _save_registry(registry)
     _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="lifetime.changed")
     return saved
+
+
+def member_departure(node_id: str) -> dict[str, Any] | None:
+    return sqlite_db.durable_state_get("member_departures", str(node_id).strip())
+
+
+def delete_member_link(node_id: str, *, operation_id: str, subnet_id: str) -> dict[str, Any]:
+    """Terminal membership removal; ordinary detach remains reversible."""
+    from adaos.services.artifact_pipeline.storage import mutation_lock
+    from adaos.services.runtime_paths import current_state_dir
+
+    token = str(node_id).strip()
+    if not token or not operation_id or not subnet_id:
+        raise ValueError("node, subnet and operation identities are required")
+    with mutation_lock(current_state_dir() / "member_departures.lock"):
+        previous = member_departure(token)
+        if previous:
+            if previous.get("departure_operation_id") != operation_id or previous.get("subnet_id") != subnet_id:
+                raise ValueError("member already deleted by another operation")
+            return previous
+        now = _now_ts()
+        receipt = {
+            "node_id": token, "subnet_id": subnet_id, "lifecycle_state": "deleted",
+            "departure_operation_id": operation_id, "departure_reason": "delete",
+            "deleted_at": now, "revoked_at": now,
+        }
+        # Commit the terminal fact before updating the reconstructible view.
+        sqlite_db.durable_state_put("member_departures", token, receipt)
+    registry = _load_registry()
+    entry = _get_entry(registry, "member", token) or _normalize_entry("member", token, {})
+    saved = _put_entry(registry, "member", entry)
+    _save_registry(registry)
+    _emit_entity_registry_changed_if_needed("member", None, saved, reason="member.deleted")
+    return receipt
 
 
 def detach_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
@@ -1835,7 +1887,7 @@ def browser_snapshot() -> list[dict[str, Any]]:
             active_transports.append(source)
         parent["active_runtime_sources"] = active_transports
         by_id[device_id] = parent
-        if not client_id:
+        if not client_id or parent.get("client_build_id") == "adaos-desktop":
             continue
         entry_id = f"{device_id}::{client_id}"
         if entry_id in by_id:

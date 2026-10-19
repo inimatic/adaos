@@ -179,11 +179,25 @@ async def subnet_ws(websocket: WebSocket) -> None:
 
             allowed, reason = await asyncio.to_thread(authorize_link, "member", node_id)
             if not allowed:
-                await websocket.send_json({"t": "hello.ack", "ok": False, "error": f"device_{reason or 'denied'}"})
+                response = {"t": "hello.ack", "ok": False, "error": f"device_{reason or 'denied'}"}
+                # A lost departure ACK may be recovered without readmitting
+                # the node. The original operation must match the tombstone.
+                operation_id = str(raw.get("departure_operation_id") or "")
+                if reason == "deleted" and operation_id:
+                    from adaos.services.access_links import member_departure
+                    from adaos.services.node_departure import finalize_member_departure
+                    receipt = await asyncio.to_thread(member_departure, node_id)
+                    if receipt and receipt.get("departure_operation_id") == operation_id:
+                        try:
+                            response["departure_receipt"] = await finalize_member_departure(node_id, operation_id)
+                        except Exception:
+                            pass  # Root ACK pending; no false success or membership restoration.
+                await websocket.send_json(response)
                 await websocket.close(code=1008)
                 return
         except Exception:
-            pass
+            await websocket.close(code=1011, reason="admission_unavailable")
+            return
         await websocket.send_json(
             {
                 "t": "hello.ack",
@@ -286,6 +300,21 @@ async def subnet_ws(websocket: WebSocket) -> None:
                 if isinstance(ev, dict):
                     await mgr.ingest_member_bus_event(node_id=node_id, event=ev)
                 continue
+
+            if t == "node.departure":
+                from adaos.services.node_departure import finalize_member_departure
+                operation_id = str(msg.get("operation_id") or "").strip()
+                if msg.get("reason") != "delete" or not operation_id or len(operation_id) > 100:
+                    await link.send_json({"t": "node.departure.ack", "ok": False, "error": "invalid_departure"})
+                    continue
+                try:
+                    receipt = await finalize_member_departure(node_id, operation_id)
+                    await link.send_json({"t": "node.departure.ack", "ok": True, "receipt": receipt})
+                except Exception:
+                    await link.send_json({"t": "node.departure.ack", "ok": False, "error": "departure_confirmation_pending"})
+                    continue
+                await websocket.close(code=1008, reason="node_deleted")
+                return
 
             if t == "node.meta":
                 node_names = msg.get("node_names") or []

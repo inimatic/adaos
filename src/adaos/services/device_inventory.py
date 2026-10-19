@@ -321,6 +321,9 @@ def _build_policy_block(
     admission_policy = _text(entry.get("admission_policy")) if present else ""
     expired = _is_expired(entry, now=now) if present else False
     managed_state = (
+        "deleted"
+        if entry.get("lifecycle_state") == "deleted"
+        else
         "denied"
         if admission_policy == "deny" or revoked
         else "detached"
@@ -348,6 +351,10 @@ def _build_policy_block(
         "admission_policy": admission_policy or ("deny" if revoked else "allow"),
         "detached_at": _float_or_none(entry.get("detached_at")),
         "denied_at": _float_or_none(entry.get("denied_at")),
+        "lifecycle_state": _text_or_none(entry.get("lifecycle_state")),
+        "deleted_at": _float_or_none(entry.get("deleted_at")),
+        "departure_reason": _text_or_none(entry.get("departure_reason")),
+        "departure_operation_id": _text_or_none(entry.get("departure_operation_id")),
         "aliases": _list_of_raw_texts(entry.get("aliases")),
         "labels": _list_of_labels(entry.get("labels")),
     }
@@ -582,7 +589,7 @@ class DeviceInventoryService:
             items = [
                 item
                 for item in items
-                if _text(_mapping(item.get("policy")).get("managed_state")) not in {"detached", "denied", "revoked"}
+                if _text(_mapping(item.get("policy")).get("managed_state")) not in {"detached", "denied", "revoked", "deleted"}
             ]
         items.sort(
             key=lambda item: (
@@ -596,6 +603,16 @@ class DeviceInventoryService:
 
     def _list_redevice_devices(self, *, now: float) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
+        # The native client's admission credential and events transport are
+        # representations of one endpoint. Keep the addressable transport row.
+        try:
+            native_ids = {
+                _text(row.get("id")).split("::", 1)[0]
+                for row in _access_links.browser_snapshot()
+                if row.get("client_build_id") == "adaos-desktop"
+            }
+        except Exception:
+            native_ids = set()
         try:
             policy_entries = list(_access_links.list_links("redevice") or [])
         except Exception:
@@ -609,6 +626,8 @@ class DeviceInventoryService:
         for entry in _current_redevice_entries(scoped_entries):
             endpoint_id = _text(entry.get("_canonical_endpoint_id")) or _redevice_endpoint_id(entry)
             if not endpoint_id:
+                continue
+            if endpoint_id in native_ids:
                 continue
             policy = _mapping(entry.get("endpoint_policy"))
             manifest = _mapping(entry.get("endpoint_manifest"))
@@ -805,7 +824,7 @@ class DeviceInventoryService:
         assert device is not None
         kind, link_id = self._kind_and_link_id(_text(device_ref))
         policy = _mapping(device.get("policy"))
-        if _text(policy.get("managed_state")) in {"detached", "denied", "revoked"}:
+        if _text(policy.get("managed_state")) in {"detached", "denied", "revoked", "deleted"}:
             layout_refresh = _request_webspace_reload_for_device(
                 kind,
                 link_id,
@@ -926,6 +945,9 @@ class DeviceInventoryService:
                         "browser_device_id": device_id,
                         "parent_browser_device_id": _text_or_none(entry.get("parent_browser_device_id")),
                         "browser_client_id": _text_or_none(entry.get("browser_client_id")),
+                        "parent_device_ref": _text_or_none(entry.get("parent_device_ref")),
+                        "endpoint_kind": _text_or_none(entry.get("endpoint_kind")) or ("native_client" if entry.get("client_build_id") == "adaos-desktop" else None),
+                        "endpoint_id": _text_or_none(entry.get("endpoint_id")) or (device_id if entry.get("client_build_id") == "adaos-desktop" else None),
                         "node_id": None,
                         "hostname": hostname,
                         "device_display_name": _text_or_none(entry.get("device_display_name")),
@@ -1036,9 +1058,14 @@ class DeviceInventoryService:
             directory_online = bool(directory_entry.get("online")) if directory_entry else False
             policy_online = bool(policy_entry.get("online")) if policy_entry else False
             online = live_connected or directory_online or policy_online
+            deleted = bool(policy_entry and policy_entry.get("lifecycle_state") == "deleted")
+            if deleted:
+                online = False
             runtime_connected = _connected_to_subnet(projection_like)
             if live_connected:
                 runtime_connected = True
+            if deleted:
+                runtime_connected = False
             freshness = subnet_runtime_projection_freshness(
                 projection_like,
                 online=online,

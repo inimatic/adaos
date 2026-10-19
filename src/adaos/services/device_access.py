@@ -590,14 +590,14 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
 
     rename_enabled = policy_present
     rename_reason = None if rename_enabled else "device_policy_missing"
-    lifetime_enabled = policy_present
-    lifetime_reason = None if lifetime_enabled else "device_policy_missing"
-    detached_or_denied = managed_state in {"detached", "denied", "revoked"} or revoked
+    lifetime_enabled = policy_present and managed_state != "deleted"
+    lifetime_reason = None if lifetime_enabled else "deleted" if managed_state == "deleted" else "device_policy_missing"
+    detached_or_denied = managed_state in {"detached", "denied", "revoked", "deleted"} or revoked
     detach_enabled = not detached_or_denied
     detach_reason = None if detach_enabled else "already_detached"
-    deny_enabled = managed_state not in {"denied", "revoked"}
+    deny_enabled = managed_state not in {"denied", "revoked", "deleted"}
     deny_reason = None if deny_enabled else "already_denied"
-    apps_enabled = kind == "member" and bool(node_id) and managed_state not in {"detached", "denied", "revoked"}
+    apps_enabled = kind == "member" and bool(node_id) and managed_state not in {"detached", "denied", "revoked", "deleted"}
     apps_reason = None if apps_enabled else "browser_has_no_node_context" if kind == "browser" else "device_unavailable"
     observation = _mapping(device.get("observation"))
     media_enabled = kind == "browser" and bool(observation.get("online"))

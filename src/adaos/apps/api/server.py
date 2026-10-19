@@ -1991,6 +1991,8 @@ async def _runtime_context(app: FastAPI):
         app.state.skill_runtime_migration_deferred_for_promotion = False
         app.state.skill_runtime_migration_start_task = None
         reset_runtime_lifecycle()
+        from adaos.services.node_departure import restore_departure_drain
+        restore_departure_drain()
         app.state.core_update_task = None
         app.state.core_update_reconcile_task = None
         app.state.artifact_delayed_verification_task = None

@@ -365,6 +365,9 @@ class MemberLinkClient:
     def __init__(self) -> None:
         self._stop = asyncio.Event()
         self._connected = asyncio.Event()
+        self._departure_operation_id = ""
+        self._departure_receipt: dict[str, Any] | None = None
+        self._departure_waiter: asyncio.Future | None = None
         self._out_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=5000)
         self._task: asyncio.Task | None = None
         self._remove_ystore_listener: Callable[[], None] | None = None
@@ -1091,6 +1094,24 @@ class MemberLinkClient:
         except Exception:
             return
 
+    async def request_departure(self, operation_id: str) -> dict[str, Any]:
+        self._departure_operation_id = operation_id
+        deadline = asyncio.get_running_loop().time() + 35
+        while not self._connected.is_set():
+            if self._departure_receipt and self._departure_receipt.get("departure_operation_id") == operation_id:
+                return dict(self._departure_receipt)
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("member departure connection unavailable")
+            await asyncio.sleep(.1)
+        waiter = asyncio.get_running_loop().create_future()
+        self._departure_waiter = waiter
+        try:
+            await asyncio.wait_for(self._out_q.put({"t": "node.departure", "operation_id": operation_id, "reason": "delete"}), timeout=2)
+            return await asyncio.wait_for(waiter, timeout=35)
+        finally:
+            if self._departure_waiter is waiter:
+                self._departure_waiter = None
+
     def request_refresh(self, *, reason: str = "member_link_refresh") -> dict[str, Any]:
         snapshot = self.snapshot()
         if not self.is_connected():
@@ -1656,6 +1677,8 @@ class MemberLinkClient:
                         "base_url": None,
                         "capacity": get_local_capacity(),
                     }
+                    if self._departure_operation_id:
+                        hello["departure_operation_id"] = self._departure_operation_id
                     await self._send_ws_message(ws, hello, lane="handshake")
                     try:
                         raw_ack = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -1679,6 +1702,8 @@ class MemberLinkClient:
                             await ws.close(code=1011, reason=reason[:120])
                         raise RuntimeError(reason)
                     if not isinstance(ack, dict) or ack.get("t") != "hello.ack" or ack.get("ok") is not True:
+                        if isinstance(ack, dict) and isinstance(ack.get("departure_receipt"), dict):
+                            self._departure_receipt = dict(ack["departure_receipt"])
                         error = "hello_ack_rejected"
                         if isinstance(ack, dict):
                             error = str(ack.get("error") or error).strip() or error
@@ -1778,6 +1803,15 @@ class MemberLinkClient:
                                 continue
                             self._last_message_at = time.time()
                             t = msg.get("t")
+                            if t == "node.departure.ack":
+                                waiter = self._departure_waiter
+                                if msg.get("ok") and isinstance(msg.get("receipt"), dict):
+                                    self._departure_receipt = dict(msg["receipt"])
+                                    if waiter is not None and not waiter.done():
+                                        waiter.set_result(dict(self._departure_receipt))
+                                elif waiter is not None and not waiter.done():
+                                    waiter.set_exception(RuntimeError("departure_confirmation_pending"))
+                                continue
                             if t == "pong":
                                 self._last_pong_at = time.time()
                                 continue
