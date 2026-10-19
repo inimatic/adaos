@@ -12,7 +12,7 @@ from typing import Callable, Sequence
 from adaos.apps.bootstrap import init_ctx
 from adaos.services.agent_context import get_ctx
 from adaos.services.builder.automation import BuilderAutomationService, _now_iso
-from adaos.services.builder.worker_identity import worker_core_identity
+from adaos.services.builder.worker_identity import worker_core_identity, worker_runtime_identity
 from adaos.services.settings import Settings
 
 
@@ -59,6 +59,7 @@ def _write_worker_handshake(
                 "status": status,
                 "pid": os.getpid(),
                 "core_identity": identity,
+                "runtime_identity": worker_runtime_identity(),
                 "recorded_at": _now_iso(),
             },
             ensure_ascii=False,

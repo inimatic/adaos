@@ -104,6 +104,7 @@ jobs:
             tests/test_trial_activation.py \
             tests/test_artifact_retention.py \
             tests/test_builder_automation_worker.py \
+            tests/test_structured_executor_failure.py \
             --basetemp=.tmp/ci-application-data \
             --junitxml=reports/application-data.xml
       - name: Enforce bounded MCP collections and output budgets

@@ -20,7 +20,7 @@ import time
 import uuid
 
 from adaos.domain.relational_storage import RelationalMigration
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, replace_with_retry
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, replace_with_retry, sync_directory
 
 
 def _hash(path: Path) -> str:
@@ -58,6 +58,11 @@ class SQLiteTransitionPolicy:
 DEFAULT_POLICY = SQLiteTransitionPolicy()
 
 
+def _sync_metadata(path: Path) -> None:
+    if os.name == 'posix' and not sync_directory(path.parent):
+        raise OSError('SQLite transition metadata could not be persisted')
+
+
 def _check_deadline(deadline: float) -> None:
     if time.monotonic() >= deadline:
         raise TimeoutError("SQLite transition operation exceeded its admitted deadline")
@@ -89,14 +94,17 @@ def _backup(source: Path, target: Path, *, policy: SQLiteTransitionPolicy = DEFA
         _check_deadline(deadline)
         if page_size * total > policy.max_database_bytes:
             raise ValueError("SQLite snapshot exceeds its admitted database byte limit")
+        if admit_write is not None and total > admitted_pages:
+            raise ValueError('SQLite source grew beyond its admitted backup envelope; re-admit the transition')
 
     with _read(source) as original:
         page_size = original.execute("PRAGMA page_size").fetchone()[0]
+        admitted_pages = original.execute('PRAGMA page_count').fetchone()[0]
         _check_deadline(deadline)
-        if original.execute("PRAGMA page_count").fetchone()[0] * page_size > policy.max_database_bytes:
+        if admitted_pages * page_size > policy.max_database_bytes:
             raise ValueError("SQLite snapshot exceeds its admitted database byte limit")
         if admit_write is not None:
-            admit_write(target, original.execute('PRAGMA page_count').fetchone()[0] * page_size)
+            admit_write(target, _backup_write_envelope(target, admitted_pages * page_size, page_size))
         _integrity(original, deadline=deadline)
         with closing(sqlite3.connect(target, timeout=1)) as copied:
             original.backup(copied, pages=256, progress=progress, sleep=0.01)
@@ -105,6 +113,28 @@ def _backup(source: Path, target: Path, *, policy: SQLiteTransitionPolicy = DEFA
             admit_write(target, 0)
     with target.open("r+b") as stream:
         os.fsync(stream.fileno())
+
+
+def _backup_write_envelope(target: Path, source_bytes: int, page_size: int) -> int:
+    """Charge target growth and transaction sidecars before opening a writer.
+
+    Existing WAL targets can write a full frame per copied source page. Legacy
+    rollback-journal targets conservatively retain twice their old extent;
+    neither case may be admitted as a zero-growth overwrite. Reading the fixed
+    format header avoids opening/recovering the target database in preflight.
+    """
+    old_bytes = target.stat().st_size if target.exists() else 0
+    if not old_bytes:
+        return source_bytes + 65536
+    with target.open('rb') as stream:
+        header = stream.read(100)
+    if len(header) != 100 or header[:16] != b'SQLite format 3\0':
+        raise ValueError('SQLite backup target is not a recognized database')
+    if header[18:20] == b'\x02\x02':
+        sidecar = source_bytes + ((source_bytes + page_size - 1) // page_size) * 24 + 32
+    else:
+        sidecar = 2 * old_bytes
+    return max(0, source_bytes - old_bytes) + sidecar + 65536
 
 
 def initialize_sqlite_schema(path: Path, migrations: Sequence[RelationalMigration], *, development: bool = False) -> dict:
@@ -268,6 +298,7 @@ class SQLiteDataTransition:
                 proof = {"ok": True, "identity": identity, "digest": baseline_digest,
                          "bytes": checked["bytes"], "mode": "verified_identical_snapshot"}
                 atomic_write_json(proof_path, proof)
+            _sync_metadata(proof_path)
             self._retire_verified_duplicate(destination, source, operation_key, baseline_digest)
             return proof
 
@@ -286,7 +317,9 @@ class SQLiteDataTransition:
                 if _hash(destination) != digest:
                     raise ValueError("SQLite validation snapshot changed before retirement")
                 destination.unlink()
+                _sync_metadata(destination)
             metadata.unlink()
+            _sync_metadata(metadata)
 
     @staticmethod
     def _statement_authorizer():
@@ -329,6 +362,7 @@ class SQLiteDataTransition:
                 receipt = json.loads(metadata.read_text(encoding="utf-8"))
                 if receipt["identity"] != identity or not destination.is_file() or _hash(destination) != receipt["digest"]:
                     raise ValueError("Retained SQLite staging evidence changed")
+                _sync_metadata(metadata)
                 return receipt
             if pending.exists():
                 saved = json.loads(pending.read_text(encoding="utf-8"))
@@ -346,7 +380,9 @@ class SQLiteDataTransition:
                         raise ValueError("Pending SQLite staging content changed")
                     replace_with_retry(temporary, destination)
                 atomic_write_json(metadata, receipt)
+                _sync_metadata(metadata)
                 pending.unlink()
+                _sync_metadata(pending)
                 return receipt
             if destination.exists():
                 raise ValueError("Unrecognized SQLite destination requires explicit recovery")
@@ -360,9 +396,12 @@ class SQLiteDataTransition:
                 receipt = {"ok": True, "identity": identity, "digest": _hash(temporary), "bytes": temporary.stat().st_size,
                            "duration_ms": round((time.monotonic() - started) * 1000, 3)}
                 atomic_write_json(pending, {"temporary": temporary.name, "receipt": receipt})
+                _sync_metadata(pending)
                 replace_with_retry(temporary, destination)
                 atomic_write_json(metadata, receipt)
+                _sync_metadata(metadata)
                 pending.unlink()
+                _sync_metadata(pending)
                 return receipt
             finally:
                 if not pending.exists():

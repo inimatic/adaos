@@ -8499,7 +8499,8 @@ class LocalSkillFactoryWorker:
                 if key in signature.parameters
             }
         result = self.executor(**executor_kwargs)
-        if getattr(self.executor, "returns_structured_outcome", False):
+        if (getattr(self.executor, "returns_structured_outcome", False)
+                and (result.returncode == 0 or str(result.final_message or '').strip())):
             try:
                 normalized = outcome_message(result.final_message)
             except (TypeError, ValueError) as exc:

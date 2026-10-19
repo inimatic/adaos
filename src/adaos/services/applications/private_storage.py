@@ -12,7 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import stat
 
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, sync_directory
 from .sqlite_data_transition import SQLiteTransitionPolicy
 
 
@@ -146,6 +146,13 @@ def _bindings(private: Path) -> Path:
     return private / 'state/applications/private-storage-bindings'
 
 
+def _sync_binding(path: Path) -> None:
+    # File fsync + rename alone does not durably enroll a new placement on
+    # POSIX. Its directory link must survive before any Candidate data effect.
+    if not sync_directory(path.parent.parent) or not sync_directory(path.parent):
+        raise PrivateStorageError('Private storage placement metadata could not be persisted')
+
+
 def load_candidate_storage(private: Path, candidate_id: str, *, application_id: str | None = None,
                            release_digest: str | None = None) -> CandidateStorage | None:
     path = _bindings(private) / f'{_segment(candidate_id)}.json'
@@ -168,6 +175,7 @@ def enroll_candidate_storage(private: Path, candidate_id: str, release, *, works
     existing = load_candidate_storage(private, candidate_id, application_id=release.project_id,
                                       release_digest=release.release_digest)
     if existing is not None:
+        _sync_binding(_bindings(private) / f'{candidate_id}.json')
         return existing
     profile_path = private / 'state/applications/private-storage-profiles' / f'{_segment(release.project_id)}.json'
     if not profile_path.exists() and not profile_path.is_symlink():
@@ -195,8 +203,10 @@ def enroll_candidate_storage(private: Path, candidate_id: str, release, *, works
         existing = load_candidate_storage(private, candidate_id, application_id=release.project_id,
                                           release_digest=release.release_digest)
         if existing is not None:
+            _sync_binding(path)
             return existing
         # Commit placement authority before any directory or data effect. Replay
         # uses this immutable snapshot, not a later operator profile revision.
         atomic_write_json(path, record)
+        _sync_binding(path)
     return binding

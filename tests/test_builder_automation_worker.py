@@ -91,6 +91,8 @@ def test_worker_publishes_booting_handshake_from_environment(tmp_path, monkeypat
     assert payload["session_id"] == "automation.skill.demo"
     from adaos.services.builder.worker_identity import worker_core_identity
     assert payload['core_identity'] == worker_core_identity()
+    assert payload['runtime_identity']['python_prefix']
+    assert 'automation_version' in payload['runtime_identity']
 
 
 def test_worker_rejects_a_different_core_before_publishing_readiness(tmp_path, monkeypatch):

@@ -363,3 +363,48 @@ def test_capacity_rejection_happens_before_opening_the_destination(tmp_path):
         adapter.snapshot(stable, target, operation_key='capacity')
     assert opened and not target.exists()
     assert not list(tmp_path.glob('*.staging'))
+
+
+def test_backup_admission_accounts_for_existing_target_wal_frames(tmp_path):
+    _adapter, stable = seed(tmp_path)
+    reservations = []
+    adapter = SQLiteDataTransition(tmp_path, admit_write=lambda path, size: reservations.append((path, size)))
+    snapshot = tmp_path / 'snapshot.sqlite'
+    receipt = adapter.snapshot(stable, snapshot, operation_key='wal-envelope')
+    with closing(sqlite3.connect(stable)) as writer:
+        writer.execute('PRAGMA journal_mode=WAL')
+        writer.execute("INSERT INTO records VALUES (2, 'later')")
+        writer.commit()
+        adapter.install(snapshot, stable, staged_digest=receipt['digest'])
+    target_reserve = [size for path, size in reservations if path == stable and size]
+    assert len(target_reserve) == 1
+    assert target_reserve[0] > snapshot.stat().st_size + 65536
+    assert len(rows(stable)) == 1
+
+
+def test_rollback_journal_extent_is_not_treated_as_a_zero_growth_overwrite(tmp_path):
+    from adaos.services.applications.sqlite_data_transition import _backup_write_envelope
+    _adapter, stable = seed(tmp_path)
+    size = stable.stat().st_size
+    assert _backup_write_envelope(stable, size, 4096) >= 2 * size
+
+
+def test_equality_proof_must_be_persisted_before_retiring_its_copy(tmp_path, monkeypatch):
+    from adaos.services.applications import sqlite_data_transition as module
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / 'baseline.sqlite', tmp_path / 'checked.sqlite'
+    receipt = adapter.snapshot(stable, baseline, operation_key='durable-base')
+    real_sync = module._sync_metadata
+    def failed_barrier(path):
+        if str(path).endswith('.unchanged.json'):
+            raise OSError('injected metadata barrier failure')
+        real_sync(path)
+    monkeypatch.setattr(module, '_sync_metadata', failed_barrier)
+    with pytest.raises(OSError, match='barrier failure'):
+        adapter.verify_snapshot_unchanged(stable, baseline, checked,
+            baseline_digest=receipt['digest'], operation_key='durable-check')
+    assert checked.exists() and baseline.exists()
+    monkeypatch.setattr(module, '_sync_metadata', real_sync)
+    assert adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=receipt['digest'], operation_key='durable-check')['ok']
+    assert baseline.exists() and not checked.exists()

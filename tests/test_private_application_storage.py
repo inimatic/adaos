@@ -32,6 +32,7 @@ def enrolled(tmp_path, monkeypatch):
     profile_path.write_text(json.dumps(profile), encoding='utf-8')
     # POSIX trust and actual mount identity are independently tested below.
     monkeypatch.setattr(module, '_read', lambda path: json.loads(path.read_text(encoding='utf-8')))
+    monkeypatch.setattr(module, '_sync_binding', lambda path: None)
     def verify(binding):
         assert binding.volume.absolute() == binding.volume.resolve()
         if not binding.volume.is_dir():
@@ -130,6 +131,22 @@ def test_a_profile_cannot_lower_the_approved_floors(enrolled):
     path.write_text(json.dumps(profile))
     with pytest.raises(module.PrivateStorageError, match='cannot lower'):
         module.enroll_candidate_storage(private, 'candidate1', release)
+
+
+def test_placement_requires_a_durable_metadata_barrier_before_data_effects(enrolled, monkeypatch):
+    private, _volume, release, _profile, _path = enrolled
+    calls = []
+    def fail_sync(path):
+        calls.append(path)
+        raise module.PrivateStorageError('metadata could not be persisted')
+    monkeypatch.setattr(module, '_sync_binding', fail_sync)
+    with pytest.raises(module.PrivateStorageError, match='metadata'):
+        module.enroll_candidate_storage(private, 'candidate1', release)
+    assert calls and not (private / 'volumes/test-volume/candidates/candidate1').exists()
+    monkeypatch.setattr(module, '_sync_binding', lambda path: calls.append(path))
+    # Retry persists the exact retained binding, without adopting a new profile.
+    assert module.enroll_candidate_storage(private, 'candidate1', release).record['candidate_id'] == 'candidate1'
+    assert len(calls) == 2
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='POSIX enrollment authority')
