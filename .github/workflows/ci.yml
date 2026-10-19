@@ -100,6 +100,10 @@ jobs:
             tests/test_sqlite_data_transition.py \
             tests/test_application_data_lifecycle.py \
             tests/test_local_release_transition.py \
+            tests/test_private_application_storage.py \
+            tests/test_trial_activation.py \
+            tests/test_artifact_retention.py \
+            tests/test_builder_automation_worker.py \
             --basetemp=.tmp/ci-application-data \
             --junitxml=reports/application-data.xml
       - name: Enforce bounded MCP collections and output budgets

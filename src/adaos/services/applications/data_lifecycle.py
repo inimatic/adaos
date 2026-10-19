@@ -683,12 +683,17 @@ class LocalApplicationDataLifecycle:
         if any(item.beta_source_root is not None for item in components) and not beta_source_ref:
             raise ValueError("Beta source data requires a pinned source channel")
         self.channel = ApplicationRuntimeChannel(self.state, application_id)
-        self.data = SQLiteDataTransition(self.private)
+        from .private_storage import load_candidate_storage
+        self.storage = load_candidate_storage(self.private, candidate_id,
+            application_id=application_id, release_digest=release_digest)
+        self.data = (SQLiteDataTransition(self.private, policy=self.storage.policy,
+                                         admit_write=self.storage.admit_write)
+                     if self.storage else SQLiteDataTransition(self.private))
         self.state_files = _StateFileTransition(self.private)
         self.skill_memory = _SkillMemoryTransition(self.private)
         self.blobs = BlobDataTransition(self.private)
         key = hashlib.sha256(json.dumps([application_id, candidate_id, release_digest]).encode()).hexdigest()
-        self.recovery = self.private / "recovery/applications" / key
+        self.recovery = self.storage.recovery if self.storage else self.private / "recovery/applications" / key
         self.contracts = {}
         self.state_file_contracts = {}
         self.coordination_contracts = {}

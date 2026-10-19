@@ -11468,6 +11468,9 @@ class BuilderAutomationService:
         normal Skill Factory state watched by :meth:`refresh_session`.
         """
 
+        from adaos.services.builder.worker_identity import worker_core_identity
+
+        core_identity = worker_core_identity()
         token = _safe_token(session_id, fallback="automation")
         worker_root = self.state_dir / "builder" / "automation_workers" / token
         worker_root.mkdir(parents=True, exist_ok=True)
@@ -11498,7 +11501,11 @@ class BuilderAutomationService:
         env["ADAOS_BASE_DIR"] = str(self.state_dir.parent.resolve())
         env["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] = "1"
         env["ADAOS_DISABLE_PREFERRED_PYTHON_REEXEC"] = "1"
-        source_root = str((self.repo_root / "src").resolve())
+        # repo_root is the mutable authoring/control checkout. After an A/B
+        # update it can still contain an older Core. Preserve this process's
+        # module owner and its capability ABI for the detached worker instead.
+        source_root = core_identity['source_root']
+        env['ADAOS_BUILDER_WORKER_CORE_IDENTITY'] = json.dumps(core_identity)
         inherited_pythonpath = str(env.get("PYTHONPATH") or "").strip()
         env["PYTHONPATH"] = (
             source_root + os.pathsep + inherited_pythonpath
@@ -11545,6 +11552,7 @@ class BuilderAutomationService:
             "status": "starting",
             "repo_root": str(self.repo_root.resolve()),
             "executable": str(executable.resolve()),
+            "core_identity": core_identity,
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
             "resource_policy": resource_policy,
@@ -11569,6 +11577,16 @@ class BuilderAutomationService:
             if isinstance(value, Mapping) and str(value.get("session_id") or "") == str(
                 session_id
             ):
+                if value.get('core_identity') != core_identity:
+                    launched.update(status='failed', error='automation worker Core identity mismatch', failed_at=_now_iso())
+                    _write_json(launch_path, launched)
+                    terminate = getattr(process, 'terminate', None)
+                    if callable(terminate):
+                        try:
+                            terminate()
+                        except OSError:
+                            pass
+                    raise RuntimeError(str(launched['error']))
                 handshake_status = str(value.get("status") or "").strip()
                 if handshake_status == "ready":
                     ready = dict(value)

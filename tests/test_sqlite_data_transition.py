@@ -6,6 +6,7 @@ import pytest
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.applications.sqlite_data_transition import SQLiteDataTransition
 from adaos.services.applications.sqlite_data_transition import initialize_sqlite_schema
+from adaos.services.applications.sqlite_data_transition import SQLiteTransitionPolicy
 
 
 def write(path, sql, *args):
@@ -283,3 +284,82 @@ def test_unrecognized_destination_and_paths_outside_owner_are_rejected(tmp_path)
     assert unknown.read_bytes() == b"owned elsewhere"
     with pytest.raises(ValueError, match="escaped"):
         adapter.snapshot(stable, tmp_path.parent / "outside.sqlite", operation_key="first")
+
+
+def test_default_limits_are_not_raised_by_a_large_library_adapter(tmp_path):
+    default = SQLiteDataTransition(tmp_path)
+    large = SQLiteDataTransition(tmp_path, policy=SQLiteTransitionPolicy(4 * 1024**3, 1800))
+    assert default.policy.max_database_bytes == 512 * 1024**2
+    assert default.policy.operation_timeout_seconds == 120
+    assert large.policy.max_database_bytes == 4 * 1024**3
+    assert SQLiteDataTransition(tmp_path).policy == default.policy
+
+
+@pytest.mark.parametrize("size,seconds", [(True, 120), (4095, 120), (4 * 1024**3 + 1, 120),
+    (4096, 0), (4096, float('nan')), (4096, float('inf')), (4096, True), (4096, 1801)])
+def test_transition_policy_rejects_unbounded_or_invalid_limits(size, seconds):
+    with pytest.raises(ValueError):
+        SQLiteTransitionPolicy(size, seconds)
+
+
+def test_explicit_database_cap_rejects_snapshot_without_modifying_source(tmp_path):
+    _adapter, stable = seed(tmp_path)
+    original = stable.read_bytes()
+    adapter = SQLiteDataTransition(tmp_path, policy=SQLiteTransitionPolicy(4096, 120))
+    destination = tmp_path / 'too-large.sqlite'
+    with pytest.raises(ValueError, match='admitted database byte limit'):
+        adapter.snapshot(stable, destination, operation_key='bounded')
+    assert stable.read_bytes() == original
+    assert not destination.exists() and not list(tmp_path.glob('*.staging'))
+
+
+def test_integrity_check_is_interrupted_at_its_deadline_and_handler_is_cleared(tmp_path, monkeypatch):
+    from adaos.services.applications import sqlite_data_transition as module
+    _adapter, stable = seed(tmp_path)
+    # Enough VM instructions to invoke SQLite's progress handler during a real
+    # full integrity scan, without large fixture databases or a wall-clock wait.
+    with closing(sqlite3.connect(stable)) as connection:
+        connection.executemany('INSERT INTO records VALUES (?, ?)', ((i, 'bounded') for i in range(2, 6000)))
+        connection.commit()
+        ticks = iter([0.0, 2.0, 2.0])
+        monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks, 2.0))
+        with pytest.raises(TimeoutError, match='integrity verification exceeded'):
+            module._integrity(connection, deadline=1.0)
+        assert connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+
+
+def test_migration_backup_and_validation_share_one_deadline(tmp_path, monkeypatch):
+    from adaos.services.applications import sqlite_data_transition as module
+    adapter, stable = seed(tmp_path)
+    snapshot = tmp_path / 'snapshot.sqlite'
+    receipt = adapter.snapshot(stable, snapshot, operation_key='deadline-base')
+    real_backup = module._backup
+    deadlines = []
+    def backup(*args, **kwargs):
+        deadlines.append(kwargs['deadline'])
+        return real_backup(*args, **kwargs)
+    real_apply = module._apply_migrations
+    def migrate(*args, **kwargs):
+        deadlines.append(kwargs['deadline'])
+        return real_apply(*args, **kwargs)
+    monkeypatch.setattr(module, '_backup', backup)
+    monkeypatch.setattr(module, '_apply_migrations', migrate)
+    adapter.migrate(snapshot, tmp_path / 'staged.sqlite', snapshot_digest=receipt['digest'],
+        migrations=[], operation_key='deadline-migration')
+    assert len(deadlines) == 2 and deadlines[0] == deadlines[1]
+
+
+def test_capacity_rejection_happens_before_opening_the_destination(tmp_path):
+    _adapter, stable = seed(tmp_path)
+    opened = []
+    def admit(path, reserve):
+        if reserve:
+            assert not path.exists()
+            opened.append(reserve)
+            raise ValueError('injected capacity rejection')
+    adapter = SQLiteDataTransition(tmp_path, admit_write=admit)
+    target = tmp_path / 'not-created.sqlite'
+    with pytest.raises(ValueError, match='capacity rejection'):
+        adapter.snapshot(stable, target, operation_key='capacity')
+    assert opened and not target.exists()
+    assert not list(tmp_path.glob('*.staging'))

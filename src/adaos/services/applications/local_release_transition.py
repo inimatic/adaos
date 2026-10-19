@@ -363,7 +363,7 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
         for item in selections
     )
     root = Path(archive_value).resolve()
-    archive_root = (state / "artifact_pipeline/trial-rollbacks").resolve()
+    from adaos.services.artifact_pipeline.trial_activation import trial_rollback_workspace, trial_workspace_root
     if not has_exact_selection and not root.is_dir():
         # A superseded decision may be reconciled after its retained archive
         # has already expired. With no exact active selection and no archive,
@@ -374,7 +374,16 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
             "candidate_id": candidate_id,
             "release_digest": release_digest,
         }
-    if not root.is_dir() or not root.is_relative_to(archive_root):
+    from .private_storage import load_candidate_storage
+    placement = load_candidate_storage(workspace.parent, candidate_id,
+                                      release_digest=release_digest)
+    if placement:
+        expected_archive = trial_rollback_workspace(workspace, state / 'artifact_pipeline', candidate_id,
+                                                   str(activation.get('trial_id') or '')).resolve()
+        archive_allowed = root == expected_archive
+    else:
+        archive_allowed = root.is_relative_to((state / 'artifact_pipeline/trial-rollbacks').resolve())
+    if not root.is_dir() or not archive_allowed:
         raise ValueError("Rejected Trial archive is outside the retained recovery root")
     binding = root / ".adaos/data-transition.json"
     if not binding.is_file():
@@ -388,7 +397,7 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
                                  project_id=release.project_id)
     lifecycle = bind_local_data_lifecycle(owner, runtime, release)
     original_root = Path(str((activation.get("runtime_binding") or {}).get("path") or "")).resolve()
-    expected_trial_root = (workspace.parent / "trials" / candidate_id).resolve()
+    expected_trial_root = trial_workspace_root(workspace, candidate_id).resolve()
     if original_root != expected_trial_root:
         raise ValueError("Rejected Trial retained a different original runtime root")
     original_components = tuple(

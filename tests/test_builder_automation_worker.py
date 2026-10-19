@@ -89,6 +89,55 @@ def test_worker_publishes_booting_handshake_from_environment(tmp_path, monkeypat
     payload = json.loads((worker_root / "ready.json").read_text(encoding="utf-8"))
     assert payload["status"] == "booting"
     assert payload["session_id"] == "automation.skill.demo"
+    from adaos.services.builder.worker_identity import worker_core_identity
+    assert payload['core_identity'] == worker_core_identity()
+
+
+def test_worker_rejects_a_different_core_before_publishing_readiness(tmp_path, monkeypatch):
+    import pytest
+    monkeypatch.setenv('ADAOS_BUILDER_WORKER_CORE_IDENTITY', json.dumps({'source_root': 'older-checkout'}))
+    with pytest.raises(RuntimeError, match='Core identity mismatch'):
+        _write_worker_handshake(tmp_path, 'automation.skill.demo', status='booting')
+    assert not (tmp_path / 'ready.json').exists()
+
+
+def test_launcher_preserves_loaded_core_while_authoring_checkout_is_old(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services.builder.worker_identity import worker_core_identity
+    state = tmp_path / 'state'
+    repo = tmp_path / 'older-authoring-checkout'
+    repo.mkdir()
+    service = SimpleNamespace(state_dir=state, repo_root=repo)
+    root = state / 'builder/automation_workers/automation.test'
+    captured = []
+    def popen(command, **kwargs):
+        captured.append(kwargs)
+        (root / 'ready.json').write_text(json.dumps({'session_id': 'automation.test',
+            'status': 'booting', 'pid': 123, 'core_identity': worker_core_identity()}))
+        return SimpleNamespace(pid=123, poll=lambda: None)
+    monkeypatch.setattr(automation_module.subprocess, 'Popen', popen)
+    result = automation_module.BuilderAutomationService._launch_worker_process(service, 'automation.test')
+    assert result['core_identity'] == worker_core_identity()
+    assert captured[0]['cwd'] == str(repo)
+    assert captured[0]['env']['PYTHONPATH'].split(automation_module.os.pathsep)[0] == worker_core_identity()['source_root']
+    assert result['status'] == 'booting'
+
+
+def test_launcher_stops_a_worker_with_a_different_loaded_core(tmp_path, monkeypatch):
+    import pytest
+    from types import SimpleNamespace
+    service = SimpleNamespace(state_dir=tmp_path / 'state', repo_root=tmp_path)
+    root = service.state_dir / 'builder/automation_workers/automation.test'
+    terminated = []
+    def popen(command, **kwargs):
+        (root / 'ready.json').write_text(json.dumps({'session_id': 'automation.test',
+            'status': 'ready', 'core_identity': {'source_root': 'wrong'}}))
+        return SimpleNamespace(pid=123, poll=lambda: None, terminate=lambda: terminated.append(True))
+    monkeypatch.setattr(automation_module.subprocess, 'Popen', popen)
+    with pytest.raises(RuntimeError, match='Core identity mismatch'):
+        automation_module.BuilderAutomationService._launch_worker_process(service, 'automation.test')
+    assert terminated == [True]
+    assert json.loads((root / 'launch.json').read_text())['status'] == 'failed'
 
 
 def test_recovery_worker_only_calls_the_validated_result_owner():

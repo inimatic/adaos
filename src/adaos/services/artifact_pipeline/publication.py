@@ -499,8 +499,12 @@ class ArtifactPublicationService:
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc
 
-    def _trial_workspace(self, candidate_id: str) -> Path:
+    def _trial_workspace(self, candidate_id: str, *, release=None) -> Path:
         try:
+            if release is not None:
+                from adaos.services.applications.private_storage import enroll_candidate_storage
+                enroll_candidate_storage(self.workspace_root.parent, candidate_id, release,
+                                         workspace_root=self.workspace_root)
             workspace, migration = self.trial_workspaces.ensure(candidate_id)
             if migration is not None:
                 activation = self.trial_activations.load(candidate_id)
@@ -2222,7 +2226,7 @@ class ArtifactPublicationService:
         )
         candidate = record_validation(candidate, effective_validation_evidence, now=_now())
 
-        trial_workspace = self._trial_workspace(candidate_id)
+        trial_workspace = self._trial_workspace(candidate_id, release=plan.release)
         ensure_trial_workspace_shape(trial_workspace)
         trial_manager = WorkspaceActivationManager(
             workspace_root=trial_workspace,
@@ -2516,7 +2520,7 @@ class ArtifactPublicationService:
         )
         candidate = record_validation(candidate, validation_evidence, now=_now())
 
-        trial_workspace = self._trial_workspace(candidate_id)
+        trial_workspace = self._trial_workspace(candidate_id, release=plan.release)
         ensure_trial_workspace_shape(trial_workspace)
         trial_manager = WorkspaceActivationManager(
             workspace_root=trial_workspace,
@@ -2667,13 +2671,8 @@ class ArtifactPublicationService:
                 }
             else:
                 trial_workspace = self._trial_workspace(candidate_id)
-                archive = (
-                    self.state_root
-                    / "trial-rollbacks"
-                    / candidate_id
-                    / running.trial_id
-                    / "workspace"
-                )
+                from adaos.services.artifact_pipeline.trial_activation import trial_rollback_workspace
+                archive = trial_rollback_workspace(self.workspace_root, self.state_root, candidate_id, running.trial_id)
                 if not trial_workspace.is_dir():
                     raise PublicationError(
                         "rejected trial Workspace is missing before rollback"

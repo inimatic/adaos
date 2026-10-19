@@ -79,11 +79,24 @@ def trial_workspace_root(workspace_root: Path, candidate_id: str) -> Path:
     """Return the canonical sibling root for an immutable Trial Workspace."""
 
     workspace = Path(workspace_root).resolve()
+    from adaos.services.applications.private_storage import load_candidate_storage
+    placement = load_candidate_storage(workspace.parent, _safe_candidate_id(candidate_id))
+    if placement is not None:
+        return placement.workspace
     return _workspace_child(
         workspace.parent,
         "trials",
         _safe_candidate_id(candidate_id),
     )
+
+
+def trial_rollback_workspace(workspace_root: Path, state_root: Path, candidate_id: str, trial_id: str) -> Path:
+    """Keep volume-backed rejection archives on the same filesystem."""
+    from adaos.services.applications.private_storage import load_candidate_storage
+    placement = load_candidate_storage(Path(workspace_root).resolve().parent, _safe_candidate_id(candidate_id))
+    if placement is not None:
+        return placement.rollback(trial_id)
+    return Path(state_root) / 'trial-rollbacks' / _safe_candidate_id(candidate_id) / _safe_candidate_id(trial_id) / 'workspace'
 
 
 def legacy_workspace_trial_root(workspace_root: Path, candidate_id: str) -> Path:

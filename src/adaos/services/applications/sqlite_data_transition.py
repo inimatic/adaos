@@ -7,9 +7,12 @@ adapter never consumes real records as model input or copies a live WAL file.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Callable
 from contextlib import closing
+from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -29,29 +32,77 @@ def _read(path: Path):
     return closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1))
 
 
-def _integrity(connection: sqlite3.Connection) -> None:
-    if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
-        raise ValueError("SQLite integrity verification failed")
-    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-        raise ValueError("SQLite foreign-key verification failed")
+@dataclass(frozen=True)
+class SQLiteTransitionPolicy:
+    """Internal, owner-admitted limits; never accept these from a tool caller.
+
+    A large-library profile must separately admit aggregate growth, mount
+    identity and free-space floors. Raising a per-database limit is not such
+    admission. Defaults retain the existing small-store envelope.
+    """
+
+    max_database_bytes: int = 512 * 1024 * 1024
+    operation_timeout_seconds: float = 120
+
+    def __post_init__(self):
+        if (type(self.max_database_bytes) is not int
+                or not 4096 <= self.max_database_bytes <= 4 * 1024**3):
+            raise ValueError("SQLite database limit must be between 4 KiB and 4 GiB")
+        if (isinstance(self.operation_timeout_seconds, bool)
+                or not isinstance(self.operation_timeout_seconds, (int, float))
+                or not math.isfinite(self.operation_timeout_seconds)
+                or not 0 < self.operation_timeout_seconds <= 1800):
+            raise ValueError("SQLite operation deadline must be finite and within 1800 seconds")
 
 
-def _backup(source: Path, target: Path) -> None:
-    started = time.monotonic()
+DEFAULT_POLICY = SQLiteTransitionPolicy()
+
+
+def _check_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise TimeoutError("SQLite transition operation exceeded its admitted deadline")
+
+
+def _integrity(connection: sqlite3.Connection, *, deadline: float | None = None) -> None:
+    deadline = deadline if deadline is not None else time.monotonic() + DEFAULT_POLICY.operation_timeout_seconds
+    _check_deadline(deadline)
+    connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10000)
+    try:
+        if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+            raise ValueError("SQLite integrity verification failed")
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise ValueError("SQLite foreign-key verification failed")
+        _check_deadline(deadline)
+    except sqlite3.OperationalError as exc:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("SQLite integrity verification exceeded its admitted deadline") from exc
+        raise
+    finally:
+        connection.set_progress_handler(None, 0)
+
+
+def _backup(source: Path, target: Path, *, policy: SQLiteTransitionPolicy = DEFAULT_POLICY,
+            deadline: float | None = None, admit_write: Callable[[Path, int], None] | None = None) -> None:
+    deadline = deadline if deadline is not None else time.monotonic() + policy.operation_timeout_seconds
 
     def progress(_status, remaining, total):
-        if time.monotonic() - started > 120:
-            raise TimeoutError("SQLite backup did not converge within 120 seconds")
-        if page_size * total > 512 * 1024 * 1024:
-            raise ValueError("SQLite snapshot exceeds 512 MiB")
+        _check_deadline(deadline)
+        if page_size * total > policy.max_database_bytes:
+            raise ValueError("SQLite snapshot exceeds its admitted database byte limit")
 
-    with _read(source) as original, closing(sqlite3.connect(target, timeout=1)) as copied:
+    with _read(source) as original:
         page_size = original.execute("PRAGMA page_size").fetchone()[0]
-        if original.execute("PRAGMA page_count").fetchone()[0] * page_size > 512 * 1024 * 1024:
-            raise ValueError("SQLite snapshot exceeds 512 MiB")
-        _integrity(original)
-        original.backup(copied, pages=256, progress=progress, sleep=0.01)
-        _integrity(copied)
+        _check_deadline(deadline)
+        if original.execute("PRAGMA page_count").fetchone()[0] * page_size > policy.max_database_bytes:
+            raise ValueError("SQLite snapshot exceeds its admitted database byte limit")
+        if admit_write is not None:
+            admit_write(target, original.execute('PRAGMA page_count').fetchone()[0] * page_size)
+        _integrity(original, deadline=deadline)
+        with closing(sqlite3.connect(target, timeout=1)) as copied:
+            original.backup(copied, pages=256, progress=progress, sleep=0.01)
+            _integrity(copied, deadline=deadline)
+        if admit_write is not None:
+            admit_write(target, 0)
     with target.open("r+b") as stream:
         os.fsync(stream.fileno())
 
@@ -65,7 +116,9 @@ def initialize_sqlite_schema(path: Path, migrations: Sequence[RelationalMigratio
         return _apply_migrations(connection, ordered, allow_existing=development)
 
 
-def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[RelationalMigration], *, allow_existing: bool) -> dict:
+def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[RelationalMigration], *, allow_existing: bool,
+                      deadline: float | None = None) -> dict:
+    deadline = deadline if deadline is not None else time.monotonic() + DEFAULT_POLICY.operation_timeout_seconds
     connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 16 * 1024 * 1024)
     connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, 1024 * 1024)
     connection.execute("PRAGMA foreign_keys=ON")
@@ -82,10 +135,11 @@ def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[Relation
         if pending and tables - {"adaos_schema_migrations", "sqlite_sequence"} and not allow_existing:
             raise ValueError("Existing installed data requires the fenced Beta migration, not runtime initialization")
         connection.execute("CREATE TABLE IF NOT EXISTS adaos_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL)")
-        started = time.monotonic()
-        connection.set_progress_handler(lambda: int(time.monotonic() - started > 120), 10000)
+        _check_deadline(deadline)
+        connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10000)
         for item in pending:
             for statement in item.statements:
+                _check_deadline(deadline)
                 connection.set_authorizer(SQLiteDataTransition._statement_authorizer())
                 try:
                     connection.execute(statement)
@@ -103,7 +157,8 @@ def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[Relation
                     values.append(value)
             connection.execute(f"INSERT INTO adaos_schema_migrations ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})", values)
         if pending:
-            _integrity(connection)
+            _integrity(connection, deadline=deadline)
+        _check_deadline(deadline)
         connection.commit()
         return {"schema_version": max(declared, default=0), "applied_versions": [item.version for item in pending]}
     except BaseException:
@@ -115,14 +170,19 @@ def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[Relation
 
 
 class SQLiteDataTransition:
-    def __init__(self, private_root: Path):
+    def __init__(self, private_root: Path, *, policy: SQLiteTransitionPolicy = DEFAULT_POLICY,
+                 admit_write: Callable[[Path, int], None] | None = None):
         self.root = private_root.resolve()
+        self.policy = policy
+        self.admit_write = admit_write
 
     def _path(self, path: Path) -> Path:
         path = path.absolute()
         resolved = path.resolve()
         if path != resolved or not resolved.is_relative_to(self.root) or resolved == self.root:
             raise ValueError("SQLite transition path escaped its private owner root or used a link")
+        if self.admit_write is not None:
+            self.admit_write(resolved, 0)
         return resolved
 
     def snapshot(self, source: Path, destination: Path, *, operation_key: str) -> dict:
@@ -132,7 +192,7 @@ class SQLiteDataTransition:
             raise ValueError("Snapshot requires distinct existing source and private destination")
         identity = {"kind": "snapshot", "operation_key": operation_key,
                     "source": str(source.relative_to(self.root))}
-        return self._build(destination, identity, lambda target: _backup(source, target))
+        return self._build(destination, identity, lambda target: _backup(source, target, policy=self.policy, admit_write=self.admit_write))
 
     def migrate(self, snapshot: Path, destination: Path, *, snapshot_digest: str,
                 migrations: Sequence[RelationalMigration], operation_key: str) -> dict:
@@ -146,11 +206,18 @@ class SQLiteDataTransition:
                     "snapshot_digest": snapshot_digest, "migrations": [item.checksum for item in ordered]}
 
         def build(target):
-            _backup(snapshot, target)
+            deadline = time.monotonic() + self.policy.operation_timeout_seconds
+            _backup(snapshot, target, policy=self.policy, deadline=deadline, admit_write=self.admit_write)
+            if self.admit_write is not None:
+                # A declared migration may grow to its cap and needs rollback
+                # journal space as well; do not infer safety from source size.
+                self.admit_write(target, self.policy.max_database_bytes)
             with closing(sqlite3.connect(target, isolation_level=None)) as connection:
                 page_size = connection.execute("PRAGMA page_size").fetchone()[0]
-                connection.execute(f"PRAGMA max_page_count={512 * 1024 * 1024 // page_size}")
-                _apply_migrations(connection, ordered, allow_existing=True)
+                connection.execute(f"PRAGMA max_page_count={self.policy.max_database_bytes // page_size}")
+                _apply_migrations(connection, ordered, allow_existing=True, deadline=deadline)
+            if self.admit_write is not None:
+                self.admit_write(target, 0)
         return self._build(destination, identity, build)
 
     def verify_unmigrated_snapshot(self, snapshot: Path, *, snapshot_digest: str) -> dict:
@@ -312,5 +379,5 @@ class SQLiteDataTransition:
         if staged == target or _hash(staged) != staged_digest:
             raise ValueError("Staged SQLite identity mismatch")
         target.parent.mkdir(parents=True, exist_ok=True)
-        _backup(staged, target)
+        _backup(staged, target, policy=self.policy, admit_write=self.admit_write)
         return {"ok": True, "staged_digest": staged_digest}

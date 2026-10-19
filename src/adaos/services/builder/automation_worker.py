@@ -12,6 +12,7 @@ from typing import Callable, Sequence
 from adaos.apps.bootstrap import init_ctx
 from adaos.services.agent_context import get_ctx
 from adaos.services.builder.automation import BuilderAutomationService, _now_iso
+from adaos.services.builder.worker_identity import worker_core_identity
 from adaos.services.settings import Settings
 
 
@@ -45,6 +46,10 @@ def _write_worker_handshake(
     *,
     status: str,
 ) -> None:
+    identity = worker_core_identity()
+    expected = str(os.getenv('ADAOS_BUILDER_WORKER_CORE_IDENTITY') or '').strip()
+    if expected and json.loads(expected) != identity:
+        raise RuntimeError('automation worker Core identity mismatch before initialization')
     worker_root.mkdir(parents=True, exist_ok=True)
     (worker_root / "ready.json").write_text(
         json.dumps(
@@ -53,6 +58,7 @@ def _write_worker_handshake(
                 "session_id": str(session_id),
                 "status": status,
                 "pid": os.getpid(),
+                "core_identity": identity,
                 "recorded_at": _now_iso(),
             },
             ensure_ascii=False,

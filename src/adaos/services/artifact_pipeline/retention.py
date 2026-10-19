@@ -377,7 +377,12 @@ class ArtifactPipelineRetentionManager:
                     continue
                 roots = [self.state_root / "trials" / candidate_id]
                 if status == "completed":
-                    roots.append(trial_workspace_root(self.workspace_root, candidate_id))
+                    trial_root = trial_workspace_root(self.workspace_root, candidate_id)
+                    # A managed private volume holds retained Application data,
+                    # not merely derived build artifacts. Never recurse into it
+                    # through generic Trial retention (including after remount).
+                    if trial_root.is_relative_to(self.workspace_root.parent / 'trials'):
+                        roots.append(trial_root)
                 else:
                     roots.append(self.state_root / "trial-rollbacks" / candidate_id)
                 for root in roots:
