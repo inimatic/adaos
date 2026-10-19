@@ -2593,8 +2593,19 @@ class MemberLinkClient:
             action = "update"
         if action == "update":
             from adaos.services.operator_controls import read_controls
-
-            if not bool(read_controls().get("core_auto_update", True)):
+            try:
+                conf = getattr(get_ctx(), 'config', None)
+                if conf is None:
+                    disabled_reason = 'core_update_configuration_unavailable'
+                elif not bool(getattr(conf, 'core_update_enabled', True)):
+                    disabled_reason = 'core_update_disabled_by_node_config'
+                elif not bool(read_controls().get('core_auto_update', True)):
+                    disabled_reason = 'core_auto_update_disabled_by_operator'
+                else:
+                    disabled_reason = ''
+            except RuntimeError:
+                disabled_reason = 'core_update_configuration_unavailable'
+            if disabled_reason:
                 await self._send_ws_message(
                     ws,
                     {
@@ -2603,8 +2614,9 @@ class MemberLinkClient:
                         "action": action,
                         "ok": False,
                         "accepted": False,
-                        "error": "core_auto_update_disabled_by_operator",
+                        "error": disabled_reason,
                     },
+                    lane="control_response",
                 )
                 return
         request_id = str(msg.get("request_id") or "").strip()

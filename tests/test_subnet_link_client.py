@@ -844,6 +844,9 @@ def test_member_link_client_skips_hub_succeeded_status_when_already_current(monk
 
 
 def test_member_control_keeps_supervisor_read_timeout_pending(monkeypatch) -> None:
+    monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(core_update_enabled=True)))
+    from adaos.services import operator_controls
+    monkeypatch.setattr(operator_controls, "read_controls", lambda: {"core_auto_update": True})
     class _FakeWebSocket:
         def __init__(self) -> None:
             self.messages: list[dict] = []
