@@ -2713,6 +2713,25 @@ def _setup_form_editors(
     return {"settings": settings_editors, "credentials": credential_editors}
 
 
+def _application_storage_editor(application_id: str, release_digest: str):
+    from adaos.services.applications.storage_settings import ApplicationStorageSettings, COMPONENT_REF
+    storage = ApplicationStorageSettings(_state_dir().parent, application_id).inspect()
+    if not storage['configured'] and not storage['available_volumes']:
+        return None, None
+    schema = storage['form_schema']
+    fields = []
+    for name, declaration in schema['properties'].items():
+        field, reason = _setup_form_field(name, declaration, required=name in schema['required'])
+        if reason:
+            raise ValueError('Native Application storage editor has an unsupported field')
+        fields.append(field)
+    return storage, {'id': COMPONENT_REF, 'component_ref': COMPONENT_REF,
+        'application_id': application_id, 'release_digest': release_digest,
+        'expected_revision': storage['revision'], 'fields': fields,
+        'values': storage['values'], 'supported': True, 'unsupported_fields': [],
+        'applies_to': 'new_candidates', 'existing_data_relocated': False}
+
+
 def get_application_setup(
     application_id: str,
     *,
@@ -2726,19 +2745,21 @@ def get_application_setup(
         release_digest=release_digest,
         webspace_id=webspace_id,
     )
+    storage, storage_editor = _application_storage_editor(application_id, release.release_digest)
     contract = release.setup_contract
     if contract is None:
         return {
             "schema": "adaos.application.setup_surface.v1",
             "application_id": application_id,
             "release_digest": release.release_digest,
-            "available": False,
-            "reason": "release_setup_contract_not_declared",
+            "available": storage_editor is not None,
+            "reason": None if storage_editor else "release_setup_contract_not_declared",
             "contract": None,
             "state": None,
             "configuration": [],
             "provider_configuration": [],
-            "editors": {"settings": [], "credentials": [], "providers": []},
+            "storage": storage,
+            "editors": {"settings": [storage_editor] if storage_editor else [], "credentials": [], "providers": []},
         }
     configuration, values, credential_presence = _setup_configuration_rows(
         application_id,
@@ -2848,6 +2869,8 @@ def get_application_setup(
         contract,
         configuration,
     )
+    if storage_editor:
+        editors['settings'].append(storage_editor)
     editors["providers"] = [
         {
             "id": str(item["provider_id"]),
@@ -2873,6 +2896,7 @@ def get_application_setup(
         "contract": contract.to_dict(),
         "state": state,
         "configuration": configuration,
+        "storage": storage,
         "provider_configuration": provider_configuration,
         "editors": editors,
     }
@@ -2958,6 +2982,14 @@ def update_application_configuration(
         release_digest=release_digest,
         webspace_id=webspace_id,
     )
+    from adaos.services.applications.storage_settings import ApplicationStorageSettings, COMPONENT_REF
+    if component_ref == COMPONENT_REF:
+        settings = ApplicationStorageSettings(_state_dir().parent, application_id)
+        saved = settings.write(dict(values), expected_revision=expected_revision)
+        return {'configuration': {'component_ref': component_ref, 'revision': saved['revision'],
+                'values': saved['values']},
+            'setup': get_application_setup(application_id, release_digest=release.release_digest,
+                                           webspace_id=webspace_id)}
     contract = release.setup_contract
     if contract is None:
         raise ValueError("Application release does not declare a setup contract")

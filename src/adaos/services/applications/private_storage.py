@@ -122,22 +122,31 @@ class CandidateStorage:
         if target != target.resolve() or not target.is_relative_to(self.private):
             raise PrivateStorageError('Private storage write escaped the owner')
         budget = self.record['budget']
-        integers = ('aggregate_ceiling_bytes', 'external_reserved_bytes', 'system_floor_bytes', 'volume_floor_bytes')
+        integers = ('external_reserved_bytes', 'system_floor_bytes', 'volume_floor_bytes')
         if any(type(budget.get(key)) is not int or budget[key] < 0 for key in integers):
             raise PrivateStorageError('Invalid private storage budget')
-        if not 0 < budget['aggregate_ceiling_bytes'] <= 20 * 1024**3:
+        mode = budget.get('limit_mode', 'legacy_fixed')
+        ceiling = budget.get('aggregate_ceiling_bytes')
+        valid_ceiling = type(ceiling) is int and 0 < ceiling <= 1048576 * 1024**3
+        if (mode not in {'legacy_fixed', 'fixed', 'filesystem'}
+                or mode == 'filesystem' and ceiling is not None
+                or mode != 'filesystem' and not valid_ceiling
+                or mode == 'legacy_fixed' and valid_ceiling and ceiling > 20 * 1024**3):
             raise PrivateStorageError('Private storage budget exceeds the admitted aggregate ceiling')
         if budget['system_floor_bytes'] < 4 * 1024**3 or budget['volume_floor_bytes'] < 10 * 1024**3:
             raise PrivateStorageError('Private storage cannot lower the admitted free-space floors')
         on_volume = target.is_relative_to(self.volume)
         growth = reserve_bytes if on_volume else 0
-        if _allocated(self.volume) + growth + budget['external_reserved_bytes'] > budget['aggregate_ceiling_bytes']:
+        if mode != 'filesystem' and _allocated(self.volume) + growth + budget['external_reserved_bytes'] > ceiling:
             raise PrivateStorageError('Private storage aggregate growth budget would be exceeded')
         for root, floor, reserve in (
             (self.private, budget['system_floor_bytes'], reserve_bytes if not on_volume else 0),
             (self.volume, budget['volume_floor_bytes'], growth),
         ):
             info = os.statvfs(root)
+            if (type(info.f_bavail) is not int or info.f_bavail < 0
+                    or type(info.f_frsize) is not int or info.f_frsize <= 0):
+                raise PrivateStorageError('Private storage filesystem capacity is unknown')
             if info.f_bavail * info.f_frsize - reserve < floor:
                 raise PrivateStorageError('Private storage free-space floor would be crossed')
 
@@ -177,10 +186,19 @@ def enroll_candidate_storage(private: Path, candidate_id: str, release, *, works
     if existing is not None:
         _sync_binding(_bindings(private) / f'{candidate_id}.json')
         return existing
-    profile_path = private / 'state/applications/private-storage-profiles' / f'{_segment(release.project_id)}.json'
-    if not profile_path.exists() and not profile_path.is_symlink():
-        return None
-    profile = _read(profile_path)
+    from .storage_settings import ApplicationStorageSettings
+    settings = ApplicationStorageSettings(private, release.project_id)
+    if settings.read()['revision']:
+        profile = settings.candidate_profile(release)
+        if profile is None:
+            return None
+    else:
+        # Compatibility with previously enrolled, exact-release profiles. New
+        # Management settings are the authority once explicitly saved.
+        profile_path = private / 'state/applications/private-storage-profiles' / f'{_segment(release.project_id)}.json'
+        if not profile_path.exists() and not profile_path.is_symlink():
+            return None
+        profile = _read(profile_path)
     if (profile.get('schema') != 'adaos.application.private_storage_profile.v1'
             or profile.get('application_id') != release.project_id
             or profile.get('release_digest') != release.release_digest):

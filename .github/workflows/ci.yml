@@ -101,6 +101,7 @@ jobs:
             tests/test_application_data_lifecycle.py \
             tests/test_local_release_transition.py \
             tests/test_private_application_storage.py \
+            tests/test_application_storage_settings.py \
             tests/test_trial_activation.py \
             tests/test_artifact_retention.py \
             tests/test_builder_automation_worker.py \

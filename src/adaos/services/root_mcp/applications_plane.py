@@ -810,7 +810,7 @@ def contracts() -> list[RootMcpToolContract]:
                 "type": "string",
                 "pattern": "^sha256:[0-9a-f]{64}$",
             },
-            "component_ref": {"type": "string", "pattern": "^(skill|scenario):"},
+            "component_ref": {"type": "string", "pattern": "^(?:(?:skill|scenario):|application:storage$)"},
             "slot": {"type": "string"},
             "expected_revision": {"type": "integer", "minimum": 0},
             "present": {"type": "boolean"},
@@ -822,6 +822,8 @@ def contracts() -> list[RootMcpToolContract]:
             },
             "values": {"type": "object"},
             "supported": {"type": "boolean"},
+            "applies_to": {"const": "new_candidates"},
+            "existing_data_relocated": {"type": "boolean"},
             "unsupported_fields": {
                 "type": "array",
                 "items": schema_object(
@@ -893,6 +895,24 @@ def contracts() -> list[RootMcpToolContract]:
                 "pattern": "^sha256:[0-9a-f]{64}$",
             },
             "available": {"type": "boolean"},
+            "storage": {
+                "type": ["object", "null"],
+                "properties": {
+                    "schema": {"const": "adaos.application.storage_settings.v1"},
+                    "application_id": {"type": "string"},
+                    "revision": {"type": "integer", "minimum": 0},
+                    "values": {"type": "object"},
+                    "configured": {"type": "boolean"},
+                    "status": {"enum": ["mounted", "unavailable", "not_configured"]},
+                    "available_volumes": {"type": "array", "maxItems": 64, "items": {
+                        "type": "object", "properties": {"ref": {"type": "string"}, "label": {"type": "string"}},
+                        "required": ["ref", "label"], "additionalProperties": False}},
+                    "form_schema": {"type": "object"},
+                    "applies_to": {"const": "new_candidates"},
+                    "existing_data_relocated": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
             "reason": {"type": ["string", "null"]},
             "contract": {"type": ["object", "null"]},
             "state": {"type": ["object", "null"]},
@@ -1597,7 +1617,8 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary=(
                 "CAS-update typed non-secret values declared by the exact "
-                "Application release setup contract."
+                "Application release setup contract, or the native enrolled-volume "
+                "storage policy. Storage changes apply to new Candidates, not existing data."
             ),
             input_schema=schema_object(
                 properties={
@@ -1608,7 +1629,7 @@ def contracts() -> list[RootMcpToolContract]:
                     },
                     "component_ref": {
                         "type": "string",
-                        "pattern": "^(skill|scenario):",
+                        "pattern": "^(?:(?:skill|scenario):|application:storage$)",
                     },
                     "values": {"type": "object"},
                     "expected_revision": {"type": "integer", "minimum": 0},
