@@ -10803,7 +10803,7 @@ async def process_events_command(
             except Exception:
                 node_id = ""
                 subnet_id = ""
-            candidate["device_id"] = node_id or device_id or "dev-unknown"
+            candidate["device_id"] = device_id or node_id or "dev-unknown"
             candidate["room_id"] = subnet_id or webspace_id
             result = await asyncio.to_thread(
                 claim_voice_activation,
@@ -10844,6 +10844,34 @@ async def process_events_command(
         except Exception:
             _log.warning("platform notification snapshot failed webspace=%s", webspace_id, exc_info=True)
             await _ack(False, error="notification_snapshot_unavailable")
+        return None
+
+    if kind == "voice.activation.describe":
+        try:
+            from adaos.services.voice_activation_capture import voice_activation_descriptor
+
+            result = await asyncio.to_thread(voice_activation_descriptor, str(payload.get("lang") or ""))
+            await _ack(data=result)
+        except HTTPException as exc:
+            await _ack(False, error=str(exc.detail or "voice_activation_unavailable"))
+        except Exception:
+            _log.warning("voice activation discovery failed device=%s", device_id, exc_info=True)
+            await _ack(False, error="voice_activation_unavailable")
+        return None
+
+    if kind == "voice.transcribe":
+        # Recognition alone must never dispatch ambient speech to a dialog, NLU
+        # or chat history. The native caller applies transcript-address activation.
+        try:
+            from adaos.apps.api.stt_api import transcribe_audio_payload
+
+            result = await asyncio.to_thread(transcribe_audio_payload, dict(payload or {}))
+            await _ack(data=result)
+        except HTTPException as exc:
+            await _ack(False, error=str(exc.detail or "voice_transcription_failed"))
+        except Exception:
+            _log.warning("voice transcription failed device=%s", device_id, exc_info=True)
+            await _ack(False, error="voice_transcription_failed")
         return None
 
     if kind == "dialog.user_audio":

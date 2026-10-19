@@ -4109,6 +4109,44 @@ def test_process_events_command_transcribes_desktop_audio_and_binds_output_owner
     assert responses[-1]["data"]["text"] == "проверь статус"
 
 
+def test_transcribe_only_does_not_publish_a_conversation_turn(monkeypatch) -> None:
+    from adaos.apps.api import stt_api
+
+    published, responses = [], []
+    monkeypatch.setattr(gateway_module, "_make_publish_bus", lambda *args, **kwargs: lambda *args: published.append(args))
+    monkeypatch.setattr(stt_api, "transcribe_audio_payload", lambda payload: {"ok": True, "text": "ordinary room conversation"})
+
+    async def send(msg):
+        responses.append(msg)
+
+    asyncio.run(gateway_module.process_events_command(
+        kind="voice.transcribe", cmd_id="recognition-only", payload={"audio_b64": "fixture"},
+        device_id="native-endpoint", webspace_id="desktop", send_response=send,
+    ))
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["text"] == "ordinary room conversation"
+    assert published == []
+
+
+def test_activation_claim_binds_the_endpoint_instead_of_collapsing_all_clients_to_the_hub(monkeypatch):
+    from adaos.services import voice_runtime
+
+    received, responses = [], []
+    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node", subnet_id="sn_room")))
+    monkeypatch.setattr(voice_runtime, "claim_voice_activation", lambda candidate, **kw: received.append(candidate) or {"admitted": True})
+
+    async def send(msg):
+        responses.append(msg)
+
+    asyncio.run(gateway_module.process_events_command(
+        kind="voice.activation.claim", cmd_id="claim", payload={"device_id": "spoofed", "room_id": "spoofed", "text": "question"},
+        device_id="native-endpoint", webspace_id="desktop", send_response=send,
+    ))
+    assert received[0]["device_id"] == "native-endpoint"
+    assert received[0]["room_id"] == "sn_room"
+    assert responses[-1]["data"]["admitted"] is True
+
+
 def test_process_events_command_returns_platform_notifications(monkeypatch) -> None:
     from adaos.services import platform_notifications as notification_module
 
