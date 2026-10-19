@@ -20,6 +20,7 @@ and product-management planning live outside the public repository.
 | Connect a browser or member node | [Browser And Member Connection](onboarding/browser-and-member.md) |
 | Review the architecture vocabulary | [Architecture Overview](architecture/overview.md) |
 | Operate an existing node | [Runtime Operations](cli/runtime.md) |
+| Review documents and chat with project context | [Context Chat private beta](context-chat/index.md) |
 
 ## Public Product Focus
 

@@ -45,6 +45,46 @@ function Have($cmd) {
   catch { return $false }
 }
 
+function Test-UnavailableLoopbackInternetProxy {
+  if ($env:OS -ne "Windows_NT") { return $false }
+  try {
+    $settings = Get-ItemProperty -LiteralPath "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop
+    if ([int]$settings.ProxyEnable -ne 1 -or [string]::IsNullOrWhiteSpace([string]$settings.ProxyServer)) {
+      return $false
+    }
+    $targets = @()
+    foreach ($entry in ([string]$settings.ProxyServer -split ";")) {
+      $candidate = $entry.Trim()
+      if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+      if ($candidate.Contains("=")) { $candidate = $candidate.Substring($candidate.IndexOf("=") + 1).Trim() }
+      if ($candidate -notmatch "^[a-z][a-z0-9+.-]*://") { $candidate = "http://$candidate" }
+      $uri = [Uri]$candidate
+      if (-not $uri.IsLoopback -or $uri.Port -le 0) { return $false }
+      $targets += @($uri)
+    }
+    if ($targets.Count -eq 0) { return $false }
+    foreach ($target in $targets) {
+      $client = New-Object System.Net.Sockets.TcpClient
+      $wait = $null
+      try {
+        $connect = $client.BeginConnect($target.Host, $target.Port, $null, $null)
+        $wait = $connect.AsyncWaitHandle
+        if ($wait.WaitOne(400, $false)) {
+          $client.EndConnect($connect)
+          if ($client.Connected) { return $false }
+        }
+      }
+      catch { }
+      finally {
+        if ($wait) { $wait.Close() }
+        $client.Close()
+      }
+    }
+    return $true
+  }
+  catch { return $false }
+}
+
 function Expand-ZipPortable {
   param(
     [Parameter(Mandatory = $true)][string]$ArchivePath,
@@ -253,6 +293,13 @@ if ($env:OS -eq "Windows_NT" -and [string]::IsNullOrWhiteSpace($env:UV_SYSTEM_CE
   # Use the Windows certificate store for uv downloads. This also avoids the
   # connection failures seen with uv's bundled roots in minimal Windows images.
   $env:UV_SYSTEM_CERTS = "1"
+}
+if (Test-UnavailableLoopbackInternetProxy) {
+  # Windows Sandbox can inherit a host-only loopback proxy. Native tools then
+  # try to tunnel through the guest's unused 127.0.0.1 and fail, while direct
+  # HTTPS remains available. Scope the bypass to this bootstrap process.
+  Write-Warning "Ignoring an unavailable loopback Internet proxy for AdaOS runtime downloads."
+  $env:NO_PROXY = "*"
 }
 
 $localUvBin = Join-Path $HOME ".local\bin"
