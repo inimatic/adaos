@@ -10846,6 +10846,29 @@ async def process_events_command(
             await _ack(False, error="notification_snapshot_unavailable")
         return None
 
+    if kind == "voice.dialogue":
+        try:
+            from adaos.services.voice_native_dialogue import dialogue_command
+
+            result = await asyncio.to_thread(dialogue_command, webspace_id, device_id, dict(payload or {}))
+            text = result.pop("dispatch_text", "")
+            if text:
+                owner = {"kind": "desktop", "endpoint_id": device_id, "label": str(client_label or "AdaOS Desktop")}
+                _publish_bus("dialog.user_message", {
+                    "text": text, "webspace_id": webspace_id,
+                    "_meta": {"client_message_id": result["message_id"], "addressed_agent_id": result["target_id"],
+                              "voice_input_owner": owner, "voice_output_owner": owner,
+                              "voice_listening_mode": "activation", "capture_backend": "adaos_desktop_native",
+                              "dialog_channel_id": "conversational", "voice_chat_scope": "shared"},
+                })
+            await _ack(data=result)
+        except (ValueError, HTTPException) as exc:
+            await _ack(False, error=str(getattr(exc, "detail", exc)))
+        except Exception:
+            _log.warning("native voice dialogue failed device=%s", device_id, exc_info=True)
+            await _ack(False, error="voice_dialogue_failed")
+        return None
+
     if kind == "voice.activation.describe":
         try:
             from adaos.services.voice_activation_capture import voice_activation_descriptor
@@ -10865,7 +10888,12 @@ async def process_events_command(
         try:
             from adaos.apps.api.stt_api import transcribe_audio_payload
 
-            result = await asyncio.to_thread(transcribe_audio_payload, dict(payload or {}))
+            if payload.get("stream_id"):
+                from adaos.services.voice_native_dialogue import transcribe_stream
+
+                result = await asyncio.to_thread(transcribe_stream, device_id, dict(payload or {}))
+            else:
+                result = await asyncio.to_thread(transcribe_audio_payload, dict(payload or {}))
             await _ack(data=result)
         except HTTPException as exc:
             await _ack(False, error=str(exc.detail or "voice_transcription_failed"))

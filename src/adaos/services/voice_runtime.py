@@ -151,9 +151,8 @@ def advance_persisted_long_form_session(
         sessions[key] = dict(result["session"])
         path = long_form_sessions_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-        temporary.replace(path)
+        from adaos.services.artifact_pipeline.storage import atomic_write_json
+        atomic_write_json(path, payload)
         return result
 
 
@@ -363,7 +362,10 @@ def advance_long_form_session(
     segments = [_text(item) for item in current.get("segments") or [] if _text(item)]
     if token:
         segments.append(token)
-    current.update({"segments": segments[-512:], "text": " ".join(segments), "updated_at": now})
+    # Never silently lose the beginning of a deliberately long question.
+    if len(segments) > 4096 or sum(len(item) + 1 for item in segments) > 50_000:
+        raise ValueError("voice_draft_limit")
+    current.update({"segments": segments, "text": " ".join(segments), "updated_at": now})
     return {
         "action": "appended",
         "dispatch": False,

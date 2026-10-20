@@ -25,4 +25,5 @@ def voice_activation_descriptor(language: str) -> dict:
             targets.append({"id": str(record["id"])[:256], "label": label, "aliases": aliases})
     if not targets:
         raise HTTPException(status_code=503, detail="voice_activation_targets_unavailable")
-    return {"contract": "adaos.voice.activation.v1", "language": language, "targets": targets, "wake_window_ms": 10000}
+    return {"contract": "adaos.voice.activation.v1", "language": language, "targets": targets,
+            "dialogue_contract": "adaos.voice.dialogue.v1", "streaming": True}
