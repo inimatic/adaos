@@ -67,8 +67,12 @@ def dialogue_command(webspace: str, endpoint: str, payload: dict, *, now: float 
         result = {"mode": current.get("mode", "dialogue"), "assistant": label}
         if action == "start":
             if current.get("mode") == "collecting":
-                raise ValueError("voice_finish_or_cancel_draft_first")
-            current.update(active=True, mode="dialogue", endpoint=endpoint, target_id=target)
+                if owner != endpoint or target != current.get("target_id"):
+                    raise ValueError("voice_finish_or_cancel_draft_first")
+                result["draft"] = runtime.read_long_form_session(scope).get("text", "")
+            else:
+                current["mode"] = "dialogue"
+            current.update(active=True, endpoint=endpoint, target_id=target)
         elif action == "listen":
             if current.get("mode") != "collecting":
                 runtime.advance_persisted_long_form_session(scope, text="", intent_name=runtime.LONG_FORM_DIALOG_START_INTENT, active_agent_id=target)
@@ -97,13 +101,15 @@ def dialogue_command(webspace: str, endpoint: str, payload: dict, *, now: float 
         elif action == "turn":
             if current.get("mode") == "collecting":
                 raise ValueError("voice_commit_draft_first")
-        elif action in {"heartbeat", "interrupt"}:
+        elif action in {"heartbeat", "interrupt", "pause"}:
             text = ""
+            if action == "pause":
+                current["active"] = False
         else:
             raise ValueError("voice_dialogue_action_invalid")
         current["heartbeat"] = now
         current["operations"] = [*current.get("operations", []), operation][-128:]
-        result["mode"] = current["mode"] if current.get("active") else "waiting"
+        result["mode"] = current["mode"] if current.get("active") else ("waiting" if action == "end" else "paused")
         if text and action in {"turn", "commit"}:
             result["dispatch_text"] = label + ", " + text
             result["target_id"] = target
@@ -167,7 +173,11 @@ def transcribe_stream(endpoint: str, payload: dict) -> dict:
             if state["rec"].AcceptWaveform(pcm[offset:offset+8000]):
                 state["parts"].append(json.loads(state["rec"].Result()).get("text", ""))
         if payload.get("more"):
-            return {"text": "", "pending": True}
+            # Vosk's acoustic endpoint can finish a turn even when the cheap
+            # client VAD stays open because AGC/background noise raises RMS.
+            completed = " ".join(p for p in state["parts"] if p).strip()
+            state["parts"].clear()
+            return {"text": completed, "pending": not bool(completed)}
         state["parts"].append(json.loads(state["rec"].FinalResult()).get("text", ""))
         _STREAMS.pop(key, None)
         return {"text": " ".join(p for p in state["parts"] if p).strip(), "pending": False}

@@ -22,6 +22,9 @@ def test_activation_descriptor_uses_installed_agent_aliases(monkeypatch):
     assert result["contract"] == "adaos.voice.activation.v1"
     assert result["language"] == "ru-RU"
     assert result["targets"][0]["aliases"] == ["Арсений", "Сеня"]
+    assert "streaming" not in result  # a stale gateway may import a newer helper
+    native = voice_activation_descriptor("ru", native_dialogue=True)
+    assert native["streaming"] and native["dialogue_contract"] == "adaos.voice.dialogue.v1"
     monkeypatch.setattr(model_manager, "resolve_vosk_model", lambda *args: None)
     with pytest.raises(HTTPException) as failure:
         voice_activation_descriptor("en-US")

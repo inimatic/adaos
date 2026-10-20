@@ -10873,7 +10873,7 @@ async def process_events_command(
         try:
             from adaos.services.voice_activation_capture import voice_activation_descriptor
 
-            result = await asyncio.to_thread(voice_activation_descriptor, str(payload.get("lang") or ""))
+            result = await asyncio.to_thread(voice_activation_descriptor, str(payload.get("lang") or ""), native_dialogue=True)
             await _ack(data=result)
         except HTTPException as exc:
             await _ack(False, error=str(exc.detail or "voice_activation_unavailable"))

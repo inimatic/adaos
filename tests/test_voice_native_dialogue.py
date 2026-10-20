@@ -1,4 +1,10 @@
 import pytest
+import base64
+import io
+import json
+import sys
+import types
+import wave
 from adaos.services import voice_runtime, voice_native_dialogue as native
 
 
@@ -49,3 +55,43 @@ def test_draft_limit_preserves_previous_text(voice_state):
         native.dialogue_command("chat", "phone", {"action": "append", "text": "overflow", "operation_id": "4"})
     scope=voice_runtime.long_form_scope_key("chat",device_id="native-dialogue:phone")
     assert voice_runtime.read_long_form_session(scope)["text"] == "A" * 49998
+
+
+def test_streaming_acoustic_endpoints_and_tail_are_not_replayed(monkeypatch):
+    from adaos.apps.api import stt_api
+    instances=[]
+    class Recognizer:
+        def __init__(self, *_):
+            self.pcm=bytearray();self.calls=0;instances.append(self)
+        def SetWords(self, _): pass
+        def AcceptWaveform(self, pcm):
+            self.pcm.extend(pcm);self.calls+=1
+            return self.calls==2
+        def Result(self): return json.dumps({"text":"Арсений"})
+        def FinalResult(self): return json.dumps({"text":"следующий вопрос"})
+    monkeypatch.setitem(sys.modules,"vosk",types.SimpleNamespace(KaldiRecognizer=Recognizer))
+    monkeypatch.setattr(stt_api,"_ensure_model",lambda *_: "model")
+    monkeypatch.setattr(stt_api,"_load_model",lambda *_: object())
+    def audio(pcm):
+        output=io.BytesIO()
+        with wave.open(output,"wb") as file:
+            file.setnchannels(1);file.setsampwidth(2);file.setframerate(16000);file.writeframes(pcm)
+        return base64.b64encode(output.getvalue()).decode()
+    parts=[b'\x01\x00'*2000,b'\x02\x00'*2000,b'\x03\x00'*2000]
+    responses=[]
+    for sequence,pcm in enumerate(parts):
+        responses.append(native.transcribe_stream("test-endpoint",{"audio_b64":audio(pcm),"stream_id":"continuous","sequence":sequence,"more":sequence<2,"lang":"ru-RU"}))
+    assert [r["text"] for r in responses]==["","Арсений","следующий вопрос"]
+    assert len(instances)==1 and instances[0].pcm==b''.join(parts)
+    assert ("test-endpoint","continuous") not in native._STREAMS
+
+
+def test_stopping_capture_preserves_and_resumes_long_question(voice_state):
+    def call(action,op,text=""):
+        return native.dialogue_command("chat","phone",{"action":action,"target_id":"a","operation_id":op,"text":text})
+    call("start","1");call("listen","2");call("append","3","first part")
+    assert call("pause","4")["mode"]=="paused"
+    resumed=call("start","5")
+    assert resumed["mode"]=="collecting" and resumed["draft"]=="first part"
+    call("append","6","last part")
+    assert call("commit","7")["user_text"]=="first part last part"
