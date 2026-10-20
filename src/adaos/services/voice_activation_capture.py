@@ -22,7 +22,11 @@ def voice_activation_descriptor(language: str, *, native_dialogue: bool = False)
         aliases = [label, *(record.get("aliases") or [])]
         aliases = list(dict.fromkeys(str(item).strip()[:80] for item in aliases if isinstance(item, str) and item.strip() and ":" not in item))[:16]
         if record.get("id") and aliases:
-            targets.append({"id": str(record["id"])[:256], "label": label, "aliases": aliases})
+            targets.append({
+                "id": str(record["id"])[:256], "label": label, "aliases": aliases,
+                "gender": str(record.get("gender") or "")[:32],
+                "voice": str(record.get("voice") or "")[:256],
+            })
     if not targets:
         raise HTTPException(status_code=503, detail="voice_activation_targets_unavailable")
     result = {"contract": "adaos.voice.activation.v1", "language": language, "targets": targets}

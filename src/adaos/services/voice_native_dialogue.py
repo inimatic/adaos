@@ -177,7 +177,12 @@ def transcribe_stream(endpoint: str, payload: dict) -> dict:
             # client VAD stays open because AGC/background noise raises RMS.
             completed = " ".join(p for p in state["parts"] if p).strip()
             state["parts"].clear()
-            return {"text": completed, "pending": not bool(completed)}
+            result = {"text": completed, "pending": not bool(completed)}
+            if payload.get("include_partial"):
+                # Provisional words are for named interruption detection only.
+                # They never enter a draft or the conversation as a user turn.
+                result["partial"] = str(json.loads(state["rec"].PartialResult()).get("partial") or "")[:8000]
+            return result
         state["parts"].append(json.loads(state["rec"].FinalResult()).get("text", ""))
         _STREAMS.pop(key, None)
         return {"text": " ".join(p for p in state["parts"] if p).strip(), "pending": False}

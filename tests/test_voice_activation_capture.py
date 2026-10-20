@@ -16,12 +16,13 @@ def test_activation_descriptor_uses_installed_agent_aliases(monkeypatch):
     monkeypatch.setattr(stt_api, "_models_root", lambda: Path("unused"))
     monkeypatch.setattr(model_manager, "resolve_vosk_model", lambda *args: Path("model"))
     monkeypatch.setattr(dialog_registry, "published_agent_records", lambda: [
-        {"id": "agent:a", "label": "Арсений", "aliases": ["Сеня", "internal:id"]},
+        {"id": "agent:a", "label": "Арсений", "aliases": ["Сеня", "internal:id"], "gender":"male", "voice":"ru-male"},
     ])
     result = voice_activation_descriptor("ru")
     assert result["contract"] == "adaos.voice.activation.v1"
     assert result["language"] == "ru-RU"
     assert result["targets"][0]["aliases"] == ["Арсений", "Сеня"]
+    assert result["targets"][0]["gender"] == "male" and result["targets"][0]["voice"] == "ru-male"
     assert "streaming" not in result  # a stale gateway may import a newer helper
     native = voice_activation_descriptor("ru", native_dialogue=True)
     assert native["streaming"] and native["dialogue_contract"] == "adaos.voice.dialogue.v1"

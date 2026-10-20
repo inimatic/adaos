@@ -68,6 +68,7 @@ def test_streaming_acoustic_endpoints_and_tail_are_not_replayed(monkeypatch):
             self.pcm.extend(pcm);self.calls+=1
             return self.calls==2
         def Result(self): return json.dumps({"text":"Арсений"})
+        def PartialResult(self): return json.dumps({"partial":"Арсений стоп"})
         def FinalResult(self): return json.dumps({"text":"следующий вопрос"})
     monkeypatch.setitem(sys.modules,"vosk",types.SimpleNamespace(KaldiRecognizer=Recognizer))
     monkeypatch.setattr(stt_api,"_ensure_model",lambda *_: "model")
@@ -80,8 +81,10 @@ def test_streaming_acoustic_endpoints_and_tail_are_not_replayed(monkeypatch):
     parts=[b'\x01\x00'*2000,b'\x02\x00'*2000,b'\x03\x00'*2000]
     responses=[]
     for sequence,pcm in enumerate(parts):
-        responses.append(native.transcribe_stream("test-endpoint",{"audio_b64":audio(pcm),"stream_id":"continuous","sequence":sequence,"more":sequence<2,"lang":"ru-RU"}))
+        responses.append(native.transcribe_stream("test-endpoint",{"audio_b64":audio(pcm),"stream_id":"continuous","sequence":sequence,"more":sequence<2,"lang":"ru-RU","include_partial":True}))
     assert [r["text"] for r in responses]==["","Арсений","следующий вопрос"]
+    assert responses[0]["partial"] == "Арсений стоп" and responses[0]["pending"]
+    assert "partial" not in responses[-1]
     assert len(instances)==1 and instances[0].pcm==b''.join(parts)
     assert ("test-endpoint","continuous") not in native._STREAMS
 
