@@ -57,7 +57,11 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
     application = SimpleNamespace(
         application_id="reading-list",
         display={"title": "Reading List"},
-        entrypoints=({"presentation_ref": "scenario:reading_list"},),
+        entrypoints=(
+            {"presentation_ref": "subscription_status_app"},
+            {"presentation_ref": "skill:subscription_status_skill"},
+            {"presentation_ref": "scenario:reading_list"},
+        ),
     )
     release = SimpleNamespace(
         accepted_candidate_id="candidate-1",
@@ -82,6 +86,7 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
 
     entries = runtime_selection.trial_launcher_entries(get_ctx(), "desktop")
 
+    assert len(entries) == 1
     assert entries[0]["icon"] == "book-outline"
     assert entries[0]["scenario_id"] == "reading_list"
 
