@@ -2198,6 +2198,49 @@ class WorkspaceActivationManager:
         except MutationLockTimeout as exc:
             raise ActivationError("Workspace writer lease is busy") from exc
 
+    def _verify_already_rolled_back(self, operation, observed):
+        """Retire a proven rollback without reverting unrelated later releases."""
+        previous_raw, desired_raw = operation.get('previous_lock'), operation.get('desired_lock')
+        rollback = operation.get('runtime_rollback') or {}
+        if (operation.get('status') != 'failed' or operation.get('rolled_back') is not True
+                or rollback.get('status') != 'completed' or not observed
+                or not isinstance(previous_raw, Mapping) or not isinstance(desired_raw, Mapping)
+                or rollback.get('lock_digest') != previous_raw.get('lock_digest')):
+            return None
+        previous, desired = WorkspaceLock.from_mapping(previous_raw), WorkspaceLock.from_mapping(desired_raw)
+        before = {item.key: item for item in previous.components}
+        after = {item.key: item for item in desired.components}
+        current = {item.key: item for item in observed.components}
+        affected = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
+        if not affected or any(current.get(key) != before.get(key) for key in affected):
+            return None
+        old_bindings, new_bindings, current_bindings = (
+            {(item.consumer, item.dependency): item for item in lock.bindings}
+            for lock in (previous, desired, observed))
+        changed_bindings = {key for key in old_bindings.keys() | new_bindings.keys()
+                            if old_bindings.get(key) != new_bindings.get(key)}
+        # An ordinary scenario-to-skill version change is recoverable only
+        # when both ends belong to the verified rollback and its original
+        # dependency binding remains selected. Provider/state rebinding outside
+        # this closure still needs explicit reconciliation.
+        if any(not set(key) <= affected or current_bindings.get(key) != old_bindings.get(key)
+               for key in changed_bindings):
+            return None
+        old_slots = {item.slot_id: item for item in previous.slots}
+        new_slots = {item.slot_id: item for item in desired.slots}
+        current_slots = {item.slot_id: item for item in observed.slots}
+        changed_slots = {key for key in old_slots.keys() | new_slots.keys() if old_slots.get(key) != new_slots.get(key)}
+        if any(current_slots.get(key) != old_slots.get(key) for key in changed_slots):
+            return None
+        for key in affected:
+            if key in before:
+                self._verify_materialized_component(before[key])
+            elif self._target_for(after[key]).exists():
+                return None
+        return {'mode': 'already_rolled_back_unrelated_lock_advance',
+                'observed_lock_digest': self._lock_digest(observed),
+                'verified_components': sorted(affected), 'workspace_mutated': False}
+
     def _recover_interrupted_under_writer_lease(
         self,
         operation_id: str,
@@ -2297,8 +2340,14 @@ class WorkspaceActivationManager:
                 if isinstance(desired, Mapping)
                 else None
             )
-            observed = self._lock_digest(self.load_lock())
+            observed_lock = self.load_lock()
+            observed = self._lock_digest(observed_lock)
             if observed not in {previous_digest, desired_digest}:
+                verified = self._verify_already_rolled_back(operation, observed_lock)
+                if verified is not None:
+                    operation.update(status='recovered', recovered_at=_now_iso(), recovery_receipt=verified)
+                    self._write_operation(operation)
+                    return operation
                 raise ActivationReplayBlocked(
                     "interrupted activation no longer owns the observed WorkspaceLock; "
                     "manual reconciliation is required"

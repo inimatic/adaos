@@ -5952,6 +5952,20 @@ class SkillManager:
         target_dir = slot.internal_data_dir
         env.ensure_data_dirs(target_version)
 
+        if active_version and active_bucket != target_bucket and (resolved_manifest.get('data_lifecycle') or {}).get('execution') == 'native_tools':
+            from adaos.services.applications.native_data_adoption import is_adopted_native_data
+            from adaos.services.applications.data_lifecycle import declared_databases
+            from adaos.services.applications.sqlite_data_transition import verify_sqlite_schema
+            if not is_adopted_native_data(target_data_root, resolved_manifest):
+                raise RuntimeError('Native Application bucket upgrade requires its fenced data lifecycle; legacy bucket copying is forbidden')
+            for relative, migrations in declared_databases(resolved_manifest).items():
+                verify_sqlite_schema(target_data_root / relative, migrations)
+            return {'mode': 'application_data_lifecycle', 'ok': True, 'skipped': True,
+                'reason': 'fenced_data_already_adopted', 'bucket_migration': True,
+                'source_version': active_version, 'source_runtime_bucket': active_bucket,
+                'target_version': target_version, 'runtime_bucket': target_bucket,
+                'data_root': str(target_data_root), 'internal_root': str(target_dir)}
+
         base_result = {
             "tool": "",
             "runtime_bucket": target_bucket,

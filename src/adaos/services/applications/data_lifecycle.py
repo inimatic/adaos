@@ -1196,6 +1196,48 @@ class LocalApplicationDataLifecycle:
         return self._run("stable", webspace_id, [TransitionStep("protect_and_adopt_data", transfer),
             TransitionStep("adopt_configuration", configure), TransitionStep("publish_verify", publish)])
 
+    def verify_or_restore_missing_stable_data(self):
+        """Recover missing adopted files after a rolled-back runtime activation.
+
+        Only the exact unfinished Stable journal may restore its retained
+        accepted snapshots. Existing files are never overwritten; an unexpected
+        ledger or changed evidence leaves the Application fenced.
+        """
+        operation = f'application-stable:{self.application_id}:{self.candidate_id}'
+        record = ApplicationRuntimeTransition(self.channel).get(operation)
+        if (not record or record.get('completed') or record.get('aborted')
+                or record['intent']['contract_digest'] != self._contract()
+                or record.get('running_step') != 'publish_verify'
+                or 'protect_and_adopt_data' not in record.get('receipts', {})):
+            raise RuntimeChannelConflict('Stable data verification requires the exact fenced adoption journal')
+        from .sqlite_data_transition import verify_sqlite_schema
+        restored = []
+        for component in self.components:
+            for name, migrations in self.contracts[component.component_ref].items():
+                target = component.target_root / name
+                if not target.exists():
+                    accepted = self._root(component, 'accepted') / name
+                    receipt = json.loads(accepted.with_suffix(accepted.suffix + '.receipt.json').read_text(encoding='utf-8'))
+                    marker = self._root(component, 'stable_install') / (name + '.json')
+                    expected = {'digest': receipt['digest'], 'target': str(target)}
+                    if not marker.is_file() or json.loads(marker.read_text(encoding='utf-8')) != expected:
+                        raise RuntimeChannelConflict('Missing Stable database has no exact prior installation proof')
+                    self._install_new(component, 'stable', name, accepted, receipt['digest'], target)
+                    restored.append(component.component_ref + ':' + name)
+                verify_sqlite_schema(target, migrations)
+            for name, contract in self.state_file_contracts[component.component_ref].items():
+                target = component.target_root / name
+                accepted = self._root(component, 'accepted_state_files') / name
+                if not target.exists() and accepted.exists():
+                    receipt = json.loads(accepted.with_suffix(accepted.suffix + '.receipt.json').read_text(encoding='utf-8'))
+                    marker = self._root(component, 'stable_state_file_install') / (name + '.json')
+                    expected = {'digest': receipt['digest'], 'target': str(target)}
+                    if not marker.is_file() or json.loads(marker.read_text(encoding='utf-8')) != expected:
+                        raise RuntimeChannelConflict('Missing Stable state file has no exact prior installation proof')
+                    self._install_state_file_new(component, 'stable', name, accepted, receipt['digest'], target, contract)
+                    restored.append(component.component_ref + ':' + name)
+        return {'ok': True, 'restored_missing_files': restored}
+
     def abort_beta_preparation(self, *, verify_source: Callable[[str], Mapping[str, Any]], source_guard: Callable = nullcontext):
         """Cancel a failed prepare, never an accepted/published data cutover.
 

@@ -3130,11 +3130,27 @@ class ArtifactPublicationService:
                         raise PublicationError(
                             "promotion workflow admission receipt has no admission record"
                         )
-                    activation_manager.validate_release_admission(
-                        plan,
-                        raw_admission,
-                        slot_id=slot_id,
-                    )
+                    try:
+                        activation_manager.validate_release_admission(plan, raw_admission, slot_id=slot_id)
+                    except ActivationError:
+                        recovered = receipts.get('activation_recovered') or {}
+                        recovered_operation = activation_manager._read_operation(str(recovered.get('operation_id') or '')) if recovered.get('operation_id') else None
+                        proof = (recovered_operation or {}).get('recovery_receipt') or {}
+                        if (not recovered_operation or recovered_operation.get('status') != 'recovered'
+                                or proof.get('mode') != 'already_rolled_back_unrelated_lock_advance'
+                                or proof.get('observed_lock_digest') != activation_manager._lock_digest(activation_manager.load_lock())):
+                            raise
+                        # Only an exact, verified rollback can refresh stale
+                        # whole-Workspace admission after unrelated releases.
+                        # Re-run normal admission; never reuse its old digest
+                        # or roll another project's current lock backwards.
+                        fresh = activation_manager.admit_release_candidate(plan, slot_id=slot_id,
+                            fetch_package=self.remote.fetch_package)
+                        self._promotion_receipt(operation, 'workflow_admission_reconciled', {
+                            'previous_admission': dict(raw_admission), 'admission': fresh,
+                            'activation_recovery_operation_id': recovered['operation_id']})
+                        self._promotion_receipt(operation, 'workflow_admitted', {'admission': fresh})
+                        raw_admission = fresh
                     workflow_admission = raw_admission
                 else:
                     admission = activation_manager.admit_release_candidate(
