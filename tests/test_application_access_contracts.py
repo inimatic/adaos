@@ -110,7 +110,7 @@ def test_permission_profile_normalizes_digest_privacy_and_legacy_projection() ->
 def test_documented_application_access_project_is_a_valid_authoritative_example() -> None:
     root = Path(__file__).parents[1]
     payload = yaml.safe_load(
-        (root / "docs" / "examples" / "application-access" / "project.yaml").read_text(
+        (root / "docs-development" / "platform" / "examples" / "application-access" / "project.yaml").read_text(
             encoding="utf-8"
         )
     )
