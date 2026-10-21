@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 _COMPATIBILITY_PORT: Any = None
 _WORKSPACE_PORT: Any = None
+_PERSONAL_PORT: Any = None
 
 
 def _compatibility_execution_port():
@@ -18,6 +19,27 @@ def _compatibility_execution_port():
     if _COMPATIBILITY_PORT is None:
         _COMPATIBILITY_PORT = LegacyDevSkillPrototypeExecution()
     return _COMPATIBILITY_PORT
+
+
+def personal_provider_jobs(metadata: Mapping[str, Any]):
+    """Foreground-only Core AI transport for a frozen personal selection.
+
+    Does not enable Automation, hosted tools, paid fallback, or provider retries.
+    Job observation can outlive a foreground tool invocation.
+    """
+    from adaos.services.builder.personal_prototype import PersonalBuilderJobs
+    return PersonalBuilderJobs(metadata)
+
+
+def model_reasoning(model: str | None, effort: str = 'low'):
+    """Validate explicit reasoning effort against the reviewed model family."""
+    from adaos.services.builder.model_controls import reasoning_for_model
+    return reasoning_for_model(model, effort)
+
+
+def model_supports_sampling(model: str | None) -> bool:
+    from adaos.services.builder.model_controls import supports_sampling
+    return supports_sampling(model)
 
 
 def submit_request(
@@ -40,15 +62,22 @@ def submit_request(
 
     from adaos.services.builder.prototype_requests import submit_request as submit
 
-    global _WORKSPACE_PORT
+    global _WORKSPACE_PORT, _PERSONAL_PORT
     # Scope this cutover to the admitted semantic proposer. General generation
     # retains its explicitly named compatibility backend until separately qualified.
     mode = (metadata or {}).get("builder_semantic_edit_mode")
+    if (metadata or {}).get('builder_ai_resource_ref') and mode not in {None, 'full_candidate', 'bounded_ops', 'full_document'}:
+        raise ValueError('Personal ChatGPT supports foreground Prototype only; no Root or Automation fallback')
     selected = (metadata or {}).get('builder_selected_target') or {}
     from adaos.sdk.builder.semantic_ui import recognizes_request
     managed_edit = (isinstance(selected, Mapping) and selected.get('object_type') in {'scenario', 'project'}
                     and recognizes_request(statement))
-    if mode in {"bounded_ops", "full_document"} or managed_edit:
+    if (metadata or {}).get('builder_ai_resource_ref'):
+        from adaos.adapters.builder.legacy_dev_skill import PersonalChatGPTPrototypeExecution
+        if _PERSONAL_PORT is None:
+            _PERSONAL_PORT = PersonalChatGPTPrototypeExecution()
+        port = _PERSONAL_PORT
+    elif mode in {"bounded_ops", "full_document"} or managed_edit:
         from adaos.adapters.builder.legacy_dev_skill import WorkspaceSkillPrototypeExecution
         if _WORKSPACE_PORT is None:
             _WORKSPACE_PORT = WorkspaceSkillPrototypeExecution()
@@ -383,6 +412,9 @@ def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, An
 
 
 __all__ = [
+    "personal_provider_jobs",
+    "model_reasoning",
+    "model_supports_sampling",
     "prepare_collection_repair",
     "apply_collection_repair",
     "prepare_record_repair",

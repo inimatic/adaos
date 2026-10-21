@@ -107,3 +107,49 @@ def test_bounded_ui_requires_explicit_scope_before_intake_or_paid_call(native_pr
     assert result['status'] == 'semantic_proposal_rejected' and result['model_calls'] == 0
     assert (root / 'semantic.webui.json').read_bytes() == before
     assert workflow.describe('scenario', root.name)['generation'] == generation
+
+
+def test_personal_selection_uses_only_bounded_sdk_path_and_never_automation(native_proposer, monkeypatch):
+    from adaos.sdk import ai
+    from adaos.services.ai.service import RESOURCE_REF
+    module, workflow, root, document = native_proposer
+    calls = []
+    def forbidden(**kwargs): pytest.fail('Personal Prototype must never route to Automation or Root generation')
+    monkeypatch.setattr(module, '_route_automation_chat', forbidden)
+    monkeypatch.setattr(module, 'update_current_scenario', forbidden)
+    monkeypatch.setattr(ai, 'status', lambda: {'binding_ref': 'personal-binding'})
+    monkeypatch.setattr(ai, 'submit', lambda **kw: calls.append(kw) or {'job_id': 'ai-personal'})
+    proposal = {'schema': PROPOSAL_SCHEMA, 'status': 'proposed', 'message': '',
+        'ops': [{'kind': 'label.set', 'ref': 'view:work-list', 'locale': 'en', 'text': 'Personal queue'}]}
+    monkeypatch.setattr(ai, 'job', lambda identity: {'job_id': identity, 'status': 'completed',
+        'funding_source': 'personal_subscription', 'usage': {'input_tokens': 123, 'output_tokens': 20},
+        'output_text': json.dumps(proposal)})
+    metadata = {'source_message_id': 'personal.user', 'builder_llm_model': 'gpt-5',
+        'builder_ai_resource_ref': RESOURCE_REF, 'builder_subscription_output_policy': 'provider_default',
+        'builder_semantic_edit_mode': 'bounded_ops', 'builder_semantic_write_ref': 'view:work-list',
+        'builder_semantic_write_property': 'title.en'}
+    result = module.chat(text='Rename this heading', webspace_id='builder-host', _meta=metadata)
+    assert result['status'] == 'semantic_proposal_applied' and len(calls) == 1, result
+    assert calls[0]['expected_binding'] == 'personal-binding'
+    assert 'max_tokens' not in calls[0] and 'cost_usd' not in result['execution_metrics']
+    blocked = module.chat(text='Run Automation', _meta={'builder_ai_resource_ref': RESOURCE_REF,
+        'builder_semantic_edit_mode': 'automation'})
+    assert blocked['status'] == 'personal_chatgpt_requires_foreground_prototype' and len(calls) == 1
+
+
+def test_saved_personal_selection_routes_full_prototype_without_automation(native_proposer, monkeypatch):
+    module, _, root, _ = native_proposer
+    from adaos.services.ai.service import RESOURCE_REF
+    (root / 'prompt_state.json').write_text(json.dumps({'llm_profile': {
+        'id': 'chatgpt/test-model', 'model': 'test-model', 'resource_ref': RESOURCE_REF,
+        'binding_ref': 'saved-binding', 'subscription_output_policy': 'provider_default'}}), encoding='utf-8')
+    calls = []
+    monkeypatch.setattr(module, '_route_automation_chat', lambda **_: pytest.fail('Personal selection reached Automation'))
+    monkeypatch.setattr(module, '_try_semantic_label_request', lambda **_: None)
+    monkeypatch.setattr(module, 'update_current_scenario', lambda **kw: calls.append(kw) or {
+        'ok': True, 'status': 'llm_pending', 'message': 'Submitted'})
+    monkeypatch.setattr(module, '_schedule_safe_emit_chat', lambda *a, **kw: None)
+    result = module.chat(text='Create a complete tracker prototype', webspace_id='builder-host')
+    assert result['status'] == 'llm_pending' and len(calls) == 1
+    assert calls[0]['_meta']['builder_ai_resource_ref'] == RESOURCE_REF
+    assert calls[0]['_meta']['builder_ai_expected_binding'] == 'saved-binding'

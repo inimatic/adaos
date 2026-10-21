@@ -14,6 +14,7 @@ class RuntimeRouter:
 def runtime_routers() -> tuple[RuntimeRouter, ...]:
     """Resolve runtime routers lazily after the AgentContext is available."""
     from adaos.apps.api import (
+        ai,
         agent_context_control,
         application_access,
         application_cbs,
@@ -54,6 +55,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
     from adaos.services.yjs.gateway import router as yjs_router
 
     return (
+        RuntimeRouter(ai.router, '/api/node/internal/ai'),
         RuntimeRouter(tool_bridge.router, "/api"),
         RuntimeRouter(companion_lab.router, "/api/companion/lab"),
         RuntimeRouter(application_report_relay.router),

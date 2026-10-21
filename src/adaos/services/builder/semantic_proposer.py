@@ -148,7 +148,12 @@ def _response_metrics(job: Mapping[str, Any], effort: str) -> dict[str, Any]:
     job_id = job.get('job_id') or (job.get('job') or {}).get('id')
     if job_id:
         metrics.setdefault('source_refs', [f'llm_job:{job_id}'])
-    if 'cost_usd' not in metrics:
+    if job.get('funding_source') == 'personal_subscription':
+        # Token usage is real; API list-price estimates are not subscription cost.
+        metrics.pop('cost_usd', None)
+        metrics.pop('cost_basis', None)
+        metrics['source_refs'] = ['ai_attempt:' + str(job.get('job_id') or '')]
+    elif 'cost_usd' not in metrics:
         from .model_costs import estimate_observed_model_cost
         estimate = estimate_observed_model_cost(metrics)
         if estimate:
@@ -164,9 +169,10 @@ class SemanticProposer:
         self.wait = wait or llm_client.wait_response_job
 
     def _observe_run(self, record, retained, activity):
+        attempt_prefix = 'ai_attempt:' if retained['request'].get('ai_resource_ref') else 'llm_job:'
         metrics = retained.get('execution_metrics') or {'source': 'builder.llm_result',
             'model': retained['request']['model'],
-            'llm_calls': 1, 'repair_attempts': 0, 'source_refs': ['llm_job:' + retained['job_id']]}
+            'llm_calls': 1, 'repair_attempts': 0, 'source_refs': [attempt_prefix + retained['job_id']]}
         effort = (retained['request'].get('reasoning') or {}).get('effort')
         if effort:
             metrics.setdefault('reasoning_effort', effort)
@@ -176,7 +182,8 @@ class SemanticProposer:
             execution_metrics=metrics, source_message_id=record['source_request']['source_message_id'])
 
     def propose(self, *, project_ref: str, admission_id: str, model: str, reasoning_effort: str = 'high',
-                max_tokens: int = 32768, timeout_s: float = 300, output_mode: str = 'bounded_ops') -> dict[str, Any]:
+                max_tokens: int = 32768, timeout_s: float = 300, output_mode: str = 'bounded_ops',
+                ai_resource_ref: str | None = None, subscription_output_policy: str | None = None) -> dict[str, Any]:
         from .model_controls import reasoning_for_model
         if not model or isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1024 <= max_tokens <= 65536:
             raise BuilderWorkflowError('Explicit model and bounded output capacity are required')
@@ -187,6 +194,14 @@ class SemanticProposer:
         record = _read(path)
         model_path = path.with_suffix('.model.json')
         observed_request = _read(model_path) if model_path.is_file() else {}
+        submit, wait = self.submit, self.wait
+        if ai_resource_ref is not None:
+            from .personal_prototype import PersonalPrototypeJobs
+            from adaos.services.ai.service import RESOURCE_REF
+            if ai_resource_ref != RESOURCE_REF or subscription_output_policy != 'provider_default':
+                raise BuilderWorkflowError('Personal ChatGPT requires explicit resource selection and provider-default output consent; no token cap is promised')
+            client = PersonalPrototypeJobs()
+            submit, wait = client.submit, client.wait
         if 'component_snapshot' not in record and not observed_request.get('job_id'):
             raise BuilderWorkflowError('An unpinned legacy admission requires explicit new admission before inference')
         immutable = {key: value for key, value in record.items() if key not in
@@ -217,6 +232,15 @@ class SemanticProposer:
                            'schema': contract}}
         envelope = {'messages': messages, 'model': model, 'reasoning': reasoning, 'max_tokens': max_tokens,
                     'text': text, 'tools': [], 'tool_choice': 'none', 'profile_scope': 'development'}
+        if ai_resource_ref is not None:
+            from adaos.sdk import ai
+            previous = observed_request.get('request') or {}
+            pinned_binding = previous.get('ai_expected_binding') or ai.status().get('binding_ref')
+            if not pinned_binding:
+                raise BuilderWorkflowError('Connect personal ChatGPT in Subscription before selecting it for Prototype')
+            envelope.pop('max_tokens')
+            envelope.update(ai_resource_ref=ai_resource_ref, ai_expected_binding=pinned_binding,
+                            subscription_output_policy=subscription_output_policy)
         from adaos.services.contract_context_admission import prepare_component_input
         envelope, input_admission = prepare_component_input(envelope, snapshot=record.get('component_snapshot'),
             required_ids=packet['authoring_discovery']['required_closure'])
@@ -230,7 +254,8 @@ class SemanticProposer:
                 frozen_mode = 'full_document' if 'semantic_document' in frozen['text']['format']['schema']['properties'] else 'bounded_ops'
                 if (digest(frozen) != retained['request_digest'] or frozen_mode != output_mode
                         or any(frozen.get(key) != envelope.get(key) for key in
-                               ('model', 'reasoning', 'max_tokens', 'tools', 'tool_choice', 'profile_scope'))):
+                               ('model', 'reasoning', 'max_tokens', 'tools', 'tool_choice', 'profile_scope',
+                                'ai_resource_ref', 'ai_expected_binding', 'subscription_output_policy'))):
                     raise BuilderWorkflowError('A retained proposal cannot change its model/profile/context on retry')
                 # Software/prompt updates must not replace a previously sealed
                 # Root request. Resume its exact envelope, not a new paid input.
@@ -256,7 +281,7 @@ class SemanticProposer:
             if not retained.get('job_id'):
                 from adaos.services.contract_context_admission import component_input_scope
                 with component_input_scope(record['component_snapshot'], required_ids=input_admission['required_closure'], route='increment'):
-                    submitted = self.submit(**envelope, request_id=retained['request_id'], stream=False,
+                    submitted = submit(**envelope, request_id=retained['request_id'], stream=False,
                                             provider_max_attempts=1, timeout=30)
                 job_id = submitted.get('job_id') or (submitted.get('job') or {}).get('id')
                 if not job_id:
@@ -264,7 +289,7 @@ class SemanticProposer:
                 retained.update(job_id=job_id, base_url=(submitted.get('_client') or {}).get('base_url'), status='submitted')
                 atomic_write_json(model_path, retained)
             self._observe_run(record, retained, 'started')
-            job = self.wait(retained['job_id'], base_url=retained.get('base_url'), timeout_s=timeout_s, poll_interval_s=0.5)
+            job = wait(retained['job_id'], base_url=retained.get('base_url'), timeout_s=timeout_s, poll_interval_s=0.5)
             metrics = _response_metrics(job, reasoning_effort)
             metrics.setdefault('model', model)
             retained.update(status='observed', job=job, execution_metrics=metrics)
@@ -291,6 +316,7 @@ class SemanticProposer:
                 raise BuilderWorkflowError('The model returned no valid semantic proposal') from exc
             self._observe_run(record, retained, 'ready' if prepared['status'] == 'planned' else prepared['status'])
             result = {**prepared, 'proposal': proposal, 'execution_metrics': metrics, 'root_job_id': retained['job_id'],
+                'provider_job_id': retained['job_id'], 'ai_resource_ref': ai_resource_ref,
                 'admission_id': admission_id, 'model_calls': metrics['llm_calls'], 'requested_model': model,
                 'reasoning_effort': reasoning_effort, 'output_mode': output_mode,
                 'input_bytes': len(json.dumps(envelope['messages'], ensure_ascii=False).encode('utf-8'))}
