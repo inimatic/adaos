@@ -183,7 +183,8 @@ class SemanticProposer:
 
     def propose(self, *, project_ref: str, admission_id: str, model: str, reasoning_effort: str = 'high',
                 max_tokens: int = 32768, timeout_s: float = 300, output_mode: str = 'bounded_ops',
-                ai_resource_ref: str | None = None, subscription_output_policy: str | None = None) -> dict[str, Any]:
+                ai_resource_ref: str | None = None, subscription_output_policy: str | None = None,
+                ai_expected_binding: str | None = None) -> dict[str, Any]:
         from .model_controls import reasoning_for_model
         if not model or isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1024 <= max_tokens <= 65536:
             raise BuilderWorkflowError('Explicit model and bounded output capacity are required')
@@ -235,7 +236,12 @@ class SemanticProposer:
         if ai_resource_ref is not None:
             from adaos.sdk import ai
             previous = observed_request.get('request') or {}
-            pinned_binding = previous.get('ai_expected_binding') or ai.status().get('binding_ref')
+            retained_binding = previous.get('ai_expected_binding')
+            if ai_expected_binding is not None and (not isinstance(ai_expected_binding, str)
+                    or not ai_expected_binding.strip()
+                    or (retained_binding and retained_binding != ai_expected_binding)):
+                raise BuilderWorkflowError('Personal Prototype cannot change its selected connection binding')
+            pinned_binding = retained_binding or ai_expected_binding or ai.status().get('binding_ref')
             if not pinned_binding:
                 raise BuilderWorkflowError('Connect personal ChatGPT in Subscription before selecting it for Prototype')
             envelope.pop('max_tokens')

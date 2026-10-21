@@ -109,7 +109,8 @@ def test_bounded_ui_requires_explicit_scope_before_intake_or_paid_call(native_pr
     assert workflow.describe('scenario', root.name)['generation'] == generation
 
 
-def test_personal_selection_uses_only_bounded_sdk_path_and_never_automation(native_proposer, monkeypatch):
+@pytest.mark.parametrize('selected_binding', [None, 'selected-before-reconnect'])
+def test_personal_selection_uses_only_bounded_sdk_path_and_never_automation(native_proposer, monkeypatch, selected_binding):
     from adaos.sdk import ai
     from adaos.services.ai.service import RESOURCE_REF
     module, workflow, root, document = native_proposer
@@ -128,9 +129,11 @@ def test_personal_selection_uses_only_bounded_sdk_path_and_never_automation(nati
         'builder_ai_resource_ref': RESOURCE_REF, 'builder_subscription_output_policy': 'provider_default',
         'builder_semantic_edit_mode': 'bounded_ops', 'builder_semantic_write_ref': 'view:work-list',
         'builder_semantic_write_property': 'title.en'}
+    if selected_binding:
+        metadata['builder_ai_expected_binding'] = selected_binding
     result = module.chat(text='Rename this heading', webspace_id='builder-host', _meta=metadata)
     assert result['status'] == 'semantic_proposal_applied' and len(calls) == 1, result
-    assert calls[0]['expected_binding'] == 'personal-binding'
+    assert calls[0]['expected_binding'] == (selected_binding or 'personal-binding')
     assert 'max_tokens' not in calls[0] and 'cost_usd' not in result['execution_metrics']
     blocked = module.chat(text='Run Automation', _meta={'builder_ai_resource_ref': RESOURCE_REF,
         'builder_semantic_edit_mode': 'automation'})

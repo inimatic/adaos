@@ -47,7 +47,8 @@ def test_proposal_uses_strict_typed_output_and_read_dependencies(graph_project):
     assert graph_project[1].current_prototype_revision('scenario', 'semantic_labels') == '001'
 
 
-def test_personal_chatgpt_uses_core_sdk_without_root_billing_or_output_cap(graph_project, monkeypatch):
+@pytest.mark.parametrize('selected_binding', [None, 'selected-registration'])
+def test_personal_chatgpt_uses_core_sdk_without_root_billing_or_output_cap(graph_project, monkeypatch, selected_binding):
     from adaos.sdk import ai
     from adaos.services.ai.service import RESOURCE_REF
     proposer, packet, root_calls, completed = setup_proposer(graph_project)
@@ -61,15 +62,21 @@ def test_personal_chatgpt_uses_core_sdk_without_root_billing_or_output_cap(graph
     monkeypatch.setattr(ai, 'job', lambda identity: {'job_id': identity, 'status': 'completed',
         'output_text': json.dumps(output), 'funding_source': 'personal_subscription',
         'usage': {'input_tokens': 100, 'output_tokens': 20}})
-    result = run(proposer, packet, ai_resource_ref=RESOURCE_REF, subscription_output_policy='provider_default')
+    result = run(proposer, packet, ai_resource_ref=RESOURCE_REF, subscription_output_policy='provider_default',
+        ai_expected_binding=selected_binding)
     assert result['status'] == 'planned' and not root_calls
-    assert core_calls[0]['expected_binding'] == 'personal-registration'
+    assert core_calls[0]['expected_binding'] == (selected_binding or 'personal-registration')
     assert core_calls[0]['text']['format']['strict']
     assert all(row['role'] != 'system' for row in core_calls[0]['inputs'])
     assert 'max_output_tokens' not in core_calls[0] and 'max_tokens' not in core_calls[0]
     assert 'cost_usd' not in result['execution_metrics']
     assert result['execution_metrics']['input_tokens'] == 100
-    assert run(proposer, packet, ai_resource_ref=RESOURCE_REF, subscription_output_policy='provider_default') == result
+    assert run(proposer, packet, ai_resource_ref=RESOURCE_REF, subscription_output_policy='provider_default',
+        ai_expected_binding=selected_binding) == result
+    assert len(core_calls) == 1
+    with pytest.raises(BuilderWorkflowError, match='selected connection binding'):
+        run(proposer, packet, ai_resource_ref=RESOURCE_REF, subscription_output_policy='provider_default',
+            ai_expected_binding='different-registration')
     assert len(core_calls) == 1
     with pytest.raises(BuilderWorkflowError, match='cannot change'):
         run(proposer, packet)
