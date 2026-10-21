@@ -18,20 +18,32 @@ def declaration():
             'statements': ['CREATE TABLE entries(id INTEGER PRIMARY KEY, label TEXT)']}]}]}}
 
 
-def bucket_prepare(tmp_path, manifest):
+def bucket_prepare(tmp_path, manifest, *, resolve=False):
     target = tmp_path / 'new'
     target.mkdir(exist_ok=True)
     manager = SimpleNamespace(_data_migration_config=lambda _: {})
     environment = SimpleNamespace(runtime_bucket=lambda version: version[:3],
         resolve_active_version=lambda: '0.1.0', ensure_data_dirs=lambda _: None)
     slot = SimpleNamespace(version='0.2.0', data_root=target, internal_data_dir=target / 'internal')
+    if resolve:
+        from adaos.services.skill.manager import PolicyDefaults
+        from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+        environment_real = SkillRuntimeEnvironment(skills_root=tmp_path / 'skills', skill_name='sample')
+        slot_real = environment_real.build_slot_paths('0.2.0', 'B')
+        manager_real = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=SimpleNamespace())
+        manifest = manager_real._enrich_manifest(
+            manifest={**manifest, 'name': 'sample', 'version': '0.2.0'}, slot=slot_real,
+            interpreter=tmp_path / 'python', python_paths=[],
+            defaults=PolicyDefaults(timeout_seconds=30, retry_count=0, telemetry_enabled=False),
+            policy_overrides={}, skill_dir=tmp_path)
     return lambda: SkillManager._prepare_bucket_data(manager, env=environment, slot=slot,
         resolved_manifest={**manifest, 'version': '0.2.0'}, skill_dir=tmp_path, python_paths=[])
 
 
-def test_native_bucket_upgrade_never_copies_legacy_data_over_adopted_data(tmp_path):
+@pytest.mark.parametrize('resolve', [False, True])
+def test_native_bucket_upgrade_never_copies_legacy_data_over_adopted_data(tmp_path, resolve):
     manifest = declaration()
-    prepare = bucket_prepare(tmp_path, manifest)
+    prepare = bucket_prepare(tmp_path, manifest, resolve=resolve)
     target = tmp_path / 'new'
     initialize_sqlite_schema(target / 'store.sqlite', declared_databases(manifest)['store.sqlite'])
     with closing(sqlite3.connect(target / 'store.sqlite')) as db:

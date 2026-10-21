@@ -6387,6 +6387,10 @@ class SkillManager:
             "default_tool": default_tool,
             "data_migration_tool": data_migration_tool,
             "data_migration": dict(data_migration) if data_migration_tool or data_migration else {},
+            # Bucket preparation must see the same native data contract as
+            # the fenced Application coordinator. Dropping it here would
+            # select legacy copying and overwrite an already migrated store.
+            "data_lifecycle": manifest.get("data_lifecycle") if isinstance(manifest.get("data_lifecycle"), Mapping) else {},
             "policy": {
                 "timeout_seconds": defaults.timeout_seconds,
                 "retry_count": defaults.retry_count,
