@@ -623,8 +623,8 @@ fi
 
 if [[ -n "${ZONE_ID:-}" ]]; then
   ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
-  if [[ ! "$ZONE_ID" =~ ^[a-z]{2}$ ]]; then
-    die "ZONE_ID must be a two-letter lowercase country/region code (example: ru)"
+  if [[ ! "$ZONE_ID" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
+    die "ZONE_ID must be a directory zone name (example: ru or de)"
   fi
 fi
 LANGUAGE="$(printf '%s' "${LANGUAGE:-en}" | tr '[:upper:]' '[:lower:]')"
@@ -803,6 +803,17 @@ log "Detecting git availability (adaos git autodetect)..."
 
 export ADAOS_REV="$REV"
 EFFECTIVE_ROOT_URL="$(effective_root_url "$ROOT_URL" "${ZONE_ID:-}")"
+if [[ -n "${ZONE_ID:-}" ]]; then
+  log "Resolving zone through the signed public directory..."
+  ZONE_DIRECTORY_CACHE="$ADAOS_BASE_DIR/state/zone-directory.json"
+  EFFECTIVE_ROOT_URL="$("$ADAOS_PY" -m adaos.services.zone_directory resolve --zone "$ZONE_ID" --cache "$ZONE_DIRECTORY_CACHE")" \
+    || die "Requested zone has no fresh signed placement; refusing legacy fallback"
+  export ADAOS_ZONE_DIRECTORY_ENABLED=1
+  export ADAOS_ZONE_DIRECTORY_CACHE_FILE="$ZONE_DIRECTORY_CACHE"
+  write_env_var "ADAOS_ZONE_DIRECTORY_ENABLED" "1" ".env"
+  write_env_var "ADAOS_ZONE_DIRECTORY_CACHE_FILE" "$ZONE_DIRECTORY_CACHE" ".env"
+  write_env_var "ADAOS_API_BASE" "$EFFECTIVE_ROOT_URL" ".env"
+fi
 export ADAOS_API_BASE="$EFFECTIVE_ROOT_URL"
 if [[ -n "${ZONE_ID:-}" ]]; then
   export ADAOS_ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
