@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
+from contextlib import nullcontext
 import hashlib
 import json
 import re
@@ -4499,17 +4500,19 @@ def append_message(
     redacted_at: float | None = None,
     redaction_reason: str | None = None,
     ts: float | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict[str, Any] | None:
-    if not ensure_schema():
+    if connection is None and not ensure_schema():
         return None
     now = float(ts or time.time())
     message_payload = dict(payload or {})
     message_id = _normalize_id(message_payload.get("id"), "m")
     idem = str(idempotency_key or "").strip() or None
-    with _sql().connect() as con:  # type: ignore[union-attr]
+    with (nullcontext(connection) if connection is not None else _sql().connect()) as con:
         con.row_factory = sqlite3.Row
         try:
-            con.execute("BEGIN IMMEDIATE")
+            if connection is None:
+                con.execute("BEGIN IMMEDIATE")
             if idem:
                 existing = con.execute(
                     """
@@ -4520,7 +4523,8 @@ def append_message(
                     (conversation_id, idem),
                 ).fetchone()
                 if existing:
-                    con.rollback()
+                    if connection is None:
+                        con.rollback()
                     return _row_to_message(existing)
             existing_id = con.execute(
                 """
@@ -4531,7 +4535,8 @@ def append_message(
                 (message_id,),
             ).fetchone()
             if existing_id:
-                con.rollback()
+                if connection is None:
+                    con.rollback()
                 return _row_to_message(existing_id)
             max_seq = con.execute(
                 "SELECT COALESCE(MAX(seq), 0) FROM conversation_messages WHERE conversation_id=?",
@@ -4587,9 +4592,11 @@ def append_message(
                 role=role,
                 text=text,
             )
-            con.commit()
+            if connection is None:
+                con.commit()
         except Exception:
-            con.rollback()
+            if connection is None:
+                con.rollback()
             raise
     message_payload.update(
         {
