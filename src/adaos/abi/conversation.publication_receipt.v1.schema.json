@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.publication_receipt.v1",
+  "title": "Committed conversation publication, not external delivery proof",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "publication_id", "message_id", "intent_ids", "status", "committed_at"],
+  "properties": {
+    "schema": {"const": "adaos.conversation.publication_receipt.v1"},
+    "publication_id": {"type": "string", "minLength": 1},
+    "message_id": {"type": "string", "minLength": 1},
+    "intent_ids": {"type": "array", "maxItems": 20, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "status": {"const": "committed"},
+    "committed_at": {"type": "number", "minimum": 0}
+  }
+}

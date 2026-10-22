@@ -76,6 +76,8 @@ jobs:
             tests/test_realtime_sidecar.py \
             tests/test_root_mcp_output_profile.py \
             tests/test_supervisor.py \
+            tests/test_conversation_publication.py \
+            tests/test_conversation_receipt_recovery.py \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread
 

@@ -5,6 +5,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -292,8 +293,10 @@ def enqueue_response(
     turn_trace_id: str | None = None,
     trace: Mapping[str, Any] | None = None,
     now: str | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
-    ensure_schema()
+    if connection is None:
+        ensure_schema()
     timestamp = now or _now()
     conversation = str(conversation_id or "").strip()
     selected_id = str(envelope_id or f"response.{uuid.uuid4().hex}").strip()
@@ -346,9 +349,10 @@ def enqueue_response(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    with _sql().connect() as con:
+    with (nullcontext(connection) if connection is not None else _sql().connect()) as con:
         con.row_factory = sqlite3.Row
-        con.execute("BEGIN IMMEDIATE")
+        if connection is None:
+            con.execute("BEGIN IMMEDIATE")
         sequence = int(
             con.execute(
                 "SELECT COALESCE(MAX(sequence), 0) FROM conversation_response_outbox WHERE conversation_id=?",
@@ -396,7 +400,8 @@ def enqueue_response(
             (selected_id,),
         ).fetchone()
         if existing:
-            con.rollback()
+            if connection is None:
+                con.rollback()
             if str(existing["payload_digest"]) != request_digest:
                 raise DurableDeliveryError("response envelope idempotency conflict")
             return _validate(RESPONSE_ENVELOPE_SCHEMA, _load(existing["payload_json"]))
@@ -416,7 +421,8 @@ def enqueue_response(
                 )
                 if prior_terminal.get("terminal_key") != effective_terminal_key:
                     continue
-                con.rollback()
+                if connection is None:
+                    con.rollback()
                 if str(terminal_row["payload_digest"]) == request_digest:
                     return prior_terminal
                 raise DurableDeliveryError(
@@ -451,7 +457,8 @@ def enqueue_response(
                 record["coalesce_key"], status, request_digest, payload, timestamp, timestamp,
             ),
         )
-        con.commit()
+        if connection is None:
+            con.commit()
     return record
 
 
