@@ -801,9 +801,6 @@ export ADAOS_BASE_DIR
 
 print_bootstrap_config
 
-log "Detecting git availability (adaos git autodetect)..."
-"$ADAOS_PY" -m adaos git autodetect >/dev/null 2>&1 || true
-
 export ADAOS_REV="$REV"
 EFFECTIVE_ROOT_URL="$(effective_root_url "$ROOT_URL" "${ZONE_ID:-}")"
 if [[ -n "${ZONE_ID:-}" ]]; then
@@ -821,6 +818,8 @@ export ADAOS_API_BASE="$EFFECTIVE_ROOT_URL"
 if [[ -n "${ZONE_ID:-}" ]]; then
   export ADAOS_ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
 fi
+log "Detecting git availability (adaos git autodetect)..."
+"$ADAOS_PY" -m adaos git autodetect >/dev/null 2>&1 || true
 if [[ "$PREPARE_ENROLLMENT" == "1" ]]; then
   "$ADAOS_PY" -m adaos dev root prepare || die "Hub enrollment request preparation failed"
   exit 0

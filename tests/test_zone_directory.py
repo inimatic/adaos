@@ -35,6 +35,8 @@ def test_signed_de_beats_legacy_alias_and_survives_restart(tmp_path, authority, 
     assert zone_hosts.zone_public_base_url("de") == "https://de.api.adaos.io"
     assert zone_hosts.zone_public_nats_ws_url("de") == "wss://de.api.adaos.io/nats"
     assert zone_hosts.resolve_zone_for_server("de", "de") == "de"
+    from adaos.services.node_config import resolve_effective_root_base_url
+    assert resolve_effective_root_base_url("https://ru.api.inimatic.com", zone_id="de") == "https://de.api.adaos.io"
     restored = directory.Replica(tmp_path / "cache.json", trust, clock=lambda: 1500)
     assert restored.resolve("de")["id"] == "de"
     with pytest.raises(ValueError):
