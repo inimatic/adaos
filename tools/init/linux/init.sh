@@ -75,6 +75,15 @@ fetch_to_file() {
   die "Neither curl nor wget is available. Install one of them and retry."
 }
 
+source_archive_url() {
+  local revision="$1"
+  if [[ "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'https://codeload.github.com/%s/%s/tar.gz/%s' "$REPO_OWNER" "$REPO_NAME" "$revision"
+  else
+    printf 'https://codeload.github.com/%s/%s/tar.gz/refs/heads/%s' "$REPO_OWNER" "$REPO_NAME" "$revision"
+  fi
+}
+
 usage() {
   cat <<EOF
 Usage: init.sh [--dest DIR] [--rev REV] [--dev --use-git] [--archive|--no-git] [--force] [--use-git-from URL] [--workspace-registry-repo URL] [--codespaces] [--] [bootstrap args...]
@@ -284,7 +293,7 @@ else
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp" >/dev/null 2>&1 || true' EXIT
   archive="$tmp/adaos.tar.gz"
-  url="https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/refs/heads/${REV}"
+  url="$(source_archive_url "$REV")"
   log "Downloading source archive: ${url}"
   fetch_to_file "$url" "$archive"
 
