@@ -1,5 +1,6 @@
 import base64
 import json
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -100,3 +101,28 @@ def test_peer_failure_retains_valid_cache(tmp_path, authority):
 def test_redirect_handler_refuses_credential_leak():
     with pytest.raises(ValueError):
         directory.NoRedirect().redirect_request(None, None, None, None, "https://other.example.com")
+
+
+@pytest.mark.parametrize('saved_zone',['ru','de'])
+def test_existing_foreign_hub_identity_is_not_silently_reenrolled(tmp_path,authority,monkeypatch,saved_zone):
+    from adaos.services import node_config
+    from adaos.services.agent_context import get_ctx
+    config=node_config.load_config()
+    config.zone_id=saved_zone
+    config.root_settings.base_url='https://ru.api.inimatic.com'
+    node_config.save_config(config)
+    certificate=config.hub_cert_path()
+    certificate.parent.mkdir(parents=True,exist_ok=True)
+    certificate.write_text('existing identity boundary')
+    config_path=Path(get_ctx().paths.base_dir())/'node.yaml'
+    original=config_path.read_bytes()
+    trust,signed=authority
+    replica=directory.Replica(tmp_path/'directory.json',trust,clock=lambda:1500)
+    replica.accept(signed())
+    monkeypatch.setenv('ADAOS_ZONE_DIRECTORY_ENABLED','1')
+    monkeypatch.setenv('ADAOS_ZONE_ID','de')
+    monkeypatch.setattr(directory,'_configured',replica)
+    node_config._NODE_CONFIG_CACHE.clear()
+    with pytest.raises(ValueError,match='explicit migration'):
+        node_config.load_config()
+    assert config_path.read_bytes()==original
