@@ -795,6 +795,11 @@ if [[ "${DEV_MODE:-0}" == "1" ]]; then
   ENV_TYPE="dev"
 fi
 export ENV_TYPE="${ENV_TYPE:-prod}"
+if [[ "$ENV_TYPE" != "dev" ]]; then
+  # Managed runtime consumes archives/packages; Git in PATH is not delivery policy.
+  export ADAOS_GIT_MODE=disabled
+  write_env_var "ADAOS_GIT_MODE" "disabled" ".env"
+fi
 ADAOS_BASE_DIR="$(resolve_adaos_base_dir)"
 mkdir -p "$ADAOS_BASE_DIR"
 export ADAOS_BASE_DIR
