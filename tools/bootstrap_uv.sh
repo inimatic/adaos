@@ -20,6 +20,7 @@ CONTROL_PORT="8777"
 ROOT_URL="https://api.inimatic.com"
 REV="main"
 ZONE_ID=""
+PREPARE_ENROLLMENT=0
 LANGUAGE="${ADAOS_LANG:-en}"
 NO_VOICE="0"
 DEV_MODE="0"
@@ -510,6 +511,7 @@ while [[ $# -gt 0 ]]; do
     --root-url) ROOT_URL="${2:-}"; shift 2 ;;
     --rev) REV="${2:-}"; shift 2 ;;
     --zone|--zone-id) ZONE_ID="${2:-}"; shift 2 ;;
+    --prepare-enrollment) PREPARE_ENROLLMENT=1; shift ;;
     --language|--lang) LANGUAGE="${2:-}"; shift 2 ;;
     --python) PYTHON_ARG="${2:-}"; shift 2 ;;
     --node-name) NODE_NAME="${2:-}"; shift 2 ;;
@@ -539,6 +541,7 @@ Usage: tools/bootstrap_uv.sh [options]
   --root-url URL
   --rev REV
   --zone ZONE_ID
+  --prepare-enrollment  Prepare public key enrollment request without registering or starting services
   --language en|ru    Initial owner UI language (default: en)
   --python /path/to/python3.11
   --node-name NAME
@@ -817,6 +820,10 @@ fi
 export ADAOS_API_BASE="$EFFECTIVE_ROOT_URL"
 if [[ -n "${ZONE_ID:-}" ]]; then
   export ADAOS_ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
+fi
+if [[ "$PREPARE_ENROLLMENT" == "1" ]]; then
+  "$ADAOS_PY" -m adaos dev root prepare || die "Hub enrollment request preparation failed"
+  exit 0
 fi
 
 # Native Application installation resolves immutable packages through the
