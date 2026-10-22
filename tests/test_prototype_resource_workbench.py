@@ -32,6 +32,16 @@ def test_legacy_prototype_state_migrates_without_reseeding_or_catalog_reads(tmp_
     assert target.registry_path.read_bytes() == original
 
 
+def test_materialization_cannot_replace_another_projects_resource(tmp_path):
+    service = PrototypeResourceService(state_dir=tmp_path)
+    original = service.materialize(_bundle())["state"]
+    foreign = _bundle(revision="ui-002")
+    foreign["project_ref"] = "project:another"
+    with pytest.raises(PrototypeResourceConflict, match="another Project"):
+        service.materialize(foreign)
+    assert service.snapshot(original["resource_type"]) == original
+
+
 def _record_schema() -> dict:
     return {
         "type": "object",

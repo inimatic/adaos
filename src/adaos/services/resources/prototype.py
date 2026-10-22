@@ -215,6 +215,8 @@ class PrototypeResourceService:
         )
         with mutation_lock(self.lock_path, timeout_s=30.0):
             previous = self._state(resource_type)
+            if isinstance(previous, Mapping) and previous.get("project_ref") != value["project_ref"]:
+                raise PrototypeResourceConflict("Prototype resource already belongs to another Project")
             if isinstance(previous, Mapping) and previous.get("bundle_digest") == bundle_digest:
                 return {"ok": True, "duplicate": True, "state": _clone(previous)}
             state = {
