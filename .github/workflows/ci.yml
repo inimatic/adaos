@@ -91,6 +91,12 @@ jobs:
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread
 
+      - name: Verify protocol authority and recovery diagnostics
+        # Run diagnostics in a separate process: this module intentionally has
+        # lightweight optional-WebSocket fixtures for platform-independent tests.
+        run: |
+          uv run python -m pytest -q tests/test_reliability.py --junitxml=reports/reliability-junit.xml
+
       - name: Enforce bounded MCP collections and output budgets
         run: |
           uv run python tools/mcp_output_profiler.py \
