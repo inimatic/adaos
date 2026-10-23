@@ -1042,6 +1042,45 @@ def test_hub_root_protocol_accepts_fresh_acked_authority_without_control_subscri
     assert assessment == {"state": "nominal", "reason": "no_active_protocol_pressure"}
 
 
+def test_hub_root_protocol_aging_authority_does_not_claim_subscription_missing() -> None:
+    protocol = {
+        "traffic_classes": {
+            "control": {"active_subscriptions": 0, "policy": {"stale_authority_after_s": 30}},
+            "route": {"active_subscriptions": 1},
+        },
+        "streams": {
+            "current": {
+                "flow_id": "hub_root.control.lifecycle", "traffic_class": "control", "ack_total": 5,
+                "last_issue_at": 2000.0, "last_ack_at": 2001.0,
+                "last_issue_ago_s": 15.05, "last_ack_ago_s": 15.01,
+            },
+        },
+    }
+    assert _hub_root_control_authority_snapshot(protocol)["state"] == "aging"
+    assessment = _hub_root_protocol_assessment(protocol)
+    assert assessment == {"state": "pressure", "reason": "aging_authority:hub_root.control.lifecycle"}
+
+    # The boundary remains enforced: losing a current ack must still close
+    # admission even when a cached higher-level summary once said "ready".
+    protocol["streams"]["current"]["last_ack_ago_s"] = 30.0
+    assert _hub_root_control_authority_snapshot(protocol)["state"] == "stale"
+    assessment = _hub_root_protocol_assessment(protocol)
+    assert assessment["state"] == "degraded"
+    assert "control_subscription_missing" in assessment["reason"]
+    assert "stale_authority:hub_root.control.lifecycle" in assessment["reason"]
+
+
+def test_hub_root_protocol_missing_ack_still_rejects_subscriptionless_authority() -> None:
+    protocol = {
+        "traffic_classes": {"control": {"active_subscriptions": 0, "policy": {"stale_authority_after_s": 30}}},
+        "streams": {"current": {"flow_id": "hub_root.control.lifecycle", "ack_total": 0, "last_issue_ago_s": 31.0}},
+    }
+    assert _hub_root_control_authority_snapshot(protocol)["state"] == "missing"
+    assessment = _hub_root_protocol_assessment(protocol)
+    assert assessment["state"] == "degraded"
+    assert "control_subscription_missing" in assessment["reason"]
+
+
 def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkless_members(monkeypatch) -> None:
     class _FakeDirectory:
         def list_known_nodes(self):

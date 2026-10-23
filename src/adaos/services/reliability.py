@@ -4897,7 +4897,12 @@ def _hub_root_protocol_assessment(protocol: dict[str, Any]) -> dict[str, Any]:
     control_authority = _hub_root_control_authority_snapshot(protocol)
     if (
         int(control.get("active_subscriptions") or 0) <= 0
-        and str(control_authority.get("state") or "") != "fresh"
+        # The supervisor/sidecar can own the actual NATS subscription, so the
+        # API process may have no local subscription counter. An acknowledged
+        # lifecycle remains authoritative through the policy's aging window,
+        # consistently with sidecar control readiness below. Aging is pressure,
+        # not evidence that the subscription disappeared.
+        and str(control_authority.get("state") or "") not in {"fresh", "aging"}
     ):
         state = "degraded"
         reasons.append("control_subscription_missing")
