@@ -78,6 +78,16 @@ jobs:
             tests/test_supervisor.py \
             tests/test_conversation_publication.py \
             tests/test_conversation_receipt_recovery.py \
+            tests/test_bootstrap_delivery_policy.py \
+            tests/test_bootstrap_source_revision.py \
+            tests/test_root_prepared_enrollment.py \
+            tests/test_zone_directory.py \
+            tests/test_native_data_adoption.py \
+            tests/test_activation_rollback_reconciliation.py \
+            tests/test_publication_rollback_reconciliation.py \
+            tests/test_ai.py \
+            tests/test_ai_chatgpt.py \
+            tests/test_builder_personal_ai.py \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \
             tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread
 

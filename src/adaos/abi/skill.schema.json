@@ -252,6 +252,14 @@
           "type": "string",
           "description": "Required Python version (for example \"3.11\")."
         },
+        "sdk_only": {
+          "type": "boolean",
+          "description": "Restrict platform imports to the public adaos.sdk surface during source admission."
+        },
+        "in_process_events": {
+          "type": "boolean",
+          "description": "Whether Core imports handlers to deliver events for a service skill."
+        },
         "env": {
           "type": "object",
           "description": "Environment installation strategy for the skill runtime.",
@@ -392,7 +400,9 @@
 
     "entry": {
       "description": "Legacy entry-point for non-Python runtimes; Python skills usually rely on @tool decorators instead.",
-      "type": "object",
+      "type": ["object", "string"],
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_./:-]+$",
       "additionalProperties": false,
       "properties": {
         "module": {

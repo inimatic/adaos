@@ -518,7 +518,10 @@ def promote_with_local_data(owner, candidate_id, promote):
     result_path = lifecycle.recovery / "publication-result.json"
 
     def publish(_key):
-        result = promote()
+        from .native_data_adoption import adopted_native_data
+        lifecycle.verify_or_restore_missing_stable_data()
+        with adopted_native_data(lifecycle.components):
+            result = promote()
         if not result.get("ok") or result.get("error") or result.get("status") == "stale":
             raise ValueError("Native publication is not verified; data and runtime remain fenced")
         metadata_root = workspace / ".adaos"

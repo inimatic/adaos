@@ -627,6 +627,11 @@ def _default_conf() -> NodeConfig:
 
 def resolve_effective_root_base_url(base_url: str | None, *, zone_id: str | None = None) -> str:
     normalized_zone = canonical_zone_id(str(zone_id or "").strip().lower())
+    from adaos.services.zone_directory import configured_replica
+    if configured_replica() is not None:
+        # Once directory admission is enabled, placement outranks old built-in
+        # URL defaults. Existing certificate affinity is fenced during loading.
+        return zone_public_base_url(normalized_zone)
     normalized_base = str(base_url or "").strip().rstrip("/")
     if not normalized_base:
         return zone_public_base_url(normalized_zone)
@@ -874,6 +879,19 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
     root_settings = _settings_from_dict(RootSettings, raw_root_settings)
     loaded_zone_id = (str(data.get("zone_id") or "").strip().lower() or None)
     env_zone_id = str(os.environ.get("ADAOS_ZONE_ID", "") or "").strip().lower() or None
+    from adaos.services.zone_directory import configured_replica
+    directory_replica = configured_replica()
+    if directory_replica is not None:
+        requested_zone = canonical_zone_id(env_zone_id or loaded_zone_id)
+        subnet_payload = data.get("subnet") if isinstance(data.get("subnet"), dict) else {}
+        hub_payload = subnet_payload.get("hub") if isinstance(subnet_payload.get("hub"), dict) else {}
+        existing_certificate = _expand_path(hub_payload.get("cert"), "keys/hub_cert.pem")
+        if existing_certificate.is_file():
+            saved_zone = canonical_zone_id(loaded_zone_id)
+            selected_root = zone_public_base_url(requested_zone)
+            other_roots = {item["apiBase"] for item in directory_replica.snapshot()["zones"]} - {selected_root}
+            if (saved_zone and saved_zone != requested_zone) or str(root_settings.base_url).rstrip("/") in other_roots:
+                raise ValueError("Existing Hub identity belongs to another zone; explicit migration is required")
     root_settings.base_url = resolve_effective_root_base_url(
         root_settings.base_url,
         zone_id=(env_zone_id or loaded_zone_id),

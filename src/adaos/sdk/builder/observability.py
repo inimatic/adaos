@@ -24,6 +24,12 @@ def execution_metrics_from_llm(result: Any, *, reasoning_effort=None) -> dict[st
     return project(result, reasoning_effort=reasoning_effort)
 
 
+def project_run(value: Any, *, request=None, source_message_ids=()) -> dict[str, Any]:
+    """Project retained run facts for Builder UI without issuing inference."""
+    from adaos.services.builder.run_observability import project_run as project
+    return project(value, request=request, source_message_ids=source_message_ids)
+
+
 def read_llm_evidence(receipt: Any) -> dict[str, Any]:
     """Verify the retained bytes for an acknowledged private attempt input."""
     from adaos.services.builder.llm_input_attribution import read_llm_evidence as read
@@ -72,6 +78,6 @@ def application_journey_profiles() -> list[dict[str, Any]]:
     return registered_profiles()
 
 
-__all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm",
+__all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm", "project_run",
            "configure_usd_budget", "usd_budget", "analyze_failure", "qualify_failure_replay", "analyze_browser_failure",
            "application_journey_profiles"]

@@ -26,8 +26,9 @@ class LlmJobWaitTimeout(TimeoutError):
 
     def __init__(self, observation: Mapping[str, Any]):
         self.observation = dict(observation)
+        provider = 'Core AI' if observation.get('funding_source') == 'personal_subscription' else 'Root LLM'
         super().__init__(
-            f"Root LLM job wait budget exhausted: {observation['job_id']} "
+            f"{provider} job wait budget exhausted: {observation['job_id']} "
             f"status={observation['root_status']} reason={observation['reason']} "
             f"elapsed_ms={observation['elapsed_ms']} "
             f"last_poll_error={observation['last_poll_error'] or 'none'}"

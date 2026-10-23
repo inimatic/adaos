@@ -98,12 +98,22 @@ def prepare_proposal(*, project_ref: str, admission_id: str, proposal: Mapping[s
 
 
 def propose(*, project_ref: str, admission_id: str, model: str, reasoning_effort='high',
-            max_tokens=32768, timeout_s=300, output_mode='bounded_ops') -> dict[str, Any]:
+            max_tokens=32768, timeout_s=300, output_mode='bounded_ops',
+            ai_resource_ref: str | None = None, subscription_output_policy: str | None = None,
+            ai_expected_binding: str | None = None) -> dict[str, Any]:
+    """Propose an admitted Prototype edit without changing execution authority.
+
+    Root retains its bounded API profile. Personal ChatGPT requires explicit
+    resource selection and subscription_output_policy='provider_default';
+    max_tokens is not sent on that route and is not a subscription spend cap.
+    Automation, tools and general generation are not admitted by this opt-in.
+    """
     from adaos.services.builder.semantic_admission import SemanticAdmissionService
     from adaos.services.builder.semantic_proposer import SemanticProposer
     return SemanticProposer(SemanticAdmissionService.from_context()).propose(project_ref=project_ref,
         admission_id=admission_id, model=model, reasoning_effort=reasoning_effort, max_tokens=max_tokens,
-        timeout_s=timeout_s, output_mode=output_mode)
+        timeout_s=timeout_s, output_mode=output_mode, ai_resource_ref=ai_resource_ref,
+        subscription_output_policy=subscription_output_policy, ai_expected_binding=ai_expected_binding)
 
 
 def prepare_request(*, project_ref: str, instruction: str, source_message_id: str,
@@ -126,6 +136,8 @@ def proposal_observation(*, project_ref: str, admission_id: str) -> dict[str, An
     retained = _read(model_path)
     metrics = retained.get('execution_metrics') or {}
     return {'status': retained.get('status'), 'root_job_id': retained.get('job_id'),
+            'provider_job_id': retained.get('job_id'),
+            'ai_resource_ref': (retained.get('request') or {}).get('ai_resource_ref'),
             'execution_metrics': metrics, 'model_calls': metrics.get('llm_calls', int(bool(retained.get('job_id'))))}
 
 

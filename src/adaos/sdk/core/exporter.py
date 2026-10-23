@@ -24,6 +24,8 @@ from .decorators import emits_map, event_payloads, tools_meta, tools_registry
 _ALLOWED_TOOL_PREFIXES: Tuple[str, ...] = ("manage.", "skills.", "scenarios.", "resources.")
 _DISCOVERY_PACKAGES: Tuple[str, ...] = ("adaos.sdk.manage", "adaos.sdk.data")
 _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
+    "adaos.sdk.ai",
+    "adaos.sdk.developer.compositions",
     "adaos.sdk.access",
     "adaos.sdk.applications",
     "adaos.sdk.automation",
@@ -57,6 +59,8 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.workflow",
 )
 _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
+    "adaos.sdk.ai": "Use an explicit personal AI resource through Core; connection management requires verified owner consent. Credentials and provider transport never belong to an Application.",
+    "adaos.sdk.developer.compositions": "Author distributable DEV Projects and attach package-neutral CBS capability requirements through manifest CAS; declarations never grant access or activate a provider.",
     "adaos.sdk.builder.observability": "Read source-attributed attempt observations and durable project USD commitments. Unknown provider charges retain their reservation; estimates are not invoices.",
     "adaos.sdk.builder.prototype": "Author and inspect governed declarative Prototype context and submit owned Builder requests.",
     "adaos.sdk.builder.semantic_ui": "Inspect semantic refs and obtain Core-issued bounded edit admissions; retained pins, exact write masks, replay and undo never grant production bindings.",
