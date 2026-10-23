@@ -71,4 +71,14 @@ class WorkspaceSkillPrototypeExecution(LegacyDevSkillPrototypeExecution):
             {"session_id": session_id, "webspace_id": webspace_id}, timeout=timeout_seconds)
 
 
-__all__ = ["LegacyDevSkillPrototypeExecution", "WorkspaceSkillPrototypeExecution"]
+class PersonalChatGPTPrototypeExecution(WorkspaceSkillPrototypeExecution):
+    """Exact opt-in endpoint; an older Builder must fail, never ignore selection."""
+    adapter_id = 'personal_chatgpt_prototype.v1'
+
+    def submit_turn(self, payload: Mapping[str, Any], *, timeout_seconds: float) -> Mapping[str, Any]:
+        return self._manager().run_tool('builder_skill', 'prototype_chatgpt_edit',
+            dict(payload), timeout=timeout_seconds)
+
+
+__all__ = ['LegacyDevSkillPrototypeExecution', 'WorkspaceSkillPrototypeExecution',
+           'PersonalChatGPTPrototypeExecution']

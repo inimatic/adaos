@@ -760,8 +760,11 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
         release_catalog = release.project_release.catalog or {}
         icon = str(release_catalog.get("icon") or "apps-outline").strip() or "apps-outline"
         for entrypoint in application.entrypoints:
-            kind, component = entrypoint["presentation_ref"].split(":", 1)
-            if kind != "scenario":
+            # Logical skill surfaces are valid Application entrypoints too.
+            # They are contributed by their skill declarations, not scenario
+            # launchers; one such Trial must not break every desktop rebuild.
+            kind, separator, component = entrypoint["presentation_ref"].partition(":")
+            if kind != "scenario" or not separator or not component:
                 continue
             availability = {"status": "ready"}
             try:

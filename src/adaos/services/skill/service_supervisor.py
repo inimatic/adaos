@@ -1129,6 +1129,9 @@ class ServiceSkillSupervisor:
 
         self._rehydrate_service_runtime(name, spec)
         env = os.environ.copy()
+        # A child never inherits another service's AI lease.
+        for key in ('ADAOS_AI_BRIDGE_URL', 'ADAOS_AI_BRIDGE_TOKEN'):
+            env.pop(key, None)
         for key in ("ADAOS_APPLICATION_ID", "ADAOS_APPLICATION_RELEASE_DIGEST", "ADAOS_APPLICATION_RUNTIME_ROOT"):
             env.pop(key, None)
         env.update(getattr(self, "_application_services", {}).get(name, {}))
@@ -1171,6 +1174,9 @@ class ServiceSkillSupervisor:
         env["ADAOS_SKILL_PACKAGE"] = f"skills.{name}"
         env["ADAOS_SKILL_ROOT"] = str(spec.skill_root)
         env["ADAOS_SKILL_MODE"] = "runtime"
+        from adaos.services.ai.bridge import bridge_environment
+        env.update(bridge_environment(self._ctx, name, spec.skill_root,
+            legacy_root=bucket_root / 'data' if bucket_root is not None else None))
         env["ADAOS_BASE_DIR"] = str(_path_value(self._ctx.paths.base_dir()))
         for env_name, path_value in (
             ("ADAOS_PACKAGE_DIR", _optional_path_value(self._ctx.paths, "package_path", "package_dir")),
@@ -1319,6 +1325,8 @@ class ServiceSkillSupervisor:
             await self._stop_owned(name, timeout_s=timeout_s)
 
     async def _stop_owned(self, name: str, *, timeout_s: float = 3.0) -> None:
+        from adaos.services.ai.bridge import revoke_bridge
+        revoke_bridge(name)
         proc = self._procs.get(name)
         if not proc:
             spec = self._specs.get(name)

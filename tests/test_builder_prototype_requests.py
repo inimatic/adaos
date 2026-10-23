@@ -31,6 +31,19 @@ class FakePrototypeExecution:
         return {"ok": True, "session": {"id": session_id}}
 
 
+def test_personal_resource_selects_the_dedicated_port_not_legacy_chat(monkeypatch):
+    personal, legacy = FakePrototypeExecution(), FakePrototypeExecution()
+    monkeypatch.setattr(prototype, '_PERSONAL_PORT', personal)
+    monkeypatch.setattr(prototype, '_COMPATIBILITY_PORT', legacy)
+    monkeypatch.setattr(prototype, '_WORKSPACE_PORT', legacy)
+    prototype.submit_request('Rename this existing heading', webspace_id='host', metadata={
+        'builder_ai_resource_ref': 'ai-resource:personal-chatgpt',
+        'builder_semantic_edit_mode': 'bounded_ops',
+        'builder_selected_target': {'object_type': 'scenario', 'object_id': 'owned'},
+    })
+    assert len(personal.turns) == 1 and not legacy.turns
+
+
 def test_selected_native_undo_receives_the_same_fenced_conversation_as_model_edits():
     from adaos.services.builder.prototype_requests import submit_request
     port = FakePrototypeExecution()

@@ -65,6 +65,22 @@ def initialize_sqlite_schema(path: Path, migrations: Sequence[RelationalMigratio
         return _apply_migrations(connection, ordered, allow_existing=development)
 
 
+def verify_sqlite_schema(path: Path, migrations: Sequence[RelationalMigration]) -> dict:
+    """Verify an adopted store read-only; never bootstrap or stamp a ledger."""
+    if path.is_symlink() or path.absolute() != path.resolve() or not path.is_file():
+        raise ValueError('Adopted Application database is missing')
+    with _read(path) as connection:
+        _integrity(connection)
+        try:
+            history = dict(connection.execute('SELECT version, checksum FROM adaos_schema_migrations'))
+        except sqlite3.OperationalError as exc:
+            raise ValueError('Adopted Application database has no migration ledger') from exc
+        declared = {item.version: item.checksum for item in migrations}
+        if history != declared:
+            raise ValueError('Adopted Application migration chain is not complete or differs')
+        return {'schema_version': max(declared, default=0)}
+
+
 def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[RelationalMigration], *, allow_existing: bool) -> dict:
     connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 16 * 1024 * 1024)
     connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, 1024 * 1024)
