@@ -21,6 +21,9 @@ const complete = forms.find(({ widget }) => widget.actions?.some(action => actio
 if (!create || !complete) throw new Error('Create and Complete forms required')
 const createAction = create.widget.actions.find(action => action.params?.operation_id === 'create')
 const completeAction = complete.widget.actions.find(action => action.params?.payload?.status === 'done')
+const titleFields = (create.widget.inputs?.fields || []).filter(field => field.type === 'shortText'
+  && !field.readOnly && createAction.params?.payload?.[field.id] === `$event.values.${field.id}`)
+if (titleFields.length !== 1) throw new Error('Exactly one authored task-title input required')
 const report = { ok: false, providerCalls: 0, project, resource, samples: [] }
 const browser = await chromium.launch({ headless: true })
 try {
@@ -57,7 +60,8 @@ try {
       await command(collection, createAction.id).click()
       const form = widget(create.widget.id)
       await expect(form).toBeVisible()
-      const title = form.locator('[data-webui-field-id="title"] input, [data-webui-field-id="title"] textarea')
+      const titleField = `[data-webui-field-id=${JSON.stringify(titleFields[0].id)}]`
+      const title = form.locator(`${titleField} input, ${titleField} textarea`)
       const marker = `Core acceptance ${layout} ${Date.now()}`
       await title.fill(marker)
       const createdResponse = operationResponse()
