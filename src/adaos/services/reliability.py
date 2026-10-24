@@ -36,7 +36,7 @@ from adaos.services.registry.subnet_runtime_projection import (
 )
 from adaos.services.realtime_sidecar import classify_realtime_sidecar_transport
 from adaos.services.runtime_topology import is_loopback_http_url, supervisor_base_candidates_from_env
-from adaos.services.zone_hosts import canonical_zone_id
+from adaos.services.zone_hosts import canonical_zone_id, zone_public_host
 
 _log = logging.getLogger("adaos.reliability")
 
@@ -4897,7 +4897,12 @@ def _hub_root_protocol_assessment(protocol: dict[str, Any]) -> dict[str, Any]:
     control_authority = _hub_root_control_authority_snapshot(protocol)
     if (
         int(control.get("active_subscriptions") or 0) <= 0
-        and str(control_authority.get("state") or "") != "fresh"
+        # The supervisor/sidecar can own the actual NATS subscription, so the
+        # API process may have no local subscription counter. An acknowledged
+        # lifecycle remains authoritative through the policy's aging window,
+        # consistently with sidecar control readiness below. Aging is pressure,
+        # not evidence that the subscription disappeared.
+        and str(control_authority.get("state") or "") not in {"fresh", "aging"}
     ):
         state = "degraded"
         reasons.append("control_subscription_missing")
@@ -8774,7 +8779,11 @@ def reliability_snapshot(
     active_zone_id = None
     if selected_server:
         lower = selected_server.lower()
-        if "://ru.api.inimatic.com" in lower or lower.endswith("ru.api.inimatic.com"):
+        requested = canonical_zone_id(zone_id)
+        selected_host = urlparse(selected_server if "://" in selected_server else "https://" + selected_server).hostname
+        if requested and selected_host == zone_public_host(requested):
+            active_zone_id = requested
+        elif "://ru.api.inimatic.com" in lower or lower.endswith("ru.api.inimatic.com"):
             active_zone_id = "ru"
         elif "://api.inimatic.com" in lower or lower.endswith("api.inimatic.com"):
             active_zone_id = canonical_zone_id(zone_id) if canonical_zone_id(zone_id) in {"us", "eu", "in", "ch"} else "us"

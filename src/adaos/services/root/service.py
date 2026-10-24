@@ -933,6 +933,25 @@ def fingerprint_for_key(key: rsa.RSAPrivateKey) -> str:
     return "sha256:" + hashlib.sha256(public_bytes).hexdigest()
 
 
+def _prepared_bootstrap_token() -> str | None:
+    """A short fingerprint-bound capability, never the Root administrator secret."""
+    raw_path = str(os.getenv("ADAOS_BOOTSTRAP_TOKEN_FILE") or "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not path.is_absolute() or any(item.is_symlink() for item in (path, *path.parents)):
+        raise RootServiceError("bootstrap capability must use an absolute private regular file")
+    info = path.stat()
+    if not path.is_file() or info.st_size > 128:
+        raise RootServiceError("invalid bootstrap capability file")
+    if os.name != "nt" and (info.st_uid != os.getuid() or info.st_mode & 0o077):
+        raise RootServiceError("bootstrap capability must be owned by the enrolling user with mode 0600")
+    token = path.read_text(encoding="ascii").strip()
+    if len(token) != 48 or any(character not in "0123456789abcdef" for character in token):
+        raise RootServiceError("invalid one-time bootstrap capability encoding")
+    return token
+
+
 def _config_path_value(path: Path) -> str:
     rendered = displayable_path(path)
     return rendered if rendered is not None else str(path)
@@ -1100,6 +1119,18 @@ class RootDeveloperService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    def prepare_enrollment(self) -> dict[str, str]:
+        """Prepare a local Hub key; disclose only its public registration request."""
+        cfg = self._load_config()
+        key_path, private_key = self._ensure_hub_keypair(cfg)
+        return {
+            "schema": "adaos.root.enrollment_request.v1",
+            "fingerprint": fingerprint_for_key(private_key),
+            "zone_id": str(os.getenv("ADAOS_ZONE_ID") or cfg.zone_id or ""),
+            "root_url": str(cfg.root_settings.base_url),
+            "key_path": str(key_path),
+        }
+
     def init(
         self,
         *,
@@ -2027,8 +2058,10 @@ class RootDeveloperService:
             meta_payload["zone_id"] = zone_id
         if metadata:
             meta_payload.update(metadata)
-        bootstrap = client.request_bootstrap_token(token, meta=meta_payload, verify=verify)
-        bootstrap_token = bootstrap.get("one_time_token") or bootstrap.get("token")
+        bootstrap_token = _prepared_bootstrap_token()
+        if bootstrap_token is None:
+            bootstrap = client.request_bootstrap_token(token, meta=meta_payload, verify=verify)
+            bootstrap_token = bootstrap.get("one_time_token") or bootstrap.get("token")
         if not isinstance(bootstrap_token, str) or not bootstrap_token:
             raise RootServiceError("Root did not return bootstrap token")
         csr_common_name = self._hub_common_name(subnet_id)

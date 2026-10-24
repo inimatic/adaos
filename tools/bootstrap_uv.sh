@@ -20,6 +20,7 @@ CONTROL_PORT="8777"
 ROOT_URL="https://api.inimatic.com"
 REV="main"
 ZONE_ID=""
+PREPARE_ENROLLMENT=0
 LANGUAGE="${ADAOS_LANG:-en}"
 NO_VOICE="0"
 DEV_MODE="0"
@@ -510,6 +511,7 @@ while [[ $# -gt 0 ]]; do
     --root-url) ROOT_URL="${2:-}"; shift 2 ;;
     --rev) REV="${2:-}"; shift 2 ;;
     --zone|--zone-id) ZONE_ID="${2:-}"; shift 2 ;;
+    --prepare-enrollment) PREPARE_ENROLLMENT=1; shift ;;
     --language|--lang) LANGUAGE="${2:-}"; shift 2 ;;
     --python) PYTHON_ARG="${2:-}"; shift 2 ;;
     --node-name) NODE_NAME="${2:-}"; shift 2 ;;
@@ -539,6 +541,7 @@ Usage: tools/bootstrap_uv.sh [options]
   --root-url URL
   --rev REV
   --zone ZONE_ID
+  --prepare-enrollment  Prepare public key enrollment request without registering or starting services
   --language en|ru    Initial owner UI language (default: en)
   --python /path/to/python3.11
   --node-name NAME
@@ -623,8 +626,8 @@ fi
 
 if [[ -n "${ZONE_ID:-}" ]]; then
   ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
-  if [[ ! "$ZONE_ID" =~ ^[a-z]{2}$ ]]; then
-    die "ZONE_ID must be a two-letter lowercase country/region code (example: ru)"
+  if [[ ! "$ZONE_ID" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
+    die "ZONE_ID must be a directory zone name (example: ru or de)"
   fi
 fi
 LANGUAGE="$(printf '%s' "${LANGUAGE:-en}" | tr '[:upper:]' '[:lower:]')"
@@ -792,20 +795,39 @@ if [[ "${DEV_MODE:-0}" == "1" ]]; then
   ENV_TYPE="dev"
 fi
 export ENV_TYPE="${ENV_TYPE:-prod}"
+if [[ "$ENV_TYPE" != "dev" ]]; then
+  # Managed runtime consumes archives/packages; Git in PATH is not delivery policy.
+  export ADAOS_GIT_MODE=disabled
+  write_env_var "ADAOS_GIT_MODE" "disabled" ".env"
+fi
 ADAOS_BASE_DIR="$(resolve_adaos_base_dir)"
 mkdir -p "$ADAOS_BASE_DIR"
 export ADAOS_BASE_DIR
 
 print_bootstrap_config
 
-log "Detecting git availability (adaos git autodetect)..."
-"$ADAOS_PY" -m adaos git autodetect >/dev/null 2>&1 || true
-
 export ADAOS_REV="$REV"
 EFFECTIVE_ROOT_URL="$(effective_root_url "$ROOT_URL" "${ZONE_ID:-}")"
+if [[ -n "${ZONE_ID:-}" ]]; then
+  log "Resolving zone through the signed public directory..."
+  ZONE_DIRECTORY_CACHE="$ADAOS_BASE_DIR/state/zone-directory.json"
+  EFFECTIVE_ROOT_URL="$("$ADAOS_PY" -m adaos.services.zone_directory resolve --zone "$ZONE_ID" --cache "$ZONE_DIRECTORY_CACHE")" \
+    || die "Requested zone has no fresh signed placement; refusing legacy fallback"
+  export ADAOS_ZONE_DIRECTORY_ENABLED=1
+  export ADAOS_ZONE_DIRECTORY_CACHE_FILE="$ZONE_DIRECTORY_CACHE"
+  write_env_var "ADAOS_ZONE_DIRECTORY_ENABLED" "1" ".env"
+  write_env_var "ADAOS_ZONE_DIRECTORY_CACHE_FILE" "$ZONE_DIRECTORY_CACHE" ".env"
+  write_env_var "ADAOS_API_BASE" "$EFFECTIVE_ROOT_URL" ".env"
+fi
 export ADAOS_API_BASE="$EFFECTIVE_ROOT_URL"
 if [[ -n "${ZONE_ID:-}" ]]; then
   export ADAOS_ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
+fi
+log "Detecting git availability (adaos git autodetect)..."
+"$ADAOS_PY" -m adaos git autodetect >/dev/null 2>&1 || true
+if [[ "$PREPARE_ENROLLMENT" == "1" ]]; then
+  "$ADAOS_PY" -m adaos dev root prepare || die "Hub enrollment request preparation failed"
+  exit 0
 fi
 
 # Native Application installation resolves immutable packages through the

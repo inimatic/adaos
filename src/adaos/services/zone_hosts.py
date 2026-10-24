@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Final
+from urllib.parse import urlsplit
+
+from adaos.services.zone_directory import configured_replica
 
 CENTRAL_PUBLIC_HOST: Final[str] = "api.inimatic.com"
 RU_PUBLIC_HOST: Final[str] = "ru.api.inimatic.com"
@@ -43,16 +46,25 @@ def canonical_zone_id(value: str | None) -> str | None:
     raw = str(value or "").strip().lower()
     if not raw:
         return None
+    replica = configured_replica()
+    if replica is not None:
+        zones = {zone["id"] for zone in replica.snapshot()["zones"] if zone["state"] != "disabled"}
+        return raw if raw in zones else ZONE_ALIASES.get(raw) if ZONE_ALIASES.get(raw) in zones else None
     return ZONE_ALIASES.get(raw, raw if raw in CANONICAL_ZONE_IDS else None)
 
 
 def default_zone_for_server(server_zone_id: str | None) -> str:
     canonical = canonical_zone_id(server_zone_id)
+    replica = configured_replica()
+    if replica is not None:
+        return canonical or replica.snapshot()["defaultZoneId"]
     return "ru" if canonical == "ru" else "us"
 
 
 def supported_zone_ids_for_server(server_zone_id: str | None) -> tuple[str, ...]:
     canonical = canonical_zone_id(server_zone_id)
+    if configured_replica() is not None:
+        return (canonical,) if canonical else ()
     return ("ru",) if canonical == "ru" else CENTRAL_ZONE_IDS
 
 
@@ -66,6 +78,9 @@ def resolve_zone_for_server(requested_zone_id: str | None, server_zone_id: str |
 
 def zone_public_host(zone_id: str | None) -> str:
     canonical = canonical_zone_id(zone_id)
+    replica = configured_replica()
+    if replica is not None:
+        return urlsplit(replica.resolve(canonical)["apiBase"]).hostname
     return RU_PUBLIC_HOST if canonical == "ru" else CENTRAL_PUBLIC_HOST
 
 
@@ -85,6 +100,10 @@ def zone_integration_ingress_host(zone_id: str | None) -> str:
     """
 
     canonical = canonical_zone_id(zone_id)
+    if configured_replica() is not None:
+        # New zones do not inherit production callback authority implicitly.
+        if canonical not in CANONICAL_ZONE_IDS:
+            raise ValueError("integration ingress is not configured for this zone")
     return RU_INTEGRATION_INGRESS_HOST if canonical == "ru" else CENTRAL_INTEGRATION_INGRESS_HOST
 
 

@@ -119,6 +119,12 @@ def _service() -> RootDeveloperService:
     return RootDeveloperService()
 
 
+@root_app.command("prepare")
+def root_prepare() -> None:
+    """Prepare a local Hub key and emit its public, fingerprint-bound enrollment request."""
+    _echo_utf8_json(_service().prepare_enrollment())
+
+
 def _display_path(path: Path | None) -> str:
     if path is None:
         return "—"

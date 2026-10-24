@@ -204,6 +204,20 @@ class RootHttpClient:
 
     # ---------- public helpers ------------------------------------------------
     @classmethod
+    def from_hub_config(cls, config: Any, *, fallback_base_url: str | None = None) -> "RootHttpClient | None":
+        """Use the existing Hub certificate, never a platform administration token."""
+        if config is None:
+            return None
+        cert_path, key_path, ca_path = config.hub_cert_path(), config.hub_key_path(), config.ca_cert_path()
+        if not cert_path.is_file() or not key_path.is_file():
+            return None
+        base_url = getattr(getattr(config, "root_settings", None), "base_url", None) or fallback_base_url
+        if not base_url:
+            return None
+        return cls(base_url=base_url, verify=str(ca_path) if ca_path.is_file() else True,
+                   cert=(str(cert_path), str(key_path)))
+
+    @classmethod
     def from_settings(
         cls,
         settings: Any,
