@@ -2775,6 +2775,26 @@ def test_semantic_v2_compiles_independent_resources_and_relationships() -> None:
     }
 
 
+@pytest.mark.parametrize("role", ["details", "editor"])
+def test_selected_record_views_use_the_resource_query_filter_contract(role) -> None:
+    brief, semantic = _multi_resource_fixture()
+    result = compile_semantic_prototype(semantic, brief=brief, project_ref="project:test")
+    view_ids = {view["id"] for view in semantic["views"] if view["role"] == role}
+    assert view_ids
+    application = result["webui"]["ui"]["application"]
+    widgets = [*application["desktop"]["pageSchema"]["widgets"], *[
+        widget for modal in application.get("modals", {}).values()
+        for widget in modal["schema"]["widgets"]
+    ]]
+    selected = [widget for widget in widgets if widget["id"] in view_ids]
+    assert len(selected) == len(view_ids)
+    for widget in selected:
+        state_key = widget.get("selectedStateKey") or widget["inputs"]["selectedStateKey"]
+        assert widget["dataSource"]["query"] == {"filters": {"id": f"$state.{state_key}"}}
+    specs = developer_prototypes.derive_resource_specs(result["webui"], result["prototype_resources"])
+    assert all("id" in spec["resource_definition"]["query"]["filters"] for spec in specs)
+
+
 def test_semantic_v2_provider_candidate_compiles_through_public_sdk() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)

@@ -2417,7 +2417,7 @@ def _compile_semantic_prototype_v1(
             widget["type"] = "item.details"
             widget["selectedStateKey"] = selection_ref
             widget["inputs"] = {"fields": []}
-            widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
+            widget["dataSource"]["query"]["filters"] = {"id": f"$state.{selection_ref}"}
             for field_id in view["field_refs"]:
                 label, label_i18n = _localized(fields[field_id]["label"], dictionaries)
                 widget["inputs"]["fields"].append(
@@ -2431,7 +2431,7 @@ def _compile_semantic_prototype_v1(
             widget["inputs"] = {"layout": "responsiveGrid", "fields": [], "buttons": [], "selectedStateKey": selection_ref}
             if resource.get("read_only_when"):
                 widget["inputs"]["readOnlyIf"] = _condition_expression(resource["read_only_when"], fields)
-            widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
+            widget["dataSource"]["query"]["filters"] = {"id": f"$state.{selection_ref}"}
             owned_commands = [command for command in commands.values() if command["view_ref"] == view_id]
             editable_inputs = {ref for command in owned_commands for ref in command["input_field_refs"]
                                if ref not in command.get("fixed_values", {})}
