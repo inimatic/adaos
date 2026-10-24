@@ -2608,6 +2608,15 @@ async def _on_builder_preview_selected(evt: Any) -> None:
     source_webspace_id = str(payload.get("source_webspace_id") or payload.get("webspace_id") or "").strip() or None
     service = BuilderWorkbenchService()
     reason = str(payload.get("reason") or "").strip()
+    force_revision = reason == "builder_follow_active_revision"
+    if force_revision:
+        binding = service.get_workspace_binding(source_webspace_id)
+        target = binding.get("preview_target") or {}
+        if not (target.get("follow_active") and target.get("stage") == "prototype"
+            and (target.get("scenario_id") or target.get("object_id")) == scenario_id
+            and str(target.get("revision") or "") == str(payload.get("revision") or "")
+            and str(payload.get("revision") or "")):
+            return
     if reason in {"builder_project_created", "builder_project_switched"}:
         binding = service.get_workspace_binding(source_webspace_id)
         desired_scenario = str(binding.get("runtime_scenario_id") or "").strip()
@@ -2626,6 +2635,7 @@ async def _on_builder_preview_selected(evt: Any) -> None:
         runtime_scenario_id=scenario_id,
         preview_state=payload.get("preview_state") if isinstance(payload.get("preview_state"), Mapping) else None,
         wait_for_rebuild=bool(payload.get("wait_for_rebuild", False)),
+        **({"force_runtime_reload": True} if force_revision else {}),
     )
 
 

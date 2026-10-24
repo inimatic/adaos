@@ -833,6 +833,15 @@ def refresh_follow_active_target(
         "follow_active": True,
     }
     binding = _plain(service.set_preview_target(source_webspace_id=source, target=target))
+    from adaos.sdk.data.events import publish
+    publish(
+        BUILDER_PREVIEW_DESIRED,
+        {"source_webspace_id": source, "object_type": "scenario",
+         "object_id": project_id, "scenario_id": project_id,
+         "revision": revision_token, "reason": "builder_follow_active_revision",
+         "reconciled": False, "wait_for_rebuild": False},
+        source="sdk.builder.preview",
+    )
     return {
         "ok": bool(binding.get("ok", True)),
         "target": target,

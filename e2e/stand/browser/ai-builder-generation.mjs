@@ -57,6 +57,7 @@ try {
       await expect(collection).toBeVisible({ timeout: 60_000 })
       await expect(collection.getByText('Read SDK guide', { exact: true })).toBeVisible()
       await expect(collection.getByText('Test shared connection', { exact: true })).toBeVisible()
+      if (table.title) await expect(collection.locator('header h2')).toHaveText(table.title, { timeout: 30_000 })
       await command(collection, createAction.id).click()
       const form = widget(create.widget.id)
       await expect(form).toBeVisible()
