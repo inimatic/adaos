@@ -72,7 +72,7 @@ class SemanticAdmissionService:
             raise BuilderWorkflowError('semantic admission requires an active editable Change')
         document = _read(self.graph._file(root, 'semantic.webui.json'))
         runtime = _read(self.graph._file(root, 'webui.json'))
-        baseline = verify_baseline(document, runtime, project_ref='project:' + object_id)
+        baseline = verify_baseline(document, runtime, project_ref='project:' + object_id, runtime_root=root)
         locales = self.graph.verify_locale_assets(root, baseline)
         return root, gate, document, runtime, locales
 

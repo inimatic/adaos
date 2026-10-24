@@ -228,8 +228,25 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
 
 
 def _runtime_projection(webui: Mapping[str, Any]) -> dict[str, Any]:
-    """Exclude only declared bookkeeping and validated Core i18n descriptors."""
-    value = copy.deepcopy(dict(webui))
+    """Compare executable UI across the supported authoring representations."""
+    from adaos.services.interface_deprecations import migrate_deprecated_interfaces
+    owner = str(webui["ui"]["application"]["desktop"]["pageSchema"]["id"])
+    value, _migration = migrate_deprecated_interfaces(webui, owner=owner)
+
+    def externalize(value):
+        if isinstance(value, list):
+            return [externalize(item) for item in value]
+        if not isinstance(value, Mapping):
+            return value
+        return {key: item["key"] if (
+            key.endswith("_i18n") and isinstance(item, Mapping)
+            and set(item) == {"key", "fallback"}
+            and isinstance(item["key"], str) and item["key"]
+            and item["fallback"] == value.get(key[:-5],
+                value.get('title') if key == 'label_i18n' else None)
+        ) else externalize(item) for key, item in value.items()}
+
+    value = externalize(value)
     ui = value["ui"]
     ui.pop("version", None)
     app = ui["application"]
@@ -250,7 +267,41 @@ def _runtime_projection(webui: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
-def verify_baseline(document: Mapping[str, Any], webui: Mapping[str, Any], *, project_ref: str) -> dict[str, Any]:
+def _scenario_title_projection(project_ref: str, runtime_root: Path | None, page: Mapping[str, Any]):
+    """Bind host title metadata only to the canonical selected scenario manifest."""
+    if not re.fullmatch(r"project:[A-Za-z0-9_.-]{1,160}", project_ref):
+        return None
+    object_id = project_ref.partition(":")[2]
+    if runtime_root is None:
+        from adaos.sdk.core._ctx import require_ctx
+        try:
+            ctx = require_ctx('builder.semantic_baseline')
+        except RuntimeError:
+            return None
+        if not all(callable(getattr(ctx.paths, name, None)) for name in (
+            'dev_skills_dir', 'dev_scenarios_dir', 'workspace_dir', 'dev_projects_dir')):
+            return None
+        runtime_root = BuilderWorkflowService.from_context().project_root('scenario', object_id)
+    path = Path(runtime_root) / 'scenario.yaml'
+    if Path(runtime_root).name != object_id or not path.is_file() or path.is_symlink():
+        return None
+    if path.stat().st_size > 2 * 1024 * 1024:
+        raise BuilderWorkflowError('scenario manifest exceeds the bounded slice')
+    import yaml
+    manifest = yaml.safe_load(path.read_text(encoding='utf-8-sig'))
+    if (not isinstance(manifest, Mapping) or manifest.get('id') != object_id
+        or manifest.get('title') != page.get('title')):
+        return None
+    binding = manifest.get('title_i18n')
+    if (not isinstance(binding, Mapping) or set(binding) != {'key', 'fallback'}
+        or binding.get('key') != f'scenario.{object_id}.title'
+        or not isinstance(binding.get('fallback'), str) or not binding['fallback']):
+        return None
+    return dict(binding)
+
+
+def verify_baseline(document: Mapping[str, Any], webui: Mapping[str, Any], *, project_ref: str,
+                    runtime_root: Path | None = None) -> dict[str, Any]:
     """Compare the effective UI with recompilation; a digest marker is insufficient."""
     if document.get("schema") != "adaos.webui.semantic.v2":
         raise BuilderWorkflowError("semantic baseline requires v2 source")
@@ -273,6 +324,16 @@ def verify_baseline(document: Mapping[str, Any], webui: Mapping[str, Any], *, pr
             raise BuilderWorkflowError("semantic baseline source is not canonical; explicit normalization is required")
         if _runtime_projection(compiled["webui"]) == actual:
             return {"compiled": compiled, "primary_locale": locale, "semantic_digest": source_digest}
+        projected = copy.deepcopy(compiled["webui"])
+        page = projected["ui"]["application"]["desktop"]["pageSchema"]
+        actual_title = webui['ui']['application']['desktop']['pageSchema'].get('title_i18n')
+        title_binding = (_scenario_title_projection(project_ref, runtime_root, page)
+            if isinstance(actual_title, Mapping)
+            and actual_title.get('key') == f"scenario.{project_ref.partition(':')[2]}.title" else None)
+        if title_binding:
+            page["title_i18n"] = title_binding
+            if _runtime_projection(projected) == actual:
+                return {"compiled": compiled, "primary_locale": locale, "semantic_digest": source_digest}
     raise BuilderWorkflowError("semantic baseline drift: effective UI differs from compiled source")
 
 
@@ -370,7 +431,7 @@ class SemanticGraphService:
             stage = "source_verification"
             try:
                 document = _read(self._file(root, "semantic.webui.json"))
-                baseline = verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}")
+                baseline = verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}", runtime_root=root)
                 stage = "locale_verification"
                 self.verify_locale_assets(root, baseline)
                 stage = "reference_inventory"
@@ -481,7 +542,7 @@ class SemanticGraphService:
             if expected_revision and expected_revision != revision:
                 raise BuilderWorkflowError("stale label request revision")
             document = _read(self._file(root, "semantic.webui.json"))
-            baseline = verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}")
+            baseline = verify_baseline(document, _read(self._file(root, "webui.json")), project_ref=f"project:{object_id}", runtime_root=root)
             self.verify_locale_assets(root, baseline)
             if parsed["kind"] == "undo":
                 retained = _read(self._file(root, f"ui_revisions/{revision}.json"))
@@ -550,7 +611,7 @@ class SemanticGraphService:
             before_ui = _read(self._file(root, "webui.json"))
             # The first slice admits only the selected scenario's own namespace.
             compilation_ref = f"project:{object_id}"
-            baseline = verify_baseline(document, before_ui, project_ref=compilation_ref)
+            baseline = verify_baseline(document, before_ui, project_ref=compilation_ref, runtime_root=root)
             self.verify_locale_assets(root, baseline)
             reduced = reduce_graph(document, value["ops"], write_refs=value["write_refs"])
             compiled = compile_semantic_prototype(reduced["semantic_document"], project_ref=compilation_ref,
