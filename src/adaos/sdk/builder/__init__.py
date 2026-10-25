@@ -29,6 +29,23 @@ from . import (
     workflow,
 )
 
+from adaos.sdk.core.authoring import bind_authoring_operations as _bind_authoring
+
+for _module in (artifacts, applications, automation, development_sessions, issues,
+                lifecycle, model_settings, preview, project_catalog, releases,
+                review, source_recovery, sources, workflow):
+    _bind_authoring(_module)
+_bind_authoring(semantic_ui, (
+    "apply", "prepare_label_request", "inspect", "record_turn_timing", "admit",
+    "prepare_proposal", "propose", "prepare_request", "proposal_observation"))
+_bind_authoring(prototype, (
+    "history", "retain_revision", "read_revision", "recover_evidenced_revision",
+    "add_reference", "reference_context", "reconcile_semantic_revision"))
+_bind_authoring(observability, (
+    "retain_llm_evidence", "read_llm_evidence", "configure_usd_budget", "usd_budget"))
+# submit_request/candidate_status, conversations and application data runtimes
+# deliberately keep the invoking Trial context and its exact execution package.
+
 __all__ = [
     "artifacts",
     "applications",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from threading import RLock
 from typing import Any
 
 
@@ -11,14 +12,25 @@ class LegacyDevSkillPrototypeExecution:
 
     def __init__(self) -> None:
         self._skill_manager: Any = None
+        self._manager_context_key: tuple[str, str] | None = None
+        self._manager_lock = RLock()
 
     def _manager(self) -> Any:
-        if self._skill_manager is None:
+        from adaos.services.agent_context import get_ctx
+        ctx = get_ctx()
+        key = (str(ctx.paths.skills_dir()), str(ctx.paths.state_dir()))
+        with self._manager_lock:
+            return self._manager_for_context(ctx, key)
+
+    def _manager_for_context(self, ctx: Any, key: tuple[str, str]) -> Any:
+        if self._skill_manager is not None and self._manager_context_key is None:
+            # Preserve explicit test/embedding injection, binding it to only
+            # its first context instead of reusing it across Trial/Stable.
+            self._manager_context_key = key
+        if self._skill_manager is None or self._manager_context_key != key:
             from adaos.adapters.db import SqliteSkillRegistry
-            from adaos.services.agent_context import get_ctx
             from adaos.services.skill.manager import SkillManager
 
-            ctx = get_ctx()
             self._skill_manager = SkillManager(
                 repo=ctx.skills_repo,
                 registry=SqliteSkillRegistry(ctx.sql),
@@ -28,6 +40,7 @@ class LegacyDevSkillPrototypeExecution:
                 caps=ctx.caps,
                 settings=ctx.settings,
             )
+            self._manager_context_key = key
         return self._skill_manager
 
     def submit_turn(

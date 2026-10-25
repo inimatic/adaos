@@ -108,8 +108,19 @@ def candidate_status(
 
     from adaos.services.builder.prototype_requests import candidate_status as status
 
+    from adaos.services.agent_context import get_ctx
+    # Trial sessions belong to the sealed runtime that admitted the request.
+    # Polling must not resolve a same-named mutable DEV skill instead.
+    if getattr(get_ctx(), "authority_context", None) is not None:
+        global _WORKSPACE_PORT
+        from adaos.adapters.builder.legacy_dev_skill import WorkspaceSkillPrototypeExecution
+        if _WORKSPACE_PORT is None:
+            _WORKSPACE_PORT = WorkspaceSkillPrototypeExecution()
+        port = _WORKSPACE_PORT
+    else:
+        port = _compatibility_execution_port()
     return status(
-        _compatibility_execution_port(),
+        port,
         session_id,
         webspace_id=webspace_id,
         timeout_seconds=timeout_seconds,
