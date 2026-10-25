@@ -432,6 +432,14 @@ class ApplicationRegistryProjection:
         con.commit()
 
     def _ensure_fts(self, con: sqlite3.Connection) -> None:
+        # A catalog read must not become a writer merely by opening a
+        # connection. Repeated FTS metadata upserts serialize every reader
+        # behind an unrelated projection writer (including Home refresh).
+        exists = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='application_index_fts'"
+        ).fetchone()
+        if exists and self._get_meta(con, "fts5_available") is True:
+            return
         try:
             con.execute(
                 """
@@ -439,9 +447,11 @@ class ApplicationRegistryProjection:
                 USING fts5(application_id, title, description, search_text)
                 """
             )
-            self._set_meta(con, "fts5_available", True)
+            available = True
         except sqlite3.OperationalError:
-            self._set_meta(con, "fts5_available", False)
+            available = False
+        if self._get_meta(con, "fts5_available") is not available:
+            self._set_meta(con, "fts5_available", available)
 
     def _set_meta(self, con: sqlite3.Connection, key: str, value: Any) -> None:
         con.execute(

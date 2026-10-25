@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
+from contextlib import closing
 
 import pytest
 import yaml
@@ -13,6 +14,27 @@ from adaos.services.application_registry_projection import ApplicationRegistryPr
 _DIGEST_A = "sha256:" + "a" * 64
 _DIGEST_B = "sha256:" + "b" * 64
 _DIGEST_C = "sha256:" + "c" * 64
+
+
+def test_projection_reads_do_not_commit_fts_metadata(tmp_path):
+    projection = ApplicationRegistryProjection(tmp_path)
+    with closing(projection._connect()) as observer:
+        before = observer.execute("PRAGMA data_version").fetchone()[0]
+        assert projection.list_workspace_projects() == []
+        assert projection.list_workspace_projects() == []
+        assert observer.execute("PRAGMA data_version").fetchone()[0] == before
+
+
+def test_projection_read_does_not_wait_for_an_existing_writer(tmp_path):
+    projection = ApplicationRegistryProjection(tmp_path)
+    with closing(projection._connect()) as writer:
+        if not projection._get_meta(writer, "fts5_available"):
+            pytest.skip("SQLite runtime has no FTS5")
+        writer.execute("BEGIN IMMEDIATE")
+        try:
+            assert projection.list_workspace_projects() == []
+        finally:
+            writer.rollback()
 
 
 class _StoreRecord:
