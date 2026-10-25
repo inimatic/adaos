@@ -47,9 +47,13 @@ def _attention_status(
     installed = bool(model.get("installed"))
     available = bool(model.get("available"))
     by_type = {item["type"]: item for item in conditions}
+    integrity = by_type.get("RuntimeIntegrity", {})
     ready = by_type.get("Ready", {})
     progressing = by_type.get("Progressing", {})
     suspended = by_type.get("Suspended", {})
+
+    if integrity.get("status") == "False":
+        return "degraded", str(integrity["reason"]), str(integrity["message"])
 
     if ready.get("status") == "False" and ready.get("reason") in {
         "OperationFailed",
@@ -264,6 +268,20 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
             "Runtime readiness is unavailable before installation.",
         )
     conditions.append(ready)
+
+    runtime = model.get("runtime_revisions")
+    if isinstance(runtime, Mapping):
+        runtime_status = str(runtime.get("status") or "unknown")
+        integrity_status = "True" if runtime_status == "aligned" else (
+            "False" if runtime_status in {"drift", "unavailable"} else "Unknown")
+        conditions.append(_condition("RuntimeIntegrity", integrity_status,
+            "RuntimeCompositionAligned" if integrity_status == "True" else (
+                "RuntimeCompositionDrift" if integrity_status == "False" else "RuntimeCompositionUnknown"),
+            str(runtime.get("summary") or "Runtime composition has not been verified.")))
+        if integrity_status == "False" or (integrity_status == "Unknown" and ready["status"] == "True"):
+            ready.update(status=integrity_status,
+                         reason="RuntimeCompositionDrift" if integrity_status == "False" else "RuntimeCompositionUnknown",
+                         message=str(runtime.get("summary") or "Runtime composition has not been verified."))
 
     status, reason, message = _attention_status(model, conditions)
     icon, color, priority = _ATTENTION_PRESENTATION[status]

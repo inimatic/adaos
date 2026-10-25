@@ -2050,6 +2050,20 @@ def list_system_application_summaries(
     return result
 
 
+def get_runtime_revisions(application_id: str, *, webspace_id: str = "desktop", deep: bool = False) -> dict[str, Any]:
+    """Observe Alpha sources, selected Beta and Stable package composition.
+
+    Observation does not prepare, switch, refresh, or repair runtime packages.
+    Deep inspection additionally verifies packaged files; it is an explicit
+    diagnostic, not work performed on every first-paint catalog request.
+    """
+    from adaos.services.applications.runtime_integrity import observe_application_revisions
+
+    ctx = require_ctx("sdk.applications.runtime_revisions")
+    owner = getattr(ctx, "authority_context", None) or ctx
+    return observe_application_revisions(owner, application_id, webspace_id=webspace_id, deep=deep)
+
+
 def get_application(
     application_id: str, *, webspace_id: str | None = None
 ) -> dict[str, Any]:
@@ -2149,6 +2163,15 @@ def get_application(
                 # Lightweight SDK contract tests may deliberately replace the
                 # Application store without bootstrapping an AgentContext.
                 pass
+            try:
+                model["runtime_revisions"] = get_runtime_revisions(token, webspace_id=str(webspace_id or "desktop"))
+            except SdkRuntimeNotInitialized:
+                pass
+            except (OSError, ValueError, RuntimeError) as exc:
+                model["runtime_revisions"] = {"status": "unknown", "reason": type(exc).__name__,
+                    "summary": "Runtime composition could not be verified; refresh diagnostics."}
+            if "runtime_revisions" in model:
+                model = enrich_application_conditions(model)
             return model
     raise FileNotFoundError(f"Application not found: {token}")
 
@@ -5180,6 +5203,7 @@ __all__ = [
     "get_operation",
     "get_prerelease_rollout",
     "get_runtime_selection",
+    "get_runtime_revisions",
     "get_subscription",
     "get_update_batch",
     "get_users_access_surface",

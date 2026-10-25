@@ -2624,6 +2624,9 @@ class SkillManager:
         target_slot = slot or self._preferred_activation_slot(env, target_version, metadata)
         slot_paths = env.build_slot_paths(target_version, target_slot)
         slot_meta = metadata.get("slots", {}).get(target_slot, {})
+        from adaos.services.applications.runtime_integrity import assert_managed_skill_activation
+
+        assert_managed_skill_activation(self.ctx, name, package_digest or slot_meta.get("package_digest"))
         manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
         target_manifest: dict[str, Any] = {}
         slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
@@ -2743,6 +2746,7 @@ class SkillManager:
                     )
                 ):
                     raise RuntimeError('exact_runtime_package_source_incompatible')
+        assert_managed_skill_activation(self.ctx, name, selected_package or None)
         target_manifest = self._read_json_dict(manifest_path)
         self._ensure_core_compatible(target_manifest, skill_name=name, stage="activate")
         lifecycle = self._slot_lifecycle_state(metadata=metadata, slot=target_slot)

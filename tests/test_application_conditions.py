@@ -42,6 +42,15 @@ def test_current_application_has_ready_attention():
     }
 
 
+def test_runtime_composition_drift_is_visible_even_when_installation_is_active():
+    projection = application_condition_projection(_model(runtime_revisions={
+        "status": "drift", "summary": "Expected exact release; observed another package."}))
+    assert projection["attention"]["status"] == "degraded"
+    assert projection["attention"]["reason"] == "RuntimeCompositionDrift"
+    assert next(c for c in projection["conditions"] if c["type"] == "RuntimeIntegrity")["status"] == "False"
+    assert next(c for c in projection["conditions"] if c["type"] == "Ready")["status"] == "False"
+
+
 def test_failed_operation_has_degraded_attention():
     projection = application_condition_projection(
         _model(
