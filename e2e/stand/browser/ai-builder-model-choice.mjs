@@ -6,7 +6,8 @@ import path from 'node:path'
 const output = process.env.ADAOS_E2E_OUTPUT
 if (!output || !process.env.ADAOS_E2E_HUB_TOKEN) throw new Error('Local owner session required')
 const browser = await chromium.launch({ headless: true })
-const report = { ok: false, providerCalls: 0, errors: [] }
+const report = { ok: false, providerCalls: 0, errors: [], choiceReads: [] }
+let inspectedPage
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
   await context.addInitScript(({ token, subnet }) => {
@@ -15,6 +16,16 @@ try {
       adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo' })) localStorage.setItem(key, value)
   }, { token: process.env.ADAOS_E2E_HUB_TOKEN, subnet: process.env.ADAOS_E2E_SUBNET_ID })
   const page = await context.newPage()
+  inspectedPage = page
+  page.on('response', async response => {
+    if (!response.request().postData()?.includes('get_prototype_model_choices')) return
+    try {
+      const value = await response.json()
+      const result = value.result ?? value
+      report.choiceReads.push({ status: response.status(), error: value.error || value.detail?.code,
+        collectionSize: Array.isArray(result) ? result.length : result?.items?.length })
+    } catch { /* A cancelled read has no response body to retain. */ }
+  })
   page.on('pageerror', error => report.errors.push(String(error)))
   await page.addLocatorHandler(page.locator('.component-updates-backdrop'), async () => {
     await page.locator('.component-updates-panel__tools button').last().dispatchEvent('click')
@@ -59,6 +70,16 @@ try {
   report.ok = !report.errors.length
 } catch (error) {
   report.errors.push(String(error))
+  if (inspectedPage) report.diagnostic = await inspectedPage.evaluate(() => {
+    const el = [...document.querySelectorAll('[data-webui-widget-id="chat-side-settings"]')]
+      .find(item => item.getBoundingClientRect().width > 0)
+    const form = el && window.ng?.getComponent(el.querySelector('ada-form-widget') || el)
+    const source = form?.optionSources?.get('llmModel')
+    return { component: form?.constructor?.name, statusText: el?.querySelector('.option-status')?.textContent,
+      options: source?.options?.length, received: source?.received, state: source?.status?.state,
+      error: source?.status?.error?.message, selectedRecordId: form?.selectedRecordId,
+      recordLoaded: form?.recordLoaded, submitting: form?.submitting }
+  })
 } finally {
   await fs.mkdir(output, { recursive: true })
   await fs.writeFile(path.join(output, 'builder-model-choice.json'), JSON.stringify(report, null, 2))
