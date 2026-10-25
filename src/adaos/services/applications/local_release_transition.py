@@ -262,6 +262,13 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                     continue
                 if item["lifecycle"] == "bound":
                     raise ValueError("Owned skill is referenced by another installation; reconcile ownership before cutover")
+                if preserve_selected_beta and ref in previous:
+                    # An existing owner snapshots its own Stable data into an
+                    # isolated Trial. Historical consumer pins do not select
+                    # that owner's data source and are not rebound by Beta.
+                    # New ownership and Workspace promotion retain the exact
+                    # shared-adoption checks below.
+                    continue
                 active_package = next(
                     (
                         package

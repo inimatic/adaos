@@ -245,6 +245,41 @@ def _promote(service: ArtifactPublicationService, candidate_id: str, **kwargs):
     return service.promote(candidate_id, **kwargs)
 
 
+def test_shared_version_opt_in_only_materializes_an_isolated_project_trial(tmp_path, monkeypatch):
+    source_workspace = tmp_path / "dev"
+    _scenario(source_workspace / "scenarios")
+    _skill(source_workspace / "skills")
+    project_dir = source_workspace / "projects/recipes_project"
+    project_dir.mkdir(parents=True)
+    (project_dir / "project.yaml").write_text(json.dumps({
+        "schema": "adaos.project.v1", "kind": "project", "id": "recipes_project", "version": "1.0.0", "profiles": [],
+        "components": {"owned": [{"ref": "scenario:recipes", "role": "primary"},
+            {"ref": "skill:shopping_skill", "role": "implementation"}], "dependencies": []},
+        "entrypoints": [{"id": "main", "presentation": "scenario:recipes", "default": True, "bindings": {}}],
+        "catalog": {"title": "Recipes", "description": "Isolated trial", "categories": [], "tags": []},
+        "lifecycle": {"uninstall": {"components": "remove_if_unreferenced", "runtime_data": "retain",
+            "source_artifacts": "retain"}}}), encoding="utf-8")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace", remote=remote)
+    conflict = {"skill": "skill:shopping_skill", "active_consumers": ["scenario:external"],
+        "reason": "shared_skill_version_conflict"}
+    monkeypatch.setattr(publication_module, "unresolved_shared_skill_conflicts", lambda *_a, **_kw: ([conflict], []))
+    arguments = dict(project_id="recipes_project", project_dir=project_dir,
+        source_workspace_root=source_workspace, source_ref=_source(), source_tree="f" * 40,
+        change_ids=("isolated-shared-version",), validation_evidence={"status": "passed"})
+    with pytest.raises(PublicationError, match="replace a shared active skill"):
+        service.prepare_project_candidate(**arguments)
+    prepared = service.prepare_project_candidate(**arguments, isolated_shared_versions=True)
+    proof = prepared.trial_activation["safety_evidence"]["shared_versions"]
+    assert proof == {"mode": "isolated_trial_only", "workspace_rebinding_authorized": False,
+        "conflicts": [conflict]}
+    assert prepared.trial_activation["runtime_binding"]["kind"] == "isolated_trial_workspace"
+    assert prepared.trial_workspace != service.workspace_root
+    assert not (service.workspace_root / ".adaos/workspace.lock.json").exists()
+    assert remote.channel_writes == 0
+
+
 def test_project_candidate_uses_full_owned_component_closure(tmp_path: Path) -> None:
     remote = _Remote(tmp_path / "remote")
     source_workspace = tmp_path / "dev"

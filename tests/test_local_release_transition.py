@@ -430,7 +430,8 @@ def _register_component_consumer(
     )
 
 
-def test_bound_owner_rejects_a_second_application_owner(setup) -> None:
+@pytest.mark.parametrize("preserve_selected_beta", [False, True])
+def test_bound_owner_rejects_a_second_application_owner(setup, preserve_selected_beta) -> None:
     owner, service, _old, new, _activations, _lock = setup
     _register_component_consumer(
         service,
@@ -442,6 +443,22 @@ def test_bound_owner_rejects_a_second_application_owner(setup) -> None:
     )
 
     with pytest.raises(ValueError, match="referenced by another installation"):
+        bind_local_data_lifecycle(owner, runtime, new, preserve_selected_beta=preserve_selected_beta)
+
+
+def test_existing_owner_beta_does_not_adopt_historical_consumer_data(setup) -> None:
+    owner, service, old, new, _activations, _lock = setup
+    # The other installation retains a historical shared pin absent from the
+    # current Workspace lock. It is not an owner and must not redirect data.
+    _register_component_consumer(service, package_digest="sha256:" + "e" * 64, lifecycle="shared")
+    runtime = NativeTrialRuntime._resolve_immutable(owner, "candidate-sample", new.release_digest)
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new, preserve_selected_beta=True)
+    assert lifecycle.stable_digest == old.release_digest
+    assert lifecycle.components[0].stable_root == (
+        owner.paths.workspace_dir() / "skills/.runtime/worker/v0.1/data")
+    assert rows(lifecycle.components[0].stable_root / "entries.sqlite") == [(1, "private stable")]
+    # The same stale pin still blocks global Workspace cutover.
+    with pytest.raises(ValueError, match="absent from the active Workspace lock"):
         bind_local_data_lifecycle(owner, runtime, new)
 
 

@@ -2351,6 +2351,7 @@ class ArtifactPublicationService:
         target_subnet_id: str | None = None,
         idempotency_key: str | None = None,
         permission_decision: bool | Mapping[str, Any] | None = None,
+        isolated_shared_versions: bool = False,
     ) -> PreparedCandidate:
         """Prepare one immutable Trial from a declarative Project closure."""
 
@@ -2399,7 +2400,7 @@ class ArtifactPublicationService:
                 self.release_cache,
             ),
         )
-        if conflicts:
+        if conflicts and not isolated_shared_versions:
             summary = "; ".join(
                 f"{item['skill']} used by {', '.join(item['active_consumers'])}"
                 for item in conflicts
@@ -2559,6 +2560,18 @@ class ArtifactPublicationService:
                 "status": "verified",
                 "mode": "empty",
                 "reason": "isolated trial Workspace has no seeded data",
+            }
+        if conflicts and isolated_shared_versions:
+            # This opt-in changes no active Workspace binding. The exact
+            # closure below is materialized under the Candidate's Trial root;
+            # global publication still requires its normal shared-skill checks.
+            isolation_evidence = {
+                **dict(isolation_evidence or {}),
+                "shared_versions": {
+                    "mode": "isolated_trial_only",
+                    "workspace_rebinding_authorized": False,
+                    "conflicts": conflicts,
+                },
             }
         trial_started_at = _now()
         primary_kind, _, primary_id = primary_ref.partition(":")
