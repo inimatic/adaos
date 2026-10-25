@@ -17,6 +17,7 @@ let inspectedPage
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' })
   await context.addInitScript(({ token, subnet, hub }) => {
+    if (location.href === 'about:blank') return
     for (const [key, value] of Object.entries({ adaos_local_hub_url: hub, adaos_local_hub_token: token,
       adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: 'en' })) {
       localStorage.setItem(key, value)
@@ -29,11 +30,23 @@ try {
     await page.locator('.component-updates-panel__tools button').last().dispatchEvent('click')
   })
   const open = async scenario => {
+    await page.goto('about:blank')
     const response = await context.request.post(`${hub}/api/node/yjs/webspaces/${host}/scenario`, {
       headers: { 'X-AdaOS-Token': token }, data: { scenario_id: scenario, wait_for_rebuild: false,
         request_source: 'e2e.builder.beta.reconciliation' }, timeout: 120_000,
     })
     if (!response.ok()) throw new Error(`Isolated scenario switch failed: ${response.status()}`)
+    const accepted = await response.json()
+    if (accepted.ok !== true) throw new Error(`Scenario switch rejected: ${accepted.error || 'unknown'}`)
+    await expect.poll(async () => {
+      const state = await context.request.get(`${hub}/api/node/yjs/webspaces/${host}/materialization`, {
+        headers: { 'X-AdaOS-Token': token }, timeout: 30_000,
+      })
+      const value = await state.json()
+      if (value.rebuild?.status === 'failed') throw new Error(`Scenario materialization failed: ${value.rebuild.error}`)
+      return `${value.rebuild?.scenario_id}:${value.rebuild?.status}`
+    }, { timeout: 150_000, intervals: [500, 1000, 2000] }).toBe(`${scenario}:ready`)
+    console.log(JSON.stringify({ phase: 'materialized', scenario }))
     const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100')
     for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: subnet,
       webspace_id: host, expected_scenario_id: scenario, try_local_hub: '1' })) url.searchParams.set(key, value)

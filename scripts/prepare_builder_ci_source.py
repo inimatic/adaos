@@ -25,6 +25,10 @@ def main():
     pin = json.loads(args.pin.read_text(encoding='utf-8'))
     source = args.source
     if source is None:
+        if pin.get('source_state') == 'local_beta_pending_publication':
+            raise SystemExit('Builder Beta is qualified locally but its source checkpoint is not published. '
+                'Publish that exact checkpoint before resuming CI, or explicitly supply --source '
+                'for a verified local gate. No older Builder or Workspace fallback is allowed.')
         checkout = args.checkout.resolve()
         if not checkout.is_relative_to((ROOT/'.tmp').resolve()):
             raise SystemExit('CI source checkout must be inside repository .tmp')
