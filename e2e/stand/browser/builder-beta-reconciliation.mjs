@@ -39,11 +39,17 @@ try {
     const accepted = await response.json()
     if (accepted.ok !== true) throw new Error(`Scenario switch rejected: ${accepted.error || 'unknown'}`)
     await expect.poll(async () => {
-      const state = await context.request.get(`${hub}/api/node/yjs/webspaces/${host}/materialization`, {
+      const state = await context.request.get(`${hub}/api/node/yjs/webspaces/${host}/materialization?include_runtime=0`, {
         headers: { 'X-AdaOS-Token': token }, timeout: 30_000,
       })
       const value = await state.json()
       if (value.rebuild?.status === 'failed') throw new Error(`Scenario materialization failed: ${value.rebuild.error}`)
+      // After a Core restart an unchanged, ready snapshot has no in-process
+      // rebuild job. Prove its scenario/readiness rather than requiring a job
+      // that the idempotent switch correctly did not schedule.
+      if (!value.rebuild?.pending && ['idle', 'ready'].includes(value.rebuild?.status)
+        && value.materialization?.ready && !value.materialization?.stale
+        && value.materialization?.current_scenario === scenario) return `${scenario}:ready`
       return `${value.rebuild?.scenario_id}:${value.rebuild?.status}`
     }, { timeout: 150_000, intervals: [500, 1000, 2000] }).toBe(`${scenario}:ready`)
     console.log(JSON.stringify({ phase: 'materialized', scenario }))
