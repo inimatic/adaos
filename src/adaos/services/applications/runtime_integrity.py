@@ -59,6 +59,7 @@ def compare_runtime_component(expected: Mapping[str, Any], observed: Mapping[str
     actual = {k: observed.get(k) for k in (
         "version", "package_digest", "package_manifest_digest", "ready", "active_slot",
         "active", "active_selection_valid", "source_verified",
+        "source_verification_error",
     )}
     reasons = []
     if not observed:
@@ -75,10 +76,15 @@ def compare_runtime_component(expected: Mapping[str, Any], observed: Mapping[str
         reasons.append("runtime_selection_invalid")
     if observed.get("source_verified") is False:
         reasons.append("source_drift")
+    if observed.get("source_verification_error"):
+        reasons.append("source_verification_unavailable")
     unknown = not observed or "package_identity_unknown" in reasons
+    definite = any(reason in reasons for reason in (
+        "package_digest_mismatch", "version_mismatch", "runtime_not_ready",
+        "runtime_selection_invalid", "source_drift"))
     return {"component_ref": f"{expected['kind']}:{expected['artifact_id']}",
             "expected": identity, "observed": actual, "reasons": reasons,
-            "status": "unknown" if unknown else "drift" if reasons else "aligned"}
+            "status": "drift" if definite else "unknown" if unknown or reasons else "aligned"}
 
 
 def runtime_slot_observation(skills_root: Path, skill_id: str) -> dict[str, Any]:
@@ -161,8 +167,10 @@ def _release_observation(ctx, release, *, root: Path, runtime_root_ref: str, dee
         if deep:
             try:
                 actual["source_verified"] = _packaged_files_match(ctx, package, source)
-            except (OSError, ValueError, RuntimeError):
-                actual["source_verified"] = False
+            except (OSError, ValueError, RuntimeError) as exc:
+                # Missing/unverifiable evidence is not proof of changed code.
+                actual["source_verified"] = None
+                actual["source_verification_error"] = type(exc).__name__
         rows.append(compare_runtime_component(package.to_dict(), actual))
     status = "drift" if any(row["status"] == "drift" for row in rows) else (
         "unknown" if not rows or any(row["status"] == "unknown" for row in rows) else "aligned")
@@ -172,10 +180,46 @@ def _release_observation(ctx, release, *, root: Path, runtime_root_ref: str, dee
             "evidence_scope": "package_identity_and_packaged_files" if deep else "slot_package_identity"}
 
 
+def _alpha_observation(ctx: Any, project_id: str, *, deep: bool) -> dict[str, Any] | None:
+    import yaml
+
+    dev_method = getattr(ctx.paths, "dev_dir", None)
+    if not callable(dev_method):
+        return None
+    alpha = {"version": None, "status": "mutable_source", "runtime_root_ref": "development", "components": []}
+    try:
+        dev = Path(dev_method())
+        manifest = dev / "projects" / project_id / "project.yaml"
+        if not manifest.is_file():
+            return None
+        project = yaml.safe_load(manifest.read_text(encoding="utf-8-sig"))
+        if not isinstance(project, Mapping):
+            raise ValueError("Invalid Project declaration")
+        alpha["version"] = project.get("version")
+        for member in project.get("components", {}).get("owned", ()):
+            kind, _, name = str(member.get("ref") or "").partition(":")
+            if kind not in {"skill", "scenario"} or not name:
+                continue
+            path = dev / f"{kind}s" / name / f"{kind}.yaml"
+            declaration = yaml.safe_load(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
+            if not isinstance(declaration, Mapping):
+                raise ValueError("Invalid component declaration")
+            alpha["components"].append({"component_ref": f"{kind}:{name}", "version": declaration.get("version"),
+                "status": "source_present" if path.is_file() else "source_missing"})
+        if deep:
+            from adaos.services.artifact_pipeline.project_build import project_source_snapshot
+            alpha["source_revision"] = project_source_snapshot(
+                project_dir=manifest.parent, workspace_root=dev)["source_revision"]
+    except (OSError, ValueError, RuntimeError, yaml.YAMLError) as exc:
+        # Mutable authoring errors are independent of immutable runtime health.
+        alpha["status"] = "invalid_source"
+        alpha["source_error"] = type(exc).__name__
+    return alpha
+
+
 def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id: str = "desktop",
                                   deep: bool = False) -> dict[str, Any]:
     """One read model for Builder and Applications; no refresh/activation/repair."""
-    import yaml
     from adaos.services.applications.trial_runtime import NativeTrialRuntime
 
     store = ApplicationStore(Path(ctx.paths.state_dir()))
@@ -208,28 +252,7 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
         row["expires_at"] = activation.get("expires_at")
         row["admission_status"] = activation.get("status")
         beta.append(row)
-    alpha = None
-    dev_method = getattr(ctx.paths, "dev_dir", None)
-    if callable(dev_method):
-        dev = Path(dev_method())
-        manifest = dev / "projects" / app.legacy_project_id / "project.yaml"
-        if manifest.is_file():
-            project = yaml.safe_load(manifest.read_text(encoding="utf-8-sig")) or {}
-            components = []
-            for member in project.get("components", {}).get("owned", ()):
-                kind, _, name = str(member.get("ref") or "").partition(":")
-                if kind not in {"skill", "scenario"} or not name:
-                    continue
-                path = dev / f"{kind}s" / name / f"{kind}.yaml"
-                declaration = yaml.safe_load(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
-                components.append({"component_ref": f"{kind}:{name}", "version": (declaration or {}).get("version"),
-                                   "status": "source_present" if path.is_file() else "source_missing"})
-            alpha = {"version": project.get("version"), "status": "mutable_source",
-                     "runtime_root_ref": "development", "components": components}
-            if deep:
-                from adaos.services.artifact_pipeline.project_build import project_source_snapshot
-                alpha["source_revision"] = project_source_snapshot(
-                    project_dir=manifest.parent, workspace_root=dev)["source_revision"]
+    alpha = _alpha_observation(ctx, app.legacy_project_id, deep=deep)
     active = next((row for row in beta if selected and row["runtime_root_ref"] == selected.runtime_root_ref),
                   stable if selected is None or selected.runtime_root_ref == "workspace" else None)
     channels = store.get_channels(application_id).get("channels") or {}

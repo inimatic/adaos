@@ -19,6 +19,11 @@ def _ctx(tmp_path):
     ({"package_digest": "sha256:a", "source_verified": False}, "drift", "source_drift"),
     ({"package_digest": "sha256:a", "active": False}, "drift", "runtime_not_ready"),
     ({"package_digest": "sha256:a", "active_selection_valid": False}, "drift", "runtime_selection_invalid"),
+    ({"version": "2.0.0"}, "drift", "version_mismatch"),
+    ({"source_verified": False}, "drift", "source_drift"),
+    ({"package_digest": "sha256:a", "source_verification_error": "FileNotFoundError"},
+     "unknown", "source_verification_unavailable"),
+    ({"source_verification_error": "FileNotFoundError"}, "unknown", "package_identity_unknown"),
 ])
 def test_component_comparison_requires_exact_identity(observed, status, reason):
     result = integrity.compare_runtime_component(
@@ -30,6 +35,22 @@ def test_component_comparison_requires_exact_identity(observed, status, reason):
 
 def test_unmanaged_skill_remains_usable(tmp_path):
     integrity.assert_managed_skill_activation(_ctx(tmp_path), "example", None)
+
+
+@pytest.mark.parametrize("declaration", ["[broken", "[]", "version: 1.2.3\ncomponents: {owned: []}\n"])
+def test_invalid_alpha_remains_observable_without_repair(tmp_path, monkeypatch, declaration):
+    ctx = _ctx(tmp_path)
+    ctx.paths.dev_dir = lambda: tmp_path / "dev"
+    project = tmp_path / "dev/projects/example/project.yaml"
+    project.parent.mkdir(parents=True)
+    project.write_text(declaration, encoding="utf-8")
+    def fail(**kwargs):
+        raise RuntimeError("compiler-owned outputs differ")
+    monkeypatch.setattr("adaos.services.artifact_pipeline.project_build.project_source_snapshot", fail)
+    result = integrity._alpha_observation(ctx, "example", deep=True)
+    assert result["status"] == "invalid_source"
+    assert result["source_error"]
+    assert project.read_text(encoding="utf-8") == declaration
 
 
 def test_committed_lock_allows_only_its_exact_package(tmp_path, monkeypatch):
