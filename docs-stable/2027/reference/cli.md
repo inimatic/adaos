@@ -21,3 +21,7 @@ development-only references are not part of the public stable documentation.
 
 Run `adaos --help` and `adaos <group> --help` for the current command surface.
 
+`adaos dev contracts ...` provides local-beta
+[contract compatibility checks](../operations/contract-evolution.md), including
+contract comparison, consumer assessments, proposed Dev Tickets and evidence.
+

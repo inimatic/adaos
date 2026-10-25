@@ -8515,6 +8515,8 @@ class DevelopmentTicketService:
                     _development_source_scope(ticket, automation_target)
                 ),
                 "compatibility": _mapping(ticket.get("metadata")),
+                **({"contract_evolution": _mapping(ticket.get("metadata"))["contract_evolution"]}
+                   if _mapping(ticket.get("metadata")).get("contract_evolution") else {}),
                 "policy": _mapping(ticket.get("policy")),
                 "economic": {
                     "schema": "adaos.builder.codex_token_accounting.v1",
@@ -8525,12 +8527,16 @@ class DevelopmentTicketService:
                     "policy": "record provider-reported billable tokens even when repair work fails",
                 },
                 "acceptance": {
-                    "checks": [
+                    "checks": ([
+                        "Validate the consumer against the exact target contract digest.",
+                        *[str(item) for item in _mapping(_mapping(ticket.get("metadata")).get("contract_evolution")).get("acceptance") or []],
+                        "Record the exact Candidate and target-contract verification evidence.",
+                    ] if _mapping(ticket.get("metadata")).get("contract_evolution") else [
                         "strict skill/scenario validation passes",
                         "activation or smoke import passes",
                         "expected receiver admission passes",
                         "unrelated receiver admission remains denied",
-                    ]
+                    ])
                 },
             },
             design_time_fixable=bool(_mapping(ticket.get("policy")).get("design_time_fixable", True)),

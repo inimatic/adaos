@@ -9,7 +9,7 @@ from typing import Any, Mapping
 import zipfile
 
 from .producers import current_contracts, unit_digest
-from .records import digest, seal
+from .records import POLICY_DIGEST, digest, seal
 from .service import USAGE
 
 
@@ -59,7 +59,28 @@ def build_usage_lock(files: Mapping[str, bytes], *, application_ref: str,
                 unresolved.append({"code": "source_unreadable", "location": path})
                 continue
             aliases = _call_aliases(tree)
+            parents = {id(child): parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+            sdk_aliases = set()
+            imported_modules = set()
             for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("adaos.sdk"):
+                    for alias in node.names:
+                        sdk_aliases.add(alias.asname or alias.name)
+                        symbol = node.module + "." + alias.name
+                        if "sdk:" + symbol not in units:
+                            imported_modules.add(symbol)
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith("adaos.sdk"):
+                            sdk_aliases.add(alias.asname or "adaos")
+                            imported_modules.add(alias.name)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in sdk_aliases:
+                    parent = parents.get(id(node))
+                    if not isinstance(parent, (ast.Attribute, ast.Call)):
+                        unresolved.append({"code": "sdk_alias_dataflow_unknown", "location": f"{path}:{node.lineno}"})
+                    elif isinstance(parent, ast.Call) and parent.func is not node:
+                        unresolved.append({"code": "sdk_callback_usage_unknown", "location": f"{path}:{node.lineno}"})
                 if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("adaos.sdk"):
                     for alias in node.names:
                         if alias.name == "*":
@@ -77,15 +98,27 @@ def build_usage_lock(files: Mapping[str, bytes], *, application_ref: str,
                         unresolved.append({"code": "dynamic_sdk_arguments", "location": f"{path}:{node.lineno}"})
                 if isinstance(node.func, ast.Name) and node.func.id in {"getattr", "__import__", "eval", "exec"}:
                     unresolved.append({"code": "dynamic_python_usage", "location": f"{path}:{node.lineno}"})
+            for module in sorted(imported_modules):
+                if not any(ref.startswith("sdk:" + module + ".") for ref in used):
+                    unresolved.append({"code": "sdk_module_usage_unresolved", "module": module, "location": path})
         elif path.endswith(".json"):
             try:
                 walk(json.loads(content), path)
             except (ValueError, UnicodeError):
                 unresolved.append({"code": "descriptor_unreadable", "location": path})
+        elif path.endswith((".yaml", ".yml")):
+            import yaml
+            try:
+                manifest = yaml.safe_load(content)
+                if isinstance(manifest, dict) and manifest.get("conversational"):
+                    unresolved.append({"code": "conversational_usage_not_indexed", "location": path})
+            except (yaml.YAMLError, UnicodeError):
+                unresolved.append({"code": "manifest_unreadable", "location": path})
     # Producer identity includes all analyzer code and the selected policy.
     from pathlib import Path
-    producer = digest({name: digest((Path(__file__).parent / name).read_text(encoding="utf-8"))
-                       for name in ("usage.py", "producers.py")})
+    producer = digest({"policy_digest": POLICY_DIGEST, "tools": {
+        name: digest((Path(__file__).parent / name).read_text(encoding="utf-8"))
+        for name in ("usage.py", "producers.py")}})
     artifacts = {}
     for path, content in files.items():
         if path.endswith(".json"):

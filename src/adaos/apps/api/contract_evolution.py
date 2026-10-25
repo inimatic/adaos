@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from adaos.apps.api.auth import require_token
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.contract_evolution.service import ContractEvolutionService, WAVE
+from adaos.services.contract_evolution.store import EvolutionQueryLimitError
 
 
 router = APIRouter(tags=["contract-evolution"], dependencies=[Depends(require_token)])
@@ -18,13 +19,24 @@ def _service(ctx):
 
 @router.get("/v1/contract-evolution/applications/{application_id}")
 def application_posture(application_id: str, consumer_digest: str | None = None, ctx: AgentContext = Depends(get_ctx)):
-    return _service(ctx).application_projection("application:" + application_id, consumer_digest=consumer_digest)
+    service = _service(ctx)
+    if consumer_digest is None:
+        from adaos.services.applications.store import ApplicationStore
+        try:
+            consumer_digest = ApplicationStore(service.state_dir).get_installation(application_id).installed_release_digest
+        except FileNotFoundError:
+            # No installed release is not an invitation to aggregate history.
+            consumer_digest = ""
+    return service.application_projection("application:" + application_id, consumer_digest=consumer_digest)
 
 
 @router.get("/v1/contract-evolution/waves")
 def waves(ctx: AgentContext = Depends(get_ctx)):
     service = _service(ctx)
-    return {"items": [service.wave_projection(item["wave_id"]) for item in service.store.list(WAVE, limit=100)]}
+    try:
+        return {"items": [service.wave_projection(item["wave_id"]) for item in service.store.list(WAVE, limit=100)]}
+    except EvolutionQueryLimitError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/v1/contract-evolution/events")

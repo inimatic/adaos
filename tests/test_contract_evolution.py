@@ -186,3 +186,165 @@ def test_builder_repair_context_keeps_contract_evolution_acceptance(tmp_path):
     brief = json.loads(_autonomous_repair_brief(ticket, {"repair_id": "repair:demo"}, target={"type": "scenario", "id": "demo"}))
     assert brief["contract_evolution"]["assessment_id"] == result["assessment_id"]
     assert brief["contract_evolution"]["purpose"] == "migration"
+
+
+def test_expired_verification_reselects_prior_assessment_without_mutating_history(tmp_path, monkeypatch):
+    from adaos.services.contract_evolution import service as module
+    service = ContractEvolutionService(tmp_path)
+    entry, delta = usage(service), change(service)
+    original = assess(service, entry, delta)
+    service.record_verification(application_ref=entry["application_ref"], consumer_digest=entry["consumer_digest"],
+        change_id=delta["change_id"], environment_ref="profile:local/default", kind="contract_test", result="passed",
+        report_digest=digest("passed"), valid_until=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(), runner_ref="test:pytest")
+    verified = assess(service, entry, delta)
+    assert verified["compatibility"] == "compatible"
+    class Later(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(days=2)
+    monkeypatch.setattr(module, "datetime", Later)
+    expired = assess(service, entry, delta)
+    assert expired["assessment_id"] == original["assessment_id"]
+    assert service.application_projection(entry["application_ref"])["posture"] == "action_required"
+    assert service.store.get(verified["assessment_id"])["compatibility"] == "compatible"
+
+
+def test_new_target_supersedes_old_contract_attention(tmp_path):
+    service = ContractEvolutionService(tmp_path)
+    entry = usage(service)
+    original = assess(service, entry, change(service))
+    service.materialize_ticket(original["assessment_id"])
+    service.publish_change(contract_ref="sdk:example.run", contract_kind="sdk_operation", owner_ref="core:sdk",
+        before=digest("new"), after=digest("third"), classification="additive", required_evidence=[])
+    service.reconcile()
+    posture = service.application_projection(entry["application_ref"])
+    # Unknown baseline remains visible; the old target Ticket is not counted
+    # against an unrelated/new target as though its assessment were current.
+    assert posture["posture"] == "verification_due"
+    assert posture["ticket_count"] == 0
+
+
+def test_ui_schema_fragment_changes_do_not_affect_unrelated_components(tmp_path):
+    from adaos.services.contract_evolution.producers import publish_ui_changes
+    catalog = {"components": [
+        {"id": "ui.form", "manifest": {"widget_type": "ui.form", "input_schema": "webui.v1.schema.json#/$defs/formInputs"}},
+        {"id": "ui.list", "manifest": {"widget_type": "ui.list", "input_schema": "webui.v1.schema.json#/$defs/listInputs"}},
+    ]}
+    old = {"$defs": {"formInputs": {"type": "object"}, "listInputs": {"type": "object"}}}
+    new = deepcopy(old)
+    new["$defs"]["formInputs"]["required"] = ["resource"]
+    changes = publish_ui_changes(ContractEvolutionService(tmp_path), catalog, catalog, previous_schema=old, current_schema=new)
+    assert [entry["contract_ref"] for entry in changes] == ["webui:ui.form"]
+
+
+def test_mcp_publisher_ignores_title_but_detects_required_argument(tmp_path):
+    from adaos.services.contract_evolution.producers import publish_mcp_changes
+    old = {"applications.show": {"id": "applications.show", "title": "Show", "input_schema": {"type": "object", "required": []}}}
+    new = deepcopy(old)
+    new["applications.show"]["title"] = "Inspect"
+    service = ContractEvolutionService(tmp_path)
+    assert publish_mcp_changes(service, old, new) == []
+    new["applications.show"]["input_schema"]["required"] = ["application_id"]
+    changes = publish_mcp_changes(service, old, new)
+    assert changes[0]["classification"] == "breaking"
+    assert changes[0]["contract_ref"] == "mcp:applications.show"
+
+
+def test_an_unassessed_target_never_leaves_an_application_aligned(tmp_path):
+    service = ContractEvolutionService(tmp_path)
+    entry = usage(service)
+    assess(service, entry, change(service, "additive"))
+    assert service.application_projection(entry["application_ref"])["posture"] == "aligned"
+    service.publish_change(contract_ref="sdk:another.read", contract_kind="sdk_operation", owner_ref="core:sdk",
+        before=digest("a"), after=digest("b"), classification="additive")
+    projection = service.application_projection(entry["application_ref"])
+    assert projection["posture"] == "verification_due"
+    assert not projection["coverage_complete"]
+    assert projection["unassessed_change_count"] == 1
+    service.reconcile()
+    assert service.application_projection(entry["application_ref"])["posture"] == "aligned"
+
+
+def test_queries_never_silently_truncate_and_product_read_degrades_safely(tmp_path, monkeypatch):
+    from adaos.services.contract_evolution.store import EvolutionQueryLimitError
+    service = ContractEvolutionService(tmp_path)
+    entry = usage(service)
+    assess(service, entry, change(service))
+    change(service, "additive")
+    with pytest.raises(EvolutionQueryLimitError, match="coverage is incomplete"):
+        service.store.list("adaos.contract_change.v1", limit=1)
+    def full(*args, **kwargs):
+        raise EvolutionQueryLimitError("test bounded population exceeded")
+    monkeypatch.setattr(service.store, "list", full)
+    projection = service.application_projection(entry["application_ref"])
+    assert projection["posture"] == "unknown"
+    assert projection["reason"] == "AssessmentQueryLimitExceeded"
+    assert projection["coverage_complete"] is False
+
+
+def test_head_index_upgrade_preserves_other_consumers(tmp_path):
+    service = ContractEvolutionService(tmp_path)
+    delta = change(service, "additive")
+    one, two = usage(service), usage(service, app="application:other")
+    assess(service, one, delta)
+    assess(service, two, delta)
+    with service.store.connection(write=True) as db:
+        db.execute("DROP TABLE assessment_heads")
+    assert service.application_projection(two["application_ref"])["posture"] == "aligned"
+    assess(service, one, delta)  # Initializes the index for all historical consumers.
+    assert service.application_projection(two["application_ref"])["posture"] == "aligned"
+
+
+def test_contract_descriptor_is_bound_to_the_published_digest(tmp_path):
+    service = ContractEvolutionService(tmp_path)
+    with pytest.raises(ValueError, match="descriptor does not match"):
+        change(service, after_descriptor={"required": ["new"]})
+    descriptor = {"required": ["new"]}
+    record = service.publish_change(contract_ref="sdk:example.run", contract_kind="sdk_operation", owner_ref="core:sdk",
+        before=digest("old"), after=digest(descriptor), after_descriptor=descriptor, classification="breaking")
+    entry = usage(service)
+    ticket = service.materialize_ticket(assess(service, entry, record)["assessment_id"])
+    assert ticket["metadata"]["contract_evolution"]["target_contract"] == descriptor
+
+
+def test_module_alias_escape_is_unknown_even_with_an_indexed_call():
+    from adaos.services.contract_evolution.usage import build_usage_lock
+    record = build_usage_lock({"handler.py": b"from adaos.sdk import example\nexample.run()\nsaved = example\n"},
+        application_ref="application:demo", consumer_ref="skill:demo", consumer_digest=digest("source"),
+        contracts={"sdk:adaos.sdk.example.run": {"contract": {"digest": digest("run")}}})
+    assert not record["complete"]
+    assert "sdk_alias_dataflow_unknown" in {item["code"] for item in record["unresolved"]}
+
+
+def test_adoption_event_observes_native_installation_without_changing_it(tmp_path):
+    from adaos.domain.application import Application, ApplicationInstallation
+    from adaos.services.applications.store import ApplicationStore
+    service = ContractEvolutionService(tmp_path)
+    entry, delta = usage(service), change(service, "additive")
+    assess(service, entry, delta)
+    store = ApplicationStore(tmp_path)
+    store.save_application(Application(application_id="demo", legacy_project_id="demo", publisher_ref="subnet:sn_home",
+        slug="demo", display={"title": "Demo", "summary": None}, visibility="public",
+        entrypoints=({"entrypoint_id": "main", "presentation_ref": "scenario:demo"},),
+        publisher={"publisher_ref": "subnet:sn_home", "display_name": "Home", "subnet_short_ref": "sn_home",
+                   "release_key_ref": "subnet-key:release-signing:1", "release_key_fingerprint": digest("key"),
+                   "home_zone": "local-dev", "trust_relation": "local"}), expected_revision=0)
+    installation = store.save_installation(ApplicationInstallation(
+        installation_id="installation:demo", application_id="demo", installed_release_digest=entry["consumer_digest"],
+        component_refs=({"component_ref": "scenario:demo", "package_digest": digest("package"), "lifecycle": "bound"},),
+        data_policy="retain", status="active", revision=1), expected_revision=0)
+    assert service.observe_adoptions()[0]["installation_revision"] == 1
+    service.observe_adoptions()
+    events = service.store.events(limit=1000)["items"]
+    assert len([item for item in events if item["type"] == "compatible_release.activated"]) == 1
+    assert store.get_installation("demo") == installation
+
+
+@pytest.mark.parametrize("classification", ["additive", "deprecated", "compatible_by_policy"])
+def test_incomplete_usage_is_not_sufficient_compatibility_proof(tmp_path, classification):
+    service = ContractEvolutionService(tmp_path)
+    entry = usage(service, complete=False)
+    result = assess(service, entry, change(service, classification))
+    assert result["compatibility"] == "unknown"
+    assert result["reason"] == "UsageIncomplete"
+    assert not result["action_required"]

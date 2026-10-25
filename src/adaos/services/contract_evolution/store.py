@@ -15,6 +15,10 @@ from typing import Any, Iterator, Mapping
 from .records import IDENTITIES, digest, utc_now, validate
 
 
+class EvolutionQueryLimitError(ValueError):
+    """A bounded query is incomplete; never infer compatibility from its prefix."""
+
+
 class EvolutionStore:
     def __init__(self, state_dir: Path):
         self.path = Path(state_dir) / "contract_evolution" / "records.sqlite3"
@@ -44,11 +48,29 @@ class EvolutionStore:
                     CREATE TABLE IF NOT EXISTS migrations (
                         usage_lock_id TEXT NOT NULL, change_id TEXT NOT NULL, receipt_id TEXT NOT NULL,
                         PRIMARY KEY(usage_lock_id,change_id,receipt_id));
+                    CREATE TABLE IF NOT EXISTS assessment_heads (
+                        application_ref TEXT, consumer_digest TEXT, change_id TEXT, environment_ref TEXT,
+                        assessment_id TEXT NOT NULL, generation INTEGER NOT NULL,
+                        PRIMARY KEY(application_ref,consumer_digest,change_id,environment_ref));
                     CREATE TABLE IF NOT EXISTS events (
                         seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL,
                         body TEXT NOT NULL);
                 """)
                 db.execute("BEGIN IMMEDIATE")
+                # Upgrade an earlier MVP store without losing its existing
+                # assessments when the new head table is first initialized.
+                # Existing selections (including reselected older records)
+                # always win over insertion order.
+                db.execute("""
+                    INSERT OR IGNORE INTO assessment_heads
+                    SELECT application_ref,consumer_digest,change_id,
+                           json_extract(body,'$.environment_ref'),id,1
+                    FROM records WHERE seq IN (
+                        SELECT MAX(seq) FROM records
+                        WHERE schema='adaos.consumer_contract_assessment.v1'
+                        GROUP BY application_ref,consumer_digest,change_id,
+                                 json_extract(body,'$.environment_ref'))
+                """)
             yield db
             if write:
                 db.commit()
@@ -72,6 +94,7 @@ class EvolutionStore:
         with self.connection(write=True) as db:
             previous = db.execute("SELECT body FROM records WHERE id=?", (identity,)).fetchone()
             if previous:
+                self._select_assessment(db, value)
                 return validate(json.loads(previous[0]))
             db.execute("INSERT INTO records(id,schema,application_ref,consumer_digest,change_id,body) VALUES (?,?,?,?,?,?)",
                        (identity, value["schema"], value.get("application_ref"), value.get("consumer_digest"),
@@ -79,7 +102,21 @@ class EvolutionStore:
             self._event(db, event_type, identity, {k: value[k] for k in (
                 "application_ref", "consumer_digest", "contract_ref", "change_id", "wave_id",
                 "target_contract_digest", "environment_ref", "policy_digest") if k in value})
+            self._select_assessment(db, value)
         return value
+
+    def _select_assessment(self, db: sqlite3.Connection, value: Mapping[str, Any]):
+        if value["schema"] != "adaos.consumer_contract_assessment.v1":
+            return
+        key = tuple(value[name] for name in ("application_ref", "consumer_digest", "change_id", "environment_ref"))
+        previous = db.execute("SELECT assessment_id,generation FROM assessment_heads WHERE application_ref=? AND consumer_digest=? AND change_id=? AND environment_ref=?", key).fetchone()
+        if previous and previous[0] == value["assessment_id"]:
+            return
+        generation = previous[1] + 1 if previous else 1
+        db.execute("INSERT OR REPLACE INTO assessment_heads VALUES (?,?,?,?,?,?)", (*key, value["assessment_id"], generation))
+        self._event(db, "consumer_assessment.selected", value["assessment_id"], {
+            "application_ref": key[0], "consumer_digest": key[1], "change_id": key[2],
+            "environment_ref": key[3], "generation": generation, "replaces": previous[0] if previous else None})
 
     def get(self, identity: str) -> dict[str, Any]:
         with self.connection() as db:
@@ -90,7 +127,7 @@ class EvolutionStore:
 
     def list(self, schema: str, *, application_ref: str | None = None,
              consumer_digest: str | None = None, change_id: str | None = None,
-             limit: int = 1000) -> list[dict[str, Any]]:
+             limit: int = 1000, current: bool = False) -> list[dict[str, Any]]:
         if schema not in IDENTITIES or not 1 <= limit <= 10000:
             raise ValueError("invalid Contract Evolution query")
         clauses, params = ["schema=?"], [schema]
@@ -99,9 +136,22 @@ class EvolutionStore:
                 clauses.append(f"{key}=?")
                 params.append(value)
         with self.connection() as db:
+            if current and db:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assessment_heads'").fetchone():
+                    clauses.append("id IN (SELECT assessment_id FROM assessment_heads)")
+                else:
+                    # Read an earlier MVP store without mutating it. The next
+                    # explicit assessment write initializes its head index.
+                    clauses.append("seq IN (SELECT MAX(seq) FROM records WHERE schema='adaos.consumer_contract_assessment.v1' GROUP BY application_ref,consumer_digest,change_id,json_extract(body,'$.environment_ref'))")
             rows = db.execute("SELECT body FROM records WHERE " + " AND ".join(clauses) + " ORDER BY seq DESC LIMIT ?",
-                              [*params, limit]).fetchall() if db else []
+                              [*params, limit + 1]).fetchall() if db else []
+        if len(rows) > limit:
+            raise EvolutionQueryLimitError(f"Contract Evolution {schema} query exceeds its {limit}-record limit; assessment coverage is incomplete")
         return [validate(json.loads(row[0])) for row in rows]
+
+    def append_event(self, kind: str, subject: str, refs: Mapping[str, Any]):
+        with self.connection(write=True) as db:
+            self._event(db, kind, subject, refs)
 
     def ticket_links(self) -> dict[str, str]:
         with self.connection() as db:

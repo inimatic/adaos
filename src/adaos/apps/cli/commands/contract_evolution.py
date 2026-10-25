@@ -29,8 +29,11 @@ def _print(value):
 def _snapshot():
     from adaos.sdk.core.exporter import export
     from adaos.services.interface_deprecations import _CATALOG_PATH
+    from adaos.services.root_mcp.applications_plane import contracts
     return {"schema": "adaos.contract_snapshot.v1", "sdk": export(level="rich", include_deprecated=True),
-            "ui": json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))}
+            "ui": json.loads(_CATALOG_PATH.read_text(encoding="utf-8")),
+            "webui_schema": json.loads((_CATALOG_PATH.parent / "webui.v1.schema.json").read_text(encoding="utf-8")),
+            "mcp": {item.id: item.to_dict() for item in contracts()}}
 
 
 @app.command("snapshot")
@@ -46,12 +49,13 @@ def compare(baseline: Path = typer.Option(..., "--baseline"),
             target: Optional[Path] = typer.Option(None, "--target"),
             state_dir: Optional[Path] = typer.Option(None, "--state-dir")):
     """Publish exact SDK/UI changes to local evolution state; no consumer mutation."""
-    from adaos.services.contract_evolution.producers import publish_sdk_changes, publish_ui_changes
+    from adaos.services.contract_evolution.producers import publish_sdk_changes, publish_ui_changes, publish_mcp_changes
     old = json.loads(baseline.read_text(encoding="utf-8"))
     new = json.loads(target.read_text(encoding="utf-8")) if target else _snapshot()
     service = _service(state_dir)
     changes = [*publish_sdk_changes(service, old["sdk"], new["sdk"]),
-               *publish_ui_changes(service, old["ui"], new["ui"])]
+               *publish_ui_changes(service, old["ui"], new["ui"], previous_schema=old.get("webui_schema"), current_schema=new.get("webui_schema")),
+               *publish_mcp_changes(service, old.get("mcp", {}), new.get("mcp", {}))]
     _print({"changes": changes, "count": len(changes)})
 
 
@@ -93,6 +97,43 @@ def reconcile(materialize: bool = typer.Option(False, "--materialize-tickets"),
               state_dir: Optional[Path] = typer.Option(None, "--state-dir")):
     """Assess registered consumers; optionally materialize only actionable Tickets."""
     _print(_service(state_dir).reconcile(materialize=materialize))
+
+
+@app.command("ingest")
+def ingest(changes: Path = typer.Argument(...),
+           state_dir: Optional[Path] = typer.Option(None, "--state-dir")):
+    """Admit a build-produced ContractChangeSet through the local operator boundary."""
+    from adaos.services.contract_evolution.records import validate
+    payload = json.loads(changes.read_text(encoding="utf-8"))
+    if payload.get("schema") != "adaos.contract_change_set.v1":
+        raise typer.BadParameter("expected adaos.contract_change_set.v1")
+    records = [validate(item) for item in payload["changes"]]
+    if any(item["schema"] != "adaos.contract_change.v1" for item in records):
+        raise typer.BadParameter("change set contains a different record kind")
+    service = _service(state_dir)
+    for item in records:
+        service.store.put(item, "contract_change.published")
+    _print({"admitted": len(records)})
+
+
+@app.command("record-verification")
+def record_verification(application_ref: str = typer.Option(..., "--application"),
+                        consumer_digest: str = typer.Option(..., "--consumer-digest"),
+                        change_id: str = typer.Option(..., "--change"),
+                        kind: str = typer.Option(..., "--kind"),
+                        result: str = typer.Option(..., "--result"),
+                        report: Path = typer.Option(..., "--report"),
+                        runner_ref: str = typer.Option(..., "--runner"),
+                        valid_hours: int = typer.Option(24, "--valid-hours", min=1, max=168),
+                        state_dir: Optional[Path] = typer.Option(None, "--state-dir")):
+    """Attest an executed local check; records the supplied runner and report digest."""
+    from datetime import datetime, timedelta, timezone
+    import hashlib
+    record = _service(state_dir).record_verification(application_ref=application_ref, consumer_digest=consumer_digest,
+        change_id=change_id, environment_ref="profile:local/default", kind=kind, result=result,
+        report_digest="sha256:" + hashlib.sha256(report.read_bytes()).hexdigest(), runner_ref=runner_ref,
+        valid_until=(datetime.now(timezone.utc) + timedelta(hours=valid_hours)).isoformat())
+    _print(record)
 
 
 @app.command("show")

@@ -67,6 +67,7 @@ jobs:
           path: |
             build/sdk-metadata/adaos-sdk-metadata.json
             build/sdk-metadata/compatibility.json
+            build/sdk-metadata/contract-changes.json
           retention-days: 7
 
   verify-reproducible:

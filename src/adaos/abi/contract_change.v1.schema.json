@@ -24,6 +24,8 @@
     "publisher_ref"
   ],
   "properties": {
+    "before_descriptor": {"type": "object"},
+    "after_descriptor": {"type": "object"},
     "schema": {
       "const": "adaos.contract_change.v1"
     },
@@ -48,6 +50,7 @@
     "contract_kind": {
       "enum": [
         "sdk_operation",
+        "api_operation",
         "webui",
         "conversational",
         "ui_component",

@@ -77,6 +77,12 @@
           "exposure"
         ],
         "properties": {
+          "component_refs": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9_.-]+$"},
+            "uniqueItems": true,
+            "maxItems": 256
+          },
           "contract_ref": {
             "type": "string",
             "minLength": 1,

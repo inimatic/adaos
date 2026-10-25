@@ -160,7 +160,8 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
         posture = evolution.get("posture", "unknown")
         aligned = "False" if posture in {"action_required", "blocked", "degraded"} else (
             "True" if posture in {"aligned", "compatible_legacy"} else "Unknown")
-        fresh = posture in {"aligned", "compatible_legacy", "migration_ready"} and not evolution.get("stale_evidence_count")
+        fresh = posture in {"aligned", "compatible_legacy"} and not evolution.get("stale_evidence_count")
+        work_known = evolution.get("reason") != "AssessmentQueryLimitExceeded"
         message = ("Used contracts require Application adaptation." if aligned == "False" else
                    "Used contracts are compatible." if aligned == "True" else
                    "Consumer contract verification is incomplete.")
@@ -170,9 +171,10 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
             _condition("VerificationFresh", "True" if fresh else "Unknown" if posture == "unknown" else "False",
                        "EvidenceCurrent" if fresh else "VerificationRequired", "Compatibility evidence is current." if fresh else
                        "Verify the exact consumer against its target contracts."),
-            _condition("CompatibilityWork", "True" if evolution.get("ticket_count") else "False",
-                       "LinkedCompatibilityWork" if evolution.get("ticket_count") else "NoLinkedCompatibilityWork",
-                       f"{int(evolution.get('ticket_count') or 0)} active compatibility Dev Tickets."),
+            _condition("CompatibilityWork", "True" if evolution.get("ticket_count") else "False" if work_known else "Unknown",
+                       "LinkedCompatibilityWork" if evolution.get("ticket_count") else "NoLinkedCompatibilityWork" if work_known else "WorkCoverageUnknown",
+                       f"{int(evolution.get('ticket_count') or 0)} active compatibility Dev Tickets." if work_known else
+                       "Compatibility work coverage is incomplete."),
         ])
 
     progressing_status = operation_status or installation_status

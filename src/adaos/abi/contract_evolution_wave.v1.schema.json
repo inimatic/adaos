@@ -35,7 +35,7 @@
         "minLength": 1,
         "maxLength": 512
       },
-      "maxItems": 256
+      "maxItems": 1000
     },
     "owner_ref": {
       "type": "string",

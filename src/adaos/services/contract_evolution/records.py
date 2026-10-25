@@ -23,10 +23,11 @@ IDENTITIES = {
 }
 POLICY = {
     "schema": "adaos.contract_evolution_policy.v1",
-    "revision": 1,
+    "revision": 2,
     "unknown": "verify_before_adaptation",
     "breaking": "consumer_contract_verification",
     "transparent_migration": "registered_declarative_only",
+    "incomplete_usage": "never_policy_only_compatibility_proof",
 }
 
 
@@ -68,6 +69,13 @@ def validate(record: Mapping[str, Any]) -> dict[str, Any]:
     expected = digest(content)
     if value["digest"] != expected or value[identity] != schema.removeprefix("adaos.").removesuffix(".v1") + ":" + expected:
         raise ValueError("Contract Evolution record digest/identity mismatch")
+    if schema == "adaos.contract_change.v1":
+        for key, pin in (("before_descriptor", "before"), ("after_descriptor", "after")):
+            if key in value:
+                descriptor = value[key]
+                pinned = (descriptor.get("contract") or {}).get("digest") or digest(descriptor)
+                if pinned != value[pin]:
+                    raise ValueError("contract descriptor does not match its published digest")
     instant(value["recorded_at"])
     for key in ("removal_after", "evidence_expires_at", "valid_until"):
         if value.get(key):
