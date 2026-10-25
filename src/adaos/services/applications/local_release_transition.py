@@ -153,7 +153,8 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             from adaos.domain.artifact_release import ProjectRelease
             from .trial_runtime import NativeTrialRuntime
             source_runtime = NativeTrialRuntime._resolve_immutable(owner,
-                beta_source["runtime_root_ref"].split(":", 1)[1], beta_source["release_digest"])
+                beta_source["runtime_root_ref"].split(":", 1)[1], beta_source["release_digest"],
+                for_data_recovery=True)
             if source_runtime.project_id != application_id:
                 raise ValueError("Beta upgrade source belongs to another Application")
             source_release = ProjectRelease.from_mapping(json.loads((source_runtime.root / ".adaos/releases" /

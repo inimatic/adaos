@@ -88,6 +88,7 @@ class NativeTrialRuntime:
     root: Path
     packages: tuple[ArtifactPackageRef, ...]
     project_id: str = ""
+    recovery_only: bool = False
 
     @classmethod
     def resolve(cls, owner: AgentContext, candidate_id: str, release_digest: str) -> "NativeTrialRuntime":
@@ -115,14 +116,15 @@ class NativeTrialRuntime:
         return runtime
 
     @classmethod
-    def _resolve_immutable(cls, owner: AgentContext, candidate_id: str, release_digest: str) -> "NativeTrialRuntime":
+    def _resolve_immutable(cls, owner: AgentContext, candidate_id: str, release_digest: str,
+                           *, for_data_recovery: bool = False) -> "NativeTrialRuntime":
         """Verify Candidate metadata for preparation; this does not admit execution."""
         state = Path(owner.paths.state_dir())
         record = TrialActivationStore(state / "artifact_pipeline/trial-activations").load(candidate_id)
         if not record or record.get("status") not in {"active", "completed"}:
             raise TrialRuntimeUnavailable("Trial is missing or inactive")
         expiry = record.get("expires_at")
-        if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc):
+        if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc) and not for_data_recovery:
             raise TrialRuntimeUnavailable("Trial has expired")
         identity = record.get("candidate_ref") or {}
         binding = record.get("runtime_binding") or {}
@@ -144,7 +146,8 @@ class NativeTrialRuntime:
         release = ProjectRelease.from_mapping(json.loads(release_path.read_text(encoding="utf-8"))).seal()
         if release.release_digest != release_digest or any(item not in packages for item in release.components):
             raise TrialRuntimeUnavailable("Trial release differs from its locked packages")
-        return cls(owner, candidate_id, release_digest, root, packages, project_id=release.project_id)
+        return cls(owner, candidate_id, release_digest, root, packages,
+                   project_id=release.project_id, recovery_only=for_data_recovery)
 
     def component(self, kind: str, name: str) -> ArtifactPackageRef:
         matches = [item for item in self.packages if item.kind == kind and item.artifact_id == name]
@@ -168,6 +171,8 @@ class NativeTrialRuntime:
         return source
 
     def context(self) -> AgentContext:
+        if self.recovery_only:
+            raise TrialRuntimeUnavailable("Data-recovery Trial cannot execute code")
         paths = TrialPaths(self.owner, self.root)
         sql = SQLite(paths)
         ctx = replace(self.owner, paths=paths, sql=sql, kv=SQLiteKV(sql),
@@ -180,6 +185,8 @@ class NativeTrialRuntime:
         return ctx
 
     def manager(self, *, prepare: bool = False):
+        if self.recovery_only:
+            raise TrialRuntimeUnavailable("Data-recovery Trial cannot execute code")
         from adaos.services.skill.manager import SkillManager
 
         ctx = self.context()
@@ -208,6 +215,8 @@ class NativeTrialRuntime:
             return manager
 
     def ready_manager(self, skill: str):
+        if self.recovery_only:
+            raise TrialRuntimeUnavailable("Data-recovery Trial cannot execute code")
         package = self.component("skill", skill)
         cache_key = (str(self.root), self.release_digest, skill, package.digest)
         with _READY_MANAGER_CACHE_LOCK:

@@ -224,6 +224,23 @@ def test_native_trial_fails_closed_for_unadmitted_modes_and_lifecycle(activation
         NativeTrialRuntime.resolve(get_ctx(), "candidate-example", release.release_digest)
 
 
+def test_expired_trial_is_only_resolved_as_non_executable_data_recovery(activation_record):
+    store, release, package = activation_record
+    store.update("candidate-example", expires_at="2000-01-01T00:00:00+00:00")
+    runtime = NativeTrialRuntime._resolve_immutable(get_ctx(), "candidate-example", release.release_digest,
+        for_data_recovery=True)
+    assert runtime.recovery_only and runtime.packages == (package,)
+    for operation in (runtime.context, runtime.manager, lambda: runtime.ready_manager("example")):
+        with pytest.raises(TrialRuntimeUnavailable, match="cannot execute"):
+            operation()
+    with pytest.raises(TrialRuntimeUnavailable, match="expired"):
+        NativeTrialRuntime.resolve(get_ctx(), "candidate-example", release.release_digest)
+    store.update("candidate-example", package_refs=[replace(package, digest="sha256:" + "d" * 64).to_dict()])
+    with pytest.raises(TrialRuntimeUnavailable, match="WorkspaceLock"):
+        NativeTrialRuntime._resolve_immutable(get_ctx(), "candidate-example", release.release_digest,
+            for_data_recovery=True)
+
+
 @pytest.mark.parametrize("stage", ["trial", "publication"])
 def test_candidate_materialization_route_rejects_delivery_before_side_effects(stage):
     import asyncio

@@ -358,7 +358,8 @@ def setup(tmp_path):
     return owner, service, old, new, activations, lock
 
 
-def test_upgrade_binding_pins_current_beta_without_reinterpreting_stable(setup):
+@pytest.mark.parametrize("expired_source", [False, True])
+def test_upgrade_binding_pins_current_beta_without_reinterpreting_stable(setup, expired_source):
     owner, service, old, new, _activations, _lock = setup
     first_runtime = NativeTrialRuntime._resolve_immutable(owner, "candidate-sample", new.release_digest)
     first = bind_local_data_lifecycle(owner, first_runtime, new)
@@ -367,6 +368,8 @@ def test_upgrade_binding_pins_current_beta_without_reinterpreting_stable(setup):
     with closing(sqlite3.connect(source / "entries.sqlite")) as db:
         db.execute("INSERT INTO entries VALUES(2,'new uploaded photo and held run')")
         db.commit()
+    if expired_source:
+        _activations.update("candidate-sample", expires_at="2000-01-01T00:00:00+00:00")
     second_runtime = SimpleNamespace(root=first_runtime.root.parent / "candidate-upgrade",
         candidate_id="candidate-upgrade", release_digest=new.release_digest)
     second = bind_local_data_lifecycle(owner, second_runtime, new, preserve_selected_beta=True)
