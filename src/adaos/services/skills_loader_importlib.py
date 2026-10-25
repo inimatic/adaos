@@ -798,20 +798,24 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 "subscriptions": subscriptions,
                 "handlers": [],
             }
+        service_manifest = (environment.build_slot_paths(active_version, active_slot).src_dir
+                            / "skills" / target / "skill.yaml") if active_version and active_slot else None
+        service_only = bool(service_manifest and self._is_service_manifest(service_manifest)
+                            and not self._service_allows_in_process_events(service_manifest))
         runtime_handlers = await asyncio.to_thread(self._discover_runtime_handlers, root)
         handlers = [
             handler
             for handler, name in runtime_handlers
             if name == target and self._handler_runs_in_process(handler)
         ]
-        if not handlers:
+        if not handlers and not service_only:
             loaded: set[str] = set()
             workspace_handlers = await asyncio.to_thread(self._discover_workspace_handlers, root, loaded)
             handlers = [handler for handler, name in workspace_handlers if name == target]
-        if not handlers:
+        if not handlers and not service_only:
             repo_handlers = await asyncio.to_thread(self._discover_repo_workspace_handlers, root, set())
             handlers = [handler for handler, name in repo_handlers if name == target]
-        if not handlers:
+        if not handlers and not service_only:
             return {
                 "ok": False,
                 "skipped": True,
@@ -921,6 +925,16 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         loaded_declaration_manifests: set[Path] = set()
         loaded_handlers: list[str] = []
         try:
+            if service_only:
+                # External services deliberately have no imported handlers.
+                # Retire an older in-process generation under the same drain/
+                # rollback fences, then refresh declarations only. The service
+                # supervisor owns process convergence and health, not this loader.
+                await asyncio.to_thread(_retire_loaded_skill_sources, target,
+                                        retired_by="out_of_process_service")
+                await asyncio.to_thread(self._load_skill_declarations,
+                    service_manifest.parent / "handlers/main.py", loaded_declaration_manifests,
+                    skill_name=target)
             for handler in handlers:
                 import_started_at = time.perf_counter()
                 await asyncio.to_thread(self._load_handler, handler, reload=True)
@@ -1010,7 +1024,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         if loaded_handlers:
             await register_subscriptions(skill_names={target}, force=True)
         return {
-            "ok": bool(loaded_handlers),
+            "ok": bool(loaded_handlers) or service_only,
+            **({"runtime_kind": "service", "service_health_verified": False} if service_only else {}),
             "skill": target,
             "selection": selection,
             "source_manifest_digest": active_source_digest or None,

@@ -949,6 +949,30 @@ def test_reload_rejects_runtime_selection_different_from_activation_receipt(tmp_
     assert receipt["selection"] == {"version": "0.8.28", "slot": "A"}
 
 
+@pytest.mark.parametrize("service", [True, False])
+def test_reload_external_service_does_not_require_or_import_in_process_handlers(tmp_path, monkeypatch, service):
+    name = "isolated_service_reload"
+    root = tmp_path / ".runtime" / name
+    version = root / "v1.0"
+    source = version / "slots/A/src/skills" / name
+    source.mkdir(parents=True)
+    (root / "current_version").write_text("1.0", encoding="utf-8")
+    (version / "active").write_text("A", encoding="utf-8")
+    (source / "skill.yaml").write_text("name: isolated_service_reload\nversion: '1.0'\n"
+        + ("runtime: {kind: service, in_process_events: false}\n" if service else ""), encoding="utf-8")
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda *a, **kw: pytest.fail("external service code must not be imported"))
+    result = asyncio.run(loader.reload_skill_handlers(tmp_path, name, expected_version="1.0", expected_slot="A"))
+    assert result["ok"] is service
+    assert result["handlers"] == []
+    if service:
+        assert result["runtime_kind"] == "service"
+        assert result["service_health_verified"] is False
+        assert result["postcheck"]["ok"] is True
+    else:
+        assert result["reason"] == "reactivation_preflight_no_in_process_handlers"
+
+
 def test_reload_rejects_runtime_source_digest_different_from_admitted_identity(tmp_path: Path) -> None:
     skill_name = "identity_fenced_skill"
     runtime_root = tmp_path / ".runtime" / skill_name
