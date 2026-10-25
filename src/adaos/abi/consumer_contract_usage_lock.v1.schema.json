@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.consumer_contract_usage_lock.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "usage_lock_id",
+    "digest",
+    "recorded_at",
+    "application_ref",
+    "consumer_digest",
+    "consumer_ref",
+    "producer_digest",
+    "complete",
+    "unresolved",
+    "edges"
+  ],
+  "properties": {
+    "schema": {
+      "const": "adaos.consumer_contract_usage_lock.v1"
+    },
+    "usage_lock_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "application_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "consumer_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "consumer_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "producer_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 4096
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_ref",
+          "contract_digest",
+          "surface",
+          "exposure"
+        ],
+        "properties": {
+          "contract_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "contract_digest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "surface": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "maxItems": 4096
+          },
+          "exposure": {
+            "enum": [
+              "compiled",
+              "static",
+              "declared"
+            ]
+          }
+        }
+      },
+      "maxItems": 4096
+    }
+  }
+}

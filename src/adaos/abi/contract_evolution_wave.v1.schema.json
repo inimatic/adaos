@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.contract_evolution_wave.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "wave_id",
+    "digest",
+    "recorded_at",
+    "change_ids",
+    "owner_ref"
+  ],
+  "properties": {
+    "schema": {
+      "const": "adaos.contract_evolution_wave.v1"
+    },
+    "wave_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "change_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "maxItems": 256
+    },
+    "owner_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    }
+  }
+}

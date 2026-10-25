@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.contract_migration_receipt.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receipt_id",
+    "digest",
+    "recorded_at",
+    "owner_ref",
+    "source_digest",
+    "effective_digest",
+    "contract_before_digest",
+    "contract_after_digest",
+    "migrators",
+    "transformed_paths",
+    "unresolved",
+    "validated",
+    "write_back"
+  ],
+  "properties": {
+    "schema": {
+      "const": "adaos.contract_migration_receipt.v1"
+    },
+    "receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "owner_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "source_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "effective_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "contract_before_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "contract_after_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "migrators": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 4096
+    },
+    "transformed_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "maxItems": 4096
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 4096
+    },
+    "validated": {
+      "type": "boolean"
+    },
+    "write_back": {
+      "const": "explicit_change_required"
+    }
+  }
+}

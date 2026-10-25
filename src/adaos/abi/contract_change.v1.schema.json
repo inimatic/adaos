@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.contract_change.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "change_id",
+    "digest",
+    "recorded_at",
+    "contract_ref",
+    "contract_kind",
+    "owner_ref",
+    "before",
+    "after",
+    "classification",
+    "dimensions",
+    "findings",
+    "required_evidence",
+    "migration_route",
+    "removal_after",
+    "replacement_refs",
+    "migrator_refs",
+    "publisher_ref"
+  ],
+  "properties": {
+    "schema": {
+      "const": "adaos.contract_change.v1"
+    },
+    "change_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "contract_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "contract_kind": {
+      "enum": [
+        "sdk_operation",
+        "webui",
+        "conversational",
+        "ui_component",
+        "capability",
+        "state",
+        "package"
+      ]
+    },
+    "owner_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "before": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "after": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "classification": {
+      "enum": [
+        "additive",
+        "compatible_by_policy",
+        "deprecated",
+        "potentially_breaking",
+        "breaking",
+        "unknown"
+      ]
+    },
+    "dimensions": {
+      "type": "object"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 4096
+    },
+    "required_evidence": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "contract_test",
+          "runtime_smoke",
+          "conformance"
+        ]
+      },
+      "maxItems": 8
+    },
+    "migration_route": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "removal_after": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "replacement_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "maxItems": 64
+    },
+    "migrator_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "maxItems": 64
+    },
+    "publisher_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    }
+  }
+}
