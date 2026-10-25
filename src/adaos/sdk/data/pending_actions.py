@@ -198,13 +198,27 @@ def list_pending_actions(
     statuses: Sequence[str] | None = None,
     kinds: Sequence[str] | None = None,
     field_mask: str = "summary",
+    include_terminal: bool | None = None,
 ) -> dict[str, Any]:
+    """Read an ACL-filtered page, retaining the bounded legacy list shape.
+
+    Older consumers pass include_terminal and read active_items. Keep those
+    aliases on the same authorized page; never fall back to the unbounded
+    internal projection or broaden its principal.
+    """
     require_ctx("sdk.pending_actions.list")
     access.require("workspace.read")
     principal = _verified_principal()
     from adaos.services.pending_actions import query_pending_actions as _query_pending
 
-    return _query_pending(
+    if include_terminal is not None and not isinstance(include_terminal, bool):
+        raise ValueError("include_terminal must be a boolean")
+    if include_terminal is False:
+        active = {"pending", "postponed"}
+        if statuses and not set(statuses).issubset(active):
+            raise ValueError("include_terminal=False conflicts with terminal statuses")
+        statuses = tuple(statuses) if statuses else tuple(sorted(active))
+    page = _query_pending(
         webspace_id=webspace_id,
         limit=limit,
         cursor=cursor,
@@ -213,6 +227,11 @@ def list_pending_actions(
         field_mask=field_mask,
         principal=principal,
     )
+    if include_terminal is not None:
+        page = {**page,
+                "active_items": [item for item in page.get("items", ()) if item.get("status") in {"pending", "postponed"}],
+                "history_items": [item for item in page.get("items", ()) if item.get("status") in {"responded", "expired", "cancelled"}]}
+    return page
 
 
 def expire_pending_actions(*, webspace_id: str | None = None) -> dict[str, Any]:

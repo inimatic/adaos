@@ -60,6 +60,25 @@ def test_bounded_list_derives_acl_principal_from_verified_ingress(monkeypatch) -
     }
 
 
+def test_legacy_terminal_flag_retains_bounded_authorized_shape(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pending_actions, "require_ctx", lambda _: object())
+    monkeypatch.setattr(pending_actions.access, "require", lambda _: None)
+    monkeypatch.setattr(pending_actions, "_verified_principal", lambda: {"id": "owner"})
+    monkeypatch.setattr("adaos.services.pending_actions.query_pending_actions", lambda **kwargs:
+        calls.append(kwargs) or {"items": [{"id": "one", "status": "pending"}],
+                                "next_cursor": "opaque", "has_more": True})
+    page = pending_actions.list_pending_actions(include_terminal=False, limit=7)
+    assert set(calls[0]["statuses"]) == {"pending", "postponed"}
+    assert calls[0]["principal"] == {"id": "owner"}
+    assert calls[0]["limit"] == 7
+    assert page["active_items"] == page["items"]
+    assert page["history_items"] == []
+    assert page["next_cursor"] == "opaque"
+    with pytest.raises(ValueError, match="conflicts"):
+        pending_actions.list_pending_actions(include_terminal=False, statuses=["cancelled"])
+
+
 def test_canonical_query_derives_acl_principal_from_verified_ingress(monkeypatch) -> None:
     calls: list[dict] = []
     monkeypatch.setattr(pending_actions, "require_ctx", lambda _feature: object())
