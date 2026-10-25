@@ -653,6 +653,21 @@ def contracts() -> list[RootMcpToolContract]:
                 required=["status", "reason", "message", "requires_action"],
                 additional_properties=True,
             ),
+            "contract_evolution": schema_object(
+                properties={
+                    "schema": {"const": "adaos.application.contract_posture.v1"},
+                    "application_ref": {"type": "string"},
+                    "consumer_digest": {"type": ["string", "null"]},
+                    "posture": {"enum": ["unknown", "aligned", "compatible_legacy", "verification_due",
+                                          "migration_ready", "action_required", "blocked", "degraded"]},
+                    "assessment_count": {"type": "integer", "minimum": 0},
+                    "ticket_count": {"type": "integer", "minimum": 0},
+                    "assessments": {"type": "array", "items": {"type": "object"}},
+                    "tickets": {"type": "array", "items": {"type": "object"}},
+                },
+                required=["schema", "application_ref", "posture", "assessment_count", "ticket_count"],
+                additional_properties=True,
+            ),
         },
         required=[
             "application",

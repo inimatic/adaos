@@ -63,6 +63,11 @@ def main() -> int:
         default=REPOSITORY_ROOT / "build" / "sdk-metadata" / "compatibility.json",
     )
     parser.add_argument("--fail-on-breaking", action="store_true")
+    parser.add_argument(
+        "--contract-changes-output", type=Path,
+        default=REPOSITORY_ROOT / "build" / "sdk-metadata" / "contract-changes.json",
+        help="Content-addressed operation changes alongside the compatibility report.",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     build_root = (REPOSITORY_ROOT / "build").resolve()
@@ -87,6 +92,15 @@ def main() -> int:
         # Migration metadata retains deprecated APIs, so a supported migration
         # path is not misclassified as an immediate removal from authoring.
         report = compatibility_report(dict(baseline), dict(payload["migration"]))
+        from adaos.services.contract_evolution.producers import ChangeCollector, publish_sdk_changes
+        change_output = args.contract_changes_output.resolve()
+        if not change_output.is_relative_to(build_root):
+            parser.error("--contract-changes-output must stay under the repository build directory")
+        changes = publish_sdk_changes(ChangeCollector(), dict(baseline), dict(payload["migration"]))
+        change_output.parent.mkdir(parents=True, exist_ok=True)
+        change_output.write_text(json.dumps({"schema": "adaos.contract_change_set.v1", "changes": changes},
+                                           ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        summary["contract_changes"] = {"output": str(change_output), "count": len(changes)}
         compatibility_output = args.compatibility_output.resolve()
         if not compatibility_output.is_relative_to(build_root):
             parser.error("--compatibility-output must stay under the repository build directory")

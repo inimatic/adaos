@@ -41,6 +41,9 @@ class EvolutionStore:
                     CREATE INDEX IF NOT EXISTS records_change ON records(change_id, schema);
                     CREATE TABLE IF NOT EXISTS links (
                         assessment_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL);
+                    CREATE TABLE IF NOT EXISTS migrations (
+                        usage_lock_id TEXT NOT NULL, change_id TEXT NOT NULL, receipt_id TEXT NOT NULL,
+                        PRIMARY KEY(usage_lock_id,change_id,receipt_id));
                     CREATE TABLE IF NOT EXISTS events (
                         seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL,
                         body TEXT NOT NULL);
@@ -120,3 +123,16 @@ class EvolutionStore:
             rows = db.execute("SELECT seq,body FROM events WHERE seq>? ORDER BY seq LIMIT ?", (after, limit)).fetchall() if db else []
         return {"items": [{**json.loads(row[1]), "sequence": row[0]} for row in rows],
                 "next_after": rows[-1][0] if rows else after}
+
+    def link_migration(self, usage_lock_id: str, change_id: str, receipt_id: str):
+        with self.connection(write=True) as db:
+            db.execute("INSERT OR IGNORE INTO migrations VALUES (?,?,?)", (usage_lock_id, change_id, receipt_id))
+            self._event(db, "contract_migration.applied", receipt_id, {"usage_lock_id": usage_lock_id, "change_id": change_id})
+
+    def migration_receipts(self, usage_lock_id: str, change_id: str) -> list[dict[str, Any]]:
+        with self.connection() as db:
+            if db and not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='migrations'").fetchone():
+                return []
+            rows = db.execute("SELECT receipt_id FROM migrations WHERE usage_lock_id=? AND change_id=?",
+                              (usage_lock_id, change_id)).fetchall() if db else []
+        return [self.get(row[0]) for row in rows]

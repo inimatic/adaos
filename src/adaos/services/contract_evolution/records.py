@@ -75,10 +75,9 @@ def validate(record: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
-def seal(schema: str, **fields: Any) -> dict[str, Any]:
+def seal(schema: str, *, recorded_at: str | None = None, **fields: Any) -> dict[str, Any]:
     identity = IDENTITIES[schema]
     content = {"schema": schema, **deepcopy(fields)}
     hashed = digest(content)
     return validate({**content, identity: schema.removeprefix("adaos.").removesuffix(".v1") + ":" + hashed,
-                     "digest": hashed, "recorded_at": utc_now()})
-
+                     "digest": hashed, "recorded_at": recorded_at or utc_now()})

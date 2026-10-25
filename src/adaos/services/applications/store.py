@@ -329,14 +329,20 @@ class ApplicationStore:
             raise ApplicationStoreError("ApplicationRelease belongs to a different legacy Project")
         path = self._release_path(value.application_id, value.release_digest)
         payload = value.to_dict()
+        from adaos.services.contract_evolution.usage import release_usage_locks
+        release_usage_locks(value.project_release, application_ref="application:" + value.application_id)
         with mutation_lock(self.lock_path, timeout_s=30.0):
             if path.is_file():
                 existing = ApplicationRelease.from_mapping(_read(path))
                 if existing.to_dict() != payload:
                     raise ApplicationStoreError("immutable ApplicationRelease conflict")
-                return existing
-            path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(path, payload)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(path, payload)
+        # Replaying put repairs a crash between release persistence and this
+        # rebuildable usage index. Legacy releases have no usage evidence.
+        from adaos.services.contract_evolution.service import ContractEvolutionService
+        ContractEvolutionService(self.state_dir).register_application_release(value)
         return value
 
     def import_public_registry_release(

@@ -55,6 +55,38 @@ class ContractEvolutionService:
             raise ValueError("usage lock has duplicate contract edges")
         return self.store.put(record, "consumer_usage.registered")
 
+    def register_application_release(self, release) -> dict[str, Any] | None:
+        """Index admitted build evidence; legacy releases remain explicitly unknown."""
+        from .usage import release_usage_locks
+        entries = release_usage_locks(release.project_release, application_ref="application:" + release.application_id)
+        if not entries:
+            return None
+        edges, unresolved, artifacts = {}, [], {}
+        for entry in entries:
+            unresolved.extend(entry["unresolved"])
+            artifacts.update({entry["consumer_ref"] + "/" + path: value for path, value in entry.get("source_artifacts", {}).items()})
+            for edge in entry["edges"]:
+                previous = edges.get(edge["contract_ref"])
+                if previous and previous["contract_digest"] != edge["contract_digest"]:
+                    unresolved.append({"code": "component_contract_digest_conflict", "contract_ref": edge["contract_ref"]})
+                else:
+                    edges[edge["contract_ref"]] = edge
+        primary = release.project_release.components[0].key
+        composition = release.project_release.composition_lock
+        if composition:
+            primary = next((member.ref for member in composition.members if member.role == "primary"), primary)
+        entry = self.register_usage(seal(USAGE, application_ref="application:" + release.application_id,
+            consumer_ref=primary, consumer_digest=release.release_digest,
+            producer_digest=digest(sorted(item["producer_digest"] for item in entries)),
+            complete=all(item["complete"] for item in entries) and not unresolved,
+            unresolved=unresolved, source_artifacts=artifacts,
+            edges=sorted(edges.values(), key=lambda edge: edge["contract_ref"])))
+        changes = self.store.list(CHANGE)
+        if changes:
+            wave = self.create_wave([item["change_id"] for item in changes], owner_ref="core:contract_evolution")
+            self.assess(wave_id=wave["wave_id"], usage_lock_id=entry["usage_lock_id"])
+        return entry
+
     def create_wave(self, change_ids: list[str], *, owner_ref: str) -> dict[str, Any]:
         if not change_ids:
             raise ValueError("wave requires a ContractChange")
@@ -63,6 +95,40 @@ class ContractEvolutionService:
                 raise ValueError("wave members must be ContractChanges")
         return self.store.put(seal(WAVE, change_ids=sorted(set(change_ids)), owner_ref=owner_ref),
                               "contract_impact.indexed")
+
+    def reconcile(self, *, materialize: bool = False) -> dict[str, Any]:
+        """Explicit operator/background work; product reads never call this."""
+        changes = self.store.list(CHANGE)
+        if not changes:
+            return {"wave": None, "assessments": [], "tickets": []}
+        wave = self.create_wave([item["change_id"] for item in changes], owner_ref="core:contract_evolution")
+        rows, tickets = [], []
+        for entry in self.store.list(USAGE):
+            assessed = self.assess(wave_id=wave["wave_id"], usage_lock_id=entry["usage_lock_id"])
+            rows.extend(assessed)
+            if materialize:
+                for item in assessed:
+                    ticket = self.materialize_ticket(item["assessment_id"])
+                    if ticket:
+                        tickets.append(ticket["ticket_id"])
+        return {"wave": wave, "assessments": rows, "tickets": sorted(set(tickets))}
+
+    def record_migration(self, receipt: Mapping[str, Any], *, usage_lock_id: str, change_id: str):
+        from .records import validate
+        value = validate(receipt)
+        usage, change = self.store.get(usage_lock_id), self.store.get(change_id)
+        if value["schema"] != "adaos.contract_migration_receipt.v1" or not value["validated"] or value["unresolved"]:
+            raise ValueError("migration receipt must have passed validation with no unresolved findings")
+        if change["migration_route"] != "declarative_projection":
+            raise ValueError("contract change does not admit transparent migration")
+        if value["source_digest"] not in usage.get("source_artifacts", {}).values():
+            raise ValueError("migration source does not belong to the exact consumer snapshot")
+        if not any(item.get("ref") in change["migrator_refs"] and item.get("target_contract_digest") == change["after"]
+                   for item in value["migrators"]):
+            raise ValueError("migration receipt does not target the admitted contract/migrator")
+        value = self.store.put(value, "contract_migration.verified")
+        self.store.link_migration(usage_lock_id, change_id, value["receipt_id"])
+        return value
 
     def record_verification(self, *, application_ref: str, consumer_digest: str, change_id: str,
                             environment_ref: str, kind: str, result: str, report_digest: str,
@@ -92,6 +158,7 @@ class ContractEvolutionService:
             if edge is None and not usage["complete"]:
                 status, reason = "unknown", "UsageIncomplete"
             elif edge is not None:
+                migrations = self.store.migration_receipts(usage_lock_id, identity)
                 checks = self.store.list(VERIFICATION, application_ref=usage["application_ref"],
                     consumer_digest=usage["consumer_digest"], change_id=identity)
                 latest = {}
@@ -107,6 +174,9 @@ class ContractEvolutionService:
                     status, reason = "unknown", "BaselineDigestMismatch"
                 elif any(check["result"] == "failed" for check in fresh.values()):
                     status, reason, action = "incompatible", "ConsumerVerificationFailed", True
+                elif migrations:
+                    status, reason = "compatible", "TransparentMigrationVerified"
+                    evidence.extend(item["receipt_id"] for item in migrations)
                 elif (change["required_evidence"] and all(
                         kind in fresh and fresh[kind]["result"] == "passed" for kind in change["required_evidence"])):
                     status, reason = "compatible", "ConsumerVerified"
@@ -191,7 +261,7 @@ class ContractEvolutionService:
             service = DevelopmentTicketService(state_dir=self.state_dir)
             for identity in ticket_ids:
                 ticket = service.get_ticket(identity)
-                if ticket["status"] not in TERMINAL_TICKETS:
+                if ticket and ticket["status"] not in TERMINAL_TICKETS:
                     tickets.append({"ticket_id": identity, "status": ticket["status"], "summary": ticket["summary"]})
         stale = [item for item in rows if item["evidence_expires_at"] and
                  instant(item["evidence_expires_at"]) <= datetime.now(timezone.utc)]
@@ -221,7 +291,8 @@ class ContractEvolutionService:
                 if row["wave_id"] == wave_id:
                     latest.setdefault((row["application_ref"], row["consumer_digest"], identity, row["environment_ref"]), row)
         rows = list(latest.values())
+        links = self.store.ticket_links()
         return {"wave": wave, "coverage": dict(Counter(row["compatibility"] for row in rows)),
                 "assessed_edges": len(rows), "consumers": sorted({row["application_ref"] for row in rows}),
-                "actionable_without_ticket": sum(row["action_required"] and row["assessment_id"] not in self.store.ticket_links() for row in rows),
+                "actionable_without_ticket": sum(row["action_required"] and row["assessment_id"] not in links for row in rows),
                 "assessments": rows}

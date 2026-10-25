@@ -1623,6 +1623,12 @@ def _enrich_application_models(
     for model in models:
         application = model.get("application") or {}
         application_id = str(application.get("application_id") or "")
+        from adaos.services.contract_evolution.service import ContractEvolutionService
+        release = _active_release_for_webspace(model, webspace_id=webspace_id) or {}
+        model["contract_evolution"] = ContractEvolutionService(_state_dir()).application_projection(
+            "application:" + application_id,
+            consumer_digest=str(release.get("release_digest") or "") or None,
+        )
         release_catalogs = [
             (
                 ((model.get(field) or {}).get("project_release") or {}).get("catalog")

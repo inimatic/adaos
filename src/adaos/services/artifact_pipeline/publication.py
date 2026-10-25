@@ -2162,6 +2162,9 @@ class ArtifactPublicationService:
             checkpoint_change_ids=change_ids,
             base_release=stable,
         )
+        from adaos.services.contract_evolution.usage import package_usage_evidence
+
+        contract_usage = package_usage_evidence((built,), project_id=artifact_id)
         plan = build_project_release(
             project_id=artifact_id,
             version=built.ref.version,
@@ -2169,7 +2172,7 @@ class ArtifactPublicationService:
             components=(built.ref,),
             catalog=catalog,
             requirements_by_package=requirements_by_package,
-            validation_evidence=(effective_validation_evidence,),
+            validation_evidence=(effective_validation_evidence, *contract_usage),
         )
         # The CAS is non-authoritative and may safely receive verified bytes
         # before Candidate admission. Contract-preserving rebinding evidence

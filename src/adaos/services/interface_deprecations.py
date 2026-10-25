@@ -79,12 +79,34 @@ def migrate_deprecated_interfaces(
         current, receipt = migrator(current, owner)
         applied.append({"interface": rule.get("interface"), "migrator": migration_id, "receipt": receipt})
     remaining = scan_deprecated_interfaces(current)
-    return current, {
+    result = {
         "schema": "adaos.interface_deprecation_migration.v1",
         "applied": applied,
         "remaining": remaining,
         "ok": not remaining,
     }
+    if applied:
+        from adaos.services.contract_evolution.records import digest, seal
+        from adaos.services.webui_contract import validate_application_ui_contract, validate_webui_contract
+
+        checks = [*validate_webui_contract(current),
+                  *validate_application_ui_contract((current.get("ui") or {}).get("application"))]
+        issues = [issue.to_dict() for issue in checks if issue.level == "error"]
+        contract = deprecation_contract()
+        source_findings = scan_deprecated_interfaces(payload)
+        result["contract_receipt"] = seal("adaos.contract_migration_receipt.v1",
+            owner_ref=owner, source_digest=digest(dict(payload)), effective_digest=digest(current),
+            contract_before_digest=digest(source_findings), contract_after_digest=digest(contract),
+            migrators=[{"ref": "migrator:" + item["migrator"], "target_contract_digest": digest(next(
+                rule for rule in contract["deprecated_interfaces"] if rule["interface"] == item["interface"])),
+                "digest": digest(
+                Path(__file__).read_text(encoding="utf-8") +
+                (Path(__file__).parents[1] / "apps" / "open_modal_migrate.py").read_text(encoding="utf-8"))}
+                for item in applied],
+            transformed_paths=[item["path"] for item in source_findings],
+            unresolved=[*remaining, *issues], validated=not remaining and not issues,
+            write_back="explicit_change_required")
+    return current, result
 
 
 def validate_authoring_interfaces(payload: Mapping[str, Any]) -> dict[str, Any]:

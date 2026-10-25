@@ -2025,6 +2025,8 @@ def _autonomous_repair_brief(ticket: Mapping[str, Any], repair: Mapping[str, Any
         "relation_refs": [ref for ref in relation_refs if ref],
         "input_evidence_refs": list(reversed(input_refs)),
         "repair_hints": _bounded_repair_hints(ticket),
+        **({"contract_evolution": _mapping(ticket.get("metadata")).get("contract_evolution")}
+           if _mapping(ticket.get("metadata")).get("contract_evolution") else {}),
         "diff_policy": {
             "scope": "minimal",
             "allowed": [
@@ -2088,6 +2090,8 @@ def _autonomous_package_brief(
             "summary": _text(ticket.get("summary")),
             "component_ref": _text(ticket.get("component_ref")) or None,
             "acceptance_checks": _bounded_repair_hints(ticket).get("acceptance_checks") or [],
+            **({"contract_evolution": _mapping(ticket.get("metadata")).get("contract_evolution")}
+               if _mapping(ticket.get("metadata")).get("contract_evolution") else {}),
             "artifact_refs": [ref for ref in artifact_refs if ref],
             "detail_source": {
                 "server": "adaos_task_root",

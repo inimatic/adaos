@@ -71,6 +71,9 @@ def _attention_status(
         )
     if suspended.get("status") == "True":
         return "suspended", str(suspended.get("reason")), str(suspended.get("message"))
+    contract = by_type.get("ContractAligned", {})
+    if contract.get("status") == "False":
+        return "action_required", str(contract["reason"]), str(contract["message"])
     if bool(model.get("update_available")):
         return (
             "update_available",
@@ -149,6 +152,28 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
             observed_generation=revision,
         ),
     ]
+    # Keep Current for existing consumers; ReleaseCurrent makes its plane
+    # explicit alongside independent contract/evidence/work conditions.
+    conditions.append({**conditions[-1], "type": "ReleaseCurrent"})
+    evolution = model.get("contract_evolution")
+    if isinstance(evolution, Mapping):
+        posture = evolution.get("posture", "unknown")
+        aligned = "False" if posture in {"action_required", "blocked", "degraded"} else (
+            "True" if posture in {"aligned", "compatible_legacy"} else "Unknown")
+        fresh = posture in {"aligned", "compatible_legacy", "migration_ready"} and not evolution.get("stale_evidence_count")
+        message = ("Used contracts require Application adaptation." if aligned == "False" else
+                   "Used contracts are compatible." if aligned == "True" else
+                   "Consumer contract verification is incomplete.")
+        conditions.extend([
+            _condition("ContractAligned", aligned, "ConsumerContract" + str(posture).title().replace("_", ""), message,
+                       last_transition_time=evolution.get("last_evaluated_at")),
+            _condition("VerificationFresh", "True" if fresh else "Unknown" if posture == "unknown" else "False",
+                       "EvidenceCurrent" if fresh else "VerificationRequired", "Compatibility evidence is current." if fresh else
+                       "Verify the exact consumer against its target contracts."),
+            _condition("CompatibilityWork", "True" if evolution.get("ticket_count") else "False",
+                       "LinkedCompatibilityWork" if evolution.get("ticket_count") else "NoLinkedCompatibilityWork",
+                       f"{int(evolution.get('ticket_count') or 0)} active compatibility Dev Tickets."),
+        ])
 
     progressing_status = operation_status or installation_status
     if operation_status in {"planned", "applying", "reconciling"} or installation_status in {

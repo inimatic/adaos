@@ -387,6 +387,11 @@ def build_workspace_project_release(
     )
     owned = tuple(built_by_ref[ref].ref for ref in owned_refs)
     project_scope = project_root.relative_to(workspace).as_posix() + "/"
+    from adaos.services.contract_evolution.usage import package_usage_evidence
+
+    contract_usage = package_usage_evidence(
+        (built_by_ref[ref] for ref in owned_refs), project_id=project_id
+    )
     plan = build_project_release(
         project_id=project_id,
         version=str(definition["version"]),
@@ -394,7 +399,7 @@ def build_workspace_project_release(
         components=owned,
         catalog=catalog,
         requirements_by_package=requirements_by_digest,
-        validation_evidence=validation_evidence,
+        validation_evidence=(*validation_evidence, *contract_usage),
         project_definition=definition,
         project_dependency_locks=project_dependency_locks,
     )
