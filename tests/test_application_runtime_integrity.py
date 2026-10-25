@@ -107,3 +107,41 @@ def test_manager_rejects_foreign_package_before_prepare_or_lifecycle(tmp_path, m
     monkeypatch.setattr(manager, "prepare_runtime", lambda *args, **kwargs: pytest.fail("must not prepare a foreign package"))
     with pytest.raises(integrity.ManagedRuntimeConflict):
         manager.activate_runtime("example", version="1.0.0", slot="B")
+
+
+@pytest.mark.parametrize("tamper", [False, True])
+def test_legacy_provenance_allows_only_policy_change_not_payload_change(tmp_path, monkeypatch, tamper):
+    from adaos.domain.artifact_release import ArtifactSourceRef
+    from adaos.services.artifact_pipeline import packages
+    from adaos.services.skill.manager import SkillManager
+
+    ctx = _ctx(tmp_path)
+    source = tmp_path / "slot/src/skills/example"
+    (source / "handlers").mkdir(parents=True)
+    (source / "skill.yaml").write_text("name: example\nversion: 1.0.0\n", encoding="utf-8")
+    handler = source / "handlers/main.py"
+    handler.write_text("def handle():\n    return {}\n", encoding="utf-8")
+    ref = ArtifactSourceRef(forge="test", repository="tests/policy", revision="a" * 40)
+    original = packages.build_artifact_package(source, kind="skill", source_ref=ref)
+    store = packages.ContentAddressedPackageStore(tmp_path / "state/artifact_pipeline/packages")
+    store.put(original.archive_bytes, expected_digest=original.ref.digest)
+    metadata = {"slots": {"A": {}}}
+    writes = []
+    env = SimpleNamespace(resolve_active_version=lambda: "1.0.0", read_active_slot=lambda _: "A",
+        read_version_metadata=lambda _: metadata,
+        build_slot_paths=lambda *args: SimpleNamespace(src_dir=tmp_path / "slot/src"),
+        write_version_metadata=lambda version, value: writes.append(value))
+    manager = object.__new__(SkillManager)
+    manager.ctx = ctx
+    monkeypatch.setattr(manager, "_runtime_env", lambda _: env)
+    monkeypatch.setattr(packages, "PACKAGE_BUILD_POLICY_DIGEST", "sha256:" + "e" * 64)
+    if tamper:
+        handler.write_text("def handle():\n    return {'changed': True}\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="bytes do not match"):
+            manager.adopt_active_runtime_package_identity("example", package=original.ref.to_dict())
+        assert not writes
+    else:
+        result = manager.adopt_active_runtime_package_identity("example", package=original.ref.to_dict())
+        assert result["reason"] == "verified_payload_across_build_policy"
+        assert result["package_digest"] == original.ref.digest
+        assert writes[0]["slots"]["A"]["package_digest"] == original.ref.digest

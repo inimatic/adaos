@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import secrets
 import time
@@ -10,11 +11,17 @@ from typing import Any
 
 
 def _scenario_switch_background_timeout_s() -> float:
-    raw = str(os.getenv("ADAOS_SCENARIO_SWITCH_BACKGROUND_TIMEOUT_S") or "20").strip()
+    # The control API already acknowledges a switch asynchronously. This is
+    # the bounded background job budget, not the HTTP/first-paint deadline.
+    # Large immutable Application closures can exceed the old 20s read budget
+    # on a cold Windows runtime without being stalled or invalid.
+    raw = str(os.getenv("ADAOS_SCENARIO_SWITCH_BACKGROUND_TIMEOUT_S") or "120").strip()
     try:
         value = float(raw)
     except ValueError:
-        value = 20.0
+        value = 120.0
+    if not math.isfinite(value):
+        value = 120.0
     return max(2.0, min(120.0, value))
 
 

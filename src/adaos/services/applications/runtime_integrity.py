@@ -132,7 +132,18 @@ def _release_observation(ctx, release, *, root: Path, runtime_root_ref: str, dee
     lock = load_workspace_lock(root / ".adaos/workspace.lock.json")
     locked = {item.key: item for item in lock.components} if lock else {}
     rows = []
-    for package in release.project_release.components:
+    packages = list(release.project_release.components)
+    from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+    package_store = ContentAddressedPackageStore(Path(ctx.paths.state_dir()) / "artifact_pipeline/packages")
+    for dependency in getattr(release.project_release, "resolved_dependencies", ()):
+        if any(p.kind == dependency.kind and p.artifact_id == dependency.artifact_id for p in packages):
+            continue
+        try:
+            packages.append(package_store.verify(dependency.package_digest).ref)
+        except (OSError, ValueError, RuntimeError):
+            rows.append(compare_runtime_component({"kind": dependency.kind, "artifact_id": dependency.artifact_id,
+                "version": dependency.version, "digest": dependency.package_digest}, {}))
+    for package in packages:
         source = root / f"{package.kind}s" / package.artifact_id
         if package.kind == "skill":
             actual = runtime_slot_observation(root / "skills", package.artifact_id)
@@ -156,6 +167,7 @@ def _release_observation(ctx, release, *, root: Path, runtime_root_ref: str, dee
     status = "drift" if any(row["status"] == "drift" for row in rows) else (
         "unknown" if not rows or any(row["status"] == "unknown" for row in rows) else "aligned")
     return {"version": release.project_release.version, "release_digest": release.release_digest,
+            "source_revision": release.project_release.source_ref.revision,
             "runtime_root_ref": runtime_root_ref, "status": status, "components": rows,
             "evidence_scope": "package_identity_and_packaged_files" if deep else "slot_package_identity"}
 
@@ -191,6 +203,10 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
                    "runtime_root_ref": f"trial:{candidate_id}", "status": "unavailable",
                    "reason": type(exc).__name__, "components": []}
         row["webspace_ids"] = sorted(s.webspace_id for s in selections if s.runtime_root_ref == f"trial:{candidate_id}")
+        from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+        activation = TrialActivationStore(Path(ctx.paths.state_dir()) / "artifact_pipeline/trial-activations").load(candidate_id) or {}
+        row["expires_at"] = activation.get("expires_at")
+        row["admission_status"] = activation.get("status")
         beta.append(row)
     alpha = None
     dev_method = getattr(ctx.paths, "dev_dir", None)
@@ -210,15 +226,23 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
                                    "status": "source_present" if path.is_file() else "source_missing"})
             alpha = {"version": project.get("version"), "status": "mutable_source",
                      "runtime_root_ref": "development", "components": components}
+            if deep:
+                from adaos.services.artifact_pipeline.project_build import project_source_snapshot
+                alpha["source_revision"] = project_source_snapshot(
+                    project_dir=manifest.parent, workspace_root=dev)["source_revision"]
     active = next((row for row in beta if selected and row["runtime_root_ref"] == selected.runtime_root_ref),
                   stable if selected is None or selected.runtime_root_ref == "workspace" else None)
     channels = store.get_channels(application_id).get("channels") or {}
+    if alpha is not None:
+        alpha["matches_selected_release"] = (
+            alpha["source_revision"] == active.get("source_revision")
+            if active and alpha.get("source_revision") and active.get("source_revision") else None)
     return {"schema": "adaos.application.runtime_revisions.v1", "application_id": application_id,
             "webspace_id": webspace_id, "selection": selected.to_dict() if selected else None,
             "status": active["status"] if active else "not_selected", "alpha": alpha, "beta": beta,
             "stable": stable, "channels": channels, "read_only": True,
             "selected_components": active.get("components", []) if active else [],
             "summary": f"Runtime: {active['status'] if active else 'not_selected'}; "
-                       f"Alpha: {(alpha or {}).get('version', '—')}; "
-                       f"Beta: {', '.join(str(r['version']) for r in beta) or '—'}; "
-                       f"Stable: {(stable or {}).get('version', '—')}"}
+                       f"Alpha: {(alpha or {}).get('version', '—')} ({(alpha or {}).get('status', 'absent')}); "
+                       f"Beta: {', '.join(str(r['version']) + ' (' + r['status'] + ')' for r in beta) or '—'}; "
+                       f"Stable: {(stable or {}).get('version', '—')} ({(stable or {}).get('status', 'absent')})"}

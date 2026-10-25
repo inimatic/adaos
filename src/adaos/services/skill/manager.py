@@ -2470,8 +2470,9 @@ class SkillManager:
         Older prepared slots did not persist PackageRef identity.  Copying the
         current Workspace lock into those records would turn mutable desired
         state into false installed evidence.  Rebuild the immutable package from
-        the active slot instead and persist provenance only when both the
-        package archive and package-manifest digests match the admitted ref.
+        the active slot instead. A newer builder policy may change archive
+        digests; in that case verify the original archive and every payload
+        manifest field, allowing only the policy digest to differ.
         """
 
         from adaos.domain.artifact_release import ArtifactPackageRef
@@ -2527,11 +2528,26 @@ class SkillManager:
             kind="skill",
             source_ref=expected.source_ref,
         )
+        policy_compatible_payload = False
         if (
             rebuilt.ref.digest != expected.digest
             or rebuilt.ref.manifest_digest != expected.manifest_digest
         ):
-            raise ValueError("active runtime bytes do not match admitted package")
+            if rebuilt.ref.build_policy_digest == expected.build_policy_digest:
+                raise ValueError("active runtime bytes do not match admitted package")
+            from adaos.services.artifact_pipeline.packages import (
+                ContentAddressedPackageStore, package_manifests_content_equivalent,
+            )
+            original = ContentAddressedPackageStore(
+                Path(self.ctx.paths.state_dir()) / "artifact_pipeline/packages"
+            ).verify(expected.digest)
+            policy_compatible_payload = (
+                original.ref == expected
+                and rebuilt.ref.build_policy_digest != expected.build_policy_digest
+                and package_manifests_content_equivalent(original.package_manifest, rebuilt.package_manifest)
+            )
+            if not policy_compatible_payload:
+                raise ValueError("active runtime bytes do not match admitted package")
         source_manifest_digest = source_tree_digest(
             source_root,
             excluded_dirs=frozenset({".runtime"}),
@@ -2554,8 +2570,8 @@ class SkillManager:
             current[field] = expected_value
         # Legacy source digests describe the pre-staging source tree, while the
         # package is rebuilt from the normalized active slot. Preserve that
-        # independently useful evidence when present; exact package and
-        # package-manifest equality above authorizes the provenance adoption.
+        # independently useful evidence when present; verified complete
+        # payload identity above authorizes the provenance adoption.
         current_source_digest = str(current.get("source_manifest_digest") or "").strip()
         adopted_source_digest = current_source_digest or source_manifest_digest
         current["source_manifest_digest"] = adopted_source_digest
@@ -2566,7 +2582,7 @@ class SkillManager:
             "schema": "adaos.skill_runtime.provenance_adoption.v1",
             "ok": True,
             "adopted": True,
-            "reason": "exact_package_rebuilt",
+            "reason": "verified_payload_across_build_policy" if policy_compatible_payload else "exact_package_rebuilt",
             "skill_id": name,
             "version": version,
             "slot": slot,
