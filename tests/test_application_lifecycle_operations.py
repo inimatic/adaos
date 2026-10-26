@@ -80,6 +80,32 @@ def test_installed_local_beta_does_not_edit_trial_lease_or_publish(operations):
     assert NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
 
 
+def test_multi_webspace_admission_compares_exact_identities_not_storage_order(operations):
+    ops, subnet, _, candidate = operations
+    selected = ops.store.get_runtime_selection("desktop", "example")
+    ops.store.save_runtime_selection(replace(selected, webspace_id="another-room", revision=1), expected_revision=0)
+    # The raw channel preserves insertion order; the public store is sorted.
+    assert ApplicationRuntimeChannel(ops.state, "example").read()[0].webspace_id == "desktop"
+    assert apply(ops, subnet, plan(ops, subnet, "retain_local_beta"))["status"] == "succeeded"
+
+
+def test_sdk_returns_durable_unknown_receipt_but_never_masks_wrong_actor(operations, monkeypatch):
+    ops, subnet, _, _ = operations
+    from adaos.sdk import applications as sdk
+    planned = plan(ops, subnet, "retain_local_beta")
+
+    def interrupted(*_args, **_kwargs):
+        raise RuntimeChannelConflict("SyntheticUnconfirmedEffect")
+
+    monkeypatch.setattr(NativeTrialRuntime, "resolve", interrupted)
+    result = sdk.apply_lifecycle_operation(planned["operation_id"], plan_digest=planned["plan_digest"],
+        actor_ref="user:owner", subnet_ref=subnet, capability="applications.apply", idempotency_key=planned["idempotency_key"])
+    assert result["status"] == "unknown"
+    with pytest.raises(PermissionError):
+        sdk.apply_lifecycle_operation(planned["operation_id"], plan_digest=planned["plan_digest"],
+            actor_ref="user:other", subnet_ref=subnet, capability="applications.apply", idempotency_key=planned["idempotency_key"])
+
+
 def test_accepted_expired_trial_is_not_silently_installed(operations):
     ops, subnet, activations, candidate = operations
     activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
@@ -178,18 +204,15 @@ def test_unused_trial_deletion_is_recoverable_and_keeps_data(operations):
     assert (Path(deletion["archive"]) / "retained-test-data.json").is_file()
 
 
-def test_live_execution_fences_admission_and_exact_recovery_does_not_resubmit(operations):
+def test_admission_only_preserves_live_execution_and_exact_channel(operations):
     ops, subnet, _, candidate = operations
     planned = plan(ops, subnet, "retain_local_beta")
     channel = ApplicationRuntimeChannel(ops.state, "example")
+    before = channel.read()
     with channel.execution("trial:candidate-example", candidate.release_digest):
-        with pytest.raises(RuntimeChannelConflict, match="executing"):
-            apply(ops, subnet, planned)
-        assert not admission_path(ops.state, candidate.candidate_id).exists()
-    assert ops.store.get_operation(planned["operation_id"]).status == "unknown"
-    result = ops.apply(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
-                       subnet_ref=subnet, capability="applications.recover", recover=True)
-    assert result["status"] == "succeeded"
+        assert apply(ops, subnet, planned)["status"] == "succeeded"
+        assert admission_path(ops.state, candidate.candidate_id).is_file()
+    assert channel.read() == before
 
 
 def test_unresolved_generation_jobs_block_trial_deletion(operations):
@@ -305,8 +328,9 @@ def test_core_ai_skill_consumer_blocks_lifecycle_effects(operations):
     with sqlite3.connect(path) as db:
         db.execute("CREATE TABLE attempts(consumer TEXT,status TEXT)")
         db.execute("INSERT INTO attempts VALUES('skill:example','running')")
+    ApplicationRuntimeChannel(ops.state, "example").retire()
     with pytest.raises(RuntimeChannelConflict, match="ActiveCoreJobs"):
-        plan(ops, subnet, "retain_local_beta")
+        plan(ops, subnet, "delete_trial", candidate_id=candidate.candidate_id)
 
 
 def test_core_clock_observes_retirement_and_reuses_durable_cursor(operations):

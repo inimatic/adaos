@@ -21,6 +21,12 @@ class RuntimeChannelConflict(RuntimeError):
     pass
 
 
+def same_runtime_selections(left, right) -> bool:
+    """Placement order is not authority; every identity/revision still is."""
+    key = lambda item: item.webspace_id
+    return sorted(left, key=key) == sorted(right, key=key)
+
+
 class ApplicationRuntimeChannel:
     def __init__(self, state_dir: Path, application_id: str):
         if not application_id:

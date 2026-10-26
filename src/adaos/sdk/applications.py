@@ -2115,8 +2115,20 @@ def apply_lifecycle_operation(operation_id: str, *, plan_digest: str, actor_ref:
 
     actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
         required_capability="applications.recover" if recover else "applications.apply")
-    return ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle")).apply(operation_id,
-        plan_digest=plan_digest, actor_ref=actor, subnet_ref=subnet, capability=granted, recover=recover)
+    operations = ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle"))
+    try:
+        return operations.apply(operation_id, plan_digest=plan_digest, actor_ref=actor,
+                                subnet_ref=subnet, capability=granted, recover=recover)
+    except PermissionError:
+        raise
+    except Exception:
+        current = operations.store.get_operation(operation_id)
+        if (current.status == "unknown" and current.actor_ref == actor and current.subnet_ref == subnet
+                and current.plan_digest == plan_digest):
+            # An admitted effect has a durable unknown outcome, not a missing
+            # HTTP result. Consumers must refresh and offer exact recovery.
+            return current.to_dict()
+        raise
 
 
 def cancel_operation(operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,

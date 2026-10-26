@@ -16,7 +16,7 @@ from typing import Any
 
 from adaos.domain.application import RuntimeSelection
 from adaos.services.artifact_pipeline.storage import mutation_lock
-from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
+from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict, same_runtime_selections
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,7 @@ class ApplicationRuntimeTransition:
             with self.channel._connection() as connection:
                 connection.execute("BEGIN EXCLUSIVE")
                 actual = self.channel._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-                if actual != values:
+                if not same_runtime_selections(actual, values):
                     raise RuntimeChannelConflict("Channel changed during fenced transition")
                 record["completed"] = True
                 connection.execute("UPDATE channel SET document=? WHERE id=1", (self.channel._encode(projected),))
@@ -131,7 +131,7 @@ class ApplicationRuntimeTransition:
                 record["recovery"] = recovery
                 self._write(operation_id, record)
             source = tuple(RuntimeSelection.from_mapping(item) for item in intent["source"])
-            if self.channel.read() != source:
+            if not same_runtime_selections(self.channel.read(), source):
                 raise RuntimeChannelConflict("Recovery source channel changed")
             for step in steps:
                 # Recheck the final verifier after every recovery interruption,
@@ -150,7 +150,7 @@ class ApplicationRuntimeTransition:
             with self.channel._connection() as connection:
                 connection.execute("BEGIN EXCLUSIVE")
                 actual = self.channel._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-                if actual != source:
+                if not same_runtime_selections(actual, source):
                     raise RuntimeChannelConflict("Recovery source channel changed")
                 record["aborted"] = True
                 connection.execute("UPDATE transitions SET document=? WHERE operation_id=? AND completed=0", (_json(record), operation_id))
@@ -235,7 +235,7 @@ class ApplicationRuntimeTransition:
                 else:
                     self.channel._assert_available(connection)
                     actual = self.channel._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-                    if actual != selected:
+                    if not same_runtime_selections(actual, selected):
                         raise RuntimeChannelConflict("Application channel changed before Beta rejection")
                     record = {
                         "schema": "adaos.application.runtime_rejection.v1",
@@ -265,7 +265,7 @@ class ApplicationRuntimeTransition:
             with self.channel._connection() as connection:
                 connection.execute("BEGIN EXCLUSIVE")
                 actual = self.channel._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-                if actual != selected:
+                if not same_runtime_selections(actual, selected):
                     raise RuntimeChannelConflict("Application channel changed during Beta rejection")
                 record["completed"] = True
                 connection.execute("UPDATE channel SET document=? WHERE id=1", (self.channel._encode(restored),))
@@ -287,7 +287,7 @@ class ApplicationRuntimeTransition:
                 return record
             self.channel._assert_available(connection)
             actual = self.channel._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-            if actual != expected:
+            if not same_runtime_selections(actual, expected):
                 raise RuntimeChannelConflict("Channel changed before transition; review the current release")
             record = {"schema": "adaos.application.runtime_transition.v1", "operation_id": operation_id,
                       "fingerprint": fingerprint, "intent": intent, "completed": False,
@@ -328,7 +328,7 @@ class ApplicationRuntimeTransition:
             with self.channel._connection() as db:
                 db.execute("BEGIN EXCLUSIVE")
                 actual = self.channel._decode(db.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-                if actual != values:
+                if not same_runtime_selections(actual, values):
                     raise RuntimeChannelConflict("Channel changed during retirement")
                 record["completed"] = True
                 db.execute("UPDATE channel SET document=? WHERE id=1", (self.channel._encode(()),))

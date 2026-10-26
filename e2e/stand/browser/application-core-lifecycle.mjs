@@ -9,6 +9,7 @@ const output = process.env.ADAOS_E2E_OUTPUT
 const token = process.env.ADAOS_E2E_HUB_TOKEN
 const hub = process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777'
 const subnet = process.env.ADAOS_E2E_SUBNET_ID
+const installLocalBeta = process.env.ADAOS_E2E_INSTALL_LOCAL_BETA === '1'
 if (!output || !token || !subnet || !input.host.startsWith('desktop-codex-applications-beta-')) throw new Error('Explicit isolated host and credentials required')
 const safe = error => String(error?.message || error).split('\n')[0].replaceAll(token, '[redacted]').slice(0, 400)
 const browser = await chromium.launch({ headless: true })
@@ -40,8 +41,18 @@ try {
       if (!request.url().includes('/root_mcp/call')) return
       try {
         const body = request.postDataJSON()
-        if (body.tool_id?.startsWith('applications.lifecycle.')) row.lifecycleReads.push({ tool: body.tool_id,
+        if (body.tool_id?.startsWith('applications.')) row.lifecycleReads.push({ tool: body.tool_id,
           application: body.arguments?.application_id })
+      } catch {}
+    })
+    page.on('response', async response => {
+      if (!response.url().includes('/root_mcp/call')) return
+      try {
+        const request = response.request().postDataJSON()
+        if (!request.tool_id?.startsWith('applications.')) return
+        const value = await response.json()
+        const error = value.response?.error || value.error || value.detail
+        if (error) row.errors.push(safe(`${request.tool_id}: ${typeof error === 'string' ? error : JSON.stringify(error)}`))
       } catch {}
     })
     try {
@@ -81,6 +92,23 @@ try {
       const identity = page.locator('[data-webui-widget-id="core-lifecycle-identity"]').filter({ visible: true })
       await expect(identity).toBeVisible({ timeout: 90_000 })
       await expect(identity).toContainText(test.version, { timeout: 90_000 })
+      if (installLocalBeta && lifecycle.runtime.admission_kind !== 'installed_local_beta') {
+        row.stage = 'review-install-local-beta'
+        if (!lifecycle.candidate.accepted) throw new Error('Accept the qualified exact Candidate before installation review')
+        await page.locator('[data-webui-widget-id="core-lifecycle-review-actions"] [data-command-id="retain-beta"]').click()
+        const review = page.locator('[data-webui-widget-id="core-lifecycle-plan"]').filter({ visible: true })
+        await expect(review).toBeVisible({ timeout: 60_000 })
+        await expect(review).toContainText('retain_local_beta', { timeout: 60_000 })
+        const operationId = (await review.innerText()).match(/applifecycle\.[0-9a-f]{32}/)?.[0]
+        if (!operationId) throw new Error('Review has no exact Core operation identity')
+        await page.locator('[data-webui-widget-id="core-lifecycle-confirm"] [data-command-id="apply"]').click()
+        await expect.poll(async () => {
+          const { lifecycle: after } = await mcp('applications.lifecycle.show', { application_id: test.application, webspace_id: input.host })
+          return after.runtime.admission_kind
+        }, { timeout: 90_000, intervals: [1000, 2000] }).toBe('installed_local_beta')
+        row.installedLocalBeta = true
+        row.reviewedOperationId = operationId
+      }
       await expect(page.locator('[data-webui-widget-id="core-trial-inventory"]').filter({ visible: true })).toBeVisible({ timeout: 60_000 })
       row.wide = true
       await page.setViewportSize({ width: 390, height: 844 })

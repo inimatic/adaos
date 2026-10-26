@@ -23,7 +23,7 @@ from adaos.services.artifact_pipeline.trial_activation import TrialActivationSto
 from .lifecycle import ApplicationLifecycleService
 from .local_beta_admission import admission_path
 from .runtime import get_application_service
-from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
+from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict, same_runtime_selections
 from .runtime_transition import ApplicationRuntimeTransition
 from .trial_runtime import NativeTrialRuntime
 
@@ -271,7 +271,8 @@ class ApplicationLifecycleOperations:
         if action in {"deactivate_beta", "restore_stable"} and not acknowledge_write_loss:
             raise ValueError("Acknowledge that retained Beta writes are not adopted into the restored source")
         root = trial_workspace_root(self.workspace, target_candidate)
-        assert_idle_jobs(self.state, application_id, root)
+        if action != "retain_local_beta":
+            assert_idle_jobs(self.state, application_id, root)
         if action in {"deactivate_beta", "restore_stable"}:
             binding_path = root / ".adaos/data-transition.json"
             if not binding_path.is_file():
@@ -351,10 +352,11 @@ class ApplicationLifecycleOperations:
             path = admission_path(self.state, candidate_id)
             if path.is_file():
                 prior = json.loads(path.read_text(encoding="utf-8"))
-                if prior.get("operation_id") == operation.operation_id and prior.get("status") == "active":
+                if prior.get("status") == "active":
                     from .local_beta_admission import read_local_beta_admission
                     read_local_beta_admission(self.state, candidate_id, candidate.release_digest, activation)
-                    return {"ok": True, "status": "installed_local_beta", "receipt_digest": prior["receipt_digest"]}
+                    return {"ok": True, "status": "installed_local_beta", "receipt_digest": prior["receipt_digest"],
+                            "observed_admission_operation_id": prior.get("operation_id"), "observation_only": True}
                 if prior.get("status") != "revoked":
                     raise RuntimeChannelConflict("LocalBetaAdmissionAlreadyExists")
             NativeTrialRuntime.resolve(self.owner, candidate_id, candidate.release_digest)
@@ -364,10 +366,14 @@ class ApplicationLifecycleOperations:
             expected = tuple(RuntimeSelection.from_mapping(s) for s in plan["expected_selections"])
             with channel._connection() as db:
                 channel._initialize(db, expected)
-                db.execute("BEGIN EXCLUSIVE")
+                # Admission-only metadata neither changes executable code nor
+                # data. Reserve the channel against other writers while
+                # allowing the same immutable runtime's current readers/jobs.
+                # Destructive transitions still require an exclusive fence.
+                db.execute("BEGIN IMMEDIATE")
                 channel._assert_available(db)
                 actual = channel._decode(db.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-                if actual != expected or not actual or any(s.runtime_root_ref != f"trial:{candidate_id}" for s in actual):
+                if not same_runtime_selections(actual, expected) or not actual or any(s.runtime_root_ref != f"trial:{candidate_id}" for s in actual):
                     raise RuntimeChannelConflict("SelectedTrialChanged")
                 receipt = {"schema": "adaos.application.local_beta_admission.v1", "status": "active",
                     "application_id": application_id, "candidate_id": candidate_id,
@@ -377,7 +383,9 @@ class ApplicationLifecycleOperations:
                     "actor_ref": operation.actor_ref, "operation_id": operation.operation_id, "created_at": utc_now()}
                 receipt["receipt_digest"] = canonical_payload_digest(receipt)
                 atomic_write_json(path, receipt)
-                db.commit()
+                # Only the receipt is written. Releasing this read/reservation
+                # transaction by rollback needs no exclusive reader drain.
+                db.rollback()
             return {"ok": True, "status": "installed_local_beta", "receipt_digest": receipt["receipt_digest"]}
         if action == "delete_trial":
             return self._delete_trial(operation, root, activation)
