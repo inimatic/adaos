@@ -53,7 +53,12 @@ def observe_runtime_admission(state: Path, selected: Any, *, now: datetime | Non
     identity = activation.get("candidate_ref") or {}
     expiry = timestamp(activation.get("expires_at"))
     remaining = int((expiry - observed).total_seconds()) if expiry else None
-    installed = read_local_beta_admission(state, candidate_id, selected.release_digest, activation)
+    try:
+        installed = read_local_beta_admission(state, candidate_id, selected.release_digest, activation)
+    except (OSError, ValueError, KeyError):
+        return {"admission": "unavailable", "reason": "InstalledLocalBetaAdmissionInvalid",
+                "expires_at": None, "remaining_seconds": None, "admission_kind": "invalid_local_beta",
+                "trial_expires_at": activation.get("expires_at")}
     admission, reason = "admitted", "TrialActive"
     if (activation.get("status") not in {"active", "completed"}
             or identity.get("candidate_id") != candidate_id
@@ -196,8 +201,11 @@ class ApplicationLifecycleService:
                       if is_beta and candidate_id else None) or {}
         from .local_beta_admission import read_local_beta_admission
 
-        installed_beta = (read_local_beta_admission(self.state, candidate_id, digest, activation)
-                          if is_beta and candidate_id else None)
+        try:
+            installed_beta = (read_local_beta_admission(self.state, candidate_id, digest, activation)
+                              if is_beta and candidate_id else None)
+        except (OSError, ValueError, KeyError):
+            installed_beta = None  # Observation stays available for data-only recovery.
         admission_fact = observe_runtime_admission(self.state, selected, now=observed)
         admission, reason = admission_fact["admission"], admission_fact["reason"]
         if digest:
@@ -267,6 +275,9 @@ class ApplicationLifecycleService:
         refs = {"selection_revisions": {s.webspace_id: s.revision for s in selections},
                 "installation_revision": baseline.revision if baseline else 0,
                 "release_digest": digest, "candidate_digest": candidate.digest if candidate else None,
+                "candidate_status": candidate.status if candidate else None,
+                "admission_reason": reason,
+                "pending_transition": transition.get("fingerprint") if transition else None,
                 "activation_updated_at": activation.get("updated_at"),
                 "activation_status": activation.get("status"), "expires_at": activation.get("expires_at"),
                 "local_beta_admission": (installed_beta or {}).get("receipt_digest")}

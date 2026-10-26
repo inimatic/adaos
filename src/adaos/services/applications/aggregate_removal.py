@@ -12,6 +12,9 @@ from .runtime_transition import ApplicationRuntimeTransition, TransitionStep
 def apply_reviewed_removal(service, operation, *, recover=False):
     state = service.store.state_dir
     channel = ApplicationRuntimeChannel(state, operation.application_id)
+    runner = ApplicationRuntimeTransition(channel)
+    retained = runner.get("application-remove:" + operation.operation_id) or {}
+    external_may_have_run = retained.get("running_step") == "remove_packages" or "remove_packages" in retained.get("receipts", {})
     expected = tuple(RuntimeSelection.from_mapping(s) for s in operation.plan.get("expected_runtime_selections", []))
     applying = service._transition_operation(operation, "reconciling" if recover else "applying")
     owner = None
@@ -37,7 +40,7 @@ def apply_reviewed_removal(service, operation, *, recover=False):
         current = service.store.get_operation(operation.operation_id)
         receipt = current.result.get("removal_executor_receipt")
         if receipt is None:
-            if recover:
+            if recover and external_may_have_run:
                 # No proof that an external executor didn't already act. A
                 # new apply would be a blind replay, even with the same key.
                 raise RuntimeChannelConflict("RemovalExecutorOutcomeUnknown:inspect retained deployment journal")
@@ -59,7 +62,7 @@ def apply_reviewed_removal(service, operation, *, recover=False):
         return {"ok": True, "status": "removed"}
 
     try:
-        journal = ApplicationRuntimeTransition(channel).retire_reviewed("application-remove:" + operation.operation_id,
+        journal = runner.retire_reviewed("application-remove:" + operation.operation_id,
             contract_digest=operation.plan_digest, expected=expected,
             steps=[TransitionStep("verify_idle_jobs", idle), TransitionStep("remove_packages", remove),
                    TransitionStep("retire_installation", metadata)])

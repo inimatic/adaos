@@ -1340,7 +1340,7 @@ class LocalApplicationDataLifecycle:
         operation = f"application-beta:{self.application_id}:{self.candidate_id}"
         record = runner.get(operation)
         if (not record or not record["completed"]
-                or record["intent"]["target"]["webspace_id"] != webspace_id
+                or expected_current is None and record["intent"]["target"]["webspace_id"] != webspace_id
                 or record["intent"]["target"]["runtime_root_ref"] != f"trial:{self.candidate_id}"):
             raise RuntimeChannelConflict("Reject only the exact completed Beta selection")
         stable = runner.get(f"application-stable:{self.application_id}:{self.candidate_id}")

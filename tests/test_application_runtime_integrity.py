@@ -83,7 +83,8 @@ def test_observer_keeps_stable_and_beta_separate_and_selects_by_webspace(tmp_pat
     ctx = _ctx(tmp_path)
     def selection(ws, digest, root):
         return SimpleNamespace(application_id="example", webspace_id=ws, release_digest=digest,
-            runtime_root_ref=root, to_dict=lambda: {"webspace_id": ws, "release_digest": digest, "runtime_root_ref": root})
+            runtime_root_ref=root, source="local_trial" if root.startswith("trial:") else "stable_installation",
+            to_dict=lambda: {"webspace_id": ws, "release_digest": digest, "runtime_root_ref": root})
     rows = [selection("desktop", "beta", "trial:candidate"), selection("other", "stable", "workspace")]
     def release(digest):
         return SimpleNamespace(release_digest=digest, project_release=SimpleNamespace(version=digest))

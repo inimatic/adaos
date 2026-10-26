@@ -334,6 +334,56 @@ def test_source_resolution_and_history_are_core_owned_and_redacted(operations):
     assert "synthetic secret" not in json.dumps(history)
 
 
+def _stable_uninstall_plan(ops, subnet, candidate):
+    from adaos.domain.application import ApplicationInstallation
+    ops.store.save_installation(ApplicationInstallation(installation_id="installation:example", application_id="example",
+        installed_release_digest=candidate.release_digest,
+        component_refs=({"component_ref":"skill:example","package_digest":candidate.package_digest,"lifecycle":"bound"},),
+        data_policy="retain", status="active", revision=1),
+        expected_revision=0)
+    return plan(ops, subnet, "uninstall")
+
+
+def test_stable_uninstall_fences_before_executor_and_can_recover_before_any_effect(operations):
+    ops, subnet, _, candidate = operations
+    planned = _stable_uninstall_plan(ops, subnet, candidate)
+    calls = []
+    ops.service.executor = lambda p: calls.append(p) or {"ok": True, "status": "removed"}
+    channel = ApplicationRuntimeChannel(ops.state, "example")
+    with channel.execution("trial:" + candidate.candidate_id, candidate.release_digest):
+        with pytest.raises(RuntimeChannelConflict):
+            ops.service.apply_operation(planned["operation_id"], plan_digest=planned["plan_digest"],
+                idempotency_key=planned["idempotency_key"], actor_ref="user:owner", subnet_ref=subnet, capability="applications.apply")
+        assert calls == []
+    from adaos.services.applications.operation_recovery import recover_core_operation
+    recovered = recover_core_operation(ops.owner, planned["operation_id"], plan_digest=planned["plan_digest"],
+        actor_ref="user:owner", subnet_ref=subnet, capability="applications.recover")
+    assert recovered["status"] == "succeeded" and len(calls) == 1 and channel.read() == ()
+
+
+def test_stable_uninstall_recovers_metadata_without_repeating_executor(operations, monkeypatch):
+    ops, subnet, _, candidate = operations
+    planned = _stable_uninstall_plan(ops, subnet, candidate)
+    calls = []
+    ops.service.executor = lambda p: calls.append(p) or {"ok": True, "status": "removed"}
+    original = type(ops.store).save_installation
+
+    def interrupted(self, installation, **kwargs):
+        if installation.status == "removed":
+            raise OSError("synthetic metadata write interrupted")
+        return original(self, installation, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(type(ops.store), "save_installation", interrupted)
+        with pytest.raises(OSError):
+            ops.service.apply_operation(planned["operation_id"], plan_digest=planned["plan_digest"],
+                idempotency_key=planned["idempotency_key"], actor_ref="user:owner", subnet_ref=subnet, capability="applications.apply")
+    from adaos.services.applications.operation_recovery import recover_core_operation
+    recovered = recover_core_operation(ops.owner, planned["operation_id"], plan_digest=planned["plan_digest"],
+        actor_ref="user:owner", subnet_ref=subnet, capability="applications.recover")
+    assert recovered["status"] == "succeeded" and len(calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_materialization_failure_is_pending_and_recoverable_without_migration(operations, monkeypatch):
     ops = operations[0]
