@@ -99,6 +99,9 @@ try {
     } catch (error) {
       row.ok = false
       row.errors.push(safeError(error))
+      row.failureHints = String(error?.message || error).split('\n')
+        .filter(line => /intercepts pointer events|not visible|not enabled|outside of the viewport|was detached/.test(line))
+        .map(line => line.replace(/<[^>]*>/g, '<element>').slice(0, 300)).slice(0, 5)
       row.expectedWidgets = test.widgets
       row.visibleWidgetIds = await page.locator('[data-webui-widget-id]').filter({ visible: true })
         .evaluateAll(elements => [...new Set(elements.map(element => element.getAttribute('data-webui-widget-id')))])
