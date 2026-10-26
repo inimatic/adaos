@@ -95,7 +95,8 @@ class ApplicationLifecycleOperations:
         app = self.store.get_application(application_id)
         selected = {s.runtime_root_ref for s in self.store.list_runtime_selections()}
         records = []
-        for activation in TrialActivationStore(self.state / "artifact_pipeline/trial-activations").list_all():
+        activations = TrialActivationStore(self.state / "artifact_pipeline/trial-activations").list_all()
+        for activation in activations:
             identity = activation.get("candidate_ref") or {}
             candidate_id = str(identity.get("candidate_id") or "")
             if not candidate_id:
@@ -130,18 +131,20 @@ class ApplicationLifecycleOperations:
         records.sort(key=lambda item: (not item["selected"], str(item["candidate_id"])))
         start, size = max(0, int(offset)), max(1, min(int(limit), 100))
         page = records[start:start+size]
+        references = self._reference_index([record["candidate_id"] for record in page], activations=activations)
         for record in page:
             root = trial_workspace_root(self.workspace, record["candidate_id"])
-            refs = self._references(application_id, record["candidate_id"])
+            refs = references[record["candidate_id"]]
             record["references"] = refs[:20]
             record["reference_count"] = len(refs)
             record["deletion_review_available"] = record["deletion_review_available"] and not refs
             record["deletion_reason"] = "TrialReferenced" if refs else "ReviewJobChecksRequired"
-            try:
-                assert_idle_jobs(self.state, application_id, root)
-            except (RuntimeError, OSError, ValueError, sqlite3.Error) as exc:
-                record["deletion_review_available"] = False
-                record["deletion_reason"] = str(exc) if isinstance(exc, RuntimeChannelConflict) else "JobMetadataUnavailable"
+            if record["deletion_review_available"]:
+                try:
+                    assert_idle_jobs(self.state, application_id, root)
+                except (RuntimeError, OSError, ValueError, sqlite3.Error) as exc:
+                    record["deletion_review_available"] = False
+                    record["deletion_reason"] = str(exc) if isinstance(exc, RuntimeChannelConflict) else "JobMetadataUnavailable"
             if include_storage and root.is_dir():
                 total, count, complete = 0, 0, True
                 for current, dirs, files in os.walk(root, followlinks=False):
@@ -172,9 +175,19 @@ class ApplicationLifecycleOperations:
                 "data_policy": "retained", "private_content_included": False}
 
     def _references(self, application_id: str, candidate_id: str, *, ignore_operation: str | None = None) -> list[str]:
-        root_ref = f"trial:{candidate_id}"
-        refs = [f"selected:{s.webspace_id}" for s in self.store.list_runtime_selections()
-                if s.runtime_root_ref == root_ref]
+        return self._reference_index([candidate_id], ignore_operation=ignore_operation)[candidate_id]
+
+    def _reference_index(self, candidate_ids, *, activations=None, ignore_operation=None) -> dict[str, list[str]]:
+        """One metadata scan per inventory page; mutations always take a fresh scan."""
+        import re
+        refs = {candidate_id: [] for candidate_id in candidate_ids}
+        targets = {f"trial:{candidate_id}": candidate_id for candidate_id in refs}
+        if not refs:
+            return refs
+        for selection in self.store.list_runtime_selections():
+            candidate_id = targets.get(selection.runtime_root_ref)
+            if candidate_id:
+                refs[candidate_id].append(f"selected:{selection.webspace_id}")
         # Pending transitions can reference an unselected target or rollback source.
         root = self.state / "applications/runtime_channels"
         for path in root.glob("*.sqlite3"):
@@ -183,27 +196,53 @@ class ApplicationLifecycleOperations:
                     continue
                 for operation_id, raw in db.execute("SELECT operation_id,document FROM transitions WHERE completed=0"):
                     record = json.loads(raw)
-                    if not record.get("aborted") and root_ref in json.dumps(record.get("intent", {})):
-                        refs.append(f"pending_transition:{operation_id}")
-        activations = TrialActivationStore(self.state / "artifact_pipeline/trial-activations")
-        for other in activations.list_all():
+                    if not record.get("aborted"):
+                        intent = json.dumps(record.get("intent", {}))
+                        for root_ref, candidate_id in targets.items():
+                            if root_ref in intent:
+                                refs[candidate_id].append(f"pending_transition:{operation_id}")
+        store = TrialActivationStore(self.state / "artifact_pipeline/trial-activations")
+        activations = store.list_all() if activations is None else activations
+        by_id = {}
+        for other in activations:
             other_id = str((other.get("candidate_ref") or {}).get("candidate_id") or "")
-            if not other_id or other_id == candidate_id or other.get("lifecycle_deletion"):
+            if not other_id:
                 continue
+            by_id[other_id] = other
             other_root = trial_workspace_root(self.workspace, other_id)
+            marker = other.get("lifecycle_deletion")
+            if marker:
+                operation_id = str(marker.get("operation_id") or "")
+                if not re.fullmatch(r"applifecycle\.[0-9a-f]{32}", operation_id):
+                    for candidate_id in refs:
+                        if candidate_id != other_id:
+                            refs[candidate_id].append(f"unresolved_archive:{other_id}")
+                    continue
+                other_root = self.state / "artifact_pipeline/trial-deletions" / operation_id / "runtime"
+                if not other_root.is_dir() or other_root.absolute() != other_root.resolve():
+                    for candidate_id in refs:
+                        if candidate_id != other_id:
+                            refs[candidate_id].append(f"unresolved_archive:{other_id}")
+                    continue
             binding = other_root / ".adaos/data-transition.json"
             if binding.is_file():
+                if binding.absolute() != binding.resolve():
+                    raise RuntimeChannelConflict("UnlinkedDataReferenceMetadataRequired")
                 source = json.loads(binding.read_text(encoding="utf-8")).get("beta_source") or {}
-                if source.get("runtime_root_ref") == root_ref:
-                    refs.append(f"retained_data_source:{other_id}")
+                candidate_id = targets.get(source.get("runtime_root_ref"))
+                if candidate_id and candidate_id != other_id:
+                    refs[candidate_id].append(f"retained_data_source:{other_id}")
         for op in self.store.list_operations():
-            if (op.operation_id != ignore_operation and op.status in {"planned", "applying", "unknown", "reconciling"}
-                    and candidate_id in json.dumps(op.plan)):
-                refs.append(f"operation:{op.operation_id}")
-        activation = activations.load(candidate_id) or {}
-        if activation.get("retention_holds") or activation.get("legal_hold"):
-            refs.append("explicit_retention_hold")
-        return sorted(set(refs))
+            if op.operation_id != ignore_operation and op.status in {"planned", "applying", "unknown", "reconciling"}:
+                intent = json.dumps(op.plan)
+                for candidate_id in refs:
+                    if candidate_id in intent:
+                        refs[candidate_id].append(f"operation:{op.operation_id}")
+        for candidate_id in refs:
+            activation = by_id.get(candidate_id) or store.load(candidate_id) or {}
+            if activation.get("retention_holds") or activation.get("legal_hold"):
+                refs[candidate_id].append("explicit_retention_hold")
+        return {candidate_id: sorted(set(values)) for candidate_id, values in refs.items()}
 
     def plan(self, application_id: str, action: str, *, actor_ref: str, subnet_ref: str,
              capability: str, idempotency_key: str, expected_revision: str,

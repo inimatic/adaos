@@ -320,6 +320,57 @@ def test_inventory_protects_retained_sources_and_explicit_holds(operations):
     assert "archive" not in row
 
 
+def test_inventory_batches_reference_scans_and_skips_jobs_for_referenced_trials(operations, monkeypatch):
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+    import adaos.services.applications.lifecycle_operations as lifecycle_operations
+    ops, _, activations, candidate = operations
+    counts = {"activations": 0, "operations": 0}
+    original = TrialActivationStore.list_all
+    original_operations = ops.store.list_operations
+    def list_all(store):
+        counts["activations"] += 1
+        return original(store)
+    def list_operations(*args, **kwargs):
+        counts["operations"] += 1
+        return original_operations(*args, **kwargs)
+    def forbidden(*args):
+        raise AssertionError("A selected Trial cannot become deletable by inspecting jobs")
+    monkeypatch.setattr(TrialActivationStore, "list_all", list_all)
+    monkeypatch.setattr(ops.store, "list_operations", list_operations)
+    monkeypatch.setattr(lifecycle_operations, "assert_idle_jobs", forbidden)
+    result = ops.trials("example")
+    assert counts == {"activations": 1, "operations": 1}
+    assert not result["trials"][0]["deletion_review_available"]
+
+
+def test_archived_trial_keeps_its_retained_data_source_protected(operations):
+    ops, subnet, activations, candidate = operations
+    ApplicationRuntimeChannel(ops.state, "example").retire()
+    other = activations.load(candidate.candidate_id)
+    other_id = "candidate-archived-dependent"
+    other["candidate_ref"]["candidate_id"] = other_id
+    operation_id = "applifecycle." + "f" * 32
+    archive = ops.state / "artifact_pipeline/trial-deletions" / operation_id / "runtime"
+    binding = archive / ".adaos/data-transition.json"
+    binding.parent.mkdir(parents=True)
+    binding.write_text(json.dumps({"beta_source": {"runtime_root_ref": "trial:" + candidate.candidate_id}}), encoding="utf-8")
+    other["lifecycle_deletion"] = {"operation_id": operation_id, "archive": str(archive), "data_policy": "retain"}
+    activations.save(other)
+    assert "retained_data_source:" + other_id in ops._references("example", candidate.candidate_id)
+    with pytest.raises(RuntimeChannelConflict, match="TrialReferenced"):
+        plan(ops, subnet, "delete_trial", candidate_id=candidate.candidate_id)
+    assert trial_workspace_root(ops.workspace, candidate.candidate_id).is_dir()
+
+
+def test_unknown_archived_reference_fails_closed_without_reading_marker_paths(operations):
+    ops, _, activations, candidate = operations
+    other = activations.load(candidate.candidate_id)
+    other["candidate_ref"]["candidate_id"] = "candidate-unknown-archive"
+    other["lifecycle_deletion"] = {"operation_id": "../../outside", "archive": "C:/private", "data_policy": "retain"}
+    activations.save(other)
+    assert "unresolved_archive:candidate-unknown-archive" in ops._references("example", candidate.candidate_id)
+
+
 def test_core_ai_skill_consumer_blocks_lifecycle_effects(operations):
     import sqlite3
     ops, subnet, _, candidate = operations
