@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.lifecycle.v1.schema.json",
+  "title": "Core-owned operational Application lifecycle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "application_id", "freshness", "summary"],
+  "allOf": [{"if": {"properties": {"freshness": {"const": "observed"}}}, "then": {
+    "required": ["observed_at", "read_only", "revision", "installation", "runtime", "candidate", "data", "operation", "actions"]
+  }, "else": {"required": ["reason"]}}],
+  "properties": {
+    "schema": {"const": "adaos.application.lifecycle.v1"},
+    "application_id": {"type": "string", "minLength": 1},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "read_only": {"const": true},
+    "revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "freshness": {"enum": ["observed", "unavailable"]},
+    "reason": {"type": "string"},
+    "installation": {"type": "object", "required": ["present", "beta_only", "stable_baseline_present", "stable_release_digest"]},
+    "runtime": {"type": "object", "required": ["selected", "source", "release_digest", "version", "runtime_root_ref", "webspace_ids", "admission", "reason", "expires_at", "remaining_seconds", "integrity"]},
+    "candidate": {"type": "object", "required": ["candidate_id", "candidate_digest", "package_digest", "release_digest", "status", "accepted", "reason"]},
+    "data": {"type": "object", "required": ["disposition", "transition_pending", "operation_id"]},
+    "operation": {"type": ["object", "null"]},
+    "actions": {"type": "object", "additionalProperties": {"type": "object", "required": ["eligible", "reason", "required_capability", "requires_authorization"], "properties": {
+      "eligible": {"type": "boolean"}, "reason": {"type": "string"}, "required_capability": {"type": "string"}, "requires_authorization": {"const": true}
+    }}},
+    "summary": {"type": "string"}
+  }
+}

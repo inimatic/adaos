@@ -2070,6 +2070,15 @@ def get_runtime_revisions(application_id: str, *, webspace_id: str = "desktop", 
     return observe_application_revisions(owner, application_id, webspace_id=webspace_id, deep=deep)
 
 
+def get_lifecycle(application_id: str, *, webspace_id: str = "desktop",
+                  runtime_revisions: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Read Core operational authority independently of Builder authoring state."""
+    from adaos.services.applications.lifecycle import ApplicationLifecycleService
+
+    return ApplicationLifecycleService(require_ctx("sdk.applications.lifecycle")).snapshot(
+        application_id, webspace_id=webspace_id, runtime_revisions=runtime_revisions)
+
+
 def get_application(
     application_id: str, *, webspace_id: str | None = None
 ) -> dict[str, Any]:
@@ -2176,6 +2185,15 @@ def get_application(
             except (OSError, ValueError, RuntimeError) as exc:
                 model["runtime_revisions"] = {"status": "unknown", "reason": type(exc).__name__,
                     "summary": "Runtime composition could not be verified; refresh diagnostics."}
+            try:
+                model["lifecycle"] = get_lifecycle(token, webspace_id=str(webspace_id or "desktop"),
+                                                  runtime_revisions=model.get("runtime_revisions"))
+            except SdkRuntimeNotInitialized:
+                pass
+            except (OSError, ValueError, RuntimeError) as exc:
+                model["lifecycle"] = {"schema": "adaos.application.lifecycle.v1",
+                    "application_id": token, "freshness": "unavailable", "reason": type(exc).__name__,
+                    "summary": "Core lifecycle could not be observed; no action eligibility is asserted."}
             if "runtime_revisions" in model:
                 model = enrich_application_conditions(model)
             return model
@@ -5210,6 +5228,7 @@ __all__ = [
     "get_prerelease_rollout",
     "get_runtime_selection",
     "get_runtime_revisions",
+    "get_lifecycle",
     "get_subscription",
     "get_update_batch",
     "get_users_access_surface",
