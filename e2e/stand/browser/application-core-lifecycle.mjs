@@ -116,11 +116,16 @@ try {
       }, { scenario: test.scenario, digest: lifecycle.runtime.release_digest }, { timeout: 90_000 })
       row.stage = 'core-modal'
       await page.evaluate(async ({ application, marker }) => {
-        const host = [...document.querySelectorAll(`[data-webui-widget-id="${marker}"]`)]
-          .find(element => element.getClientRects().length > 0)
-        const component = [host, ...host.querySelectorAll('*')]
-          .map(element => window.ng.getComponent(element))
-          .find(component => component?.actions?.handle && component?.state?.getSnapshot)
+        let component
+        const deadline = Date.now() + 10000
+        do {
+          const host = [...document.querySelectorAll(`[data-webui-widget-id="${marker}"]`)]
+            .find(element => element.getClientRects().length > 0)
+          component = host && [host, ...host.querySelectorAll('*')]
+            .map(element => window.ng.getComponent(element))
+            .find(component => component?.actions?.handle && component?.state?.getSnapshot)
+          if (!component) await new Promise(resolve => setTimeout(resolve, 50))
+        } while (!component && Date.now() < deadline)
         if (!component) throw new Error('Active page action scope is unavailable')
         // A debug API invocation originates outside Angular. Run the real
         // public action handlers in the same zone as an actual widget click;
