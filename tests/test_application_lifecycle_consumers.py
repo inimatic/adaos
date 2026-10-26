@@ -33,6 +33,10 @@ def test_consumers_share_exact_core_modal_and_no_authoring_runtime_authority(nam
     ui = model["ui"]["application"]
     assert "core-application-lifecycle" not in ui["desktop"].get("modals", {})
     modal = ui["modals"]["core-application-lifecycle"]
+    for schema in (modal["schema"], ui["desktop"]["pageSchema"]):
+        clock = next(a for a in schema["autoActions"] if a["id"] == "core-lifecycle-observation-clock")
+        assert clock["intervalMs"] >= 15000
+        assert clock["action"]["dryRun"] and "idempotencyKey" not in clock["action"]
     tools = {n.get("toolId") or n.get("target") for n in walk(modal)}
     assert {"applications.lifecycle.show", "applications.lifecycle.plan", "applications.lifecycle.trials",
             "applications.lifecycle.operations", "applications.lifecycle.recover", "applications.cancel_operation"} <= tools

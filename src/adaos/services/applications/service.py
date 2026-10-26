@@ -2536,9 +2536,10 @@ class ApplicationService:
 
         selected = next(iter(runtime_selections), None)
         if selected is None and installation is not None and installation.status == "active":
-            selected = SimpleNamespace(source="stable_installation")
+            selected = SimpleNamespace(source="stable_installation", application_id=installation.application_id,
+                                       release_digest=installation.installed_release_digest)
         try:
-            return observe_runtime_admission(self.store.state_dir, selected)
+            return observe_runtime_admission(self.store.state_dir, selected, store=self.store)
         except (OSError, ValueError, RuntimeError):
             return {"admission": "unavailable", "reason": "InvalidAdmissionMetadata",
                     "expires_at": None, "remaining_seconds": None}

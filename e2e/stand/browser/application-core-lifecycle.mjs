@@ -12,6 +12,12 @@ const subnet = process.env.ADAOS_E2E_SUBNET_ID
 const installLocalBeta = process.env.ADAOS_E2E_INSTALL_LOCAL_BETA === '1'
 if (!output || !token || !subnet || !input.host.startsWith('desktop-codex-applications-beta-')) throw new Error('Explicit isolated host and credentials required')
 const safe = error => String(error?.message || error).split('\n')[0].replaceAll(token, '[redacted]').slice(0, 400)
+const clickCommand = async (page, widgetId, commandId) => {
+  const widget = page.locator(`[data-webui-widget-id="${widgetId}"]`).filter({ visible: true })
+  const button = widget.locator(`[data-command-id="${commandId}"]`)
+  if (!(await button.isVisible())) await widget.getByRole('button', { name: 'More actions', exact: true }).click()
+  await button.click({ timeout: 60_000 })
+}
 const browser = await chromium.launch({ headless: true })
 const report = { ok: false, scope: 'three_consumers_core_runtime_and_trials', cases: [], modelCalls: 0, destructiveActions: 0 }
 try {
@@ -95,13 +101,13 @@ try {
       if (installLocalBeta && lifecycle.runtime.admission_kind !== 'installed_local_beta') {
         row.stage = 'review-install-local-beta'
         if (!lifecycle.candidate.accepted) throw new Error('Accept the qualified exact Candidate before installation review')
-        await page.locator('[data-webui-widget-id="core-lifecycle-review-actions"] [data-command-id="retain-beta"]').click()
+        await clickCommand(page, 'core-lifecycle-review-actions', 'retain-beta')
         const review = page.locator('[data-webui-widget-id="core-lifecycle-plan"]').filter({ visible: true })
         await expect(review).toBeVisible({ timeout: 60_000 })
         await expect(review).toContainText('retain_local_beta', { timeout: 60_000 })
         const operationId = (await review.innerText()).match(/applifecycle\.[0-9a-f]{32}/)?.[0]
         if (!operationId) throw new Error('Review has no exact Core operation identity')
-        await page.locator('[data-webui-widget-id="core-lifecycle-confirm"] [data-command-id="apply"]').click()
+        await clickCommand(page, 'core-lifecycle-confirm', 'apply')
         await expect.poll(async () => {
           const { lifecycle: after } = await mcp('applications.lifecycle.show', { application_id: test.application, webspace_id: input.host })
           return after.runtime.admission_kind
