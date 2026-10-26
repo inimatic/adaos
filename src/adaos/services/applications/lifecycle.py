@@ -294,7 +294,9 @@ class ApplicationLifecycleService:
             "reject_candidate": _action(is_beta and exact and candidate.status == "trial" and transition is None,
                 "ExactTrialCandidateRequired", "applications.develop"),
         }
-        refs = {"selection_revisions": {s.webspace_id: s.revision for s in selections},
+        refs = {"application_revision": getattr(application, "revision", 0),
+                "publisher_ref": getattr(application, "publisher_ref", None),
+                "selection_revisions": {s.webspace_id: s.revision for s in selections},
                 "installation_revision": baseline.revision if baseline else 0,
                 "release_digest": digest, "candidate_digest": candidate.digest if candidate else None,
                 "candidate_status": candidate.status if candidate else None,

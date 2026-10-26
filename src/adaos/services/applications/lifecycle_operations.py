@@ -349,6 +349,8 @@ class ApplicationLifecycleOperations:
         root = trial_workspace_root(self.workspace, candidate_id)
         action = plan["action"]
         if action == "retain_local_beta":
+            if self.store.get_application(application_id).publisher_ref.lower() != operation.subnet_ref.lower():
+                raise PermissionError("OnlyPublisherMayInstallLocalBeta")
             path = admission_path(self.state, candidate_id)
             if path.is_file():
                 prior = json.loads(path.read_text(encoding="utf-8"))
