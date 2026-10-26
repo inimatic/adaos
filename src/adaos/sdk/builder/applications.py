@@ -935,6 +935,8 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
 
 
 def _refresh_application_placements(application_id: str) -> dict[str, Any]:
+    from requests import ConnectionError, Timeout
+
     from adaos.services.component_updates import ComponentUpdateService
 
     rooms = sorted({item.webspace_id for item in _application_service().store.list_runtime_selections()
@@ -944,7 +946,26 @@ def _refresh_application_placements(application_id: str) -> dict[str, Any]:
     # Opening the notifications panel is not a prerequisite for Beta acceptance.
     for room in rooms:
         updates.reconcile_local_trials(room, application_id=application_id)
-    return {"ok": True, "webspaces": {room: refresh_placement(room) for room in rooms}}
+    # The channel/data transition is already committed. A missing HTTP
+    # acknowledgement cannot undo it and must not invite a second migration.
+    # Keep local reconciliation/authorization failures strict; only transport
+    # failures become an explicit, retryable derived-UI refresh observation.
+    refreshed = {}
+    for room in rooms:
+        try:
+            refreshed[room] = refresh_placement(room)
+        except (ConnectionError, Timeout) as exc:
+            refreshed[room] = {
+                "ok": False,
+                "status": "refresh_unconfirmed",
+                "error_type": type(exc).__name__,
+                "retryable": True,
+                "retry_operation": "applications.refresh_placement",
+                "webspace_id": room,
+            }
+    ready = all(item.get("ok") is True for item in refreshed.values())
+    return {"ok": ready, "status": "refreshed" if ready else "refresh_pending",
+            "pending": not ready, "webspaces": refreshed}
 
 
 def abort_local_trial_preparation(candidate_id: str, *, release_digest: str, actor_ref: str) -> dict[str, Any]:
