@@ -58,6 +58,7 @@ def _trial_selection_fingerprint(state_dir: Path) -> tuple[tuple[str, int, int],
         *root.glob("runtime_channels/*.sqlite3"),
         *root.glob("runtime_selections/*/current.json"),
         *root.glob("installations/*/current.json"),
+        *root.glob("local_beta_admissions/*.json"),
     ]
     rows: list[tuple[str, int, int]] = []
     for path in sorted(paths, key=lambda item: str(item)):
@@ -545,8 +546,13 @@ def _exact_trial_selection_fingerprint(
         activation = activation_store.load(candidate)
         if activation is None or activation.get("status") not in {"active", "completed"}:
             raise TrialRuntimeUnavailable("Trial is missing or inactive")
+        from .local_beta_admission import admission_path, read_local_beta_admission
+
+        append_stat("local_beta_admission", admission_path(state_dir, candidate))
+        append_stat("candidate", state_dir / "artifact_pipeline/candidates" / f"{candidate}.json")
+        installed_beta = read_local_beta_admission(state_dir, candidate, release_digest, activation)
         expiry = str(activation.get("expires_at") or "").strip()
-        if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc):
+        if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc) and not installed_beta:
             raise TrialRuntimeUnavailable("Trial has expired")
     return tuple(rows)
 
@@ -562,6 +568,10 @@ def _exact_trial_expiry_timestamp(
     activation = TrialActivationStore(
         state_dir / "artifact_pipeline" / "trial-activations"
     ).load(runtime.candidate_id)
+    from .local_beta_admission import read_local_beta_admission
+
+    if activation and read_local_beta_admission(state_dir, runtime.candidate_id, runtime.release_digest, activation):
+        return None
     expiry = str((activation or {}).get("expires_at") or "").strip()
     if not expiry:
         return None

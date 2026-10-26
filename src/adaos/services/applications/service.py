@@ -1981,6 +1981,8 @@ class ApplicationService:
         """
 
         operation = self.store.get_operation(operation_id)
+        if operation.plan.get("schema") == "adaos.application.lifecycle_plan.v1":
+            raise ApplicationServiceError("Use the Core lifecycle apply boundary for this reviewed operation")
         token = hashlib.sha256(operation.application_id.encode("utf-8")).hexdigest()
         lease = self.store.root / "operation-leases" / f"{token}.lock"
         with mutation_lock(lease, timeout_s=900.0):

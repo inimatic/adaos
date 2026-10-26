@@ -2079,6 +2079,44 @@ def get_lifecycle(application_id: str, *, webspace_id: str = "desktop",
         application_id, webspace_id=webspace_id, runtime_revisions=runtime_revisions)
 
 
+def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
+                   actor_ref: str, subnet_ref: str, capability: str, idempotency_key: str,
+                   webspace_id: str = "desktop", candidate_id: str | None = None,
+                   acknowledge_write_loss: bool = False) -> dict[str, Any]:
+    """Review an exact Core local lifecycle transition; never publish implicitly."""
+    from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
+
+    actor, subnet, granted, key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
+                                                    required_capability="applications.plan")
+    return ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle")).plan(
+        application_id, action, expected_revision=expected_revision, actor_ref=actor,
+        subnet_ref=subnet, capability=granted, idempotency_key=key, webspace_id=webspace_id,
+        candidate_id=candidate_id, acknowledge_write_loss=acknowledge_write_loss)
+
+
+def apply_lifecycle_operation(operation_id: str, *, plan_digest: str, actor_ref: str,
+                              subnet_ref: str, capability: str, idempotency_key: str,
+                              recover: bool = False) -> dict[str, Any]:
+    """Apply/resume the reviewed Core intent, not a Builder workflow transition."""
+    from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
+
+    actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
+        required_capability="applications.recover" if recover else "applications.apply")
+    return ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle")).apply(operation_id,
+        plan_digest=plan_digest, actor_ref=actor, subnet_ref=subnet, capability=granted, recover=recover)
+
+
+def cancel_operation(operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,
+                      capability: str, idempotency_key: str) -> dict[str, Any]:
+    """Durably cancel an unstarted reviewed operation, including legacy plans."""
+    from adaos.services.applications.lifecycle_operations import cancel_planned_operation
+
+    actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
+                                                    required_capability="applications.plan")
+    return cancel_planned_operation(require_ctx("sdk.applications.lifecycle"), operation_id,
+        plan_digest=plan_digest, actor_ref=actor, subnet_ref=subnet, capability=granted)
+
+
 def get_application(
     application_id: str, *, webspace_id: str | None = None
 ) -> dict[str, Any]:
@@ -5114,6 +5152,9 @@ def apply_operation(
         idempotency_key,
         required_capability="applications.apply",
     )
+    if operation_id.startswith("applifecycle."):
+        return apply_lifecycle_operation(operation_id, plan_digest=plan_digest, actor_ref=actor,
+            subnet_ref=subnet, capability=granted, idempotency_key=key)
     result = (
         _service()
         .apply_operation(
@@ -5229,6 +5270,9 @@ __all__ = [
     "get_runtime_selection",
     "get_runtime_revisions",
     "get_lifecycle",
+    "plan_lifecycle",
+    "apply_lifecycle_operation",
+    "cancel_operation",
     "get_subscription",
     "get_update_batch",
     "get_users_access_surface",

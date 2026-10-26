@@ -83,6 +83,10 @@ class ApplicationLifecycleService:
                       if is_beta and candidate_id else None) or {}
         expiry = timestamp(activation.get("expires_at"))
         remaining = int((expiry - observed).total_seconds()) if expiry else None
+        from .local_beta_admission import read_local_beta_admission
+
+        installed_beta = (read_local_beta_admission(self.state, candidate_id, digest, activation)
+                          if is_beta and candidate_id else None)
         admission = "not_selected"
         reason = "NoSelectedRuntime"
         if digest:
@@ -93,13 +97,18 @@ class ApplicationLifecycleService:
                     or identity.get("candidate_id") != candidate_id
                     or identity.get("release_digest") != digest):
                 admission, reason = "unavailable", "TrialAdmissionUnavailable"
+            elif installed_beta:
+                admission, reason = "admitted", "InstalledLocalBeta"
             elif remaining is not None and remaining <= 0:
                 admission, reason = "expired", "TrialExpired"
             elif remaining is not None and remaining <= EXPIRING_SECONDS:
                 admission, reason = "expiring", "TrialExpiring"
-        transition = None
+        channel = ApplicationRuntimeChannel(self.state, application_id)
+        transition = next(iter(channel.pending_transitions()), None)
+        if transition:
+            admission, reason = "recovery_required", "RuntimeTransitionPending"
         if candidate_id:
-            runner = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, application_id))
+            runner = ApplicationRuntimeTransition(channel)
             for prefix in ("application-stable", "application-beta"):
                 record = runner.get(f"{prefix}:{application_id}:{candidate_id}")
                 if record and not record.get("completed") and not record.get("aborted"):
@@ -128,7 +137,7 @@ class ApplicationLifecycleService:
         usable = admission in {"admitted", "expiring"}
         actions = {
             "open": _action(usable, reason, "applications.read"),
-            "retain_local_beta": _action(is_beta and exact and candidate.status == "accepted" and usable,
+            "retain_local_beta": _action(is_beta and exact and candidate.status == "accepted" and usable and not installed_beta,
                 "ExactAcceptedTrialRequired", "applications.apply"),
             "deactivate_beta": _action(is_beta and transition is None,
                 "SelectedBetaRequired" if not is_beta else "ReviewRuntimeAndDataDisposition"),
@@ -143,7 +152,8 @@ class ApplicationLifecycleService:
                 "installation_revision": baseline.revision if baseline else 0,
                 "release_digest": digest, "candidate_digest": candidate.digest if candidate else None,
                 "activation_updated_at": activation.get("updated_at"),
-                "activation_status": activation.get("status"), "expires_at": activation.get("expires_at")}
+                "activation_status": activation.get("status"), "expires_at": activation.get("expires_at"),
+                "local_beta_admission": (installed_beta or {}).get("receipt_digest")}
         return {
             "schema": LIFECYCLE_SCHEMA, "application_id": application_id,
             "observed_at": observed.isoformat(), "read_only": True,
@@ -157,8 +167,10 @@ class ApplicationLifecycleService:
                         "runtime_root_ref": selected.runtime_root_ref if selected else "workspace" if baseline_active else None,
                         "webspace_ids": sorted(s.webspace_id for s in selections),
                         "admission": admission, "reason": reason,
-                        "expires_at": activation.get("expires_at") if is_beta else None,
-                        "remaining_seconds": max(0, remaining) if remaining is not None else None,
+                        "admission_kind": "installed_local_beta" if installed_beta else "temporary_trial" if is_beta else "stable",
+                        "trial_expires_at": activation.get("expires_at") if is_beta else None,
+                        "expires_at": activation.get("expires_at") if is_beta and not installed_beta else None,
+                        "remaining_seconds": max(0, remaining) if remaining is not None and not installed_beta else None,
                         "integrity": integrity.get("status", "not_checked")},
             "candidate": {"candidate_id": candidate_id, "candidate_digest": candidate.digest if candidate else None,
                           "package_digest": candidate.package_digest if candidate else None,

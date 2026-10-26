@@ -124,7 +124,10 @@ class NativeTrialRuntime:
         if not record or record.get("status") not in {"active", "completed"}:
             raise TrialRuntimeUnavailable("Trial is missing or inactive")
         expiry = record.get("expires_at")
-        if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc) and not for_data_recovery:
+        from .local_beta_admission import read_local_beta_admission
+
+        installed_beta = None if for_data_recovery else read_local_beta_admission(state, candidate_id, release_digest, record)
+        if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc) and not for_data_recovery and not installed_beta:
             raise TrialRuntimeUnavailable("Trial has expired")
         identity = record.get("candidate_ref") or {}
         binding = record.get("runtime_binding") or {}

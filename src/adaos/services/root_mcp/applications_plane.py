@@ -397,6 +397,39 @@ def _builder_contracts() -> list[RootMcpToolContract]:
     ]
 
 
+def _lifecycle_contracts() -> list[RootMcpToolContract]:
+    """Common Core operational surface; no Builder-specific lifecycle policy."""
+    digest = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    identity = {"application_id": {"type": "string", "minLength": 1},
+                "webspace_id": {"type": "string"}}
+    operation = {"operation_id": {"type": "string", "minLength": 1},
+                 "plan_digest": digest, "idempotency_key": {"type": "string", "minLength": 1}}
+    specs = [
+        ("applications.lifecycle.show", "Read Core Application lifecycle", identity,
+         ["application_id"], "applications.read", False),
+        ("applications.lifecycle.plan", "Review local Application lifecycle transition", {
+            **identity, "action": {"enum": ["retain_local_beta", "deactivate_beta", "uninstall_beta", "delete_trial", "recover_runtime"]},
+            "expected_revision": digest, "candidate_id": {"type": ["string", "null"]},
+            "acknowledge_write_loss": {"type": "boolean"},
+            "idempotency_key": {"type": "string", "minLength": 1}},
+         ["application_id", "action", "expected_revision", "idempotency_key"], "applications.plan", True),
+        ("applications.lifecycle.apply", "Apply reviewed Core lifecycle transition", operation,
+         list(operation), "applications.apply", True),
+        ("applications.lifecycle.recover", "Recover exact Core lifecycle operation", operation,
+         list(operation), "applications.recover", True),
+        ("applications.cancel_operation", "Cancel unstarted reviewed operation", operation,
+         list(operation), "applications.plan", True),
+    ]
+    return [RootMcpToolContract(id=tool_id, title=title, surface=RootMcpSurface.OPERATIONS,
+        summary=title + "; Core owns admission, data protection and operation history.",
+        input_schema=schema_object(properties=properties, required=required),
+        output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA), required_capability=capability,
+        side_effects="write" if mutation else "read",
+        metadata={"published_by": "plane:applications", "adapter": "adaos.sdk.applications",
+                  "handler": tool_id.replace(".", "_")})
+        for tool_id, title, properties, required, capability, mutation in specs]
+
+
 def contracts() -> list[RootMcpToolContract]:
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
@@ -2965,6 +2998,7 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**published, "handler": "applications_record_prerelease_health"},
         ),
         *_builder_contracts(),
+        *_lifecycle_contracts(),
     ]
 
 
@@ -4348,10 +4382,53 @@ def _handle_record_prerelease_health(
     )
 
 
+def _handle_lifecycle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {"lifecycle": _sdk().get_lifecycle(_application_id(arguments), webspace_id=_webspace_id(arguments))}
+
+
+def _handle_lifecycle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_plan": True, "action": arguments.get("action"),
+                "application_id": _application_id(arguments)}
+    return {"operation": _sdk().plan_lifecycle(_application_id(arguments), str(arguments.get("action") or ""),
+        expected_revision=str(arguments.get("expected_revision") or ""), webspace_id=_webspace_id(arguments),
+        candidate_id=arguments.get("candidate_id"), acknowledge_write_loss=bool(arguments.get("acknowledge_write_loss")),
+        **_mcp_mutation_context(arguments, "applications.plan"))}
+
+
+def _lifecycle_apply(arguments: dict[str, Any], *, dry_run: bool, recover: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_recover" if recover else "would_apply": True, "operation_id": arguments.get("operation_id")}
+    return {"operation": _sdk().apply_lifecycle_operation(str(arguments.get("operation_id") or ""),
+        plan_digest=str(arguments.get("plan_digest") or ""), recover=recover,
+        **_mcp_mutation_context(arguments, "applications.recover" if recover else "applications.apply"))}
+
+
+def _handle_lifecycle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _lifecycle_apply(arguments, dry_run=dry_run, recover=False)
+
+
+def _handle_lifecycle_recover(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _lifecycle_apply(arguments, dry_run=dry_run, recover=True)
+
+
+def _handle_cancel_operation(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_cancel": True, "operation_id": arguments.get("operation_id")}
+    return {"operation": _sdk().cancel_operation(str(arguments.get("operation_id") or ""),
+        plan_digest=str(arguments.get("plan_digest") or ""),
+        **_mcp_mutation_context(arguments, "applications.plan"))}
+
+
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "applications.list": _handle_list,
         "applications.show": _handle_show,
+        "applications.lifecycle.show": _handle_lifecycle_show,
+        "applications.lifecycle.plan": _handle_lifecycle_plan,
+        "applications.lifecycle.apply": _handle_lifecycle_apply,
+        "applications.lifecycle.recover": _handle_lifecycle_recover,
+        "applications.cancel_operation": _handle_cancel_operation,
         "applications.assess_updates": _handle_assess_updates,
         "applications.plan_updates": _handle_plan_updates,
         "applications.get_update_batch": _handle_get_update_batch,

@@ -1331,7 +1331,8 @@ class LocalApplicationDataLifecycle:
 
     def reject_beta(self, *, webspace_id: str,
                     verify_source: Callable[[str], Mapping[str, Any]],
-                    source_guard: Callable = nullcontext):
+                    source_guard: Callable = nullcontext,
+                    verify_idle: Callable[[str], Mapping[str, Any]] | None = None):
         """Deselect a reviewed Beta while retaining its isolated data evidence."""
         runner = ApplicationRuntimeTransition(self.channel)
         operation = f"application-beta:{self.application_id}:{self.candidate_id}"
@@ -1349,7 +1350,8 @@ class LocalApplicationDataLifecycle:
                 self._restore_configuration_after_beta(component)
             return {"ok": True, "overrides_retained": True}
 
-        return runner.reject_completed(operation, contract_digest=self._contract(), steps=[
+        steps = [TransitionStep("verify_idle_jobs", verify_idle)] if verify_idle else []
+        return runner.reject_completed(operation, contract_digest=self._contract(), steps=steps + [
             TransitionStep("deactivate_configuration", configure),
             TransitionStep("verify_source", verify_source),
         ], source_guard=source_guard)

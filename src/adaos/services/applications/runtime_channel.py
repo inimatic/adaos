@@ -183,6 +183,15 @@ class ApplicationRuntimeChannel:
             )
             connection.commit()
 
+    def pending_transitions(self) -> tuple[dict, ...]:
+        """Read persisted execution fences without creating channel state."""
+        if not self.path.is_file():
+            return ()
+        with self._connection() as connection:
+            if not connection.execute("SELECT 1 FROM sqlite_master WHERE name='transitions'").fetchone():
+                return ()
+            return self._pending_transitions(connection)
+
     @contextmanager
     def execution(self, runtime_root_ref: str, release_digest: str, *,
                   legacy: Sequence[RuntimeSelection] = ()) -> Iterator[None]:
