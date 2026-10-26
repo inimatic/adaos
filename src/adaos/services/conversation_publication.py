@@ -61,6 +61,8 @@ def publish(
     channel_id: str = "general", thread_id: str | None = None,
     route_ids: Sequence[str] = (), meta: Mapping[str, Any] | None = None,
     task_ref: Mapping[str, Any] | None = None, bus: Any = None,
+    existing_message_id: str | None = None,
+    message_payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Commit a message and one existing durable envelope per authorized target.
 
@@ -76,9 +78,21 @@ def publish(
     routes = list(dict.fromkeys(route_ids))
     if len(routes) > 20:
         raise ValueError("too many output targets")
-    request_digest = _digest(dict(owner=owner, webspace_id=webspace_id, text=text,
+    request_input = dict(owner=owner, webspace_id=webspace_id, text=text,
         category=category, role=role, channel_id=channel_id, thread_id=thread_id,
-        meta=dict(meta or {}), task_ref=task_ref))
+        meta=dict(meta or {}), task_ref=task_ref)
+    presentation = dict(message_payload or {})
+    allowed_presentation = {"actions", "interaction", "active_agent_id", "active_agent_label",
+                            "active_agent_icon", "active_agent_avatar_ref"}
+    if set(presentation) - allowed_presentation:
+        raise ValueError("unsupported publication presentation fields")
+    if presentation:
+        request_input["presentation"] = presentation
+    if existing_message_id is not None:
+        if not isinstance(existing_message_id, str) or not existing_message_id.strip():
+            raise ValueError("existing message identity is required")
+        request_input["existing_message_id"] = existing_message_id
+    request_digest = _digest(request_input)
     now = time.time()
     metadata = {**dict(meta or {}), "publication_id": publication_id,
                 "response_idempotency_key": publication_id, "output_delivery_owned": True}
@@ -115,11 +129,24 @@ def publish(
                         or durable_delivery._expired(route.get("expires_at"), now=durable_delivery._now())):
                     continue
                 admitted.append(route)
-            payload = conversation_store.append_message(conversation_id=conversation_id,
-                owner=owner, webspace_id=webspace_id, channel_id=channel_id,
-                thread_id=thread_id, text=text, role=role, meta=metadata,
-                payload={"id": "message:" + _digest(publication_id)},
-                idempotency_key=publication_id, connection=con)
+            if existing_message_id is not None:
+                # Attach delivery to an already committed turn without creating
+                # a second transcript row or altering its author/actions.
+                message = con.execute("""SELECT * FROM conversation_messages
+                    WHERE message_id=? AND conversation_id=? AND owner=?
+                        AND webspace_id=? AND channel_id=? AND COALESCE(thread_id,'')=?
+                        AND text=? AND redaction_state='active'""",
+                    (existing_message_id, conversation_id, owner, webspace_id,
+                     channel_id, thread_id or '', text)).fetchone()
+                if message is None:
+                    raise ValueError("existing message ownership, content or redaction mismatch")
+                payload = conversation_store._row_to_message(message)
+            else:
+                payload = conversation_store.append_message(conversation_id=conversation_id,
+                    owner=owner, webspace_id=webspace_id, channel_id=channel_id,
+                    thread_id=thread_id, text=text, role=role, meta=metadata,
+                    payload={**presentation, "id": "message:" + _digest(publication_id)},
+                    idempotency_key=publication_id, connection=con)
             intents = []
             for route in admitted:
                 intent_id = "output:" + _digest([publication_id, route["route_id"]])
@@ -146,6 +173,9 @@ def publish(
                         (publication_id, conversation_id, request_digest, json.dumps(receipt)))
         con.commit()
     # Re-emission repairs a lost projection event without appending a second message.
+    if existing_message_id is not None:
+        payload = {**payload, "_meta": {**dict(payload.get("_meta") or {}),
+            "output_delivery_owned": True, "publication_id": publication_id}}
     if bus is not None and payload.get("redaction_state", "active") == "active":
         from adaos.domain import Event
         try:

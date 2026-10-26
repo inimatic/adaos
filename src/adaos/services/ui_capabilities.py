@@ -236,6 +236,13 @@ def _generic_ui_capability_catalog(source_fingerprint: str = "") -> dict[str, An
     contract_projection = project_component_contract()
     contract_units = {unit["id"]: unit for unit in contract_projection["retrieval_units"]}
     for component in result["components"]:
+        if component["id"] in {"visual.imageCompare", "layout.group", "feedback.taskProgress"}:
+            from adaos.services.ui_widget_inputs import input_contracts
+            component["manifest"]["input_contract"] = copy.deepcopy(input_contracts()[component["id"]])
+        if component["id"] == "visual.imageCompare":
+            component["manifest"]["annotation_document_schema"] = _read_json(_ABI_ROOT / "image.annotations.v1.schema.json")
+        if component["id"] == "feedback.taskProgress":
+            component["manifest"]["task_record_schema"] = _read_json(_ABI_ROOT / "ui.task_progress.v1.schema.json")
         if component["id"] in contract_units:
             component["component_contract"] = copy.deepcopy(contract_units[component["id"]])
             component["events"] = copy.deepcopy(contract_units[component["id"]]["content"]["events"])
@@ -259,7 +266,10 @@ def ui_capability_catalog(
         return copy.deepcopy(adapter.ui_capability_catalog())
     from adaos.services.ui_component_contracts import CONTRACT_PATH
     fingerprint = hashlib.sha256(_CATALOG_PATH.read_bytes() + _CATALOG_SCHEMA_PATH.read_bytes()
-        + _WEBUI_SCHEMA_PATH.read_bytes() + json.dumps(project_component_contract()["provenance"], sort_keys=True).encode()).hexdigest()
+        + _WEBUI_SCHEMA_PATH.read_bytes()
+        + (_ABI_ROOT / "image.annotations.v1.schema.json").read_bytes()
+        + (_ABI_ROOT / "ui.task_progress.v1.schema.json").read_bytes()
+        + json.dumps(project_component_contract()["provenance"], sort_keys=True).encode()).hexdigest()
     result = copy.deepcopy(_generic_ui_capability_catalog(fingerprint))
     recipes = [
         copy.deepcopy(dict(recipe))
@@ -1125,16 +1135,19 @@ def selected_ui_capabilities(
         flags=re.IGNORECASE,
     ) and "ui.actions" not in selected_ids:
         selected_ids.append("ui.actions")
-    for item_id in index:
+    explicit_ids = [
+        item_id for item_id in index
         if (
             re.search(
-                rf"(?<![\w.-]){re.escape(item_id)}(?![\w.-])",
+                rf"(?<![\w.-]){re.escape(item_id)}(?![\w-]|\.[\w-])",
                 request_text,
                 flags=re.IGNORECASE,
             )
-            and item_id not in selected_ids
-        ):
-            selected_ids.append(item_id)
+        )
+    ]
+    # An exact requested ABI capability must not disappear behind inferred CRUD
+    # recipes when the bounded root slice fills up. Dependencies remain bounded.
+    selected_ids = list(dict.fromkeys([*explicit_ids, *selected_ids]))
     if not selected_ids and str(request or "").strip():
         selected_ids.extend(
             str(item.get("id") or "")
@@ -1222,6 +1235,10 @@ def _with_source_ui_contracts(selection: dict[str, Any], webui: Mapping[str, Any
     source values enter the contract facet, and oversized closures fail before
     model spend rather than silently dropping an existing component contract.
     """
+    # Page-level contracts are not widget profiles and cannot be recovered by
+    # keyword-ranking individual components. Preserve them in the compiler
+    # facet alongside the complete source component closure.
+    selection['navigation_contracts'] = copy.deepcopy(ui_capability_catalog().get('navigation_contracts', {}))
     if not isinstance(webui, Mapping):
         return selection
     catalog = ui_capability_catalog()
@@ -1308,19 +1325,20 @@ def _has_path(value: Any, path: str) -> bool:
 
 def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
     from adaos.services.ui_component_contracts import component_contract_findings
+    from adaos.services.ui_widget_inputs import flatten_widgets, widget_input_findings
     catalog = ui_capability_catalog()
     known_types = {
         str(item.get("id") or "")
         for item in catalog.get("components") or []
         if isinstance(item, Mapping)
     }
-    findings: list[dict[str, Any]] = component_contract_findings(webui)
+    findings: list[dict[str, Any]] = component_contract_findings(webui) + widget_input_findings(webui)
     schemas = _page_schemas(webui)
     desktop_state = next((page.get("initialState") for path, page in schemas if path == "ui.application.desktop.pageSchema"), {})
     shared_initial_state = desktop_state if isinstance(desktop_state, Mapping) else {}
     for schema_path, page in schemas:
         findings.extend(layout_v2_findings(page, schema_path=schema_path))
-        widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
+        widgets = flatten_widgets(page.get("widgets"))
         query_controls_by_state: dict[str, Mapping[str, Any]] = {}
         for candidate in widgets:
             if not isinstance(candidate, Mapping) or candidate.get("type") != "ui.queryToolbar":
@@ -1392,6 +1410,37 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 if isinstance(candidate.get("actions"), list)
                 else []
             )
+            # ui.actions menus carry the selected-state binding and options on
+            # each button, not on widget.inputs. Count only options connected
+            # to that menu's real select/updateState action, never unrelated
+            # declarations as proof that a visibility state is reachable.
+            if str(candidate.get("type") or "") == "ui.actions":
+                for button in candidate_inputs.get("buttons") or []:
+                    if not isinstance(button, Mapping) or not isinstance(button.get("options"), list):
+                        continue
+                    state_key = str(button.get("selectedStateKey") or "").removeprefix("$state.")
+                    menu_id = str(button.get("id") or "")
+                    if not state_key or not menu_id:
+                        continue
+                    for action in candidate_actions:
+                        if (not isinstance(action, Mapping) or action.get("type") != "updateState"
+                                or action.get("on") != f"select:{menu_id}"):
+                            continue
+                        params = action.get("params")
+                        expression = params.get(state_key) if isinstance(params, Mapping) else None
+                        if not isinstance(expression, str) or expression not in {"$event.id", "$event.value"}:
+                            continue
+                        field = str(expression).removeprefix("$event.")
+                        values = set()
+                        for option in button["options"]:
+                            if not isinstance(option, Mapping):
+                                continue
+                            value = option.get(field)
+                            if value is None and field == "value":
+                                value = option.get("id")
+                            if isinstance(value, (str, int, float, bool)) and str(value):
+                                values.add(str(value))
+                        controlled_state_values.setdefault(state_key, set()).update(values)
             candidate_data_source = (
                 candidate.get("dataSource")
                 if isinstance(candidate.get("dataSource"), Mapping)
@@ -1807,6 +1856,24 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     state_writes_by_event.setdefault(event, {}).setdefault(
                         str(state_key), []
                     ).append(action_index)
+                    initial_value = initial_state.get(state_key, shared_initial_state.get(state_key))
+                    value = params[state_key]
+                    if (type(initial_value) in (int, float) and isinstance(value, str)
+                            and re.fullmatch(r"\s*\$(?:state|event|client|data)\.[A-Za-z0-9_.-]+\s+[+*/-]\s+.+", value)):
+                        findings.append({
+                            "code": "ui.action.numeric_binding_is_interpolated_text",
+                            "severity": "error",
+                            "path": f"{widget_path}.actions[{action_index}].params.{state_key}",
+                            "message": "A numeric state binding uses arithmetic in an interpolated string. Use {kind: expression, op: add, args: [$state.counter, 1]} or mutateState increment.",
+                        })
+                    if (type(initial_value) in (int, float) and isinstance(value, Mapping)
+                            and value.get("op") and value.get("kind") != "expression"):
+                        findings.append({
+                            "code": "ui.action.expression_discriminator_missing",
+                            "severity": "error",
+                            "path": f"{widget_path}.actions[{action_index}].params.{state_key}",
+                            "message": "A numeric state operation is missing kind: expression. Without this discriminator the Client retains an ordinary object rather than evaluating it.",
+                        })
             for event, state_writes in state_writes_by_event.items():
                 for state_key, action_indexes in state_writes.items():
                     if event and len(action_indexes) > 1:
@@ -1823,6 +1890,20 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                                 "action_indexes": action_indexes,
                             }
                         )
+            if widget_type == "ui.form":
+                source = widget.get("dataSource") or {}
+                params = source.get("params") or {} if isinstance(source, Mapping) else {}
+                filters = params.get("filters") or {} if isinstance(params, Mapping) else {}
+                selection = filters.get("id") if isinstance(filters, Mapping) else None
+                if (isinstance(selection, str) and selection.startswith("$state.")
+                        and not inputs.get("selectedStateKey")
+                        and not (isinstance(source.get("query"), Mapping) and source["query"].get("id"))):
+                    findings.append({
+                        "code": "ui.form.record_selection_missing",
+                        "severity": "error",
+                        "path": f"{widget_path}.inputs.selectedStateKey",
+                        "message": "A form queried by record id needs selectedStateKey. Use " + selection[7:] + " so values and the revision bind to the selected record.",
+                    })
             if widget_type == "ui.list":
                 reorder = (
                     inputs.get("reorder")

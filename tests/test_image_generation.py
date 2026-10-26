@@ -109,7 +109,7 @@ def test_completed_owned_output_can_be_read_without_network_or_publication(tmp_p
     assert len(broker.submits) == len(broker.polls) == 1
     with pytest.raises(ValueError, match="current owner"):
         ImageGenerationService(tmp_path, "skill:retouch|user:two", broker, no_publish).read_bytes("candidate")
-    for limit in (True, 0, 12582913):
+    for limit in (True, 0, 67108865):
         with pytest.raises(ValueError, match="max_bytes"):
             reopened.read_bytes("candidate", max_bytes=limit)
     with pytest.raises(ValueError, match="size limit"):
@@ -117,6 +117,38 @@ def test_completed_owned_output_can_be_read_without_network_or_publication(tmp_p
     next(reopened.root.glob("*.png")).write_bytes(b"tampered")
     with pytest.raises(ValueError, match="integrity"):
         reopened.read_bytes("candidate")
+
+
+def test_nested_provider_failure_is_retained_without_resubmission(tmp_path):
+    broker = Broker()
+    service = ImageGenerationService(tmp_path, 'skill:retouch|user:quota', broker, publisher)
+    service.submit(request_id='quota', model='gpt-image-2.5-sunburst', prompt='Preserve detail')
+    broker.job.update(status='failed', error={'error': {'code': 'credit_balance_exhausted',
+        'type': 'insufficient_quota', 'message': 'No API credits remain.'}})
+    failed = service.get('quota')
+    assert failed['error'] == {'code': 'credit_balance_exhausted', 'message': 'No API credits remain.'}
+    assert failed['message'] == 'No API credits remain.'
+    assert service.get('quota') == failed
+    assert len(broker.submits) == len(broker.polls) == 1
+
+
+def test_large_rgba_output_survives_capture_and_explicit_owned_read(tmp_path):
+    # A native RGBA PNG must not be rejected by the former 12 MiB transport
+    # cap. No compression makes this boundary deterministic without fixtures.
+    stream = io.BytesIO()
+    Image.new('RGBA', (2048, 2048), (120, 90, 60, 200)).save(stream, format='PNG', compress_level=0)
+    raw = stream.getvalue()
+    assert 12 * 1024 * 1024 < len(raw) < 64 * 1024 * 1024
+    broker = Broker()
+    service = ImageGenerationService(tmp_path, 'skill:retouch|user:large', broker, publisher)
+    service.submit(request_id='native-rgba', model='gpt-image-2.5-sunburst', prompt='Preserve detail')
+    broker.job.update(status='succeeded', response={'data': [{'b64_json': base64.b64encode(raw).decode('ascii')}]})
+    assert service.get('native-rgba')['status'] == 'completed'
+    reopened = ImageGenerationService(tmp_path, 'skill:retouch|user:large', broker, publisher)
+    with pytest.raises(ValueError, match='size limit'):
+        reopened.read_bytes('native-rgba', max_bytes=12 * 1024 * 1024)
+    assert reopened.read_bytes('native-rgba', max_bytes=64 * 1024 * 1024) == raw
+    assert len(broker.submits) == len(broker.polls) == 1
 
 
 def test_image_generation_is_owned_durable_idempotent_and_context_stays_local(tmp_path):

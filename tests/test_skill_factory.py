@@ -635,6 +635,46 @@ def test_skill_factory_cancel_is_terminal_for_late_worker_updates(tmp_path: Path
         )
     persisted = {item["task_id"]: item for item in service.snapshot(include_tasks=True)["tasks"]}
     assert persisted[task["task_id"]]["status"] == "cancelled"
+    with pytest.raises(ValueError, match="is terminal: cancelled"):
+        service.fail_task({"task_id": task["task_id"], "node_id": "devnode.test",
+                           "message": "late failure", "retry_requested": True})
+    assert service.read_task(task["task_id"])["status"] == "cancelled"
+
+
+def test_task_query_reuses_only_unchanged_atomic_state_and_returns_detached_values(tmp_path, monkeypatch):
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request({"target": {"type": "skill", "id": "query_cache"}})["task"]
+    original = SkillFactoryService._read_state
+    reads = []
+    monkeypatch.setattr(SkillFactoryService, "_read_state", lambda self: reads.append(True) or original(self))
+    first = service.read_task(task["task_id"])
+    first["status"] = "caller mutation"
+    for _ in range(10):
+        assert service.read_task(task["task_id"])["status"] == "queued"
+    assert len(reads) == 1
+    service.cancel_task(task["task_id"], actor="operator")
+    assert service.read_task(task["task_id"])["status"] == "cancelled"
+    assert len(reads) == 3  # mutation reads fresh, then query observes replacement
+
+
+@pytest.mark.parametrize("late_cancel_error", [True, False])
+def test_skill_factory_reconciles_only_proven_legacy_cancel_race(tmp_path: Path, late_cancel_error: bool) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request({"target": {"type": "skill", "id": "cancel_race"}})["task"]
+    service.register_dev_node({"node_id": "devnode.test"})
+    service.poll_assignment("devnode.test")
+    cancelled = service.cancel_task(task["task_id"], reason="operator guard", actor="operator")["task"]
+    # Reproduce the historical on-disk state left by the pre-fix late writer.
+    state = service._read_state()
+    stored = state["tasks"][task["task_id"]]
+    stored["status"] = "failed"
+    stored["failure_history"] = [{"message": "task is terminal: cancelled" if late_cancel_error else "another failure",
+                                  "reported_at": cancelled["cancelled_at"]}]
+    service._write_state(state)
+    result = service.cancel_task(task["task_id"], actor="operator")
+    assert result["ok"] is late_cancel_error
+    assert result["task"]["status"] == ("cancelled" if late_cancel_error else "failed")
+    assert result["task"]["cancelled_at"] == cancelled["cancelled_at"]
 
 
 def test_skill_factory_cannot_cancel_completed_or_committing_task(tmp_path: Path) -> None:

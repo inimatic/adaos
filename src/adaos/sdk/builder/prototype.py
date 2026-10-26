@@ -10,6 +10,41 @@ _WORKSPACE_PORT: Any = None
 _PERSONAL_PORT: Any = None
 
 
+def history(object_type: str, object_id: str, *, limit: int = 50,
+            cursor: str | None = None) -> dict[str, Any]:
+    """Read paginated revision metadata; missing snapshots remain explicit."""
+    from adaos.services.builder.prototype_history import PrototypeHistoryService
+    from adaos.sdk.builder.workflow import _service
+    return PrototypeHistoryService(_service()).list(object_type, object_id, limit=limit, cursor=cursor)
+
+
+def retain_revision(object_type: str, object_id: str, revision: str) -> dict[str, Any]:
+    """Explicitly retain an existing revision outside disposable DEV sources."""
+    from adaos.services.builder.prototype_history import PrototypeHistoryService
+    from adaos.sdk.builder.workflow import _service
+    return PrototypeHistoryService(_service()).retain(object_type, object_id, revision)
+
+
+def read_revision(object_type: str, object_id: str, revision: str) -> dict[str, Any]:
+    """Read a retained or legacy snapshot without switching current revision."""
+    from adaos.services.builder.prototype_history import PrototypeHistoryService
+    from adaos.sdk.builder.workflow import _service
+    return PrototypeHistoryService(_service()).read(object_type, object_id, revision)
+
+
+def recover_evidenced_revision(
+    object_type: str,
+    object_id: str,
+    source_snapshot: Mapping[str, Any],
+    acceptance_id: str,
+) -> dict[str, Any]:
+    """Maintenance recovery from a verified snapshot and durable acceptance."""
+    from adaos.services.builder.prototype_history import PrototypeHistoryService
+    from adaos.sdk.builder.workflow import _service
+    return PrototypeHistoryService(_service()).recover_evidenced_acceptance(
+        object_type, object_id, source_snapshot, acceptance_id)
+
+
 def _compatibility_execution_port():
     global _COMPATIBILITY_PORT
     from adaos.adapters.builder.legacy_dev_skill import (
@@ -125,6 +160,24 @@ def candidate_status(
         webspace_id=webspace_id,
         timeout_seconds=timeout_seconds,
     )
+
+
+def add_reference(*, project_ref: str, name: str, media_type: str, text: str) -> dict[str, Any]:
+    """Retain an explicit text/HTML design reference; never execute or fetch it."""
+    from adaos.sdk import access
+    access.require('applications.develop')
+    access.require('workspace.write')
+    from adaos.services.builder.reference_artifacts import BuilderReferenceArtifacts
+    return BuilderReferenceArtifacts().add(project_ref=project_ref, name=name, media_type=media_type, text=text)
+
+
+def reference_context(*, project_ref: str, receipts: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Verify exact project ownership and content before adding model input."""
+    from adaos.sdk import access
+    access.require('applications.develop')
+    access.require('workspace.read')
+    from adaos.services.builder.reference_artifacts import BuilderReferenceArtifacts
+    return BuilderReferenceArtifacts().resolve(project_ref=project_ref, receipts=receipts)
 
 
 def model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[str, Any]:
@@ -423,6 +476,10 @@ def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, An
 
 
 __all__ = [
+    "history",
+    "retain_revision",
+    "read_revision",
+    "recover_evidenced_revision",
     "personal_provider_jobs",
     "model_reasoning",
     "model_supports_sampling",
@@ -444,6 +501,8 @@ __all__ = [
     "composition_slice",
     "automation_handoff",
     "model_context",
+    "add_reference",
+    "reference_context",
     "semantic_revision_context",
     "verify_semantic_source",
     "output_locales",

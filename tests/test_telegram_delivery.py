@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+
+def test_committed_publication_projection_cannot_become_a_second_transport_sender():
+    from adaos.services.router.telegram_projection import _telegram_output_projection
+    assert _telegram_output_projection({"text": "Committed", "from": "hub"},
+        {"io_type": "telegram", "chat_id": "test", "output_delivery_owned": True}) is None
+
 import pytest
 from types import SimpleNamespace
 import hashlib
@@ -111,26 +117,27 @@ def test_hub_pairing_claim_binds_content_and_retains_late_delivery() -> None:
 
 @pytest.mark.asyncio
 async def test_builder_root_acceptance_is_distinct_from_bot_delivery(tmp_path, monkeypatch) -> None:
-    from adaos.services.router import service as module
+    from adaos.services import conversation_publication, conversation_delivery, conversation_store, durable_delivery
+    from adaos.services.agent_context import get_ctx
+    import requests
     router = RouterService(eventbus=LocalEventBus(), base_dir=tmp_path)
-    router._notification_context = SimpleNamespace(
-        config=SimpleNamespace(node_id="owner", subnet_id="hub", root_settings=SimpleNamespace(base_url="https://root.invalid")),
-        settings=SimpleNamespace())
-    router._rules = [{"target": {"io_type": "telegram", "node_id": "this"}}]
-    monkeypatch.setattr(module, "load_subnet_alias", lambda **_: None)
+    get_ctx().config = SimpleNamespace(root_settings=SimpleNamespace(base_url="https://root.invalid"))
+    conversation_store.upsert_conversation(conversation_id="builder:202", owner="skill:builder_skill", webspace_id="test",
+        policy={"output_route_ids": ["route:202"]})
+    durable_delivery.create_reply_route("builder:202", transport="telegram", route_id="route:202",
+        destination_ref={"hub_id": "hub", "routing_mode": "hub_pairing"}, principal_scope=["user:local"])
+    committed = conversation_publication.publish(publication_key="brief.202", conversation_id="builder:202",
+        owner="skill:builder_skill", webspace_id="test", text="Builder qualification brief", route_ids=["route:202"])
     sent = []
-    monkeypatch.setattr(module.requests, "post", lambda url, **kw: sent.append(kw["json"]) or SimpleNamespace(status_code=202))
-    event = Event(type="ui.notify", source="test", ts=1.0, payload={
-        "id": "brief.202", "text": "Builder qualification brief",
-        "_meta": {"schema": "adaos.builder.chat_notification.v1"}})
-    await router._handle_notify_event(event)
+    monkeypatch.setattr(requests, "post", lambda url, **kw: sent.append(kw["json"]) or SimpleNamespace(status_code=202))
+    import asyncio
+    await asyncio.to_thread(conversation_delivery.dispatch_once)
     assert len(sent) == 1
     protocol = sent[0]["_protocol"]
     assert protocol["receipt_subject"] == "tg.receipt.hub"
     attempt = telegram_delivery.get_attempt(protocol["delivery_attempt_id"])
     assert attempt["status"] == "claimed"
-    receipt_path = next((tmp_path / "state/router/builder-deliveries").glob("*.json"))
-    assert json.loads(receipt_path.read_text(encoding="utf-8"))["phase"] == "accepted"
+    assert conversation_publication.output_status(committed["publication_id"])[0]["status"] == "accepted_by_root"
     payload = {
         "schema": "adaos.telegram.delivery_receipt.v1", "receipt_id": "root.receipt.202",
         "delivery_attempt_id": attempt["attempt_id"], "operation_key": "wrong.operation",
@@ -145,7 +152,72 @@ async def test_builder_root_acceptance_is_distinct_from_bot_delivery(tmp_path, m
     await receive({**payload, "external_message_ids": [], "duplicate_suppressed": 1})
     assert telegram_delivery.get_attempt(attempt["attempt_id"])["status"] == "claimed"
     await receive(payload)
-    stored = json.loads(receipt_path.read_text(encoding="utf-8"))
-    assert stored["phase"] == "delivered" and stored["receipt"]["external_message_ids"] == ["903"]
-    await router._handle_notify_event(event)
+    stored = telegram_delivery.get_attempt(attempt["attempt_id"])
+    assert stored["status"] == "delivered" and stored["receipt"]["external_message_ids"] == ["903"]
+    await asyncio.to_thread(conversation_delivery.dispatch_once)
     assert len(sent) == 1
+    assert not (tmp_path / "state/router/builder-deliveries").exists()
+
+
+def _builder_claim(key, **overrides):
+    arguments = dict(hub_id="hub", routing_mode="hub_pairing", message_count=1,
+                     content_digest="sha256:" + hashlib.sha256(b"identical stage").hexdigest())
+    return telegram_delivery.claim_outbound(key, **{**arguments, **overrides})
+
+
+def _duplicate_ack(attempt):
+    return {"operation_key": attempt["operation_key"], "external_message_ids": [],
+            "duplicate_suppressed": 1, "transport": "telegram"}
+
+
+@pytest.mark.asyncio
+async def test_builder_duplicate_keeps_ack_separate_from_actual_delivery_and_preserves_reference(tmp_path):
+    original = _builder_claim("builder-notify:original")
+    telegram_delivery.complete_outbound(original["attempt_id"], delivered=True,
+        receipt={"operation_key": original["operation_key"], "external_message_ids": ["905"]})
+    duplicate = _builder_claim("builder-notify:duplicate")
+    telegram_delivery.complete_outbound(duplicate["attempt_id"], delivered=False, error="http_timeout")
+    router = RouterService(eventbus=LocalEventBus(), base_dir=tmp_path)
+    await router._on_telegram_delivery_receipt(Event(type="tg.delivery.receipt", source="io.nats", ts=1,
+        payload={"schema": "adaos.telegram.delivery_receipt.v1", "receipt_id": "duplicate.receipt",
+                 "delivery_attempt_id": duplicate["attempt_id"], "delivered": True,
+                 **_duplicate_ack(duplicate), "error": None, "completed_at": "2026-10-20T00:00:00Z"}))
+    stored = telegram_delivery.get_attempt(duplicate["attempt_id"])
+    # Equal text from a different operation is not proof of this delivery.
+    assert stored["status"] == "failed"
+    assert not stored.get("duplicate_of")
+    assert not (tmp_path / "state/router/builder-deliveries").exists()
+
+
+@pytest.mark.parametrize("overrides", [
+    {"hub_id": "other-hub"}, {"content_digest": "sha256:" + "0" * 64}, {"message_count": 2},
+])
+def test_builder_duplicate_cannot_borrow_receipt_from_different_route_or_content(overrides):
+    original = _builder_claim("builder-notify:proof", **overrides)
+    telegram_delivery.complete_outbound(original["attempt_id"], delivered=True,
+        receipt={"operation_key": original["operation_key"], "external_message_ids": ["906"]})
+    duplicate = _builder_claim("builder-notify:unproven")
+    with pytest.raises(telegram_delivery.TelegramDeliveryError, match="no matching proven"):
+        telegram_delivery.reconcile_builder_duplicate(duplicate["attempt_id"], receipt=_duplicate_ack(duplicate))
+    assert telegram_delivery.get_attempt(duplicate["attempt_id"])["status"] == "claimed"
+
+
+@pytest.mark.parametrize("patch", [{"operation_key": "wrong"}, {"duplicate_suppressed": 0},
+                                    {"external_message_ids": ["907"]}])
+def test_duplicate_ack_must_be_bound_and_actually_suppressed(patch):
+    duplicate = _builder_claim("builder-notify:invalid-ack")
+    with pytest.raises(telegram_delivery.TelegramDeliveryError, match="not bound"):
+        telegram_delivery.reconcile_builder_duplicate(duplicate["attempt_id"],
+            receipt={**_duplicate_ack(duplicate), **patch})
+
+
+def test_duplicate_reference_is_builder_only_and_requires_matching_receipt_operation():
+    original = _builder_claim("builder-notify:wrong-proof")
+    telegram_delivery.complete_outbound(original["attempt_id"], delivered=True,
+        receipt={"external_message_ids": ["908"]})
+    duplicate = _builder_claim("builder-notify:no-bound-proof")
+    with pytest.raises(telegram_delivery.TelegramDeliveryError, match="no matching proven"):
+        telegram_delivery.reconcile_builder_duplicate(duplicate["attempt_id"], receipt=_duplicate_ack(duplicate))
+    other = _builder_claim("tg-dialog:other")
+    with pytest.raises(telegram_delivery.TelegramDeliveryError, match="Only single Builder"):
+        telegram_delivery.reconcile_builder_duplicate(other["attempt_id"], receipt=_duplicate_ack(other))

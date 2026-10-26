@@ -4,28 +4,32 @@ import {spawnSync} from 'node:child_process'
 import {isExpectedFixtureRestartReadError as expected, isOptionalLocalDiscoveryRequest as discovery, fetchOwnedReadWithOneRetry as fetchRead} from './controlled-faults.mjs'
 
 test('a reset owned read recovers once and retains sanitized retry evidence', async () => {
+  for (const message of ['route.fetch: read ECONNRESET', 'route.fetch: socket hang up']) {
   for (const context of [{method:'GET'}, {method:'POST',tool:'natural_retouch_skill:run_state'}]) {
     let calls=0; const evidence=[]
     const result=await fetchRead(async()=>{
-      if (++calls===1) throw new Error('route.fetch: read ECONNRESET\nprivate transport headers')
+      if (++calls===1) throw new Error(message + '\nprivate transport headers')
       return 'owned response'
     },context,row=>evidence.push(row))
     assert.equal(result,'owned response');assert.equal(calls,2)
-    assert.deepEqual(evidence,[{...context,tool:context.tool,message:'route.fetch: read ECONNRESET'}])
+    assert.deepEqual(evidence,[{...context,tool:context.tool,message}])
+  }
   }
 })
 
 test('owned read recovery never repeats mutations or persistent faults', async () => {
+  for (const message of ['ECONNRESET', 'route.fetch: socket hang up']) {
   for (const tool of ['run_command','save_mask','adopt_result','upload_attachment','prepare_comparison']) {
     let calls=0
-    await assert.rejects(()=>fetchRead(async()=>{calls++;throw new Error('ECONNRESET')},
-      {method:'POST',tool:`natural_retouch_skill:${tool}`}),/ECONNRESET/)
+    await assert.rejects(()=>fetchRead(async()=>{calls++;throw new Error(message)},
+      {method:'POST',tool:`natural_retouch_skill:${tool}`}),new RegExp(message))
     assert.equal(calls,1)
   }
-  for (const message of ['ECONNRESET','Timeout','HTTP 500']) {
+  }
+  for (const message of ['ECONNRESET','route.fetch: socket hang up','Timeout','HTTP 500']) {
     let calls=0
     await assert.rejects(()=>fetchRead(async()=>{calls++;throw new Error(message)}, {method:'GET'}),new RegExp(message))
-    assert.equal(calls,message==='ECONNRESET'?2:1)
+    assert.equal(calls,/ECONNRESET|socket hang up/.test(message)?2:1)
   }
 })
 

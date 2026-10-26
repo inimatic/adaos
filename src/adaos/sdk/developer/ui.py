@@ -59,8 +59,11 @@ def select(
     *,
     limit: int = 8,
     domain_packs: Sequence[str] | None = None,
+    source_webui: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _selected_ui_capabilities(request, limit=limit, domain_packs=domain_packs)
+    return _selected_ui_capabilities(
+        request, limit=limit, domain_packs=domain_packs, source_webui=source_webui
+    )
 
 
 def validate(webui: Mapping[str, Any]) -> dict[str, Any]:

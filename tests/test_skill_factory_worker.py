@@ -302,6 +302,22 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert contract["failure"]["stable_attribute"] == "code"
 
 
+def test_implementation_sdk_contract_explains_existing_communication_ports():
+    bundle = worker_module._implementation_sdk_contract_bundle()
+    names = {item["name"] for item in bundle["contracts"]}
+    assert {"adaos.sdk.conversation.publish", "adaos.sdk.conversation.output_routes",
+        "adaos.sdk.conversation.select_output_routes", "adaos.sdk.conversation.communication_context",
+        "adaos.sdk.chat.request", "adaos.sdk.developer.conversational.compile_project"} <= names
+    contract = bundle["response_contracts"]["conversational_communication"]
+    from adaos.services.conversational_communication_contract import automation_contract
+    full = automation_contract()
+    assert {item["id"] for item in full["channels"]} == {"web", "telegram", "voice", "stdout"}
+    assert "Core alone" in full["runtime"]["receipt_lookup"]
+    assert "not_found" in full["runtime"]["receipt_lookup"]
+    assert contract["publish"]["status"] == "committed"
+    assert "output_policy_revision" in contract["select_output_routes"]["confirmation"]
+
+
 def test_preservable_feedback_unwraps_latest_structured_outcome(tmp_path: Path) -> None:
     run_root = tmp_path / "run"
     (run_root / "output").mkdir(parents=True)
@@ -466,6 +482,18 @@ def test_explicit_preserved_validation_forbids_model_fallback() -> None:
 
     with pytest.raises(ValueError, match="model fallback is forbidden"):
         _enforce_continuation_model_policy(checkpoint, "")
+
+
+def test_preserved_validation_fences_every_model_execution_including_repairs(tmp_path):
+    calls = []
+    worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=tmp_path,
+        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios",
+        executor=lambda **kwargs: calls.append(kwargs))
+    assignment = {"realize_request": {"artifacts": {"continuation_checkpoint": {"model_policy": "forbid"}}}}
+    with pytest.raises(ValueError, match="model execution is forbidden"):
+        worker._execute_codex(task_id="task.no-model", assignment=assignment,
+            workspace=tmp_path, prompt="repair validation failures", output_dir=tmp_path / "output")
+    assert calls == []
 
 
 def test_validation_repair_leads_with_failures_and_keeps_full_reference():
@@ -1748,6 +1776,104 @@ def test_projected_snapshot_activation_preserves_owner_artifacts(
         encoding="utf-8"
     ) == "owner evidence"
     assert (skill / "prompt_state.json").is_file()
+
+
+def test_skill_activation_syncs_only_explicitly_authorized_owned_ui_and_preserves_draft(tmp_path):
+    from adaos.services.builder.ui_change_authorization import admit_ui_change
+    state = tmp_path / "state"
+    skills, scenarios = tmp_path / "dev/skills", tmp_path / "dev/scenarios"
+    skill, scenario = skills / "owned", scenarios / "app"
+    skill.mkdir(parents=True)
+    scenario.mkdir(parents=True)
+    (skill / "skill.yaml").write_text("name: owned\nversion: 1.0.0\n", encoding="utf-8")
+    (scenario / "webui.json").write_text('{"schema":"adaos.webui.v1","ui":{"binding":"before"}}', encoding="utf-8")
+    (scenario / "ui_revisions").mkdir()
+    (scenario / "ui_revisions/002.json").write_text('{"draft":"unfinished"}', encoding="utf-8")
+    snapshot = capture_source_snapshot(state_dir=state, artifacts=[("skill", "owned", skill), ("scenario", "app", scenario)], created_at="2026-10-22T00:00:00Z")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    materialize_source_snapshot(state_dir=state, reference=snapshot, workspace=workspace)
+    (workspace / "scenarios/app/webui.json").write_text('{"schema":"adaos.webui.v1","ui":{"binding":"fixed"}}', encoding="utf-8")
+    authority = admit_ui_change({"reason":"Explicit user technical correction", "source_message_ids":["message:approval"]},
+        project_id="app", prototype_revision="sha256:"+hashlib.sha256((scenario / "webui.json").read_bytes()).hexdigest())
+    worker = LocalSkillFactoryWorker(state_dir=state, repo_root=tmp_path, dev_skills_root=skills, dev_scenarios_root=scenarios)
+    worker._sync_artifacts({"target":{"type":"skill","id":"owned"},"forge":{"source_snapshot":snapshot},
+        "constraints":{"ui_change_authorization":authority}}, workspace)
+    assert json.loads((scenario / "webui.json").read_text(encoding="utf-8"))["ui"]["binding"] == "fixed"
+    assert (scenario / "ui_revisions/002.json").read_text(encoding="utf-8") == '{"draft":"unfinished"}'
+
+
+@pytest.mark.parametrize("authorized,stale", [(True, False), (False, False), (True, True)])
+def test_skill_activation_retains_admitted_companion_descriptors_only(tmp_path, authorized, stale):
+    state = tmp_path / "state"
+    skills, scenarios = tmp_path / "dev/skills", tmp_path / "dev/scenarios"
+    names = ("owner", "companion", "read_only_dependency")
+    for name in names:
+        root = skills / name
+        root.mkdir(parents=True)
+        (root / "skill.yaml").write_text(f"name: {name}\nversion: 1.0.0\n", encoding="utf-8")
+        (root / "handler.py").write_text("# unchanged\n", encoding="utf-8")
+    snapshot = capture_source_snapshot(state_dir=state,
+        artifacts=[("skill", name, skills / name) for name in names], created_at="2026-10-23T00:00:00Z")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    materialize_source_snapshot(state_dir=state, reference=snapshot, workspace=workspace)
+    for name in names:
+        path = workspace / "skills" / name / "skill.yaml"
+        path.write_text(path.read_text(encoding="utf-8") + "read_policy: explicit\n", encoding="utf-8")
+    assignment = {"target": {"type": "skill", "id": "owner"},
+        "forge": {"source_snapshot": snapshot}, "constraints": {},
+        "realize_request": {"artifacts": {"companion_skill_ids": list(names[1:])}}}
+    if authorized:
+        assignment["constraints"]["companion_manifest_authorization"] = {
+            "schema": "adaos.builder.companion_manifest_authorization.v1",
+            "sources": {"companion": "sha256:" + hashlib.sha256((skills / "companion/skill.yaml").read_bytes()).hexdigest()}}
+    if stale:
+        (skills / "companion/skill.yaml").write_text("name: companion\nversion: 2.0.0\n", encoding="utf-8")
+    worker = LocalSkillFactoryWorker(state_dir=state, repo_root=tmp_path, dev_skills_root=skills, dev_scenarios_root=scenarios)
+    if stale:
+        with pytest.raises(SourceSnapshotError, match="companion descriptor changed"):
+            worker._sync_artifacts(assignment, workspace)
+        assert "read_policy" not in (skills / "owner/skill.yaml").read_text(encoding="utf-8")
+    else:
+        worker._sync_artifacts(assignment, workspace)
+        assert ("read_policy" in (skills / "companion/skill.yaml").read_text(encoding="utf-8")) is authorized
+        assert (skills / "companion/handler.py").read_text(encoding="utf-8") == "# unchanged\n"
+    assert "read_policy" not in (skills / "read_only_dependency/skill.yaml").read_text(encoding="utf-8")
+
+
+def test_continuation_base_uses_git_crlf_rules_without_normalizing_binary_evidence(tmp_path):
+    from adaos.services.skill_factory_worker import _git
+    previous, current = tmp_path / "previous", tmp_path / "current"
+    previous.mkdir()
+    current.mkdir()
+    (previous / "text.yaml").write_bytes(b"value: one\n")
+    (previous / "binary.dat").write_bytes(b"\x00\n")
+    worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=tmp_path,
+        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios")
+    worker._init_git_workspace(previous, "source")
+    _git(["config", "core.autocrlf", "true"], cwd=previous)
+    (current / "text.yaml").write_bytes(b"value: one\r\n")
+    (current / "binary.dat").write_bytes(b"\x00\r\n")
+    assert worker._candidate_base_matches_workspace(previous, current, ["text.yaml"])
+    assert not worker._candidate_base_matches_workspace(previous, current, ["binary.dat"])
+
+
+def test_origin_gate_uses_existing_conversational_compiler_and_cannot_ignore_failed_stories(tmp_path, monkeypatch):
+    from adaos.sdk.developer import conversational
+    root = tmp_path / "skills/owned"
+    root.mkdir(parents=True)
+    (root / "skill.yaml").write_text("name: owned\ntools:\n- name: read_routes\nconversational:\n  manifest: conversational/manifest.yaml\n", encoding="utf-8")
+    calls = []
+    def compile_package(path, **kwargs):
+        calls.append((path, kwargs))
+        return {"valid":False,"validation_report":{"diagnostics":[{"code":"story_failed"}]}}
+    monkeypatch.setattr(conversational, "compile_package", compile_package)
+    checks, errors = [], []
+    LocalSkillFactoryWorker._validate_conversational_packages(tmp_path, checks, errors)
+    assert calls == [(root, {"kind":"skill", "operation_catalog":{"owned":["read_routes"]}, "run_stories":True})]
+    assert checks[0]["authority"] == "origin_compiler" and checks[0]["ok"] is False
+    assert "story_failed" in errors[0]
 
 
 def test_projected_snapshot_activation_syncs_owning_project_manifest(
@@ -5421,7 +5547,7 @@ def test_large_scenario_inline_ui_diff_is_admitted_only_as_exact_webui_mirror(
         "schema": "adaos.scenario.v1",
         "id": "demo",
         "runtime": {"skills": {"required": ["demo_skill"]}},
-        "ui": {"application": copy.deepcopy(application)},
+        "ui": {"manifest": "webui.json", "application": copy.deepcopy(application)},
     }
     scenario_document["ui"]["application"]["version"] = "0.1"
     webui_document = {
@@ -5468,6 +5594,27 @@ def test_large_scenario_inline_ui_diff_is_admitted_only_as_exact_webui_mirror(
         baseline=baseline,
         path="scenarios/demo/scenario.json",
     )
+
+    # An explicit canonical manifest also permits dropping the competing copy.
+    scenario_document["runtime"]["skills"]["required"].remove("unexpected_skill")
+    scenario_document["ui"].pop("application")
+    scenario_path.write_text(json.dumps(scenario_document, indent=2), encoding="utf-8")
+    assert worker._is_exact_scenario_webui_mirror_edit(
+        workspace=workspace, baseline=baseline, path="scenarios/demo/scenario.json")
+    assignment={"realize_request":{"artifacts":{"execution_budget":{"max_wall_seconds":300}}}}
+    worker._validate_manifest_rewrite_bounds(assignment,["scenarios/demo/scenario.json"],workspace=workspace)
+
+    # That exemption does not waive bounds on the canonical UI itself.
+    webui_document["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = []
+    webui_path.write_text(json.dumps(webui_document, indent=2),encoding="utf-8")
+    with pytest.raises(ValueError,match="large declarative manifest rewrite"):
+        worker._validate_manifest_rewrite_bounds(assignment,
+            ["scenarios/demo/scenario.json","scenarios/demo/webui.json"],workspace=workspace)
+
+    scenario_document["ui"]["manifest"]="different.json"
+    scenario_path.write_text(json.dumps(scenario_document,indent=2),encoding="utf-8")
+    assert not worker._is_exact_scenario_webui_mirror_edit(
+        workspace=workspace,baseline=baseline,path="scenarios/demo/scenario.json")
 
 
 def test_bounded_task_admits_proportionate_semantic_webui_evolution(
@@ -6155,6 +6302,15 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         text=True,
     ).stdout.strip()
     assert receipt["core_commit"] == expected_commit
+    overlay = {entry['module']: entry for entry in receipt['public_facade_overlay']}
+    for module_name, function in [('adaos.sdk.builder.prototype', 'history'),
+                                  ('adaos.sdk.builder.workflow', 'get_lifecycle_state')]:
+        import ast
+        entry = overlay[module_name]
+        content = (snapshot / entry['path']).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == entry['sha256']
+        assert function in {node.name for node in ast.parse(content).body if isinstance(node, ast.FunctionDef)}
+    assert receipt['public_facade_source'] == 'loaded_core'
     assert "docs-stable/2027/cli/runtime.md" in receipt["included_roots"]
     assert (
         receipt["client_commit"]
@@ -7961,8 +8117,10 @@ def test_worker_requires_tool_effects_on_changed_skill_manifests(
     ]
 
 
+@pytest.mark.parametrize("changed_path", ["skills/demo/handlers/main.py", "skills/demo/skill.yaml"])
 def test_builder_records_tool_only_activation_assessment_from_handler_source(
     tmp_path: Path,
+    changed_path: str,
 ) -> None:
     workspace = tmp_path / "workspace"
     skill_root = workspace / "skills" / "demo"
@@ -7989,7 +8147,7 @@ def test_builder_records_tool_only_activation_assessment_from_handler_source(
 
     receipts = LocalSkillFactoryWorker._record_changed_skill_activation(
         workspace,
-        changed_paths={"skills/demo/handlers/main.py"},
+        changed_paths={changed_path},
     )
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     activation = manifest["runtime"]["activation"]
@@ -9473,6 +9631,10 @@ def test_worker_changed_paths_supports_single_commit_dirty_workspace(
     tracked.write_text("changed\n", encoding="utf-8")
     (workspace / "new.txt").write_text("new\n", encoding="utf-8")
 
+    scratch = workspace / ".tmp" / "test-artifacts"
+    scratch.mkdir(parents=True)
+    (scratch / "retouch.sqlite3").write_bytes(b"diagnostic-only")
+
     worker = object.__new__(LocalSkillFactoryWorker)
 
     assert worker._changed_from_baseline(workspace) == ["tracked.txt", "new.txt"]
@@ -9518,10 +9680,12 @@ def test_worker_changed_paths_differs_from_root_after_commit(tmp_path: Path) -> 
         "Codex token safety cap exceeded: observed 2031327 of 2000000 billable_tokens tokens.",
     ],
 )
+@pytest.mark.parametrize("scope_rejection", [False, True])
 def test_worker_restores_budget_stopped_candidate_for_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure_message: str,
+    scope_rejection: bool,
 ) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -9538,6 +9702,12 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
     previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
     worker._init_git_workspace(previous_workspace, "realize/source")
     previous_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    # A preserved workspace made by an older worker has no scratch exclusion.
+    # Diagnostics must not silently make its entire source candidate disappear.
+    (previous_workspace / ".git" / "info" / "exclude").write_text("", encoding="utf-8")
+    scratch = previous_workspace / ".tmp" / "native-review"
+    scratch.mkdir(parents=True)
+    (scratch / "retouch.sqlite3").write_bytes(b"retained diagnostic")
     continuation_contract = {
         "schema": "adaos.builder.continuation_contract.v1",
         "standard_prompt_version": "test/1",
@@ -9592,21 +9762,32 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
             "artifacts": {
                 "continuation_contract": continuation_contract,
                 "continuation_checkpoint": {
-                    "mode": "validate_preserved_candidate",
+                    "mode": "resume_preserved_candidate" if scope_rejection else "validate_preserved_candidate",
                     "source_task_id": source_task_id,
                     "failure_id": failure_id,
                     "continuation_contract": continuation_contract,
+                    "source_continuation_contract": continuation_contract,
                 },
             }
         },
     }
 
+    if scope_rejection:
+        def refuse(*args, **kwargs):
+            raise ValueError("Codex changed paths outside the task scope: ['foreign.py']")
+        monkeypatch.setattr(worker, "_validate_changed_paths", refuse)
+        with pytest.raises(ValueError, match="Preserved candidate restoration refused"):
+            worker._restore_continuation_candidate(assignment, workspace)
+        assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "baseline"
+        return
     restored = worker._restore_continuation_candidate(assignment, workspace)
 
     assert restored is not None
     assert restored["source_task_id"] == source_task_id
     assert restored["changed_paths"] == ["skills/demo/webui.json"]
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
+    assert not (workspace / ".tmp" / "native-review").exists()
+    assert (scratch / "retouch.sqlite3").read_bytes() == b"retained diagnostic"
 
 
 def test_worker_skips_candidate_already_absorbed_by_refreshed_snapshot(
@@ -9853,9 +10034,11 @@ def test_worker_resumes_blocking_feedback_from_materialized_snapshot(
     assert "Use runtime scope" in restored["blocking_feedback_message"]
 
 
-def test_worker_rejects_stale_materialized_snapshot(
+@pytest.mark.parametrize("refreshed_contract", [False, True])
+def test_worker_rejects_stale_materialized_snapshot_unless_new_contract_starts_fresh(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    refreshed_contract: bool,
 ) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -9929,6 +10112,13 @@ def test_worker_rejects_stale_materialized_snapshot(
         },
     }
 
+    if refreshed_contract:
+        updated_contract = {**contract, "sdk_contract_digest": "sha256:refreshed"}
+        assignment["realize_request"]["artifacts"]["continuation_contract"] = updated_contract
+        assignment["realize_request"]["artifacts"]["continuation_checkpoint"]["continuation_contract"] = updated_contract
+        assert worker._restore_continuation_candidate(assignment, workspace) is None
+        assert (workspace / "README.md").read_text(encoding="utf-8") == "candidate"
+        return
     with pytest.raises(ValueError, match="materialized continuation source snapshot is stale"):
         worker._restore_continuation_candidate(assignment, workspace)
 
@@ -9988,9 +10178,18 @@ def test_candidate_absorption_accepts_only_compiled_skill_activation(
     )
 
 
+@pytest.mark.parametrize(("continuation_mode", "current_value", "resumable"), [
+    ("validate_preserved_candidate", "different", False),
+    ("validate_preserved_candidate", "baseline", False),
+    ("resume_preserved_candidate", "different", False),
+    ("resume_preserved_candidate", "baseline", True),
+])
 def test_worker_rejects_divergent_candidate_after_snapshot_refresh(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    continuation_mode: str,
+    current_value: str,
+    resumable: bool,
 ) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -10035,24 +10234,30 @@ def test_worker_rejects_divergent_candidate_after_snapshot_refresh(
     workspace = tmp_path / "current"
     current_file = workspace / "skills" / "demo" / "webui.json"
     current_file.parent.mkdir(parents=True)
-    current_file.write_text("different", encoding="utf-8")
+    current_file.write_text(current_value, encoding="utf-8")
     worker._init_git_workspace(workspace, "realize/current")
     assignment = {
         "target": {"type": "skill", "id": "demo"},
-        "forge": {"source_snapshot": {"digest": "sha256:new"}},
+        "forge": {"source_snapshot": {"digest": "sha256:new"}, "sparse_paths": ["skills/demo/"]},
         "realize_request": {
             "artifacts": {
                 "continuation_contract": contract,
                 "continuation_checkpoint": {
-                    "mode": "validate_preserved_candidate",
+                    "mode": continuation_mode,
                     "source_task_id": source_task_id,
                     "failure_id": "failure.divergent",
                     "continuation_contract": contract,
+                    "source_continuation_contract": contract,
                 },
             }
         },
     }
 
+    if resumable:
+        restored = worker._restore_continuation_candidate(assignment, workspace)
+        assert restored and restored["changed_paths"] == ["skills/demo/webui.json"]
+        assert current_file.read_text(encoding="utf-8") == "candidate"
+        return
     with pytest.raises(ValueError, match="source snapshot is stale"):
         worker._restore_continuation_candidate(assignment, workspace)
 
@@ -10931,7 +11136,7 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
     assert bindings_path.resolve().as_posix() in prompt
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
     assert "never use `rg`" in prompt
-    assert "never search it with\n`rg`/`Select-String`" in prompt
+    assert "never print/search all" in prompt
 
 
 def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
@@ -12322,14 +12527,21 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert blueprint_packet["public_sdk_contracts_ref"] == (
         sdk_contracts_path.resolve().as_posix()
     )
-    assert sdk_contracts_path.resolve().as_posix() in prompt
-    assert "import failure there is not evidence" in prompt
+    index_path = tmp_path / "input-blueprint/task-input-index.json"
+    assert index_path.resolve().as_posix() in prompt
+    assert hashlib.sha256(index_path.read_bytes()).hexdigest() in prompt
+    sdk_input = next(item for item in json.loads(index_path.read_text(encoding="utf-8"))
+                     if item["name"] == "public-sdk-contracts.json")
+    assert sdk_input["path"] == sdk_contracts_path.resolve().as_posix()
+    assert sdk_input["sha256"] == hashlib.sha256(sdk_contracts_path.read_bytes()).hexdigest()
+    assert sdk_input["bytes"] == sdk_contracts_path.stat().st_size
+    assert "Core is absent in isolation; origin validates" in prompt
     assert "stateKey" in bindings["binding_rules"]["creation"]
     assert "click:dynamic" in bindings["binding_rules"]["dynamic_tabs"]
     assert bindings["examples"]["dynamic_tabs"]["inputs"]["fixedButtons"][0]["id"] == "add"
     assert "independent acceptance owns browser journeys" in prompt
-    assert "Explicitly mark checks not executed" in prompt
-    assert "These are implementation claims, not passing checks" in prompt
+    assert "Mark unexecuted checks" in prompt
+    assert "Claims are not acceptance" in prompt
     assert project_id not in bindings_path.read_text(encoding="utf-8")
     assert "Do not create custom CRUD handlers" not in prompt
     assert "Fresh installation starts with empty user data" in prompt

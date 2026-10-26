@@ -905,23 +905,32 @@ def submit_image_edit_job(*, request_id: str, model: str, prompt: str,
     Inputs are bounded inline references, never provider credentials or arbitrary
     remote URLs. Reuse request_id when recovering an uncertain submission.
     """
-    if not re.fullmatch(r"gpt-image-[a-z0-9.-]+", str(model or "")):
-        raise ValueError("An explicit GPT Image model is required")
     if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 200:
         raise ValueError("A bounded stable image request_id is required")
+    image = _validated_image_edit(model=model, prompt=prompt, images=images, mask=mask,
+        size=size, quality=quality, output_format=output_format, background=background)
+    return _submit_budgeted_root_job({"api": "images.edit", "model": model, "request_id": request_id, "image": image},
+        request_id=request_id, timeout=timeout, submit_started=time.perf_counter(),
+        spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
+
+
+def _validated_image_edit(*, model, prompt, images, mask=None, size="1024x1024", quality="high", output_format="png", background="opaque"):
+    """Pure validation shared by SDK preflight and the actual submission."""
+    if not re.fullmatch(r"gpt-image-[a-z0-9.-]+", str(model or "")):
+        raise ValueError("An explicit GPT Image model is required")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode("utf-8")) > 32000:
         raise ValueError("Image prompt must contain 1..32000 UTF-8 bytes")
-    modern = bool(re.match(r"^gpt-image-2(?:[.-]|$)", model))
+    from adaos.sdk.llm.images import edit_limits
+    limits = edit_limits(model)
+    modern = limits["custom_sizes"]
     dimensions = re.fullmatch(r"(\d+)x(\d+)", size)
     if size not in {"1024x1024", "1536x1024", "1024x1536"}:
         if not modern or dimensions is None:
             raise ValueError("Unsupported edit size")
         width, height = map(int, dimensions.groups())
-        if min(width, height) <= 0 or max(width, height) > 3840 or width % 16 or height % 16 or not 655360 <= width * height <= 8294400 or max(width, height) > 3 * min(width, height):
+        if min(width, height) <= 0 or max(width, height) > limits["max_edge"] or width % limits["dimension_multiple"] or height % limits["dimension_multiple"] or not limits["min_pixels"] <= width * height <= limits["max_pixels"] or max(width, height) > limits["max_aspect_ratio"] * min(width, height):
             raise ValueError("Edit size exceeds model pixel, edge or aspect limits")
-    qualities = {"low", "medium", "high"}
-    if model.startswith("gpt-image-2.5-"):
-        qualities |= {"xhigh", "max"}
+    qualities = set(limits["qualities"])
     if quality not in qualities or output_format not in {"png", "jpeg", "webp"} or background not in {"opaque", "transparent"} or (background == "transparent" and output_format == "jpeg"):
         raise ValueError("Invalid image edit output parameters")
     if not isinstance(images, list) or not 1 <= len(images) <= 16:
@@ -956,9 +965,7 @@ def submit_image_edit_job(*, request_id: str, model: str, prompt: str,
              "output_format": output_format, "background": background}
     if mask is not None:
         image["mask"] = mask
-    return _submit_budgeted_root_job({"api": "images.edit", "model": model, "request_id": request_id, "image": image},
-        request_id=request_id, timeout=timeout, submit_started=time.perf_counter(),
-        spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
+    return image
 
 
 def _submit_budgeted_root_job(payload, *, request_id, timeout, submit_started,

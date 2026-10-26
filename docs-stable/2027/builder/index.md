@@ -46,6 +46,8 @@ external users:
 
 ## Current Limits
 
+For beta layout and editor capabilities, see [Declarative workspaces and image layers](workspaces.md).
+
 - Builder is still a development workflow, not a general public app builder.
 - Internal implementation contracts and roadmaps are not part of this public
   documentation track.

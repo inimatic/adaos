@@ -639,6 +639,12 @@ class BootstrapBootCoordinator:
         except Exception:
             service._log.warning("failed to start scheduler", exc_info=True)
 
+        try:
+            from adaos.services.tool_continuations import start as start_continuations
+            await start_continuations(service.ctx)
+        except Exception:
+            service._log.warning("failed to start durable tool continuations", exc_info=True)
+
         # Optional: monitor asyncio event loop lag to catch blocking handlers (which can manifest as
         # WebSocket stalls/timeouts and cascading disconnects).
         try:

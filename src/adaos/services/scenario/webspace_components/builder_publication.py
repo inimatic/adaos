@@ -310,9 +310,13 @@ class WebspaceBuilderPublicationService:
             if not revision_token.isdigit():
                 raise ValueError(f"Builder prototype revision is unavailable: {revision}")
             root = operations.scenarios_loader.scenario_root_for_space(scenario_id, "dev")
-            revision_path = root / "ui_revisions" / f"{revision_token}.json"
+            revision_path = root / 'ui_revisions' / f'{revision_token}.json'
             try:
-                revision_payload = json.loads(revision_path.read_text(encoding="utf-8-sig"))
+                if revision_path.is_file():
+                    revision_payload = json.loads(revision_path.read_text(encoding='utf-8-sig'))
+                else:
+                    from adaos.sdk.builder.prototype import read_revision
+                    revision_payload = read_revision('scenario', scenario_id, revision_token)
             except (OSError, json.JSONDecodeError) as exc:
                 raise ValueError(
                     f"Builder prototype revision is unavailable: {revision}"

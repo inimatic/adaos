@@ -211,6 +211,31 @@ def test_shared_owner_recovers_from_immutable_legacy_slot_source(
     )
 
 
+def test_legacy_owner_parses_once_and_invalidates_by_exact_bytes(tmp_path, monkeypatch):
+    from adaos.services.skill import tool_contract
+
+    slot = tmp_path / "slot"
+    source = slot / "src" / "mail_provider"
+    source.mkdir(parents=True)
+    source_path = source / "skill.yaml"
+    source_path.write_text("name: mail_provider\nwebui_owner: shared\n", encoding="utf-8")
+    manifest_path = slot / "resolved.manifest.json"
+    manifest_path.write_text(json.dumps({"source": str(source)}), encoding="utf-8")
+    manager = type("Manager", (), {"runtime_status": lambda self, name: {"resolved_manifest": str(manifest_path)}})()
+    original = tool_contract.yaml.safe_load
+    parses = []
+    monkeypatch.setattr(tool_contract.yaml, "safe_load", lambda raw: parses.append(raw) or original(raw))
+
+    assert declared_skill_webui_owner(manager, skill_name="mail_provider", dev=False) == "shared"
+    assert declared_skill_webui_owner(manager, skill_name="mail_provider", dev=False) == "shared"
+    assert len(parses) == 1
+    source_path.write_text("name: mail_provider\nwebui_owner: application\n", encoding="utf-8")
+    assert declared_skill_webui_owner(manager, skill_name="mail_provider", dev=False) == "application"
+    assert len(parses) == 2
+    source_path.write_text("name: foreign_provider\nwebui_owner: shared\n", encoding="utf-8")
+    assert declared_skill_webui_owner(manager, skill_name="mail_provider", dev=False) == ""
+
+
 def test_shared_owner_does_not_fall_back_outside_selected_runtime_slot(
     tmp_path: Path,
 ) -> None:

@@ -21,6 +21,10 @@ class JourneyProfile:
 
 
 _PROFILES = (
+    JourneyProfile('natural-retouch.v6', 'natural_retouch', 'e2e/stand/qualify-retouch-browser.py', None,
+                   'Layered workbench, native coordinates, independent alpha, durable queue, request allowance and exports; synthetic matte/provider; live quality excluded'),
+    JourneyProfile('natural-retouch.v5', 'natural_retouch', 'e2e/stand/qualify-retouch-browser.py', None,
+                   'Direct workspace flow; real handlers/SQLite/CPU and durable queue with synthetic provider; live quality excluded'),
     JourneyProfile('natural-retouch.v4', 'natural_retouch', 'e2e/stand/qualify-retouch-browser.py', None,
                    'Real handlers/SQLite/CPU with synthetic provider; live image quality excluded'),
     JourneyProfile('knowledge-library.v1', 'knowledge_library', 'e2e/stand/browser/application-journey.mjs',
@@ -53,8 +57,9 @@ def profile_definition(*, repo_root, profile_id):
             raise ValueError('Registered platform plan has invalid obligation identities')
         return {'profile': dict(vars(profile)), 'obligations': identities, 'plan': document,
                 'cases': ['wide', 'compact']}
-    from .application_journeys import RETOUCH_OBLIGATIONS, RETOUCH_CASES
-    return {'profile': dict(vars(profile)), 'obligations': list(RETOUCH_OBLIGATIONS),
+    from .application_journeys import retouch_obligations, RETOUCH_CASES
+    obligations = retouch_obligations(profile_id)
+    return {'profile': dict(vars(profile)), 'obligations': list(obligations),
             'cases': list(RETOUCH_CASES), 'plan': None}
 
 
@@ -110,11 +115,31 @@ def evaluate_registered_application(*, scenario_id, **context):
     """Existing Retouch owner behind the registry; other targets need explicit admission."""
     if scenario_id != 'natural_retouch':
         return None
-    get_profile('natural-retouch.v4')
+    profile_id = retouch_profile_for_sources(context.get('implementation_paths', ()))
+    get_profile(profile_id)
     from .application_journeys import evaluate_retouch
-    return evaluate_retouch(scenario_id=scenario_id, **context)
+    return evaluate_retouch(scenario_id=scenario_id, profile_id=profile_id, **context)
+
+
+def retouch_profile_for_sources(paths):
+    """Choose only a Core-owned contract; a candidate cannot name its runner."""
+    import yaml
+    expected = {'workspace_query': 'handlers.workspace:workspace_query',
+                'workspace_command': 'handlers.workspace:workspace_command',
+                'workspace_run': 'handlers.workspace:workspace_run',
+                'workspace_draft': 'handlers.workspace:workspace_draft'}
+    sources = [Path(p) for p in paths if Path(p).name == 'natural_retouch_skill']
+    if len(sources) == 1:
+        try:
+            manifest = yaml.safe_load((sources[0] / 'skill.yaml').read_text(encoding='utf-8'))
+            tools = {row['name']: row.get('entry') for row in manifest.get('tools', [])}
+            if all(tools.get(name) == entry for name, entry in expected.items()):
+                return 'natural-retouch.v6'
+        except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError):
+            pass
+    return 'natural-retouch.v5'
 
 
 def automatic_profile_for(scenario_id):
     # TEST plan profiles require their own retained ownership checkpoint.
-    return get_profile('natural-retouch.v4') if scenario_id == 'natural_retouch' else None
+    return get_profile('natural-retouch.v5') if scenario_id == 'natural_retouch' else None

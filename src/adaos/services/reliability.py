@@ -8917,6 +8917,9 @@ def reliability_snapshot(
     skill_env_io_guard = _skill_env_io_guard_runtime_snapshot()
     workspace_persistence = _workspace_persistence_runtime_snapshot()
     sqlite_connections = _sqlite_connection_runtime_snapshot()
+    from adaos.services.conversation_delivery import runtime_snapshot as delivery_snapshot
+
+    conversation_delivery = delivery_snapshot()
     incidents = incident_registry_snapshot(limit=50, include_evidence=True)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
@@ -8969,6 +8972,7 @@ def reliability_snapshot(
             "skill_env_io_guard": skill_env_io_guard,
             "workspace_persistence": workspace_persistence,
             "sqlite_connections": sqlite_connections,
+            "conversation_delivery": conversation_delivery,
             "incident_registry": incidents,
             "media_runtime": media_runtime,
             "supervisor_runtime": supervisor_runtime,

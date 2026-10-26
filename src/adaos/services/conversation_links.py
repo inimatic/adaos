@@ -136,23 +136,30 @@ def ensure_builder_conversation(webspace_id: str | None = None) -> dict[str, Any
     stored = False
     try:
         if conversation_store.ensure_schema():
+            existing = conversation_store.get_conversation(cid)
+            # A legacy generic ingress may already own this identifier. Never
+            # take over that conversation or merge its messages into Builder.
+            scoped = bool(existing and existing.get("owner") != BUILDER_OWNER)
+            if scoped:
+                cid = f"{BUILDER_CONVERSATION_ID}.{ws}"
             conversation_store.upsert_conversation(
                 conversation_id=cid,
-                webspace_id="global",
+                webspace_id=ws if scoped else "global",
                 owner=BUILDER_OWNER,
                 kind="builder",
                 title="Builder",
                 meta={
                     "channel_id": BUILDER_CHANNEL_ID,
                     "surface": "builder",
-                    "scope": "global",
+                    "scope": "webspace" if scoped else "global",
                     "topic_contract": "project",
                 },
             )
-            conversation_store.merge_conversations_by_prefix(
-                prefix=f"{BUILDER_CONVERSATION_ID}.",
-                target_conversation_id=cid,
-            )
+            if not scoped:
+                conversation_store.merge_conversations_by_prefix(
+                    prefix=f"{BUILDER_CONVERSATION_ID}.",
+                    target_conversation_id=cid,
+                )
             conversation_store.upsert_dialog_channel(
                 webspace_id=ws,
                 channel_id=BUILDER_CHANNEL_ID,

@@ -16,6 +16,7 @@ from adaos.services.artifact_pipeline.storage import (
 
 SOURCE_SNAPSHOT_SCHEMA = "adaos.skill_factory.source_snapshot.v1"
 _IGNORED_DIRS = {
+    ".tmp",
     ".builder_current_publication",
     ".builder_previous_automation",
     ".git",
@@ -45,12 +46,25 @@ _IGNORED_FILES = {
     "skill_prompt.md",
 }
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
+# Authoring history/state is not model input and is not owned by source activation.
+# Caches and generated context attachments deliberately remain outside this set.
+PRESERVED_AUTHORING_PATHS = frozenset({"ui_revisions", "llm_jobs", "prep", "tz", *_IGNORED_FILES})
 _RESERVED_PROJECT_INPUT_DIRS = {"artifacts"}
 _SNAPSHOT_ARCHIVE = "payload.zip"
 
 
 class SourceSnapshotError(RuntimeError):
     pass
+
+
+def is_ephemeral_workfile(value: str) -> bool:
+    """Recognize disposable untracked diagnostics, without hiding tracked edits."""
+    path = PurePosixPath(str(value).replace("\\", "/"))
+    return bool(path.parts) and (
+        path.parts[0] == ".tmp"
+        or any(part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"} for part in path.parts)
+        or path.suffix.lower() in {".pyc", ".pyo"}
+    )
 
 
 def _safe_relative(value: Any) -> str:

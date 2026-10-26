@@ -16,6 +16,7 @@ from pathlib import Path
 import time
 import sys
 import uuid
+from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
@@ -26,6 +27,17 @@ from adaos.services.builder.spend_ledger import BuilderSpendLedger
 
 def digest(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def synthetic_qa_checks(keys, schema):
+    """Keep synthetic responses compatible with the recorded request schema."""
+    declarations = schema.get("properties", {}).get("checks", {}).get("properties", {})
+    checks = {}
+    for key in keys:
+        checks[key] = {"verdict": "pass", "reason": "SYNTHETIC fixture verdict, no visual quality assertion"}
+        if "subject_presence" in declarations.get(key, {}).get("required", []):
+            checks[key]["subject_presence"] = "unknown"
+    return checks
 
 
 class RetouchFixture:
@@ -57,6 +69,18 @@ class RetouchFixture:
         self.module.runtime_store = lambda permission: self.store
         self.module.active_budget = lambda: self.ledger.snapshot(self.module.pipeline.SPEND_SCOPE)
         self.module.pipeline.SDKBroker = lambda: self
+        # The real durable queue is exercised against owned fixture data. Only
+        # its ingress/provider/access boundary is substituted in this process.
+        resolved = self.root / "resolved.manifest.json"
+        import yaml
+        declaration = yaml.safe_load((source / "skill.yaml").read_text(encoding="utf-8")) or {}
+        resolved.write_text(json.dumps({"source": str(self.source), "tools": {
+            row["name"]: row for row in declaration.get("tools", [])
+        }}), encoding="utf-8")
+        self.continuation_ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: self.root / "state"))
+        self.continuation_manager = SimpleNamespace(
+            runtime_status=lambda skill: {"resolved_manifest": str(resolved)},
+            dev_runtime_status=lambda skill: {"resolved_manifest": str(resolved)})
 
     def install_blob_boundary(self):
         """Install only inside the dedicated fixture server process."""
@@ -68,6 +92,16 @@ class RetouchFixture:
         blob.store = Blob
         blob.read_bytes = lambda ref, logical_name, **kwargs: self.read_blob(ref, logical_name)
         blob.put_upload = lambda logical: self.publish("fixture-upload", self.upload.get()[0], self.upload.get()[1], logical)
+        from adaos.sdk import access
+        from adaos.services import tool_continuations
+        access.require = lambda capability: {"decision": "allow", "source": "owned-test-boundary"}
+
+        async def fixture_dispatch(ctx, binding):
+            if ctx is not self.continuation_ctx:
+                raise ValueError("fixture_continuation_owner_mismatch")
+            body = binding["body"]
+            await self.call(body["tool"].split(":", 1)[1], body["arguments"], body=body)
+        tool_continuations._dispatch = fixture_dispatch
 
     def publish(self, filename, raw, mime, logical="exports"):
         identity = digest(raw)
@@ -96,6 +130,12 @@ class RetouchFixture:
                 "data_url": self.module.pipeline.data_url(raw, "image/jpeg")}
 
     def submit(self, kind, request):
+        if kind != "edit":
+            # The provider double must not accept requests the public SDK
+            # rejects before transport (for example, an omitted purpose).
+            import inspect
+            from adaos.sdk.llm import content
+            inspect.signature(content.generate).bind(**request)
         identity = request["request_id"]
         raw_request = self.module.dumps(request)
         try:
@@ -121,14 +161,20 @@ class RetouchFixture:
             # The fixture blemish lies inside the native (top-left) crop,
             # rather than the padding added for an API canvas minimum.
             image.putpixel((min(100, image.width // 2), min(100, image.height // 2)), (161, 101, 91))
+            # Deliberately modify a red-protected pixel as well. Raw inspection
+            # must expose it; explicit mask composition must restore it exactly.
+            image.putpixel((50, 50), (71, 181, 91))
             raw = self.module.pipeline.encoded(image)
             self.publish(identity + ".png", raw, "image/png")
             response["media"] = {"sha256": digest(raw)[7:], "width": image.width, "height": image.height,
                                   "content_ref": "generated-image:" + digest(raw)[7:]}
         elif kind == "qa":
-            response["data"] = {"passed": True, "issues": [], "checks": {
-                key: {"verdict": "pass", "reason": "SYNTHETIC fixture verdict, no visual quality assertion"}
-                for key in self.module.pipeline.QA_CHECKS}}
+            response["data"] = {"passed": True, "issues": [], "checks":
+                synthetic_qa_checks(self.module.pipeline.QA_CHECKS, request.get("schema", {}))}
+        elif kind == "mask_advice":
+            response["data"] = {"summary": "SYNTHETIC mask suggestion; no visual quality assertion", "regions": [
+                {"points": [{"x": .5, "y": .5}], "radius": .05,
+                 "reason": "SYNTHETIC fixture region for editable overlay verification", "confidence": .8}]}
         else: raise ValueError("unknown_fixture_phase")
         with self.store.connect() as db:
             db.execute("INSERT INTO fixture_jobs(request_id,kind,input_digest,request,response) VALUES(?,?,?,?,?)",
@@ -156,28 +202,64 @@ class RetouchFixture:
             row = db.execute("SELECT response FROM fixture_jobs WHERE request_id=? AND kind='edit'", (identity,)).fetchone()
         return self.read_blob("sha256:" + json.loads(row[0])["media"]["sha256"], "exports")
 
-    async def call(self, name, arguments):
+    def function_for(self, name):
         if name not in {"query_records", "mutate_record", "save_mask", "run_command", "run_state", "comparison",
                         "adopt_result", "adoption_status", "upload_attachment", "read_attachment", "prepare_comparison",
-                        "review_result", "recover_submission"}:
+                        "review_result", "recover_submission", "prepare_gallery", "suggest_masks",
+                        "mask_suggestion_state", "recover_delivery"}:
             raise ValueError("undeclared_fixture_tool")
-        function = getattr(self.module, name)
-        return await function(**arguments)
+        return getattr(self.module, name)
+
+    async def call(self, name, arguments, *, body=None):
+        function = self.function_for(name)
+        from adaos.apps.api.tool_bridge import ToolCall
+        from adaos.domain.personalization_access import SubjectRef
+        from adaos.services.policy.caller import verified_caller
+        from adaos.services.policy.invocation import verified_invocation
+        from adaos.services.tool_continuations import admitted_tool
+        intent = dict(body or {})
+        intent.setdefault("tool", "natural_retouch_skill:" + name)
+        intent.setdefault("arguments", arguments)
+        intent.setdefault("request_id", "fixture:" + uuid.uuid4().hex)
+        intent.setdefault("idempotency_key", intent["request_id"])
+        descriptor = ToolCall(**intent)
+        request = Request({"type": "http", "headers": []})
+        with verified_caller(SubjectRef("user", "owned-fixture")), verified_invocation(
+                request_id=descriptor.request_id, idempotency_key=descriptor.idempotency_key):
+            with admitted_tool(self.continuation_ctx, self.continuation_manager, descriptor, request,
+                               mutating=name not in {"query_records", "run_state", "comparison", "read_attachment", "adoption_status", "mask_suggestion_state", "workspace_query"}):
+                return await function(**arguments)
 
     def audit(self):
         with self.store.connect() as db:
-            jobs = [dict(row) for row in db.execute("SELECT request_id,kind,input_digest,polls,submits FROM fixture_jobs ORDER BY rowid")]
+            jobs = []
+            for row in db.execute("SELECT request_id,kind,input_digest,polls,submits,request FROM fixture_jobs ORDER BY rowid"):
+                item = dict(row)
+                request = json.loads(item.pop("request"))
+                if item["kind"] == "edit": item["edit_prompt"] = request.get("prompt", "")
+                jobs.append(item)
             calls = [dict(row) for row in db.execute("SELECT * FROM fixture_calls ORDER BY seq")]
             runs = []
             for row in db.execute("SELECT id,revision,body FROM records WHERE kind='runs' ORDER BY rowid"):
                 run = {**json.loads(row["body"]), "id": row["id"], "revision": row["revision"]}
                 runs.append({**{key: run.get(key) for key in ("id", "photo_id", "revision", "status", "stage", "plan_revision", "plan_audit", "checks", "approved", "qa", "cost")},
                     "snapshot_digest": digest(self.module.dumps(run["snapshot"]).encode()),
+                    "mask": run["snapshot"]["mask"],
+                    "goal": run["snapshot"]["settings"].get("target_area"),
                     "jobs": {phase: {key: job.get(key) for key in ("request_id", "status", "error")}
                              for phase, job in run.get("jobs", {}).items()}})
+        from adaos.services.tool_continuations import _connect, _database
+        with _connect(_database(self.continuation_ctx)) as db:
+            continuations = []
+            for row in db.execute("SELECT id,key,status,attempts,error,binding FROM continuations"):
+                item = dict(row)
+                binding = json.loads(item.pop("binding"))
+                item["photo_id"] = binding["body"].get("arguments", {}).get("photo_id")
+                item["request_id"] = binding["identity"].get("request_id")
+                continuations.append(item)
         return {"schema": "adaos.e2e.retouch_fixture_audit.v1", "source_digest": self.source_digest,
                 "scope": "fixture handlers + SQLite + Client; Core authorization and provider quality excluded",
-                "external_model_calls": 0, "jobs": jobs, "calls": calls, "runs": runs,
+                "external_model_calls": 0, "jobs": jobs, "calls": calls, "runs": runs, "continuations": continuations,
                 "environment": {"python": sys.version.split()[0], "platform": sys.platform,
                                 "pillow": Image.__version__, "numpy": self.module.imaging.np.__version__},
                 "budget": self.ledger.snapshot(self.module.pipeline.SPEND_SCOPE)}
@@ -185,6 +267,15 @@ class RetouchFixture:
 
 def fixture_app(owner: RetouchFixture) -> FastAPI:
     app = FastAPI()
+    @app.on_event("startup")
+    async def start_continuations():
+        from adaos.services.tool_continuations import start
+        await start(owner.continuation_ctx)
+
+    @app.on_event("shutdown")
+    async def stop_continuations():
+        from adaos.services.tool_continuations import stop
+        await stop(owner.continuation_ctx)
     @app.middleware("http")
     async def boundary(request: Request, call_next):
         if request.headers.get("X-Retouch-Fixture-Token") != owner.token:
@@ -200,7 +291,7 @@ def fixture_app(owner: RetouchFixture) -> FastAPI:
         tool = str(body.get("tool") or "")
         if not tool.startswith("natural_retouch_skill:"): raise HTTPException(400, "fixture_tool_owner_mismatch")
         try:
-            result = await owner.call(tool.split(":", 1)[1], body.get("arguments") or {})
+            result = await owner.call(tool.split(":", 1)[1], body.get("arguments") or {}, body=body)
             return {"ok": True, "result": result, "trace_id": "fixture:" + uuid.uuid4().hex}
         except (KeyError, ValueError) as exc: return {"ok": False, "error": str(exc)}
 
@@ -216,11 +307,12 @@ def fixture_app(owner: RetouchFixture) -> FastAPI:
         finally: owner.upload.reset(token)
 
     @app.get("/api/tools/natural_retouch_skill/read_attachment/attachments/{logical}/{identity}/{filename}")
-    async def attachment(logical: str, identity: str, filename: str):
+    async def attachment(logical: str, identity: str, filename: str, download: bool = False):
         await owner.call("read_attachment", {"ref": "sha256:" + identity})
         raw = owner.read_blob("sha256:" + identity, logical)
         mime = "image/png" if raw.startswith(b"\x89PNG") else "image/jpeg"
-        return Response(raw, media_type=mime, headers={"Content-Disposition": f'inline; filename="{filename}"'})
+        disposition='attachment' if download else 'inline'
+        return Response(raw, media_type=mime, headers={"Content-Disposition": f'{disposition}; filename="{filename}"'})
 
     @app.post("/control")
     async def control(request: Request):

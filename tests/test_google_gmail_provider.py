@@ -150,14 +150,15 @@ def _application(application_id: str = "gmail_mail_client") -> Application:
 
 
 def _release(
-    service: ApplicationService, application_id: str = "gmail_mail_client"
+    service: ApplicationService, application_id: str = "gmail_mail_client", *, provider_id: str = "google.gmail"
 ) -> ApplicationRelease:
+    drive = provider_id == "google.drive"
     profile = ApplicationPermissionProfile.from_mapping(
         {
             "schema": "adaos.application.permission_profile.v1",
             "required": [
                 {
-                    "id": "providers.google.gmail",
+                    "id": "providers." + provider_id,
                     "purpose": "Use the connected Gmail account.",
                     "approval_policy": "explicit",
                 }
@@ -165,14 +166,14 @@ def _release(
             "optional": [],
             "external_providers": [
                 {
-                    "id": "google.gmail",
-                    "account_id": "google.gmail",
+                    "id": provider_id,
+                    "account_id": provider_id,
                     "title": "Gmail account",
                     "purpose": "Read and manage mail requested by the user.",
                     "required": True,
-                    "destination": "gmail.googleapis.com",
+                    "destination": "www.googleapis.com" if drive else "gmail.googleapis.com",
                     "account_modes": ["delegated_user"],
-                    "scopes": [GMAIL_MODIFY_SCOPE],
+                    "scopes": ["https://www.googleapis.com/auth/drive.readonly" if drive else GMAIL_MODIFY_SCOPE],
                 }
             ],
         }

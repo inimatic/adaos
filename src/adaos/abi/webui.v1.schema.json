@@ -631,6 +631,8 @@
         "visual.qrCode",
         "feedback.log",
         "feedback.statusBar",
+        "feedback.taskProgress",
+        "layout.group",
         "static.markdown",
         "ui.chat",
         "ui.voiceInput",
@@ -861,6 +863,9 @@
         "title": { "type": "string" },
         "area": { "type": "string", "description": "Optional default area when pinned as a widget." },
         "dataSource": { "$ref": "#/$defs/dataSource" },
+        "children": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/widgetConfig" } },
+        "slot": { "enum": ["header", "body", "footer"] },
+        "sizing": { "enum": ["content", "fill"] },
         "inputs": { "type": "object", "additionalProperties": true },
         "actions": { "$ref": "#/$defs/actionList" },
         "load": { "$ref": "#/$defs/loadHint" },
@@ -1007,7 +1012,11 @@
               "inputs": { "$ref": "#/$defs/toggleInputs" }
             }
           }
-        }
+        },
+        {"if": {"properties": {"type": {"const": "visual.imageCompare"}}}, "then": {"properties": {"inputs": {"$ref": "#/$defs/imageCompareInputs"}}}},
+        {"if": {"properties": {"type": {"const": "layout.group"}}}, "then": {"properties": {"inputs": {"$ref": "#/$defs/groupInputs"}}}},
+        {"if": {"properties": {"type": {"const": "feedback.taskProgress"}}}, "then": {"properties": {"inputs": {"$ref": "#/$defs/taskProgressInputs"}}}},
+        {"if": {"not": {"properties": {"type": {"const": "layout.group"}}}}, "then": {"not": {"required": ["children"]}}}
       ]
     },
 
@@ -1334,7 +1343,9 @@
         "minPx": { "type": "integer", "minimum": 160, "maximum": 1600 },
         "preferredPx": { "type": "integer", "minimum": 160, "maximum": 1600 },
         "maxPx": { "type": "integer", "minimum": 160, "maximum": 2400 },
-        "grow": { "type": "number", "minimum": 0, "maximum": 8 }
+        "grow": { "type": "number", "minimum": 0, "maximum": 8 },
+        "resizable": { "type": "boolean" },
+        "remember": { "type": "boolean", "description": "Remember presentation width per subnet, surface scope, page, layout variant and region. Never restores actions or business state." }
       }
     },
     "layoutRegionPresentation": {
@@ -1372,6 +1383,9 @@
         "area": { "type": "string", "minLength": 1 },
         "title": { "type": "string" },
         "dataSource": { "$ref": "#/$defs/dataSource" },
+        "children": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/widgetConfig" } },
+        "slot": { "enum": ["header", "body", "footer"] },
+        "sizing": { "enum": ["content", "fill"] },
         "inputs": { "type": "object", "additionalProperties": true },
         "actions": { "$ref": "#/$defs/actionList" },
         "load": { "$ref": "#/$defs/loadHint" },
@@ -1478,8 +1492,159 @@
         {
           "if": { "properties": { "type": { "const": "disclosure.accordion" } } },
           "then": { "properties": { "inputs": { "$ref": "#/$defs/accordionInputs" } } }
-        }
+        },
+        {"if": {"properties": {"type": {"const": "visual.imageCompare"}}}, "then": {"properties": {"inputs": {"$ref": "#/$defs/imageCompareInputs"}}}},
+        {"if": {"properties": {"type": {"const": "layout.group"}}}, "then": {"properties": {"inputs": {"$ref": "#/$defs/groupInputs"}}}},
+        {"if": {"properties": {"type": {"const": "feedback.taskProgress"}}}, "then": {"properties": {"inputs": {"$ref": "#/$defs/taskProgressInputs"}}}},
+        {"if": {"not": {"properties": {"type": {"const": "layout.group"}}}}, "then": {"not": {"required": ["children"]}}}
       ]
+    },
+
+    "imageCompareInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pairKey": {
+          "type": "string"
+        },
+        "originalKey": {
+          "type": "string"
+        },
+        "resultKey": {
+          "type": "string"
+        },
+        "sourceIdKey": {
+          "type": "string"
+        },
+        "sourceRevisionKey": {
+          "type": "string"
+        },
+        "noticeKey": {
+          "type": "string"
+        },
+        "editorStateKey": {
+          "type": "string"
+        },
+        "editorCommandStateKey": {
+          "type": "string"
+        },
+        "brushRadiusStateKey": {
+          "type": "string"
+        },
+        "dirtyStateKey": {
+          "type": "string"
+        },
+        "downloadFilename": {
+          "type": "string"
+        },
+        "layoutGroup": {
+          "type": "string"
+        },
+        "loadingText": {
+          "type": "string"
+        },
+        "editableMasks": {
+          "type": "boolean"
+        },
+        "maskToolbar": {
+          "type": "boolean"
+        },
+        "showMaskSaveButton": {
+          "type": "boolean"
+        },
+        "original": {
+          "type": [
+            "string",
+            "object",
+            "null"
+          ]
+        },
+        "result": {
+          "type": [
+            "string",
+            "object",
+            "null"
+          ]
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "groupInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "layout": {
+          "enum": [
+            "row",
+            "stack",
+            "grid",
+            "section",
+            "disclosure"
+          ]
+        },
+        "gap": {
+          "enum": [
+            "none",
+            "xs",
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        "columns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "minItemWidthPx": {
+          "type": "integer",
+          "minimum": 80,
+          "maximum": 800
+        },
+        "wrap": {
+          "type": "boolean"
+        },
+        "expanded": {
+          "type": "boolean"
+        },
+        "expandedStateKey": {
+          "type": "string"
+        },
+        "headingLevel": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 6
+        },
+        "layoutGroup": {
+          "type": "string"
+        }
+      }
+    },
+    "taskProgressInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "taskKey": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "layoutGroup": {
+          "type": "string"
+        },
+        "loadingText": {
+          "type": "string"
+        }
+      }
     },
 
     "prototypeMcpFixture": {
@@ -1584,6 +1749,11 @@
           "type": "string",
           "enum": ["immediate", "materialization_ready"],
           "description": "Controls whether a runtime read starts immediately or after authoritative YDoc materialization is ready."
+        },
+        "readPriority": {
+          "type": "string",
+          "enum": ["normal", "interactive"],
+          "description": "Queue interactive surface reads ahead of pending background reads while preserving the bounded single read lane."
         },
         "value": {},
         "resource": {

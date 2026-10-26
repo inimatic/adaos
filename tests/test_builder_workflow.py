@@ -2171,6 +2171,7 @@ def test_change_run_ledger_is_externalized_and_hydrated(
     assert stored_change["runs"] == []
     assert stored_change["runs_external"] == {
         "schema": "adaos.builder.change_runs_external.v1",
+        "content_addressed": True,
         "digest": _stable_digest({"runs": runs}),
         "count": len(runs),
     }
@@ -2182,6 +2183,7 @@ def test_change_run_ledger_is_externalized_and_hydrated(
         "scenario",
         "recipes",
         change["change_id"],
+        digest=stored_change['runs_external']['digest'],
     )
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     ledger["runs"][0]["status"] = "failed"
@@ -2227,6 +2229,7 @@ def test_governed_ledger_is_externalized_and_hydrated(
     assert workflow["governed"]["idempotency"] == []
     assert workflow["governed_ledger_external"] == {
         "schema": "adaos.builder.governed_ledger_external.v1",
+        "content_addressed": True,
         "digest": _stable_digest({"history": history, "idempotency": idempotency}),
         "history_count": len(history),
         "idempotency_count": len(idempotency),
@@ -2239,12 +2242,55 @@ def test_governed_ledger_is_externalized_and_hydrated(
         "scenario",
         "recipes",
         "CH-governed-ledger",
+        digest=workflow['governed_ledger_external']['digest'],
     )
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     ledger["history"][0]["transition_id"] = "tampered"
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
     with pytest.raises(BuilderWorkflowError, match="identity differs"):
         service._read_state("scenario", "recipes")
+
+
+def test_large_compatibility_history_is_immutable_and_keeps_state_bounded(workflow_project):
+    service, root = workflow_project
+    history=[{'generation':i,'metadata':{'request':'context '+str(i)+'x'*6000}} for i in range(45)]
+    state={'base_tz':'b'*120000,'workflow':{'history':history}}
+    service._write_state('scenario','recipes',state)
+    persisted=json.loads((root/'prompt_state.json').read_text(encoding='utf-8'))
+    first=persisted['workflow']['history_external']
+    assert persisted['workflow']['history']==[]
+    assert (root/'prompt_state.json').stat().st_size<512*1024
+    assert service._read_state('scenario','recipes')['workflow']['history']==history
+    state['workflow']['history']=[*history,{'generation':46,'metadata':{'request':'next'}}]
+    service._write_state('scenario','recipes',state)
+    second=json.loads((root/'prompt_state.json').read_text(encoding='utf-8'))['workflow']['history_external']
+    assert first['ref']!=second['ref']
+    from adaos.services.context_control import ContextControlService
+    assert ContextControlService(state_dir=service.state_dir).get_artifact(first['ref'])['history']==history
+    persisted['workflow']['history_external']=second
+    persisted['workflow']['history_external']['count']+=1
+    (root/'prompt_state.json').write_text(json.dumps(persisted),encoding='utf-8')
+    with pytest.raises(BuilderWorkflowError,match='history identity differs'):
+        service._read_state('scenario','recipes')
+
+
+def test_failed_main_state_write_preserves_committed_ledgers_and_portfolio(workflow_project):
+    service, root = workflow_project
+    state = {"workflow": {"change": {"change_id": "CH-atomic", "runs": [{"run_id": "first"}]},
+                          "governed": {"instance_id": "instance", "history": [{"event": "first"}],
+                                       "idempotency": [{"key": "first"}]}}}
+    service._write_state("scenario", "recipes", state)
+    committed = (root / "prompt_state.json").read_bytes()
+    original = service._read_state("scenario", "recipes")
+    changed = service._read_state("scenario", "recipes")
+    changed["workflow"]["change"]["runs"].append({"run_id": "second"})
+    changed["workflow"]["governed"]["history"].append({"event": "second"})
+    changed["workflow"]["governed"]["idempotency"].append({"key": "second"})
+    changed["base_tz"] = "x" * (512 * 1024)
+    with pytest.raises(BuilderWorkflowError, match="bounded state size"):
+        service._write_state("scenario", "recipes", changed)
+    assert (root / "prompt_state.json").read_bytes() == committed
+    assert service._read_state("scenario", "recipes") == original
 
 
 def test_context_packet_execution_scope_excludes_unrelated_change_history(
@@ -3925,6 +3971,48 @@ def test_archived_project_cannot_transition(
 
     with pytest.raises(BuilderWorkflowError, match="archived projects"):
         service.transition("scenario", "recipes", "stabilize_prototype")
+
+
+@pytest.mark.parametrize("status", ["working", "failed"])
+def test_preview_tracks_retained_snapshot_during_incomplete_finalization(workflow_project, status):
+    service, _root = workflow_project
+    state = service._read_state("scenario", "recipes")
+    state["workflow"] = service._normalized_workflow(state, object_type="scenario", object_id="recipes")
+    state["workflow"]["active_phase"] = "automation"
+    state["workflow"]["automation"] = {
+        "status": status, "head_task_id": "task.next",
+        "snapshot_task_id": "task.previous", "result_version": "old",
+    }
+    service._write_state("scenario", "recipes", state)
+    snapshot = service.snapshot_current_automation("scenario", "recipes", task_id="task.next")
+
+    described = service.describe("scenario", "recipes")
+
+    assert described["automation"]["status"] == status
+    assert described["automation"]["snapshot_task_id"] == "task.next"
+    assert described["automation"]["snapshot_path"] == snapshot["path"]
+    assert described["automation"]["result_version"] == snapshot["version"]
+    assert described["capabilities"]["can_prepare_candidate"] is False
+
+
+@pytest.mark.parametrize("metadata_change", [
+    {"task_id": "task.unrelated"}, {"object_id": "another"}, {"object_type": "skill"},
+])
+def test_preview_does_not_adopt_unrelated_retained_snapshot(workflow_project, metadata_change):
+    service, _root = workflow_project
+    state = service._read_state("scenario", "recipes")
+    state["workflow"] = service._normalized_workflow(state, object_type="scenario", object_id="recipes")
+    state["workflow"]["automation"] = {
+        "status": "failed", "head_task_id": "task.next", "snapshot_task_id": "task.previous",
+    }
+    service._write_state("scenario", "recipes", state)
+    snapshot = service.snapshot_current_automation("scenario", "recipes", task_id="task.next")
+    path = Path(snapshot["path"]) / "snapshot.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata.update(metadata_change)
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    assert service.describe("scenario", "recipes")["automation"]["snapshot_task_id"] == "task.previous"
 
 
 def test_only_latest_automation_snapshot_is_retained(

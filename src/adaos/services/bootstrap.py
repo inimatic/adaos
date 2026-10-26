@@ -819,6 +819,11 @@ class BootstrapService:
             await stop_scheduler()
         except Exception:
             pass
+        try:
+            from adaos.services.tool_continuations import stop as stop_continuations
+            await stop_continuations(self.ctx)
+        except Exception:
+            self._log.debug("continuation shutdown failed", exc_info=True)
         await self._lifecycle.stop()
         status_watchdog = getattr(self, "_status_watchdog", None)
         if status_watchdog is not None:

@@ -99,6 +99,8 @@ def start(
     execution_budget: Mapping[str, Any] | None = None,
     agent_profile: Mapping[str, Any] | None = None,
     mcp: Mapping[str, Any] | None = None,
+    ui_change_authorization: Mapping[str, Any] | None = None,
+    companion_manifest_changes: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Start or resume implementation from an approved brief."""
 
@@ -129,6 +131,8 @@ def start(
             execution_budget=execution_budget,
             agent_profile=agent_profile,
             mcp=mcp,
+            ui_change_authorization=ui_change_authorization,
+            companion_manifest_changes=companion_manifest_changes,
         )
         or {}
     )
@@ -801,17 +805,15 @@ def validate_preserved_candidate(
     object_type: str,
     object_id: str,
     source_task_id: str | None = None,
+    repair_brief: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Queue an admitted preserved candidate with model execution forbidden."""
 
-    return dict(
-        _service().validate_preserved_candidate(
-            object_type=object_type,
-            object_id=object_id,
-            source_task_id=source_task_id,
-        )
-        or {}
-    )
+    arguments = dict(object_type=object_type, object_id=object_id,
+                     source_task_id=source_task_id)
+    if repair_brief is not None:
+        arguments["repair_brief"] = dict(repair_brief)
+    return dict(_service().validate_preserved_candidate(**arguments) or {})
 
 
 def release_candidate_runtime(

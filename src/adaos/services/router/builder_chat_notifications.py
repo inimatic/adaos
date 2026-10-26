@@ -79,8 +79,9 @@ def record_builder_delivery(base_dir: Path, payload: Mapping[str, Any], **update
     with mutation_lock(path.with_suffix(".lock")):
         previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         # Root's HTTP acknowledgement can arrive after the terminal Bot receipt.
-        if previous.get("phase") == "delivered" and updates.get("phase") != "delivered":
-            updates = {key: value for key, value in updates.items() if key != "phase"}
+        if previous.get("phase") in {"delivered", "deduplicated"} and updates.get("phase") not in {"delivered", "deduplicated"}:
+            updates = {key: value for key, value in updates.items()
+                       if key not in {"phase", "receipt", "duplicate_of", "delivery_reference"}}
         atomic_write_json(path, {**previous, "message_id": identity, "updated_at": time.time(), **updates})
 
 
@@ -96,21 +97,17 @@ def pending_latest_automation_notifications(
 
     Automation persists its exact brief and lifecycle stages before it reports
     success.  A worker-local event bus may not reach the Router process, so the
-    Router reconciles the newest task from that durable transcript.  Existing
-    transport receipts keep the normal live path and this recovery path
-    idempotent.
+    Router reconciles the newest task and previously attempted messages from
+    older tasks in the supplied bounded transcript window. Root acceptance is
+    temporary; only a Bot receipt confirms delivery. Stable operation identities
+    keep retries idempotent without backfilling unattempted historical tasks.
     """
 
     current_time = time.time() if now is None else float(now)
     eligible: list[Mapping[str, Any]] = []
     for message in messages:
         meta = message.get("_meta") if isinstance(message.get("_meta"), Mapping) else {}
-        if meta.get("schema") not in {
-            "adaos.builder.automation_input.v1",
-            "adaos.builder.automation_notification.v1",
-        }:
-            continue
-        if not str(meta.get("task_id") or "").strip():
+        if builder_chat_notifications(message) is None:
             continue
         try:
             message_time = float(message.get("ts") or 0.0)
@@ -133,15 +130,14 @@ def pending_latest_automation_notifications(
             timestamp = 0.0
         return sequence, timestamp
 
-    latest = max(eligible, key=_order)
-    latest_meta = latest.get("_meta") if isinstance(latest.get("_meta"), Mapping) else {}
-    latest_task_id = str(latest_meta.get("task_id") or "").strip()
-    task_messages = []
+    automation = []
     for message in eligible:
         meta = message.get("_meta") if isinstance(message.get("_meta"), Mapping) else {}
-        if str(meta.get("task_id") or "").strip() == latest_task_id:
-            task_messages.append(message)
-
+        if meta.get("schema") in {"adaos.builder.automation_input.v1", "adaos.builder.automation_notification.v1"} and str(meta.get("task_id") or "").strip():
+            automation.append(message)
+    latest = max(automation, key=_order) if automation else {}
+    latest_meta = latest.get("_meta") if isinstance(latest.get("_meta"), Mapping) else {}
+    latest_task_id = str(latest_meta.get("task_id") or "").strip()
     def _receipt(identity: str) -> dict[str, Any]:
         if not identity:
             return {}
@@ -160,9 +156,13 @@ def pending_latest_automation_notifications(
 
     def _settled(receipt: Mapping[str, Any]) -> bool:
         phase = str(receipt.get("phase") or "").strip().lower()
-        if phase in {"sent", "accepted", "delivered"}:
+        if phase in {"sent", "delivered"}:
             return True
-        if phase != "started":
+        if phase == "deduplicated":
+            reference = receipt.get("delivery_reference") or {}
+            return bool(receipt.get("duplicate_of") == reference.get("attempt_id")
+                        and reference.get("operation_key") and reference.get("external_message_ids"))
+        if phase not in {"started", "accepted"}:
             return False
         try:
             updated_at = float(receipt.get("updated_at") or 0.0)
@@ -171,15 +171,25 @@ def pending_latest_automation_notifications(
         return bool(updated_at and current_time - updated_at < retry_started_after)
 
     pending: list[dict[str, Any]] = []
-    for message in sorted(task_messages, key=_order):
+    for message in sorted(eligible, key=_order):
         projection = builder_chat_notifications(message)
         if projection is None:
             continue
         source_identity, items = projection
-        if _settled(_receipt(source_identity)):
+        source_receipt = _receipt(source_identity)
+        if _settled(source_receipt):
             continue
+        meta = message.get("_meta") if isinstance(message.get("_meta"), Mapping) else {}
+        is_latest = bool(latest_task_id) and message in automation and str(meta.get("task_id") or "").strip() == latest_task_id
         for item in items:
             item_identity = str(item.get("id") or "").strip()
-            if not _settled(_receipt(item_identity)):
+            item_receipt = _receipt(item_identity)
+            if not is_latest and not any(
+                receipt.get("delivery_attempt_id")
+                or receipt.get("phase") in {"started", "accepted", "failed"}
+                for receipt in (source_receipt, item_receipt)
+            ):
+                continue
+            if not _settled(item_receipt):
                 pending.append(item)
     return pending

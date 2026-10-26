@@ -12,6 +12,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--owned-root", type=Path, required=True)
 parser.add_argument("--source", type=Path, required=True)
 parser.add_argument("--port", type=int, default=18879)
+parser.add_argument("--profile", choices=['natural-retouch.v4','natural-retouch.v5','natural-retouch.v6'], default='natural-retouch.v4')
 args = parser.parse_args()
 root = args.owned_root.resolve()
 if not root.is_relative_to((Path.cwd() / ".tmp").resolve()) or root == (Path.cwd() / ".tmp").resolve():
@@ -26,7 +27,12 @@ def no_external_connections(event, arguments):
         raise PermissionError("External network is forbidden in the Retouch browser fixture")
 
 sys.addaudithook(no_external_connections)
-fixture = RetouchFixture(root, args.source, token_path.read_text(encoding="utf-8"))
+if args.profile == 'natural-retouch.v6':
+    from adaos.e2e.retouch_layered_fixture import LayeredRetouchFixture
+    owner_type = LayeredRetouchFixture
+else:
+    owner_type = RetouchFixture
+fixture = owner_type(root, args.source, token_path.read_text(encoding="utf-8"))
 fixture.install_blob_boundary()
 (root / "fixture-endpoint.json").write_text(json.dumps({"base_url": f"http://127.0.0.1:{args.port}",
     "token_file": str(token_path), "source_digest": fixture.source_digest,

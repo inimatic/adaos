@@ -236,6 +236,35 @@ def test_canonical_change_switch_rejects_stale_question_form(batch, tmp_path, mo
             expected_generation=first["generation"], confirmed=True)
 
 
+def test_completed_clarification_read_uses_compact_projection(tmp_path, monkeypatch):
+    from test_builder_automation import _service
+
+    automation = _service(tmp_path)
+    monkeypatch.setattr(
+        type(automation),
+        "_read_compact_status",
+        lambda _self, *_args: {
+            "ok": True,
+            "automation": {
+                "status": "completed",
+                "waiting_for_input": False,
+                "clarification": None,
+            },
+        },
+    )
+
+    def unexpected_full_session_read(*_args):
+        raise AssertionError("completed clarification projection must remain compact")
+
+    monkeypatch.setattr(
+        type(automation), "get_session", unexpected_full_session_read
+    )
+
+    assert automation.clarification_state(
+        object_type="scenario", object_id="recipes"
+    ) == {"pending": False, "questions": [], "can_resume": False}
+
+
 def test_worker_repeated_questions_resume_exact_correction_not_initial_brief(batch, tmp_path):
     from test_builder_automation import _service
     from adaos.domain.automation_outcome import outcome_message

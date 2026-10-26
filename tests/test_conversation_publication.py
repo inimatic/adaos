@@ -40,6 +40,62 @@ def test_atomic_idempotent_publication_independent_targets():
     assert len(conversation_store.list_messages("test:outputs")) == 1
 
 
+def test_existing_user_turn_keeps_author_and_actions_without_duplicate():
+    args = setup_output(routes=1)
+    stored = conversation_store.append_message(conversation_id=args['conversation_id'],
+        owner=args['owner'], webspace_id=args['webspace_id'], channel_id='general',
+        text=args['text'], role='user', payload={'id':'message:ingress',
+            'actions':[{'id':'inspect','label':'Inspect'}]})
+    events=[]
+    from types import SimpleNamespace
+    receipt = publication.publish(**args, existing_message_id=stored['id'],bus=SimpleNamespace(publish=events.append))
+    assert publication.publish(**args, existing_message_id=stored['id']) == receipt
+    assert receipt['message_id'] == stored['id'] and len(receipt['intent_ids']) == 1
+    messages = conversation_store.list_messages(args['conversation_id'])
+    assert len(messages) == 1 and messages[0]['from'] == 'user'
+    assert messages[0]['actions'] == stored['actions']
+    assert events[0].payload['_meta']['output_delivery_owned'] is True
+
+
+@pytest.mark.parametrize('change', ['content', 'thread', 'redaction', 'conversation'])
+def test_existing_turn_must_match_owned_active_content(change):
+    args = setup_output(routes=1)
+    stored = conversation_store.append_message(conversation_id=args['conversation_id'],
+        owner=args['owner'], webspace_id=args['webspace_id'], channel_id='general',
+        text=args['text'], role='hub', payload={'id':'message:stored'})
+    if change == 'content': args['text'] = 'Different'
+    if change == 'thread': args['thread_id'] = 'another-thread'
+    if change in {'redaction', 'conversation'}:
+        column, value = ('redaction_state','redacted') if change == 'redaction' else ('conversation_id','foreign')
+        with get_ctx().sql.connect() as con:
+            con.execute(f'UPDATE conversation_messages SET {column}=? WHERE message_id=?', (value,stored['id']))
+            con.commit()
+    with pytest.raises(ValueError, match='existing message'):
+        publication.publish(**args, existing_message_id=stored['id'])
+    with get_ctx().sql.connect() as con:
+        assert con.execute('SELECT count(*) FROM conversation_output_intents').fetchone()[0] == 0
+
+
+def test_discovered_pairing_uses_frozen_explicit_transport_address(monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services import telegram_delivery
+    import requests
+    args=setup_output(routes=0)
+    durable_delivery.create_reply_route(args['conversation_id'],transport='telegram',route_id='frozen',
+        destination_ref={'hub_id':'test','routing_mode':'hub_pairing','bot_id':'observed-bot','chat_id':'observed-chat'},
+        principal_scope=['user:test'])
+    conversation_store.upsert_conversation(conversation_id=args['conversation_id'],owner=args['owner'],
+        webspace_id=args['webspace_id'],policy={'output_route_ids':['frozen']})
+    receipt=publication.publish(**{**args,'route_ids':['frozen']})
+    sent=[]
+    monkeypatch.setattr(requests,'post',lambda url,**kw:sent.append(kw['json']) or SimpleNamespace(status_code=202))
+    assert delivery.dispatch_once()
+    assert len(sent)==1 and sent[0]['bot_id']=='observed-bot' and sent[0]['chat_id']=='observed-chat'
+    attempt=telegram_delivery.get_attempt(sent[0]['_protocol']['delivery_attempt_id'])
+    assert 'routing_mode' not in attempt and attempt['bot_id']=='observed-bot'
+    assert publication.output_status(receipt['publication_id'])[0]['status']=='accepted_by_root'
+
+
 def test_crash_inside_publication_rolls_back_message_and_intents(monkeypatch):
     args = setup_output()
     original = durable_delivery.enqueue_response

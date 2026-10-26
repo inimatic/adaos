@@ -68,6 +68,25 @@ def test_complete_observations_pass_without_supervisor_intervention():
     assert result == {"ok": True, "failures": [], "repairable": False}
 
 
+def test_workspace_profile_requires_its_own_checks_and_exact_dependencies():
+    from adaos.services.builder.application_journeys import RETOUCH_WORKSPACE_OBLIGATIONS
+    reports = {}
+    for case in RETOUCH_CASES:
+        row = sample()
+        variant, layout = case.split('/')
+        row['specification'].update(variant=variant, layout=layout)
+        reports[case] = row
+    args = dict(expected_materialization={'revision': 'task', 'source_fingerprint': 'fingerprint'},
+                source_digest='source', profile_id='natural-retouch.v5')
+    assert not qualify_reports(reports, **args)['ok']  # Old manual flow cannot qualify the direct flow.
+    for row in reports.values():
+        row['checks'] = [{'id': key, 'passed': True} for key in RETOUCH_WORKSPACE_OBLIGATIONS]
+        row['specification']['obligations'] = list(RETOUCH_WORKSPACE_OBLIGATIONS)
+    assert qualify_reports(reports, **args)['ok']
+    reports['exact/wide']['checks'].append(copy.deepcopy(reports['exact/wide']['checks'][0]))
+    assert not qualify_reports(reports, **args)['ok']
+
+
 def test_only_observed_candidate_assertion_enters_existing_bounded_repair():
     reports = {"wide": sample(), "compact": sample()}
     reports["wide"].update(passed=False, active="analysis-one-submit-editable-plan",
@@ -87,12 +106,13 @@ def test_empty_materialization_expectation_is_not_acceptance():
     assert not result["ok"]
 
 
-def cost_sample(source='source'):
+def cost_sample(source='source', phases=('analysis', 'edit', 'qa')):
+    total = .01 * len(phases)
     return {'completed': True, 'source_digest': source, 'external_model_calls': 0, 'passed': True,
         'environment': {'python': '3.11', 'platform': 'test', 'pillow': '12.3', 'numpy': 'test'}, 'run_id': 'run',
-        'attempts': [{'request_id': str(i), 'run_id': 'run', 'status': 'reconciled', 'cost_basis': 'metered', 'observed_usd': .01} for i in range(3)],
-        'cases': [{'id': name, 'passed': True, 'observed_usd': .03, 'observed_known_usd': .03,
-                   'text': 'confirmed spend: unknown; confirmed part: 0.03 USD' if name == COST_CASES[-1] else 'confirmed spend: 0.03 USD'} for name in COST_CASES]}
+        'attempts': [{'request_id': 'natural-retouch-run-'+phase, 'run_id': 'run', 'status': 'reconciled', 'cost_basis': 'metered', 'observed_usd': .01} for phase in phases],
+        'cases': [{'id': name, 'passed': True, 'observed_usd': total, 'observed_known_usd': total,
+                   'text': 'confirmed spend: unknown; confirmed part: '+str(total)+' USD' if name == COST_CASES[-1] else 'confirmed spend: '+str(total)+' USD'} for name in COST_CASES]}
 
 
 @pytest.mark.parametrize('fault', [None, 'source_changed', 'verifier_source_changed', 'nonzero_exit', 'postcondition', 'missing_source', 'legacy_gap', 'cost_postcondition'])
@@ -179,5 +199,20 @@ def test_cost_verifier_cannot_accept_green_flags_without_authority_or_complete_c
     if fault == 'known_wrong_cost': report['cases'][0]['observed_usd'] = .73
     result = qualify_cost_report(report, source_digest='source')
     assert not result['ok'] and not result['repairable']
+
+
+@pytest.mark.parametrize('fault', [None, 'missing_edit', 'unexpected_qa', 'duplicate_request', 'wrong_phase'])
+def test_raw_first_cost_profile_requires_exact_analysis_and_edit_metering(fault):
+    report = cost_sample(phases=('analysis', 'edit'))
+    if fault == 'missing_edit': report['attempts'].pop()
+    if fault == 'unexpected_qa': report['attempts'].append({**report['attempts'][0], 'request_id':'natural-retouch-run-qa'})
+    if fault == 'duplicate_request': report['attempts'][1]['request_id'] = report['attempts'][0]['request_id']
+    if fault == 'wrong_phase': report['attempts'][1]['request_id'] = 'natural-retouch-run-qa'
+    total = sum(row['observed_usd'] for row in report['attempts'])
+    for row in report['cases']:
+        row.update(observed_usd=total, observed_known_usd=total)
+    result = qualify_cost_report(report, source_digest='source', profile_id='natural-retouch.v5')
+    assert result['ok'] is (fault is None)
+    assert qualify_cost_report(report, source_digest='source', profile_id='natural-retouch.v4')['ok'] is (fault == 'unexpected_qa')
 
 

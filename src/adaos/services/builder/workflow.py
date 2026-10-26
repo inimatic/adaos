@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import os
 import shutil
 import threading
@@ -1728,18 +1729,24 @@ class BuilderWorkflowService:
         object_type: str,
         object_id: str,
         change_id: str,
+        *, digest: str | None = None,
     ) -> Path:
         token = str(change_id or "").strip()
         if not token:
             raise BuilderWorkflowError("Builder Change run ledger requires change_id")
-        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        content_suffix = ""
+        if digest is not None:
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise BuilderWorkflowError("Builder ledger content digest is invalid")
+            content_suffix = "." + digest.removeprefix("sha256:")
+        change_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
         return (
             Path(self.state_dir)
             / "builder"
             / "change_runs"
             / _kind(object_type)
             / _project_id(object_id)
-            / f"{digest}.json"
+            / f"{change_digest}{content_suffix}.json"
         )
 
     def _governed_ledger_path(
@@ -1747,18 +1754,24 @@ class BuilderWorkflowService:
         object_type: str,
         object_id: str,
         change_id: str,
+        *, digest: str | None = None,
     ) -> Path:
         token = str(change_id or "").strip()
         if not token:
             raise BuilderWorkflowError("Builder governed ledger requires change_id")
-        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        content_suffix = ""
+        if digest is not None:
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise BuilderWorkflowError("Builder ledger content digest is invalid")
+            content_suffix = "." + digest.removeprefix("sha256:")
+        change_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
         return (
             Path(self.state_dir)
             / "builder"
             / "governed_ledgers"
             / _kind(object_type)
             / _project_id(object_id)
-            / f"{digest}.json"
+            / f"{change_digest}{content_suffix}.json"
         )
 
     def _load_external_governed_ledger(
@@ -1780,7 +1793,8 @@ class BuilderWorkflowService:
         ).strip()
         governed = _mapping(projected.get("governed"))
         instance_id = str(governed.get("instance_id") or "").strip()
-        path = self._governed_ledger_path(object_type, object_id, change_id)
+        path = self._governed_ledger_path(object_type, object_id, change_id,
+            digest=str(external.get("digest")) if external.get("content_addressed") is True else None)
         try:
             raw = path.read_bytes()
         except FileNotFoundError as exc:
@@ -1852,7 +1866,7 @@ class BuilderWorkflowService:
         raw = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         if len(raw) > _MAX_GOVERNED_LEDGER_BYTES:
             raise BuilderWorkflowError("Builder governed ledger exceeds the bounded size")
-        path = self._governed_ledger_path(object_type, object_id, change_id)
+        path = self._governed_ledger_path(object_type, object_id, change_id, digest=_stable_digest(identity))
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_bytes(raw)
@@ -1862,6 +1876,7 @@ class BuilderWorkflowService:
         projected["governed"] = governed
         projected["governed_ledger_external"] = {
             "schema": "adaos.builder.governed_ledger_external.v1",
+            "content_addressed": True,
             "digest": _stable_digest(identity),
             "history_count": len(history),
             "idempotency_count": len(idempotency),
@@ -1879,7 +1894,8 @@ class BuilderWorkflowService:
         if external.get("schema") != "adaos.builder.change_runs_external.v1":
             return projected
         change_id = str(projected.get("change_id") or "").strip()
-        path = self._change_run_ledger_path(object_type, object_id, change_id)
+        path = self._change_run_ledger_path(object_type, object_id, change_id,
+            digest=str(external.get("digest")) if external.get("content_addressed") is True else None)
         try:
             raw = path.read_bytes()
         except FileNotFoundError as exc:
@@ -1932,7 +1948,7 @@ class BuilderWorkflowService:
             raise BuilderWorkflowError(
                 "Builder Change run ledger exceeds the bounded size"
             )
-        path = self._change_run_ledger_path(object_type, object_id, change_id)
+        path = self._change_run_ledger_path(object_type, object_id, change_id, digest=_stable_digest({"runs": runs}))
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_bytes(raw)
@@ -1940,6 +1956,7 @@ class BuilderWorkflowService:
         projected["runs"] = []
         projected["runs_external"] = {
             "schema": "adaos.builder.change_runs_external.v1",
+            "content_addressed": True,
             "digest": _stable_digest({"runs": runs}),
             "count": len(runs),
         }
@@ -1988,12 +2005,18 @@ class BuilderWorkflowService:
         object_type: str,
         object_id: str,
         change_id: str,
+        *, digest: str | None = None,
     ) -> Path:
         token = str(change_id or "").strip()
         if not token:
             raise BuilderWorkflowError("Builder portfolio record requires change_id")
-        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        return self._portfolio_root(object_type, object_id) / f"{digest}.json"
+        suffix = ""
+        if digest is not None:
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise BuilderWorkflowError("Builder portfolio content digest is invalid")
+            suffix = "." + digest.removeprefix("sha256:")
+        identity = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        return self._portfolio_root(object_type, object_id) / f"{identity}{suffix}.json"
 
     def _load_external_portfolio(
         self,
@@ -2010,8 +2033,12 @@ class BuilderWorkflowService:
             if str(item).strip()
         ][-100:]
         records: dict[str, dict[str, Any]] = {}
+        digests = _mapping(external.get("digests"))
         for change_id in change_ids:
-            path = self._portfolio_record_path(object_type, object_id, change_id)
+            digest = digests.get(change_id)
+            if external.get("content_addressed") is True and not digest:
+                raise BuilderWorkflowError("Builder portfolio content digest is missing")
+            path = self._portfolio_record_path(object_type, object_id, change_id, digest=digest)
             try:
                 if path.stat().st_size > _MAX_PORTFOLIO_RECORD_BYTES:
                     raise BuilderWorkflowError(
@@ -2029,6 +2056,7 @@ class BuilderWorkflowService:
             if (
                 not isinstance(value, Mapping)
                 or str(value.get("change_id") or "").strip() != change_id
+                or (digest is not None and _stable_digest(value) != digest)
             ):
                 raise BuilderWorkflowError(
                     f"Builder portfolio record identity differs from its index: {change_id}"
@@ -2096,6 +2124,7 @@ class BuilderWorkflowService:
         workflow = _mapping(payload.get("workflow"))
         portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
         change_ids: list[str] = []
+        digests: dict[str, str] = {}
         for change_id, record in portfolio.items():
             persisted_record = self._externalize_portfolio_context_packet(
                 object_type,
@@ -2119,16 +2148,20 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     f"Builder portfolio record exceeds the bounded size: {change_id}"
                 )
-            path = self._portfolio_record_path(object_type, object_id, change_id)
+            digest = _stable_digest(persisted_record)
+            path = self._portfolio_record_path(object_type, object_id, change_id, digest=digest)
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_name(f".{path.name}.tmp")
             temporary.write_bytes(raw)
             _replace_path(temporary, path)
             change_ids.append(change_id)
+            digests[change_id] = digest
         workflow["change_portfolio"] = {}
         workflow["change_portfolio_external"] = {
             "schema": "adaos.builder.change_portfolio_external.v1",
             "change_ids": change_ids[-100:],
+            "content_addressed": True,
+            "digests": {key: digests[key] for key in change_ids[-100:]},
         }
         payload["workflow"] = workflow
         context_packet = _mapping(workflow.get("context_packet"))
@@ -2180,6 +2213,23 @@ class BuilderWorkflowService:
                 workflow,
             )
             payload["workflow"] = workflow
+        history = workflow.get("history")
+        if isinstance(history, list) and history and (
+            len(json.dumps(history, ensure_ascii=False).encode("utf-8")) > 64 * 1024
+            or workflow.get("history_external")
+        ):
+            from adaos.services.context_control import ContextControlService
+
+            value = {"schema": "adaos.builder.workflow_history.v1",
+                     "project_ref": f"{_kind(object_type)}:{_project_id(object_id)}",
+                     "history": history}
+            if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > _MAX_GOVERNED_LEDGER_BYTES:
+                raise BuilderWorkflowError("Builder workflow history exceeds its bounded size")
+            receipt = ContextControlService(state_dir=self.state_dir).put_artifact(value)
+            workflow["history"] = []
+            workflow["history_external"] = {"schema": "adaos.builder.workflow_history_external.v1",
+                                            **receipt, "count": len(history)}
+            payload["workflow"] = workflow
         return payload
 
     def _read_state(self, object_type: str, object_id: str) -> dict[str, Any]:
@@ -2196,6 +2246,28 @@ class BuilderWorkflowService:
             raise BuilderWorkflowError(f"invalid prompt_state.json: {exc}") from exc
         state = dict(value) if isinstance(value, Mapping) else {}
         workflow = _mapping(state.get("workflow"))
+        history_ref = _mapping(workflow.get("history_external"))
+        if history_ref:
+            from adaos.services.context_control import ContextControlService
+
+            ref = str(history_ref.get("ref") or "")
+            if (history_ref.get("schema") != "adaos.builder.workflow_history_external.v1"
+                    or not re.fullmatch(r"artifact://context/sha256/[0-9a-f]{64}", ref)
+                    or history_ref.get("digest") != "sha256:" + ref.rsplit("/", 1)[-1]
+                    or type(history_ref.get("bytes")) is not int
+                    or not 0 < history_ref["bytes"] <= _MAX_GOVERNED_LEDGER_BYTES):
+                raise BuilderWorkflowError("Builder workflow history reference is invalid")
+            try:
+                archived = ContextControlService(state_dir=self.state_dir).get_artifact(ref)
+            except (KeyError, ValueError) as exc:
+                raise BuilderWorkflowError("Builder workflow history is unavailable or corrupt") from exc
+            if (not isinstance(archived, Mapping)
+                    or archived.get("schema") != "adaos.builder.workflow_history.v1"
+                    or archived.get("project_ref") != f"{_kind(object_type)}:{_project_id(object_id)}"
+                    or not isinstance(archived.get("history"), list)
+                    or len(archived["history"]) != history_ref.get("count")):
+                raise BuilderWorkflowError("Builder workflow history identity differs from its reference")
+            workflow["history"] = copy.deepcopy(archived["history"])
         if isinstance(workflow.get("change"), Mapping):
             workflow["change"] = self._load_external_change_runs(
                 object_type,
@@ -2933,7 +3005,7 @@ class BuilderWorkflowService:
         if (
             automation_direct
             and not acceptance_required
-            and not prototype.get("head_revision")
+            and (not prototype.get("head_revision") or _kind(object_type) == "skill")
         ):
             return None
         if not prototype.get("head_revision") or not bool(prototype.get("stable")):
@@ -3064,18 +3136,31 @@ class BuilderWorkflowService:
         automation.setdefault(
             "source_prototype_revision", prototype.get("head_revision")
         )
-        if not str(automation.get("snapshot_task_id") or "").strip():
-            snapshot_path = Path(str(automation.get("snapshot_path") or "").strip())
-            try:
+        # Finalization replaces the single retained snapshot before browser
+        # acceptance. Its Preview identity must follow those retained bytes,
+        # even if observation failed; this does not mark the task completed.
+        from adaos.services.artifact_pipeline.storage import mutation_lock
+        from adaos.services.builder.automation_snapshot import snapshot_lock_path
+
+        snapshot_path = self.automation_snapshot_root(object_type, object_id)
+        try:
+            with mutation_lock(snapshot_lock_path(snapshot_path)):
                 snapshot = json.loads(
                     (snapshot_path / "snapshot.json").read_text(encoding="utf-8-sig")
                 )
-            except (OSError, ValueError, json.JSONDecodeError):
-                snapshot = {}
-            if isinstance(snapshot, Mapping):
-                snapshot_task_id = str(snapshot.get("task_id") or "").strip()
-                if snapshot_task_id:
-                    automation["snapshot_task_id"] = snapshot_task_id
+        except (OSError, ValueError):
+            snapshot = {}
+        if (isinstance(snapshot, Mapping)
+                and snapshot.get("object_type") == _kind(object_type)
+                and snapshot.get("object_id") == object_id):
+            snapshot_task_id = str(snapshot.get("task_id") or "").strip()
+            if snapshot_task_id and (
+                not str(automation.get("snapshot_task_id") or "").strip()
+                or snapshot_task_id == str(automation.get("head_task_id") or "").strip()
+            ):
+                automation["snapshot_task_id"] = snapshot_task_id
+                automation["snapshot_path"] = str(snapshot_path)
+                automation["result_version"] = snapshot.get("version") or automation.get("result_version")
 
         if "status" not in publication:
             publication["status"] = (
@@ -3339,6 +3424,18 @@ class BuilderWorkflowService:
             if not compiler_map_verified:
                 result["gaps"].append({"kind": "compiler_source_map_not_bound_to_current_semantic"})
             return result
+
+    def lifecycle_state(self, object_type: str, object_id: str) -> dict[str, Any]:
+        """Read lifecycle authority without display-only workflow inspection."""
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+        return {**copy.deepcopy(workflow), 'object_type': kind, 'object_id': project_id,
+                'archived': bool(state.get('archived')),
+                'capabilities': self._capabilities(workflow, archived=bool(state.get('archived')),
+                                                   object_type=kind, normalized=True)}
 
     def describe(self, object_type: str, object_id: str) -> dict[str, Any]:
         kind = _kind(object_type)
@@ -5977,6 +6074,11 @@ class BuilderWorkflowService:
             state["workflow"] = workflow
             state["workflow_state"] = workflow["active_phase"]
             state["updated_at"] = changed_at
+            if action_token == 'prototype_revision_recorded' and kind in {'scenario', 'project'}:
+                from adaos.services.builder.prototype_history import PrototypeHistoryService
+                revision = str(details.get('revision') or '')
+                if revision.isdigit() and 3 <= len(revision) <= 6:
+                    PrototypeHistoryService(self).retain(kind, project_id, revision)
             self._write_state(kind, project_id, state)
 
         projection = {
@@ -8753,6 +8855,8 @@ class BuilderWorkflowService:
         path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        from adaos.services.builder.prototype_history import PrototypeHistoryService
+        PrototypeHistoryService(self).retain(kind, object_id, revision)
         (revision_dir / "current.txt").write_text(revision + "\n", encoding="utf-8")
         return {
             "ok": True,

@@ -1,5 +1,5 @@
 """Typed SDK facades for Core-owned external providers."""
 
-from . import gmail
+from . import gmail, drive
 
-__all__ = ["gmail"]
+__all__ = ["gmail", "drive"]

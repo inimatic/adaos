@@ -22,6 +22,8 @@ parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--label", required=True)
 parser.add_argument("--layouts", nargs="+", choices=["wide", "compact"], default=["wide", "compact"])
 parser.add_argument("--variants", nargs="+", choices=["exact", "edited"], default=["exact", "edited"])
+parser.add_argument("--profile", choices=["natural-retouch.v4", "natural-retouch.v5", "natural-retouch.v6"],
+                    default=os.getenv("ADAOS_E2E_RETOUCH_PROFILE", "natural-retouch.v4"))
 args = parser.parse_args()
 repo = Path.cwd().resolve(); output = args.output.resolve()
 if not output.is_relative_to(repo / "e2e/artifacts") or output == repo / "e2e/artifacts":
@@ -57,7 +59,7 @@ for variant, layout in itertools.product(args.variants, args.layouts):
         stdout = (owned / "stdout.log").open("ab"); stderr = (owned / "stderr.log").open("ab")
         logs.extend([stdout, stderr])
         process = subprocess.Popen([sys.executable, "-X", "utf8", "e2e/stand/serve-retouch-fixture.py",
-            "--owned-root", str(owned), "--source", str(args.source.resolve()), "--port", str(port)],
+            "--owned-root", str(owned), "--source", str(args.source.resolve()), "--port", str(port), "--profile", args.profile],
             cwd=repo, stdout=stdout, stderr=stderr,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         processes[0] = process
@@ -95,7 +97,9 @@ for variant, layout in itertools.product(args.variants, args.layouts):
             ADAOS_E2E_OUTPUT=str(output / variant / layout), ADAOS_E2E_HUB_TOKEN=token,
             ADAOS_E2E_RESTART_FIXTURE="1", ADAOS_E2E_RETOUCH_VARIANT=variant)
         with (owned / "browser-stdout.log").open("w", encoding="utf-8") as browser_out, (owned / "browser-stderr.log").open("w", encoding="utf-8") as browser_err:
-            browser_process = subprocess.Popen(["node", "e2e/stand/browser/retouch-journey.mjs"], cwd=repo,
+            journey = {'natural-retouch.v4': 'retouch-journey.mjs', 'natural-retouch.v5': 'retouch-workspace-journey.mjs',
+                       'natural-retouch.v6': 'retouch-layered-journey.mjs'}[args.profile]
+            browser_process = subprocess.Popen(["node", "e2e/stand/browser/" + journey], cwd=repo,
                 env=environment, stdout=browser_out, stderr=browser_err, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             offset = 0; deadline = time.monotonic() + 900
             while browser_process.poll() is None:
@@ -111,11 +115,12 @@ for variant, layout in itertools.product(args.variants, args.layouts):
         result = {"variant": variant, "layout": layout, "exit_code": browser_process.returncode, "restart_errors": restart_errors,
                   "fixture_root": str(owned), "report": str(output / variant / layout / "journey.json")}
         if browser_process.returncode == 0:
-            from adaos.e2e.retouch_verification import verify_downloads
+            from adaos.e2e.retouch_verification import verify_downloads, verify_layered_downloads
             report_path = output / variant / layout / "journey.json"
             report = json.loads(report_path.read_text(encoding="utf-8"))
             try:
-                report["independent_pixel_verification"] = verify_downloads(owned_root=owned, output=output / variant / layout, report=report)
+                verifier = verify_layered_downloads if args.profile == 'natural-retouch.v6' else verify_downloads
+                report["independent_pixel_verification"] = verifier(owned_root=owned, output=output / variant / layout, report=report)
             except Exception as exc:
                 report["passed"] = False
                 report["independent_pixel_verification"] = {"passed": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -132,8 +137,10 @@ for variant, layout in itertools.product(args.variants, args.layouts):
         "passed": all(row["exit_code"] == 0 and not row["restart_errors"] for row in results)}, indent=2), encoding="utf-8")
 from adaos.services.builder.application_journeys import run_owned_journey
 try:
-    cost = run_owned_journey([sys.executable, '-X', 'utf8', 'e2e/stand/qualify-retouch-cost.py',
-        '--source', str(args.source.resolve()), '--owned-root', str(repo / '.tmp/retouch-browser-fixtures' / args.label / 'cost-authority'),
+    authority_runner = 'e2e/stand/qualify-retouch-layered-budget.py' if args.profile == 'natural-retouch.v6' else 'e2e/stand/qualify-retouch-cost.py'
+    profile_options = [] if args.profile == 'natural-retouch.v6' else ['--profile', args.profile]
+    cost = run_owned_journey([sys.executable, '-X', 'utf8', authority_runner,
+        '--source', str(args.source.resolve()), *profile_options, '--owned-root', str(repo / '.tmp/retouch-browser-fixtures' / args.label / 'cost-authority'),
         '--output', str(output / 'cost-authority')], cwd=repo, env=os.environ.copy(), timeout=90)
     cost_exit = cost.returncode
     print(cost.stdout, end='', flush=True)

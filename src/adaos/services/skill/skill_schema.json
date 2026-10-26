@@ -22,7 +22,7 @@
 		    },
 		    "legacy_adoption": {
 		      "enum": ["reconstructible_empty", "core_managed_only"],
-		      "description": "One-time bridge for a pre-lifecycle package only when its exact runtime data root contains no files."
+            "description": "One-time bridge for a pre-lifecycle package. reconstructible_empty requires an empty runtime data root; core_managed_only admits only bounded Core skill memory and Core quarantine evidence when the target declares the skill_memory adapter."
 		    },
         "coordination_files": {
           "description": "Exact owner-relative process mutex files. They are admitted by inventory but never copied as Application data.",
@@ -318,10 +318,14 @@
 					"name": { "type": "string", "minLength": 1 },
 					"description": { "type": "string" },
 					"entry": { "type": "string" },
-					"timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 600 },
+					"timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 1800 },
 					"input_schema": { "type": "object" },
 					"output_schema": { "type": "object" }
 				},
+				"allOf": [{
+					"if": {"required": ["durable_replay"], "properties": {"durable_replay": {"const": true}}},
+					"else": {"properties": {"timeout_seconds": {"maximum": 600}}}
+				}],
 				"additionalProperties": true
 			},
 			"uniqueItems": true

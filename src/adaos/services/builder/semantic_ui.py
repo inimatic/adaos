@@ -220,7 +220,10 @@ def _add(target: dict[str, Any], target_ref: str, value: Any) -> dict[str, Any]:
     item_id = str(item.get("id") or "").strip()
     if not item_id:
         raise BuilderWorkflowError("added field, widget, or action requires a stable id")
-    children = target.setdefault(collection, [])
+    owner = target
+    if collection == 'fields' and isinstance(target.get('inputs'), dict) and 'fields' in target['inputs']:
+        owner = target['inputs']
+    children = owner.setdefault(collection, [])
     if not isinstance(children, list):
         raise BuilderWorkflowError(f"target {target_ref} does not expose a {collection} list")
     if any(isinstance(child, Mapping) and str(child.get("id") or "") == item_id for child in children):
@@ -262,6 +265,12 @@ def _remove(
         raise BuilderWorkflowError("remove is limited to fields, widgets, or actions")
     removed = copy.deepcopy(container[index])
     parent_ref = _stable_ref(parent)
+    if parent_ref is None and collection == 'fields':
+        parts = target_ref.split(':')
+        if len(parts) == 3 and parts[0] == 'field':
+            widget, _ = _resolve_target(webui, f'widget:{parts[1]}')
+            if widget.get('inputs') is parent:
+                parent_ref = _stable_ref(widget)
     if parent_ref is None:
         raise BuilderWorkflowError(
             "remove requires a stable widget parent so deterministic undo remains possible"

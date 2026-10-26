@@ -24,6 +24,10 @@ def test_registration_is_explicit_and_does_not_accept_a_similar_scenario_name():
     with pytest.raises(ValueError, match='not registered'): get_profile('candidate-provided.v1')
     assert evaluate_registered_application(scenario_id='natural_retouch_forged') is None
     assert len(profile_definition(repo_root=ROOT, profile_id='natural-retouch.v4')['obligations']) == 14
+    current = profile_definition(repo_root=ROOT, profile_id='natural-retouch.v5')
+    assert 'atomic-start-goal-scope' in current['obligations']
+    assert 'automatic-progress-reopen-idempotence' in current['obligations']
+    assert 'analysis-one-submit-editable-plan' not in current['obligations']
 
 
 @pytest.mark.parametrize('fault', [None, 'foreign_scenario', 'foreign_task', 'foreign_space', 'not_test', 'not_owned'])

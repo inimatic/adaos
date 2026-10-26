@@ -328,6 +328,7 @@ def project_pending_action_page_from_store(
     *, principal: Mapping[str, Any], conversation_id: str | None = None,
     limit: int = 50, cursor: str | None = None,
     view: str = "all",
+    webspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Read a bounded ACL-checked page without touching a live Yjs document.
 
@@ -343,7 +344,8 @@ def project_pending_action_page_from_store(
     page = query_interactions(principal=principal, conversation_id=conversation_id,
         statuses=statuses,
         active_only=False, field_mask="summary", limit=max(1, min(int(limit), 100)), cursor=cursor,
-        projection_view=None if view == "all" else view)
+        projection_view=None if view == "all" else view,
+        **({"webspace_id":webspace_id} if webspace_id is not None else {}))
     inputs = conversation_store.read_interaction_projection_inputs([
         str(item.get("interaction_id") or "").strip() for item in page.get("items") or []])
     items, skipped = [], []

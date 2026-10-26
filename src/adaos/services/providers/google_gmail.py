@@ -126,6 +126,7 @@ def _credential_admission_cache_key(
     ).hexdigest()
     return (
         authority,
+        provider.provider_id,
         application_id,
         release_digest,
         subject_ref,
@@ -383,6 +384,14 @@ def _gmail_metadata_batch_payloads(
 class GoogleGmailProvider:
     """Core adapter for one fixed Google provider and bounded operation set."""
 
+    # Shared delegated OAuth/account admission. Subclasses supply a fixed
+    # provider identity, scope and profile reader; callers cannot change them.
+    provider_id = GOOGLE_GMAIL_PROVIDER_ID
+    oauth_scope = GMAIL_MODIFY_SCOPE
+    api_host = "gmail.googleapis.com"
+    credential_schema = "adaos.provider.google.gmail.credential.v1"
+    binding_instance_ref = "binding-instance:google-gmail-provider"
+
     def __init__(
         self,
         *,
@@ -457,11 +466,11 @@ class GoogleGmailProvider:
             )
         self._oauth_configuration_loaded = True
 
-    @staticmethod
-    def _account_key(subject_ref: str, account_id: str) -> str:
-        identity = f"{GOOGLE_GMAIL_PROVIDER_ID}\0{subject_ref}\0{account_id}"
+    @classmethod
+    def _account_key(cls, subject_ref: str, account_id: str) -> str:
+        identity = f"{cls.provider_id}\0{subject_ref}\0{account_id}"
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-        return f"provider:{GOOGLE_GMAIL_PROVIDER_ID}:account:{digest}"
+        return f"provider:{cls.provider_id}:account:{digest}"
 
     def _vault_get_json(self, key: str) -> dict[str, Any] | None:
         try:
@@ -483,7 +492,7 @@ class GoogleGmailProvider:
             self.vault.put(
                 key,
                 json.dumps(dict(value), ensure_ascii=False, separators=(",", ":")),
-                meta={"provider_id": GOOGLE_GMAIL_PROVIDER_ID},
+                meta={"provider_id": self.provider_id},
             )
         except Exception as exc:
             raise GoogleGmailProviderError("credential_vault_write_failed") from exc
@@ -532,7 +541,7 @@ class GoogleGmailProvider:
                 for item in profile.external_providers
                 if isinstance(item, Mapping)
             }
-        declaration = declarations.get(GOOGLE_GMAIL_PROVIDER_ID)
+        declaration = declarations.get(self.provider_id)
         if declaration is None:
             raise GoogleGmailProviderError("gmail_provider_not_declared")
         scopes = {
@@ -540,7 +549,7 @@ class GoogleGmailProvider:
             for item in declaration.get("scopes") or ()
             if _text(item)
         }
-        if scopes != {GMAIL_MODIFY_SCOPE}:
+        if scopes != {self.oauth_scope}:
             raise GoogleGmailProviderError("gmail_scope_contract_invalid")
         modes = {
             _text(item).lower()
@@ -551,13 +560,13 @@ class GoogleGmailProvider:
         destination = _text(
             declaration.get("destination") or declaration.get("host")
         ).lower()
-        if destination and destination != "gmail.googleapis.com":
+        if destination and destination != self.api_host:
             raise GoogleGmailProviderError("gmail_destination_contract_invalid")
         return release, declaration
 
-    @staticmethod
-    def _declared_account_id(declaration: Mapping[str, Any]) -> str:
-        account_id = _text(declaration.get("account_id") or GOOGLE_GMAIL_PROVIDER_ID)
+    @classmethod
+    def _declared_account_id(cls, declaration: Mapping[str, Any]) -> str:
+        account_id = _text(declaration.get("account_id") or cls.provider_id)
         if not _IDENTIFIER.fullmatch(account_id):
             raise GoogleGmailProviderError("gmail_account_id_invalid")
         return account_id
@@ -591,7 +600,7 @@ class GoogleGmailProvider:
                 for item in self.access.connected_accounts(
                     application_id, subject_ref=subject
                 )
-                if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                if item.get("provider_id") == self.provider_id
                 and item.get("account_id") == declared_account_id
             ),
             None,
@@ -599,12 +608,12 @@ class GoogleGmailProvider:
         expected_revision = int((previous or {}).get("revision") or 0)
         issued_at = float(self.clock())
         pending = {
-            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+            "provider_id": self.provider_id,
             "application_id": application_id,
             "release_digest": release_digest,
             "subject_ref": subject,
             "account_id": declared_account_id,
-            "scopes": [GMAIL_MODIFY_SCOPE],
+            "scopes": [self.oauth_scope],
             "expected_revision": expected_revision,
             "issued_at": issued_at,
             "expires_at": issued_at + _OAUTH_STATE_TTL_S,
@@ -614,14 +623,14 @@ class GoogleGmailProvider:
                 candidate_permission_profile
             )
         connection_identity = hashlib.sha256(
-            f"{GOOGLE_GMAIL_PROVIDER_ID}\0{subject}\0{declared_account_id}".encode(
+            f"{self.provider_id}\0{subject}\0{declared_account_id}".encode(
                 "utf-8"
             )
         ).hexdigest()[:32]
         try:
             authorization = self.ingress.begin_authorization(
                 provider_connection_ref=f"provider-connection:{connection_identity}",
-                binding_instance_ref="binding-instance:google-gmail-provider",
+                binding_instance_ref=self.binding_instance_ref,
                 application_ref=f"application:{application_id}",
                 subject_ref=subject,
                 return_intent="application.connection.refresh",
@@ -637,7 +646,7 @@ class GoogleGmailProvider:
                 "client_id": self.client_id,
                 "redirect_uri": redirect_uri,
                 "response_type": "code",
-                "scope": GMAIL_MODIFY_SCOPE,
+                "scope": self.oauth_scope,
                 "access_type": "offline",
                 "include_granted_scopes": "true",
                 "prompt": "consent select_account",
@@ -648,7 +657,7 @@ class GoogleGmailProvider:
         )
         return {
             "ok": True,
-            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+            "provider_id": self.provider_id,
             "account_id": declared_account_id,
             "authorization_url": authorization_url,
             "expires_at": _utc_iso(pending["expires_at"]),
@@ -688,7 +697,7 @@ class GoogleGmailProvider:
                 for item in self.access.connected_accounts(
                     application_id, subject_ref=subject
                 )
-                if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                if item.get("provider_id") == self.provider_id
                 and item.get("account_id") == declared_account_id
             ),
             None,
@@ -697,7 +706,7 @@ class GoogleGmailProvider:
             item
             for item in self.access.connected_accounts(subject_ref=subject)
             if item.get("application_id") != application_id
-            and item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+            and item.get("provider_id") == self.provider_id
             and item.get("account_id") == declared_account_id
             and item.get("status") in {"connected", "expired"}
         ]
@@ -710,22 +719,22 @@ class GoogleGmailProvider:
         if not shared:
             return {
                 "ok": True,
-                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "provider_id": self.provider_id,
                 "accounts": [],
             }
         credential = self._vault_get_json(
             self._account_key(subject, declared_account_id)
         )
         identity = {
-            "schema": "adaos.provider.google.gmail.credential.v1",
-            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+            "schema": self.credential_schema,
+            "provider_id": self.provider_id,
             "subject_ref": subject,
             "account_id": declared_account_id,
         }
         usable = bool(shared) and credential is not None and all(
             credential.get(key) == value for key, value in identity.items()
         )
-        usable = usable and GMAIL_MODIFY_SCOPE in set(
+        usable = usable and self.oauth_scope in set(
             (credential or {}).get("scopes") or ()
         )
         accounts: list[dict[str, Any]] = []
@@ -733,12 +742,12 @@ class GoogleGmailProvider:
             expires_at = float((credential or {}).get("expires_at") or 0.0)
             accounts.append(
                 {
-                    "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                    "provider_id": self.provider_id,
                     "account_id": declared_account_id,
                     "email_address": _text(
                         (credential or {}).get("email_address")
                     ),
-                    "scopes": [GMAIL_MODIFY_SCOPE],
+                    "scopes": [self.oauth_scope],
                     "status": (
                         "connected"
                         if expires_at > float(self.clock())
@@ -752,7 +761,7 @@ class GoogleGmailProvider:
             )
         return {
             "ok": True,
-            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+            "provider_id": self.provider_id,
             "accounts": accounts,
         }
 
@@ -787,7 +796,7 @@ class GoogleGmailProvider:
                 for item in self.access.connected_accounts(
                     application_id, subject_ref=subject_ref
                 )
-                if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                if item.get("provider_id") == self.provider_id
                 and item.get("account_id") == account_id
             ),
             None,
@@ -811,10 +820,10 @@ class GoogleGmailProvider:
             {
                 "release_digest": release_digest,
                 "account_id": account_id,
-                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "provider_id": self.provider_id,
                 "subject_ref": subject_ref,
                 "mode": "delegated_user",
-                "scopes": [GMAIL_MODIFY_SCOPE],
+                "scopes": [self.oauth_scope],
                 "status": (
                     "connected" if expires_at > float(self.clock()) else "expired"
                 ),
@@ -829,7 +838,7 @@ class GoogleGmailProvider:
                 "action": "connected_account_attached",
                 "application_id": application_id,
                 "subject_ref": subject_ref,
-                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "provider_id": self.provider_id,
                 "account_id": account_id,
                 "status": account["status"],
                 "credential_reused": True,
@@ -858,7 +867,7 @@ class GoogleGmailProvider:
                 {
                     "release_digest": str(pending["release_digest"]),
                     "account_id": str(pending["account_id"]),
-                    "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                    "provider_id": self.provider_id,
                     "subject_ref": str(pending["subject_ref"]),
                     "mode": "delegated_user",
                     "scopes": list(pending["scopes"]),
@@ -890,6 +899,24 @@ class GoogleGmailProvider:
             )
         except IntegrationIngressError as exc:
             raise GoogleGmailProviderError(exc.code, retryable=exc.retryable) from exc
+        provider_id = str(authorization.get("correlation", {}).get("provider_id") or "")
+        if provider_id != self.provider_id:
+            # The shared Google ingress consumes state once. Dispatch exclusively
+            # from that verified correlation, never a callback query argument.
+            if self.provider_id == GOOGLE_GMAIL_PROVIDER_ID and provider_id == "google.drive":
+                from adaos.services.providers.google_drive import GoogleDriveProvider
+                provider = GoogleDriveProvider(vault=self.vault, applications=self.applications,
+                    transport=self.transport, client_id=self.client_id, client_secret=self.client_secret,
+                    redirect_uri=self.redirect_uri, clock=self.clock,
+                    oauth_configuration_loaded=self._oauth_configuration_loaded, ingress_broker=self.ingress)
+                return provider._finish_authorization(authorization, code=code, error=error)
+            raise GoogleGmailProviderError("oauth_provider_mismatch")
+        return self._finish_authorization(authorization, code=code, error=error)
+
+    def _finish_authorization(self, authorization: Mapping[str, Any], *, code: str, error: str) -> dict[str, Any]:
+        """Complete an already consumed, Core-verified ingress authorization."""
+        if authorization.get("correlation", {}).get("provider_id") != self.provider_id:
+            raise GoogleGmailProviderError("oauth_provider_mismatch")
         pending = dict(authorization["correlation"])
         attempt = dict(authorization["attempt"])
         self._provider_declaration(
@@ -949,21 +976,10 @@ class GoogleGmailProvider:
             raise GoogleGmailProviderError("oauth_required_scope_missing")
         expires_in = max(1, int(token.get("expires_in") or 3600))
         expires_at = float(self.clock()) + expires_in
-        profile_response = self._transport_request(
-            "GET",
-            f"{GMAIL_API_ORIGIN}/gmail/v1/users/me/profile",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=(5.0, 15.0),
-        )
-        if int(getattr(profile_response, "status_code", 0) or 0) != 200:
-            raise GoogleGmailProviderError("gmail_profile_unavailable")
-        profile = _safe_json(
-            profile_response, error_code="gmail_profile_response_invalid"
-        )
-        email_address = _text(profile.get("emailAddress"))
+        email_address = self._fetch_profile_email(access_token)
         credential = {
-            "schema": "adaos.provider.google.gmail.credential.v1",
-            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+            "schema": self.credential_schema,
+            "provider_id": self.provider_id,
             "subject_ref": subject_ref,
             "account_id": account_id,
             "email_address": email_address,
@@ -981,7 +997,7 @@ class GoogleGmailProvider:
                 {
                     "release_digest": str(pending["release_digest"]),
                     "account_id": account_id,
-                    "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                    "provider_id": self.provider_id,
                     "subject_ref": subject_ref,
                     "mode": "delegated_user",
                     "scopes": list(pending["scopes"]),
@@ -1006,12 +1022,26 @@ class GoogleGmailProvider:
         self.ingress.record_outcome(attempt, "accepted")
         return {
             "ok": True,
-            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+            "provider_id": self.provider_id,
             "account_id": account_id,
             "status": account["status"],
             "email_address": email_address,
             "scopes": list(pending["scopes"]),
         }
+
+    def _fetch_profile_email(self, access_token: str) -> str:
+        profile_response = self._transport_request(
+            "GET",
+            f"{GMAIL_API_ORIGIN}/gmail/v1/users/me/profile",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=(5.0, 15.0),
+        )
+        if int(getattr(profile_response, "status_code", 0) or 0) != 200:
+            raise GoogleGmailProviderError("gmail_profile_unavailable")
+        profile = _safe_json(
+            profile_response, error_code="gmail_profile_response_invalid"
+        )
+        return _text(profile.get("emailAddress"))
 
     def _refresh(self, credential: Mapping[str, Any]) -> dict[str, Any]:
         self._ensure_oauth_configuration()
@@ -1092,7 +1122,7 @@ class GoogleGmailProvider:
                     for item in self.access.connected_accounts(
                         application_id, subject_ref=subject_ref
                     )
-                    if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                    if item.get("provider_id") == self.provider_id
                     and item.get("account_id") == account_id
                 ),
                 None,
@@ -1104,8 +1134,8 @@ class GoogleGmailProvider:
                 raise GoogleGmailProviderError("gmail_account_not_connected")
             credential = self._vault_get_json(account_key)
             identity = {
-                "schema": "adaos.provider.google.gmail.credential.v1",
-                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "schema": self.credential_schema,
+                "provider_id": self.provider_id,
                 "subject_ref": subject_ref,
                 "account_id": account_id,
             }
@@ -1113,7 +1143,7 @@ class GoogleGmailProvider:
                 credential.get(key) != value for key, value in identity.items()
             ):
                 raise GoogleGmailProviderError("gmail_reconnect_required")
-            if GMAIL_MODIFY_SCOPE not in set(credential.get("scopes") or ()):
+            if self.oauth_scope not in set(credential.get("scopes") or ()):
                 raise GoogleGmailProviderError("gmail_required_scope_missing")
             if (
                 float(credential.get("expires_at") or 0.0)
@@ -1137,10 +1167,10 @@ class GoogleGmailProvider:
                         {
                             "release_digest": release_digest,
                             "account_id": account_id,
-                            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                            "provider_id": self.provider_id,
                             "subject_ref": subject_ref,
                             "mode": "delegated_user",
-                            "scopes": [GMAIL_MODIFY_SCOPE],
+                            "scopes": [self.oauth_scope],
                             "status": "connected",
                             "token_expires_at": token_expires_at,
                         },
@@ -1157,7 +1187,7 @@ class GoogleGmailProvider:
                             for item in self.access.connected_accounts(
                                 application_id, subject_ref=subject_ref
                             )
-                            if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                            if item.get("provider_id") == self.provider_id
                             and item.get("account_id") == account_id
                         ),
                         None,
@@ -1238,11 +1268,11 @@ class GoogleGmailProvider:
         if op == "connection_status":
             return finish({
                 "ok": True,
-                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "provider_id": self.provider_id,
                 "account_id": account_id,
                 "status": "connected",
                 "email_address": _text(credential.get("email_address")),
-                "scopes": [GMAIL_MODIFY_SCOPE],
+                "scopes": [self.oauth_scope],
             })
         if op == "list_messages":
             max_results = int(args.get("max_results") or 50)

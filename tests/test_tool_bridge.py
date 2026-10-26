@@ -300,7 +300,8 @@ def test_binary_attachment_upload_rejects_a_forged_tool_receipt(monkeypatch) -> 
     assert error.value.status_code == 409
 
 
-def test_binary_attachment_download_retains_runtime_provenance(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize('download', [False,True])
+def test_binary_attachment_download_retains_runtime_provenance(tmp_path, monkeypatch, download) -> None:
     content = tmp_path / "photo.png"
     content.write_bytes(b"image-bytes")
 
@@ -331,12 +332,14 @@ def test_binary_attachment_download_retains_runtime_provenance(tmp_path, monkeyp
             response,
             webspace_id="desktop",
             dev=False,
+            download=download,
             ctx=_fake_ctx(),
         )
     )
 
     assert result.headers["x-adaos-runtime-source"] == "trial"
     assert result.headers["x-adaos-release-digest"] == "sha256:" + "a" * 64
+    assert result.headers['content-disposition'].startswith('attachment;' if download else 'inline;')
 
 
 def test_application_runtime_provenance_is_projected_to_http_headers() -> None:
@@ -1714,6 +1717,30 @@ def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch,
     assert worker_thread_ids and all(thread_id != owner_thread_id for thread_id in worker_thread_ids)
 
 
+def test_application_owner_contract_resolution_does_not_block_event_loop(tmp_path, monkeypatch):
+    import threading
+    from adaos.services.applications.access_management import ApplicationAccessManagementService
+
+    loop_thread = threading.get_ident()
+    observed_threads = []
+    def owner(*args, **kwargs):
+        observed_threads.append(threading.get_ident())
+        return "application"
+    monkeypatch.setattr(tool_bridge_module, "_declared_skill_webui_owner", owner)
+    monkeypatch.setattr(ApplicationAccessManagementService, "resolve_runtime_context", lambda *a, **kw: None)
+    body = tool_bridge_module.ToolCall(tool="owner_probe:read", context={"application_id": "owner_probe"})
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(tool_bridge_module._authorize_application_tool_call(
+            body=body, request=SimpleNamespace(headers={}),
+            ctx=SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path)),
+            skill_name="owner_probe", public_tool="read", manager=object(),
+            declared_side_effects="none", component_capabilities=("workspace.read",),
+            application_contract={"permission": "workspace.read"},
+        ))
+    assert excinfo.value.status_code == 403
+    assert observed_threads and all(thread != loop_thread for thread in observed_threads)
+
+
 def test_dev_application_context_is_derived_from_unique_project_ownership(
     tmp_path,
 ) -> None:
@@ -2930,6 +2957,106 @@ def test_scoped_runtime_action_approval_becomes_a_durable_target_grant(
 
     assert accepted["approval"]["durable_grant_id"].startswith("grant.runtime.")
     assert reused["approval"]["source"] == "durable_grant"
+
+
+def test_scoped_application_action_uses_verified_subject_for_durable_grant(
+    monkeypatch, tmp_path
+) -> None:
+    pending_by_id: dict[str, dict[str, object]] = {}
+    monkeypatch.setenv(
+        "ADAOS_RUNTIME_ACTION_GRANTS_PATH", str(tmp_path / "runtime-grants.json")
+    )
+
+    async def _list_pending_actions(
+        *, webspace_id: str | None = None, include_terminal: bool = True
+    ) -> dict[str, object]:
+        return {"by_id": pending_by_id, "active_items": [], "active": []}
+
+    async def _publish_pending_action(**kwargs) -> dict[str, object]:
+        action = {
+            "id": kwargs.get("action_id"),
+            "kind": kwargs.get("kind"),
+            "status": "pending",
+            "webspace_id": kwargs.get("webspace_id"),
+            "domain_ref": kwargs.get("domain_ref"),
+        }
+        pending_by_id[str(action["id"])] = action
+        return action
+
+    monkeypatch.setattr(
+        tool_bridge_module, "list_pending_actions_async", _list_pending_actions
+    )
+    monkeypatch.setattr(
+        tool_bridge_module, "publish_pending_action_async", _publish_pending_action
+    )
+    verified = {
+        "application_id": "natural_retouch",
+        "release_digest": "sha256:" + "a" * 64,
+        "permission_profile_digest": "sha256:" + "b" * 64,
+        "subject_ref": "user:owner",
+        "holder_ref": "user:owner",
+        "permission_id": "workspace.write",
+    }
+    body = tool_bridge_module.ToolCall(
+        tool="natural_retouch_skill:run_command",
+        arguments={"run_id": "run-1", "command": "continue_run"},
+        context={
+            "webspace_id": "desktop-dev",
+            "_verified_application_access": verified,
+        },
+    )
+    scope = {
+        "name": "natural_retouch.run",
+        "resource_argument": "run_id",
+        "ttl_seconds": 3600,
+    }
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module._enforce_runtime_action_gate(
+                body=body,
+                skill_name="natural_retouch_skill",
+                public_tool="run_command",
+                payload=dict(body.arguments),
+                forced_side_effect_class="external_write",
+                approval_scope=scope,
+                ctx=_fake_ctx(),
+            )
+        )
+
+    pending_id = excinfo.value.detail["pending_action_id"]
+    pending_by_id[pending_id]["status"] = "responded"
+    pending_by_id[pending_id]["response"] = {
+        "response_action_id": "approve",
+        "responder": {"type": "user", "user_id": "owner"},
+    }
+    accepted = asyncio.run(
+        tool_bridge_module._enforce_runtime_action_gate(
+            body=body,
+            skill_name="natural_retouch_skill",
+            public_tool="run_command",
+            payload=dict(body.arguments),
+            forced_side_effect_class="external_write",
+            approval_scope=scope,
+            ctx=_fake_ctx(),
+        )
+    )
+    pending_by_id.clear()
+    reused = asyncio.run(
+        tool_bridge_module._enforce_runtime_action_gate(
+            body=body,
+            skill_name="natural_retouch_skill",
+            public_tool="run_command",
+            payload=dict(body.arguments),
+            forced_side_effect_class="external_write",
+            approval_scope=scope,
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert accepted["approval"]["durable_grant_id"].startswith("grant.runtime.")
+    assert reused["approval"]["source"] == "durable_grant"
+    assert reused["approval"]["resource"] == "run-1"
 
 
 def test_runtime_action_gate_treats_the_controller_surface_as_local() -> None:

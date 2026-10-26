@@ -29,7 +29,7 @@ from adaos.domain.development_budget import (
     execution_prompt_token_limit,
     with_effective_billable_token_limit,
 )
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, read_atomic_json
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.builder.workflow import (
     BuilderWorkflowService,
@@ -42,6 +42,7 @@ from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import (
+    is_ephemeral_workfile,
     SourceSnapshotError,
     capture_source_snapshot,
     selected_source_paths_digest,
@@ -125,6 +126,27 @@ _PRESERVED_VALIDATION_INSTRUCTION = (
 )
 
 
+def _retained_validation_boundary(run_root: Path, failure: Mapping[str, Any]) -> bool:
+    """Recognize an executor-owned test stop, never an authoring precondition stop."""
+    try:
+        runtime = json.loads((run_root / "runtime" / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(runtime, Mapping):
+        return False
+    classification = runtime.get("classification")
+    return bool(
+        runtime.get("status") == "failed"
+        and runtime.get("stage") == "deterministic_validation"
+        and failure.get("stage") == "deterministic_validation"
+        and "Generated project validation failed:" in str(failure.get("message") or "")
+        and "Generated project validation failed:" in str(runtime.get("error") or "")
+        and isinstance(classification, Mapping)
+        and classification.get("schema") == "adaos.builder.failure_classification.v1"
+        and classification.get("candidate_checkpoint_ready") is True
+    )
+
+
 def _is_codex_budget_boundary(message: str) -> bool:
     """Recognize advisory and hard Codex token boundaries for candidate recovery."""
 
@@ -177,7 +199,10 @@ def _preserved_candidate_has_changes(run_root: Path) -> bool:
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return result.returncode == 0 and bool(result.stdout.strip())
+    return result.returncode == 0 and any(
+        line.strip() and not _untracked_agent_scratch_row(line)
+        for line in result.stdout.splitlines()
+    )
 
 
 def _preserved_candidate_is_clean(run_root: Path) -> bool:
@@ -195,7 +220,19 @@ def _preserved_candidate_is_clean(run_root: Path) -> bool:
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return result.returncode == 0 and not result.stdout.strip()
+    return result.returncode == 0 and not any(
+        line.strip() and not _untracked_agent_scratch_row(line)
+        for line in result.stdout.splitlines()
+    )
+
+
+def _untracked_agent_scratch_row(line: str) -> bool:
+    """Scratch is not a source candidate; tracked changes remain reviewable."""
+    row = line.strip().split(maxsplit=1)
+    if len(row) != 2 or row[0] != "??":
+        return False
+    path = row[1].strip('"').replace("\\", "/")
+    return is_ephemeral_workfile(path)
 
 
 def _preserved_candidate_changed_paths(run_root: Path) -> list[str]:
@@ -219,11 +256,13 @@ def _preserved_candidate_changed_paths(run_root: Path) -> list[str]:
             return []
         if result.returncode != 0:
             return []
-        paths.update(
-            value.decode("utf-8", errors="strict").replace("\\", "/").strip("/")
-            for value in result.stdout.split(b"\0")
-            if value
-        )
+        for value in result.stdout.split(b"\0"):
+            if not value:
+                continue
+            path = value.decode("utf-8", errors="strict").replace("\\", "/").strip("/")
+            if command[1] == "ls-files" and is_ephemeral_workfile(path):
+                continue
+            paths.add(path)
     return sorted(path for path in paths if path)
 
 
@@ -1000,6 +1039,13 @@ def _iteration_context_projection(
             "execution_strategy": execution_strategy or "bounded_patch_agent",
         },
     }
+    # Deterministic repairs still carry the same Prototype authority. The
+    # worker compares it with the retained resource handoff before any edits.
+    # Removing this small projection made a valid retained acceptance appear
+    # absent, even though its immutable identity was present in the envelope.
+    prototype = dict(projection.get("artifacts") or {}).get("prototype")
+    if isinstance(prototype, Mapping) and isinstance(prototype.get("acceptance"), Mapping):
+        result["artifacts"] = {"prototype": copy.deepcopy(dict(prototype))}
     if not execution_strategy:
         result["repair"].pop("deterministic_input_digest", None)
         result["repair"].pop("structured_edit_set_digest", None)
@@ -1492,6 +1538,17 @@ def _continuation_contract() -> dict[str, Any]:
     }
 
 
+def _checkpoint_for_ui_delta(checkpoint, *, explicit_ui_delta: bool):
+    if (explicit_ui_delta and isinstance(checkpoint, Mapping)
+            and checkpoint.get("mode") == "validate_preserved_candidate"
+            and checkpoint.get("model_policy") != "forbid"):
+        # Validation-only recovery is useful for an unchanged budget retry.
+        # An explicitly admitted UI delta needs the full implementation turn,
+        # retaining the same candidate identity and final validation guards.
+        return {**checkpoint, "mode": "resume_preserved_candidate"}
+    return checkpoint
+
+
 def _continuation_allows_large_manifest_rewrite(
     checkpoint: Mapping[str, Any] | None,
 ) -> bool:
@@ -1616,9 +1673,7 @@ class BuilderAutomationService:
 
     @property
     def root(self) -> Path:
-        path = self.state_dir / "builder" / "automation"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        return self.state_dir / "builder" / "automation"
 
     def _workflow(self) -> BuilderWorkflowService:
         if self.workflow_service is None:
@@ -2678,6 +2733,12 @@ class BuilderAutomationService:
             -20:
         ]
         session["development_session_id"] = incoming
+        # Clean materialization/validation belongs to the old input set.
+        # A dirty model continuation may retain its candidate: the worker
+        # independently checks every edited path against the new source base.
+        checkpoint = session.get("pending_continuation_checkpoint")
+        if not isinstance(checkpoint, Mapping) or checkpoint.get("mode") != "resume_preserved_candidate":
+            session.pop("pending_continuation_checkpoint", None)
         session["implementation_brief"] = json.dumps(
             brief,
             ensure_ascii=False,
@@ -2782,6 +2843,8 @@ class BuilderAutomationService:
         execution_budget: Mapping[str, Any] | None = None,
         agent_profile: Mapping[str, Any] | None = None,
         mcp: Mapping[str, Any] | None = None,
+        ui_change_authorization: Mapping[str, Any] | None = None,
+        companion_manifest_changes: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         requested_object_type = str(object_type or "").strip().lower().rstrip("s")
         kind, project_id = self._project_ref(object_type, object_id)
@@ -3473,6 +3536,12 @@ class BuilderAutomationService:
                 iteration=0,
                 seed=str(session["created_at"]),
             )
+            if ui_change_authorization is not None:
+                session['ui_change_authorization'] = self._admit_followup_ui_change(
+                    session, ui_change_authorization)
+            if companion_manifest_changes is not None:
+                session['companion_manifest_authorization'] = self._admit_companion_manifest_changes(
+                    session, companion_manifest_changes)
             gate_checkpoint = self._trusted_publication_gate_continuation_checkpoint(
                 session
             )
@@ -4881,14 +4950,17 @@ class BuilderAutomationService:
         blocking_feedback = manifest_scope_feedback or preservable_blocking_feedback_message(
             run_root, source_failure
         )
+        validation_stopped = source_failed and _retained_validation_boundary(run_root, source_failure)
         record(
             "blocking_feedback",
-            bool(blocking_feedback) or explicitly_cancelled,
+            bool(blocking_feedback) or explicitly_cancelled or validation_stopped,
             (
                 "structured blocking development feedback is preserved"
                 if blocking_feedback
                 else "explicit cancellation will be replayed only through full no-model validation"
                 if explicitly_cancelled
+                else "executor retained the candidate at deterministic validation; all checks must run again"
+                if validation_stopped
                 else "source task has no preserved structured blocking development feedback"
             ),
         )
@@ -5213,6 +5285,8 @@ class BuilderAutomationService:
                 "reason": (
                     "operator_cancelled_revalidation"
                     if explicitly_cancelled
+                    else "deterministic_validation_failure"
+                    if validation_stopped
                     else "manifest_scope_requalified_after_guard"
                     if manifest_scope_feedback
                     else "blocking_development_feedback"
@@ -5273,7 +5347,6 @@ class BuilderAutomationService:
             session = self.get_session(object_type, object_id)
             if not session:
                 raise ValueError("automation_session_not_found")
-            session = self.refresh_session(session)
             admission = self._preserved_candidate_admission(
                 session,
                 source_task_id=source_task_id,
@@ -5368,8 +5441,17 @@ class BuilderAutomationService:
         object_type: str,
         object_id: str,
         source_task_id: str | None = None,
+        repair_brief: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Queue a new evidence-owning validation task without a model turn."""
+        """Validate retained source, optionally applying exact guarded edits."""
+
+        instruction = _PRESERVED_VALIDATION_INSTRUCTION
+        if repair_brief is not None:
+            encoded = json.dumps(dict(repair_brief), ensure_ascii=False)
+            if (not _brief_is_bounded_dev_ticket_repair(encoded)
+                    or _brief_deterministic_strategy(encoded) != "structured_edits"):
+                raise ValueError("preserved candidate repair requires bounded structured edits")
+            instruction = encoded
 
         with _LOCK:
             preflight = self.preflight_preserved_candidate(
@@ -5380,8 +5462,22 @@ class BuilderAutomationService:
             admission = dict(preflight.get("preflight") or {})
             if admission.get("eligible") is not True:
                 return preflight
+            # Preflight proved exact source/lineage. Re-admit the already
+            # approved component scopes through their normal source-bound
+            # gates; a no-model successor must not silently lose UI authority.
+            session = self.get_session(object_type, object_id) or {}
+            retained_scope = {}
+            ui_scope = session.get("ui_change_authorization")
+            if ui_scope:
+                retained_scope["ui_change_authorization"] = {
+                    key: ui_scope[key] for key in ("reason", "source_message_ids")}
+            companion_scope = session.get("companion_manifest_authorization")
+            if companion_scope:
+                retained_scope["companion_manifest_changes"] = {
+                    "skill_ids": list(companion_scope["sources"]),
+                    **{key: companion_scope[key] for key in ("reason", "source_message_ids")}}
             result = self.submit_turn(
-                text=_PRESERVED_VALIDATION_INSTRUCTION,
+                text=instruction,
                 object_type=object_type,
                 object_id=object_id,
                 expected_session_id=str(preflight.get("session_id") or ""),
@@ -5389,6 +5485,7 @@ class BuilderAutomationService:
                 _continuation_checkpoint_override=dict(
                     admission.get("checkpoint") or {}
                 ),
+                **retained_scope,
             )
             result["preflight"] = admission
             result["model_policy"] = "forbid"
@@ -5445,6 +5542,49 @@ class BuilderAutomationService:
         session["cbs_compilation"] = copy.deepcopy(registered)
         session["prototype_acceptance"] = copy.deepcopy(dict(acceptance))
 
+    def _admit_followup_ui_change(self, session: Mapping[str, Any], value: Mapping[str, Any]) -> dict[str, Any]:
+        """Bind explicit UI authority without accepting/replacing a working Prototype."""
+        from .ui_change_authorization import admit_ui_change
+        if session.get("object_type") == "scenario":
+            return admit_ui_change(value, project_id=str(session["object_id"]),
+                prototype_revision=str(dict(session.get("prototype_acceptance") or {}).get("revision")
+                                       or session.get("source_prototype_version") or ""))
+        project_ref = str(session.get("project_ref") or "")
+        if session.get("object_type") != "skill" or not project_ref.startswith("project:"):
+            raise ValueError("UI change authorization requires an owned application scenario")
+        scenarios = self._resolve_project_application_scenario_ids(
+            project_id=project_ref.split(":", 1)[1], component_ref=f"skill:{session['object_id']}")
+        if len(scenarios) != 1:
+            raise ValueError("UI change authorization requires one unambiguous owned application scenario")
+        path = self.dev_scenarios_root / scenarios[0] / "webui.json"
+        # This is a source-bound technical correction, not an invented acceptance
+        # of the application's separate, possibly unfinished Prototype.
+        revision = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        return admit_ui_change(value, project_id=scenarios[0], prototype_revision=revision)
+
+    def _admit_companion_manifest_changes(self, session: Mapping[str, Any], value: Mapping[str, Any]) -> dict[str, Any]:
+        """Explicit component maintenance scope, distinct from UI/design authority."""
+        if (not isinstance(value, Mapping) or set(value) != {"skill_ids", "reason", "source_message_ids"}
+                or not isinstance(value["reason"], str) or not value["reason"].strip()
+                or len(value["reason"]) > 4000 or not isinstance(value["skill_ids"], list)
+                or not 1 <= len(value["skill_ids"]) <= 16
+                or not isinstance(value["source_message_ids"], list) or not 1 <= len(value["source_message_ids"]) <= 20
+                or any(not isinstance(ref, str) or not ref.strip() or len(ref) > 300 for ref in value["source_message_ids"])):
+            raise ValueError("companion manifest change requires bounded explicit component scope and source evidence")
+        project_ref = str(session.get("project_ref") or "")
+        if session.get("object_type") != "skill" or not project_ref.startswith("project:"):
+            raise ValueError("companion manifest change requires an owned skill application")
+        owned = self._resolve_companion_skill_ids("scenario", project_ref.split(":", 1)[1], project_ref=project_ref)
+        requested = value["skill_ids"]
+        if session["object_id"] not in owned or any(not isinstance(item, str) or item not in owned or item == session["object_id"] for item in requested):
+            raise ValueError("companion manifest change is outside the owned mutable application")
+        sources = {}
+        for skill_id in sorted(set(requested)):
+            path = self.dev_skills_root / skill_id / "skill.yaml"
+            sources[skill_id] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        return {"schema": "adaos.builder.companion_manifest_authorization.v1", "project_ref": project_ref,
+                "sources": sources, "reason": value["reason"].strip(), "source_message_ids": list(dict.fromkeys(value["source_message_ids"]))}
+
     def submit_turn(
         self,
         *,
@@ -5461,6 +5601,7 @@ class BuilderAutomationService:
         agent_profile: Mapping[str, Any] | None = None,
         clarification_response: Mapping[str, Any] | None = None,
         ui_change_authorization: Mapping[str, Any] | None = None,
+        companion_manifest_changes: Mapping[str, Any] | None = None,
         _continuation_checkpoint_override: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
@@ -5537,16 +5678,17 @@ class BuilderAutomationService:
                 recovered.update(resumed_exact_checkpoint=True, model_started=False)
                 return recovered
             if ui_change_authorization is not None:
-                from .ui_change_authorization import admit_ui_change
-                if session.get('object_type') != 'scenario':
-                    raise ValueError('UI change authorization requires a scenario task')
-                session['ui_change_authorization'] = admit_ui_change(ui_change_authorization,
-                    project_id=str(session['object_id']),
-                    prototype_revision=str(dict(session.get('prototype_acceptance') or {}).get('revision')
-                                           or session.get('source_prototype_version') or ''))
+                session['ui_change_authorization'] = self._admit_followup_ui_change(session, ui_change_authorization)
             elif (instruction != _UNCHANGED_RETRY_INSTRUCTION
                   and not isinstance(session.get('pending_browser_feedback'), Mapping)):
                 session.pop('ui_change_authorization', None)
+            if companion_manifest_changes is not None:
+                session['companion_manifest_authorization'] = self._admit_companion_manifest_changes(session, companion_manifest_changes)
+                session['companion_skill_ids'] = list(dict.fromkeys([
+                    *self._session_companion_skill_ids(session),
+                    *session['companion_manifest_authorization']['sources']]))
+            elif instruction not in {_UNCHANGED_RETRY_INSTRUCTION, _PRESERVED_VALIDATION_INSTRUCTION}:
+                session.pop('companion_manifest_authorization', None)
             previous_failure = (
                 dict(session.get("last_failure") or {})
                 if isinstance(session.get("last_failure"), Mapping)
@@ -5656,6 +5798,8 @@ class BuilderAutomationService:
                 continuation_checkpoint = self._qualified_continuation_checkpoint(
                     session
                 )
+            continuation_checkpoint = _checkpoint_for_ui_delta(
+                continuation_checkpoint, explicit_ui_delta=ui_change_authorization is not None)
             if continuation_checkpoint:
                 session["pending_continuation_checkpoint"] = continuation_checkpoint
             else:
@@ -6105,6 +6249,24 @@ class BuilderAutomationService:
     ) -> dict[str, Any]:
         from adaos.services.builder.clarification import BuilderClarificationService
 
+        # Clarification is exceptional state.  The compact projection is
+        # written together with every durable session checkpoint and already
+        # carries the exact ``waiting_for_input`` decision.  Do not hydrate a
+        # potentially very large historical session and Skill Factory task on
+        # the overwhelmingly common negative read path: that made every
+        # completed Builder workbench wait on the complete factory ledger.
+        compact = self._read_compact_status(object_type, object_id)
+        compact_automation = (
+            compact.get("automation")
+            if isinstance(compact, Mapping)
+            and isinstance(compact.get("automation"), Mapping)
+            else {}
+        )
+        if compact_automation and not bool(
+            compact_automation.get("waiting_for_input")
+        ):
+            return {"pending": False, "questions": [], "can_resume": False}
+
         with _LOCK:
             session = self.get_session(object_type, object_id)
             if not session:
@@ -6338,6 +6500,17 @@ class BuilderAutomationService:
                         "checkpoint_digest": checkpoint.get("checkpoint_digest"),
                     }
                 )
+                return recovered
+            if (observed.get("status") == "failed" and execution_budget is None and agent_profile is None
+                    and _retained_validation_boundary(
+                        Path(self.runs_root) / _safe_token(str(observed.get("current_task_id") or "")),
+                        observed_failure)):
+                # The mutation already ran. An ordinary retry must validate its
+                # exact retained result, rather than apply the old patch twice.
+                recovered = self.validate_preserved_candidate(
+                    object_type=kind, object_id=project_id,
+                    source_task_id=str(observed["current_task_id"]))
+                recovered.update(retried_unchanged_request=True, model_started=False)
                 return recovered
         with _LOCK:
             session = self.get_session(kind, project_id)
@@ -6599,8 +6772,9 @@ class BuilderAutomationService:
                         session,
                         exclude_task_id=task_id,
                     )
-                    if str(failure.get("stage") or "").strip()
-                    == "model_execution"
+                    if (str(failure.get("stage") or "").strip() == "model_execution"
+                        or (str(failure.get("stage") or "").strip() == "workspace_preparing"
+                            and "continuation candidate source snapshot is stale" in failure_message))
                     else None
                 )
                 if prior_candidate is None:
@@ -6942,6 +7116,29 @@ class BuilderAutomationService:
             else {}
         )
         source_contract = artifacts.get("continuation_contract")
+        source_checkpoint = artifacts.get("continuation_checkpoint")
+        if isinstance(source_checkpoint, Mapping) and source_checkpoint.get("mode") in {
+            "resume_preserved_candidate", "resume_materialized_candidate",
+        }:
+            # An older worker could silently skip a refused restore and report
+            # clean feedback against the base tree. That tree is not a new
+            # materialized candidate when required ancestor files are missing.
+            # Keep the dirty ancestor available for normal governed recovery.
+            prior = self._latest_blocking_candidate_source(session, exclude_task_id=source_task_id)
+            if prior is not None:
+                _prior_id, _prior_failure, prior_run = prior
+                try:
+                    prior_assignment = json.loads((prior_run / "input" / "assignment.json").read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    prior_assignment = {}
+                if self._request_matches_current_prototype_acceptance(session, prior_assignment.get("realize_request")):
+                    prior_paths = _preserved_candidate_changed_paths(prior_run)
+                    if any(
+                        (prior_run / "workspace" / path).is_file()
+                        and not (run_root / "workspace" / path).is_file()
+                        for path in prior_paths
+                    ):
+                        return None
         snapshot = (
             dict((assignment.get("forge") or {}).get("source_snapshot") or {})
             if isinstance(assignment.get("forge"), Mapping)
@@ -7832,18 +8029,20 @@ class BuilderAutomationService:
         session = self.get_session(object_type, object_id)
         if not session:
             return {"ok": False, "error": "automation_session_not_found"}
-        current = self.refresh_session(session)
-        current = self._reconcile_required_aprobation(current)
-        if current.get("status") == "completed":
-            current = self._notify_completed_session(current)
-        if not include_session:
-            current = self._save_session(current, emit_projection=False)
         return {
             "ok": True,
-            "session": current if include_session else self.compact_session(current),
-            "automation": self.project_session(current),
+            "session": session if include_session else self.compact_session(session),
+            "automation": self.project_session(session),
             "detail_available": not include_session,
         }
+
+    def settle_worker_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
+        """Finish durable reconciliation from the owning worker, never a read."""
+        current = self.refresh_session(session)
+        current = self._reconcile_required_aprobation(current)
+        if current.get('status') == 'completed':
+            current = self._notify_completed_session(current)
+        return current
 
     @staticmethod
     def compact_session(session: Mapping[str, Any]) -> dict[str, Any]:
@@ -8678,6 +8877,20 @@ class BuilderAutomationService:
         webspace_id: str | None = None,
         conversation_id: str | None = None,
     ) -> dict[str, Any]:
+        """Read persisted state only; execution and recovery belong to workers.
+
+        In particular, a browser poll must not adopt its conversation, finalize
+        a candidate, report usage, or publish a completion notification.
+        ``conversation_id`` remains accepted for SDK compatibility, not authority.
+        """
+        compact_reader = getattr(self, '_read_compact_status', None)
+        if object_type and object_id and callable(compact_reader):
+            cached = compact_reader(str(object_type), str(object_id))
+            identity = (cached or {}).get('session') or {}
+            if (identity.get('object_type') == str(object_type)
+                    and identity.get('object_id') == str(object_id)
+                    and isinstance((cached or {}).get('automation'), Mapping)):
+                return dict(cached)
         session = (
             self.get_session(str(object_type), str(object_id))
             if object_type and object_id
@@ -8689,24 +8902,10 @@ class BuilderAutomationService:
                 "error": "automation_session_not_found",
                 "automation": self.empty_projection(webspace_id=webspace_id),
             }
-        incoming_conversation_id = str(conversation_id or "").strip()
-        if (
-            incoming_conversation_id
-            and (not str(session.get("conversation_id") or "").strip()
-                 or session.get("conversation_binding_source") == "generated_builder_topic")
-        ):
-            session["conversation_id"] = incoming_conversation_id
-            session["conversation_binding_source"] = "explicit_ingress"
-            session["updated_at"] = _now_iso()
-            self._save_session(session)
-        current = self.refresh_session(session)
-        current = self._reconcile_required_aprobation(current)
-        if current.get("status") == "completed":
-            current = self._notify_completed_session(current)
         return {
             "ok": True,
-            "session": current,
-            "automation": self.project_session(current),
+            "session": session,
+            "automation": self.project_session(session),
         }
 
     def _reconcile_required_aprobation(
@@ -9940,10 +10139,9 @@ class BuilderAutomationService:
             return None
         path = self._session_path(kind, project_id)
         try:
-            # Readers participate in the writer's process lock: a Windows
-            # replacement can otherwise briefly deny opening the old inode.
-            with mutation_lock(self.root / ".mutation.lock", timeout_s=30.0):
-                raw = json.loads(path.read_text(encoding="utf-8"))
+            # Writers replace atomically. Retry only Windows sharing failures;
+            # a read must neither create a mutation lock nor wait on execution.
+            raw = read_atomic_json(path)
         except (FileNotFoundError, json.JSONDecodeError):
             return None
         return (
@@ -10254,6 +10452,8 @@ class BuilderAutomationService:
     ) -> dict[str, Any] | None:
         candidates: list[dict[str, Any]] = []
         for path in self.root.glob("*.json"):
+            if path.name.endswith('.summary.json'):
+                continue
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
@@ -10269,12 +10469,13 @@ class BuilderAutomationService:
                 candidates.append(session)
         if not candidates:
             return None
-        return max(
+        selected = max(
             candidates,
             key=lambda item: str(
                 item.get("updated_at") or item.get("created_at") or ""
             ),
         )
+        return self._hydrate_session_compatibility(selected)
 
     def refresh_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         current = dict(session)
@@ -10820,6 +11021,43 @@ class BuilderAutomationService:
                 source_artifacts.append(
                     ("scenario", scenario_id, self.dev_scenarios_root / scenario_id)
                 )
+            if kind == "skill":
+                # Application-closure validation needs the entire owned source
+                # composition, not just its scenario. Keep these inputs read-only:
+                # snapshot inclusion never grants an editable sparse path.
+                validation_skills = self._resolve_companion_skill_ids(
+                    "scenario", application_project_id, project_ref=application_project_ref
+                )
+                for skill_id in validation_skills:
+                    if skill_id != project_id:
+                        source_artifacts.append(("skill", skill_id, self.dev_skills_root / skill_id))
+                manifest_change = session.get("companion_manifest_authorization")
+                if manifest_change:
+                    if manifest_change.get("project_ref") != application_project_ref:
+                        raise ValueError("companion manifest application identity changed")
+                    for skill_id, expected_digest in manifest_change["sources"].items():
+                        if skill_id not in validation_skills or skill_id == project_id:
+                            raise ValueError("companion manifest is outside the owned application")
+                        current_digest = "sha256:" + hashlib.sha256(
+                            (self.dev_skills_root / skill_id / "skill.yaml").read_bytes()).hexdigest()
+                        if current_digest != expected_digest:
+                            raise ValueError("companion manifest source changed since explicit authorization")
+                        sparse_paths.append(f"skills/{skill_id}/skill.yaml")
+                        if skill_id not in companions:
+                            companions.append(skill_id)
+                ui_change = session.get("ui_change_authorization")
+                if ui_change:
+                    from .ui_change_authorization import authorized_ui_change
+                    scenario_id = str(ui_change.get("project_id") or "")
+                    if scenario_id not in application_scenario_ids:
+                        raise ValueError("UI correction is outside the owned application")
+                    current_digest = "sha256:" + hashlib.sha256(
+                        (self.dev_scenarios_root / scenario_id / "webui.json").read_bytes()).hexdigest()
+                    if not authorized_ui_change({"ui_change_authorization": ui_change},
+                            project_id=scenario_id, prototype_revision=current_digest):
+                        raise ValueError("UI correction source changed since explicit authorization")
+                    sparse_paths.extend(ui_change["allowed_paths"])
+                    sparse_paths.append(f"scenarios/{scenario_id}/tests/")
         if kind == "scenario":
             for skill_id in companions:
                 sparse_paths.append(f"skills/{skill_id}/")
@@ -10901,6 +11139,12 @@ class BuilderAutomationService:
                 separators=(",", ":"),
             )
             if accepted_prototype_validation
+            # Rebinding Development Session authority may replace the base
+            # brief and its budgets, but must retain an explicit qualified
+            # deterministic correction as the executable delta. Otherwise an
+            # exact no-model retry silently becomes a broad model task.
+            else iteration_instruction
+            if _brief_deterministic_strategy(iteration_instruction)
             else str(session.get("implementation_brief") or "")
             if canonical_brief_authority
             else iteration_instruction or str(session.get("implementation_brief") or "")
@@ -11127,6 +11371,8 @@ class BuilderAutomationService:
         }
         if session.get('ui_change_authorization'):
             realization_constraints['ui_change_authorization'] = copy.deepcopy(session['ui_change_authorization'])
+        if session.get('companion_manifest_authorization'):
+            realization_constraints['companion_manifest_authorization'] = copy.deepcopy(session['companion_manifest_authorization'])
         if is_dev_ticket_repair:
             realization_constraints.update(
                 {
@@ -12270,6 +12516,143 @@ class BuilderAutomationService:
             )
         return result
 
+    def _materialize_authorized_ui_change(
+        self,
+        current: Mapping[str, Any],
+        *,
+        webspace_id: str,
+    ) -> dict[str, Any]:
+        """Reload an explicitly authorized application UI in its DEV webspace.
+
+        A skill-owned Automation session may carry a source-bound UI repair for
+        its owning scenario without accepting or replacing that scenario's
+        separate working Prototype. The source edit is not live merely because
+        it passed validation: Core must rebuild the paired DEV projection after
+        Forge has checkpointed the scenario artifact.
+        """
+
+        authorization = (
+            dict(current.get("ui_change_authorization"))
+            if isinstance(current.get("ui_change_authorization"), Mapping)
+            else {}
+        )
+        scenario_id = str(authorization.get("project_id") or "").strip()
+        if not scenario_id:
+            raise RuntimeError("Authorized UI change has no application scenario")
+        source = self.dev_scenarios_root / scenario_id / "webui.json"
+        if not source.is_file():
+            raise RuntimeError("Authorized UI change source is unavailable")
+        source_bytes = source.read_bytes()
+        try:
+            source_payload = json.loads(source_bytes.decode("utf-8-sig"))
+        except Exception as exc:
+            raise RuntimeError("Authorized UI change source is not valid JSON") from exc
+        source_ui = (
+            source_payload.get("ui")
+            if isinstance(source_payload, Mapping)
+            and isinstance(source_payload.get("ui"), Mapping)
+            else {}
+        )
+        source_application = (
+            source_ui.get("application")
+            if isinstance(source_ui.get("application"), Mapping)
+            else None
+        )
+        if source_application is None:
+            raise RuntimeError("Authorized UI change source has no application branch")
+        expected_application_digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                source_application,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+        from adaos.services.builder.workbench import BuilderWorkbenchService
+
+        workbench = BuilderWorkbenchService(state_dir=self.state_dir)
+        requested_webspace_id = str(webspace_id or "").strip()
+        resolve_source = getattr(workbench, "resolve_source_webspace_id", None)
+        source_webspace_id = (
+            str(resolve_source(requested_webspace_id) or "").strip()
+            if callable(resolve_source)
+            else requested_webspace_id
+        )
+        if not source_webspace_id:
+            raise RuntimeError("Authorized UI change requires a Builder owner Webspace")
+        self_host_dev = bool(
+            requested_webspace_id == source_webspace_id
+            and requested_webspace_id.endswith("-dev")
+        )
+        from adaos.sdk.builder.preview import (
+            ensure_dev_webspace_via_owner,
+            reload_via_owner,
+        )
+
+        if self_host_dev:
+            preview_webspace_id = requested_webspace_id
+        else:
+            binding = dict(workbench.get_workspace_binding(source_webspace_id))
+            preview_webspace_id = str(
+                binding.get("preview_webspace_id")
+                or binding.get("dev_webspace_id")
+                or ""
+            ).strip()
+            if not preview_webspace_id:
+                raise RuntimeError("Authorized UI change has no paired DEV Webspace")
+            ensured = ensure_dev_webspace_via_owner(
+                scenario_id,
+                requested_id=preview_webspace_id,
+                title=f"DEV: {source_webspace_id}",
+                timeout_s=120.0,
+            )
+            if not bool(ensured.get("ok")) or not bool(
+                ensured.get("accepted", True)
+            ):
+                raise RuntimeError(
+                    str(
+                        ensured.get("detail")
+                        or ensured.get("error")
+                        or "Authorized UI DEV Webspace preparation failed"
+                    )
+                )
+
+        runtime = reload_via_owner(
+            preview_webspace_id,
+            scenario_id=scenario_id,
+            request_id="authorized-ui-change:"
+            + str(current.get("current_task_id") or ""),
+            request_source="builder.automation.authorized_ui_change",
+            expected_application=source_application,
+            expected_application_digest=expected_application_digest,
+            timeout_s=120.0,
+        )
+        if not bool(runtime.get("ok")) or not preview_webspace_id:
+            raise RuntimeError(
+                str(
+                    runtime.get("detail")
+                    or runtime.get("error")
+                    or "Authorized UI DEV materialization failed"
+                )
+            )
+        return {
+            **runtime,
+            "ok": True,
+            "schema": "adaos.builder.authorized_ui_materialization.v1",
+            "source": "authorized_ui_change",
+            "scenario_id": scenario_id,
+            "source_webspace_id": source_webspace_id,
+            "requested_webspace_id": requested_webspace_id,
+            "preview_webspace_id": preview_webspace_id,
+            "task_id": str(current.get("current_task_id") or "").strip() or None,
+            "source_digest": "sha256:" + hashlib.sha256(source_bytes).hexdigest(),
+            "source_size": len(source_bytes),
+            "expected_application_digest": expected_application_digest,
+            "authorization_digest": str(authorization.get("digest") or "").strip()
+            or None,
+        }
+
     def _restore_preview_after_browser_feedback(
         self,
         materialization: Mapping[str, Any],
@@ -12717,6 +13100,8 @@ class BuilderAutomationService:
                         self._prepare_and_activate_dev_skill(
                             skill_id,
                             webspace_id=webspace_id,
+                            request_id=str(current.get("current_task_id") or "").strip()
+                            or None,
                         )
                         for skill_id in companion_skill_ids
                     ]
@@ -12898,6 +13283,8 @@ class BuilderAutomationService:
                             webspace_id=webspace_id,
                             expected_version=version,
                             run_tests=False,
+                            request_id=str(current.get("current_task_id") or "").strip()
+                            or None,
                         )
                         for skill_id, version in checkpointed_skill_versions.items()
                     ]
@@ -12934,6 +13321,23 @@ class BuilderAutomationService:
                         self._ensure_project_composition_checkpoint(
                             session,
                             checkpoints=readiness["vcs_checkpoints"],
+                        )
+                    )
+
+            if (
+                object_type == "skill"
+                and isinstance(current.get("ui_change_authorization"), Mapping)
+            ):
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "ui_materialization",
+                    "Materializing the authorized UI correction in DEV",
+                ):
+                    readiness["ui_materialization"] = (
+                        self._materialize_authorized_ui_change(
+                            current,
+                            webspace_id=webspace_id,
                         )
                     )
 
@@ -13700,6 +14104,14 @@ class BuilderAutomationService:
             and (object_type, object_id) not in artifacts
         ):
             artifacts.append((object_type, object_id))
+        ui_change = (
+            session.get("ui_change_authorization")
+            if isinstance(session.get("ui_change_authorization"), Mapping)
+            else {}
+        )
+        ui_scenario_id = str(ui_change.get("project_id") or "").strip()
+        if ui_scenario_id and ("scenario", ui_scenario_id) not in artifacts:
+            artifacts.append(("scenario", ui_scenario_id))
 
         changed_paths_value = result.get("changed_paths")
         validation_scope = str(session.get("validation_scope") or "changed_paths")
@@ -13889,10 +14301,14 @@ class BuilderAutomationService:
         webspace_id: str,
         expected_version: str | None = None,
         run_tests: bool = True,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """Run package-external DEV lifecycle steps owned by the orchestrator."""
         from adaos.adapters.db import SqliteSkillRegistry
         from adaos.services.agent_context import get_ctx
+        from adaos.services.applications.dev_data_lifecycle import (
+            LocalDevSkillDataLifecycle,
+        )
         from adaos.services.builder.workbench import BuilderWorkbenchService
         from adaos.services.skill.manager import SkillManager
 
@@ -13906,14 +14322,34 @@ class BuilderAutomationService:
             caps=ctx.caps,
             settings=ctx.settings,
         )
+        target_manifest = manager._load_manifest(
+            Path(ctx.paths.dev_skills_dir()) / skill_id
+        )
+        target_version = str(
+            expected_version or target_manifest.get("version") or ""
+        ).strip()
+        if not target_version:
+            raise RuntimeError(f"DEV skill {skill_id!r} has no target version")
+        data_lifecycle = LocalDevSkillDataLifecycle(
+            private_root=Path(ctx.paths.base_dir()),
+            skills_root=Path(ctx.paths.dev_skills_dir()),
+            skill_id=skill_id,
+            target_version=target_version,
+            target_manifest=target_manifest,
+            request_id=request_id,
+        )
         # Repeat packaged tests in the exact prepared-slot environment before
         # activation. Worker-side source tests are an early repair rail, but
         # they cannot prove that owner-scoped paths, dependency resolution,
-        # and slot metadata behave identically after ProjectRelease.
-        prepared = manager.prepare_dev_runtime(
-            skill_id,
-            version_override=str(expected_version or "").strip() or None,
-            run_tests=bool(run_tests),
+        # and slot metadata behave identically after ProjectRelease.  A native
+        # cross-bucket transition is fenced by the Core data coordinator before
+        # SkillManager is allowed to stage that slot.
+        prepared, data_preparation = data_lifecycle.prepare(
+            lambda: manager.prepare_dev_runtime(
+                skill_id,
+                version_override=target_version,
+                run_tests=bool(run_tests),
+            )
         )
         if expected_version and str(prepared.version) != str(expected_version):
             raise RuntimeError(
@@ -13945,6 +14381,11 @@ class BuilderAutomationService:
                 f"DEV skill {skill_id!r} activated version {active_version!r}; "
                 f"expected {prepared.version!r}"
             )
+        data_activation = data_lifecycle.complete(
+            prepared=prepared,
+            active_slot=slot,
+            runtime_status=status,
+        )
         return {
             "ok": True,
             "id": skill_id,
@@ -13952,6 +14393,10 @@ class BuilderAutomationService:
             "slot": slot,
             "resolved_manifest": str(prepared.resolved_manifest),
             "tests_rerun": bool(run_tests),
+            "data_lifecycle": {
+                "preparation": data_preparation.to_dict(),
+                "activation": data_activation,
+            },
         }
 
     @staticmethod
@@ -15123,84 +15568,42 @@ class BuilderAutomationService:
         status: str,
         message: str,
     ) -> bool:
+        """Commit one semantic output. External delivery belongs to Core's outbox."""
+        from adaos.services import conversation_publication, conversation_store
         from adaos.services.agent_context import get_ctx
 
-        current = dict(session)
         ctx = get_ctx()
-        task_id = str(current.get("current_task_id") or "").strip()
-        conversation_id = str(current.get("conversation_id") or "").strip()
-        object_type = str(current.get("object_type") or "").strip()
-        object_id = str(current.get("object_id") or "").strip()
-        webspace_id = str(current.get("webspace_id") or "desktop").strip() or "desktop"
-        thread_id = str(current.get("topic_id") or "").strip() or (
-            f"prompt-project:scenario:{object_id}"
-            if object_type == "scenario"
-            else None
-        )
-        meta = {
-            "schema": "adaos.builder.automation_notification.v1",
-            "automation_session_id": current.get("session_id"),
-            "task_id": task_id or None,
-            "automation_status": status,
-            "object_type": object_type or None,
-            "object_id": object_id or None,
-            "notification_scope": "subnet",
-            "response_idempotency_key": f"builder-automation:{status}:{task_id}",
-        }
-        delivered = False
-        if conversation_id:
-            try:
-                from adaos.services.conversation_response import materialize_response
-
-                materialize_response(
-                    {"message": message, "render_targets": ["text_tail"]},
-                    webspace_id=webspace_id,
-                    conversation_id=conversation_id,
-                    channel_id="builder",
-                    owner="skill:builder_skill",
-                    bus=ctx.bus,
-                    route_id="voice_chat",
-                    actor_id="agent:builder_skill:builder",
-                    actor_label="Builder",
-                    thread_id=thread_id,
-                    meta=meta,
-                    source="builder.automation",
-                )
-                delivered = True
-            except Exception:
-                _log.debug(
-                    "failed to materialize Builder lifecycle message task=%s status=%s",
-                    task_id,
-                    status,
-                    exc_info=True,
-                )
-        try:
-            from adaos.services.eventbus import emit
-
-            emit(
-                ctx.bus,
-                "ui.notify",
-                {
-                    "text": message,
-                    "_meta": {
-                        **meta,
-                        "skip_voice_chat": True,
-                    },
-                },
-                source="builder.automation",
-                schema="adaos.builder.automation_notification.v1",
-                version=1,
-                generate_event_id=True,
+        task_id = str(session.get("current_task_id") or "").strip()
+        conversation_id = str(session.get("conversation_id") or "").strip()
+        if not conversation_id or not task_id:
+            return False
+        record = conversation_store.get_conversation(conversation_id)
+        if record is not None and record.get("owner") != "skill:builder_skill":
+            from adaos.services.conversation_links import (
+                BUILDER_CONVERSATION_ID, ensure_builder_conversation,
             )
-            delivered = True
-        except Exception:
-            _log.debug(
-                "failed to broadcast Builder lifecycle message task=%s status=%s",
-                task_id,
-                status,
-                exc_info=True,
-            )
-        return delivered
+            if conversation_id == BUILDER_CONVERSATION_ID:
+                # Recover only the known legacy namespace collision; arbitrary
+                # foreign conversation identities remain denied by publish.
+                owned = ensure_builder_conversation(str(session.get("webspace_id") or "desktop"))
+                conversation_id = str(owned["conversation_id"])
+                record = conversation_store.get_conversation(conversation_id)
+        if record is None:
+            conversation_store.upsert_conversation(conversation_id=conversation_id,
+                owner="skill:builder_skill", webspace_id=str(session.get("webspace_id") or "desktop"),
+                meta={"channel_id": "builder"})
+            record = conversation_store.get_conversation(conversation_id)
+        receipt = conversation_publication.publish(
+            publication_key=f"automation:{task_id}:{status}:{hashlib.sha256(message.encode('utf-8')).hexdigest()}", conversation_id=conversation_id,
+            owner="skill:builder_skill", webspace_id=record["webspace_id"], channel_id="builder",
+            text=message, category="terminal" if status in {"completed", "failed", "cancelled"} else "progress",
+            thread_id=str(session.get("topic_id") or "").strip() or (
+                f"prompt-project:{session['object_type']}:{session['object_id']}"
+                if session.get("object_type") and session.get("object_id") else None),
+            route_ids=record["policy"].get("output_route_ids", []),
+            task_ref={"kind": "task", "id": task_id},
+            meta={"automation_status": status, "automation_session_id": session.get("session_id")}, bus=ctx.bus)
+        return receipt["status"] == "committed"
 
     @staticmethod
     def _codex_execution_label() -> str:
@@ -15778,9 +16181,7 @@ class BuilderAutomationService:
         except ValueError:
             return None
         try:
-            payload = json.loads(
-                self._compact_status_path(kind, project_id).read_text(encoding="utf-8")
-            )
+            payload = read_atomic_json(self._compact_status_path(kind, project_id))
         except (FileNotFoundError, json.JSONDecodeError):
             return None
         return dict(payload) if isinstance(payload, Mapping) else None

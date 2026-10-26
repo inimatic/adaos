@@ -23,7 +23,7 @@
         },
         "legacy_adoption": {
           "enum": ["reconstructible_empty", "core_managed_only"],
-          "description": "One-time bridge for a pre-lifecycle package only when its exact runtime data root contains no files."
+            "description": "One-time bridge for a pre-lifecycle package. reconstructible_empty requires an empty runtime data root; core_managed_only admits only bounded Core skill memory and Core quarantine evidence when the target declares the skill_memory adapter."
         },
         "coordination_files": {
           "description": "Exact owner-relative process mutex files. They are admitted by inventory but never copied as Application data.",
@@ -890,8 +890,12 @@
         "timeout_seconds": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "maximum": 600,
-          "description": "Maximum wall time for one tool invocation, in seconds. The runtime uses its default when omitted; a timeout does not cancel an already submitted durable provider job."
+          "maximum": 1800,
+          "description": "Maximum wall time for one invocation: up to 600 seconds normally, or 1800 with explicit durable_replay. Return a queued receipt before long work and perform it in the admitted Core replay. A timeout does not cancel an already submitted durable provider job."
+        },
+        "durable_replay": {
+          "type": "boolean",
+          "description": "Opt in to Core continuations of this exact admitted invocation. The tool must persist immutable input and effect receipts, reconcile by stable request/idempotency identity, and tolerate at-least-once delivery without duplicate effects. This grants no additional permissions."
         },
         "side_effects": {
           "type": "string",
@@ -916,7 +920,11 @@
           "description": "Optional durable approval scope for repeated controller-to-resource actions."
         }
       },
-      "required": ["name"]
+      "required": ["name"],
+      "allOf": [{
+        "if": {"required": ["durable_replay"], "properties": {"durable_replay": {"const": true}}},
+        "else": {"properties": {"timeout_seconds": {"maximum": 600}}}
+      }]
     },
 
     "toolBehavioralGuarantees": {

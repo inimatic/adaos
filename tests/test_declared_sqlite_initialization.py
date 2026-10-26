@@ -49,6 +49,34 @@ def test_fresh_repeat_and_beta_share_identical_checksum_history(tmp_path):
         assert connection.execute("SELECT * FROM items").fetchall() == [(1, "synthetic", "retained")]
 
 
+def test_complete_chain_verification_does_not_wait_for_reserved_app_writer(tmp_path):
+    path = tmp_path / "data.db"
+    initialize_sqlite_schema(path, CHAIN)
+    with closing(sqlite3.connect(path, isolation_level=None)) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        try:
+            # A redundant BEGIN IMMEDIATE used to fail here with database locked.
+            assert initialize_sqlite_schema(path, CHAIN)["applied_versions"] == []
+        finally:
+            writer.rollback()
+
+
+def test_parallel_bootstrap_applies_schema_once(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from adaos.services.applications import sqlite_data_transition as module
+    path = tmp_path / "data.db"
+    applied = []
+    original = module._apply_migrations
+    def apply(*args, **kwargs):
+        applied.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, "_apply_migrations", apply)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: initialize_sqlite_schema(path, CHAIN), range(4)))
+    assert len(applied) == 1
+    assert sum(bool(result['applied_versions']) for result in results) == 1
+
+
 def test_legacy_installed_data_cannot_be_migrated_during_runtime_initialization(tmp_path):
     path = tmp_path / "legacy.db"
     with closing(sqlite3.connect(path)) as connection:

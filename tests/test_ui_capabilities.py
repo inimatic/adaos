@@ -18,6 +18,32 @@ def test_existing_component_contracts_survive_unrelated_keyword_ranking():
     assert len(result['items']) <= 24
 
 
+def test_explicit_annotation_recipe_precedes_inferred_collection_recipes():
+    from adaos.services.ui_capabilities import selected_ui_capabilities
+
+    result = selected_ui_capabilities(
+        'Create local CRUD forms and master detail photo lists. '
+        'Use recipe.annotation_workspace.', limit=1,
+    )
+    assert result['root_item_ids'] == ['recipe.annotation_workspace']
+    assert {'visual.imageCompare', 'layout.group', 'feedback.taskProgress'} <= {
+        item['id'] for item in result['items']
+    }
+
+
+def test_sdk_selection_preserves_nested_source_viewer_even_for_unrelated_edit():
+    from adaos.sdk.developer.ui import select
+
+    result = select('Add group CRUD forms to the photo list', limit=1,
+        source_webui={'ui': {'application': {'desktop': {'pageSchema': {'widgets': [
+            {'id': 'workspace', 'type': 'layout.group', 'children': [
+                {'id': 'viewer', 'type': 'visual.imageCompare'},
+                {'id': 'progress', 'type': 'feedback.taskProgress'},
+            ]},
+        ]}}}}})
+    assert {'visual.imageCompare', 'feedback.taskProgress', 'layout.group'} <= set(result['source_item_ids'])
+
+
 import copy
 import json
 
@@ -94,7 +120,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.8.2"
+    assert catalog["catalog_version"] == "3.9.0"
     assert catalog["navigation_contracts"]["browser_history"]["schema_field"] == (
         "pageSchema.navigationState.bindings"
     )
@@ -400,6 +426,25 @@ def test_capability_validation_rejects_unreachable_layout_variant_state() -> Non
         "ui.layout.variant_state_unreachable",
         "ui.component.visible_state_unreachable",
     } & {item["code"] for item in fixed["findings"]}
+
+
+def test_nested_action_menu_reachability_requires_its_matching_select_write() -> None:
+    from adaos.services.ui_capabilities import validate_webui_capabilities as validate_generic_capabilities
+    for expression in ("$event.id", "$event.value"):
+        webui = _board_webui()
+        page = webui["ui"]["application"]["desktop"]["pageSchema"]
+        menu = {"id": "mode-menu", "type": "ui.actions", "inputs": {"buttons": [
+            {"id": "mode", "selectedStateKey": "conversationMode", "options": [
+                {"id": "task", "label": "Task"}, {"id": "informal", "label": "Informal"}]}]},
+            "actions": [{"on": "click:task", "type": "updateState", "params": {"conversationMode": "task"}},
+                        {"on": "select:mode", "type": "updateState", "params": {"conversationMode": expression}}]}
+        page["widgets"].insert(0, menu)
+        page["widgets"][1]["visibleIf"] = "$state.conversationMode === 'informal'"
+        assert not any(f["code"] == "ui.component.visible_state_unreachable"
+                       for f in validate_generic_capabilities(webui)["findings"])
+        menu["actions"][1]["on"] = "select:another-menu"
+        assert any(f["code"] == "ui.component.visible_state_unreachable"
+                   for f in validate_generic_capabilities(webui)["findings"])
 
 
 def test_capability_validation_rejects_misbound_navigation_tabs() -> None:

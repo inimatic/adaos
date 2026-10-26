@@ -10390,6 +10390,37 @@ def _make_publish_bus(
     return _publish_bus
 
 
+def _events_verified_owner(websocket: WebSocket):
+    """Use the same validated owner credential as HTTP; never a payload actor.
+
+    Connections admitted without that credential retain a transport identity.
+    In particular, a browser/device registration is not proof of a user.
+    """
+    from adaos.apps.api.auth import ensure_token, resolve_presented_token
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.personalization_runtime import current_user_id
+
+    token = resolve_presented_token(
+        x_adaos_token=websocket.headers.get("X-AdaOS-Token"),
+        authorization=websocket.headers.get("Authorization"),
+        query_token=websocket.query_params.get("token"),
+    )
+    try:
+        ensure_token(token)
+    except HTTPException:
+        return None
+    return SubjectRef("user", current_user_id())
+
+
+def _events_command_principal(device_id: str, verified_owner=None) -> dict[str, str]:
+    from adaos.domain.personalization_access import SubjectRef
+
+    if isinstance(verified_owner, SubjectRef) and verified_owner.kind == "user":
+        return {"kind": "user", "id": verified_owner.id, "actor_id": f"user:{verified_owner.id}"}
+    identity = f"browser:{str(device_id or 'unknown').strip() or 'unknown'}"
+    return {"kind": "transport", "id": identity, "actor_id": f"transport:{identity}"}
+
+
 async def process_events_command(
     kind: str,
     cmd_id: str,
@@ -10399,6 +10430,7 @@ async def process_events_command(
     send_response: Callable[[dict[str, Any]], Awaitable[None]],
     client_label: str | None = None,
     defer_device_register_post: bool = False,
+    verified_owner=None,
 ) -> str | None:
     """
     Process a single events-channel command and send ack via *send_response*.
@@ -11009,12 +11041,11 @@ async def process_events_command(
         try:
             from adaos.services import conversation_interactions
 
-            transport_actor_id = (
-                f"transport:browser:{str(device_id or 'unknown').strip() or 'unknown'}"
-            )
+            principal = _events_command_principal(device_id, verified_owner)
+            transport_actor_id = f"transport:browser:{str(device_id or 'unknown').strip() or 'unknown'}"
             result = conversation_interactions.submit_action_token(
                 action_token,
-                actor_id=transport_actor_id,
+                actor_id=principal["actor_id"],
                 idempotency_key=idempotency_key,
                 metadata={
                     **{key: value for key, value in meta.items() if key != "user_id"},
@@ -11040,14 +11071,7 @@ async def process_events_command(
     }:
         event_payload = dict(payload or {})
         event_payload.pop("_meta", None)
-        transport_actor_id = (
-            f"transport:browser:{str(device_id or 'unknown').strip() or 'unknown'}"
-        )
-        principal = {
-            "kind": "transport",
-            "id": f"browser:{str(device_id or 'unknown').strip() or 'unknown'}",
-            "actor_id": transport_actor_id,
-        }
+        principal = _events_command_principal(device_id, verified_owner)
         try:
             from adaos.services.pending_action_projection import (
                 project_pending_action_from_store,
@@ -11066,6 +11090,10 @@ async def process_events_command(
             else:
                 result = await run_runtime_interactive(project_pending_action_page_from_store,
                     principal=principal,
+                    # A newly opened control socket may still have its default
+                    # room. This is an explicit view filter, never an actor or
+                    # action grant; per-record principal checks still apply.
+                    webspace_id=_coerce_gateway_webspace_id(event_payload.get("webspace_id") or webspace_id),
                     conversation_id=(
                         str(event_payload.get("conversation_id") or "").strip() or None
                     ),
@@ -11390,6 +11418,7 @@ async def events_ws(websocket: WebSocket):
     """
     if not await _accept_websocket(websocket, channel="events"):
         return
+    verified_owner = _events_verified_owner(websocket)
     _transport_mark_open("ws")
     if _ws_trace_enabled():
         try:
@@ -11580,6 +11609,7 @@ async def events_ws(websocket: WebSocket):
                 client_label=_ws_client_str(websocket),
                 send_response=_ws_send,
                 defer_device_register_post=True,
+                verified_owner=verified_owner,
             )
             # Update connection-scoped state when a command changed it.
             if new_ws is not None:

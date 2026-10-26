@@ -7,7 +7,7 @@ import re
 import secrets
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
@@ -556,6 +556,7 @@ def _result_provenance(raw: Mapping[str, Any], task: Mapping[str, Any]) -> dict[
 @dataclass(slots=True)
 class SkillFactoryService:
     state_dir: Path | None = None
+    _task_query_cache: tuple[tuple[int, int, int, int], dict[str, Any]] | None = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def root(self) -> Path:
@@ -1492,8 +1493,8 @@ class SkillFactoryService:
             for existing in failures:
                 if _text(_mapping(existing).get("failure_id")) == failure["failure_id"]:
                     return {"ok": True, "duplicate": True, "retry_queued": _text(task.get("status")) == "queued", "task": _json_clone(task), "failure": _json_clone(existing)}
-            if _text(task.get("status")) == "completed":
-                raise ValueError(f"task '{task_id}' is already completed")
+            if _text(task.get("status")) in {"cancelled", "expired", "completed"}:
+                raise ValueError(f"task '{task_id}' is terminal: {task.get('status')}")
             failures.append(failure)
             task["failure_history"] = failures
             retry_requested = bool(raw.get("retry_requested") or raw.get("retry"))
@@ -1556,6 +1557,27 @@ class SkillFactoryService:
             current_status = _text(task.get("status"))
             if current_status == "cancelled":
                 return {"ok": True, "duplicate": True, "task": _json_clone(task)}
+            # Older workers could overwrite cancellation with a late failure.
+            # Reconcile only that exact race, preserving the original operator
+            # decision and identity; never turn an ordinary failure into consent.
+            cancellation = _mapping(task.get("cancellation"))
+            cancelled_at = _text(task.get("cancelled_at"))
+            failures = [_mapping(item) for item in _list(task.get("failure_history"))]
+            if (current_status == "failed" and bool(task.get("cancellation_requested"))
+                    and cancelled_at and cancellation.get("at") == cancelled_at
+                    and _text(cancellation.get("actor"))
+                    and _text(task.get("assigned_at")) <= cancelled_at
+                    and not task.get("result") and failures
+                    and all("is terminal: cancelled" in _text(item.get("message"))
+                            and _text(item.get("reported_at")) >= cancelled_at
+                            for item in failures)):
+                task["status"] = "cancelled"
+                task["updated_at"] = _now_iso()
+                state["tasks"][task_token] = task
+                self._append_event(state, "skill_factory.task_cancellation_reconciled",
+                                   {"task_id": task_token, "cancelled_at": cancelled_at})
+                self._write_state(state)
+                return {"ok": True, "reconciled": True, "task": _json_clone(task)}
             if current_status in TASK_TERMINAL_STATES:
                 return {
                     "ok": False,
@@ -1775,7 +1797,23 @@ class SkillFactoryService:
         task_token = _text(task_id)
         if not task_token:
             raise ValueError("task_id is required")
-        state = self._read_state()
+        # Cancellation polling is a query, not a reason to deserialize the
+        # complete history every 200 ms. Atomic file replacement supplies the
+        # version boundary; mutation paths always use a fresh _read_state.
+        def signature():
+            try:
+                value = self.state_path.stat()
+                return value.st_mtime_ns, value.st_ctime_ns, value.st_size, value.st_ino
+            except FileNotFoundError:
+                return None
+        before = signature()
+        cached = getattr(self, "_task_query_cache", None)
+        if before is not None and cached is not None and cached[0] == before:
+            state = cached[1]
+        else:
+            state = self._read_state()
+            if before is not None and before == signature():
+                self._task_query_cache = (before, state)
         return self._compat_task(self._require_task(state, task_token))
 
     def expire_overdue_tasks(self) -> dict[str, Any]:

@@ -28,6 +28,26 @@ def test_concurrent_admission_never_oversubscribes_project_limit(ledger):
     assert ledger.snapshot('project')['available_usd'] == 0
 
 
+def test_additional_allowance_is_idempotent_concurrent_and_preserves_commitments(ledger):
+    reserve(ledger)
+    def extend(_):
+        return ledger.extend_limit('project', additional_usd=5, authorization_ref='user:additional-five')
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(extend, range(8)))
+    assert all(result['limit_usd'] == 15 for result in results)
+    restarted = BuilderSpendLedger(state_dir=ledger.path.parent.parent)
+    assert restarted.extend_limit('project', additional_usd=5, authorization_ref='user:additional-five')['limit_usd'] == 15
+    assert restarted.snapshot('project')['committed_usd'] == 2
+    assert len(restarted.snapshot('project')['attempts']) == 1
+    with pytest.raises(ValueError, match='identity conflict'):
+        ledger.extend_limit('project', additional_usd=6, authorization_ref='user:additional-five')
+    with pytest.raises(ValueError, match='identity conflict'):
+        ledger.extend_limit('another-project', additional_usd=5, authorization_ref='user:additional-five')
+    with pytest.raises(ValueError, match='Unknown spend account'):
+        ledger.extend_limit('absent', additional_usd=5, authorization_ref='user:absent')
+    assert ledger.snapshot('project')['limit_usd'] == 15
+
+
 def test_same_request_retries_are_idempotent_but_input_drift_is_rejected(ledger):
     assert reserve(ledger) == reserve(ledger)
     assert len(ledger.snapshot('project')['attempts']) == 1

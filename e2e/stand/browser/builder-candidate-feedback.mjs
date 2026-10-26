@@ -753,16 +753,21 @@ try {
       const activeModal = page.locator('ion-modal.show-modal').last()
       const interactionRoot = await activeModal.count() ? activeModal : page
       if (layout === 'compact') {
-        const compactTriggers = interactionRoot.locator('.layout-region-trigger')
+        const compactTriggers = interactionRoot.locator('.layout-region-trigger, ada-workspace-layout .panel-switcher > button')
         const compactTriggerCount = await compactTriggers.count()
         if (compactTriggerCount) {
           for (let triggerIndex = 0; triggerIndex < compactTriggerCount; triggerIndex += 1) {
             const trigger = compactTriggers.nth(triggerIndex)
+            if (!(await trigger.isVisible())) continue
+            const controlledId = await trigger.getAttribute('aria-controls')
+            const disclosedRegion = () => controlledId
+              ? interactionRoot.locator(`[id=${JSON.stringify(controlledId)}]`).filter({ visible: true }).first()
+              : interactionRoot.locator('ada-layout-region.is-open').first()
             if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
               await trigger.click({ timeout: interactionTimeoutMs })
               await page.waitForTimeout(250)
             }
-            const openRegion = interactionRoot.locator('ada-layout-region.is-open').first()
+            const openRegion = disclosedRegion()
             if ((await trigger.getAttribute('aria-expanded')) !== 'true' || !(await openRegion.count())) {
               sample.hard_failures.push(`Compact disclosure ${triggerIndex + 1} did not open its semantic region`)
               continue
@@ -771,7 +776,7 @@ try {
               sample.checks.push({ kind: 'compact-region-disclosure', count: compactTriggerCount })
               await page.screenshot({ path: path.join(output, `${layout}-disclosure.png`), fullPage: true })
             }
-            const close = openRegion.locator('.layout-region__header button').first()
+            const close = openRegion.locator('.layout-region__header button, .panel-header button').first()
             if (await close.count()) {
               await close.click({ timeout: interactionTimeoutMs })
               await page.waitForTimeout(150)
@@ -787,7 +792,7 @@ try {
                 }
               }
             }
-            const reopened = interactionRoot.locator('ada-layout-region.is-open').first()
+            const reopened = disclosedRegion()
             try {
               await reopened.locator(selectableSelector).filter({ visible: true }).first()
                 .waitFor({ state: 'visible', timeout: Math.min(timeoutMs, 5_000) })
@@ -811,7 +816,7 @@ try {
               break
             }
             if (triggerIndex < compactTriggerCount - 1 && await close.count()) {
-              await reopened.locator('.layout-region__header button').first().click({ timeout: interactionTimeoutMs })
+              await reopened.locator('.layout-region__header button, .panel-header button').first().click({ timeout: interactionTimeoutMs })
               await page.waitForTimeout(150)
             } else {
               compactSelectionRegion = reopened
@@ -821,7 +826,7 @@ try {
       }
 
       const collectionRegions = interactionRoot.locator(
-        'ada-layout-region[data-region-role="collection"]',
+        'ada-layout-region[data-region-role="collection"], .workspace-panel[data-region-role="collection"]',
       ).filter({ visible: true })
       let selectableItems = collectionRegions.locator(selectableSelector)
       if (compactSelectionRegion) selectableItems = compactSelectionRegion.locator(selectableSelector)

@@ -341,6 +341,86 @@ def test_ensure_dev_webspace_via_owner_uses_active_local_control(monkeypatch) ->
     assert captured["closed"] is True
 
 
+def test_reload_via_owner_verifies_materialized_application(monkeypatch) -> None:
+    captured: list[tuple[str, str, dict[str, object]]] = []
+    application = {
+        "version": "1.2.3",
+        "desktop": {"pageSchema": {"type": "page"}},
+    }
+    expected = preview._canonical_json_digest(application)
+
+    class _Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return self.payload
+
+    class _Session:
+        trust_env = True
+
+        def post(self, url, **kwargs):
+            captured.append(("post", url, kwargs))
+            return _Response({"ok": True, "accepted": True})
+
+        def get(self, url, **kwargs):
+            captured.append(("get", url, kwargs))
+            return _Response(
+                {
+                    "snapshot": {
+                        "ui": {
+                            "current_scenario": "builder",
+                            "application": {
+                                **application,
+                                "runtimeOnly": {"enriched": True},
+                            },
+                        }
+                    }
+                }
+            )
+
+        def close(self) -> None:
+            captured.append(("close", "", {}))
+
+    monkeypatch.setattr("requests.Session", _Session)
+    monkeypatch.setattr(
+        "adaos.apps.cli.active_control.resolve_control_base_url",
+        lambda **_kwargs: "http://127.0.0.1:8778",
+    )
+    monkeypatch.setattr(
+        "adaos.apps.cli.active_control.resolve_control_token",
+        lambda **_kwargs: "local-token",
+    )
+
+    result = preview.reload_via_owner(
+        "desktop-dev",
+        scenario_id="builder",
+        request_id="builder-authorized-ui:task.1",
+        expected_application=application,
+        expected_application_digest=expected,
+    )
+
+    assert result["delivery"] == "owner_control_api"
+    assert result["projection_verification"] == {
+        "attempted": True,
+        "expected_application_digest": expected,
+        "current_scenario": "builder",
+        "materialized_source_application_digest": expected,
+        "matched": True,
+    }
+    assert captured[0][1].endswith(
+        "/api/node/yjs/webspaces/desktop-dev/reload"
+    )
+    assert (
+        captured[0][2]["headers"]["X-Request-ID"]
+        == "builder-authorized-ui:task.1"
+    )
+    assert captured[1][2]["params"] == {"scope": "essential"}
+
+
 def test_refresh_follow_active_target_updates_metadata_without_materializing(monkeypatch) -> None:
     service = _Workbench()
     monkeypatch.setattr(preview, "_service", lambda: service)

@@ -19,6 +19,40 @@ class _Service:
         }
 
 
+def test_preserved_validation_forwards_guarded_repair_without_model(monkeypatch):
+    captured = {}
+    class Service:
+        def validate_preserved_candidate(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "model_policy": "forbid"}
+    monkeypatch.setattr(automation, "_service", lambda: Service())
+    brief = {"repair_hints": {"structured_edits": {"operations": [{"op": "json_replace"}]}}}
+    result = automation.validate_preserved_candidate(object_type="scenario", object_id="photos",
+        source_task_id="task.retained", repair_brief=brief)
+    assert result["model_policy"] == "forbid"
+    assert captured == {"object_type": "scenario", "object_id": "photos",
+                        "source_task_id": "task.retained", "repair_brief": brief}
+
+
+def test_start_forwards_explicit_initial_maintenance_scopes(monkeypatch):
+    captured = {}
+    class Service:
+        background = True
+        def start_from_execute(self, **kwargs):
+            captured.update(kwargs)
+            return {'ok': True}
+    monkeypatch.setattr(automation, '_service', lambda: Service())
+    ui = {'reason': 'Authorized technical correction', 'source_message_ids': ['user.turn']}
+    companion = {'skill_ids': ['owned'], 'reason': 'Required manifest correction',
+                 'source_message_ids': ['user.turn']}
+    result = automation.start(object_type='skill', object_id='owner',
+        implementation_brief='Apply the authorized correction', agent_profile={},
+        ui_change_authorization=ui, companion_manifest_changes=companion)
+    assert result['ok'] is True
+    assert captured['ui_change_authorization'] == ui
+    assert captured['companion_manifest_changes'] == companion
+
+
 def test_foreground_result_returns_durable_completed_projection() -> None:
     result = automation._foreground_result(
         _Service(background=False),

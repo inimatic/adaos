@@ -16,6 +16,11 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def get_lifecycle_state(object_type: str, object_id: str) -> dict[str, Any]:
+    """Read lifecycle authority without process inspection or reconciliation."""
+    return dict(_service().lifecycle_state(object_type, object_id))
+
+
 def get_traceability(object_type: str, object_id: str) -> dict[str, Any]:
     """Versioned source/Issue/semantic/verification links and explicit gaps."""
     return dict(_service().traceability(object_type, object_id))
@@ -319,6 +324,7 @@ def update_interaction_context(
 
 
 __all__ = [
+    "get_lifecycle_state",
     "get_traceability",
     "get_prototype_edit_context",
     "get_prototype_intake_context",

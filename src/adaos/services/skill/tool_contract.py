@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import threading
@@ -24,6 +25,7 @@ _MANIFEST_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _MANIFEST_CACHE_MAX = 64
 _IMMUTABLE_RUNTIME_MANIFEST_CACHE: dict[tuple[tuple[str, ...], str], tuple[Path, dict[str, Any]]] = {}
 _IMMUTABLE_RUNTIME_MANIFEST_CACHE_MAX = 128
+_LEGACY_WEBUI_OWNER_CACHE: dict[tuple[str, str, str], str] = {}
 
 
 def _resolved_manifest_document(path: Path) -> dict[str, Any]:
@@ -192,15 +194,28 @@ def declared_skill_webui_owner(
         source = Path(str(manifest.get("source") or "")).resolve()
         if not source.is_relative_to(slot_root):
             return ""
-        source_manifest_path = source / "skill.yaml"
-        source_manifest = yaml.safe_load(
-            source_manifest_path.read_text(encoding="utf-8")
-        )
-        if not isinstance(source_manifest, dict):
+        source_manifest_path = (source / "skill.yaml").resolve()
+        if not source_manifest_path.is_relative_to(slot_root):
             return ""
-        if str(source_manifest.get("name") or "").strip() != skill_name:
-            return ""
-        return str(source_manifest.get("webui_owner") or "").strip().lower()
+        raw = source_manifest_path.read_bytes()
+        # Old slots can have hundreds of tool declarations. Re-parsing that
+        # YAML for every read turned a compatibility lookup into a first-paint
+        # bottleneck. Cache only the derived field, bound to the exact bytes
+        # and selected source, never a user-specific authorization decision.
+        key = (str(source_manifest_path), skill_name, hashlib.sha256(raw).hexdigest())
+        with _MANIFEST_CACHE_LOCK:
+            if key in _LEGACY_WEBUI_OWNER_CACHE:
+                return _LEGACY_WEBUI_OWNER_CACHE[key]
+            source_manifest = yaml.safe_load(raw.decode("utf-8-sig"))
+            if not isinstance(source_manifest, dict):
+                return ""
+            if str(source_manifest.get("name") or "").strip() != skill_name:
+                return ""
+            owner = str(source_manifest.get("webui_owner") or "").strip().lower()
+            _LEGACY_WEBUI_OWNER_CACHE[key] = owner
+            while len(_LEGACY_WEBUI_OWNER_CACHE) > _MANIFEST_CACHE_MAX:
+                _LEGACY_WEBUI_OWNER_CACHE.pop(next(iter(_LEGACY_WEBUI_OWNER_CACHE)))
+            return owner
     except Exception:
         return ""
 

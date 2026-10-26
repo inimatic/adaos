@@ -161,3 +161,65 @@ def test_late_http_acceptance_cannot_overwrite_bot_delivery(tmp_path):
     value = json.loads(next((tmp_path / "state/router/builder-deliveries").glob("*.json")).read_text(encoding="utf-8"))
     assert value["phase"] == "delivered" and value["http_status"] == 202
     assert value["receipt"]["external_message_ids"] == ["904"]
+
+
+def test_root_acceptance_without_bot_receipt_is_retried_with_the_same_identity(tmp_path):
+    message = {"id": "accepted", "from": "user", "text": "brief", "seq": 1, "ts": 1.0,
+        "_meta": {"schema": "adaos.builder.automation_input.v1", "dialog_channel_id": "builder",
+                  "task_id": "task.new", "source_message_id": "accepted"}}
+    projected = builder_chat_notifications(message)[1][0]
+    record_builder_delivery(tmp_path, projected, phase="accepted", http_status=202,
+                            delivery_attempt_id="tg-existing")
+    path = next((tmp_path / "state/router/builder-deliveries").glob("*.json"))
+    receipt = json.loads(path.read_text(encoding="utf-8")); receipt["updated_at"] = 95.0
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+    assert pending_latest_automation_notifications(tmp_path, [message], now=100, settle_seconds=0) == []
+    pending = pending_latest_automation_notifications(tmp_path, [message], now=200, settle_seconds=0)
+    assert [row["id"] for row in pending] == [projected["id"]]
+    record_builder_delivery(tmp_path, projected, phase="delivered", receipt={"external_message_ids": ["904"]})
+    assert pending_latest_automation_notifications(tmp_path, [message], now=300, settle_seconds=0) == []
+
+
+def test_missing_older_delivery_is_recovered_without_backfilling_unattempted_history(tmp_path):
+    def message(identity, task, sequence):
+        return {"id": identity, "from": "hub", "text": identity, "seq": sequence, "ts": 1.0,
+            "_meta": {"schema": "adaos.builder.automation_notification.v1", "dialog_channel_id": "builder",
+                      "task_id": task, "response_idempotency_key": identity}}
+    unattempted = message("historical", "task.old", 1)
+    missing = message("missing", "task.old", 2)
+    delivered = message("delivered", "task.old", 3)
+    latest = message("latest", "task.new", 4)
+    pending_item = builder_chat_notifications(missing)[1][0]
+    record_builder_delivery(tmp_path, pending_item, phase="accepted", delivery_attempt_id="tg-existing")
+    record_builder_delivery(tmp_path, builder_chat_notifications(delivered)[1][0], phase="delivered")
+    pending = pending_latest_automation_notifications(tmp_path, [latest, delivered, missing, unattempted],
+                                                     now=time.time()+100, settle_seconds=0)
+    assert [row["text"].split("\n", 1)[1] for row in pending] == ["missing", "latest"]
+    assert pending[0]["id"] == pending_item["id"]
+
+
+def test_failed_plain_builder_reply_is_retried_without_backfilling_other_replies(tmp_path):
+    def reply(identity):
+        return {"id": identity, "from": "hub", "text": identity, "ts": 1.0,
+                "_meta": {"conversation_owner": "skill:builder_skill"}}
+    missing, historical = reply("missing"), reply("historical")
+    projected = builder_chat_notifications(missing)[1][0]
+    record_builder_delivery(tmp_path, projected, phase="failed", http_status=502)
+    pending = pending_latest_automation_notifications(tmp_path, [missing, historical], now=time.time()+100)
+    assert [item["id"] for item in pending] == [projected["id"]]
+
+
+def test_duplicate_reference_settles_delivery_and_survives_late_http_ack(tmp_path):
+    message = {"id": "duplicate", "from": "hub", "text": "stage", "ts": 1.0,
+               "_meta": {"conversation_owner": "skill:builder_skill"}}
+    projected = builder_chat_notifications(message)[1][0]
+    record_builder_delivery(tmp_path, projected, phase="deduplicated", receipt={"external_message_ids": []})
+    assert len(pending_latest_automation_notifications(tmp_path, [message], now=time.time()+100)) == 0  # no prior attempt
+    record_builder_delivery(tmp_path, projected, phase="deduplicated", delivery_attempt_id="tg-duplicate")
+    assert len(pending_latest_automation_notifications(tmp_path, [message], now=time.time()+100)) == 1
+    proof = {"attempt_id": "tg-real", "operation_key": "builder-notify:real", "external_message_ids": ["909"]}
+    record_builder_delivery(tmp_path, projected, phase="deduplicated", duplicate_of="tg-real", delivery_reference=proof)
+    record_builder_delivery(tmp_path, projected, phase="accepted", receipt=None, duplicate_of=None, delivery_reference=None)
+    assert pending_latest_automation_notifications(tmp_path, [message], now=time.time()+100) == []
+    value = json.loads(next((tmp_path / "state/router/builder-deliveries").glob("*.json")).read_text(encoding="utf-8"))
+    assert value["phase"] == "deduplicated" and value["delivery_reference"] == proof

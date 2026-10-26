@@ -2038,6 +2038,10 @@ async def _runtime_context(app: FastAPI):
 
     router_service = RouterService(eventbus=app.state.bus, base_dir=app.state.ctx.paths.base_dir())
     app.state.router_service = router_service
+    from adaos.services.conversation_delivery import DeliveryWorker
+
+    delivery_worker = DeliveryWorker(app.state.bus)
+    app.state.conversation_delivery_worker = delivery_worker
     # Periodic liveness staler (hub only)
     staler_task = None
     event_loop_lag_task: asyncio.Task[Any] | None = None
@@ -2081,6 +2085,8 @@ async def _runtime_context(app: FastAPI):
     except Exception:
         logging.getLogger("adaos.yjs.gateway").warning("failed to start Yjs websocket server", exc_info=True)
     # Start router early so ui.notify/ui.say from boot sequence are routed.
+    if runtime_transition_role() != "candidate":
+        delivery_worker.start()
     try:
         with _StartupTimer("start_router_service"):
             await router_service.start()
@@ -2850,6 +2856,7 @@ async def _runtime_context(app: FastAPI):
         except Exception:
             pass
         try:
+            delivery_worker.stop()
             await router_service.stop()
         except Exception:
             pass
@@ -3167,6 +3174,9 @@ async def _wait_for_promoted_service_start_admission(reason: str) -> dict[str, A
 
 
 async def _start_service_skills_after_promotion(reason: str) -> None:
+    delivery_worker = getattr(app.state, "conversation_delivery_worker", None)
+    if delivery_worker is not None:
+        delivery_worker.start()
     materialization_task = asyncio.create_task(
         _commit_startup_materializations_after_promotion(reason),
         name="runtime-promote-materialization-commit",

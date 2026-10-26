@@ -99,8 +99,15 @@ class TelegramAdapter:
         if route["transport"] != "telegram":
             raise ValueError("unsupported output transport")
         chunks = _telegram_text_chunks(envelope["payload"]["text"] or "", limit=3000)
+        has_bot, has_chat = bool(destination.get("bot_id")), bool(destination.get("chat_id"))
+        if has_bot != has_chat:
+            raise ValueError("output destination requires both frozen bot and chat identities")
+        # A discovered pairing route retains its observed address. Its send is
+        # explicit, so a changed pairing cannot redirect already admitted text.
+        # Hub-only legacy routes keep the address-free pairing contract.
+        mode = None if has_bot else "hub_pairing"
         transport = telegram_delivery.claim_outbound(attempt["idempotency_key"],
-            hub_id=str(destination["hub_id"]), routing_mode=destination.get("routing_mode", "hub_pairing"),
+            hub_id=str(destination["hub_id"]), routing_mode=mode,
             bot_id=destination.get("bot_id"), chat_id=destination.get("chat_id"),
             message_count=len(chunks), content_digest="sha256:" + publication._digest(chunks),
             response_envelope_id=envelope["envelope_id"], durable_attempt_id=attempt["attempt_id"])
@@ -235,10 +242,15 @@ def reconcile_once() -> bool:
         response = query_receipt(attempt)
         if response and response.get("receipt"):
             apply_receipt(response["receipt"])
-        elif response and not response.get("ok", True):
+        elif response:
+            # A restored endpoint returning a truthful miss must replace a
+            # stale "root_upgrade_required" diagnostic, without authorizing
+            # replay or closing the still-unproven operation.
+            error = ("receipt_not_found" if response.get("ok") else
+                     "receipt_query:" + str(response.get("status") or "unavailable"))
             with ctx.sql.connect() as con:
                 con.execute("UPDATE conversation_output_intents SET last_error=? WHERE intent_id=? AND status='reconciling'",
-                    ("receipt_query:" + str(response.get("status") or "unavailable"), row["intent_id"]))
+                    (error, row["intent_id"]))
                 con.commit()
     except Exception:
         _LOG.debug("exact receipt reconciliation unavailable intent=%s", row["intent_id"], exc_info=True)
@@ -258,17 +270,37 @@ def query_receipt(attempt: dict[str, Any]) -> dict[str, Any] | None:
     if _UNSUPPORTED_ROOTS.get(base, 0) > time.monotonic():
         return {"ok": False, "status": "root_upgrade_required"}
     try:
-        return client.request("POST", "/v1/hub/communication/telegram/receipt/status",
+        response = client.request("POST", "/v1/hub/communication/telegram/receipt/status",
             json={"operation_key": attempt["operation_key"]}, timeout=5)
     except RootHttpError as exc:
-        if exc.status_code == 404 and isinstance(exc.payload, dict) and "receipt" in exc.payload:
-            return {"ok": True, "found": False, "receipt": None, "status": "not_found"}
+        if (exc.status_code == 404 and isinstance(exc.payload, dict)
+                and exc.payload.get("ok") is False and "receipt" in exc.payload
+                and exc.payload["receipt"] is None):
+            return {"schema": "adaos.telegram.receipt_status.v1", "ok": True,
+                    "found": False, "receipt": None, "status": "not_found"}
         if exc.status_code in (404, 501):
             if len(_UNSUPPORTED_ROOTS) >= 16:
                 _UNSUPPORTED_ROOTS.pop(min(_UNSUPPORTED_ROOTS, key=_UNSUPPORTED_ROOTS.get))
             _UNSUPPORTED_ROOTS[base] = time.monotonic() + 300
             return {"ok": False, "status": "root_upgrade_required"}
         return {"ok": False, "status": "unavailable"}
+    if not isinstance(response, dict) or response.get("schema") != "adaos.telegram.receipt_status.v1" or response.get("ok") is not True:
+        return {"ok": False, "status": "invalid_receipt_status"}
+    if response.get("found") is False and response.get("receipt") is None and response.get("status") == "not_found":
+        _UNSUPPORTED_ROOTS.pop(base, None)
+        return response
+    if response.get("found") is True and response.get("status") == "recorded" and isinstance(response.get("receipt"), dict):
+        from adaos.services import telegram_delivery
+        try:
+            proof = telegram_delivery.validate_receipt(response["receipt"])
+        except ValueError:
+            return {"ok": False, "status": "invalid_receipt_status"}
+        if (proof["operation_key"] == attempt["operation_key"]
+                and proof["delivery_attempt_id"] == attempt.get("attempt_id")
+                and proof["transport"] == "telegram"):
+            _UNSUPPORTED_ROOTS.pop(base, None)
+            return {**response, "receipt": proof}
+    return {"ok": False, "status": "invalid_receipt_status"}
 
 
 def runtime_snapshot() -> dict[str, Any]:

@@ -822,9 +822,17 @@ def _runtime_action_grant_ref(
         subject = f"controller:{controller}"
     else:
         profile = _first_text(payload.get("profile_id"))
-        if not profile:
+        verified_application = _mapping(spec.get("application_access"))
+        verified_subject = _first_text(verified_application.get("subject_ref"))
+        if profile:
+            subject = f"profile:{profile}"
+        elif verified_subject:
+            # Application calls already carry a server-verified subject. Reuse
+            # that identity for a declared resource scope instead of forcing an
+            # app to invent a client-controlled profile/controller identifier.
+            subject = verified_subject
+        else:
             return {}
-        subject = f"profile:{profile}"
     resource = _first_text(payload.get(resource_argument))
     if not resource:
         return {}
@@ -1079,6 +1087,11 @@ async def _ensure_runtime_action_pending_action(
             title_i18n=presentation["title_i18n"],
             summary=presentation["summary"],
             summary_i18n=presentation["summary_i18n"],
+            # A bounded human-authored purpose distinguishes different frozen
+            # requests without exposing arbitrary arguments or credentials.
+            request_text=_first_text(
+                payload.get("target_label"), _mapping(payload.get("settings")).get("goal")
+            )[:240],
             producer={"type": "system", "system_id": "tool_bridge"},
             owner_scope=_without_empty({"webspace_id": webspace_id, "node_id": local_node_id}),
             domain_ref=domain_ref,
@@ -2409,8 +2422,12 @@ async def _authorize_application_tool_call(
     state_dir = Path(getattr(ctx, "authority_state_dir", None) or state_dir_getter())
     management = ApplicationAccessManagementService(get_application_service(state_dir))
     admission_timings = phase_timings if phase_timings is not None else {}
+    # Legacy exact slots recover ownership from their packaged YAML. Resolving
+    # that contract may read/parse a large manifest, so admission must not run
+    # it on the API/YJS event loop, including on an otherwise warm tool call.
     shared_dependency = bool(requested_application_id) and (
-        _declared_skill_webui_owner(
+        await asyncio.to_thread(
+            _declared_skill_webui_owner,
             manager,
             skill_name=skill_name,
             dev=False,
@@ -2999,6 +3016,7 @@ async def download_tool_attachment(
     response: Response,
     webspace_id: str = "",
     dev: bool = False,
+    download: bool = False,
     ctx: AgentContext = Depends(get_ctx),
 ) -> FileResponse:
     """Authorize a read-tool before serving one verified app-owned blob."""
@@ -3065,7 +3083,7 @@ async def download_tool_attachment(
         path,
         media_type=guessed if guessed in allowed_inline else "application/octet-stream",
         filename=safe_filename,
-        content_disposition_type="inline" if guessed in allowed_inline else "attachment",
+        content_disposition_type="inline" if guessed in allowed_inline and not download else "attachment",
         headers=headers,
     )
 
@@ -3409,7 +3427,12 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     resolved_timeout = _request_tool_call_timeout_s(body, request)
     if resolved_timeout is not None and resolved_timeout != body.timeout:
         body = body.model_copy(update={"timeout": resolved_timeout})
-    mode, key, entry = _tool_call_idempotency_begin(body, request)
+    from adaos.services.tool_continuations import is_replay
+
+    # A Core-owned continuation reconciles one existing operation. Returning
+    # its initial transport receipt forever would prevent observing remote
+    # completion. This switch cannot be supplied in application arguments.
+    mode, key, entry = ("continuation", "", None) if is_replay() else _tool_call_idempotency_begin(body, request)
     if mode == "cached" and entry is not None:
         return _tool_call_idempotency_replay(entry, response)
     if mode == "wait" and entry is not None:
@@ -3729,6 +3752,15 @@ async def _call_tool_impl(
                     time.perf_counter() - service_started_at
                 ) * 1000.0
 
+        def _invoke_admitted_tool(*, dev: bool = False) -> Any:
+            from adaos.services.tool_continuations import admitted_tool
+
+            admitted_body = body.model_copy(update={"arguments": payload})
+            with admitted_tool(ctx, mgr, admitted_body, request, mutating=mutating_call):
+                if dev:
+                    return mgr.run_dev_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+
         def _run_local_tool_unlocked() -> Any:
             nonlocal local_execution_started
             if trial_runtime is not None:
@@ -3738,7 +3770,7 @@ async def _call_tool_impl(
                 stage_started = time.perf_counter()
                 try:
                     with use_ctx(mgr.ctx):
-                        return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                        return _invoke_admitted_tool()
                 finally:
                     # Trial-backed Applications use the same execution path but
                     # previously reported a misleading 0 ms skill-dispatch in
@@ -3769,12 +3801,12 @@ async def _call_tool_impl(
             if body.dev:
                 try:
                     local_execution_started = True
-                    return mgr.run_dev_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                    return _invoke_admitted_tool(dev=True)
                 finally:
                     local_timings["run_tool_ms"] = (time.perf_counter() - stage_started) * 1000.0
             try:
                 local_execution_started = True
-                return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+                return _invoke_admitted_tool()
             finally:
                 local_timings["run_tool_ms"] = (time.perf_counter() - stage_started) * 1000.0
 

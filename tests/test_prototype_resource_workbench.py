@@ -17,6 +17,45 @@ from adaos.services.resources import (
 )
 
 
+def test_nested_groups_keep_resource_projection_identity_and_modal_crud():
+    resource = 'prototype.nested.photos'
+    listing = {'id': 'photos', 'type': 'ui.list', 'area': 'content',
+               'inputs': {'itemIdKey': 'photo_key'},
+               'dataSource': {'kind': 'resourceQuery', 'resourceType': resource}}
+    form = {'id': 'edit-photo', 'type': 'ui.form', 'area': 'content',
+            'inputs': {'fields': [{'id': 'goal', 'type': 'longText'}]},
+            'actions': [{'on': 'submit', 'type': 'resourceOperation', 'target': resource,
+                         'params': {'operation_id': 'create'}}]}
+    def group(identity, children):
+        return {'id': identity, 'type': 'layout.group', 'area': 'main',
+                'inputs': {'layout': 'stack'}, 'children': children}
+    application = {
+        'desktop': {'pageSchema': {'widgets': [group('outer', [group('inner', [listing])])]}},
+        'modals': {'edit': {'schema': {'widgets': [group('modal-group', [form])]}}},
+    }
+    webui = {'ui': {'application': application}}
+    spec = developer_prototypes.derive_record_resource_spec(webui,
+        [{'photo_key': 'one', 'goal': 'Retain texture'}], resource_type=resource)
+    definition = spec['resource_definition']
+    assert 'photo_key' in definition['record_schema']['required']
+    assert 'id' not in definition['record_schema']['properties']
+    assert {v['kind'] for v in definition['views']} == {'list', 'form'}
+    assert 'create' in {operation['id'] for operation in definition['operations']}
+    assert len(developer_prototypes._resource_query_widgets(webui)) == 1
+
+
+def test_record_predicates_cannot_be_silently_ignored_as_top_level_query_keys():
+    widget={'id':'selected-photo','type':'ui.list','dataSource':{
+        'kind':'resourceQuery','resourceType':'prototype.photos','query':{'id':'one','kind':'photo'}}}
+    webui={'ui':{'application':{'desktop':{'pageSchema':{'widgets':[widget]}}}}}
+    records=[{'id':'one','kind':'photo'},{'id':'group','kind':'group'}]
+    with pytest.raises(ValueError,match=r'query.filters'):
+        developer_prototypes.derive_record_resource_spec(webui,records,resource_type='prototype.photos')
+    widget['dataSource']['query']={'filters':{'id':'one','kind':'photo'}}
+    spec=developer_prototypes.derive_record_resource_spec(webui,records,resource_type='prototype.photos')
+    assert {'id','kind'} <= set(spec['resource_definition']['query']['filters'])
+
+
 def test_legacy_prototype_state_migrates_without_reseeding_or_catalog_reads(tmp_path, monkeypatch):
     source = PrototypeResourceService(state_dir=tmp_path / "source")
     state = source.materialize(_bundle())["state"]

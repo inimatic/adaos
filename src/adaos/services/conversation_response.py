@@ -101,6 +101,7 @@ def materialize_response(
 
     published: list[dict[str, Any]] = []
     stored: dict[str, Any] | None = None
+    publication_receipt: dict[str, Any] | None = None
     if text and "text_tail" in targets:
         existing = _matching_chat_append(
             materialized_chat_appends or (),
@@ -139,21 +140,30 @@ def materialize_response(
             if actor_avatar_ref:
                 payload["active_agent_avatar_ref"] = actor_avatar_ref
             _attach_voice_metadata(payload, clean_meta)
-            stored = _append_ledger_message(
-                payload,
-                webspace_id=webspace_id,
-                conversation_id=conversation_id,
-                channel_id=channel_id,
-                owner=owner,
-                route_id=route_id,
-                actor_id=actor_id,
-                actor_label=actor_label,
-                actor_icon=actor_icon,
-                request_id=request_id,
-                turn_trace_id=turn_trace_id,
-                thread_id=thread_id,
-                meta=clean_meta,
-            )
+            sdk_publication = _publish_owned_sdk_response(payload,
+                webspace_id=webspace_id, conversation_id=conversation_id,
+                channel_id=channel_id, owner=owner, thread_id=thread_id,
+                response_identity=response_idempotency_key, meta=clean_meta,
+                source=source)
+            if sdk_publication is not None:
+                stored, publication_receipt = sdk_publication
+                payload = dict(stored)
+            else:
+                stored = _append_ledger_message(
+                    payload,
+                    webspace_id=webspace_id,
+                    conversation_id=conversation_id,
+                    channel_id=channel_id,
+                    owner=owner,
+                    route_id=route_id,
+                    actor_id=actor_id,
+                    actor_label=actor_label,
+                    actor_icon=actor_icon,
+                    request_id=request_id,
+                    turn_trace_id=turn_trace_id,
+                    thread_id=thread_id,
+                    meta=clean_meta,
+                )
             if bus is not None and publish_chat_event:
                 _publish(bus, "io.out.chat.append", payload, source=source)
             published.append(payload)
@@ -177,7 +187,57 @@ def materialize_response(
         "published_chat": published,
         "stored_message": stored,
         "materialized": bool(published),
+        **({"publication_receipt": publication_receipt} if publication_receipt is not None else {}),
     }
+
+
+def _publish_owned_sdk_response(payload: Mapping[str, Any], *, webspace_id: str,
+    conversation_id: str, channel_id: str, owner: str, thread_id: str | None,
+    response_identity: str | None, meta: Mapping[str, Any], source: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Commit SDK chat text/actions and selected outputs in one transaction.
+
+    Only an admitted owning skill may use this path. Core/Router responses with
+    no SDK skill context retain their own authority boundary; caller-provided
+    transport addresses and owner strings grant no external delivery rights.
+    """
+    if source != 'adaos.sdk.chat': return None
+    from adaos.services.agent_context import get_ctx
+    ctx = get_ctx()
+    skill = ctx.skill_ctx.get()
+    if skill is None: return None
+    if owner != f'skill:{skill.name}': return None
+    if conversation_store.get_conversation(conversation_id) is None: return None
+    from adaos.sdk import conversation, access
+    from adaos.services.policy.caller import current_caller
+    # Legacy Core-owned callers can retain Web materialization without an
+    # authenticated SDK invocation. That grants no selected external outputs.
+    if current_caller() is None and access.current_user() is None: return None
+    from adaos.services import conversation_publication
+    record, routes = conversation._publication_scope(conversation_id)
+    if record['meta'].get('channel_id') and record['meta']['channel_id'] != channel_id:
+        raise PermissionError('SDK chat publication scope mismatch')
+    if record['webspace_id'] != webspace_id:
+        # A user-wide conversation may be presented in several explicitly bound
+        # workspaces. The trusted dialog pointer, not an app-supplied ID, admits
+        # that view; publication keeps the canonical conversation's scope.
+        pointer = conversation_store.get_dialog_channel(webspace_id, channel_id) or {}
+        if pointer.get('conversation_id') != conversation_id or pointer.get('owner') != owner:
+            raise PermissionError('SDK chat publication scope mismatch')
+    invocation = access.invocation() or {}
+    identity = response_identity or _response_idempotency_key(meta=meta,
+        request_id=invocation.get('idempotency_key') or invocation.get('request_id'),
+        turn_trace_id=None) or str(payload['id'])
+    presentation = {key: payload[key] for key in ('actions','interaction','active_agent_id',
+        'active_agent_label','active_agent_icon','active_agent_avatar_ref') if key in payload}
+    receipt = conversation_publication.publish(publication_key='sdk-chat:'+identity,
+        conversation_id=conversation_id, owner=owner, webspace_id=record['webspace_id'],
+        channel_id=channel_id, thread_id=thread_id, text=str(payload['text']),
+        route_ids=routes, meta=meta, message_payload=presentation)
+    # A post-commit failure must never fall back to a second append/sender.
+    stored = conversation_store.get_message(receipt['message_id'])
+    if stored is None: raise RuntimeError('committed SDK chat message unavailable')
+    return stored, receipt
 
 
 def materialize_tool_result(

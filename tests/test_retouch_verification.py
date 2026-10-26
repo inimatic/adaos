@@ -10,17 +10,18 @@ import pytest
 from adaos.e2e.retouch_verification import verify_downloads
 
 
-def fixture(tmp_path, *, extra_runs=0, protected_pixel=False):
+def fixture(tmp_path, *, extra_runs=0, protected_pixel=False, center=(50,50), changed_pixel=None):
     owned=tmp_path/'owned'; output=tmp_path/'output'
     (owned/'data').mkdir(parents=True); output.mkdir()
     base=Image.new('RGB',(320,240),(100,120,140)); changed=base.copy()
-    changed.putpixel((50,50) if protected_pixel else (100,100),(101,121,141))
+    altered = changed_pixel or ((50,50) if protected_pixel else (100,100))
+    changed.putpixel(altered,(101,121,141))
     def encoded(image,fmt):
         stream=io.BytesIO(); image.save(stream,format=fmt); return stream.getvalue()
     original=encoded(base,'PNG'); sha=hashlib.sha256(original).hexdigest()
     snapshot={'photo_sha256':sha,'mask':{'permission_mode':'rectangle','context_border_px':24,
         'crop':{'x':0,'y':0,'width':320,'height':240},
-        'strokes':[{'kind':'protect','points':[{'x':50,'y':50}],'radius':8}]}}
+        'strokes':[{'kind':'protect','points':[{'x':center[0],'y':center[1]}],'radius':8}]}}
     report={'downloads':[],'revision_probe':{'original_run_id':'run.original'}}
     exports=[]; download_rows=[]
     for fmt,suffix in [('PNG','png'),('JPEG','jpg')]:
@@ -29,7 +30,7 @@ def fixture(tmp_path, *, extra_runs=0, protected_pixel=False):
         exports.append({'format':fmt,'sha256':digest})
         report['downloads'].append({'filename':name,'digest':'sha256:'+digest})
         download_rows.append({'filename':name,'run_id':'run.original','format':fmt})
-    overlay=Image.new('RGBA',base.size,(0,0,0,128)); overlay.putpixel((50,50) if protected_pixel else (100,100),(0,0,0,0))
+    overlay=Image.new('RGBA',base.size,(0,0,0,128)); overlay.putpixel(altered,(0,0,0,0))
     overlay.save(output/'difference-map.png')
     db=sqlite3.connect(owned/'data/retouch.sqlite3')
     db.execute('CREATE TABLE records(kind TEXT,id TEXT,body TEXT)')
@@ -55,6 +56,25 @@ def test_exact_download_ownership_survives_multiple_completed_runs_with_identica
     assert result['protected_pixels_equal'] and result['difference_overlay_exact']
 
 
+def test_fractional_pointer_center_uses_actual_mask_for_exact_pixel_checks(tmp_path):
+    owned,output,report=fixture(tmp_path,center=(50,49.99))
+    result=verify_downloads(owned_root=owned,output=output,report=report)
+    assert result['protected_pixels_equal'] and result['difference_overlay_exact']
+
+
+def test_fractional_mask_boundary_is_protected_even_outside_the_integer_rounded_circle(tmp_path):
+    owned,output,report=fixture(tmp_path,center=(49.99,49.99),changed_pixel=(41,49))
+    with pytest.raises(ValueError,match='modified protected pixels'):
+        verify_downloads(owned_root=owned,output=output,report=report)
+
+
+@pytest.mark.parametrize('center',[(49.9,50),(50,50.1),(float('nan'),50)])
+def test_pointer_tolerance_does_not_accept_a_different_or_nonfinite_mask(tmp_path,center):
+    owned,output,report=fixture(tmp_path,center=center)
+    with pytest.raises(ValueError,match='does not cover'):
+        verify_downloads(owned_root=owned,output=output,report=report)
+
+
 @pytest.mark.parametrize('fault',['foreign_owner','mixed_owners','duplicate_filename','history_mismatch',
     'path_escape','file_corrupt','report_digest','overlay','protected_pixel'])
 def test_independent_checker_rejects_targeted_mutations(tmp_path,fault):
@@ -74,3 +94,33 @@ def test_independent_checker_rejects_targeted_mutations(tmp_path,fault):
     if fault=='overlay':Image.new('RGBA',(320,240),(0,0,0,128)).save(output/'difference-map.png')
     with pytest.raises((ValueError,OSError)):
         verify_downloads(owned_root=owned,output=output,report=report)
+
+
+@pytest.mark.parametrize('fault', [None, 'raw_clipped', 'foreign_receipt', 'mixed_variant'])
+def test_raw_then_explicit_masked_artifacts_keep_independent_pixel_and_receipt_checks(tmp_path, fault):
+    owned, output, report = fixture(tmp_path)
+    with sqlite3.connect(owned/'data/retouch.sqlite3') as db:
+        base_bytes = db.execute('SELECT base FROM assets').fetchone()[0]
+        image = Image.open(io.BytesIO(base_bytes)).convert('RGB')
+        image.putpixel((100, 100), (161, 101, 91))
+        if fault != 'raw_clipped':
+            image.putpixel((50, 50), (71, 181, 91))
+        stream = io.BytesIO(); image.save(stream, format='PNG')
+        raw = stream.getvalue(); (output/'raw.png').write_bytes(raw)
+        def receipt(content, mime):
+            return dict(digest='sha256:'+hashlib.sha256(content).hexdigest(), size_bytes=len(content),
+                        owner_ref='skill:natural_retouch_skill', logical_name='exports', media_type=mime)
+        for identity, body in db.execute("SELECT id,body FROM records WHERE kind='downloads'").fetchall():
+            row = json.loads(body)
+            row['variant'] = 'raw' if fault == 'mixed_variant' else 'masked'
+            row['receipt'] = receipt((output/row['filename']).read_bytes(), 'image/png' if row['format']=='PNG' else 'image/jpeg')
+            if fault == 'foreign_receipt': row['receipt']['owner_ref'] = 'skill:another'
+            db.execute("UPDATE records SET body=? WHERE kind='downloads' AND id=?", (json.dumps(row), identity))
+        row = dict(filename='raw.png', run_id='run.original', variant='raw', receipt=receipt(raw,'image/png'))
+        db.execute("INSERT INTO records VALUES('downloads','raw',?)", (json.dumps(row),))
+    report['raw_preview'] = dict(filename='raw.png', run_id='run.original', digest='sha256:'+hashlib.sha256(raw).hexdigest())
+    if fault:
+        with pytest.raises(ValueError): verify_downloads(owned_root=owned, output=output, report=report)
+    else:
+        result = verify_downloads(owned_root=owned, output=output, report=report)
+        assert result['raw_preview_verified'] and result['protected_pixels_equal']

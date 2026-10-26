@@ -48,7 +48,8 @@ def read_bytes(request_id: str, *, max_bytes: int = 12582912) -> bytes:
 
     Requires the same authenticated actor and executing skill as edit/generate.
     Call get to poll first. A pending/failed/missing draft is an error, never a
-    new submission. max_bytes must be an integer in 1..12582912.
+    new submission. max_bytes must be an integer in 1..67108864. The default
+    remains 12 MiB; larger native PNG edits require an explicit read allowance.
     """
     return _service("workspace.read").read_bytes(request_id, max_bytes=max_bytes)
 
@@ -70,4 +71,46 @@ def list_drafts(*, context: Mapping[str, Any], limit: int = 10) -> list[dict[str
     return _service("workspace.read").list_drafts(context=context, limit=limit)
 
 
-__all__ = ["generate", "edit", "get", "read_bytes", "list_drafts", "SubmissionNotAdmitted"]
+
+
+def edit_limits(model: str) -> dict:
+    """Inspect the current Core/SDK image-edit admission contract, without IO.
+
+    These are local contract bounds, not a claim of remote model availability
+    or a guarantee of preserved detail after a caller resamples its input.
+    """
+    import re
+    if not re.fullmatch(r"gpt-image-[a-z0-9.-]+", str(model or "")):
+        raise ValueError("An explicit GPT Image model is required")
+    modern = bool(re.match(r"^gpt-image-2(?:[.-]|$)", model))
+    return {
+        "model": model, "source": "core_sdk_admission", "requires_remote_availability_check": True,
+        "standard_sizes": ["1024x1024", "1536x1024", "1024x1536"],
+        "custom_sizes": modern, "dimension_multiple": 16 if modern else None,
+        "max_edge": 3840 if modern else 1536, "min_pixels": 655360 if modern else 1048576,
+        "max_pixels": 8294400 if modern else 1572864, "max_aspect_ratio": 3 if modern else 1.5,
+        "qualities": ["low", "medium", "high"] + (["xhigh", "max"] if model.startswith("gpt-image-2.5-") else []),
+        "max_inline_bytes": 16 * 1024 * 1024, "max_images": 16,
+        "backgrounds": ["opaque", "transparent"], "formats": ["png", "jpeg", "webp"],
+    }
+
+
+def validate_edit(*, model: str, prompt: str, images: list[dict[str, str]],
+                  mask: dict[str, str] | None = None, size: str = "1024x1024",
+                  quality: str = "high", output_format: str = "png", background: str = "opaque") -> dict:
+    """Validate exact edit inputs before reserving a request or submitting.
+
+    Pure bounded local decode/contract checks, shared with real submission.
+    Does not create a draft, reserve budget, access Root or establish availability.
+    Invalid input raises ValueError; the caller can correct it without a job.
+    """
+    from adaos.sdk.llm.llm_client import _validated_image_edit
+    _validated_image_edit(model=model, prompt=prompt, images=images, mask=mask, size=size,
+        quality=quality, output_format=output_format, background=background)
+    references = [*images, *([mask] if mask is not None else [])]
+    return {"ok": True, "model": model, "size": size,
+            "inline_bytes": sum(len(ref["image_url"]) for ref in references),
+            "limits_source": "core_sdk_admission", "provider_contacted": False}
+
+
+__all__ = ["generate", "edit", "get", "read_bytes", "list_drafts", "edit_limits", "validate_edit", "SubmissionNotAdmitted"]

@@ -832,16 +832,17 @@ def _has_path(value: Any, path: str) -> bool:
 
 
 def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
+    from adaos.services.ui_widget_inputs import flatten_widgets, widget_input_findings
     catalog = ui_capability_catalog()
     known_types = {
         str(item.get("id") or "")
         for item in catalog.get("components") or []
         if isinstance(item, Mapping)
     }
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = widget_input_findings(webui)
     for schema_path, page in _page_schemas(webui):
         findings.extend(layout_v2_findings(page, schema_path=schema_path))
-        widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
+        widgets = flatten_widgets(page.get("widgets"))
         initial_state = (
             page.get("initialState")
             if isinstance(page.get("initialState"), Mapping)

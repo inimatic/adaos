@@ -44,9 +44,9 @@ def semantic_project(tmp_path: Path) -> tuple[BuilderSemanticUIService, BuilderW
                                 "type": "ui.form",
                                 "area": "main",
                                 "title": "Recipes",
-                                "fields": [
-                                    {"id": "recipe-name", "type": "text", "label": "Name"}
-                                ],
+                                "inputs": {"fields": [
+                                    {"id": "recipe-name", "type": "shortText", "label": "Name"}
+                                ]},
                             },
                             {
                                 "id": "recipe-summary",
@@ -122,7 +122,7 @@ def test_semantic_rename_creates_valid_revision_and_undo(
 
     webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
     scenario = json.loads((root / "scenario.json").read_text(encoding="utf-8"))
-    field = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["fields"][0]
+    field = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["fields"][0]
     assert field["label"] == "Recipe name"
     assert scenario["ui"] == {"manifest": "webui.json"}
     assert result["revision"] == "002"
@@ -191,7 +191,7 @@ def test_semantic_field_add_and_remove_are_revisioned_and_reversible(
     assert added["revision"] == "002"
     assert added["undo"]["target_ref"] == "field:recipe-list:recipe-notes"
     webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
-    fields = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["fields"]
+    fields = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["fields"]
     assert [item["id"] for item in fields] == ["recipe-name", "recipe-notes"]
 
     removed = service.apply(
@@ -326,7 +326,7 @@ def test_semantic_rename_undo_is_executable(semantic_project):
     result = service.apply(_label_operation())
     service.apply(_label_operation(operation="set_property", operation_id="undo-label",
                                   source_revision=result["revision"], value=result["undo"]))
-    field = json.loads((root / "webui.json").read_text(encoding="utf-8"))["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["fields"][0]
+    field = json.loads((root / "webui.json").read_text(encoding="utf-8"))["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["fields"][0]
     assert field["label"] == "Name"
 
 

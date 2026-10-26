@@ -906,6 +906,13 @@ def create(
                 execution_budget.get("max_human_interventions") or 0
             ),
         }
+        # These fields already belong to the public Development Session ABI.
+        # Keep the owner's token metric and independent aggregate/context
+        # limits; silently dropping them changes the actual executor budget.
+        for key in ("schema", "source", "max_tokens", "token_budget_metric",
+                    "max_billable_tokens", "max_context_tokens"):
+            if key in execution_budget:
+                normalized_budget[key] = execution_budget[key]
     normalized_agent_profile = None
     if agent_profile is not None:
         normalized_agent_profile = {

@@ -41,6 +41,23 @@ def test_declared_tool_deadline_is_admitted_and_used_by_runtime():
                 {**tool, "timeout_seconds": invalid})
 
 
+def test_long_deadline_requires_durable_replay_and_matches_service_schema():
+    from adaos.services.skill.manager import SkillManager
+    schema = _load_schema("skill.schema.json")
+    validators = [
+        Draft7Validator({"$ref":"#/$defs/tool","$defs":schema["$defs"]}),
+        Draft202012Validator(_load_service_skill_schema()["properties"]["tools"]["items"]),
+    ]
+    tool={"name":"prepare_native","input_schema":{"type":"object"},"durable_replay":True,"timeout_seconds":1800}
+    for validator in validators:
+        validator.validate(tool)
+        for changed in ({"durable_replay":False},{"timeout_seconds":1801}):
+            with pytest.raises(ValidationError):validator.validate({**tool,**changed})
+        absent={k:v for k,v in tool.items() if k!="durable_replay"}
+        with pytest.raises(ValidationError):validator.validate(absent)
+    assert SkillManager._tool_timeout_seconds(tool,30)==1800
+
+
 @pytest.mark.parametrize(
     "schema_name",
     [
@@ -535,6 +552,7 @@ def test_skill_schema_accepts_durable_tool_approval_scope() -> None:
         "tools": [
             {
                 "name": "play_on",
+                "durable_replay": True,
                 "approval_scope": {
                     "name": "media.playback.control",
                     "resource_argument": "target_id",

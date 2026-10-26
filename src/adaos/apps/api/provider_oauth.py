@@ -176,8 +176,9 @@ async def google_gmail_oauth_callback(
             exc.code.replace("_", " "),
             ok=False,
         )
-    account = str(result.get("email_address") or result.get("account_id") or "Gmail")
-    return _page("Gmail connected", f"Connected account: {account}", ok=True)
+    product = "Google Drive" if result.get("provider_id") == "google.drive" else "Gmail"
+    account = str(result.get("email_address") or result.get("account_id") or product)
+    return _page(product + " connected", f"Connected account: {account}", ok=True)
 
 
 @router.post("/integrations/ingress/oauth/deliver", response_model=None)

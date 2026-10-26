@@ -28,6 +28,9 @@ class _QueuedService:
     def _find_session_by_id(self, session_id: str):
         return {"session_id": session_id, "status": self.status}
 
+    def settle_worker_session(self, session):
+        return dict(session)
+
     def _run_worker(self, session_id: str) -> None:
         self.run_calls += 1
         if self.run_calls == 2:

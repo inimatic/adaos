@@ -56,6 +56,10 @@ class BuilderSpendLedger:
                     UNIQUE(provider_base,job_id));
                 CREATE TABLE IF NOT EXISTS receipts (
                     receipt_ref TEXT PRIMARY KEY, request_id TEXT NOT NULL, facts TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS account_extensions (
+                    authorization_ref TEXT PRIMARY KEY, scope TEXT NOT NULL,
+                    additional_units INTEGER NOT NULL, previous_limit_units INTEGER NOT NULL,
+                    created_at REAL NOT NULL);
             ''')
 
     @contextmanager
@@ -80,6 +84,34 @@ class BuilderSpendLedger:
             if previous and tuple(previous) != values:
                 raise ValueError('Spend account authorization drift; existing commitments must be reviewed')
             db.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?,?)', values)
+        return self.snapshot(scope)
+
+    def extend_limit(self, scope, *, additional_usd, authorization_ref):
+        """Apply one explicit additional allowance without resetting commitments.
+
+        The same authorization is consumed once across retries and restarts.
+        A changed amount or account cannot reuse it.
+        """
+        if not isinstance(scope, str) or not scope or not isinstance(authorization_ref, str) or not authorization_ref:
+            raise ValueError('Explicit spend scope and authorization reference required')
+        additional = _units(additional_usd, positive=True)
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            previous = db.execute('SELECT scope,additional_units FROM account_extensions WHERE authorization_ref=?',
+                                  (authorization_ref,)).fetchone()
+            if previous:
+                if tuple(previous) != (scope, additional):
+                    raise ValueError('Spend allowance authorization identity conflict')
+            else:
+                account = db.execute('SELECT * FROM accounts WHERE scope=?', (scope,)).fetchone()
+                if account is None:
+                    raise ValueError('Unknown spend account')
+                updated = account['limit_units'] + additional
+                if updated > 2**62:
+                    raise ValueError('USD amount exceeds the ledger bound')
+                db.execute('INSERT INTO account_extensions VALUES(?,?,?,?,?)',
+                           (authorization_ref, scope, additional, account['limit_units'], time.time()))
+                db.execute('UPDATE accounts SET limit_units=? WHERE scope=?', (updated, scope))
         return self.snapshot(scope)
 
     @staticmethod

@@ -276,7 +276,13 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
         developer_service=_DeveloperService(),
     )
 
-    def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
+    def fake_codex(
+        *,
+        workspace: Path,
+        prompt: str,
+        output_dir: Path,
+        **_governed_context,
+    ) -> CodexRunResult:  # noqa: ARG001
         handler = workspace / "skills" / "recipes_skill" / "handlers" / "main.py"
         target = (
             handler
@@ -1893,8 +1899,10 @@ def test_automation_materializes_governed_development_session_inputs(
     )
 
 
+@pytest.mark.parametrize("deterministic_delta", [False, True])
 def test_terminal_followup_rebinds_to_new_digest_verified_development_session(
     tmp_path: Path,
+    deterministic_delta: bool,
 ) -> None:
     service = _service(tmp_path)
 
@@ -1981,8 +1989,14 @@ def test_terminal_followup_rebinds_to_new_digest_verified_development_session(
         development_session_id=first_id,
     )
 
+    delta = json.dumps({
+        "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+        "repair_hints": {"profile": "surgical_ui", "target_files": ["webui.json"],
+            "structured_edits": {"schema": "adaos.builder.structured_edit_set.v1",
+                "operations": [{"op": "replace_text", "path": "webui.json",
+                    "old": "Old title", "new": "New title", "expected_count": 1}]}}})
     followed = service.submit_turn(
-        text="Rebase to the newly compiled exact Development Session.",
+        text=delta if deterministic_delta else "Rebase to the newly compiled exact Development Session.",
         object_type="scenario",
         object_id="recipes",
         development_session_id=second_id,
@@ -2004,12 +2018,46 @@ def test_terminal_followup_rebinds_to_new_digest_verified_development_session(
         _realize_content_artifact(service, task, "development_context")["session_id"]
         == second_id
     )
-    assert (
-        json.loads(task["realize_request"]["artifacts"]["implementation_brief"])[
-            "digest"
-        ]
-        == second_digest
-    )
+    executable = json.loads(task["realize_request"]["artifacts"]["implementation_brief"])
+    if deterministic_delta:
+        assert executable == json.loads(delta)
+        assert task["realize_request"]["constraints"]["mode"] == "dev_ticket_repair"
+        assert task["realize_request"]["artifacts"]["repair_hints"]["structured_edits"]["operations"][0]["path"] == "scenarios/recipes/webui.json"
+        assert session["context_control"]["model_call_expected"] is False
+    else:
+        assert executable["digest"] == second_digest
+
+
+@pytest.mark.parametrize("explicit,forbid,expected", [(True,False,"resume_preserved_candidate"),
+    (False,False,"validate_preserved_candidate"),(True,True,"validate_preserved_candidate")])
+def test_explicit_ui_delta_resumes_implementation_without_changing_candidate_authority(explicit, forbid, expected):
+    checkpoint={"mode":"validate_preserved_candidate","source_task_id":"exact-task",
+                "failure_id":"exact-failure","continuation_contract":{"digest":"contract"}}
+    if forbid: checkpoint["model_policy"]="forbid"
+    result=automation_module._checkpoint_for_ui_delta(checkpoint,explicit_ui_delta=explicit)
+    assert result["mode"]==expected
+    assert {k:v for k,v in result.items() if k!="mode"}=={k:v for k,v in checkpoint.items() if k!="mode"}
+    assert checkpoint["mode"]=="validate_preserved_candidate"
+
+
+@pytest.mark.parametrize("mode", ["resume_materialized_candidate", "validate_preserved_candidate", "resume_preserved_candidate"])
+def test_rebinding_context_invalidates_only_the_pending_materialization_checkpoint(mode):
+    checkpoint = {"source_task_id": "old-task", "mode": mode}
+    session = {"object_type": "scenario", "object_id": "recipes",
+               "development_session_id": "old-context", "implementation_brief": "old brief",
+               "pending_continuation_checkpoint": checkpoint, "task_history": ["old-task"]}
+    reads = []
+    service = SimpleNamespace(_development_instruction=lambda identity, **kwargs:
+                             reads.append((identity, kwargs)) or ({"request": "new brief"}, Path("instruction.json")))
+    assert BuilderAutomationService._rebind_development_session(
+        service, session, development_session_id="new-context")
+    assert reads == [("new-context", {"target_ref": "scenario:recipes", "kind": "automation_brief"})]
+    assert ("pending_continuation_checkpoint" in session) == (mode == "resume_preserved_candidate")
+    assert session["task_history"] == ["old-task"]
+    session["pending_continuation_checkpoint"] = checkpoint
+    assert not BuilderAutomationService._rebind_development_session(
+        service, session, development_session_id="new-context")
+    assert session["pending_continuation_checkpoint"] == checkpoint
 
 
 def test_automation_projects_declared_and_observed_execution_budget(
@@ -2724,6 +2772,20 @@ def test_model_context_projection_keeps_large_compiler_facets_lazy() -> None:
     assert facet["compiler_view"]["digest"].startswith("sha256:")
     assert "items" not in facet
     assert len(json.dumps(projection).encode("utf-8")) < 2_000
+
+
+def test_structured_repair_context_retains_prototype_handoff_identity():
+    accepted = {"acceptance_id": "accepted:008", "revision": "008", "digest": "sha256:a",
+                "webui_digest": "sha256:b", "change_id": "change.demo",
+                "automation_requirements": [{"requirement_ref": "mask.reassembly"}]}
+    projection = _iteration_context_projection(
+        {"artifacts": {"prototype": {"acceptance": accepted}}, "large_payload": "x" * 100000},
+        implementation_brief=json.dumps({"repair_hints": {"structured_edits": {
+            "schema": "adaos.builder.structured_edit_set.v1", "operations": [{"op": "json_replace"}]}}}),
+        packet_ref="artifact://packet", packet_digest="sha256:packet", kind="scenario", project_id="demo")
+    actual = projection["artifacts"]["prototype"]["acceptance"]
+    assert {key: actual[key] for key in accepted} == accepted
+    assert "large_payload" not in projection
 
 
 def test_canonical_repair_path_preserves_project_owned_paths() -> None:
@@ -4077,6 +4139,15 @@ def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
     assert checkpoint["source_task_id"] == candidate_task_id
     assert checkpoint["trigger_failure_id"] == "failure.transient-model"
 
+    tasks[empty_retry_task_id]["failure_history"][-1] = {
+        "failure_id": "failure.source-refresh", "stage": "workspace_preparing",
+        "message": "ValueError: continuation candidate source snapshot is stale",
+    }
+    checkpoint = service._budget_continuation_checkpoint(session)
+    assert checkpoint and checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == candidate_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.source-refresh"
+
     session["prototype_acceptance"] = {"digest": "sha256:accepted-v2"}
     assert service._budget_continuation_checkpoint(session) is None
 
@@ -4168,6 +4239,42 @@ def test_clean_feedback_checkpoint_cannot_cross_prototype_acceptance(
         )
     assert qualify("sha256:accepted-v1")["mode"] == "resume_materialized_candidate"
     assert qualify("sha256:accepted-v2") is None
+
+
+@pytest.mark.parametrize("files_present", [False, True])
+def test_clean_feedback_checkpoint_keeps_a_missing_dirty_ancestor(tmp_path, monkeypatch, files_present):
+    service = _service(tmp_path)
+    clean = service.runs_root / "task.clean"
+    dirty = service.runs_root / "task.dirty"
+    artifacts = {
+        "continuation_contract": automation_module._continuation_contract(),
+        "prototype_acceptance": {"digest": "sha256:accepted-v1"},
+    }
+    for root in (clean, dirty):
+        (root / "input").mkdir(parents=True)
+        (root / "input" / "assignment.json").write_text(json.dumps({
+            "target": {"type": "scenario", "id": "applications"},
+            "forge": {"source_snapshot": {"digest": "sha256:" + "a" * 64}},
+            "realize_request": {"artifacts": {**artifacts, "continuation_checkpoint": {
+                "mode": "resume_materialized_candidate", "source_task_id": "task.ancestor"}}},
+        }), encoding="utf-8")
+    path = "skills/demo/engine.py"
+    source = dirty / "workspace" / path
+    source.parent.mkdir(parents=True)
+    source.write_text("retained implementation")
+    if files_present:
+        target = clean / "workspace" / path
+        target.parent.mkdir(parents=True)
+        target.write_text("retained implementation")
+    monkeypatch.setattr(type(service), "_latest_blocking_candidate_source", lambda *args, **kwargs: ("task.dirty", {}, dirty))
+    monkeypatch.setattr(automation_module, "_preserved_candidate_changed_paths", lambda _: [path])
+    checkpoint = service._materialized_feedback_checkpoint(
+        session={"prototype_acceptance": {"digest": "sha256:accepted-v1"}},
+        run_root=clean, source_task_id="task.clean", source_failure={}, trigger_failure_id=None)
+    if files_present:
+        assert checkpoint["mode"] == "resume_materialized_candidate"
+    else:
+        assert checkpoint is None
 
 
 def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_checks(
@@ -4384,8 +4491,10 @@ def test_preserved_candidate_preflight_keeps_durable_lineage_after_package_repla
     assert admission["checkpoint"]["model_policy"] == "forbid"
 
 
-def test_preserved_candidate_preflight_admits_explicit_cancelled_task_for_validation(
+@pytest.mark.parametrize("boundary", ["cancelled", "validation_timeout", "authoring_failure", "incomplete_candidate"])
+def test_preserved_candidate_preflight_admits_only_retained_validation_boundaries(
     tmp_path: Path,
+    boundary: str,
 ) -> None:
     service = _service(tmp_path)
     task_id = "task.cancelled-after-tests"
@@ -4434,13 +4543,22 @@ def test_preserved_candidate_preflight_admits_explicit_cancelled_task_for_valida
         ),
         encoding="utf-8",
     )
+    failure = {"failure_id": "failure.tests", "stage": "deterministic_validation",
+               "message": "Generated project validation failed: packaged pytest timed out"}
+    if boundary != "cancelled":
+        (run_root / "runtime").mkdir()
+        (run_root / "runtime" / "state.json").write_text(json.dumps({
+            "status": "failed", "stage": "workspace_preparing" if boundary == "authoring_failure" else "deterministic_validation",
+            "error": failure["message"], "classification": {
+                "schema": "adaos.builder.failure_classification.v1",
+                "candidate_checkpoint_ready": boundary != "incomplete_candidate"}}), encoding="utf-8")
     service.factory = SimpleNamespace(
         read_task=lambda _task_id: {
             "task_id": task_id,
-            "status": "cancelled",
+            "status": "cancelled" if boundary == "cancelled" else "failed",
             "attempts": 1,
             "cancelled_at": "2026-10-16T00:01:00+00:00",
-            "failure_history": [],
+            "failure_history": [] if boundary == "cancelled" else [failure],
         }
     )
     session = {
@@ -4454,17 +4572,49 @@ def test_preserved_candidate_preflight_admits_explicit_cancelled_task_for_valida
         source_task_id=task_id,
     )
 
+    if boundary in {"authoring_failure", "incomplete_candidate"}:
+        assert admission["eligible"] is False
+        assert any(item["code"] == "blocking_feedback" for item in admission["blockers"])
+        return
     assert admission["eligible"] is True, admission
     checkpoint = admission["checkpoint"]
     assert checkpoint["model_policy"] == "forbid"
-    assert checkpoint["reason"] == "operator_cancelled_revalidation"
-    assert checkpoint["source_cancelled_at"] == "2026-10-16T00:01:00+00:00"
-    assert checkpoint["cancellation_identity"].startswith("cancelled:")
+    assert checkpoint["reason"] == ("operator_cancelled_revalidation" if boundary == "cancelled" else "deterministic_validation_failure")
+    if boundary == "cancelled":
+        assert checkpoint["source_cancelled_at"] == "2026-10-16T00:01:00+00:00"
+        assert checkpoint["cancellation_identity"].startswith("cancelled:")
 
 
+def test_retry_after_validation_stop_revalidates_without_reapplying_edits(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    failure = {"stage": "deterministic_validation", "failure_class": "application_failure",
+               "message": "Generated project validation failed: packaged pytest timed out"}
+    run = service.runs_root / "task.retained-tests"
+    (run / "runtime").mkdir(parents=True)
+    (run / "runtime" / "state.json").write_text(json.dumps({
+        "status": "failed", "stage": "deterministic_validation", "error": failure["message"],
+        "classification": {"schema": "adaos.builder.failure_classification.v1",
+                           "candidate_checkpoint_ready": True}}), encoding="utf-8")
+    observed = {"status": "failed", "current_task_id": "task.retained-tests", "last_failure": failure}
+    monkeypatch.setattr(type(service), "get_session", lambda *_args: observed)
+    monkeypatch.setattr(type(service), "refresh_session", lambda _service, value: value)
+    calls = []
+    def validate(_service, **kwargs):
+        calls.append(kwargs)
+        return {"status": "automation_queued", "model_policy": "forbid"}
+    monkeypatch.setattr(type(service), "validate_preserved_candidate", validate)
+    result = service.retry_failed(object_type="scenario", object_id="recipes")
+    assert calls == [{"object_type": "scenario", "object_id": "recipes", "source_task_id": "task.retained-tests"}]
+    assert result["model_started"] is False and result["retried_unchanged_request"] is True
+
+
+@pytest.mark.parametrize("retained_scope", [False, True])
+@pytest.mark.parametrize("repair", [False, True])
 def test_preserved_candidate_validation_submits_successor_with_no_model_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    retained_scope: bool,
+    repair: bool,
 ) -> None:
     service = _service(tmp_path)
     checkpoint = {
@@ -4483,6 +4633,11 @@ def test_preserved_candidate_validation_submits_successor_with_no_model_policy(
         },
     )
     submitted: list[dict] = []
+    ui = {"reason": "Approved technical UI correction", "source_message_ids": ["message:approval"]}
+    companions = {"sources": {"recipes_control_skill": "sha256:baseline"},
+                  "reason": "Approved companion migration", "source_message_ids": ["message:approval"]}
+    monkeypatch.setattr(BuilderAutomationService, "get_session", lambda *_args, **_kwargs:
+        {"ui_change_authorization": ui, "companion_manifest_authorization": companions} if retained_scope else None)
     monkeypatch.setattr(
         BuilderAutomationService,
         "submit_turn",
@@ -4490,24 +4645,40 @@ def test_preserved_candidate_validation_submits_successor_with_no_model_policy(
         or {"ok": True, "status": "automation_queued"},
     )
 
+    brief = {"schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+             "repair_hints": {"target_files": ["scenarios/recipes/webui.json"],
+                              "structured_edits": {"schema": "adaos.builder.structured_edit_set.v1",
+                                  "operations": [{"op": "json_replace", "path": "scenarios/recipes/webui.json",
+                                                  "pointer": "/label", "expected": "old", "value": "new"}]}}}
     result = service.validate_preserved_candidate(
         object_type="scenario",
         object_id="recipes",
         source_task_id="task.iteration-12",
+        **({"repair_brief": brief} if repair else {}),
     )
 
     assert result["status"] == "automation_queued"
     assert result["model_policy"] == "forbid"
     assert submitted == [
         {
-            "text": automation_module._PRESERVED_VALIDATION_INSTRUCTION,
+            "text": json.dumps(brief, ensure_ascii=False) if repair else automation_module._PRESERVED_VALIDATION_INSTRUCTION,
             "object_type": "scenario",
             "object_id": "recipes",
             "expected_session_id": "automation.scenario.recipes",
             "expected_iteration": 14,
             "_continuation_checkpoint_override": checkpoint,
+            **({"ui_change_authorization": ui, "companion_manifest_changes": {
+                "skill_ids": ["recipes_control_skill"], "reason": companions["reason"],
+                "source_message_ids": companions["source_message_ids"]}} if retained_scope else {}),
         }
     ]
+
+
+def test_preserved_candidate_repair_refuses_model_brief(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    with pytest.raises(ValueError, match="bounded structured edits"):
+        service.validate_preserved_candidate(object_type="scenario", object_id="recipes",
+                                            repair_brief={"summary": "ask a model"})
 
 
 def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(
@@ -5222,7 +5393,7 @@ def test_development_feedback_retry_discards_brief_from_older_prototype(
     assert old_brief not in request["acceptance"]["checks"]
 
 
-def test_session_read_waits_for_the_same_mutation_lock_as_the_writer(tmp_path):
+def test_session_read_uses_atomic_snapshot_without_waiting_for_writer_lock(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
     from adaos.services.artifact_pipeline.storage import (
@@ -5239,6 +5410,7 @@ def test_session_read_waits_for_the_same_mutation_lock_as_the_writer(tmp_path):
         "object_id": "recipes",
         "status": "failed",
     }
+    atomic_write_json(path, session)
 
     def read():
         started.set()
@@ -5248,9 +5420,7 @@ def test_session_read_waits_for_the_same_mutation_lock_as_the_writer(tmp_path):
         with mutation_lock(service.root / ".mutation.lock"):
             pending = pool.submit(read)
             assert started.wait(5)
-            assert not pending.done()
-            atomic_write_json(path, session)
-        assert pending.result(timeout=5)["session_id"] == session["session_id"]
+            assert pending.result(timeout=5)["session_id"] == session["session_id"]
 
 
 def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance(
@@ -7142,6 +7312,67 @@ def test_project_owned_skill_resolves_application_scenario_as_validation_input(
     ) == []
 
 
+def test_skill_automation_snapshots_owned_siblings_without_granting_edit_authority(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    for skill_id in ("recipes_skill", "recipes_control_skill"):
+        service.workspace_service.developer_service.create_skill(skill_id)
+    _write_project_manifest(tmp_path / "dev", skill_ids=("recipes_skill", "recipes_control_skill"))
+    service.background = True
+    monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *a, **kw: None)
+    service._workflow().transition("skill", "recipes_skill", "plan_change_set", actor="test.owner",
+        metadata={"confirmed": True, "change_set_id": "communication-repair",
+            "request": "Repair the skill implementation, not its UI.",
+            "issues": [{"issue_id": "communication", "lane": "automation", "title": "Communication repair",
+                        "acceptance_criteria": ["Owned sources available; sibling edit authority unchanged"]}]})
+    started = service.start_from_execute(object_type="skill", object_id="recipes_skill",
+        confirmed_technical_application_id="recipes", links={"project_ref": "project:recipes"},
+        implementation_brief="Repair only the owning skill communication behavior; keep all sibling sources read-only.",
+        webspace_id="prompt-dev")
+    task = service.factory.read_task(started["session"]["current_task_id"])
+    snapshot = task["forge"]["source_snapshot"]
+    assert "recipes_control_skill" in json.dumps(snapshot)
+    sparse = task["forge"]["sparse_paths"]
+    assert "skills/recipes_skill/" in sparse
+    # The actual edit contract is in Forge repo admission, not inferred from sources.
+    assert "skills/recipes_control_skill/" not in sparse
+
+
+def test_companion_manifest_maintenance_is_explicit_owned_and_source_bound(tmp_path):
+    service = _service(tmp_path)
+    for skill_id in ("recipes_skill", "recipes_control_skill", "foreign_skill"):
+        service.workspace_service.developer_service.create_skill(skill_id)
+    _write_project_manifest(tmp_path / "dev", skill_ids=("recipes_skill", "recipes_control_skill"))
+    session = {"object_type": "skill", "object_id": "recipes_skill", "project_ref": "project:recipes"}
+    value = {"skill_ids": ["recipes_control_skill"], "reason": "Explicit application maintenance request",
+             "source_message_ids": ["message:user-request"]}
+    admitted = service._admit_companion_manifest_changes(session, value)
+    assert admitted["sources"] == {"recipes_control_skill": "sha256:" + hashlib.sha256(
+        (service.dev_skills_root / "recipes_control_skill/skill.yaml").read_bytes()).hexdigest()}
+    for skill_id in ("foreign_skill", "recipes_skill", "../escape"):
+        with pytest.raises(ValueError, match="outside the owned"):
+            service._admit_companion_manifest_changes(session, {**value, "skill_ids": [skill_id]})
+    with pytest.raises(ValueError, match="outside the owned"):
+        service._admit_companion_manifest_changes({**session, "object_id": "foreign_skill"}, value)
+    with pytest.raises(ValueError, match="bounded explicit"):
+        service._admit_companion_manifest_changes(session, {**value, "source_message_ids": []})
+
+
+def test_skill_ui_correction_requires_owned_application_and_does_not_accept_prototype(tmp_path):
+    service = _service(tmp_path)
+    _write_project_manifest(tmp_path / "dev", skill_ids=("recipes_skill",))
+    before = service._workflow().describe("scenario", "recipes")["prototype"]
+    session = {"object_type": "skill", "object_id": "recipes_skill", "project_ref": "project:recipes"}
+    authority = {"reason": "Explicit user authorized necessary binding corrections, preserving design.",
+                 "source_message_ids": ["message:user-approval"]}
+    admitted = service._admit_followup_ui_change(session, authority)
+    assert admitted["project_id"] == "recipes"
+    expected = hashlib.sha256((service.dev_scenarios_root / "recipes/webui.json").read_bytes()).hexdigest()
+    assert admitted["base_prototype_revision"] == "sha256:" + expected
+    assert service._workflow().describe("scenario", "recipes")["prototype"] == before
+    with pytest.raises(ValueError, match="unambiguous owned"):
+        service._admit_followup_ui_change({**session, "object_id": "foreign"}, authority)
+
+
 def test_scenario_automation_keeps_published_companions_outside_project_envelope(
     tmp_path: Path,
 ) -> None:
@@ -8305,7 +8536,7 @@ def test_refresh_never_projects_factory_completion_as_terminal_before_finalizati
     assert projection["busy"] is True
 
 
-def test_projection_backfills_missing_conversation_before_notification(
+def test_projection_does_not_backfill_conversation_or_notify(
     tmp_path: Path, monkeypatch
 ) -> None:
     service = _service(tmp_path)
@@ -8322,6 +8553,7 @@ def test_projection_backfills_missing_conversation_before_notification(
         return dict(session)
 
     monkeypatch.setattr(BuilderAutomationService, "_notify_completed_session", notify)
+    before = service.get_session('scenario', 'recipes').get('conversation_id')
 
     result = service.projection(
         object_type="scenario",
@@ -8331,10 +8563,9 @@ def test_projection_backfills_missing_conversation_before_notification(
     )
 
     assert result["ok"] is True
-    assert notified == ["conv.builder.recipes"]
+    assert notified == []
     assert (
-        service.get_session("scenario", "recipes")["conversation_id"]
-        == "conv.builder.recipes"
+        service.get_session("scenario", "recipes").get("conversation_id") == before
     )
 
 
@@ -8661,9 +8892,12 @@ def test_completed_session_publishes_one_terminal_chat_message(
         lambda: SimpleNamespace(bus=_Bus()),
     )
     monkeypatch.setattr(
-        "adaos.services.conversation_response.materialize_response",
-        lambda response, **kwargs: published.append({"response": response, **kwargs})
-        or {"ok": True},
+        "adaos.services.conversation_publication.publish",
+        lambda **kwargs: published.append(kwargs) or {"status": "committed"},
+    )
+    monkeypatch.setattr(
+        "adaos.services.conversation_store.get_conversation",
+        lambda _: {"webspace_id": "desktop", "policy": {}},
     )
     session = {
         "schema": "adaos.builder.automation_session.v1",
@@ -8680,15 +8914,13 @@ def test_completed_session_publishes_one_terminal_chat_message(
     second = service._notify_completed_session(first)
 
     assert len(published) == 1
-    assert "Builder завершил доработку recipes" in published[0]["response"]["message"]
+    assert "Builder завершил доработку recipes" in published[0]["text"]
     assert published[0]["thread_id"] == "prompt-project:scenario:recipes"
     assert (
-        published[0]["meta"]["response_idempotency_key"]
-        == "builder-automation:completed:task.1"
+        published[0]["publication_key"].startswith("automation:task.1:completed:")
     )
-    assert len(events) == 1
-    assert events[0].type == "ui.notify"
-    assert events[0].payload["_meta"]["notification_scope"] == "subnet"
+    assert published[0]["category"] == "terminal"
+    assert events == []  # Projection belongs to the single Core publication.
     assert second["completion_notified_task_id"] == "task.1"
 
 
@@ -8708,7 +8940,7 @@ def test_automation_notification_names_the_selected_codex_route(
     assert service._codex_execution_label() == expected
 
 
-def test_started_session_broadcasts_once_without_conversation(
+def test_started_session_never_broadcasts_without_an_owned_conversation(
     tmp_path: Path, monkeypatch
 ) -> None:
     service = _service(tmp_path)
@@ -8735,11 +8967,8 @@ def test_started_session_broadcasts_once_without_conversation(
     first = service._notify_started_session(session)
     second = service._notify_started_session(first)
 
-    assert len(events) == 1
-    assert events[0].type == "ui.notify"
-    assert "Итерация 1" in events[0].payload["text"]
-    assert events[0].payload["_meta"]["automation_status"] == "started"
-    assert second["started_notified_task_id"] == "task.start.1"
+    assert events == []
+    assert second.get("started_notified_task_id") is None
 
 
 def test_started_session_persists_and_routes_exact_automation_input(
@@ -12122,6 +12351,143 @@ def test_browser_feedback_resolves_preview_to_its_builder_owner(
     ]
 
 
+def test_authorized_skill_ui_change_reloads_paired_dev_webspace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    source = service.dev_scenarios_root / "recipes" / "webui.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        '{"schema":"adaos.webui.v1","ui":{"application":{}}}\n',
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    class FakeWorkbench:
+        def __init__(self, **_kwargs):
+            pass
+
+        def resolve_source_webspace_id(self, webspace_id):
+            assert webspace_id == "desktop-dev"
+            return "desktop"
+
+        def get_workspace_binding(self, source_webspace_id):
+            assert source_webspace_id == "desktop"
+            return {"preview_webspace_id": "desktop-dev"}
+
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.ensure_dev_webspace_via_owner",
+        lambda scenario_id, **kwargs: {
+            "ok": True,
+            "accepted": True,
+            "webspace_id": kwargs["requested_id"],
+        },
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.reload_via_owner",
+        lambda webspace_id, **kwargs: calls.append(
+            (webspace_id, kwargs["scenario_id"])
+        )
+        or {"ok": True, "accepted": True, "webspace_id": webspace_id},
+    )
+
+    receipt = service._materialize_authorized_ui_change(
+        {
+            "object_type": "skill",
+            "object_id": "recipes_control_skill",
+            "current_task_id": "task.ui-fix",
+            "ui_change_authorization": {
+                "project_id": "recipes",
+                "digest": "sha256:authorization",
+            },
+        },
+        webspace_id="desktop-dev",
+    )
+
+    assert calls == [("desktop-dev", "recipes")]
+    assert receipt["ok"] is True
+    assert receipt["source"] == "authorized_ui_change"
+    assert receipt["scenario_id"] == "recipes"
+    assert receipt["source_webspace_id"] == "desktop"
+    assert receipt["preview_webspace_id"] == "desktop-dev"
+    assert receipt["task_id"] == "task.ui-fix"
+    assert receipt["source_digest"] == "sha256:" + hashlib.sha256(
+        source.read_bytes()
+    ).hexdigest()
+    assert receipt["authorization_digest"] == "sha256:authorization"
+
+
+def test_authorized_builder_ui_change_reloads_self_host_without_nested_dev(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    source = service.dev_scenarios_root / "builder" / "webui.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        '{"schema":"adaos.webui.v1","ui":{"application":{}}}\n',
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str, str]] = []
+
+    class FakeWorkbench:
+        def __init__(self, **_kwargs):
+            pass
+
+        def resolve_source_webspace_id(self, webspace_id):
+            assert webspace_id == "desktop-dev"
+            return "desktop-dev"
+
+        async def ensure_dev_webspace(self, *_args, **_kwargs):
+            raise AssertionError("self-hosted Builder must not allocate nested DEV")
+
+    def fake_reload(webspace_id, *, scenario_id, request_source, **_kwargs):
+        calls.append((webspace_id, scenario_id, request_source))
+        return {
+            "ok": True,
+            "accepted": True,
+            "webspace_id": webspace_id,
+            "scenario_id": scenario_id,
+            "source_mode": "dev",
+        }
+
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.reload_via_owner",
+        fake_reload,
+    )
+
+    receipt = service._materialize_authorized_ui_change(
+        {
+            "object_type": "skill",
+            "object_id": "builder_sdk_control_skill",
+            "current_task_id": "task.builder-ui",
+            "ui_change_authorization": {
+                "project_id": "builder",
+                "digest": "sha256:builder-authorization",
+            },
+        },
+        webspace_id="desktop-dev",
+    )
+
+    assert calls == [
+        (
+            "desktop-dev",
+            "builder",
+            "builder.automation.authorized_ui_change",
+        )
+    ]
+    assert receipt["preview_webspace_id"] == "desktop-dev"
+    assert receipt["source_webspace_id"] == "desktop-dev"
+    assert receipt["webspace_id"] == "desktop-dev"
+
+
 def test_browser_feedback_restore_advances_follow_active_automation_revision(
     tmp_path: Path,
     monkeypatch,
@@ -12446,6 +12812,9 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
         def __init__(self, **kwargs):  # noqa: ARG002
             pass
 
+        def _load_manifest(self, _skill_dir):
+            return {"name": "research_skill", "version": "0.1.0"}
+
         def prepare_dev_runtime(self, skill_id, *, version_override, run_tests):
             calls.append(("prepare", skill_id, version_override, run_tests))
             return SimpleNamespace(
@@ -12462,6 +12831,27 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
             calls.append(("status", skill_id))
             return {"ready": True, "active": True, "version": "0.1.0"}
 
+    class FakeDataLifecycle:
+        def __init__(self, **kwargs):
+            calls.append(("data_init", kwargs["skill_id"], kwargs["target_version"]))
+
+        def prepare(self, callback):
+            calls.append(("data_prepare",))
+            return callback(), SimpleNamespace(
+                to_dict=lambda: {"mode": "same_bucket_or_manager_owned"}
+            )
+
+        def complete(self, *, prepared, active_slot, runtime_status):
+            calls.append(
+                (
+                    "data_complete",
+                    prepared.version,
+                    active_slot,
+                    runtime_status["version"],
+                )
+            )
+            return {"ok": True}
+
     class FakeWorkbench:
         def __init__(self, **kwargs):  # noqa: ARG002
             pass
@@ -12473,7 +12863,10 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
         skills_repo=object(),
         sql=object(),
         git=object(),
-        paths=object(),
+        paths=SimpleNamespace(
+            dev_skills_dir=lambda: tmp_path / "dev" / "skills",
+            base_dir=lambda: tmp_path,
+        ),
         bus=None,
         caps=object(),
         settings=object(),
@@ -12481,6 +12874,10 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
     monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: fake_ctx)
     monkeypatch.setattr("adaos.adapters.db.SqliteSkillRegistry", lambda sql: object())
     monkeypatch.setattr("adaos.services.skill.manager.SkillManager", FakeManager)
+    monkeypatch.setattr(
+        "adaos.services.applications.dev_data_lifecycle.LocalDevSkillDataLifecycle",
+        FakeDataLifecycle,
+    )
     monkeypatch.setattr(
         "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
     )
@@ -12491,11 +12888,15 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
 
     assert result["ok"] is True
     assert calls == [
-        ("prepare", "research_skill", None, True),
+        ("data_init", "research_skill", "0.1.0"),
+        ("data_prepare",),
+        ("prepare", "research_skill", "0.1.0", True),
         ("activate", "research_skill", "B"),
         ("status", "research_skill"),
+        ("data_complete", "0.1.0", "B", "0.1.0"),
     ]
     assert result["tests_rerun"] is True
+    assert result["data_lifecycle"]["activation"]["ok"] is True
 
 
 def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(
@@ -14169,6 +14570,47 @@ def test_automation_does_not_checkpoint_unchanged_companion_skill(
         }
     ]
     assert checkpoints == [{"ok": True, "kind": "scenario", "name": "recipes"}]
+
+
+def test_skill_ui_correction_checkpoints_authorized_scenario(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+
+    class _Workspace:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def checkpoint_artifact(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"]}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Workspace)
+
+    checkpoints = service._checkpoint_completed_artifacts(
+        {
+            "object_type": "skill",
+            "object_id": "recipes_control_skill",
+            "ui_change_authorization": {"project_id": "recipes"},
+            "last_result": {
+                "summary": "Applied an authorized application UI correction.",
+                "changed_paths": ["scenarios/recipes/webui.json"],
+            },
+        }
+    )
+
+    assert [(item["kind"], item["artifact_id"]) for item in calls] == [
+        ("skill", "recipes_control_skill"),
+        ("scenario", "recipes"),
+    ]
+    assert [(item["kind"], item["name"]) for item in checkpoints] == [
+        ("skill", "recipes_control_skill"),
+        ("scenario", "recipes"),
+    ]
 
 
 def test_owned_artifact_validation_checkpoints_complete_application_slice(

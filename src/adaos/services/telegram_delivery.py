@@ -205,7 +205,7 @@ def complete_outbound(
             raise TelegramDeliveryError("Telegram receipt operation key mismatch")
         if delivered and not (receipt or {}).get("external_message_ids"):
             raise TelegramDeliveryError("Telegram delivery needs external message identifiers")
-        if attempt["status"] == "delivered" or (attempt["status"] == "failed" and not delivered):
+        if attempt["status"] in {"delivered", "deduplicated"} or (attempt["status"] == "failed" and not delivered):
             con.rollback()
             return attempt
         if attempt["status"] == "failed":
@@ -222,5 +222,65 @@ def complete_outbound(
             "UPDATE telegram_outbound_attempts SET status=?, payload_json=?, completed_at=? WHERE attempt_id=?",
             (attempt["status"], _dump(attempt), timestamp, attempt["attempt_id"]),
         )
+        con.commit()
+    return attempt
+
+
+def reconcile_builder_duplicate(
+    attempt_id: str, *, receipt: Mapping[str, Any], now: str | None = None,
+) -> dict[str, Any]:
+    """Account for Root's duplicate acknowledgement using a real delivery.
+
+    A suppressed send has no new Bot message ID. Keep that acknowledgement and
+    a separate reference to an already delivered, identical Builder message on
+    the same configured route; never manufacture a fresh delivery receipt.
+    """
+    ensure_schema()
+    timestamp = now or _now()
+    with _sql().connect() as con:
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute("SELECT payload_json FROM telegram_outbound_attempts WHERE attempt_id=?",
+                          (attempt_id,)).fetchone()
+        if not row:
+            raise TelegramDeliveryError(f"Telegram delivery attempt not found: {attempt_id}")
+        attempt = _validate(_load(row["payload_json"]))
+        if (receipt.get("operation_key") != attempt["operation_key"]
+                or receipt.get("external_message_ids")
+                or int(receipt.get("duplicate_suppressed") or 0) < 1):
+            raise TelegramDeliveryError("Telegram duplicate acknowledgement is not bound to this operation")
+        if (not attempt["operation_key"].startswith("builder-notify:")
+                or attempt.get("routing_mode") != "hub_pairing"
+                or attempt["message_count"] != 1 or not attempt.get("content_digest")
+                or attempt.get("durable_attempt_id")):
+            raise TelegramDeliveryError("Only single Builder route notifications support duplicate references")
+        if attempt["status"] in {"delivered", "deduplicated"}:
+            con.rollback()
+            return attempt
+        reference = None
+        identity_fields = ("hub_id", "bot_id", "chat_id", "routing_mode", "message_count", "content_digest")
+        rows = con.execute("SELECT payload_json FROM telegram_outbound_attempts WHERE status='delivered' ORDER BY completed_at DESC")
+        for candidate_row in rows:
+            candidate = _validate(_load(candidate_row["payload_json"]))
+            proof = candidate.get("receipt") or {}
+            if (candidate["operation_key"].startswith("builder-notify:")
+                    and all(candidate.get(key) == attempt.get(key) for key in identity_fields)
+                    and proof.get("operation_key") == candidate["operation_key"]
+                    and proof.get("external_message_ids")):
+                reference = candidate
+                break
+        if reference is None:
+            raise TelegramDeliveryError("Telegram duplicate has no matching proven Builder delivery")
+        if attempt["status"] == "failed":
+            attempt["receipt_history"] = [{"receipt": attempt["receipt"], "error": attempt["error"],
+                                           "completed_at": attempt["completed_at"]}]
+        attempt.update(status="deduplicated", duplicate_of=reference["attempt_id"],
+                       delivery_reference={"attempt_id": reference["attempt_id"],
+                                           "operation_key": reference["operation_key"],
+                                           "external_message_ids": reference["receipt"]["external_message_ids"]},
+                       receipt=copy.deepcopy(dict(receipt)), error=None, completed_at=timestamp)
+        attempt = _validate(attempt)
+        con.execute("UPDATE telegram_outbound_attempts SET status=?, payload_json=?, completed_at=? WHERE attempt_id=?",
+                    (attempt["status"], _dump(attempt), timestamp, attempt_id))
         con.commit()
     return attempt

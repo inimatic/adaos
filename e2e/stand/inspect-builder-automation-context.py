@@ -20,7 +20,7 @@ def inspect_admitted_input(input_dir: Path) -> dict:
     """Report retained inputs, never reconstructed context or task credentials."""
     receipts = {}
     documents = {}
-    for name in ("task.md", "packet.json", "prototype-resource-handoff.json", "implementation-bindings.json", "automation-outcome.schema.json"):
+    for name in ("task.md", "packet.json", "prototype-resource-handoff.json", "implementation-bindings.json", "automation-outcome.schema.json", "conversational-communication.json"):
         path = input_dir / name
         if not path.is_file():
             continue
@@ -58,9 +58,14 @@ def inspect_admitted_input(input_dir: Path) -> dict:
                 and "adaos_schema_migrations" in actual and "configuration_contract" in actual,
                 "verification_ownership_explicit": "independent acceptance owns browser journeys" in actual
                 and "Explicitly mark checks not executed" in actual,
+                "conversational_contract_present": "## Conversational communication contract" in actual
+                and "conversational-communication.json" in actual,
             },
         })
     checks = {
+        "conversational_contract_present": documents.get("conversational-communication.json", {}).get("schema")
+        == "adaos.conversational.communication_contract.v1"
+        and "## Conversational communication contract" in prompt,
         "full_brief_in_task": bool(brief) and normalize(brief) in normalize(prompt),
         "accepted_revision_present": bool(acceptance.get("revision")),
         "handoff_acceptance_matches": bool(acceptance.get("acceptance_id"))
@@ -73,7 +78,7 @@ def inspect_admitted_input(input_dir: Path) -> dict:
         and "selected_mode" not in policy,
         "migration_contract_present": policy.get("local_release_lifecycle", {}).get("manifest_field") == "skill.yaml:data_lifecycle",
         "verification_ownership_explicit": "independent acceptance owns browser journeys" in prompt
-        and "Explicitly mark checks not executed" in prompt,
+        and any(marker in prompt for marker in ("Explicitly mark checks not executed", "Mark unexecuted checks")),
     }
     return {
         "scope": "retained model input audit; structural checks are not semantic or Automation acceptance",

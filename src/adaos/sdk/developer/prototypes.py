@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import json
+from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from adaos.services.ui_resource_queries import widget_resource_queries
+from adaos.services.ui_widget_inputs import flatten_widgets
 
 from adaos.services.resources.prototype import (
     PrototypeResourceService,
@@ -22,7 +25,7 @@ def _page_widgets(webui: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
     desktop = application.get("desktop") if isinstance(application.get("desktop"), Mapping) else {}
     page = desktop.get("pageSchema") if isinstance(desktop.get("pageSchema"), Mapping) else {}
-    return [item for item in page.get("widgets") or [] if isinstance(item, Mapping)]
+    return flatten_widgets(page.get("widgets"))
 
 
 def _surface_widgets(webui: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -34,9 +37,7 @@ def _surface_widgets(webui: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         if not isinstance(modal, Mapping):
             continue
         schema = modal.get("schema") if isinstance(modal.get("schema"), Mapping) else {}
-        widgets.extend(
-            item for item in schema.get("widgets") or [] if isinstance(item, Mapping)
-        )
+        widgets.extend(flatten_widgets(schema.get("widgets")))
     return widgets
 
 
@@ -46,6 +47,10 @@ def _resource_query_widgets(
     result: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     expected_resource_type = str(resource_type or "").strip()
     for widget in _surface_widgets(webui):
+        # Descendants are already flattened, so query them with their owning
+        # widget's identity and inputs instead of the layout container's.
+        if widget.get("type") == "layout.group":
+            continue
         for data_source in widget_resource_queries(widget):
             current_resource_type = data_source["resourceType"].strip()
             if current_resource_type.startswith("prototype.") and (
@@ -61,8 +66,16 @@ def _declared_query_filters(
     defaults: Sequence[str],
 ) -> list[str]:
     declared: set[str] = set()
+    query_fields = json.loads((Path(__file__).resolve().parents[2] / "abi/resource.query.v1.schema.json").read_text(encoding="utf-8"))["properties"]
     for _, data_source in projections:
         query = data_source.get("query") or {}
+        unknown_query = set(query) - set(query_fields)
+        if unknown_query:
+            raise ValueError(
+                "Prototype resource query has unsupported top-level keys: "
+                + ", ".join(sorted(unknown_query))
+                + "; put record predicates inside query.filters"
+            )
         filters = query.get("filters") or {}
         if not isinstance(filters, Mapping):
             raise ValueError("Prototype resource query filters must be an object")

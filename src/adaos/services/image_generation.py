@@ -14,7 +14,9 @@ from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_
 from adaos.services.content_generation import _digest
 
 
-MAX_IMAGE_BYTES = 12 * 1024 * 1024
+# An admitted 8 MP RGBA edit can exceed 12 MiB even as a valid PNG.
+# Keep compressed transport bounded independently of the decoded pixel limit.
+MAX_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_IMAGE_PIXELS = 16 * 1024 * 1024
 IMAGE_JOB_POLL_TIMEOUT_SECONDS = 30.0
 _TERMINAL = {"completed", "failed", "cancelled", "invalid_output"}
@@ -184,7 +186,17 @@ class ImageGenerationService:
         record["usage"] = response.get("usage") or (job.get("_protocol") or {}).get("usage") or {}
         record["metering_status"] = "reported" if response.get("usage") else "not_reported"
         if record["status"] != "completed":
-            record["message"] = str((job.get("error") or {}).get("code") or record["status"]) if isinstance(job.get("error"), Mapping) else record["status"]
+            error = job.get("error")
+            if isinstance(error, Mapping) and isinstance(error.get("error"), Mapping):
+                error = error["error"]
+            if isinstance(error, Mapping):
+                from adaos.services.log_redaction import redact_log_text
+                code = str(error.get("code") or error.get("type") or record["status"])[:160]
+                message = redact_log_text(str(error.get("message") or code))[:2000]
+                record["error"] = {"code": code, "message": message}
+                record["message"] = message
+            else:
+                record["message"] = record["status"]
             return
         try:
             data = response.get("data")
@@ -198,10 +210,11 @@ class ImageGenerationService:
         atomic_write_bytes(self.root / f"{digest}.{suffix}", raw)
         record["asset"] = {"sha256": digest, "suffix": suffix, "mime": mime, "width": size[0], "height": size[1], "size_bytes": len(raw)}
         record["message"] = ""
+        record.pop("error", None)
 
     @staticmethod
     def _summary(record: Mapping[str, Any]) -> dict[str, Any]:
-        return {key: record.get(key) for key in ("request_id", "root_request_id", "input_digest", "created_at", "status", "model", "usage", "metering_status", "context", "message", "last_admission_refusal", "admission_refusals")}
+        return {key: record.get(key) for key in ("request_id", "root_request_id", "input_digest", "created_at", "status", "model", "usage", "metering_status", "context", "message", "error", "last_admission_refusal", "admission_refusals")}
 
     def _view(self, record: Mapping[str, Any]) -> dict[str, Any]:
         view = self._summary(record)

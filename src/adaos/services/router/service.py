@@ -22,12 +22,6 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_identity import runtime_transition_role
 from .rules_loader import load_rules, watch_rules
-from .builder_chat_notifications import (
-    builder_chat_notifications,
-    claim_builder_notification,
-    pending_latest_automation_notifications,
-    record_builder_delivery,
-)
 from .media_routes import build_media_route_refresh_payload, resolve_media_route_state
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
@@ -52,8 +46,6 @@ from adaos.services import (
     conversation_response,
     conversation_store,
     dialog_runtime,
-    durable_delivery,
-    telegram_delivery,
 )
 from adaos.services.nlu.text_correction import correct_light_text
 from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
@@ -147,6 +139,14 @@ def _telegram_output_projection(*args: Any, **kwargs: Any) -> Any:
 
 def _telegram_interaction_consumed_projection(*args: Any, **kwargs: Any) -> Any:
     return _call_telegram_helper("_telegram_interaction_consumed_projection", *args, **kwargs)
+
+
+def _is_builder_interaction_response(interaction: Mapping[str, Any]) -> bool:
+    metadata = interaction.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    return bool(metadata.get("domain") == "builder" or (
+        interaction.get("owner") == "skill:builder_skill"
+        and metadata.get("purpose") == "conversation.output_routes"))
 
 
 def _rehydrate_durable_interaction_event(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -526,7 +526,6 @@ class RouterService:
         self._tg_reply_via_root_http = str(os.getenv("HUB_TG_REPLY_VIA_ROOT_HTTP") or "").strip() == "1"
         self._media_route_webspaces: set[str] = set()
         self._notify_tasks: set[asyncio.Task[None]] = set()
-        self._builder_chat_reconcile_task: asyncio.Task[None] | None = None
         self._notification_context = None
         self._voice_chat_append_tasks: set[asyncio.Task[None]] = set()
         self._voice_chat_append_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -610,59 +609,6 @@ class RouterService:
                 continue
         return False
 
-    async def _mirror_builder_transcript(self, payload: Mapping[str, Any]) -> None:
-        if not self._has_rule_for("telegram"):
-            return
-        notification = builder_chat_notifications(payload)
-        if notification is None:
-            return
-        identity, items = notification
-        mirrored = getattr(self, "_builder_chat_mirrored", None)
-        if mirrored is None:
-            mirrored = self._builder_chat_mirrored = {}
-        if claim_builder_notification(mirrored, identity):
-            for item in items:
-                # This Router owns the configured route. Dispatch through its
-                # background sender instead of crossing another bus/skill scope.
-                await self._on_event(Event(type="ui.notify", source="router.builder.chat", ts=time.time(), payload=item))
-
-    async def _reconcile_builder_transcript(self) -> None:
-        if not self._conversation_store_active or not self._has_rule_for("telegram"):
-            return
-        try:
-            messages = await asyncio.to_thread(
-                conversation_store.list_messages,
-                "conv.skill.builder_skill.default",
-                limit=80,
-                ascending=False,
-            )
-        except Exception:
-            _log.debug("Builder transcript reconciliation read failed", exc_info=True)
-            return
-        if not isinstance(messages, list):
-            return
-        for item in pending_latest_automation_notifications(self.base_dir, messages):
-            await self._on_event(
-                Event(
-                    type="ui.notify",
-                    source="router.builder.chat.reconcile",
-                    ts=time.time(),
-                    payload=item,
-                )
-            )
-
-    async def _builder_transcript_reconcile_loop(self) -> None:
-        try:
-            interval = max(
-                2.0,
-                float(os.getenv("ADAOS_BUILDER_CHAT_RECONCILE_INTERVAL_S") or "10"),
-            )
-        except (TypeError, ValueError):
-            interval = 10.0
-        while self._started:
-            await self._reconcile_builder_transcript()
-            await asyncio.sleep(interval)
-
     def _event_targets_local_node(self, payload: Any) -> bool:
         if not isinstance(payload, dict):
             return True
@@ -718,62 +664,12 @@ class RouterService:
 
     async def _on_telegram_delivery_receipt(self, ev: Event) -> None:
         payload = ev.payload if isinstance(ev.payload, dict) else {}
+        from adaos.services.conversation_delivery import apply_receipt
+
         try:
-            payload = telegram_delivery.validate_receipt(payload)
+            await asyncio.to_thread(apply_receipt, payload)
         except Exception:
-            _log.warning("router: invalid Telegram delivery receipt", exc_info=True)
-            return
-        attempt_id = str(payload.get("delivery_attempt_id") or "").strip()
-        if not attempt_id:
-            return
-        delivered = bool(payload.get("delivered"))
-        error = str(payload.get("error") or "").strip() or None
-        receipt = {
-            "schema": "adaos.telegram.delivery_receipt.v1",
-            "receipt_id": str(payload.get("receipt_id") or "").strip() or None,
-            "operation_key": str(payload.get("operation_key") or "").strip() or None,
-            "transport": str(payload.get("transport") or "telegram").strip() or "telegram",
-            "external_message_ids": [
-                str(item) for item in payload.get("external_message_ids") or [] if str(item)
-            ],
-            "duplicate_suppressed": int(payload.get("duplicate_suppressed") or 0),
-            "completed_at": str(payload.get("completed_at") or "").strip() or None,
-        }
-        try:
-            claimed = telegram_delivery.get_attempt(attempt_id)
-            if not claimed or claimed["operation_key"] != payload.get("operation_key"):
-                raise telegram_delivery.TelegramDeliveryError("Telegram receipt operation key mismatch")
-            attempt = telegram_delivery.complete_outbound(
-                attempt_id,
-                delivered=delivered,
-                receipt=receipt,
-                error=error,
-            )
-        except Exception:
-            _log.warning("router: unknown Telegram delivery receipt attempt=%s", attempt_id, exc_info=True)
-            return
-        if attempt["operation_key"].startswith("builder-notify:"):
-            record_builder_delivery(
-                self.base_dir,
-                {"id": attempt["operation_key"][len("builder-notify:"):],
-                 "_meta": {"schema": "adaos.builder.chat_notification.v1"}},
-                phase=attempt["status"], delivery_attempt_id=attempt_id, receipt=attempt.get("receipt"),
-            )
-        durable_attempt_id = str(attempt.get("durable_attempt_id") or "").strip()
-        if durable_attempt_id:
-            try:
-                durable_delivery.complete_delivery(
-                    durable_attempt_id,
-                    delivered=delivered,
-                    receipt=receipt,
-                    error=error,
-                )
-            except Exception:
-                _log.warning(
-                    "router: durable response receipt could not be completed attempt=%s",
-                    durable_attempt_id,
-                    exc_info=True,
-                )
+            _log.warning("router: unknown or invalid delivery receipt", exc_info=True)
 
     async def _handle_notify_event(self, ev: Event) -> None:
         payload = ev.payload or {}
@@ -782,14 +678,6 @@ class RouterService:
             return
         meta = payload.get("_meta") if isinstance(payload, dict) else None
         meta = meta if isinstance(meta, dict) else {}
-        if meta.get("schema") == "adaos.builder.automation_notification.v1":
-            identity = str(meta.get("response_idempotency_key") or "").strip()
-            if identity:
-                mirrored = getattr(self, "_builder_chat_mirrored", None)
-                if mirrored is None:
-                    mirrored = self._builder_chat_mirrored = {}
-                if not claim_builder_notification(mirrored, identity):
-                    return
         is_tg = str(meta.get("io_type") or "").lower() == "telegram"
         chat_id = meta.get("chat_id") if is_tg else None
         is_tg_chat = isinstance(chat_id, str) and bool(chat_id.strip())
@@ -885,10 +773,6 @@ class RouterService:
                 pass
         # Multi-target routing: attempt telegram and stdout independently if rules exist
         did_any = False
-        try:
-            record_builder_delivery(self.base_dir, payload, phase="started", telegram_configured=self._has_rule_for("telegram"), telegram_reply=is_tg_chat)
-        except OSError:
-            _log.debug("Builder notification receipt unavailable", exc_info=True)
 
         # Telegram route (if configured in rules)
         if self._has_rule_for("telegram") and not is_tg_chat:
@@ -919,26 +803,6 @@ class RouterService:
                     alias = conf.subnet_id
                 prefixed_text = f"[{alias}]: {text}" if alias else text
                 body = {"hub_id": hub_id, "text": prefixed_text}
-                if meta.get("schema") in {
-                    "adaos.builder.chat_notification.v1", "adaos.builder.automation_notification.v1"
-                }:
-                    identity = str(payload.get("id") or meta.get("response_idempotency_key") or meta.get("source_message_id") or "")
-                    if not identity:
-                        raise ValueError("Builder notification requires a stable delivery identity")
-                    attempt = telegram_delivery.claim_outbound(
-                        f"builder-notify:{identity}", hub_id=hub_id, routing_mode="hub_pairing",
-                        message_count=1,
-                        content_digest="sha256:" + hashlib.sha256(prefixed_text.encode("utf-8")).hexdigest(),
-                    )
-                    if attempt["status"] == "delivered":
-                        record_builder_delivery(self.base_dir, payload, phase="delivered", receipt=attempt["receipt"])
-                        return
-                    body["_protocol"] = {
-                        "delivery_attempt_id": attempt["attempt_id"],
-                        "operation_key": attempt["operation_key"],
-                        "receipt_subject": f"tg.receipt.{hub_id}",
-                    }
-                    record_builder_delivery(self.base_dir, payload, delivery_attempt_id=attempt["attempt_id"])
                 try:
                     r = await asyncio.to_thread(
                         requests.post,
@@ -947,10 +811,6 @@ class RouterService:
                         headers={"Content-Type": "application/json"},
                         timeout=15.0,
                     )
-                    try:
-                        record_builder_delivery(self.base_dir, payload, phase="accepted" if 200 <= int(r.status_code) < 300 else "failed", http_status=int(r.status_code), root_base=api_base)
-                    except OSError:
-                        _log.debug("Builder notification receipt unavailable", exc_info=True)
                     if not (200 <= int(r.status_code) < 300):
                         logging.getLogger("adaos.router").warning(
                             "router: telegram send failed",
@@ -3326,9 +3186,6 @@ class RouterService:
             turn_trace_id = str(meta.get("turn_trace_id") or clean_msg.get("turn_trace_id") or "").strip()
             if turn_trace_id:
                 clean_msg["turn_trace_id"] = turn_trace_id
-            # Router-owned dialog replies project directly after materialization
-            # and intentionally skip io.out.chat.append. Mirror that path too.
-            await self._mirror_builder_transcript(clean_msg)
             worker_msg = dict(clean_msg)
             worker_meta = dict(meta)
             worker_context_channel = dict(context.get("channel") or {})
@@ -4029,10 +3886,6 @@ class RouterService:
             if not isinstance(text, str) or not text.strip():
                 return
 
-            # Browser Builder turns use the same configured subnet Telegram
-            # route as lifecycle notifications, including the user's brief.
-            # Publish before skip_voice_chat: user echoes intentionally set it.
-            await self._mirror_builder_transcript(payload)
 
             try:
                 # All dialog replies use the canonical tg.output transport.  The
@@ -4934,7 +4787,7 @@ class RouterService:
                 )
                 return
             interaction_meta = interaction.get("metadata") if isinstance(interaction.get("metadata"), Mapping) else {}
-            if str(interaction_meta.get("domain") or "").strip() != "builder":
+            if not _is_builder_interaction_response(interaction):
                 return
             response_meta = response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
             topic_ref = interaction_meta.get("topic_ref") if isinstance(interaction_meta.get("topic_ref"), Mapping) else {}
@@ -7281,10 +7134,6 @@ class RouterService:
                 self.bus.subscribe(event_type, handler)
             self._subscribed = True
         self._start_rules_watch()
-        self._builder_chat_reconcile_task = asyncio.create_task(
-            self._builder_transcript_reconcile_loop(),
-            name="router-builder-chat-reconcile",
-        )
 
     async def activate_after_promotion(self) -> None:
         if self._conversation_store_active:
@@ -7303,13 +7152,6 @@ class RouterService:
 
     async def stop(self) -> None:
         self._started = False
-        if self._builder_chat_reconcile_task is not None:
-            self._builder_chat_reconcile_task.cancel()
-            try:
-                await self._builder_chat_reconcile_task
-            except asyncio.CancelledError:
-                pass
-            self._builder_chat_reconcile_task = None
         if self._stop_watch:
             try:
                 self._stop_watch()

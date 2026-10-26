@@ -1096,6 +1096,32 @@ def test_skill_data_root_runtime_context_ignores_foreign_process_env(
             ctx.skill_ctx.set(previous.name, previous.path)
 
 
+def test_skill_data_root_workspace_source_context_ignores_foreign_process_env(
+    monkeypatch, tmp_path: Path
+) -> None:
+    ctx = get_ctx()
+    dev_skills_root = Path(ctx.paths.skills_dir())
+    skill_name = "source_context_owner"
+    source_skill_root = dev_skills_root / skill_name
+    source_skill_root.mkdir(parents=True, exist_ok=True)
+    runtime_root = dev_skills_root / ".runtime" / skill_name
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "current_version").write_text("4.4.0", encoding="utf-8")
+    monkeypatch.setenv(
+        "ADAOS_SKILL_INTERNAL_DATA_ROOT", str(tmp_path / "foreign-owner" / "data")
+    )
+
+    previous = ctx.skill_ctx.get()
+    assert ctx.skill_ctx.set(skill_name, source_skill_root)
+    try:
+        assert skill_data_root_path() == runtime_root / "v4.4" / "data"
+    finally:
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
+
+
 def test_skill_env_workspace_context_uses_runtime_store_without_prepared_runtime(monkeypatch) -> None:
     ctx = get_ctx()
     workspace_root = Path(ctx.paths.skills_dir())

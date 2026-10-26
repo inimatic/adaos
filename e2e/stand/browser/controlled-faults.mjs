@@ -21,7 +21,7 @@ export async function fetchOwnedReadWithOneRetry(operation, { method, tool }, on
     const read = method === 'GET' || method === 'POST' &&
       ['query_records', 'run_state', 'comparison', 'adoption_status', 'read_attachment']
         .some(name => tool === `natural_retouch_skill:${name}`)
-    if (!read || !/\bECONNRESET\b/.test(message)) throw error
+    if (!read || !/\bECONNRESET\b|^route\.fetch: socket hang up$/.test(message)) throw error
     onRetry?.({ method, tool, message })
     return operation()
   }

@@ -1393,6 +1393,7 @@ class SkillManager:
                         changed = True
                     for meta_key in (
                         "side_effects",
+                        "durable_replay",
                         "read_only",
                         "yjs_governance",
                         "approval_scope",
@@ -1425,6 +1426,7 @@ class SkillManager:
             }
             for meta_key in (
                 "side_effects",
+                "durable_replay",
                 "read_only",
                 "yjs_governance",
                 "approval_scope",
@@ -6319,6 +6321,7 @@ class SkillManager:
             }
             for meta_key in (
                 "side_effects",
+                "durable_replay",
                 "read_only",
                 "yjs_governance",
                 "approval_scope",

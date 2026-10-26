@@ -90,6 +90,8 @@ def _telegram_output_projection(
         return None
     if bool(meta.get("telegram_delivery_handled")):
         return None
+    if bool(meta.get("output_delivery_owned")):
+        return None  # The committed outbox owns external delivery, not projection.
     if str(payload.get("from") or "hub").strip().lower() in {"user", "human"}:
         return None
     chat_id = str(meta.get("chat_id") or "").strip()

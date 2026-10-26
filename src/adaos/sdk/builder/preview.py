@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -1095,6 +1097,180 @@ def materialize_revision_via_owner(
     return dict(result)
 
 
+def _canonical_json_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _project_json_shape(actual: Any, expected: Any, *, path: str = "application") -> Any:
+    """Extract the source-owned shape from an enriched runtime projection."""
+
+    if isinstance(expected, Mapping):
+        if not isinstance(actual, Mapping):
+            raise RuntimeError(f"builder_reload_owner_projection_type_mismatch:{path}")
+        missing = [str(key) for key in expected if key not in actual]
+        if missing:
+            raise RuntimeError(
+                f"builder_reload_owner_projection_missing:{path}:" + ",".join(missing)
+            )
+        return {
+            key: _project_json_shape(
+                actual[key],
+                value,
+                path=f"{path}.{key}",
+            )
+            for key, value in expected.items()
+        }
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            raise RuntimeError(f"builder_reload_owner_projection_list_mismatch:{path}")
+        return [
+            _project_json_shape(value, expected[index], path=f"{path}[{index}]")
+            for index, value in enumerate(actual)
+        ]
+    return actual
+
+
+def reload_via_owner(
+    webspace_id: str,
+    *,
+    scenario_id: str,
+    request_id: str | None = None,
+    request_source: str = "sdk.builder.preview.reload_via_owner",
+    expected_application: Mapping[str, Any] | None = None,
+    expected_application_digest: str | None = None,
+    timeout_s: float = 90.0,
+) -> dict[str, Any]:
+    """Reload source through the process that owns the live Yjs room.
+
+    Builder workers often run outside the API process. They must not write the
+    shared YStore while that process owns an in-memory room, because its older
+    document can later overwrite the detached write. The optional digest makes
+    the owner command an exact, read-after-write operation.
+    """
+
+    import requests
+
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+
+    target_webspace = str(webspace_id or "").strip()
+    target_scenario = str(scenario_id or "").strip()
+    if not target_webspace or not target_scenario:
+        raise ValueError("webspace_id and scenario_id are required")
+    expected_projection = (
+        dict(expected_application) if isinstance(expected_application, Mapping) else None
+    )
+    expected_digest = (
+        str(expected_application_digest or "").strip()
+        or (
+            _canonical_json_digest(expected_projection)
+            if expected_projection is not None
+            else ""
+        )
+        or None
+    )
+    base_url = resolve_control_base_url(prefer_local=True).rstrip("/")
+    token = resolve_control_token(base_url=base_url)
+    command_id = str(request_id or "").strip() or None
+    headers = {"X-AdaOS-Token": token, "Accept": "application/json"}
+    if command_id:
+        headers["X-Request-ID"] = command_id
+        headers["X-Trace-ID"] = command_id
+    body = {
+        "scenario_id": target_scenario,
+        "recreate_room": False,
+        "request_id": command_id,
+        "request_source": str(request_source or "").strip() or None,
+    }
+    session = requests.Session()
+    session.trust_env = False
+    deadline = time.monotonic() + max(1.0, min(float(timeout_s), 120.0))
+    try:
+        response = session.post(
+            f"{base_url}/api/node/yjs/webspaces/{target_webspace}/reload",
+            headers=headers,
+            json=body,
+            timeout=max(1.0, deadline - time.monotonic()),
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not isinstance(result, Mapping):
+            raise RuntimeError("builder_reload_owner_response_invalid")
+        owner_result = dict(result)
+        if not bool(owner_result.get("ok")) or not bool(
+            owner_result.get("accepted", True)
+        ):
+            raise RuntimeError(
+                str(
+                    owner_result.get("detail")
+                    or owner_result.get("error")
+                    or "builder_reload_owner_rejected"
+                )
+            )
+
+        verification: dict[str, Any] = {
+            "attempted": bool(expected_digest),
+            "expected_application_digest": expected_digest,
+        }
+        if expected_digest:
+            snapshot_response = session.get(
+                f"{base_url}/api/node/yjs/webspaces/{target_webspace}/materialization/snapshot",
+                headers=headers,
+                params={"scope": "essential"},
+                timeout=max(1.0, deadline - time.monotonic()),
+            )
+            snapshot_response.raise_for_status()
+            snapshot = snapshot_response.json()
+            if not isinstance(snapshot, Mapping):
+                raise RuntimeError("builder_reload_owner_snapshot_invalid")
+            snapshot_payload = (
+                snapshot.get("snapshot")
+                if isinstance(snapshot.get("snapshot"), Mapping)
+                else snapshot
+            )
+            ui = (
+                snapshot_payload.get("ui")
+                if isinstance(snapshot_payload.get("ui"), Mapping)
+                else {}
+            )
+            application = (
+                ui.get("application")
+                if isinstance(ui.get("application"), Mapping)
+                else {}
+            )
+            materialized_source = (
+                _project_json_shape(application, expected_projection)
+                if expected_projection is not None
+                else application
+            )
+            actual_digest = _canonical_json_digest(materialized_source)
+            actual_scenario = str(ui.get("current_scenario") or "").strip() or None
+            verification.update(
+                {
+                    "current_scenario": actual_scenario,
+                    "materialized_source_application_digest": actual_digest,
+                    "matched": actual_digest == expected_digest
+                    and actual_scenario == target_scenario,
+                }
+            )
+            if not verification["matched"]:
+                raise RuntimeError(
+                    "builder_reload_owner_verification_failed: "
+                    f"scenario={actual_scenario or '-'} "
+                    f"expected={expected_digest} actual={actual_digest}"
+                )
+        owner_result["delivery"] = "owner_control_api"
+        owner_result["projection_verification"] = verification
+        return owner_result
+    finally:
+        session.close()
+
+
 def ensure_dev_webspace_via_owner(
     scenario_id: str,
     *,
@@ -1167,6 +1343,7 @@ __all__ = [
     "list_development_skills",
     "materialize_revision",
     "materialize_revision_via_owner",
+    "reload_via_owner",
     "ensure_dev_webspace_via_owner",
     "materialize_revision_async",
     "navigation_link",

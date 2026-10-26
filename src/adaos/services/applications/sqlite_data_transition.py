@@ -13,11 +13,16 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 import time
 import uuid
 
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, replace_with_retry
+
+
+_SCHEMA_LOCKS_GUARD = threading.Lock()
+_SCHEMA_LOCKS: dict[Path, threading.RLock] = {}
 
 
 def _hash(path: Path) -> str:
@@ -61,7 +66,27 @@ def initialize_sqlite_schema(path: Path, migrations: Sequence[RelationalMigratio
     ordered = sorted(migrations, key=lambda item: item.version)
     if len({item.version for item in ordered}) != len(ordered) or any("sqlite" not in item.dialects for item in ordered):
         raise ValueError("Migration versions must be unique and support SQLite")
-    with closing(sqlite3.connect(path, isolation_level=None, timeout=5)) as connection:
+    def verified(connection):
+        if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaos_schema_migrations'").fetchone():
+            return None
+        history = dict(connection.execute("SELECT version, checksum FROM adaos_schema_migrations"))
+        declared = {item.version: item.checksum for item in ordered}
+        if history == declared:
+            return {"schema_version": max(declared, default=0), "applied_versions": []}
+        return None
+
+    # Ordinary reads only verify immutable checksums. They must not reserve the
+    # application's write lock just to reopen an already initialized database.
+    with closing(sqlite3.connect(path, isolation_level=None, timeout=120)) as connection:
+        if (result := verified(connection)) is not None:
+            return result
+    with _SCHEMA_LOCKS_GUARD:
+        lock = _SCHEMA_LOCKS.setdefault(path.resolve(), threading.RLock())
+    # One in-process bootstrap performs integrity work; concurrent first paints
+    # wait off the event loop and recheck its result rather than timing out.
+    with lock, closing(sqlite3.connect(path, isolation_level=None, timeout=120)) as connection:
+        if (result := verified(connection)) is not None:
+            return result
         return _apply_migrations(connection, ordered, allow_existing=development)
 
 

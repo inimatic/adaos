@@ -19,6 +19,14 @@ _QUEUE_STATUSES = {"starting", "queued"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "expired"}
 
 
+def _settled_result(service: BuilderAutomationService, session: dict) -> dict:
+    # Pure status/projection reads cannot perform this responsibility. Keep it
+    # on the already admitted per-session worker, including startup recovery.
+    if session.get('status') == 'completed':
+        return dict(service.settle_worker_session(session))
+    return dict(session)
+
+
 def _session_token(session_id: str) -> str:
     return "".join(
         char if char.isalnum() or char in {"-", "_", "."} else "_"
@@ -83,13 +91,13 @@ def _run_until_settled(
         session = service._find_session_by_id(str(session_id))
         status = str((session or {}).get("status") or "").strip().lower()
         if status in _TERMINAL_STATUSES:
-            return dict(session or {})
+            return _settled_result(service, dict(session or {}))
         if status in _QUEUE_STATUSES:
             service._run_worker(str(session_id))
             session = service._find_session_by_id(str(session_id))
             status = str((session or {}).get("status") or "").strip().lower()
             if status in _TERMINAL_STATUSES:
-                return dict(session or {})
+                return _settled_result(service, dict(session or {}))
         if not session:
             raise RuntimeError(f"automation session not found: {session_id}")
         sleep(max(0.05, float(poll_interval_seconds)))

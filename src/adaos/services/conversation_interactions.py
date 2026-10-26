@@ -1507,6 +1507,7 @@ def query_interactions(
     limit: int = 50,
     cursor: str | None = None,
     projection_view: str | None = None,
+    webspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Return an ACL-filtered page of canonical interactions.
 
@@ -1555,11 +1556,14 @@ def query_interactions(
         if projection_view not in {"active", "history"}:
             raise ConversationInteractionError("unsupported interaction projection view")
         query["projection_view"] = projection_view
+    if webspace_id is not None:
+        query["webspace_id"] = str(webspace_id).strip()
     records = conversation_store.list_interactions(
         conversation_id=query["conversation_id"],
         statuses=selected_statuses,
         limit=1000,
         **({"projection_view": projection_view} if projection_view is not None else {}),
+        **({"webspace_id": query["webspace_id"]} if webspace_id is not None else {}),
     )
     if len(records) >= 1000:
         raise ConversationInteractionError(

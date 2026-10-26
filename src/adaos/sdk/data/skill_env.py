@@ -249,7 +249,7 @@ def _runtime_env_path_from_root(root: Path, skill_name: str) -> Path:
     )
 
 
-def _runtime_env_path_from_ctx() -> Path | None:
+def _runtime_env_path_from_ctx(*, allow_workspace_fallback: bool = True) -> Path | None:
     ctx, current = _current_ctx_and_skill()
     if ctx is None or current is None:
         return None
@@ -288,11 +288,15 @@ def _runtime_env_path_from_ctx() -> Path | None:
         return _runtime_env_path_from_root(workspace_root, current_name)  # type: ignore[arg-type]
 
     # Repo-workspace and other source fallbacks should still persist state into
-    # the local runtime store, not back into the git-tracked source tree.
-    if workspace_root is not None:
-        return _runtime_env_path_from_root(workspace_root, current_name)
-    if dev_root is not None:
-        return _runtime_env_path_from_root(dev_root, current_name)
+    # the local runtime store, not back into the git-tracked source tree.  Some
+    # isolated runners deliberately provide their owner root through the
+    # process environment, so callers can suppress this broad fallback while
+    # deciding whether that explicit root applies.
+    if allow_workspace_fallback:
+        if workspace_root is not None:
+            return _runtime_env_path_from_root(workspace_root, current_name)
+        if dev_root is not None:
+            return _runtime_env_path_from_root(dev_root, current_name)
     return None
 
 
@@ -352,6 +356,14 @@ def skill_data_root_path() -> Path:
         direct = None
     if direct is not None:
         return direct.expanduser().resolve().parent.parent
+
+    # A source skill inside this runtime's DEV/workspace roots is also
+    # owner-scoped by the ContextVar.  Resolve it before consulting process
+    # environment variables: those variables are compatibility shims and can
+    # transiently belong to another concurrent in-process skill call.
+    context_path = _runtime_env_path_from_ctx(allow_workspace_fallback=False)
+    if context_path is not None:
+        return context_path.expanduser().resolve().parent.parent
 
     explicit = str(os.getenv("ADAOS_SKILL_INTERNAL_DATA_ROOT") or "").strip()
     if explicit:

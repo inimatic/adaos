@@ -1327,6 +1327,23 @@ def test_private_local_checkpoint_excludes_builder_ui_revision_history(
     )
 
 
+def test_development_session_preserves_explicit_token_metric_and_independent_limits(project_space):
+    _skill(project_space["skills"], "budget_skill")
+    compositions.create(_project("budget_project", "budget_skill"))
+    budget={"budget_view":"implementation","max_wall_seconds":7200,"max_model_tokens":1200000,
+            "max_attempts":20,"max_human_interventions":10,"token_budget_metric":"fresh_plus_output",
+            "max_billable_tokens":20000000,"max_context_tokens":64000}
+    result=development_sessions.create("budget_project",session_id="explicit-budget",execution_budget=budget)
+    assert result["session"]["handoff"]["execution_budget"]==budget
+    assert development_sessions.get("explicit-budget")["handoff"]["execution_budget"]==budget
+    from adaos.services.skill_factory_worker import _codex_execution_token_budget
+    actual=_codex_execution_token_budget({"realize_request":{"artifacts":{"execution_budget":budget}}})
+    assert actual["metric"]=="fresh_plus_output" and actual["max_billable_tokens"]==20000000
+    with pytest.raises(development_sessions.DevelopmentSessionError):
+        development_sessions.create("budget_project",session_id="invalid-budget",
+                                    execution_budget={**budget,"max_billable_tokens":0})
+
+
 def test_development_session_separates_write_targets_and_readonly_context(
     project_space, tmp_path: Path
 ) -> None:

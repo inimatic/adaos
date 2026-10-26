@@ -49,6 +49,13 @@ _DECLARATIONS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Drive and Gmail use the same node-owned Google OAuth client configuration.
+# User credentials and permissions remain separate per provider/account.
+_DECLARATIONS["google.drive"] = {
+    **_DECLARATIONS["google.gmail"],
+    "purpose": "Configure the node OAuth client used to connect read-only Google Drive accounts.",
+}
+
 
 class ProviderConfigurationError(ValueError):
     pass

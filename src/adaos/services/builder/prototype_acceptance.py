@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.ui_capabilities import evaluate_ui_request
+from adaos.services.ui_widget_inputs import flatten_widgets
 
 from .workflow import BuilderWorkflowError
 from .cbs_intent import validate_cbs_intent
@@ -75,7 +76,7 @@ def _required_behavior_ids(
         str(widget.get("type") or "") == "ui.list"
         and dict(dict(widget.get("inputs") or {}).get("reorder") or {}).get("enabled") is True
         for page in page_schemas
-        for widget in page.get("widgets") or []
+        for widget in flatten_widgets(page.get("widgets"))
         if isinstance(widget, Mapping)
     ):
         required.update({"list.move", "list.move.alternative"})

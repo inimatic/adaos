@@ -323,3 +323,39 @@ def test_projection_pages_partition_by_dispatch_outcome_not_only_interaction_sta
     history = conversation_interactions.query_interactions(principal={"actor_id": "allowed"}, projection_view="history")
     assert {item["interaction_id"] for item in active["items"]} == {"running"}
     assert {item["interaction_id"] for item in history["items"]} == {"done", "unknown", "more-input"}
+
+
+def test_webspace_partition_precedes_bounded_page_and_binds_cursor():
+    conversation_store.upsert_conversation(conversation_id='conversation.pa.scoped',webspace_id='desktop',owner='skill:builder')
+    base,_=_projection_fixture()
+    metas=[{}, {'source_webspace_id':'desktop-dev'}, {'webspace_id':'dev1'},
+           {'source_webspace_id':'desktop-dev','reply_webspace_id':'default'}]
+    for index,metadata in enumerate(metas):
+        item=copy.deepcopy(base);item.update(interaction_id=f'interaction.pa.scope.{index}',
+            conversation_id='conversation.pa.scoped',metadata=metadata)
+        conversation_store.save_interaction(item)
+    def ids(ws):return {r['interaction_id'] for r in conversation_store.list_interactions(webspace_id=ws,projection_view='active')}
+    assert ids('desktop')=={'interaction.pa.scope.0'}
+    assert ids('desktop-dev')=={'interaction.pa.scope.1'}
+    assert ids('dev1')=={'interaction.pa.scope.2'}
+    assert ids('default')=={'interaction.pa.scope.3'}
+    principal={'actor_id':'user:owner'}
+    page=conversation_interactions.query_interactions(principal=principal,webspace_id='desktop-dev',limit=1)
+    assert [r['interaction_id'] for r in page['items']]==['interaction.pa.scope.1']
+
+
+def test_optional_builder_menu_is_not_a_pending_obligation_but_reviews_remain():
+    base,_=_projection_fixture()
+    for identity,extra in [('menu',{}),('review',{'pending_action_kind':'builder.prototype.review'}),
+            ('continuation',{'continuation':{'surface_command':'builder.prototype.approve'}})]:
+        item=copy.deepcopy(base);item.update(interaction_id='interaction.pa.'+identity,owner='skill:builder_skill',
+            metadata={'domain':'builder','surface_commands':{'help':'builder.help'},**extra})
+        conversation_store.save_interaction(item)
+    for kind in ('project_selection','builder_context_selection'):
+        item=copy.deepcopy(base);item.update(interaction_id='interaction.pa.'+kind,
+            owner='skill:builder_skill',metadata={'domain':'builder','interaction_kind':kind})
+        conversation_store.save_interaction(item)
+    records=conversation_store.list_interactions(conversation_id=base['conversation_id'],projection_view='active')
+    assert {r['interaction_id'] for r in records}=={'interaction.pa.review','interaction.pa.continuation'}
+    # No audit or conversation action was removed.
+    assert conversation_store.get_interaction('interaction.pa.menu')['status']==base['status']

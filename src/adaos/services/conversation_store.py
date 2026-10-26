@@ -1665,6 +1665,9 @@ def upsert_conversation(
                 if active_agent_id is not None
                 else current["active_agent_id"]
             )
+            effective_policy = (str(current["policy_json"] or "{}")
+                if policy is None and current["owner"] == owner and current["webspace_id"] == webspace_id
+                else policy_json)
             unchanged = (
                 str(current["webspace_id"] or "") == str(webspace_id or "")
                 and str(current["kind"] or "") == str(kind or "")
@@ -1673,7 +1676,7 @@ def upsert_conversation(
                 and current["active_agent_id"] == effective_agent
                 and str(current["status"] or "") == str(status or "")
                 and str(current["initiator_json"] or "") == initiator_json
-                and str(current["policy_json"] or "") == policy_json
+                and str(current["policy_json"] or "") == effective_policy
                 and str(current["meta_json"] or "") == meta_json
             )
             if unchanged:
@@ -1693,7 +1696,10 @@ def upsert_conversation(
                 status=excluded.status,
                 updated_at=excluded.updated_at,
                 initiator_json=excluded.initiator_json,
-                policy_json=excluded.policy_json,
+                policy_json=CASE WHEN ?=1
+                    AND conversation_conversations.owner=excluded.owner
+                    AND conversation_conversations.webspace_id=excluded.webspace_id
+                    THEN conversation_conversations.policy_json ELSE excluded.policy_json END,
                 meta_json=excluded.meta_json
             """,
             (
@@ -1709,6 +1715,7 @@ def upsert_conversation(
                 initiator_json,
                 policy_json,
                 meta_json,
+                int(policy is None),
             ),
         )
         con.commit()
@@ -2721,11 +2728,23 @@ def list_interactions(
     due_before: str | None = None,
     limit: int = 100,
     projection_view: str | None = None,
+    webspace_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if not ensure_schema():
         return []
     clauses: list[str] = []
     params: list[Any] = []
+    if webspace_id is not None:
+        # The reply surface is authoritative when explicit. Old requests fall
+        # back to their recorded source, then their owning conversation.
+        clauses.append("""COALESCE(
+            NULLIF(json_extract(payload_json, '$.metadata.reply_webspace_id'), ''),
+            NULLIF(json_extract(payload_json, '$.metadata.webspace_id'), ''),
+            NULLIF(json_extract(payload_json, '$.metadata.source_webspace_id'), ''),
+            (SELECT webspace_id FROM conversation_conversations AS conversation
+             WHERE conversation.conversation_id=conversation_interactions.conversation_id)
+        )=?""")
+        params.append(str(webspace_id).strip())
     if str(conversation_id or "").strip():
         clauses.append("conversation_id=?")
         params.append(str(conversation_id).strip())
@@ -2736,6 +2755,19 @@ def list_interactions(
     if projection_view is not None:
         if projection_view not in {"active", "history"}:
             raise ValueError("unsupported interaction projection view")
+        # Optional action menus remain available in their conversation. They
+        # are not obligations waiting for a human decision. Older Builder menus
+        # have a precise surface_commands contract instead of the new role tag.
+        action_menu = """(json_extract(payload_json,'$.metadata.interaction_role')='action_menu'
+            OR (owner='skill:builder_skill'
+                AND json_extract(payload_json,'$.metadata.domain')='builder'
+                AND (json_type(payload_json,'$.metadata.surface_commands')='object'
+                    OR json_extract(payload_json,'$.metadata.interaction_kind')
+                        IN ('project_selection','builder_context_selection'))
+                AND json_array_length(payload_json,'$.input_spec.required_fields')=0
+                AND json_type(payload_json,'$.metadata.continuation') IS NULL
+                AND COALESCE(json_extract(payload_json,'$.metadata.pending_action_kind'),'') IN ('','builder.change')))"""
+        clauses.append(f"NOT COALESCE({action_menu},0)")
         # Partition before the bounded query: a large historical archive must
         # not overflow the active-obligation snapshot or trigger hydration.
         # Decision status alone is insufficient: accepted interactions can

@@ -4,7 +4,9 @@ from pathlib import Path
 from PIL import Image
 from adaos.e2e.retouch_fixture import RetouchFixture,digest
 
-parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--owned-root',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--owned-root',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
+parser.add_argument('--profile',choices=['natural-retouch.v4','natural-retouch.v5'],default='natural-retouch.v5')
+args=parser.parse_args()
 root=Path.cwd().resolve();owned=args.owned_root.resolve();out=args.output.resolve()
 if not owned.is_relative_to(root/'.tmp/retouch-browser-fixtures') or owned==root/'.tmp/retouch-browser-fixtures' or owned.exists():
  parser.error('A fresh owned fixture directory is required')
@@ -40,7 +42,9 @@ async def run():
  assert job['status']=='completed',job['status']
  state=await call('run_state',photo_id=photo['id'],locale='en');audit=owner.audit()
  attempts=[a for a in audit['budget']['attempts'] if a['run_id']==job['id']]
- assert len(attempts)==3 and all(a['status']=='reconciled' and a['cost_basis']=='metered' for a in attempts)
+ phases=['analysis','edit'] if args.profile=='natural-retouch.v5' else ['analysis','edit','qa']
+ assert len(attempts)==len(phases) and all(a['status']=='reconciled' and a['cost_basis']=='metered' for a in attempts)
+ assert [j['kind'] for j in audit['jobs']]==phases, 'Paid phases must match the registered workflow; raw-first completion must not submit automatic QA'
  expected=sum(a['observed_usd'] for a in attempts)
  import re
  match=re.search(r'confirmed spend:\s*([0-9.]+)\s*USD',state['cost'],re.I)
