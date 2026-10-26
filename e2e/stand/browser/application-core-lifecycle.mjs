@@ -137,7 +137,10 @@ try {
       const inventory = await mcp('applications.lifecycle.trials', { application_id: test.application, limit: 10 })
       row.historyCount = history.operations?.length || 0
       row.inventoryCount = inventory.trials?.length || 0
-      row.ok = row.wide && row.compact && row.inventoryCount > 0 && row.errors.length === 0
+      // A normal recipient-installed prerelease need not have publisher-local
+      // Native Trials. An empty truthful inventory is valid there.
+      row.ok = row.wide && row.compact && (row.inventoryCount > 0
+        || lifecycle.runtime.admission_kind === 'installed_prerelease') && row.errors.length === 0
     } catch (error) {
       row.ok = false; row.error = safe(error)
       row.dom = await page.evaluate(() => ({ path: location.pathname, ng: Boolean(window.ng),
