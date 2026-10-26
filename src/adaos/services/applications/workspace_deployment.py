@@ -51,6 +51,16 @@ def apply_local_workspace_deployment(executor, *, plan, desired, previous,
                        for slot in lock.slots)
         if selected:
             execution["attempted"] = True
+            adapter = executor.runtime.adapter
+            local = adapter if callable(getattr(adapter, "reconcile_locked_runtimes", None)) else getattr(adapter, "local", None)
+            reconcile = getattr(local, "reconcile_locked_runtimes", None)
+            if callable(reconcile):
+                # A successful old deployment record is not proof of current
+                # native-pointer health. Repair only unhealthy planned noops,
+                # under the newly committed exact lock; healthy shared runtimes
+                # are observed, not restarted.
+                reconcile(lock, component_refs=[change.component_ref for change in deployment_plan.changes
+                    if change.action == "noop"], only_if_unhealthy=True)
             operation = executor.runtime.apply(str(deployment_plan.plan_digest),
                 principal=principal, idempotency_key=f"application:{plan['idempotency_key']}")
             execution["operation"] = operation

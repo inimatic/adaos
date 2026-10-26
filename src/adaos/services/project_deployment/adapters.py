@@ -270,7 +270,7 @@ class LocalComponentDeploymentAdapter:
     def operations_root(self) -> Path:
         return self.state_root / "project_deployments" / "component_operations"
 
-    def reconcile_locked_runtimes(self, lock, *, component_refs) -> Mapping[str, Any]:
+    def reconcile_locked_runtimes(self, lock, *, component_refs, only_if_unhealthy=False) -> Mapping[str, Any]:
         """Restore hooks only to verified, already committed Workspace authority.
 
         An activation may have changed a native pointer before health failed,
@@ -290,6 +290,11 @@ class LocalComponentDeploymentAdapter:
                 continue
             self._verify_materialized_target(package,
                 (self.workspace_root / package.materialization_path).resolve())
+            if only_if_unhealthy:
+                health = self.hooks.health(kind=package.kind, component_id=package.artifact_id,
+                    version=package.version, package_digest=package.digest, manifest_digest=package.manifest_digest)
+                if health.get("ready") is True:
+                    continue
             activated = self.hooks.activate(kind=package.kind, component_id=package.artifact_id,
                 version=package.version, package_digest=package.digest, manifest_digest=package.manifest_digest)
             health = self.hooks.health(kind=package.kind, component_id=package.artifact_id,

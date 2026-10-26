@@ -897,3 +897,23 @@ def test_local_failure_before_mutation_restores_desired_without_running_hooks(tm
     assert hooks.calls == ["1.0.0"]
     desired = executor.runtime.store.get_deployment("application-deployment:app_test")
     assert desired.release_digest == plans[0].release.release_digest
+
+
+@pytest.mark.parametrize("drifted", [False, True])
+def test_local_noop_observes_healthy_pointer_and_repairs_only_real_runtime_drift(tmp_path, drifted):
+    executor, hooks, plans, plan = _local_guarded_executor(tmp_path)
+    assert executor(plan("install", 0))["status"] == "active"
+    release = ProjectRelease(project_id="app", version="1.2.0", source_ref=SOURCE,
+        components=plans[0].packages, validation_evidence=({"status": "passed"},)).seal()
+    successor = ReleasePlan(release=release, packages=plans[0].packages, bindings=(), reverse_consumers={})
+    executor.runtime.releases.plans[release.release_digest] = successor
+    request = _plan("update", successor, source_digest=plans[0].release.release_digest)
+    request["components"] = plan("install", 0)["components"]
+    if drifted:
+        hooks.active = "stale-native-pointer"
+    result = executor(request)
+    assert result["status"] == "active", result
+    assert hooks.active == "1.0.0"
+    assert hooks.calls == (["1.0.0", "1.0.0"] if drifted else ["1.0.0"])
+    changes = result["deployment_plan"]["changes"]
+    assert changes[0]["action"] == "noop"
