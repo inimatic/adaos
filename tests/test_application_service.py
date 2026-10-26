@@ -3323,6 +3323,44 @@ def test_native_cbs_update_advances_reviewed_stable_runtime(
     assert selection.revision == 2
 
 
+@pytest.mark.parametrize("receipt_kind", ["exact", "wrong_release", "missing_package", "incomplete", "changed_runtime"])
+def test_legacy_local_workspace_update_advances_only_exact_reviewed_runtime(service, receipt_kind):
+    from dataclasses import replace
+    from adaos.domain.artifact_release import WorkspaceLock, WorkspaceSlot
+
+    first = service.register_release(_release())
+    second = service.register_release(_release(version="1.1.0", package_digest=DIGEST_B))
+    service.store.save_installation(ApplicationInstallation(
+        installation_id="installation:app_recipes", application_id="app_recipes",
+        installed_release_digest=first.release_digest, component_refs=({"component_ref": "scenario:recipes",
+            "package_digest": DIGEST_A, "lifecycle": "bound"},), status="active",
+        data_policy="retain", revision=1), expected_revision=0)
+    service.select_runtime(webspace_id="desktop", application_id="app_recipes",
+        source="stable_installation", release_digest=first.release_digest, runtime_root_ref="workspace",
+        expected_revision=0, actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply")
+    lock = WorkspaceLock(lock_revision=1, updated_at="2026-10-26T00:00:00Z",
+        slots=(WorkspaceSlot(slot_id="recipes", project_id="recipes", release="recipes@1.1.0",
+                             release_digest=second.release_digest),), components=second.project_release.components)
+    if receipt_kind == "missing_package": lock = replace(lock, components=())
+    receipt = {"status": "completed", "release_digest": second.release_digest, "workspace_lock": lock.to_dict()}
+    if receipt_kind == "incomplete": receipt["status"] = "preparing"
+    if receipt_kind == "wrong_release": receipt["release_digest"] = first.release_digest
+    service.executor = lambda _plan: {"ok": True, "status": "succeeded", "workspace_activation": receipt,
+        "snapshot_receipt": {"snapshot_ref": "snapshot:legacy-update", "source_release_digest": first.release_digest,
+                             "consistency_boundary": "artifact_activation_transaction"}}
+    planned = service.plan_operation("app_recipes", "update", release_digest=second.release_digest,
+        expected_revision=1, actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan", idempotency_key="legacy-workspace-update")
+    if receipt_kind == "changed_runtime":
+        service.select_runtime(webspace_id="desktop", application_id="app_recipes", source="local_trial",
+            release_digest=first.release_digest, runtime_root_ref="trial:new-selection", expected_revision=1,
+            actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply")
+    applied = _apply_reviewed(service, planned)
+    assert applied.status == ("succeeded" if receipt_kind == "exact" else "unknown")
+    selected = service.store.get_runtime_selection("desktop", "app_recipes")
+    assert selected.release_digest == (second.release_digest if receipt_kind == "exact" else first.release_digest)
+
+
 def test_native_cbs_activation_fails_closed_when_runtime_changed_after_review(
     service: ApplicationService,
 ) -> None:

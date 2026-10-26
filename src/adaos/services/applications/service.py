@@ -699,12 +699,35 @@ class ApplicationService:
         runtime_target: Mapping[str, Any],
         actor_ref: str,
         subnet_ref: str,
+        workspace_activation: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         native, reason = self._native_admission_status(
             application_id=application_id,
             release_digest=release_digest,
             admission=admission,
         )
+        authority_digest = admission.get("admission_digest") if admission else None
+        if not native and workspace_activation is not None:
+            # Legacy Scenario admissions do not prove native CBS admission.
+            # A completed local Artifact transaction does independently prove
+            # the exact reviewed Workspace package authority. Do not leave an
+            # old selection pointing at files that this transaction replaced.
+            from adaos.domain.artifact_release import WorkspaceLock
+
+            lock = WorkspaceLock.from_mapping(workspace_activation.get("workspace_lock") or {})
+            release = self.store.get_release(application_id, release_digest)
+            installed = self.store.get_installation(application_id)
+            packages = {package.key: package for package in lock.components}
+            if (workspace_activation.get("status") != "completed"
+                    or workspace_activation.get("release_digest") != release_digest
+                    or installed.status != "active"
+                    or installed.installed_release_digest != release_digest
+                    or not any(slot.project_id == release.project_release.project_id
+                               and slot.release_digest == release_digest for slot in lock.slots)
+                    or any(packages.get(package.key) != package for package in release.project_release.components)):
+                raise ApplicationServiceError("exact completed Workspace activation is required")
+            native = True
+            authority_digest = lock.to_dict()["lock_digest"]
         if not native:
             return {
                 "status": "compatibility_runtime",
@@ -739,7 +762,7 @@ class ApplicationService:
             return {
                 "status": "current",
                 "changed": False,
-                "admission_digest": admission.get("admission_digest"),
+                "admission_digest": authority_digest,
                 "selection": current.to_dict(),
             }
         observed_revision = current.revision if current is not None else 0
@@ -761,7 +784,7 @@ class ApplicationService:
         return {
             "status": "activated",
             "changed": True,
-            "admission_digest": admission.get("admission_digest"),
+            "admission_digest": authority_digest,
             "selection": selected.to_dict(),
         }
 
@@ -2445,6 +2468,8 @@ class ApplicationService:
                     runtime_target=raw_runtime_target,
                     actor_ref=actor_ref,
                     subnet_ref=subnet_ref,
+                    workspace_activation=(result.get("workspace_activation")
+                        if isinstance(result.get("workspace_activation"), Mapping) else None),
                 )
             except Exception as exc:
                 return self._transition_operation(
