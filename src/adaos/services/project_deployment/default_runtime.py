@@ -277,6 +277,25 @@ def _default_release_fallback(ctx: AgentContext) -> LazyReleaseProvider:
 class AdaOSComponentLifecycleHooks:
     ctx: AgentContext
 
+    def _reviewed_retirement_readmission(self, component_id: str, package_digest: str | None) -> bool:
+        """An exact new Workspace admission may reinstall a normally removed slot.
+
+        Security/safety quarantines and user deactivation are never cleared by
+        this path. A version label alone is not an admission proof.
+        """
+        from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+        from adaos.services.skill.manager import _is_explicit_reinstall_deactivation
+        from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
+        paths = getattr(self.ctx, "paths", None)
+        if not package_digest or not callable(getattr(paths, "skills_dir", None)) or not callable(getattr(paths, "workspace_dir", None)):
+            return False
+        retired = SkillRuntimeEnvironment(skills_root=Path(paths.skills_dir()), skill_name=component_id).read_deactivation()
+        if not _is_explicit_reinstall_deactivation(retired):
+            return False
+        lock = load_workspace_lock(Path(paths.workspace_dir()) / ".adaos/workspace.lock.json")
+        return bool(lock and any(package.key == "skill:" + component_id and package.digest == package_digest
+                                 for package in lock.components))
+
     def _skill_manager(self) -> SkillManager:
         return SkillManager(
             repo=self.ctx.skills_repo,
@@ -522,12 +541,14 @@ class AdaOSComponentLifecycleHooks:
                     manager = self._skill_manager()
                     prepared_slot: str | None = None
                     if package_digest is not None or manifest_digest is not None:
+                        readmission = {"allow_deactivated": True} if self._reviewed_retirement_readmission(component_id, package_digest) else {}
                         prepared = manager.prepare_runtime(
                             component_id,
                             version_override=version,
                             run_tests=False,
                             package_digest=package_digest,
                             package_manifest_digest=manifest_digest,
+                            **readmission,
                         )
                         prepared_slot = str(prepared.slot or "").strip().upper() or None
                     activation_kwargs: dict[str, Any] = {

@@ -138,7 +138,8 @@ def test_async_bridge_runs_when_activation_is_called_from_an_event_loop() -> Non
     assert asyncio.run(invoke()) == "ready"
 
 
-def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
+@pytest.mark.parametrize("readmission", [False, True])
+def test_skill_component_activation_reloads_live_handlers(monkeypatch, readmission) -> None:
     events: list[tuple[str, str]] = []
     manifest_digest = "sha256:" + "a" * 64
 
@@ -151,11 +152,13 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
             run_tests: bool,
             package_digest: str | None,
             package_manifest_digest: str | None,
+            allow_deactivated: bool = False,
         ) -> SimpleNamespace:
             events.append(("prepare", f"{component_id}:{version_override}"))
             assert run_tests is False
             assert package_digest == "sha256:" + "b" * 64
             assert package_manifest_digest == manifest_digest
+            assert allow_deactivated is readmission
             return SimpleNamespace(slot="B")
 
         def activate_runtime(
@@ -174,6 +177,7 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
             return "B"
 
     monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_skill_manager", lambda _self: Manager())
+    monkeypatch.setattr(AdaOSComponentLifecycleHooks, "_reviewed_retirement_readmission", lambda *_args: readmission)
     monkeypatch.setattr(default_runtime, "runtime_mutation_lease", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(
         AdaOSComponentLifecycleHooks,
@@ -234,6 +238,30 @@ def test_skill_component_activation_reloads_live_handlers(monkeypatch) -> None:
     assert receipt["service_convergence"]["requested"] is True
     assert receipt["service"]["ready"] is True
     assert receipt["manifest_digest"] == manifest_digest
+
+
+@pytest.mark.parametrize("marker,locked_digest,expected", [
+    ({}, "sha256:exact", False),
+    ({"reason": "project_deployment_removed", "source": "project_deployment", "status": "removed", "deactivated": True}, "sha256:exact", True),
+    ({"reason": "project_deployment_removed", "source": "project_deployment", "status": "removed", "deactivated": True}, "sha256:other", False),
+    ({"reason": "runtime_safety", "source": "project_deployment", "status": "removed", "deactivated": True}, "sha256:exact", False),
+    ({"reason": "project_deployment_removed", "source": "user", "status": "removed", "deactivated": True}, "sha256:exact", False),
+    ({"reason": "project_deployment_removed", "source": "project_deployment", "status": "removed", "deactivated": True, "transient": True}, "sha256:exact", False),
+    ({"reason": "project_deployment_removed", "source": "project_deployment", "status": "quarantined", "deactivated": True}, "sha256:exact", False),
+])
+def test_retired_runtime_readmission_requires_exact_committed_workspace(monkeypatch, tmp_path, marker, locked_digest, expected):
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+    monkeypatch.setattr(SkillRuntimeEnvironment, "read_deactivation", lambda _self: marker)
+    monkeypatch.setattr("adaos.services.artifact_pipeline.trial_activation.load_workspace_lock",
+                        lambda _path: SimpleNamespace(components=[SimpleNamespace(key="skill:demo", digest=locked_digest)]))
+    paths = SimpleNamespace(skills_dir=lambda: tmp_path / "skills", workspace_dir=lambda: tmp_path)
+    hooks = AdaOSComponentLifecycleHooks(SimpleNamespace(paths=paths))
+    assert hooks._reviewed_retirement_readmission("demo", "sha256:exact") is expected
+    assert hooks._reviewed_retirement_readmission("other", "sha256:exact") is False
+    assert hooks._reviewed_retirement_readmission("demo", None) is False
+    monkeypatch.setattr("adaos.services.artifact_pipeline.trial_activation.load_workspace_lock", lambda _path: None)
+    assert hooks._reviewed_retirement_readmission("demo", "sha256:exact") is False
 
 
 def test_project_deployment_converges_service_skill_inline(monkeypatch) -> None:
