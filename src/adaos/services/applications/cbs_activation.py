@@ -437,6 +437,8 @@ class NativeApplicationCBSActivationService:
         application_id: str,
         idempotency_key: str,
         actor_ref: str,
+        reload_runtime: Callable[[WorkspaceLock], Any] | None = None,
+        health_check: Callable[[WorkspaceLock], Any] | None = None,
     ) -> NativeApplicationCBSActivationResult:
         if str(admission.get("status") or "") != "admitted":
             raise NativeApplicationCBSActivationError(
@@ -587,8 +589,10 @@ class NativeApplicationCBSActivationService:
             idempotency_key=f"native-cbs:{idempotency_key}",
             slot_id=release_plan.release.project_id,
             fetch_package=lambda package: self.package_store.read(package.digest),
-            reload_policy=skip_policy,
-            health_policy=skip_policy,
+            reload_runtime=reload_runtime,
+            health_check=health_check,
+            reload_policy=skip_policy if reload_runtime is None else None,
+            health_policy=skip_policy if health_check is None else None,
             permission_decision={
                 "approved": True,
                 "approved_by": str(actor_ref or "system:applications"),

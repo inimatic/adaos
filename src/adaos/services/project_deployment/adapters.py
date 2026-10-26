@@ -270,6 +270,36 @@ class LocalComponentDeploymentAdapter:
     def operations_root(self) -> Path:
         return self.state_root / "project_deployments" / "component_operations"
 
+    def reconcile_locked_runtimes(self, lock, *, component_refs) -> Mapping[str, Any]:
+        """Restore hooks only to verified, already committed Workspace authority.
+
+        An activation may have changed a native pointer before health failed,
+        while the last successful deployment record still names the old slot.
+        A topology noop is therefore not proof that runtime rollback happened.
+        This is explicit compensation, not a mutating observation/read path.
+        """
+        from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
+        current = load_workspace_lock(self.workspace_root / ".adaos/workspace.lock.json")
+        if current is None or current.to_dict()["lock_digest"] != lock.to_dict()["lock_digest"]:
+            raise ProjectDeploymentExecutionError("runtime compensation WorkspaceLock changed")
+        packages = {package.key: package for package in current.components}
+        receipts = []
+        for key in sorted(set(component_refs)):
+            package = packages.get(key)
+            if package is None or package.kind != "skill":
+                continue
+            self._verify_materialized_target(package,
+                (self.workspace_root / package.materialization_path).resolve())
+            activated = self.hooks.activate(kind=package.kind, component_id=package.artifact_id,
+                version=package.version, package_digest=package.digest, manifest_digest=package.manifest_digest)
+            health = self.hooks.health(kind=package.kind, component_id=package.artifact_id,
+                version=package.version, package_digest=package.digest, manifest_digest=package.manifest_digest)
+            if health.get("ready") is not True:
+                raise ProjectDeploymentExecutionError("compensated runtime is not healthy")
+            receipts.append({"component_ref": key, "package_digest": package.digest,
+                             "activation": dict(activated), "health": dict(health)})
+        return {"status": "completed", "components": receipts}
+
     @property
     def lock_path(self) -> Path:
         return self.operations_root / ".mutation.lock"

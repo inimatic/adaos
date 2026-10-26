@@ -784,3 +784,116 @@ def test_remove_enumerates_every_activation_page(tmp_path: Path) -> None:
 
     assert removed["status"] == "removed"
     assert len(removed["deployment_operations"]) == 75
+
+
+def _local_guarded_executor(tmp_path):
+    from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+    from adaos.services.project_deployment import LocalComponentDeploymentAdapter
+    from adaos.services.applications.runtime_integrity import assert_managed_skill_activation
+    from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
+
+    store = ContentAddressedPackageStore(tmp_path / "artifact_pipeline/packages")
+    plans = []
+    for version in ("1.0.0", "1.1.0"):
+        source = tmp_path / "sources" / version
+        source.mkdir(parents=True)
+        (source / "skill.yaml").write_text("name: worker\nversion: " + version + "\n", encoding="utf-8")
+        (source / "handler.py").write_text("VERSION = '" + version + "'\n", encoding="utf-8")
+        package = build_artifact_package(source, kind="skill", source_ref=SOURCE)
+        store.put(package.archive_bytes, expected_digest=package.ref.digest)
+        release = ProjectRelease(project_id="app", version=version, source_ref=SOURCE,
+            components=(package.ref,), validation_evidence=({"status": "passed"},)).seal()
+        plans.append(ReleasePlan(release=release, packages=(package.ref,), bindings=(), reverse_consumers={}))
+
+    workspace = tmp_path / "workspace"
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path, workspace_dir=lambda: workspace))
+
+    class Hooks:
+        active = None
+        fail_version = None
+        fail_activation = None
+        calls = []
+
+        def activate(self, **value):
+            assert_managed_skill_activation(ctx, value["component_id"], value["package_digest"])
+            lock = load_workspace_lock(workspace / ".adaos/workspace.lock.json")
+            assert next(p.digest for p in lock.components if p.key == "skill:worker") == value["package_digest"]
+            self.active = value["version"]
+            self.calls.append(value["version"])
+            if self.fail_activation == value["version"]:
+                raise RuntimeError("activation acknowledgement lost")
+            return {"activated": True}
+
+        def health(self, **value):
+            return {"ready": self.active == value["version"] and self.active != self.fail_version}
+
+    hooks = Hooks()
+    adapter = LocalComponentDeploymentAdapter(local_node_id="node-local", workspace_root=workspace,
+        state_root=tmp_path, package_store=store, fetch_package=lambda p: store.read(p.digest), hooks=hooks)
+    runtime = ProjectDeploymentRuntime(store=ProjectDeploymentStore(state_dir=tmp_path),
+        releases=Releases(*plans), inventory=Inventory(), adapter=adapter, local_node_id="node-local")
+    executor = ApplicationDeploymentExecutor(runtime=runtime, state_dir=tmp_path, workspace_root=workspace)
+
+    def plan(kind, index):
+        value = _plan(kind, plans[index], source_digest=plans[0].release.release_digest if kind == "update" else None)
+        value["components"] = [{"component_ref": "skill:worker", "package_digest": plans[index].packages[0].digest,
+            "lifecycle": "bound"}]
+        return value
+
+    return executor, hooks, plans, plan
+
+
+def test_local_reviewed_update_commits_lock_before_managed_runtime_hook(tmp_path):
+    executor, hooks, plans, plan = _local_guarded_executor(tmp_path)
+    installed = executor(plan("install", 0))
+    assert installed["status"] == "active", installed
+    updated = executor(plan("update", 1))
+    assert updated["status"] == "active", updated
+    assert updated["workspace_activation"]["status"] == "completed"
+    assert hooks.active == "1.1.0"
+    assert hooks.calls == ["1.0.0", "1.1.0"]
+
+
+def test_local_health_failure_restores_lock_source_runtime_and_data(tmp_path):
+    from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
+    executor, hooks, plans, plan = _local_guarded_executor(tmp_path)
+    assert executor(plan("install", 0))["status"] == "active"
+    old_lock = load_workspace_lock(executor.workspace_root / ".adaos/workspace.lock.json").to_dict()
+    data = executor.snapshots.data_root / "app_test/state.json"
+    data.parent.mkdir(parents=True);data.write_text('retained', encoding="utf-8")
+    hooks.fail_version = "1.1.0"
+    result = executor(plan("update", 1))
+    assert result["status"] == "failed", result
+    assert result["restore_receipt"]["status"] == "restored"
+    assert hooks.active == "1.0.0"
+    assert load_workspace_lock(executor.workspace_root / ".adaos/workspace.lock.json").to_dict() == old_lock
+    assert data.read_text() == 'retained'
+    assert "1.0.0" in (executor.workspace_root / "skills/worker/skill.yaml").read_text()
+
+
+def test_local_unknown_compensation_does_not_repeat_hooks_or_restore_data(tmp_path, monkeypatch):
+    executor, hooks, plans, plan = _local_guarded_executor(tmp_path)
+    assert executor(plan("install", 0))["status"] == "active"
+    hooks.fail_version = "1.1.0"
+    hooks.fail_activation = "1.0.0"
+    restored = []
+    monkeypatch.setattr(executor.snapshots, "restore", lambda ref: restored.append(ref))
+    result = executor(plan("update", 1))
+    assert result["status"] == "unknown", result
+    assert result["compensation_error"]
+    assert hooks.calls == ["1.0.0", "1.1.0", "1.0.0"]
+    assert restored == []
+
+
+def test_local_failure_before_mutation_restores_desired_without_running_hooks(tmp_path, monkeypatch):
+    from adaos.services.artifact_pipeline.activation import WorkspaceActivationManager, ActivationError
+    executor, hooks, plans, plan = _local_guarded_executor(tmp_path)
+    assert executor(plan("install", 0))["status"] == "active"
+    def fail(*args, **kwargs):
+        raise ActivationError("reviewed lock no longer admissible")
+    monkeypatch.setattr(WorkspaceActivationManager, "activate", fail)
+    result = executor(plan("update", 1))
+    assert result["status"] == "failed", result
+    assert hooks.calls == ["1.0.0"]
+    desired = executor.runtime.store.get_deployment("application-deployment:app_test")
+    assert desired.release_digest == plans[0].release.release_digest

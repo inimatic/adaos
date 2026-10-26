@@ -842,6 +842,13 @@ class ApplicationDeploymentExecutor:
                 "snapshot_receipt": snapshot_receipt,
                 "restore_receipt": restore,
             }
+        if (kind in {"install", "update"} and self.workspace_root is not None
+                and self.runtime.local_node_id
+                and all(change.node_id == self.runtime.local_node_id for change in deployment_plan.changes)):
+            from .workspace_deployment import apply_local_workspace_deployment
+            return apply_local_workspace_deployment(self, plan=plan, desired=desired, previous=previous,
+                deployment_plan=deployment_plan, principal=principal,
+                snapshot_receipt=snapshot_receipt, cbs_admission=cbs_admission)
         operation = self.runtime.apply(
             str(deployment_plan.plan_digest),
             principal=principal,
