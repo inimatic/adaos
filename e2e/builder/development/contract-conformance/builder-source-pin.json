@@ -6,6 +6,6 @@
   "version": "0.4.40",
   "package_digest": "sha256:a9aed21251111db8c459a77842b92c31ab13ebc6531fb4332e00744a6a52becf",
   "source_state": "local_beta_pending_publication",
-  "application_version": "0.3.27",
-  "application_release_digest": "sha256:91ccaf5b13641a84254bad7d3076f1249e34930d30f958619b9478b5609bed05"
+  "application_version": "0.3.29",
+  "application_release_digest": "sha256:51330f5d7bf13cde25e35e2a0765d3aec9e3bb4551f7b610b0b42888e254f96c"
 }
