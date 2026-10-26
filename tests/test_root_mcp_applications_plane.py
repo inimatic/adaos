@@ -1380,7 +1380,8 @@ def test_applications_contract_descriptor_and_capability_profile_are_published()
     schemas = descriptor["payload"]["schemas"]
     capabilities = {item["capability"] for item in list_capability_classes()}
 
-    assert len(schemas) == 16
+    assert len(schemas) == 17
+    assert "application.lifecycle.v1.schema.json" in schemas
     assert schemas["application.v1.schema.json"]["title"] == "AdaOS Application v1"
     assert schemas["application.release-evidence-bundle.v1.schema.json"]["title"] == (
         "AdaOS Application Release Evidence Bundle v1"

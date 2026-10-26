@@ -3633,8 +3633,10 @@ async def admin_root_mcp_logs(
 @app.post("/api/admin/root_mcp/call", dependencies=[Depends(require_token)])
 async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
     from adaos.services.companion.plane import TOOLS as companion_lab_tools
+    from adaos.services.root_mcp.applications_plane import local_lifecycle_tool_capabilities
 
     allowed_tools = {
+        **local_lifecycle_tool_capabilities(),
         **{name: contract[2] for name, contract in companion_lab_tools.items()},
         "companion.context.get": "companion.read",
         "companion.action.preview": "companion.execute",

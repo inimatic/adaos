@@ -449,6 +449,11 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
         for tool_id, title, properties, required, capability, mutation in specs]
 
 
+def local_lifecycle_tool_capabilities() -> dict[str, str]:
+    """Exact built-in Core contracts admitted by the authenticated node bridge."""
+    return {contract.id: contract.required_capability for contract in _lifecycle_contracts()}
+
+
 def contracts() -> list[RootMcpToolContract]:
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)

@@ -722,6 +722,7 @@ def _application_contracts() -> dict[str, Any]:
         "application.access-profile-diff.v1.schema.json",
         "application.verification-report.v1.schema.json",
         "application.release-evidence-bundle.v1.schema.json",
+        "application.lifecycle.v1.schema.json",
         "application.setup_contract.v1.schema.json",
         "application.setup_state.v1.schema.json",
     )
@@ -778,6 +779,8 @@ def _application_contracts() -> dict[str, Any]:
                 "applications.plan",
                 "applications.apply",
                 "applications.explain_plan",
+                "applications.cancel_operation",
+                *{tool_id for tool_id in tools if tool_id.startswith("applications.lifecycle.")},
             },
         ),
         (
