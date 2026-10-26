@@ -1,6 +1,7 @@
 """Rebuildable Core work queue for derived Application UI materialization."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -50,6 +51,15 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8) -> list[dict
         if len(results) >= max(1, min(limit, 32)):
             break
         request = json.loads(path.read_text(encoding="utf-8"))
+        # A completed projection of another selection isn't current evidence.
+        selections = [s.to_dict() for s in ApplicationStore(state).list_runtime_selections()
+                      if s.application_id == request["application_id"]]
+        rooms = sorted(set(request["webspace_ids"]) | {s["webspace_id"] for s in selections})
+        expected = canonical_payload_digest({"application_id": request["application_id"],
+            "selections": selections, "webspace_ids": rooms})
+        if request.get("request_digest") != expected:
+            request_materialization(owner, request["application_id"], webspace_ids=rooms)
+            request = json.loads(path.read_text(encoding="utf-8"))
         if request.get("status") == "completed":
             continue
         application_id = request["application_id"]
@@ -57,7 +67,8 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8) -> list[dict
         observations = []
         for room in rooms:
             try:
-                ComponentUpdateService(state_dir=state).reconcile_local_trials(room, application_id=application_id)
+                await asyncio.to_thread(ComponentUpdateService(state_dir=state).reconcile_local_trials,
+                                        room, application_id=application_id)
                 result = await rebuild_webspace_from_sources(room, action="runtime_selection_refresh",
                     source_of_truth="application_core_lifecycle", reseed_from_scenario=False)
                 observations.append({"webspace_id": room, "ok": bool(result.get("ok"))})

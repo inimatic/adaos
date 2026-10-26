@@ -114,7 +114,9 @@ def test_another_process_holds_the_execution_lease(tmp_path):
     process = ctx.Process(target=_process_reader, args=(str(tmp_path), ready, finish))
     process.start()
     try:
-        assert ready.wait(10)
+        # Cold spawn imports can take longer on an I/O-constrained stand.
+        # This is startup allowance, not a relaxation of the SQLite lease test.
+        assert ready.wait(45)
         with pytest.raises(RuntimeChannelConflict, match="executing"):
             channel.select(selection(beta=True, revision=2), expected_revision=1)
     finally:

@@ -384,6 +384,40 @@ def test_stable_uninstall_recovers_metadata_without_repeating_executor(operation
     assert recovered["status"] == "succeeded" and len(calls) == 1
 
 
+def test_workspace_prerelease_is_not_misrepresented_as_a_stable_baseline(operations):
+    ops, subnet, _, candidate = operations
+    _stable_uninstall_plan(ops, subnet, candidate)
+    selected = ops.store.get_runtime_selection("desktop", "example")
+    ops.store.save_runtime_selection(replace(selected, source="stable_installation", runtime_root_ref="workspace",
+        revision=selected.revision + 1), expected_revision=selected.revision)
+    observed = ops.observer.snapshot("example")
+    assert observed["runtime"]["admission_kind"] == "installed_prerelease"
+    assert observed["installation"]["workspace_baseline_present"]
+    assert not observed["installation"]["stable_baseline_present"]
+    assert observed["summary"].startswith("Beta:")
+
+
+def test_unknown_removal_executor_is_not_replayed_by_core_recovery(operations):
+    ops, subnet, _, candidate = operations
+    planned = _stable_uninstall_plan(ops, subnet, candidate)
+    calls = []
+
+    def executor(_plan):
+        calls.append("effect")
+        raise TimeoutError("synthetic lost external acknowledgement")
+
+    ops.service.executor = executor
+    with pytest.raises(TimeoutError):
+        ops.service.apply_operation(planned["operation_id"], plan_digest=planned["plan_digest"],
+            idempotency_key=planned["idempotency_key"], actor_ref="user:owner", subnet_ref=subnet, capability="applications.apply")
+    from adaos.services.applications.operation_recovery import recover_core_operation
+    with pytest.raises(RuntimeChannelConflict, match="ExecutorOutcomeUnknown"):
+        recover_core_operation(ops.owner, planned["operation_id"], plan_digest=planned["plan_digest"],
+            actor_ref="user:owner", subnet_ref=subnet, capability="applications.recover")
+    assert calls == ["effect"]
+    assert ApplicationRuntimeChannel(ops.state, "example").pending_transitions()
+
+
 @pytest.mark.asyncio
 async def test_materialization_failure_is_pending_and_recoverable_without_migration(operations, monkeypatch):
     ops = operations[0]

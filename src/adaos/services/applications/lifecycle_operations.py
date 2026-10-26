@@ -145,6 +145,10 @@ class ApplicationLifecycleOperations:
             if include_storage and root.is_dir():
                 total, count, complete = 0, 0, True
                 for current, dirs, files in os.walk(root, followlinks=False):
+                    count += 1
+                    if count >= 1024 or len(dirs) + len(files) > 1024:
+                        complete = False
+                        break
                     if any((Path(current) / name).is_symlink() or getattr(Path(current) / name, "is_junction", lambda: False)() for name in dirs):
                         complete = False
                         break
@@ -227,7 +231,7 @@ class ApplicationLifecycleOperations:
         if snapshot["revision"] != expected_revision:
             raise RuntimeChannelConflict("LifecycleRevisionChanged")
         if action == "uninstall":
-            if snapshot["installation"]["stable_baseline_present"]:
+            if snapshot["installation"]["workspace_baseline_present"]:
                 baseline = self.store.get_installation(application_id)
                 return self.service.plan_operation(application_id, "remove", expected_revision=baseline.revision,
                     actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability,
@@ -260,7 +264,7 @@ class ApplicationLifecycleOperations:
         if action == "retain_local_beta" and self.store.get_application(application_id).publisher_ref != subnet_ref:
             raise PermissionError("OnlyPublisherMayInstallLocalBeta")
         if action == "uninstall_beta":
-            if snapshot["installation"]["stable_baseline_present"]:
+            if snapshot["installation"]["workspace_baseline_present"]:
                 raise ValueError("Whole-Application uninstall with Stable must use the aggregate removal plan")
             if not snapshot["actions"]["uninstall"]["eligible"]:
                 raise PermissionError("ProtectedApplication")

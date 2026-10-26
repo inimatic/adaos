@@ -34,6 +34,13 @@ Checking an existing job keeps its original provider identity. The previous
 Beta data remains available for recovery; preparing an upgrade does not publish
 the application.
 
+The selected application's operational runtime is observed through Core, not
+Builder's mutable authoring history. **Manage runtime and Trials** opens the same
+reviewed controls used by Applications and Management. Candidate acceptance,
+temporary admission, installed local Beta and publication are separate decisions;
+accepting a Candidate does not by itself remove its Trial deadline. See
+[Application runtime lifecycle](../operations/versioning.md#application-runtime-lifecycle-local-beta).
+
 ## Public Promise
 
 The public promise should stay modest until the workflow is packaged for

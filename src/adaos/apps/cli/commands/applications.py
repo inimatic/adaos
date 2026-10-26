@@ -16,9 +16,10 @@ def _owner():
 
 
 def _authority(capability):
+    from adaos.services.personalization_runtime import current_user_id
     config = _owner().config
     subnet = str(config.subnet_id_value if hasattr(config, "subnet_id_value") else config.subnet_id)
-    return {"actor_ref": "cli:local-owner", "subnet_ref": subnet if subnet.startswith("subnet:") else "subnet:" + subnet,
+    return {"actor_ref": "user:" + current_user_id(_owner()), "subnet_ref": subnet if subnet.startswith("subnet:") else "subnet:" + subnet,
             "capability": capability}
 
 
@@ -56,9 +57,27 @@ def plan(application_id: str, action: str, expected_revision: str, key: str,
 
 @app.command("apply")
 def apply(operation_id: str, plan_digest: str):
-    from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
-    _print(ApplicationLifecycleOperations(_owner()).apply(operation_id, plan_digest=plan_digest,
-        **_authority("applications.apply")))
+    from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations, PLAN_SCHEMA
+    operations = ApplicationLifecycleOperations(_owner())
+    op = operations.store.get_operation(operation_id)
+    if op.plan.get("schema") == PLAN_SCHEMA:
+        _print(operations.apply(operation_id, plan_digest=plan_digest, **_authority("applications.apply")))
+        return
+    # Stable package deployment belongs to the running Core executor, never
+    # to a Builder or Management process. The node token preserves the same
+    # authenticated owner identity as the local CLI.
+    import requests
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+    base = resolve_control_base_url(prefer_local=True)
+    with requests.Session() as client:
+        client.trust_env = False
+        response = client.post(base.rstrip("/") + "/api/admin/root_mcp/call",
+            headers={"X-AdaOS-Token": resolve_control_token(base_url=base)},
+            json={"tool_id": "applications.apply", "arguments": {"operation_id": operation_id,
+                "plan_digest": plan_digest, "idempotency_key": op.idempotency_key}, "dry_run": False,
+                "scope": {"webspace_id": "desktop"}}, timeout=120)
+        response.raise_for_status()
+        _print(response.json())
 
 
 @app.command("cancel")

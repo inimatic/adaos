@@ -49,14 +49,13 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
                 "runtime_root_ref": selection.runtime_root_ref if selection else None,
                 "webspace_ids": sorted(s.webspace_id for s in selections),
                 "admission": "admitted", "reason": "StableInstallation", "expires_at": None}
-        if selection is None or selection.source == "local_trial":
-            try:
-                admission = observe_runtime_admission(state, selection, now=observed)
-                # Remaining seconds is display-only, not a new event per tick.
-                admission.pop("remaining_seconds", None)
-                fact.update(admission)
-            except (OSError, ValueError, KeyError):
-                fact.update(admission="unavailable", reason="InvalidAdmissionMetadata")
+        try:
+            admission = observe_runtime_admission(state, selection, now=observed, store=store)
+            # Remaining seconds is display-only, not a new event per tick.
+            admission.pop("remaining_seconds", None)
+            fact.update(admission)
+        except (OSError, ValueError, KeyError):
+            fact.update(admission="unavailable", reason="InvalidAdmissionMetadata")
         fact["transition_pending"] = bool(ApplicationRuntimeChannel(state, application_id).pending_transitions())
         path = request_path(state, application_id)
         if path.is_file():

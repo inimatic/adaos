@@ -38,15 +38,28 @@ def _action(eligible: bool, reason: str, capability: str = "applications.apply")
             "required_capability": capability, "requires_authorization": True}
 
 
-def observe_runtime_admission(state: Path, selected: Any, *, now: datetime | None = None) -> dict[str, Any]:
+def workspace_release_kind(store, application_id: str, digest: str) -> str:
+    """The legacy stable_installation source means Workspace, not stability."""
+    channels = store.get_channels(application_id).get("channels", {}) if hasattr(store, "get_channels") else {}
+    if channels.get("stable") == digest:
+        return "stable"
+    if channels.get("prerelease") == digest:
+        return "prerelease"
+    release = store.get_release(application_id, digest)
+    return "stable" if getattr(release, "lifecycle", "stable") == "stable" else "prerelease"
+
+
+def observe_runtime_admission(state: Path, selected: Any, *, now: datetime | None = None,
+                              store=None) -> dict[str, Any]:
     """One cheap admission projection shared by inventory, detail and clock observer."""
     observed = now or datetime.now(timezone.utc)
     if selected is None:
         return {"admission": "not_selected", "reason": "NoSelectedRuntime", "expires_at": None,
                 "remaining_seconds": None, "admission_kind": None, "trial_expires_at": None}
     if selected.source != "local_trial":
-        return {"admission": "admitted", "reason": "StableInstallation", "expires_at": None,
-                "remaining_seconds": None, "admission_kind": "stable", "trial_expires_at": None}
+        kind = workspace_release_kind(store or ApplicationStore(state), selected.application_id, selected.release_digest)
+        return {"admission": "admitted", "reason": "StableInstallation" if kind == "stable" else "InstalledPrerelease", "expires_at": None,
+                "remaining_seconds": None, "admission_kind": "stable" if kind == "stable" else "installed_prerelease", "trial_expires_at": None}
     from .local_beta_admission import read_local_beta_admission
     candidate_id = selected.runtime_root_ref.removeprefix("trial:")
     activation = TrialActivationStore(Path(state) / "artifact_pipeline/trial-activations").load(candidate_id) or {}
@@ -179,6 +192,8 @@ class ApplicationLifecycleService:
         except FileNotFoundError:
             baseline = None
         baseline_active = baseline is not None and baseline.status == "active"
+        baseline_kind = workspace_release_kind(self.store, application_id, baseline.installed_release_digest) if baseline_active else None
+        stable_baseline = baseline_active and baseline_kind == "stable"
         is_beta = bool(selected and selected.source == "local_trial")
         digest = selected.release_digest if selected else (
             baseline.installed_release_digest if baseline_active else None)
@@ -206,10 +221,10 @@ class ApplicationLifecycleService:
                               if is_beta and candidate_id else None)
         except (OSError, ValueError, KeyError):
             installed_beta = None  # Observation stays available for data-only recovery.
-        admission_fact = observe_runtime_admission(self.state, selected, now=observed)
+        admission_fact = observe_runtime_admission(self.state, selected, now=observed, store=self.store)
         admission, reason = admission_fact["admission"], admission_fact["reason"]
         if digest:
-            admission, reason = "admitted", "StableInstallation" if not is_beta else "TrialActive"
+            admission, reason = "admitted", ("StableInstallation" if baseline_kind == "stable" else "InstalledPrerelease") if not is_beta else "TrialActive"
         if is_beta:
             admission, reason = admission_fact["admission"], admission_fact["reason"]
         channel = ApplicationRuntimeChannel(self.state, application_id)
@@ -232,7 +247,14 @@ class ApplicationLifecycleService:
         from .materialization import request_path
         path = request_path(self.state, application_id)
         materialization_record = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-        materialization = {"status": materialization_record.get("status", "not_requested"),
+        materialization_status = materialization_record.get("status", "not_requested")
+        if materialization_record:
+            rooms = sorted(set(materialization_record.get("webspace_ids", [])) | {s.webspace_id for s in selections})
+            expected_projection = canonical_payload_digest({"application_id": application_id,
+                "selections": [s.to_dict() for s in selections], "webspace_ids": rooms})
+            if materialization_record.get("request_digest") != expected_projection:
+                materialization_status = "stale"
+        materialization = {"status": materialization_status,
                            "observed_at": materialization_record.get("observed_at"),
                            "attempts": materialization_record.get("attempts", 0)}
         operation_projection = None
@@ -257,7 +279,7 @@ class ApplicationLifecycleService:
                 "ExactAcceptedTrialRequired", "applications.apply"),
             "deactivate_beta": _action(is_beta and transition is None,
                 "SelectedBetaRequired" if not is_beta else "ReviewRuntimeAndDataDisposition"),
-            "restore_stable": _action(is_beta and baseline_active and transition is None,
+            "restore_stable": _action(is_beta and stable_baseline and transition is None,
                 "VerifiedStableBaselineRequired"),
             "uninstall_beta": _action(is_beta and not baseline_active and removable and transition is None,
                 "BetaOnlyInstallationRequired"),
@@ -286,8 +308,10 @@ class ApplicationLifecycleService:
             "observed_at": observed.isoformat(), "read_only": True,
             "revision": canonical_payload_digest(refs), "freshness": "observed",
             "installation": {"present": bool(digest), "beta_only": is_beta and not baseline_active,
-                             "stable_baseline_present": baseline_active,
-                             "stable_release_digest": baseline.installed_release_digest if baseline_active else None},
+                             "stable_baseline_present": stable_baseline,
+                             "stable_release_digest": baseline.installed_release_digest if stable_baseline else None,
+                             "workspace_baseline_present": baseline_active,
+                             "workspace_release_digest": baseline.installed_release_digest if baseline_active else None},
             "runtime": {"selected": bool(digest), "source": selected.source if selected else
                         "stable_installation" if baseline_active else None,
                         "release_digest": digest, "version": release.project_release.version if release else None,
@@ -295,7 +319,8 @@ class ApplicationLifecycleService:
                         "webspace_ids": sorted(s.webspace_id for s in selections),
                         "selections": [s.to_dict() for s in selections],
                         "admission": admission, "reason": reason,
-                        "admission_kind": admission_fact["admission_kind"] if selected else "stable" if baseline_active else None,
+                        "admission_kind": admission_fact["admission_kind"] if selected else (
+                            "stable" if baseline_kind == "stable" else "installed_prerelease") if baseline_active else None,
                         "trial_expires_at": admission_fact["trial_expires_at"],
                         "expires_at": admission_fact["expires_at"],
                         "remaining_seconds": admission_fact["remaining_seconds"],
@@ -310,6 +335,6 @@ class ApplicationLifecycleService:
                          "runtime_root_ref") or (f"trial:{candidate_id}" if candidate_id else "")).removeprefix("trial:")},
             "operation": operation_projection, "actions": actions,
             "materialization": materialization,
-            "summary": f"{('Beta' if is_beta else 'Stable') if digest else 'Not installed'}: "
+            "summary": f"{('Beta' if is_beta or baseline_kind == 'prerelease' else 'Stable') if digest else 'Not installed'}: "
                        f"{release.project_release.version if release else '—'}; {reason}",
         }

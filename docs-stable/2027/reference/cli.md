@@ -17,6 +17,7 @@ development-only references are not part of the public stable documentation.
 | `adaos node ...` | Inspect node status and reliability. |
 | `adaos skill ...` | List or operate skills through supported flows. |
 | `adaos scenario ...` | List or operate scenarios through supported flows. |
+| `adaos applications ...` | Inspect Core lifecycle, review local actions and recover exact operations (beta). |
 | `adaos autostart ...` | Manage production-style local runtime slots. |
 
 Run `adaos --help` and `adaos <group> --help` for the current command surface.

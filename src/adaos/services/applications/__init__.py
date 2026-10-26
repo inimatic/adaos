@@ -5,8 +5,6 @@ from .service import (
     ApplicationServiceError,
 )
 
-# Core observation/recovery is booted by sys.ready, not by a product page.
-from . import lifecycle_runtime as _lifecycle_runtime  # noqa: F401
 from .store import (
     ApplicationChannelConflict,
     ApplicationRevisionConflict,
