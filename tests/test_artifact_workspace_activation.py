@@ -7,6 +7,7 @@ import shutil
 import threading
 import time
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -964,7 +965,9 @@ def test_workspace_lock_compare_and_switch_preserves_newer_observed_lock(tmp_pat
     ) == {"marker": "cas-one"}
 
 
-def test_workspace_writer_lease_serializes_two_activations(tmp_path: Path) -> None:
+def test_workspace_writer_lease_serializes_two_activations(tmp_path: Path, monkeypatch) -> None:
+    from adaos.services.artifact_pipeline import activation
+
     first = _built_scenario(tmp_path, version="1.0.0", marker="lease-one")
     second = _built_scenario(tmp_path, version="1.1.0", marker="lease-two")
     store, first_manager = _manager(tmp_path)
@@ -977,12 +980,14 @@ def test_workspace_writer_lease_serializes_two_activations(tmp_path: Path) -> No
     store.put(second.archive_bytes)
     first_inside = threading.Event()
     release_first = threading.Event()
+    second_waiting = threading.Event()
+    second_inside = threading.Event()
     errors: list[BaseException] = []
 
     def hold_first(phase: str) -> None:
         if phase == "fetch":
             first_inside.set()
-            if not release_first.wait(timeout=5):
+            if not release_first.wait(timeout=30):
                 raise TimeoutError("test did not release first activation")
 
     def run_first() -> None:
@@ -1003,21 +1008,41 @@ def test_workspace_writer_lease_serializes_two_activations(tmp_path: Path) -> No
 
     first_thread = threading.Thread(target=run_first)
     second_thread = threading.Thread(target=run_second)
+    real_lock = activation.mutation_lock
+
+    @contextmanager
+    def observed_lock(path, **kwargs):
+        second_writer = threading.current_thread() is second_thread and path == second_manager.writer_lock_path
+        if second_writer:
+            second_waiting.set()
+        with real_lock(path, **kwargs):
+            if second_writer:
+                second_inside.set()
+            yield
+
+    monkeypatch.setattr(activation, "mutation_lock", observed_lock)
     first_thread.start()
-    assert first_inside.wait(timeout=2)
-    second_thread.start()
-    time.sleep(0.1)
-    assert second_thread.is_alive()
-    assert not second_manager.operation_path(
-        second_manager.operation_id("lease-second")
-    ).exists()
-    release_first.set()
-    first_thread.join(timeout=5)
-    second_thread.join(timeout=5)
+    try:
+        assert first_inside.wait(timeout=30)
+        second_thread.start()
+        assert second_waiting.wait(timeout=30)
+        # Observe an actual contended acquisition, not merely a live thread.
+        assert not second_inside.wait(timeout=0.1)
+        assert not second_manager.operation_path(
+            second_manager.operation_id("lease-second")
+        ).exists()
+    finally:
+        release_first.set()
+        # Completing durable filesystem work is not a five-second product SLA.
+        # Always drain workers before pytest removes their temporary Workspace.
+        first_thread.join(timeout=30)
+        if second_thread.ident is not None:
+            second_thread.join(timeout=30)
 
     assert not first_thread.is_alive()
     assert not second_thread.is_alive()
     assert errors == []
+    assert second_inside.is_set()
     final = second_manager.load_lock()
     assert final is not None
     assert final.lock_revision == 2
