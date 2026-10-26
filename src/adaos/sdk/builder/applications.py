@@ -294,126 +294,15 @@ def _ensure_application_for_project(
 
 
 def _publisher_owner_role_ids(release) -> tuple[tuple[str, ...], str]:
-    """Resolve the local publisher's Application role without guessing broadly."""
-
-    owner_roles = [
-        role for role in release.application_roles if "owner" in role.assignable_to
-    ]
-    explicit = [
-        role
-        for role in owner_roles
-        if str(role.default_for.get("owner") or "") == role.role_id
-    ]
-    if len(explicit) == 1:
-        return (explicit[0].role_id,), "declared_default"
-    if len(explicit) > 1:
-        raise ValueError(
-            "Application declares multiple default owner roles; keep one "
-            "application_roles[].default_for.owner"
-        )
-
-    # Compatibility for releases authored before owner defaults were required:
-    # accept only a unique role whose grants are a strict superset of every
-    # other owner-compatible role. Incomparable roles need an explicit choice.
-    maximal = [
-        role
-        for role in owner_roles
-        if not any(
-            set(role.grants) < set(other.grants)
-            for other in owner_roles
-            if other.role_id != role.role_id
-        )
-    ]
-    if len(maximal) == 1:
-        return (maximal[0].role_id,), "unique_maximal_compatibility"
-    raise ValueError(
-        "Application owner role is ambiguous; declare exactly one "
-        "application_roles[].default_for.owner"
-    )
+    from adaos.services.applications.publisher_owner_access import publisher_owner_role_ids
+    return publisher_owner_role_ids(release)
 
 
-def _ensure_publisher_owner_access(
-    application_id: str,
-    *,
-    release_digest: str,
-) -> dict[str, Any]:
-    """Materialize the publisher owner's reviewed access for an admitted release."""
-
-    from adaos.services.personalization_runtime import current_user_id
-
+def _ensure_publisher_owner_access(application_id: str, *, release_digest: str) -> dict[str, Any]:
+    from adaos.services.applications.publisher_owner_access import ensure_publisher_owner_access
     service = _application_service()
-    release = service.store.get_release(application_id, release_digest)
-    if release.application_roles:
-        role_ids, resolution = _publisher_owner_role_ids(release)
-    else:
-        # A roleless Application still needs a reviewed permission grant.  Its
-        # authority is the intersection of the release permission profile,
-        # component capabilities and this ceiling; it deliberately has no
-        # Application-local RBAC layer.
-        role_ids, resolution = (), "permission_profile_only"
-    owner_ref = f"user:{current_user_id(_ctx())}"
-    constraints = {
-        "platform_role": "owner",
-        "subject_kind": "user",
-        "managed_by": "builder.publisher_owner",
-    }
-    management = ApplicationAccessManagementService(service)
-    managed = [
-        grant
-        for grant in service.store.list_application_access_grants(
-            application_id,
-            subject_ref=owner_ref,
-        )
-        if grant.constraints.get("managed_by") == "builder.publisher_owner"
-    ]
-    if len(managed) > 1:
-        raise ValueError("Builder publisher owner access is duplicated; reconcile grants")
-    ceiling = tuple(release.permission_profile.flat_permissions)
-    if managed:
-        grant = managed[0]
-        exact = (
-            grant.status == "active"
-            and grant.application_roles == role_ids
-            and grant.permission_ceiling == ceiling
-            and not grant.explicit_denies
-            and dict(grant.constraints) == constraints
-            and grant.reviewed_permission_profile_digest
-            == release.permission_profile.digest
-            and grant.expires_at is None
-        )
-        if not exact:
-            grant = management.access.change_access(
-                grant.grant_id,
-                release_digest=release_digest,
-                application_roles=role_ids,
-                issuer_ref=owner_ref,
-                expected_revision=grant.revision,
-                permission_ceiling=ceiling,
-                explicit_denies=(),
-                constraints=constraints,
-                expires_at=None,
-            )
-    else:
-        grant = management.access.grant_access(
-            application_id,
-            release_digest=release_digest,
-            subject_ref=owner_ref,
-            application_roles=role_ids,
-            issuer_ref=owner_ref,
-            idempotency_key="builder-publisher-owner-v1",
-            permission_ceiling=ceiling,
-            explicit_denies=(),
-            constraints=constraints,
-        )
-    return {
-        "required": True,
-        "grant_id": grant.grant_id,
-        "subject_ref": owner_ref,
-        "application_roles": list(grant.application_roles),
-        "permission_profile_digest": grant.reviewed_permission_profile_digest,
-        "role_resolution": resolution,
-        "revision": grant.revision,
-    }
+    return ensure_publisher_owner_access(_ctx(), service, application_id,
+        release_digest=release_digest, management=ApplicationAccessManagementService(service))
 
 
 def project_access_contract(
@@ -764,174 +653,27 @@ def _sync_local_trial_home(application_id: str, *, webspace_id: str) -> dict[str
 
 
 def _with_release_setup_contract(envelope, runtime):
-    """Compile setup from immutable release manifests and access declarations."""
-
-    component_manifests: dict[str, Mapping[str, Any]] = {}
-    for package in runtime.packages:
-        source = runtime.verified_source(package)
-        value: Any = None
-        if package.kind == "skill":
-            path = source / "skill.yaml"
-            if path.is_file():
-                value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
-        elif package.kind == "scenario":
-            path = source / "scenario.json"
-            if path.is_file():
-                value = json.loads(path.read_text(encoding="utf-8-sig"))
-        if isinstance(value, Mapping):
-            component_manifests[f"{package.kind}:{package.artifact_id}"] = dict(value)
-
-    connected_accounts = []
-    for provider in envelope.permission_profile.external_providers:
-        provider_id = str(provider.get("id") or "").strip().lower()
-        if not provider_id:
-            continue
-        account_id = str(provider.get("account_id") or provider_id).strip().lower()
-        connected_accounts.append(
-            {
-                "id": account_id,
-                "title": str(provider.get("title") or provider_id),
-                "purpose": str(
-                    provider.get("purpose")
-                    or f"Connect the declared {provider_id} account"
-                ),
-                "required": bool(provider.get("required", True)),
-                "scopes": list(provider.get("scopes") or ()),
-            }
-        )
-    contract = compile_setup_contract(
-        application_id=envelope.application_id,
-        release_digest=envelope.release_digest,
-        component_manifests=component_manifests,
-        permission_profile=envelope.permission_profile.to_dict(),
-        connected_accounts=connected_accounts,
-        placement_required=True,
-    )
-    return replace(envelope, setup_contract=contract)
+    from adaos.services.applications.release_setup import with_release_setup_contract
+    return with_release_setup_contract(envelope, runtime)
 
 
 def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) -> dict[str, Any]:
-    """Admit local Builder Beta, migrating Stable data without a second UI approval."""
-
-    from adaos.domain.application import ApplicationRelease
-    from adaos.domain.artifact_release import ProjectRelease
-    from adaos.sdk.developer import projects
-    from adaos.services.applications.trial_runtime import NativeTrialRuntime
-    from adaos.services.applications.local_release_transition import bind_local_data_lifecycle
-    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
-    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
-
-    if not actor_ref.strip():
-        raise ValueError("Trial placement requires an actor")
-    host = WebspaceRelationshipRegistry.from_context().resolve_production_host(webspace_id)
-    if host != webspace_id:
-        raise ValueError("Trial placement must target the production Webspace, not Preview")
-    publisher = publisher_context()
+    """Compatibility adapter; Core owns exact Trial/data admission."""
+    from adaos.services.applications.local_runtime import prepare_local_trial
     candidate = projects.get_candidate(candidate_id)["candidate"]
+    from adaos.services.applications.trial_runtime import NativeTrialRuntime
     runtime = NativeTrialRuntime._resolve_immutable(_ctx(), candidate_id, candidate["release_digest"])
-    release_path = runtime.root / ".adaos/releases" / f"{runtime.release_digest.split(':')[1]}.json"
-    release = ProjectRelease.from_mapping(json.loads(release_path.read_text(encoding="utf-8"))).seal()
-    if release.release_digest != runtime.release_digest:
-        raise ValueError("Candidate release digest mismatch")
-    service = _application_service()
-    project_id = release.project_id
-    application = _ensure_application_for_project(project_id, actor_ref=actor_ref)
-    _admit_builder_mutation("create_trial", application.application_id, subnet_ref=publisher["publisher_ref"],
-                            capability="applications.develop")
-    envelope = ApplicationRelease(application_id=application.application_id,
-                                  publisher_ref=application.publisher_ref, project_release=release,
-                                  accepted_candidate_id=candidate_id,
-                                  acceptance_evidence=tuple(candidate["validation_evidence"]),
-                                  provenance_refs=(release.release_digest,), lifecycle="trial")
-    envelope = _with_release_setup_contract(envelope, runtime)
-    from adaos.services.applications.access_management import (
-        ApplicationAccessManagementService,
-    )
-
-    verification = ApplicationAccessManagementService(service).admit_release_stage(
-        application.application_id,
-        release_digest=envelope.release_digest,
-        stage="trial",
-        candidate_release=envelope,
-    )
-    service.register_release(envelope)
-    owner_access = _ensure_publisher_owner_access(
-        application.application_id,
-        release_digest=envelope.release_digest,
-    )
-    data = bind_local_data_lifecycle(_ctx(), runtime, release, preserve_selected_beta=True)
-    activations = TrialActivationStore(_state_dir() / "artifact_pipeline/trial-activations")
-
-    def preserve_runtime_state(key):
-        from adaos.services.applications.generation_draft_transition import preserve_generation_drafts
-        return preserve_generation_drafts(source_runtime=data.beta_source_runtime_root,
-            target_runtime=runtime.root, recovery=data.recovery / "sdk-drafts",
-            private=data.private, operation_key=key)
-
-    def activate(_key):
-        try:
-            for package in runtime.packages:
-                if package.kind == "skill":
-                    runtime.ready_manager(package.artifact_id)
-        except (ValueError, FileNotFoundError, RuntimeError, KeyError):
-            runtime.manager(prepare=True)
-        for package in runtime.packages:
-            if package.kind == "skill":
-                runtime.ready_manager(package.artifact_id)
-        activation = activations.load(candidate_id)
-        proof = {"operation_id": f"application-beta:{project_id}:{candidate_id}",
-                 "contract_digest": data._contract()}
-        activations.update(candidate_id, data_mode="snapshot",
-            target=dict(activation["target"]) | {"webspace_id": webspace_id, "space_kind": "workspace"},
-            safety_evidence=dict(activation.get("safety_evidence") or {}) | {"data_transition": proof})
-        return {"ok": True, **proof}
-
-    transition = data.prepare_beta(
-        webspace_id=webspace_id,
-        activate=activate,
-        allow_beta_data_reset=False,
-        prepare_runtime_state=preserve_runtime_state if data.beta_source_runtime_root else None,
-    )
-    selection = service.store.get_runtime_selection(webspace_id, application.application_id)
-    activation = activations.load(candidate_id)
-    transition_proof = {
-        "operation_id": transition.get("operation_id"),
-        "contract_digest": data._contract(),
-        "completed": bool(transition.get("completed")),
-    }
-    migrated_from_stable = bool(data.stable_digest)
-    migrated_from_beta = bool(data.beta_source_ref)
-    activation = activations.update(
-        candidate_id,
-        data_mode="snapshot",
-        safety_evidence={
-            **dict(activation.get("safety_evidence") or {}),
-            "status": "verified",
-            "mode": (
-                "beta_snapshot_forward"
-                if migrated_from_beta
-                else "stable_snapshot_forward"
-                if migrated_from_stable
-                else "empty_initialization"
-            ),
-            "reason": (
-                "Selected Beta data and durable SDK jobs were retained in the upgraded Trial."
-                if migrated_from_beta
-                else "Stable data was snapshotted and migrated into the isolated Trial."
-                if migrated_from_stable
-                else "The first release initialized an isolated Trial data store."
-            ),
-            "data_transition": transition_proof,
-            **({"beta_source": {"runtime_root_ref": data.beta_source_ref[0],
-                "release_digest": data.beta_source_ref[1]}} if migrated_from_beta else {}),
-        },
-    )
-    home = _sync_local_trial_home(application.application_id, webspace_id=webspace_id)
-    refresh = _refresh_application_placements(application.application_id)
-    return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
-            "runtime_refresh": refresh, "data_transition": transition,
-            "verification": verification, "publisher_owner_access": owner_access,
-            "home": home}
+    application = _ensure_application_for_project(runtime.project_id, actor_ref=actor_ref)
+    publisher = publisher_context()
+    result = prepare_local_trial(_ctx(), application.application_id, candidate_id,
+        webspace_id=webspace_id, actor_ref=actor_ref, subnet_ref=publisher["publisher_ref"],
+        capability="applications.develop")
+    if result.get("status") != "superseded_runtime_selection":
+        result["home"] = _sync_local_trial_home(application.application_id, webspace_id=webspace_id)
+        # Preserve the existing synchronous refresh signature while Core also
+        # retains an independent, restart-safe derived-materialization request.
+        result["runtime_refresh"] = _refresh_application_placements(application.application_id)
+    return result
 
 
 def _refresh_application_placements(application_id: str) -> dict[str, Any]:
@@ -969,211 +711,17 @@ def _refresh_application_placements(application_id: str) -> dict[str, Any]:
 
 
 def abort_local_trial_preparation(candidate_id: str, *, release_digest: str, actor_ref: str) -> dict[str, Any]:
-    """Recover a failed local prepare to its unchanged Stable, retaining evidence.
-
-    Requires applications.recover and the exact Candidate/release. This cannot
-    undo accepted data or published code; those require publication recovery.
-    """
-    import json
-
-    from adaos.domain.artifact_release import ProjectRelease, WorkspaceLock
-    from adaos.services.applications.local_release_transition import bind_local_data_lifecycle
-    from adaos.services.applications.trial_runtime import NativeTrialRuntime
-    from adaos.services.artifact_pipeline.storage import mutation_lock
-
-    if not actor_ref.strip():
-        raise ValueError("Recovery requires an actor")
-    runtime = NativeTrialRuntime._resolve_immutable(_ctx(), candidate_id, release_digest)
-    path = runtime.root / ".adaos/releases" / f"{runtime.release_digest.split(':')[1]}.json"
-    release = ProjectRelease.from_mapping(json.loads(path.read_text(encoding="utf-8"))).seal()
-    application = _application_service().store.get_application(release.project_id)
-    subnet = _local_subnet_ref()
-    _admit_builder_mutation("recover", application.application_id, subnet_ref=subnet, capability="applications.recover")
-    if application.publisher_ref.lower() != subnet.lower():
-        raise ValueError("Only the local publisher may recover its Beta preparation")
-    binding_path = runtime.root / ".adaos/data-transition.json"
-    if not binding_path.is_file():
-        # The immutable Trial may have been materialized and registered before
-        # ownership/data admission rejected it.  In that case no migration
-        # intent, runtime selection, or Workspace mutation exists to roll back.
-        # Prove those negatives and retire only the exact activation record;
-        # attempting to reconstruct a lifecycle here would repeat the original
-        # admission failure and make the failed Candidate unrecoverable.
-        selections = _application_service().store.list_runtime_selections()
-        if any(
-            item.application_id == application.application_id
-            and (
-                item.release_digest == release_digest
-                or item.runtime_root_ref == f"trial:{candidate_id}"
-            )
-            for item in selections
-        ):
-            raise ValueError(
-                "Trial runtime selection exists without a data-transition binding"
-            )
-        lock_path = Path(_ctx().paths.workspace_dir()) / ".adaos/workspace.lock.json"
-        if lock_path.is_file():
-            lock = WorkspaceLock.from_mapping(
-                json.loads(lock_path.read_text(encoding="utf-8"))
-            )
-            if any(
-                slot.project_id == release.project_id
-                and slot.release_digest == release_digest
-                for slot in lock.slots
-            ):
-                raise ValueError(
-                    "Workspace contains the failed release without a data-transition binding"
-                )
-        from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
-
-        activations = TrialActivationStore(
-            _state_dir() / "artifact_pipeline/trial-activations"
-        )
-        activation = activations.load(candidate_id)
-        candidate_ref = (
-            activation.get("candidate_ref") if isinstance(activation, dict) else None
-        )
-        if (
-            not isinstance(candidate_ref, Mapping)
-            or candidate_ref.get("candidate_id") != candidate_id
-            or candidate_ref.get("release_digest") != release_digest
-        ):
-            raise ValueError("Exact failed TrialActivation record is missing")
-        activations.update(
-            candidate_id,
-            status="failed",
-            detached_at=utc_now(),
-            safety_evidence={
-                **dict(activation.get("safety_evidence") or {}),
-                "status": "aborted_before_data_transition",
-                "reason": "ownership_or_data_admission_rejected_before_mutation",
-                "actor_ref": actor_ref,
-            },
-        )
-        return {
-            "ok": True,
-            "status": "aborted_before_data_transition",
-            "operation_id": None,
-            "runtime_refresh": _refresh_application_placements(
-                application.application_id
-            ),
-        }
-    lifecycle = bind_local_data_lifecycle(_ctx(), runtime, release)
-    metadata = Path(_ctx().paths.workspace_dir()) / ".adaos"
-
-    def verify(_key):
-        if lifecycle.beta_source_ref:
-            NativeTrialRuntime._resolve_immutable(_ctx(), lifecycle.beta_source_ref[0].split(":", 1)[1],
-                lifecycle.beta_source_ref[1])
-            return {"ok": True, "release_digest": lifecycle.beta_source_ref[1]}
-        lock = WorkspaceLock.from_mapping(json.loads((metadata / "workspace.lock.json").read_text(encoding="utf-8")))
-        slots = [slot for slot in lock.slots if slot.project_id == release.project_id]
-        if lifecycle.stable_digest:
-            installation = _application_service().store.get_installation(application.application_id)
-            if (installation.status != "active" or installation.installed_release_digest != lifecycle.stable_digest
-                    or len(slots) != 1 or slots[0].release_digest != lifecycle.stable_digest):
-                raise ValueError("Stable code/installation changed; explicit publication recovery required")
-        elif slots:
-            raise ValueError("Workspace installation appeared after Beta preparation")
-        return {"ok": True, "release_digest": lifecycle.stable_digest}
-
-    result = lifecycle.abort_beta_preparation(verify_source=verify,
-        source_guard=lambda: mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30))
-    return {"ok": True, "status": "aborted", "operation_id": result["operation_id"],
-            "runtime_refresh": _refresh_application_placements(application.application_id)}
+    """Compatibility adapter to the Core recovery authority."""
+    from adaos.services.applications.lifecycle_recovery import abort_local_trial_preparation as recover
+    return recover(_ctx(), candidate_id, release_digest=release_digest, actor_ref=actor_ref,
+                   subnet_ref=_local_subnet_ref(), capability="applications.recover")
 
 
-def retire_failed_local_publication_preflight(
-    candidate_id: str,
-    *,
-    release_digest: str,
-    actor_ref: str,
-) -> dict[str, Any]:
-    """Retire an exact Stable adoption that failed before its first effect."""
-
-    import json
-
-    from adaos.domain.artifact_release import ProjectRelease, WorkspaceLock
-    from adaos.services.applications.local_release_transition import bind_local_data_lifecycle
-    from adaos.services.applications.trial_runtime import NativeTrialRuntime
-    from adaos.services.artifact_pipeline.storage import mutation_lock
-
-    if not actor_ref.strip():
-        raise ValueError("Recovery requires an actor")
-    runtime = NativeTrialRuntime._resolve_immutable(_ctx(), candidate_id, release_digest)
-    release_path = (
-        runtime.root
-        / ".adaos/releases"
-        / f"{runtime.release_digest.split(':')[1]}.json"
-    )
-    release = ProjectRelease.from_mapping(
-        json.loads(release_path.read_text(encoding="utf-8"))
-    ).seal()
-    application = _application_service().store.get_application(release.project_id)
-    subnet = _local_subnet_ref()
-    _admit_builder_mutation(
-        "recover",
-        application.application_id,
-        subnet_ref=subnet,
-        capability="applications.recover",
-    )
-    if application.publisher_ref.lower() != subnet.lower():
-        raise ValueError("Only the local publisher may recover its Stable preflight")
-    lifecycle = bind_local_data_lifecycle(_ctx(), runtime, release)
-    metadata = Path(_ctx().paths.workspace_dir()) / ".adaos"
-
-    def verify(_key):
-        lock = WorkspaceLock.from_mapping(
-            json.loads((metadata / "workspace.lock.json").read_text(encoding="utf-8"))
-        )
-        slots = [slot for slot in lock.slots if slot.project_id == release.project_id]
-        if lifecycle.stable_digest:
-            installation = _application_service().store.get_installation(
-                application.application_id
-            )
-            if (
-                installation.status != "active"
-                or installation.installed_release_digest != lifecycle.stable_digest
-                or len(slots) != 1
-                or slots[0].release_digest != lifecycle.stable_digest
-            ):
-                raise ValueError(
-                    "Stable code/installation changed; explicit publication recovery required"
-                )
-        elif slots:
-            raise ValueError("Workspace installation appeared after Beta preparation")
-        return {"ok": True, "release_digest": lifecycle.stable_digest}
-
-    def guard():
-        return mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30)
-
-    retired = lifecycle.abort_stable_adoption_before_effects(
-        verify_source=verify,
-        source_guard=guard,
-    )
-    selections = [
-        item
-        for item in lifecycle.channel.read() or ()
-        if item.application_id == application.application_id
-        and item.runtime_root_ref == f"trial:{candidate_id}"
-        and item.release_digest == release_digest
-    ]
-    if len(selections) != 1:
-        raise ValueError("Exact failed Trial selection is unavailable")
-    rejected = lifecycle.reject_beta(
-        webspace_id=selections[0].webspace_id,
-        verify_source=verify,
-        source_guard=guard,
-    )
-    return {
-        "ok": True,
-        "status": "retired_before_effects",
-        "stable_recovery": retired,
-        "beta_rejection": rejected,
-        "runtime_refresh": _refresh_application_placements(
-            application.application_id
-        ),
-    }
+def retire_failed_local_publication_preflight(candidate_id: str, *, release_digest: str, actor_ref: str) -> dict[str, Any]:
+    """Compatibility adapter to the Core recovery authority."""
+    from adaos.services.applications.lifecycle_recovery import retire_failed_local_publication_preflight as recover
+    return recover(_ctx(), candidate_id, release_digest=release_digest, actor_ref=actor_ref,
+                   subnet_ref=_local_subnet_ref(), capability="applications.recover")
 
 
 def refresh_placement(webspace_id: str) -> dict[str, Any]:

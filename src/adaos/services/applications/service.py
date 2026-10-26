@@ -2520,6 +2520,19 @@ class ApplicationService:
             "data_outcome": data_policy,
         }
 
+    def _runtime_admission(self, runtime_selections, installation):
+        from types import SimpleNamespace
+        from .lifecycle import observe_runtime_admission
+
+        selected = next(iter(runtime_selections), None)
+        if selected is None and installation is not None and installation.status == "active":
+            selected = SimpleNamespace(source="stable_installation")
+        try:
+            return observe_runtime_admission(self.store.state_dir, selected)
+        except (OSError, ValueError, RuntimeError):
+            return {"admission": "unavailable", "reason": "InvalidAdmissionMetadata",
+                    "expires_at": None, "remaining_seconds": None}
+
     def _read_model(
         self,
         application: Application,
@@ -2591,6 +2604,7 @@ class ApplicationService:
             "prerelease_following": prerelease_following,
             "use_prerelease": local_beta or prerelease_following,
             "local_beta_active": local_beta,
+            "runtime_admission": self._runtime_admission(runtime_selections, installation),
             "runtime_selections": [item.to_dict() for item in runtime_selections],
             "auto_update_enabled": bool(
                 subscription.update_policy == "auto_compatible"
@@ -2724,6 +2738,7 @@ class ApplicationService:
             "prerelease_following": prerelease_following,
             "use_prerelease": local_beta or prerelease_following,
             "local_beta_active": local_beta,
+            "runtime_admission": self._runtime_admission(runtime_selections, installation),
             "runtime_selections": [item.to_dict() for item in runtime_selections],
             "auto_update_enabled": bool(
                 subscription.update_policy == "auto_compatible"

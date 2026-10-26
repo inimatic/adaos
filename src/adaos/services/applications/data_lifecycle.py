@@ -1332,7 +1332,9 @@ class LocalApplicationDataLifecycle:
     def reject_beta(self, *, webspace_id: str,
                     verify_source: Callable[[str], Mapping[str, Any]],
                     source_guard: Callable = nullcontext,
-                    verify_idle: Callable[[str], Mapping[str, Any]] | None = None):
+                    verify_idle: Callable[[str], Mapping[str, Any]] | None = None,
+                    restore_source: bool = True,
+                    expected_current=None):
         """Deselect a reviewed Beta while retaining its isolated data evidence."""
         runner = ApplicationRuntimeTransition(self.channel)
         operation = f"application-beta:{self.application_id}:{self.candidate_id}"
@@ -1347,11 +1349,20 @@ class LocalApplicationDataLifecycle:
 
         def configure(_key):
             for component in self.components:
-                self._restore_configuration_after_beta(component)
+                if restore_source:
+                    self._restore_configuration_after_beta(component)
+                else:
+                    store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
+                    state = store.read()
+                    beta = state.get("beta") or {}
+                    if beta.get("active"):
+                        if beta.get("candidate_id") != self.candidate_id:
+                            raise RuntimeChannelConflict("Another Candidate owns active configuration")
+                        store.deactivate_beta(candidate_id=self.candidate_id, expected_revision=state["revision"])
             return {"ok": True, "overrides_retained": True}
 
         steps = [TransitionStep("verify_idle_jobs", verify_idle)] if verify_idle else []
         return runner.reject_completed(operation, contract_digest=self._contract(), steps=steps + [
             TransitionStep("deactivate_configuration", configure),
             TransitionStep("verify_source", verify_source),
-        ], source_guard=source_guard)
+        ], source_guard=source_guard, restore_source=restore_source, expected_current=expected_current)

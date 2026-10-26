@@ -20,7 +20,7 @@ class ApplicationDevelopmentOutcomeUnknown(ApplicationDevelopmentError):
 
 
 class ApplicationDevelopmentCoordinator:
-    """Durable idempotency boundary around bounded Builder lifecycle adapters."""
+    """Core idempotency boundary around bounded authoring/lifecycle adapters."""
 
     _CAPABILITIES = {
         "create": "applications.develop",

@@ -249,7 +249,14 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
         row["webspace_ids"] = sorted(s.webspace_id for s in selections if s.runtime_root_ref == f"trial:{candidate_id}")
         from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
         activation = TrialActivationStore(Path(ctx.paths.state_dir()) / "artifact_pipeline/trial-activations").load(candidate_id) or {}
-        row["expires_at"] = activation.get("expires_at")
+        from .lifecycle import observe_runtime_admission
+        selection = next(s for s in selections if s.runtime_root_ref == f"trial:{candidate_id}")
+        admission = observe_runtime_admission(Path(ctx.paths.state_dir()), selection)
+        row["expires_at"] = admission["expires_at"]
+        row["trial_expires_at"] = activation.get("expires_at")
+        row["admission_kind"] = admission["admission_kind"]
+        if admission["admission"] == "expired":
+            row["reason"] = "TrialExpired"
         row["admission_status"] = activation.get("status")
         beta.append(row)
     alpha = _alpha_observation(ctx, app.legacy_project_id, deep=deep)

@@ -2117,6 +2117,46 @@ def cancel_operation(operation_id: str, *, plan_digest: str, actor_ref: str, sub
         plan_digest=plan_digest, actor_ref=actor, subnet_ref=subnet, capability=granted)
 
 
+def list_trials(application_id: str, *, limit: int = 50, offset: int = 0,
+                include_storage: bool = False) -> dict[str, Any]:
+    """Read Core Trial inventory without executing applications or querying providers."""
+    from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
+    return ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle")).trials(
+        application_id, limit=limit, offset=offset, include_storage=include_storage)
+
+
+def poll_lifecycle_events(*, application_id: str | None = None, cursor: str | None = None,
+                          limit: int = 50) -> dict[str, Any]:
+    """Resume durable Core admission/expiration observations after reconnect."""
+    from adaos.services.applications.lifecycle_events import LifecycleEvents
+    ctx = require_ctx("sdk.applications.lifecycle")
+    owner = getattr(ctx, "authority_context", None) or ctx
+    return LifecycleEvents(Path(owner.paths.state_dir())).poll(application_id=application_id, cursor=cursor, limit=limit)
+
+
+def prepare_local_trial(application_id: str, candidate_id: str, *, actor_ref: str, subnet_ref: str,
+                         capability: str, idempotency_key: str, webspace_id: str = "desktop") -> dict[str, Any]:
+    """Prepare an existing immutable Candidate through Core, including skill-owned apps."""
+    from adaos.services.applications.local_runtime import prepare_local_trial as prepare
+    actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
+                                                     required_capability="applications.develop")
+    return prepare(require_ctx("sdk.applications.lifecycle"), application_id, candidate_id,
+        actor_ref=actor, subnet_ref=subnet, capability=granted, webspace_id=webspace_id)
+
+
+def decide_local_candidate(application_id: str, candidate_id: str, *, accepted: bool,
+                            expected_candidate_digest: str, actor_ref: str, subnet_ref: str,
+                            capability: str, idempotency_key: str,
+                            acknowledge_write_loss: bool = False) -> dict[str, Any]:
+    """Decide exact Core Candidate identity without consulting an authoring workflow."""
+    from adaos.services.applications.candidate_decisions import decide_local_candidate as decide
+    actor, subnet, granted, key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
+                                                    required_capability="applications.develop")
+    return decide(require_ctx("sdk.applications.lifecycle"), application_id, candidate_id,
+        accepted=accepted, expected_candidate_digest=expected_candidate_digest, actor_ref=actor,
+        subnet_ref=subnet, capability=granted, idempotency_key=key, acknowledge_write_loss=acknowledge_write_loss)
+
+
 def get_application(
     application_id: str, *, webspace_id: str | None = None
 ) -> dict[str, Any]:
@@ -4966,6 +5006,22 @@ def plan_remove(
         idempotency_key,
         required_capability="applications.plan",
     )
+    # Beta-only is a real operational installation, not an absent Stable
+    # installation. Keep the legacy reviewed remove signature and bind the
+    # resulting Core plan to fresh exact runtime revisions.
+    service = _service()
+    try:
+        installation = service.store.get_installation(application_id)
+    except FileNotFoundError:
+        installation = None
+    if installation is None or installation.status == "removed":
+        if any(s.application_id == application_id and s.source == "local_trial"
+               for s in service.store.list_runtime_selections()):
+            if data_policy != "retain":
+                raise ValueError("Beta-only uninstall retains isolated data; destructive purge requires a separate reviewed adapter")
+            lifecycle = get_lifecycle(application_id)
+            return plan_lifecycle(application_id, "uninstall_beta", expected_revision=lifecycle["revision"],
+                actor_ref=actor, subnet_ref=subnet, capability=granted, idempotency_key=key)
     return (
         _service()
         .plan_operation(
@@ -5273,6 +5329,10 @@ __all__ = [
     "plan_lifecycle",
     "apply_lifecycle_operation",
     "cancel_operation",
+    "list_trials",
+    "poll_lifecycle_events",
+    "prepare_local_trial",
+    "decide_local_candidate",
     "get_subscription",
     "get_update_batch",
     "get_users_access_surface",

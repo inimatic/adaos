@@ -16,6 +16,7 @@ def lifecycle(tmp_path, monkeypatch):
     app = SimpleNamespace(application_id="sample", legacy_project_id="sample", protection={})
     selected = SimpleNamespace(application_id="sample", webspace_id="desktop", source="local_trial",
                                runtime_root_ref="trial:sample-trial", release_digest=DIGEST, revision=2)
+    selected.to_dict = lambda: {k: v for k, v in vars(selected).items() if k != "to_dict"}
     candidate = SimpleNamespace(project_id="sample", release_digest=DIGEST, status="accepted",
                                 digest=DIGEST, package_digest=DIGEST)
     activation = {"status": "completed", "expires_at": "2026-10-28T21:00:00+00:00",

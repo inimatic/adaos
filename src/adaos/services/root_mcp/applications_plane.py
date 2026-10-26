@@ -405,6 +405,20 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
     operation = {"operation_id": {"type": "string", "minLength": 1},
                  "plan_digest": digest, "idempotency_key": {"type": "string", "minLength": 1}}
     specs = [
+        ("applications.lifecycle.trials", "Read Core Trial inventory", {**identity,
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0},
+            "include_storage": {"type": "boolean"}}, ["application_id"], "applications.read", False),
+        ("applications.lifecycle.events", "Read Core lifecycle events", {
+            "application_id": {"type": ["string", "null"]}, "cursor": {"type": ["string", "null"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, [], "applications.read", False),
+        ("applications.lifecycle.prepare", "Prepare exact local Trial through Core", {**identity,
+            "candidate_id": {"type": "string", "minLength": 1}, "idempotency_key": {"type": "string", "minLength": 1}},
+            ["application_id", "candidate_id", "idempotency_key"], "applications.develop", True),
+        ("applications.lifecycle.decide", "Decide exact local Candidate through Core", {**identity,
+            "candidate_id": {"type": "string", "minLength": 1}, "expected_candidate_digest": digest,
+            "accepted": {"type": "boolean"}, "acknowledge_write_loss": {"type": "boolean"},
+            "idempotency_key": {"type": "string", "minLength": 1}},
+            ["application_id", "candidate_id", "expected_candidate_digest", "accepted", "idempotency_key"], "applications.develop", True),
         ("applications.lifecycle.show", "Read Core Application lifecycle", identity,
          ["application_id"], "applications.read", False),
         ("applications.lifecycle.plan", "Review local Application lifecycle transition", {
@@ -424,7 +438,7 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
         summary=title + "; Core owns admission, data protection and operation history.",
         input_schema=schema_object(properties=properties, required=required),
         output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA), required_capability=capability,
-        side_effects="write" if mutation else "read",
+        side_effects="write" if mutation else "none",
         metadata={"published_by": "plane:applications", "adapter": "adaos.sdk.applications",
                   "handler": tool_id.replace(".", "_")})
         for tool_id, title, properties, required, capability, mutation in specs]
@@ -4386,6 +4400,32 @@ def _handle_lifecycle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[
     return {"lifecycle": _sdk().get_lifecycle(_application_id(arguments), webspace_id=_webspace_id(arguments))}
 
 
+def _handle_lifecycle_trials(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _sdk().list_trials(_application_id(arguments), limit=int(arguments.get("limit") or 50),
+        offset=int(arguments.get("offset") or 0), include_storage=bool(arguments.get("include_storage")))
+
+
+def _handle_lifecycle_events(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _sdk().poll_lifecycle_events(application_id=arguments.get("application_id"),
+        cursor=arguments.get("cursor"), limit=int(arguments.get("limit") or 50))
+
+
+def _handle_lifecycle_prepare(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_prepare": True, "application_id": _application_id(arguments)}
+    return _sdk().prepare_local_trial(_application_id(arguments), str(arguments.get("candidate_id") or ""),
+        webspace_id=_webspace_id(arguments), **_mcp_mutation_context(arguments, "applications.develop"))
+
+
+def _handle_lifecycle_decide(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_decide": True, "application_id": _application_id(arguments)}
+    return _sdk().decide_local_candidate(_application_id(arguments), str(arguments.get("candidate_id") or ""),
+        accepted=bool(arguments.get("accepted")), expected_candidate_digest=str(arguments.get("expected_candidate_digest") or ""),
+        acknowledge_write_loss=bool(arguments.get("acknowledge_write_loss")),
+        **_mcp_mutation_context(arguments, "applications.develop"))
+
+
 def _handle_lifecycle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {"would_plan": True, "action": arguments.get("action"),
@@ -4425,6 +4465,10 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.list": _handle_list,
         "applications.show": _handle_show,
         "applications.lifecycle.show": _handle_lifecycle_show,
+        "applications.lifecycle.trials": _handle_lifecycle_trials,
+        "applications.lifecycle.events": _handle_lifecycle_events,
+        "applications.lifecycle.prepare": _handle_lifecycle_prepare,
+        "applications.lifecycle.decide": _handle_lifecycle_decide,
         "applications.lifecycle.plan": _handle_lifecycle_plan,
         "applications.lifecycle.apply": _handle_lifecycle_apply,
         "applications.lifecycle.recover": _handle_lifecycle_recover,

@@ -77,7 +77,7 @@ def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> di
     return {"ok": True, "hook": hook, "components": receipts}
 
 
-def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta=False):
+def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta=False, application_id=None):
     """Caller must admit the local publisher before preparing this exact Candidate.
 
     Retain the original Stable identity before publication can advance the
@@ -87,7 +87,7 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
     state = Path(owner.paths.state_dir()).resolve()
     workspace = Path(owner.paths.workspace_dir()).resolve()
     store = ApplicationStore(state)
-    application_id = release.project_id
+    application_id = application_id or release.project_id
     if release.release_digest != runtime.release_digest:
         raise ValueError("Data transition Candidate identity mismatch")
     binding_path = runtime.root / ".adaos/data-transition.json"
@@ -123,7 +123,7 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             has_installed_slot = bool(
                 workspace_lock
                 and any(
-                    slot.project_id == application_id
+                    slot.project_id == release.project_id
                     for slot in workspace_lock.slots
                 )
             )
@@ -155,7 +155,7 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             source_runtime = NativeTrialRuntime._resolve_immutable(owner,
                 beta_source["runtime_root_ref"].split(":", 1)[1], beta_source["release_digest"],
                 for_data_recovery=True)
-            if source_runtime.project_id != application_id:
+            if source_runtime.project_id != release.project_id:
                 raise ValueError("Beta upgrade source belongs to another Application")
             source_release = ProjectRelease.from_mapping(json.loads((source_runtime.root / ".adaos/releases" /
                 f"{source_runtime.release_digest.split(':')[1]}.json").read_text(encoding="utf-8"))).seal()

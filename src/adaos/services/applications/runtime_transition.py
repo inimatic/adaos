@@ -159,7 +159,9 @@ class ApplicationRuntimeTransition:
 
     def reject_completed(self, operation_id: str, *, contract_digest: str,
                          steps: Sequence[TransitionStep],
-                         source_guard: Callable = nullcontext) -> dict[str, Any]:
+                         source_guard: Callable = nullcontext,
+                         restore_source: bool = True,
+                         expected_current: Sequence[RuntimeSelection] | None = None) -> dict[str, Any]:
         """Compensate a completed Beta selection without reversing Beta data.
 
         The original Stable data was only snapshotted during Beta preparation,
@@ -183,13 +185,26 @@ class ApplicationRuntimeTransition:
                         updated_at=target.updated_at)
                 for item in expected if item.webspace_id != target.webspace_id
             ] + [target])
+            if expected_current is not None:
+                selected = tuple(expected_current)
+                self.channel._validate(selected)
+                if not selected or any((item.runtime_root_ref, item.release_digest) != (
+                        target.runtime_root_ref, target.release_digest) for item in selected):
+                    raise RuntimeChannelConflict("Retire only the exact current Candidate channel")
             active_by_webspace = {item.webspace_id: item for item in selected}
             restored = tuple(
                 replace(item, revision=active_by_webspace[item.webspace_id].revision + 1,
                         updated_at=target.updated_at)
                 for item in expected
-            )
-            rejection_id = operation_id + ":rejected"
+            ) if expected_current is None else ()
+            if expected_current is not None and expected:
+                source = expected[0]
+                restored = tuple(replace(item, source=source.source, release_digest=source.release_digest,
+                    runtime_root_ref=source.runtime_root_ref, revision=item.revision + 1,
+                    updated_at=target.updated_at) for item in selected)
+            if not restore_source:
+                restored = ()
+            rejection_id = operation_id + (":rejected" if restore_source else ":retired")
             intent = {
                 "contract_digest": contract_digest,
                 "source_operation_id": operation_id,

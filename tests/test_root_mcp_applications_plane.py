@@ -301,6 +301,10 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
     assert plane["title"] == "ApplicationsPlane"
     assert {item.id for item in contracts} == {
         "applications.lifecycle.show",
+        "applications.lifecycle.trials",
+        "applications.lifecycle.events",
+        "applications.lifecycle.prepare",
+        "applications.lifecycle.decide",
         "applications.lifecycle.plan",
         "applications.lifecycle.apply",
         "applications.lifecycle.recover",

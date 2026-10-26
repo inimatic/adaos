@@ -51,6 +51,11 @@ def _attention_status(
     ready = by_type.get("Ready", {})
     progressing = by_type.get("Progressing", {})
     suspended = by_type.get("Suspended", {})
+    admission = by_type.get("RuntimeAdmission", {})
+    if admission.get("reason") in {"TrialExpired", "TrialExpiring", "RuntimeTransitionPending"}:
+        return "action_required", str(admission["reason"]), str(admission["message"])
+    if by_type.get("AwaitingApproval", {}).get("status") == "True":
+        return "action_required", "OperationAwaitingApproval", "A reviewed plan is waiting for confirmation or cancellation."
 
     if integrity.get("status") == "False":
         return "degraded", str(integrity["reason"]), str(integrity["message"])
@@ -178,7 +183,10 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
         ])
 
     progressing_status = operation_status or installation_status
-    if operation_status in {"planned", "applying", "reconciling"} or installation_status in {
+    conditions.append(_condition("AwaitingApproval", "True" if operation_status == "planned" else "False",
+        "OperationAwaitingApproval" if operation_status == "planned" else "NoUnconfirmedPlan",
+        "A plan is awaiting confirmation; execution has not started." if operation_status == "planned" else "No unconfirmed plan is known."))
+    if operation_status in {"applying", "reconciling"} or installation_status in {
         "planned",
         "installing",
         "updating",
@@ -310,6 +318,18 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
                          reason="RuntimeCompositionDrift" if integrity_status == "False" else "RuntimeCompositionUnknown",
                          message=str(runtime.get("summary") or "Runtime composition has not been verified."))
 
+    lifecycle = model.get("lifecycle") or {}
+    admission = lifecycle.get("runtime") or model.get("runtime_admission") or {}
+    if admission:
+        admitted = admission.get("admission") in {"admitted", "expiring"}
+        message = {"TrialExpired": "The temporary Trial has expired; choose a reviewed recovery or replacement.",
+                   "TrialExpiring": "The temporary Trial expires within 48 hours; review its next lifecycle step.",
+                   "RuntimeTransitionPending": "An exact runtime transition requires completion or recovery."}.get(
+                       admission.get("reason"), "Core runtime admission: " + str(admission.get("reason") or "unknown"))
+        conditions.append(_condition("RuntimeAdmission", "True" if admitted else "False",
+                                     str(admission.get("reason") or "AdmissionUnknown"), message))
+        if admission.get("admission") in {"expired", "unavailable", "recovery_required"}:
+            ready.update(status="False", reason=str(admission.get("reason") or "AdmissionUnavailable"), message=message)
     status, reason, message = _attention_status(model, conditions)
     icon, color, priority = _ATTENTION_PRESENTATION[status]
     if bool(model.get("local_beta_active")) or bool(model.get("use_prerelease")):

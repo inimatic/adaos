@@ -355,6 +355,13 @@ def setup(tmp_path):
         "runtime_binding": {"authority": "immutable_candidate", "kind": "isolated_trial_workspace",
             "path": str(trial), "workspace_lock_digest": lock(new).to_dict()["lock_digest"]},
         "package_refs": [item.to_dict() for item in new.components]})
+    from adaos.services.artifact_pipeline.candidates import CandidateRecord, CandidateStore
+    CandidateStore(state / "artifact_pipeline/candidates").save(CandidateRecord(
+        candidate_id="candidate-sample", project_id="sample", version=new.version,
+        source_ref=source, base_release=f"sample@{old.version}", base_release_digest=old.release_digest,
+        base_source_ref=source, package_digest=new.components[0].digest, release_digest=new.release_digest,
+        change_ids=("synthetic-runtime-transition",), created_at="2026-09-19T00:00:00+00:00",
+        updated_at="2026-09-19T00:00:00+00:00", status="trial", validation_evidence=({"status": "passed"},)))
     return owner, service, old, new, activations, lock
 
 

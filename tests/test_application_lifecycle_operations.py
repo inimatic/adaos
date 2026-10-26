@@ -154,7 +154,7 @@ def test_deactivation_retains_candidate_decision_and_beta_data(operations, monke
         private_root=ops.workspace.parent, application_id="example", candidate_id=candidate.candidate_id,
         release_digest=candidate.release_digest, stable_digest=None, components=())
     data.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
-    monkeypatch.setattr(local_release_transition, "bind_local_data_lifecycle", lambda *_: data)
+    monkeypatch.setattr(local_release_transition, "bind_local_data_lifecycle", lambda *_, **kw: data)
     root = trial_workspace_root(ops.workspace, candidate.candidate_id)
     payload = root / "retained-test-data.json"
     payload.write_text('{"synthetic":true}', encoding="utf-8")
@@ -222,3 +222,56 @@ def test_lost_deletion_metadata_ack_is_reconciled_without_overwrite(operations, 
                        subnet_ref=subnet, capability="applications.recover", recover=True)
     assert result["status"] == "succeeded"
     assert activations.load(candidate.candidate_id)["lifecycle_deletion"]["operation_id"] == planned["operation_id"]
+
+
+def test_core_clock_observes_expiry_without_opening_any_application(operations):
+    ops, _, _, _ = operations
+    from adaos.services.applications.lifecycle_runtime import observe_lifecycle_leases
+    from adaos.services.applications.lifecycle_events import LifecycleEvents
+    events = LifecycleEvents(ops.state)
+    assert observe_lifecycle_leases(ops.owner, now=datetime(2039, 12, 30, tzinfo=timezone.utc))["changed"] == 1
+    first = events.poll(limit=1)
+    assert first["events"][0]["observation"]["admission"] == "expiring"
+    assert observe_lifecycle_leases(ops.owner, now=datetime(2039, 12, 30, 0, 1, tzinfo=timezone.utc))["changed"] == 0
+    assert observe_lifecycle_leases(ops.owner, now=datetime(2040, 1, 2, tzinfo=timezone.utc))["changed"] == 1
+    resumed = LifecycleEvents(ops.state).poll(cursor=first["cursor"])
+    assert len(resumed["events"]) == 1
+    assert resumed["events"][0]["observation"]["reason"] == "TrialExpired"
+
+
+def test_candidate_acceptance_is_core_owned_and_has_no_scenario_or_root_dependency(operations):
+    ops, subnet, _, candidate = operations
+    from adaos.services.applications.candidate_decisions import decide_local_candidate
+    from adaos.services.artifact_pipeline.candidates import begin_trial
+    running = begin_trial(replace(candidate, status="validated"), trial_id="synthetic-running",
+        audience="owner", data_mode="empty", lock_digest=candidate.package_digest,
+        now="2026-01-01T00:00:00+00:00", health_receipt={"status": "passed"})
+    CandidateStore(ops.state / "artifact_pipeline/candidates").save(running)
+    result = decide_local_candidate(ops.owner, "example", candidate.candidate_id, accepted=True,
+        expected_candidate_digest=running.digest, actor_ref="user:owner", subnet_ref=subnet,
+        capability="applications.develop", idempotency_key="core-accept-synthetic")
+    assert result["candidate"]["status"] == "accepted"
+    assert ops.observer.snapshot("example")["candidate"]["accepted"]
+
+
+@pytest.mark.asyncio
+async def test_materialization_failure_is_pending_and_recoverable_without_migration(operations, monkeypatch):
+    ops = operations[0]
+    from adaos.services.applications.materialization import request_materialization, reconcile_materializations, request_path
+    from adaos.services.component_updates import ComponentUpdateService
+    from adaos.services.scenario import webspace_runtime
+    monkeypatch.setattr(ComponentUpdateService, "reconcile_local_trials", lambda *a, **k: None)
+    calls = []
+
+    async def refresh(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise TimeoutError("synthetic private transport detail")
+        return {"ok": True}
+
+    monkeypatch.setattr(webspace_runtime, "rebuild_webspace_from_sources", refresh)
+    request_materialization(ops.owner, "example")
+    assert (await reconcile_materializations(ops.owner))[0]["status"] == "pending"
+    assert "private transport" not in request_path(ops.state, "example").read_text()
+    assert (await reconcile_materializations(ops.owner))[0]["status"] == "completed"
+    assert ops.observer.snapshot("example")["materialization"]["status"] == "completed"

@@ -37,6 +37,40 @@ def _action(eligible: bool, reason: str, capability: str = "applications.apply")
             "required_capability": capability, "requires_authorization": True}
 
 
+def observe_runtime_admission(state: Path, selected: Any, *, now: datetime | None = None) -> dict[str, Any]:
+    """One cheap admission projection shared by inventory, detail and clock observer."""
+    observed = now or datetime.now(timezone.utc)
+    if selected is None:
+        return {"admission": "not_selected", "reason": "NoSelectedRuntime", "expires_at": None,
+                "remaining_seconds": None, "admission_kind": None, "trial_expires_at": None}
+    if selected.source != "local_trial":
+        return {"admission": "admitted", "reason": "StableInstallation", "expires_at": None,
+                "remaining_seconds": None, "admission_kind": "stable", "trial_expires_at": None}
+    from .local_beta_admission import read_local_beta_admission
+    candidate_id = selected.runtime_root_ref.removeprefix("trial:")
+    activation = TrialActivationStore(Path(state) / "artifact_pipeline/trial-activations").load(candidate_id) or {}
+    identity = activation.get("candidate_ref") or {}
+    expiry = timestamp(activation.get("expires_at"))
+    remaining = int((expiry - observed).total_seconds()) if expiry else None
+    installed = read_local_beta_admission(state, candidate_id, selected.release_digest, activation)
+    admission, reason = "admitted", "TrialActive"
+    if (activation.get("status") not in {"active", "completed"}
+            or identity.get("candidate_id") != candidate_id
+            or identity.get("release_digest") != selected.release_digest):
+        admission, reason = "unavailable", "TrialAdmissionUnavailable"
+    elif installed:
+        reason = "InstalledLocalBeta"
+    elif remaining is not None and remaining <= 0:
+        admission, reason = "expired", "TrialExpired"
+    elif remaining is not None and remaining <= EXPIRING_SECONDS:
+        admission, reason = "expiring", "TrialExpiring"
+    return {"admission": admission, "reason": reason,
+            "expires_at": activation.get("expires_at") if not installed else None,
+            "trial_expires_at": activation.get("expires_at"),
+            "remaining_seconds": max(0, remaining) if remaining is not None and not installed else None,
+            "admission_kind": "installed_local_beta" if installed else "temporary_trial"}
+
+
 class ApplicationLifecycleService:
     """Node authority shared by SDK/MCP, Builder, Applications and Management."""
 
@@ -81,28 +115,16 @@ class ApplicationLifecycleService:
                 candidate_reason = "CandidateUnavailable"
         activation = (TrialActivationStore(self.state / "artifact_pipeline/trial-activations").load(candidate_id)
                       if is_beta and candidate_id else None) or {}
-        expiry = timestamp(activation.get("expires_at"))
-        remaining = int((expiry - observed).total_seconds()) if expiry else None
         from .local_beta_admission import read_local_beta_admission
 
         installed_beta = (read_local_beta_admission(self.state, candidate_id, digest, activation)
                           if is_beta and candidate_id else None)
-        admission = "not_selected"
-        reason = "NoSelectedRuntime"
+        admission_fact = observe_runtime_admission(self.state, selected, now=observed)
+        admission, reason = admission_fact["admission"], admission_fact["reason"]
         if digest:
             admission, reason = "admitted", "StableInstallation" if not is_beta else "TrialActive"
         if is_beta:
-            identity = activation.get("candidate_ref") or {}
-            if (activation.get("status") not in {"active", "completed"}
-                    or identity.get("candidate_id") != candidate_id
-                    or identity.get("release_digest") != digest):
-                admission, reason = "unavailable", "TrialAdmissionUnavailable"
-            elif installed_beta:
-                admission, reason = "admitted", "InstalledLocalBeta"
-            elif remaining is not None and remaining <= 0:
-                admission, reason = "expired", "TrialExpired"
-            elif remaining is not None and remaining <= EXPIRING_SECONDS:
-                admission, reason = "expiring", "TrialExpiring"
+            admission, reason = admission_fact["admission"], admission_fact["reason"]
         channel = ApplicationRuntimeChannel(self.state, application_id)
         transition = next(iter(channel.pending_transitions()), None)
         if transition:
@@ -120,9 +142,17 @@ class ApplicationLifecycleService:
             admission, reason = "unavailable", "RuntimeIntegrityUnavailable"
         operations = self.store.list_operations(application_id)
         operation = next(iter(operations), None)
+        from .materialization import request_path
+        import json
+        path = request_path(self.state, application_id)
+        materialization_record = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        materialization = {"status": materialization_record.get("status", "not_requested"),
+                           "observed_at": materialization_record.get("observed_at"),
+                           "attempts": materialization_record.get("attempts", 0)}
         operation_projection = None
         if operation:
-            pending = bool(operation.result.get("runtime_refresh", {}).get("pending"))
+            pending = (bool(operation.result.get("runtime_refresh", {}).get("pending"))
+                       and materialization["status"] != "completed")
             operation_projection = {
                 "operation_id": operation.operation_id, "kind": operation.kind,
                 "status": operation.status, "revision": operation.revision,
@@ -141,6 +171,8 @@ class ApplicationLifecycleService:
                 "ExactAcceptedTrialRequired", "applications.apply"),
             "deactivate_beta": _action(is_beta and transition is None,
                 "SelectedBetaRequired" if not is_beta else "ReviewRuntimeAndDataDisposition"),
+            "uninstall_beta": _action(is_beta and not baseline_active and removable and transition is None,
+                "BetaOnlyInstallationRequired"),
             "uninstall": _action(bool(digest) and removable and transition is None,
                 "ProtectedApplication" if not removable else "ReviewUninstallPlan"),
             "recover": _action(transition is not None or bool(operation and operation.status in {"unknown", "reconciling"}),
@@ -166,11 +198,12 @@ class ApplicationLifecycleService:
                         "release_digest": digest, "version": release.project_release.version if release else None,
                         "runtime_root_ref": selected.runtime_root_ref if selected else "workspace" if baseline_active else None,
                         "webspace_ids": sorted(s.webspace_id for s in selections),
+                        "selections": [s.to_dict() for s in selections],
                         "admission": admission, "reason": reason,
-                        "admission_kind": "installed_local_beta" if installed_beta else "temporary_trial" if is_beta else "stable",
-                        "trial_expires_at": activation.get("expires_at") if is_beta else None,
-                        "expires_at": activation.get("expires_at") if is_beta and not installed_beta else None,
-                        "remaining_seconds": max(0, remaining) if remaining is not None and not installed_beta else None,
+                        "admission_kind": admission_fact["admission_kind"] if selected else "stable" if baseline_active else None,
+                        "trial_expires_at": admission_fact["trial_expires_at"],
+                        "expires_at": admission_fact["expires_at"],
+                        "remaining_seconds": admission_fact["remaining_seconds"],
                         "integrity": integrity.get("status", "not_checked")},
             "candidate": {"candidate_id": candidate_id, "candidate_digest": candidate.digest if candidate else None,
                           "package_digest": candidate.package_digest if candidate else None,
@@ -179,6 +212,7 @@ class ApplicationLifecycleService:
             "data": {"disposition": "retained", "transition_pending": transition is not None,
                      "operation_id": transition.get("operation_id") if transition else None},
             "operation": operation_projection, "actions": actions,
+            "materialization": materialization,
             "summary": f"{('Beta' if is_beta else 'Stable') if digest else 'Not installed'}: "
                        f"{release.project_release.version if release else '—'}; {reason}",
         }
