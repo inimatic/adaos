@@ -22,12 +22,16 @@ const browser = await chromium.launch({ headless: true })
 const report = { ok: false, scope: 'three_consumers_core_runtime_and_trials', cases: [], modelCalls: 0, destructiveActions: 0 }
 try {
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
-  await context.addInitScript(({ token, subnet, hub }) => {
+  await context.addInitScript(({ token, subnet, hub, host }) => {
     if (location.href === 'about:blank') return
-    for (const [key, value] of Object.entries({ adaos_local_hub_url: hub, adaos_local_hub_token: token,
+    window.__ADAOS_BASE__ = hub
+    window.__ADAOS_FIXED_RUNTIME_BASE__ = hub
+    window.__ADAOS_TOKEN__ = token
+    for (const [key, value] of Object.entries({ adaos_hub_base: hub, adaos_local_hub_base: hub, adaos_hub_token: token,
+      adaos_try_local_hub: '1', adaos_webspace_id: host,
       adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: 'en',
       'adaos.runtime_debug': '1' })) localStorage.setItem(key, value)
-  }, { token, subnet, hub })
+  }, { token, subnet, hub, host: input.host })
   const mcp = async (tool, args, dryRun = true) => {
     const response = await context.request.post(`${hub}/api/admin/root_mcp/call`, {
       headers: { 'X-AdaOS-Token': token }, data: { tool_id: tool, arguments: args, dry_run: dryRun,
@@ -46,6 +50,7 @@ try {
     page.on('pageerror', error => row.errors.push(safe(error)))
     page.on('request', request => {
       if (!request.url().includes('/root_mcp/call')) return
+      if (!request.url().startsWith(hub + '/')) row.errors.push('Client used a different Hub than the qualified target')
       try {
         const body = request.postDataJSON()
         if (body.tool_id?.startsWith('applications.')) row.lifecycleReads.push({ tool: body.tool_id,
@@ -168,8 +173,14 @@ try {
         || lifecycle.runtime.admission_kind === 'installed_prerelease') && row.errors.length === 0
     } catch (error) {
       row.ok = false; row.error = safe(error)
-      row.dom = await page.evaluate(() => ({ path: location.pathname, ng: Boolean(window.ng),
-        customElements: [...new Set([...document.querySelectorAll('*')].map(e => e.tagName.toLowerCase()).filter(t => t.includes('-')))].slice(0, 35) }))
+      row.dom = await page.evaluate(() => {
+        const root = window.ng?.getComponent(document.querySelector('app-root'))
+        const render = root?.ydoc?.getRenderMaterializationSnapshot?.()
+        return { path: location.pathname, ng: Boolean(window.ng),
+          render: render ? { scenario: render.currentScenario, release: render.applicationReleaseDigest,
+            application: render.applicationId } : null,
+          customElements: [...new Set([...document.querySelectorAll('*')].map(e => e.tagName.toLowerCase()).filter(t => t.includes('-')))].slice(0, 35) }
+      })
       row.identity = await page.locator('[data-webui-widget-id="core-lifecycle-identity"]').filter({ visible: true }).first().innerText().catch(() => '')
       row.identityDiagnostics = await page.evaluate(async () => {
         const hosts = [...document.querySelectorAll('[data-webui-widget-id="core-lifecycle-identity"]')]
