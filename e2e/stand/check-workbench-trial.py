@@ -22,7 +22,7 @@ def main():
     load_dotenv()
     root = Path.cwd()
     output = args.output.resolve()
-    if os.getenv("ENV_TYPE") != "dev" or output.exists() or not output.is_relative_to(root / "e2e/artifacts/builder"):
+    if os.getenv("ENV_TYPE") != "dev" or output.exists() or not output.is_relative_to((root / "e2e/artifacts/builder").resolve()):
         parser.error("Requires DEV and new Builder evidence")
     admission = json.loads(args.admission.read_text(encoding="utf-8"))
     identifier = admission["scenario"]

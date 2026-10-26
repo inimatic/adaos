@@ -116,7 +116,7 @@ def main():
     parser.add_argument('--run', type=Path, required=True)
     args = parser.parse_args()
     run = args.run.resolve()
-    if not run.is_relative_to(Path.cwd() / 'e2e/artifacts/builder'):
+    if not run.is_relative_to((Path.cwd() / 'e2e/artifacts/builder').resolve()):
         parser.error('Owned E2E evidence required')
     result = analyze(read(run / 'report.json'), run)
     _write_json(run / 'oracle-cost-analysis.json', result)

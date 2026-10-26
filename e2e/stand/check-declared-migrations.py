@@ -40,7 +40,7 @@ def main():
             or created["result"]["project"]["created_by"] != "builder.user"
             or admitted["object_id"] != identifier or session["status"] != "completed"
             or session["current_task_id"] != admitted["current_task_id"]
-            or output.exists() or not output.is_relative_to(root / "e2e/artifacts/builder")):
+            or output.exists() or not output.is_relative_to((root / "e2e/artifacts/builder").resolve())):
         parser.error("Exact completed owned TEST task and new confined output required")
     manifest = root / f".adaos/dev/sn_6acf0c01/skills/{identifier}_skill/skill.yaml"
     raw = manifest.read_bytes()
