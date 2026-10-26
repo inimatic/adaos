@@ -62,14 +62,14 @@ def test_streaming_acoustic_endpoints_and_tail_are_not_replayed(monkeypatch):
     instances=[]
     class Recognizer:
         def __init__(self, *_):
-            self.pcm=bytearray();self.calls=0;instances.append(self)
-        def SetWords(self, _): pass
+            self.pcm=bytearray();self.calls=0;self.words=False;instances.append(self)
+        def SetWords(self, enabled): self.words=enabled
         def AcceptWaveform(self, pcm):
             self.pcm.extend(pcm);self.calls+=1
             return self.calls==2
-        def Result(self): return json.dumps({"text":"Арсений"})
+        def Result(self): return json.dumps({"text":"Арсений","result":[{"word":"Арсений","start":0.1,"end":0.7,"conf":0.91}]})
         def PartialResult(self): return json.dumps({"partial":"Арсений стоп"})
-        def FinalResult(self): return json.dumps({"text":"следующий вопрос"})
+        def FinalResult(self): return json.dumps({"text":"следующий вопрос","result":[{"word":"следующий","start":0.8,"end":1.2,"conf":0.8}]})
     monkeypatch.setitem(sys.modules,"vosk",types.SimpleNamespace(KaldiRecognizer=Recognizer))
     monkeypatch.setattr(stt_api,"_ensure_model",lambda *_: "model")
     monkeypatch.setattr(stt_api,"_load_model",lambda *_: object())
@@ -85,7 +85,10 @@ def test_streaming_acoustic_endpoints_and_tail_are_not_replayed(monkeypatch):
     assert [r["text"] for r in responses]==["","Арсений","следующий вопрос"]
     assert responses[0]["partial"] == "Арсений стоп" and responses[0]["pending"]
     assert "partial" not in responses[-1]
+    assert responses[1]["words"][0]["end"] == 0.7
+    assert responses[-1]["words"][0]["start"] == 0.8
     assert len(instances)==1 and instances[0].pcm==b''.join(parts)
+    assert instances[0].words is True
     assert ("test-endpoint","continuous") not in native._STREAMS
 
 

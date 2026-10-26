@@ -156,8 +156,11 @@ def transcribe_stream(endpoint: str, payload: dict) -> dict:
                 raise ValueError("voice_stream_capacity")
             model = stt_api._load_model(vosk, stt_api._ensure_model(language))
             rec = vosk.KaldiRecognizer(model, 16000)
-            rec.SetWords(False)
-            state = {"rec": rec, "parts": [], "at": now, "seq": 0, "language": language}
+            # Word timestamps let a trusted native client retain only the
+            # addressed assistant name as a local acoustic template. The raw
+            # recording remains transient and never enters the registry.
+            rec.SetWords(True)
+            state = {"rec": rec, "parts": [], "words": [], "at": now, "seq": 0, "language": language}
             _STREAMS[key] = state
         sequence = int(payload.get("sequence") or 0)
         if sequence != state["seq"] or language != state["language"]:
@@ -171,18 +174,24 @@ def transcribe_stream(endpoint: str, payload: dict) -> dict:
         # Small frames preserve Vosk's finalized segments within a long batch.
         for offset in range(0, len(pcm), 8000):
             if state["rec"].AcceptWaveform(pcm[offset:offset+8000]):
-                state["parts"].append(json.loads(state["rec"].Result()).get("text", ""))
+                accepted = json.loads(state["rec"].Result())
+                state["parts"].append(accepted.get("text", ""))
+                state["words"].extend(accepted.get("result") or [])
         if payload.get("more"):
             # Vosk's acoustic endpoint can finish a turn even when the cheap
             # client VAD stays open because AGC/background noise raises RMS.
             completed = " ".join(p for p in state["parts"] if p).strip()
             state["parts"].clear()
-            result = {"text": completed, "pending": not bool(completed)}
+            result = {"text": completed, "pending": not bool(completed), "words": list(state["words"])}
             if payload.get("include_partial"):
                 # Provisional words are for named interruption detection only.
                 # They never enter a draft or the conversation as a user turn.
                 result["partial"] = str(json.loads(state["rec"].PartialResult()).get("partial") or "")[:8000]
+            if completed:
+                state["words"].clear()
             return result
-        state["parts"].append(json.loads(state["rec"].FinalResult()).get("text", ""))
+        final = json.loads(state["rec"].FinalResult())
+        state["parts"].append(final.get("text", ""))
+        state["words"].extend(final.get("result") or [])
         _STREAMS.pop(key, None)
-        return {"text": " ".join(p for p in state["parts"] if p).strip(), "pending": False}
+        return {"text": " ".join(p for p in state["parts"] if p).strip(), "pending": False, "words": state["words"]}
