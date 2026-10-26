@@ -41,7 +41,7 @@ try {
   const cases = input.cases.filter(test => !selected.size || selected.has(test.application))
   for (const test of cases) {
     const page = await context.newPage()
-    const row = { ...test, errors: [], lifecycleReads: [] }
+    const row = { ...test, errors: [], lifecycleReads: [], lifecycleResults: [] }
     page.on('pageerror', error => row.errors.push(safe(error)))
     page.on('request', request => {
       if (!request.url().includes('/root_mcp/call')) return
@@ -57,6 +57,9 @@ try {
         const request = response.request().postDataJSON()
         if (!request.tool_id?.startsWith('applications.')) return
         const value = await response.json()
+        const observed = value.response?.result?.lifecycle
+        if (observed) row.lifecycleResults.push({ application: observed.application_id,
+          version: observed.runtime?.version, admission: observed.runtime?.admission })
         const error = value.response?.error || value.error || value.detail
         if (error) row.errors.push(safe(`${request.tool_id}: ${typeof error === 'string' ? error : JSON.stringify(error)}`))
       } catch {}
@@ -89,12 +92,18 @@ try {
       const marker = { applications: 'catalog-tabs', web_desktop: 'primary-nav', adaos_builder: 'design-workbench-header' }[test.application]
       await expect(page.locator(`[data-webui-widget-id="${marker}"]`).filter({ visible: true })).toBeVisible({ timeout: 90_000 })
       row.stage = 'core-modal'
-      await page.evaluate(async ({ application }) => {
-        const component = window.ng.getComponent(document.querySelector('ada-details-widget'))
+      await page.evaluate(async ({ application, marker }) => {
+        const host = [...document.querySelectorAll(`[data-webui-widget-id="${marker}"]`)]
+          .find(element => element.getClientRects().length > 0)
+        const component = [host, ...host.querySelectorAll('*')]
+          .map(element => window.ng.getComponent(element))
+          .find(component => component?.actions?.handle && component?.state?.getSnapshot)
+        if (!component) throw new Error('Active page action scope is unavailable')
         await component.actions.handle({ type: 'updateState', params: { lifecycleApplicationId: application,
           selectedApplicationId: application, selectedProjectKind: 'project', selectedProjectId: application } })
-        await component.actions.handle({ type: 'openModal', params: { modalId: 'core-application-lifecycle' } })
-      }, test)
+        await component.actions.handle({ type: 'openModal', params: { modalId: 'core-application-lifecycle',
+          statePatch: { lifecycleApplicationId: application, coreLifecyclePlan: {}, coreWriteLossAcknowledged: false } } })
+      }, { ...test, marker })
       const identity = page.locator('[data-webui-widget-id="core-lifecycle-identity"]').filter({ visible: true })
       await expect(identity).toBeVisible({ timeout: 90_000 })
       await expect(identity).toContainText(test.version, { timeout: 90_000 })
@@ -116,6 +125,9 @@ try {
         row.reviewedOperationId = operationId
       }
       await expect(page.locator('[data-webui-widget-id="core-trial-inventory"]').filter({ visible: true })).toBeVisible({ timeout: 60_000 })
+      await expect.poll(() => row.lifecycleReads.some(read => read.tool === 'applications.lifecycle.events'),
+        { timeout: 35_000, intervals: [500, 1000] }).toBe(true)
+      row.clockReadObserved = true
       row.wide = true
       await page.setViewportSize({ width: 390, height: 844 })
       await expect(identity).toBeVisible({ timeout: 30_000 })

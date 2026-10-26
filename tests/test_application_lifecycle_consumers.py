@@ -43,6 +43,14 @@ def test_consumers_share_exact_core_modal_and_no_authoring_runtime_authority(nam
     assert not any(str(t).startswith("builder.") for t in tools)
     ids = [w["id"] for w in modal["schema"]["widgets"]]
     assert len(ids) == len(set(ids))
+    openers = [n for n in walk(ui["desktop"]["pageSchema"])
+               if n.get("type") == "openModal"
+               and n.get("params", {}).get("modalId") == "core-application-lifecycle"]
+    assert openers
+    for opener in openers:
+        patch = opener["params"]["statePatch"]
+        assert patch["lifecycleApplicationId"].startswith(("$state.", "$event."))
+        assert patch["coreLifecyclePlan"] == {} and patch["coreWriteLossAcknowledged"] is False
     if name == "applications":
         bindings = next(w for w in ui["desktop"]["pageSchema"]["widgets"] if w["id"] == "application-details")["inputs"]["stateBindings"]
         assert bindings["trialAccepted"]["path"] == "lifecycle.candidate.accepted"
