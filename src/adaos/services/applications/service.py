@@ -1840,6 +1840,8 @@ class ApplicationService:
             "subscription_change": subscription_change,
             "subscription_default": subscription_default,
             "runtime_target": runtime_target,
+            "expected_runtime_selections": [s.to_dict() for s in self.store.list_runtime_selections()
+                if s.application_id == application_id] if operation_kind == "remove" else None,
             "placement_change": placement_change,
             "installation_revision": installation_revision,
             "access": {
@@ -2060,6 +2062,11 @@ class ApplicationService:
                 )
         application = self.store.get_application(operation.application_id)
         self._assert_management_preconditions(application, operation.kind)
+        if operation.kind == "remove" and operation.plan.get("expected_runtime_selections") is not None:
+            observed = [s.to_dict() for s in self.store.list_runtime_selections()
+                        if s.application_id == operation.application_id]
+            if observed != operation.plan["expected_runtime_selections"]:
+                raise ApplicationServiceError("Selected Application runtime changed; review a new uninstall plan")
         if operation.kind == "select_track":
             raw_subscription = operation.plan.get("subscription_change")
             if not isinstance(raw_subscription, Mapping):
@@ -2079,6 +2086,9 @@ class ApplicationService:
             raise ApplicationServiceError(
                 "Application operation executor is not configured"
             )
+        if operation.kind == "remove":
+            from .aggregate_removal import apply_reviewed_removal
+            return apply_reviewed_removal(self, operation)
         install_access = None
         if operation.kind in {"install", "update"}:
             permission_review = operation.plan.get("permission_review")

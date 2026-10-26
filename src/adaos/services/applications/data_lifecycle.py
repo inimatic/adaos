@@ -1334,7 +1334,7 @@ class LocalApplicationDataLifecycle:
                     source_guard: Callable = nullcontext,
                     verify_idle: Callable[[str], Mapping[str, Any]] | None = None,
                     restore_source: bool = True,
-                    expected_current=None):
+                    expected_current=None, restored_source=None):
         """Deselect a reviewed Beta while retaining its isolated data evidence."""
         runner = ApplicationRuntimeTransition(self.channel)
         operation = f"application-beta:{self.application_id}:{self.candidate_id}"
@@ -1349,7 +1349,7 @@ class LocalApplicationDataLifecycle:
 
         def configure(_key):
             for component in self.components:
-                if restore_source:
+                if restore_source and restored_source is None:
                     self._restore_configuration_after_beta(component)
                 else:
                     store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
@@ -1365,4 +1365,5 @@ class LocalApplicationDataLifecycle:
         return runner.reject_completed(operation, contract_digest=self._contract(), steps=steps + [
             TransitionStep("deactivate_configuration", configure),
             TransitionStep("verify_source", verify_source),
-        ], source_guard=source_guard, restore_source=restore_source, expected_current=expected_current)
+        ], source_guard=source_guard, restore_source=restore_source, expected_current=expected_current,
+            restored_source=restored_source)

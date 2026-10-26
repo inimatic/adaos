@@ -1,9 +1,10 @@
 """Local Candidate decision authority with no Root/network/Builder dependency."""
 from pathlib import Path
+import json
 from typing import Mapping, Any
 from adaos.domain.application import utc_now as _now
 from .candidates import CandidateRecord, CandidateStore, complete_trial
-from .storage import replace_with_retry
+from .storage import atomic_write_json, mutation_lock, replace_with_retry
 from .trial_activation import TrialActivationStore, trial_workspace_root
 
 
@@ -28,7 +29,19 @@ class LocalCandidateDecisionService:
         accepted: bool,
         observations: tuple[Mapping[str, Any], ...] = (),
     ) -> CandidateRecord:
+        # The terminal Candidate and the activation are separate files. Keep
+        # the exact intent before moving a tree, and reconcile an interrupted
+        # acknowledgement instead of making another authoring decision.
+        import hashlib
+        token = hashlib.sha256(candidate_id.encode()).hexdigest()
+        with mutation_lock(self.state_root / "candidate-decisions" / f"{token}.lock"):
+            return self._decide_locked(candidate_id, accepted=accepted, observations=observations)
+
+    def _decide_locked(self, candidate_id, *, accepted, observations):
         candidate = self.candidate_store.load(candidate_id)
+        wanted = "accepted" if accepted else "rejected"
+        if candidate.status == wanted:
+            return self._reconcile_terminal(candidate, accepted=accepted)
         running = next((item for item in candidate.trials if item.status == "running"), None)
         if running is None:
             raise LocalCandidateDecisionError("candidate has no running trial")
@@ -38,6 +51,15 @@ class LocalCandidateDecisionService:
         activation = self.trial_activations.load(candidate_id)
         activation_status_before = str((activation or {}).get("status") or "").strip()
         activation_quiesced = False
+        decision_committed = False
+        intent_path = self.state_root / "candidate-decisions" / candidate_id / "intent.json"
+        intent = {"candidate_id": candidate_id, "candidate_digest": candidate.digest,
+                  "trial_id": running.trial_id, "accepted": accepted}
+        if intent_path.is_file():
+            if json.loads(intent_path.read_text(encoding="utf-8")) != intent:
+                raise LocalCandidateDecisionError("candidate has another retained decision intent")
+        else:
+            atomic_write_json(intent_path, intent)
         try:
             if accepted:
                 rollback_receipt = {
@@ -54,11 +76,11 @@ class LocalCandidateDecisionService:
                     / running.trial_id
                     / "workspace"
                 )
-                if not trial_workspace.is_dir():
+                if not trial_workspace.is_dir() and not archive.is_dir():
                     raise LocalCandidateDecisionError(
                         "rejected trial Workspace is missing before rollback"
                     )
-                if archive.exists():
+                if archive.exists() and trial_workspace.exists():
                     raise LocalCandidateDecisionError(
                         "rejected trial rollback archive already exists"
                     )
@@ -77,7 +99,8 @@ class LocalCandidateDecisionService:
                 # Windows skill reads to release their handles before moving the
                 # immutable Trial tree.  This retries only the filesystem switch;
                 # it never repeats the candidate decision.
-                self._switch_workspace(trial_workspace, archive, attempts=64)
+                if trial_workspace.exists():
+                    self._switch_workspace(trial_workspace, archive, attempts=64)
                 rollback_receipt = {
                     "status": "rolled_back",
                     "mode": "isolated_workspace_detached",
@@ -93,6 +116,7 @@ class LocalCandidateDecisionService:
                 rollback_receipt=rollback_receipt,
             )
             self.candidate_store.save(candidate)
+            decision_committed = True
             if activation is not None:
                 now = _now()
                 self.trial_activations.update(
@@ -103,19 +127,42 @@ class LocalCandidateDecisionService:
                     rollback=rollback_receipt,
                 )
         except Exception:
+            # save() can commit and lose its acknowledgement. Once the exact
+            # terminal decision is durable, never restore executable rejected
+            # code or rewind its activation. Recovery finishes metadata only.
+            persisted = self.candidate_store.load(candidate_id)
+            decision_committed = decision_committed or (persisted.status == wanted and persisted.digest == candidate.digest)
             if (
-                not accepted
+                not decision_committed and not accepted
                 and archive is not None
                 and archive.exists()
                 and trial_workspace is not None
                 and not trial_workspace.exists()
             ):
                 self._switch_workspace(archive, trial_workspace)
-            if activation_quiesced:
+            if activation_quiesced and not decision_committed:
                 self.trial_activations.update(
                     candidate_id,
                     status=activation_status_before,
                     detaching_at=None,
                 )
             raise
+        return candidate
+
+    def _reconcile_terminal(self, candidate, *, accepted):
+        completed = next((t for t in reversed(candidate.trials) if t.status == ("accepted" if accepted else "rejected")), None)
+        if completed is None:
+            raise LocalCandidateDecisionError("terminal Candidate lacks exact completed Trial evidence")
+        receipt = dict(completed.rollback_receipt or {})
+        if not accepted:
+            archive = self.state_root / "trial-rollbacks" / candidate.candidate_id / completed.trial_id / "workspace"
+            if (receipt.get("status") != "rolled_back" or receipt.get("archive") != str(archive)
+                    or not archive.is_dir() or self._trial_workspace(candidate.candidate_id).exists()):
+                raise LocalCandidateDecisionError("terminal rejection requires its exact retained archive")
+        activation = self.trial_activations.load(candidate.candidate_id)
+        if activation:
+            expected = "completed" if accepted else "detached"
+            if activation.get("status") != expected:
+                self.trial_activations.update(candidate.candidate_id, status=expected, rollback=receipt,
+                    completed_at=_now() if accepted else None, detached_at=None if accepted else _now())
         return candidate

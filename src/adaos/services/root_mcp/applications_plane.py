@@ -405,6 +405,11 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
     operation = {"operation_id": {"type": "string", "minLength": 1},
                  "plan_digest": digest, "idempotency_key": {"type": "string", "minLength": 1}}
     specs = [
+        ("applications.lifecycle.source", "Resolve Core lifecycle for an authoring source", {
+            "source_kind": {"enum": ["project", "skill", "scenario"]}, "source_id": {"type": "string", "minLength": 1},
+            "webspace_id": {"type": "string"}}, ["source_kind", "source_id"], "applications.read", False),
+        ("applications.lifecycle.operations", "Read correlated Core lifecycle operations", {**identity,
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, ["application_id"], "applications.read", False),
         ("applications.lifecycle.trials", "Read Core Trial inventory", {**identity,
             "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0},
             "include_storage": {"type": "boolean"}}, ["application_id"], "applications.read", False),
@@ -422,7 +427,7 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
         ("applications.lifecycle.show", "Read Core Application lifecycle", identity,
          ["application_id"], "applications.read", False),
         ("applications.lifecycle.plan", "Review local Application lifecycle transition", {
-            **identity, "action": {"enum": ["retain_local_beta", "deactivate_beta", "uninstall_beta", "delete_trial", "recover_runtime"]},
+            **identity, "action": {"enum": ["retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime"]},
             "expected_revision": digest, "candidate_id": {"type": ["string", "null"]},
             "acknowledge_write_loss": {"type": "boolean"},
             "idempotency_key": {"type": "string", "minLength": 1}},
@@ -4400,6 +4405,15 @@ def _handle_lifecycle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[
     return {"lifecycle": _sdk().get_lifecycle(_application_id(arguments), webspace_id=_webspace_id(arguments))}
 
 
+def _handle_lifecycle_source(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {"lifecycle": _sdk().get_lifecycle_for_source(str(arguments.get("source_kind") or ""),
+        str(arguments.get("source_id") or ""), webspace_id=_webspace_id(arguments))}
+
+
+def _handle_lifecycle_operations(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _sdk().list_lifecycle_operations(_application_id(arguments), limit=int(arguments.get("limit") or 50))
+
+
 def _handle_lifecycle_trials(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     return _sdk().list_trials(_application_id(arguments), limit=int(arguments.get("limit") or 50),
         offset=int(arguments.get("offset") or 0), include_storage=bool(arguments.get("include_storage")))
@@ -4449,7 +4463,11 @@ def _handle_lifecycle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict
 
 
 def _handle_lifecycle_recover(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return _lifecycle_apply(arguments, dry_run=dry_run, recover=True)
+    if dry_run:
+        return {"would_recover": True, "operation_id": arguments.get("operation_id")}
+    return {"operation": _sdk().recover_core_operation(str(arguments.get("operation_id") or ""),
+        plan_digest=str(arguments.get("plan_digest") or ""),
+        **_mcp_mutation_context(arguments, "applications.recover"))}
 
 
 def _handle_cancel_operation(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -4465,6 +4483,8 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.list": _handle_list,
         "applications.show": _handle_show,
         "applications.lifecycle.show": _handle_lifecycle_show,
+        "applications.lifecycle.source": _handle_lifecycle_source,
+        "applications.lifecycle.operations": _handle_lifecycle_operations,
         "applications.lifecycle.trials": _handle_lifecycle_trials,
         "applications.lifecycle.events": _handle_lifecycle_events,
         "applications.lifecycle.prepare": _handle_lifecycle_prepare,

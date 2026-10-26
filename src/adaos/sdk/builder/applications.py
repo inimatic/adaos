@@ -1021,30 +1021,12 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
     release = service.store.get_release(application_id, digest)
     if release.accepted_candidate_id != candidate_id:
         raise ValueError("Published Application release belongs to another Candidate")
-    ApplicationAccessManagementService(service).admit_release_stage(
-        application_id,
-        release_digest=release.release_digest,
-        stage="publication",
-    )
-    owner_access = _ensure_publisher_owner_access(
-        application_id,
-        release_digest=release.release_digest,
-    )
-    metadata_root = Path(_ctx().paths.workspace_dir()) / ".adaos"
-    with mutation_lock(metadata_root / ".workspace-writer.lock", timeout_s=30):
-        lock = WorkspaceLock.from_mapping(json.loads((metadata_root / "workspace.lock.json").read_text(encoding="utf-8")))
-        installation = service.reconcile_workspace_installation(application_id, digest, lock)
-        try:
-            selection = service.store.get_runtime_selection(webspace_id, application_id)
-        except FileNotFoundError:
-            selection = None
-        if selection and selection.release_digest != digest:
-            raise ValueError("RuntimeSelection changed; do not overwrite another selected release")
-        if selection is None or selection.source != "stable_installation":
-            selection = service.select_runtime(webspace_id=webspace_id, application_id=application_id,
-                source="stable_installation", release_digest=digest, runtime_root_ref="workspace",
-                expected_revision=selection.revision if selection else 0, actor_ref=actor_ref,
-                subnet_ref=publisher, capability="applications.apply")
+    from adaos.services.applications.workspace_adoption import adopt_published_workspace
+    adopted = adopt_published_workspace(_ctx(), application_id,
+        candidate_id=candidate_id, package_digest=candidate_digest,
+        release_digest=digest, webspace_id=webspace_id, actor_ref=actor_ref,
+        subnet_ref=publisher, capability="applications.publish",
+        management=ApplicationAccessManagementService(service))
     existing = (state.get("project") or {}).get("placements") or []
     if scenario_id and workflow_published and not any(item.get("kind") == "stable" and item.get("status") == "active"
                                       and (item.get("target") or {}).get("webspace_id") == webspace_id
@@ -1064,9 +1046,7 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
                 state = workflow.record_project_placement("scenario", scenario_id, {**item, "status": "detached"},
                     expected_generation=int(state["generation"]))["workflow"]
     refresh = _refresh_application_placements(application_id)
-    return {"ok": True, "workflow": state, "installation": installation.to_dict(),
-            "runtime_selection": selection.to_dict(), "runtime_refresh": refresh,
-            "publisher_owner_access": owner_access}
+    return {**adopted, "workflow": state, "runtime_refresh": refresh}
 
 
 def open_trial_placement(candidate_id: str, *, webspace_id: str, scenario_id: str) -> dict[str, Any]:

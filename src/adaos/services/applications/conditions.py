@@ -54,8 +54,6 @@ def _attention_status(
     admission = by_type.get("RuntimeAdmission", {})
     if admission.get("reason") in {"TrialExpired", "TrialExpiring", "RuntimeTransitionPending"}:
         return "action_required", str(admission["reason"]), str(admission["message"])
-    if by_type.get("AwaitingApproval", {}).get("status") == "True":
-        return "action_required", "OperationAwaitingApproval", "A reviewed plan is waiting for confirmation or cancellation."
 
     if integrity.get("status") == "False":
         return "degraded", str(integrity["reason"]), str(integrity["message"])
@@ -68,6 +66,8 @@ def _attention_status(
         return "degraded", str(ready.get("reason")), str(ready.get("message"))
     if ready.get("status") == "False":
         return "action_required", str(ready.get("reason")), str(ready.get("message"))
+    if by_type.get("AwaitingApproval", {}).get("status") == "True":
+        return "action_required", "OperationAwaitingApproval", "A reviewed plan is waiting for confirmation or cancellation."
     if progressing.get("status") == "True":
         return (
             "progressing",

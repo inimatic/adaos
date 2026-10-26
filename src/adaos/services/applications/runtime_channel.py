@@ -125,6 +125,10 @@ class ApplicationRuntimeChannel:
                     identities.add(identity)
                     if include_pending and connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone():
                         for pending in cls._pending_transitions(connection):
+                            if not pending.get("intent", {}).get("target"):
+                                # Retirement/restoration journals fence the
+                                # existing channel but introduce no Trial target.
+                                continue
                             target = RuntimeSelection.from_mapping(pending["intent"]["target"])
                             if target.application_id != identity:
                                 raise RuntimeChannelConflict("Transition target owner differs from its channel")

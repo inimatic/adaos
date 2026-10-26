@@ -7,6 +7,7 @@ renews a lease, hashes entire package trees, or executes application code.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -79,6 +80,84 @@ class ApplicationLifecycleService:
         self.state = Path(self.owner.paths.state_dir())
         self.store = store or ApplicationStore(self.state)
 
+    def for_source(self, source_kind: str, source_id: str, *, webspace_id: str = "desktop") -> dict:
+        """Resolve declared Application ownership; never guess from display names."""
+        if source_kind not in {"project", "skill", "scenario"} or not source_id:
+            raise ValueError("An explicit authoring source kind/id is required")
+        matches = []
+        selections = self.store.list_runtime_selections()
+        for app in self.store.list_applications():
+            if source_kind == "project":
+                if app.legacy_project_id == source_id:
+                    matches.append(app.application_id)
+                continue
+            ref = f"{source_kind}:{source_id}"
+            if any(e.get("presentation_ref") == ref for e in app.entrypoints):
+                matches.append(app.application_id)
+                continue
+            releases = {s.release_digest for s in selections if s.application_id == app.application_id}
+            try:
+                baseline = self.store.get_installation(app.application_id)
+                if baseline.status == "active":
+                    releases.add(baseline.installed_release_digest)
+            except FileNotFoundError:
+                pass
+            for digest in releases:
+                release = self.store.get_release(app.application_id, digest).project_release
+                lock = release.composition_lock
+                if lock and any(m.ref == ref and m.lifecycle != "shared" for m in lock.members):
+                    matches.append(app.application_id)
+                    break
+        matches = sorted(set(matches))
+        if len(matches) != 1:
+            return {"schema": "adaos.application.lifecycle_source.v1", "available": False,
+                    "reason": "ApplicationNotRegistered" if not matches else "ApplicationOwnershipAmbiguous",
+                    "summary": "No unique Core Application owner is registered for this source.",
+                    "source_ref": f"{source_kind}:{source_id}"}
+        return self.snapshot(matches[0], webspace_id=webspace_id)
+
+    def operations(self, application_id: str, *, limit: int = 50) -> dict:
+        """Correlated, bounded, redacted history over existing journals."""
+        self.store.get_application(application_id)
+        records = []
+        for op in self.store.list_operations(application_id):
+            records.append({"operation_id": op.operation_id, "source": "application", "action": op.plan.get("action", op.kind),
+                "status": op.status, "summary": op.plan.get("summary") or op.plan.get("review_summary") or op.kind,
+                "updated_at": op.updated_at, "recovery_reason": "ExactCoreRecoveryRequired" if op.recovery_reason else None,
+                "plan_digest": op.plan_digest,
+                "recoverable": op.status in {"applying", "unknown", "reconciling"} and (
+                    op.plan.get("schema") == "adaos.application.lifecycle_plan.v1" or op.kind == "remove"),
+                "correlated_operation_id": op.result.get("runtime_transition_operation_id")})
+        from .development import ApplicationDevelopmentCoordinator
+        for op in ApplicationDevelopmentCoordinator(self.state).list(application_id):
+            records.append({"operation_id": op["operation_id"], "source": "authoring", "action": op["action"],
+                "status": op["status"], "summary": "Authoring operation: " + op["action"], "updated_at": op["updated_at"],
+                "plan_digest": op["intent_digest"],
+                "recoverable": op["status"] in {"applying", "unknown"} and op["action"] == "decide_trial"
+                    and "expected_selections" in op["intent"],
+                "recovery_reason": "ExactCoreRecoveryRequired" if op.get("recovery_reason") else None})
+        channel = ApplicationRuntimeChannel(self.state, application_id)
+        if channel.path.is_file():
+            with channel._connection() as db:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='transitions'").fetchone():
+                    for op_id, raw in db.execute("SELECT operation_id,document FROM transitions"):
+                        op = json.loads(raw)
+                        records.append({"operation_id": op_id, "source": "runtime", "action": "runtime_transition",
+                            "status": "cancelled" if op.get("aborted") else "succeeded" if op.get("completed") else "recovery_required",
+                            "summary": "Runtime journal: " + str(op.get("running_step") or "checkpoint"),
+                            "updated_at": str((op.get("intent") or {}).get("target", {}).get("updated_at") or ""),
+                            "recovery_reason": None if op.get("completed") or op.get("aborted") else "RuntimeFenced"})
+        for path in (self.state / "applications/distribution").glob("*.json"):
+            op = json.loads(path.read_text(encoding="utf-8"))
+            if op.get("application_id") == application_id:
+                records.append({"operation_id": op.get("operation_id") or "distribution:" + path.stem,
+                    "source": "publication", "action": "publication", "status": op.get("status", "unknown"),
+                    "summary": "Immutable distribution journal", "updated_at": op.get("updated_at", ""),
+                    "recovery_reason": None if op.get("status") == "completed" else "ReviewDistributionJournal"})
+        records.sort(key=lambda r: (r.get("updated_at") or "", r["operation_id"]), reverse=True)
+        return {"schema": "adaos.application.lifecycle_operation_page.v1", "application_id": application_id,
+                "operations": records[:max(1, min(int(limit), 200))], "total": len(records), "private_content_included": False}
+
     def snapshot(self, application_id: str, *, webspace_id: str = "desktop",
                  runtime_revisions: Mapping[str, Any] | None = None,
                  now: datetime | None = None) -> dict[str, Any]:
@@ -143,7 +222,6 @@ class ApplicationLifecycleService:
         operations = self.store.list_operations(application_id)
         operation = next(iter(operations), None)
         from .materialization import request_path
-        import json
         path = request_path(self.state, application_id)
         materialization_record = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
         materialization = {"status": materialization_record.get("status", "not_requested"),
@@ -171,6 +249,8 @@ class ApplicationLifecycleService:
                 "ExactAcceptedTrialRequired", "applications.apply"),
             "deactivate_beta": _action(is_beta and transition is None,
                 "SelectedBetaRequired" if not is_beta else "ReviewRuntimeAndDataDisposition"),
+            "restore_stable": _action(is_beta and baseline_active and transition is None,
+                "VerifiedStableBaselineRequired"),
             "uninstall_beta": _action(is_beta and not baseline_active and removable and transition is None,
                 "BetaOnlyInstallationRequired"),
             "uninstall": _action(bool(digest) and removable and transition is None,
@@ -179,6 +259,10 @@ class ApplicationLifecycleService:
                 "ExactPendingOperationRequired", "applications.recover"),
             "cancel_plan": _action(bool(operation and operation.status == "planned"),
                 "UnstartedPlanRequired", "applications.plan"),
+            "accept_candidate": _action(is_beta and exact and candidate.status == "trial" and transition is None,
+                "ExactTrialCandidateRequired", "applications.develop"),
+            "reject_candidate": _action(is_beta and exact and candidate.status == "trial" and transition is None,
+                "ExactTrialCandidateRequired", "applications.develop"),
         }
         refs = {"selection_revisions": {s.webspace_id: s.revision for s in selections},
                 "installation_revision": baseline.revision if baseline else 0,
@@ -210,7 +294,9 @@ class ApplicationLifecycleService:
                           "release_digest": digest, "status": candidate.status if candidate else "unknown",
                           "accepted": bool(candidate and candidate.status == "accepted"), "reason": candidate_reason},
             "data": {"disposition": "retained", "transition_pending": transition is not None,
-                     "operation_id": transition.get("operation_id") if transition else None},
+                     "operation_id": transition.get("operation_id") if transition else None,
+                     "recovery_candidate_id": str(((transition or {}).get("intent", {}).get("target") or {}).get(
+                         "runtime_root_ref") or (f"trial:{candidate_id}" if candidate_id else "")).removeprefix("trial:")},
             "operation": operation_projection, "actions": actions,
             "materialization": materialization,
             "summary": f"{('Beta' if is_beta else 'Stable') if digest else 'Not installed'}: "

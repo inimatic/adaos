@@ -156,6 +156,7 @@ def test_deactivation_retains_candidate_decision_and_beta_data(operations, monke
     data.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
     monkeypatch.setattr(local_release_transition, "bind_local_data_lifecycle", lambda *_, **kw: data)
     root = trial_workspace_root(ops.workspace, candidate.candidate_id)
+    (root / ".adaos/data-transition.json").write_text('{"stable_release_digest":null}', encoding="utf-8")
     payload = root / "retained-test-data.json"
     payload.write_text('{"synthetic":true}', encoding="utf-8")
     planned = plan(ops, subnet, "deactivate_beta", acknowledge_write_loss=True)
@@ -252,6 +253,85 @@ def test_candidate_acceptance_is_core_owned_and_has_no_scenario_or_root_dependen
         capability="applications.develop", idempotency_key="core-accept-synthetic")
     assert result["candidate"]["status"] == "accepted"
     assert ops.observer.snapshot("example")["candidate"]["accepted"]
+
+
+def test_candidate_decision_recovers_lost_activation_ack_without_new_trial(operations, monkeypatch):
+    ops, subnet, activations, candidate = operations
+    from adaos.services.applications.candidate_decisions import decide_local_candidate, recover_local_candidate_decision
+    from adaos.services.applications.development import ApplicationDevelopmentCoordinator
+    from adaos.services.artifact_pipeline.candidates import begin_trial
+    running = begin_trial(replace(candidate, status="validated"), trial_id="lost-ack",
+        audience="owner", data_mode="empty", lock_digest=candidate.package_digest,
+        now="2026-01-01T00:00:00+00:00", health_receipt={"status": "passed"})
+    CandidateStore(ops.state / "artifact_pipeline/candidates").save(running)
+    original = type(activations).update
+
+    def interrupted(self, candidate_id, **changes):
+        if changes.get("status") == "completed":
+            raise OSError("synthetic activation acknowledgement lost")
+        return original(self, candidate_id, **changes)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(type(activations), "update", interrupted)
+        with pytest.raises(OSError):
+            decide_local_candidate(ops.owner, "example", candidate.candidate_id, accepted=True,
+                expected_candidate_digest=running.digest, actor_ref="user:owner", subnet_ref=subnet,
+                capability="applications.develop", idempotency_key="lost-ack")
+    op = ApplicationDevelopmentCoordinator(ops.state).list("example")[0]
+    assert op["status"] == "unknown"
+    result = recover_local_candidate_decision(ops.owner, op["operation_id"], actor_ref="user:owner",
+        subnet_ref=subnet, capability="applications.recover")
+    assert result["ok"] and activations.load(candidate.candidate_id)["status"] == "completed"
+    assert len(CandidateStore(ops.state / "artifact_pipeline/candidates").load(candidate.candidate_id).trials) == 1
+
+
+def test_inventory_protects_retained_sources_and_explicit_holds(operations):
+    ops, _, activations, candidate = operations
+    ApplicationRuntimeChannel(ops.state, "example").retire()
+    activations.update(candidate.candidate_id, retention_holds=["synthetic-retain"])
+    inventory = ops.trials("example", limit=1, include_storage=True)
+    row = inventory["trials"][0]
+    assert not row["deletion_review_available"]
+    assert "explicit_retention_hold" in row["references"]
+    assert row["storage_complete"] and row["storage_bytes"] > 0
+    assert "archive" not in row
+
+
+def test_core_ai_skill_consumer_blocks_lifecycle_effects(operations):
+    import sqlite3
+    ops, subnet, _, candidate = operations
+    path = ops.state / "ai/local/ai.sqlite3"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE attempts(consumer TEXT,status TEXT)")
+        db.execute("INSERT INTO attempts VALUES('skill:example','running')")
+    with pytest.raises(RuntimeChannelConflict, match="ActiveCoreJobs"):
+        plan(ops, subnet, "retain_local_beta")
+
+
+def test_core_clock_observes_retirement_and_reuses_durable_cursor(operations):
+    ops, _, _, _ = operations
+    from adaos.services.applications.lifecycle_runtime import observe_lifecycle_leases
+    from adaos.services.applications.lifecycle_events import LifecycleEvents
+    observe_lifecycle_leases(ops.owner)
+    events = LifecycleEvents(ops.state).poll()
+    ApplicationRuntimeChannel(ops.state, "example").retire()
+    assert observe_lifecycle_leases(ops.owner)["changed"] == 1
+    latest = LifecycleEvents(ops.state).poll(cursor=events["cursor"])
+    assert latest["events"][0]["observation"]["admission"] == "not_selected"
+
+
+def test_source_resolution_and_history_are_core_owned_and_redacted(operations):
+    ops, subnet, _, _ = operations
+    assert ops.observer.for_source("project", "example")["application_id"] == "example"
+    assert ops.observer.for_source("skill", "example")["application_id"] == "example"
+    assert ops.observer.for_source("project", "missing")["reason"] == "ApplicationNotRegistered"
+    planned = plan(ops, subnet, "retain_local_beta")
+    ops.service._transition_operation(ops.store.get_operation(planned["operation_id"]), "unknown",
+                                      recovery_reason="exception contains private synthetic secret")
+    history = ops.observer.operations("example")
+    assert history["operations"][0]["recoverable"]
+    assert "synthetic secret" not in json.dumps(history)
 
 
 @pytest.mark.asyncio

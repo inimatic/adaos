@@ -95,6 +95,12 @@ class ApplicationDevelopmentCoordinator:
             values = [item for item in values if item.get("application_id") == application_id]
         return sorted(values, key=lambda item: (item["created_at"], item["operation_id"]), reverse=True)
 
+    def find_idempotency(self, key: str) -> dict[str, Any] | None:
+        path = self._idempotency_path(self._identity(key, "idempotency_key"))
+        if not path.is_file():
+            return None
+        return self.get(str(json.loads(path.read_text(encoding="utf-8"))["operation_id"]))
+
     def execute(
         self,
         action: str,

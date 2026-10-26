@@ -9,10 +9,9 @@ from pathlib import Path
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
-from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+from adaos.domain.application import RuntimeSelection
 from .lifecycle import observe_runtime_admission
 from .lifecycle_events import LifecycleEvents
-from .local_beta_admission import read_local_beta_admission
 from .materialization import reconcile_materializations, request_path
 from .runtime_channel import ApplicationRuntimeChannel
 from .store import ApplicationStore
@@ -29,16 +28,28 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
     observed = now or datetime.now(timezone.utc)
     store = ApplicationStore(state)
     grouped = {}
+    for application in store.list_applications():
+        grouped[application.application_id] = []
     for selection in store.list_runtime_selections():
         grouped.setdefault(selection.application_id, []).append(selection)
     changed = 0
     for application_id, selections in grouped.items():
-        selection = selections[0]
-        fact = {"source": selection.source, "release_digest": selection.release_digest,
-                "runtime_root_ref": selection.runtime_root_ref,
+        selection = next(iter(selections), None)
+        if selection is None:
+            try:
+                baseline = store.get_installation(application_id)
+                if baseline.status == "active":
+                    selection = RuntimeSelection(webspace_id="desktop", application_id=application_id,
+                        source="stable_installation", release_digest=baseline.installed_release_digest,
+                        runtime_root_ref="workspace", revision=1)
+            except FileNotFoundError:
+                pass
+        fact = {"source": selection.source if selection else None,
+                "release_digest": selection.release_digest if selection else None,
+                "runtime_root_ref": selection.runtime_root_ref if selection else None,
                 "webspace_ids": sorted(s.webspace_id for s in selections),
                 "admission": "admitted", "reason": "StableInstallation", "expires_at": None}
-        if selection.source == "local_trial":
+        if selection is None or selection.source == "local_trial":
             try:
                 admission = observe_runtime_admission(state, selection, now=observed)
                 # Remaining seconds is display-only, not a new event per tick.

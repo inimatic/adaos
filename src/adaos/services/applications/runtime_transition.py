@@ -161,7 +161,8 @@ class ApplicationRuntimeTransition:
                          steps: Sequence[TransitionStep],
                          source_guard: Callable = nullcontext,
                          restore_source: bool = True,
-                         expected_current: Sequence[RuntimeSelection] | None = None) -> dict[str, Any]:
+                         expected_current: Sequence[RuntimeSelection] | None = None,
+                         restored_source: RuntimeSelection | None = None) -> dict[str, Any]:
         """Compensate a completed Beta selection without reversing Beta data.
 
         The original Stable data was only snapshotted during Beta preparation,
@@ -204,7 +205,16 @@ class ApplicationRuntimeTransition:
                     updated_at=target.updated_at) for item in selected)
             if not restore_source:
                 restored = ()
+            if restored_source is not None:
+                if restored_source.application_id != self.channel.application_id:
+                    raise RuntimeChannelConflict("Restored source belongs to another Application")
+                restored = tuple(replace(item, source=restored_source.source,
+                    release_digest=restored_source.release_digest, runtime_root_ref=restored_source.runtime_root_ref,
+                    revision=item.revision + 1, updated_at=target.updated_at) for item in selected)
             rejection_id = operation_id + (":rejected" if restore_source else ":retired")
+            if restored_source is not None:
+                rejection_id = operation_id + ":restore:" + hashlib.sha256(
+                    _json([restored_source.source, restored_source.release_digest, restored_source.runtime_root_ref]).encode()).hexdigest()[:16]
             intent = {
                 "contract_digest": contract_digest,
                 "source_operation_id": operation_id,
@@ -284,6 +294,46 @@ class ApplicationRuntimeTransition:
                       "receipts": {}, "running_step": None}
             connection.execute("INSERT INTO transitions VALUES (?, 0, ?)", (operation_id, _json(record)))
             connection.commit()
+            return record
+
+    def retire_reviewed(self, operation_id: str, *, contract_digest: str,
+                        expected: Sequence[RuntimeSelection], steps: Sequence[TransitionStep]) -> dict:
+        """Fence before aggregate uninstall effects; keep the fence on doubt.
+
+        Recovery receives the same reviewed steps. A step with an unknown
+        external outcome must observe its receipt, never blindly replay it.
+        """
+        values = tuple(expected)
+        self.channel._validate(values)
+        if not steps or not contract_digest.startswith("sha256:"):
+            raise ValueError("Exact retirement contract and effects required")
+        intent = {"contract_digest": contract_digest, "expected": [s.to_dict() for s in values],
+                  "restored": [], "steps": [s.step_id for s in steps]}
+        fingerprint = hashlib.sha256(_json(intent).encode()).hexdigest()
+        with mutation_lock(self.channel.path.with_suffix(".transition.lock")):
+            record = self._begin(operation_id, fingerprint, intent, values)
+            if record.get("completed"):
+                return record
+            for step in steps:
+                if step.step_id in record["receipts"]:
+                    continue
+                record["running_step"] = step.step_id
+                self._write(operation_id, record)
+                receipt = dict(step.apply(hashlib.sha256(_json([operation_id, fingerprint, step.step_id]).encode()).hexdigest()))
+                if receipt.get("ok") is not True or len(_json(receipt).encode()) > 65536:
+                    raise RuntimeChannelConflict("Retirement effect not verified; runtime remains fenced")
+                record["receipts"][step.step_id] = receipt
+                record["running_step"] = None
+                self._write(operation_id, record)
+            with self.channel._connection() as db:
+                db.execute("BEGIN EXCLUSIVE")
+                actual = self.channel._decode(db.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
+                if actual != values:
+                    raise RuntimeChannelConflict("Channel changed during retirement")
+                record["completed"] = True
+                db.execute("UPDATE channel SET document=? WHERE id=1", (self.channel._encode(()),))
+                db.execute("UPDATE transitions SET completed=1,document=? WHERE operation_id=?", (_json(record), operation_id))
+                db.commit()
             return record
 
     def _write(self, operation_id, record):

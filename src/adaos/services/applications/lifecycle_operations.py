@@ -29,7 +29,7 @@ from .trial_runtime import NativeTrialRuntime
 
 
 PLAN_SCHEMA = "adaos.application.lifecycle_plan.v1"
-_ACTIONS = {"retain_local_beta", "deactivate_beta", "uninstall_beta", "delete_trial", "recover_runtime"}
+_ACTIONS = {"retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime"}
 _TERMINAL_JOBS = {"completed", "succeeded", "failed", "cancelled", "canceled", "interrupted",
                   "refused", "out_of_scope", "incomplete", "invalid_output"}
 
@@ -114,17 +114,38 @@ class ApplicationLifecycleOperations:
             if status in {"active", "completed"} and expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc):
                 status = "expired"
             is_selected = f"trial:{candidate_id}" in selected
+            from .local_beta_admission import read_local_beta_admission
+            installed_beta = read_local_beta_admission(self.state, candidate_id, str(identity.get("release_digest") or ""), activation)
+            if installed_beta and is_selected:
+                status = "installed_beta"
             record = {"candidate_id": candidate_id, "release_digest": identity.get("release_digest"),
                 "version": candidate.version if candidate else None, "status": status,
                 "candidate_status": candidate.status if candidate else "unknown", "selected": is_selected,
                 "expires_at": expiry, "data_policy": "retained", "recoverable": bool(activation.get("lifecycle_deletion")),
-                "deletion_eligible": bool(candidate) and not is_selected and root.is_dir(),
+                "deletion_review_available": bool(candidate) and not is_selected and root.is_dir(),
+                "deletion_eligible": None,
                 "deletion_reason": "SelectedRuntime" if is_selected else "ReviewReferenceAndJobChecksRequired",
                 "storage_bytes": None, "storage_complete": False, "storage_reason": "NotRequested"}
+            records.append(record)
+        records.sort(key=lambda item: (not item["selected"], str(item["candidate_id"])))
+        start, size = max(0, int(offset)), max(1, min(int(limit), 100))
+        page = records[start:start+size]
+        for record in page:
+            root = trial_workspace_root(self.workspace, record["candidate_id"])
+            refs = self._references(application_id, record["candidate_id"])
+            record["references"] = refs[:20]
+            record["reference_count"] = len(refs)
+            record["deletion_review_available"] = record["deletion_review_available"] and not refs
+            record["deletion_reason"] = "TrialReferenced" if refs else "ReviewJobChecksRequired"
+            try:
+                assert_idle_jobs(self.state, application_id, root)
+            except (RuntimeError, OSError, ValueError, sqlite3.Error) as exc:
+                record["deletion_review_available"] = False
+                record["deletion_reason"] = str(exc) if isinstance(exc, RuntimeChannelConflict) else "JobMetadataUnavailable"
             if include_storage and root.is_dir():
                 total, count, complete = 0, 0, True
                 for current, dirs, files in os.walk(root, followlinks=False):
-                    if any((Path(current) / name).is_symlink() for name in dirs):
+                    if any((Path(current) / name).is_symlink() or getattr(Path(current) / name, "is_junction", lambda: False)() for name in dirs):
                         complete = False
                         break
                     for name in files:
@@ -141,15 +162,12 @@ class ApplicationLifecycleOperations:
                         break
                 record.update(storage_bytes=total if complete else None, storage_complete=complete,
                               storage_reason="Observed" if complete else "InventoryBoundExceeded")
-            records.append(record)
-        records.sort(key=lambda item: (not item["selected"], str(item["candidate_id"])))
-        start, size = max(0, int(offset)), max(1, min(int(limit), 100))
         return {"schema": "adaos.application.trial_inventory.v1", "application_id": application_id,
-                "trials": records[start:start+size], "total": len(records), "offset": start,
+                "trials": page, "total": len(records), "offset": start,
                 "next_offset": start+size if start+size < len(records) else None,
                 "data_policy": "retained", "private_content_included": False}
 
-    def _references(self, application_id: str, candidate_id: str) -> list[str]:
+    def _references(self, application_id: str, candidate_id: str, *, ignore_operation: str | None = None) -> list[str]:
         root_ref = f"trial:{candidate_id}"
         refs = [f"selected:{s.webspace_id}" for s in self.store.list_runtime_selections()
                 if s.runtime_root_ref == root_ref]
@@ -175,9 +193,12 @@ class ApplicationLifecycleOperations:
                 if source.get("runtime_root_ref") == root_ref:
                     refs.append(f"retained_data_source:{other_id}")
         for op in self.store.list_operations():
-            if (op.plan.get("schema") != PLAN_SCHEMA and op.status in {"planned", "applying", "unknown", "reconciling"}
+            if (op.operation_id != ignore_operation and op.status in {"planned", "applying", "unknown", "reconciling"}
                     and candidate_id in json.dumps(op.plan)):
                 refs.append(f"operation:{op.operation_id}")
+        activation = activations.load(candidate_id) or {}
+        if activation.get("retention_holds") or activation.get("legal_hold"):
+            refs.append("explicit_retention_hold")
         return sorted(set(refs))
 
     def plan(self, application_id: str, action: str, *, actor_ref: str, subnet_ref: str,
@@ -193,7 +214,8 @@ class ApplicationLifecycleOperations:
         except FileNotFoundError:
             prior = None
         if prior:
-            expected = {"schema": PLAN_SCHEMA, "action": action, "application_id": application_id,
+            replay_action = "uninstall_beta" if action == "uninstall" and prior.plan.get("action") == "uninstall_beta" else action
+            expected = {"schema": PLAN_SCHEMA, "action": replay_action, "application_id": application_id,
                         "expected_lifecycle_revision": expected_revision, "webspace_id": webspace_id,
                         "actor_ref": actor_ref, "subnet_ref": subnet_ref,
                         "acknowledge_write_loss": acknowledge_write_loss}
@@ -204,6 +226,13 @@ class ApplicationLifecycleOperations:
         snapshot = self.observer.snapshot(application_id, webspace_id=webspace_id)
         if snapshot["revision"] != expected_revision:
             raise RuntimeChannelConflict("LifecycleRevisionChanged")
+        if action == "uninstall":
+            if snapshot["installation"]["stable_baseline_present"]:
+                baseline = self.store.get_installation(application_id)
+                return self.service.plan_operation(application_id, "remove", expected_revision=baseline.revision,
+                    actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability,
+                    idempotency_key=idempotency_key, data_policy="retain").to_dict()
+            action = "uninstall_beta"
         selected = snapshot["candidate"].get("candidate_id")
         target_candidate = candidate_id or selected
         if not target_candidate:
@@ -221,9 +250,10 @@ class ApplicationLifecycleOperations:
             references = []
             pending = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, application_id)).get(
                 f"application-beta:{application_id}:{target_candidate}")
-            if not pending or pending.get("completed") or pending.get("aborted"):
+            no_binding = not (trial_workspace_root(self.workspace, target_candidate) / ".adaos/data-transition.json").exists()
+            if (not pending and not no_binding) or pending and (pending.get("completed") or pending.get("aborted")):
                 raise RuntimeChannelConflict("ExactPendingPreparationRequired")
-        if action == "deactivate_beta" and not snapshot["actions"]["deactivate_beta"]["eligible"]:
+        if action in {"deactivate_beta", "restore_stable"} and not snapshot["actions"][action]["eligible"]:
             raise RuntimeChannelConflict("RecoverPendingTransitionBeforeDeactivation")
         if action == "retain_local_beta" and not snapshot["actions"][action]["eligible"]:
             raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
@@ -234,17 +264,36 @@ class ApplicationLifecycleOperations:
                 raise ValueError("Whole-Application uninstall with Stable must use the aggregate removal plan")
             if not snapshot["actions"]["uninstall"]["eligible"]:
                 raise PermissionError("ProtectedApplication")
-        if action == "deactivate_beta" and not acknowledge_write_loss:
+        if action in {"deactivate_beta", "restore_stable"} and not acknowledge_write_loss:
             raise ValueError("Acknowledge that retained Beta writes are not adopted into the restored source")
         root = trial_workspace_root(self.workspace, target_candidate)
         assert_idle_jobs(self.state, application_id, root)
+        if action in {"deactivate_beta", "restore_stable"}:
+            binding_path = root / ".adaos/data-transition.json"
+            if not binding_path.is_file():
+                raise RuntimeChannelConflict("ReviewedDataTransitionBindingRequired")
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            source = binding.get("beta_source")
+            if source and action != "restore_stable":
+                NativeTrialRuntime.resolve(self.owner, source["runtime_root_ref"].removeprefix("trial:"), source["release_digest"])
+            elif binding.get("stable_release_digest"):
+                baseline = self.store.get_installation(application_id)
+                lock = WorkspaceLock.from_mapping(json.loads((self.workspace / ".adaos/workspace.lock.json").read_text(encoding="utf-8")))
+                if (baseline.status != "active" or baseline.installed_release_digest != binding["stable_release_digest"]
+                        or not any(s.project_id == candidate.project_id and s.release_digest == baseline.installed_release_digest for s in lock.slots)):
+                    raise RuntimeChannelConflict("StableSourceChanged")
+        receipt_path = admission_path(self.state, target_candidate)
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
         plan = {"schema": PLAN_SCHEMA, "action": action, "application_id": application_id,
                 "candidate_id": target_candidate, "candidate_digest": candidate.digest,
                 "release_digest": candidate.release_digest, "package_digest": candidate.package_digest,
                 "expected_lifecycle_revision": expected_revision, "webspace_id": webspace_id,
                 "affected_webspace_ids": snapshot["runtime"]["webspace_ids"],
                 "expected_selections": snapshot["runtime"]["selections"],
+                "expected_admission_receipt_digest": receipt.get("receipt_digest"),
+                "stable_release_digest": snapshot["installation"].get("stable_release_digest"),
                 "actor_ref": actor_ref, "subnet_ref": subnet_ref, "data_policy": "retain",
+                "required_apply_capability": "applications.recover" if action == "recover_runtime" else "applications.apply",
                 "acknowledge_write_loss": acknowledge_write_loss, "references": references,
                 "trial_binding_digest": canonical_payload_digest(activation.get("runtime_binding") or {}),
                 "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
@@ -257,8 +306,9 @@ class ApplicationLifecycleOperations:
 
     def apply(self, operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,
               capability: str, recover: bool = False) -> dict:
-        self._authorize(actor_ref, subnet_ref, capability, "applications.recover" if recover else "applications.apply")
         operation = self.store.get_operation(operation_id)
+        self._authorize(actor_ref, subnet_ref, capability, "applications.recover"
+                        if recover or operation.plan.get("action") == "recover_runtime" else "applications.apply")
         if (operation.plan.get("schema") != PLAN_SCHEMA or operation.plan_digest != plan_digest
                 or operation.actor_ref != actor_ref or operation.subnet_ref != subnet_ref):
             raise PermissionError("Exact reviewed lifecycle operation authority is required")
@@ -327,6 +377,10 @@ class ApplicationLifecycleOperations:
             return {"ok": True, "status": "installed_local_beta", "receipt_digest": receipt["receipt_digest"]}
         if action == "delete_trial":
             return self._delete_trial(operation, root, activation)
+        if action == "recover_runtime":
+            from .lifecycle_recovery import abort_local_trial_preparation
+            return abort_local_trial_preparation(self.owner, candidate_id, release_digest=plan["release_digest"],
+                actor_ref=operation.actor_ref, subnet_ref=operation.subnet_ref, capability="applications.recover")
         return self._restore_source(operation)
 
     def _restore_source(self, operation: ApplicationOperation) -> dict:
@@ -342,7 +396,7 @@ class ApplicationLifecycleOperations:
         def verify(_key):
             if plan["action"] == "uninstall_beta":
                 return {"ok": True, "reason": "RetiredWithoutFallback", "data_policy": "retain"}
-            if lifecycle.beta_source_ref:
+            if lifecycle.beta_source_ref and plan["action"] != "restore_stable":
                 NativeTrialRuntime.resolve(self.owner, lifecycle.beta_source_ref[0].removeprefix("trial:"),
                                             lifecycle.beta_source_ref[1])
             elif lifecycle.stable_digest:
@@ -365,18 +419,27 @@ class ApplicationLifecycleOperations:
             transition = lifecycle.abort_beta_preparation(verify_source=verify,
                 source_guard=lambda: mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30))
         else:
+            restored_source = None
+            if plan["action"] == "restore_stable":
+                restored_source = RuntimeSelection(webspace_id=plan["webspace_id"], application_id=operation.application_id,
+                    source="stable_installation", release_digest=plan["stable_release_digest"],
+                    runtime_root_ref="workspace", revision=1)
             transition = lifecycle.reject_beta(webspace_id=plan["webspace_id"], verify_source=verify,
                 source_guard=lambda: mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30),
                 verify_idle=lambda key: assert_idle_jobs(self.state, operation.application_id, runtime.root),
                 restore_source=plan["action"] != "uninstall_beta",
-                expected_current=tuple(RuntimeSelection.from_mapping(s) for s in plan["expected_selections"]))
+                expected_current=tuple(RuntimeSelection.from_mapping(s) for s in plan["expected_selections"]),
+                restored_source=restored_source)
         path = admission_path(self.state, candidate_id)
         if path.is_file():
             receipt = json.loads(path.read_text(encoding="utf-8"))
-            receipt.update(status="revoked", revoked_by_operation=operation.operation_id)
-            receipt.pop("receipt_digest", None)
-            receipt["receipt_digest"] = canonical_payload_digest(receipt)
-            atomic_write_json(path, receipt)
+            # A completed old transition can be acknowledged after another
+            # reviewed admission. Never revoke that newer authority on replay.
+            if receipt.get("receipt_digest") == plan.get("expected_admission_receipt_digest"):
+                receipt.update(status="revoked", revoked_by_operation=operation.operation_id)
+                receipt.pop("receipt_digest", None)
+                receipt["receipt_digest"] = canonical_payload_digest(receipt)
+                atomic_write_json(path, receipt)
         from .materialization import request_materialization
         refresh = request_materialization(self.owner, operation.application_id,
                                            webspace_ids=plan["affected_webspace_ids"])
@@ -390,7 +453,7 @@ class ApplicationLifecycleOperations:
         if marker.get("operation_id") == operation.operation_id:
             return {"ok": True, "status": "trial_deleted_recoverably", "data_policy": "retain"}
         candidate_id = plan["candidate_id"]
-        refs = self._references(operation.application_id, candidate_id)
+        refs = self._references(operation.application_id, candidate_id, ignore_operation=operation.operation_id)
         if refs:
             raise RuntimeChannelConflict("TrialReferenced:" + ",".join(refs))
         assert_idle_jobs(self.state, operation.application_id, root)
@@ -415,7 +478,7 @@ class ApplicationLifecycleOperations:
         else:
             atomic_write_json(intent_path, intent)
         with mutation_lock(self.state / "artifact_pipeline/trial-activations" / f"{candidate_id}.lifecycle.lock"):
-            if self._references(operation.application_id, candidate_id):
+            if self._references(operation.application_id, candidate_id, ignore_operation=operation.operation_id):
                 raise RuntimeChannelConflict("TrialBecameReferenced")
             if root.is_dir() and not archive.exists():
                 root.rename(archive)

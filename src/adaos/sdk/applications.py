@@ -2079,6 +2079,19 @@ def get_lifecycle(application_id: str, *, webspace_id: str = "desktop",
         application_id, webspace_id=webspace_id, runtime_revisions=runtime_revisions)
 
 
+def get_lifecycle_for_source(source_kind: str, source_id: str, *, webspace_id: str = "desktop") -> dict[str, Any]:
+    """Resolve a declared authoring source to its unique Core Application owner."""
+    from adaos.services.applications.lifecycle import ApplicationLifecycleService
+    return ApplicationLifecycleService(require_ctx("sdk.applications.lifecycle")).for_source(
+        source_kind, source_id, webspace_id=webspace_id)
+
+
+def list_lifecycle_operations(application_id: str, *, limit: int = 50) -> dict[str, Any]:
+    """Read correlated operational, runtime, authoring and publication journals."""
+    from adaos.services.applications.lifecycle import ApplicationLifecycleService
+    return ApplicationLifecycleService(require_ctx("sdk.applications.lifecycle")).operations(application_id, limit=limit)
+
+
 def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
                    actor_ref: str, subnet_ref: str, capability: str, idempotency_key: str,
                    webspace_id: str = "desktop", candidate_id: str | None = None,
@@ -2115,6 +2128,16 @@ def cancel_operation(operation_id: str, *, plan_digest: str, actor_ref: str, sub
                                                     required_capability="applications.plan")
     return cancel_planned_operation(require_ctx("sdk.applications.lifecycle"), operation_id,
         plan_digest=plan_digest, actor_ref=actor, subnet_ref=subnet, capability=granted)
+
+
+def recover_core_operation(operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,
+                           capability: str, idempotency_key: str) -> dict[str, Any]:
+    """Recover a retained Core intent, including partial Candidate decisions."""
+    from adaos.services.applications.operation_recovery import recover_core_operation as recover
+    actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
+                                                    required_capability="applications.recover")
+    return recover(require_ctx("sdk.applications.lifecycle"), operation_id, plan_digest=plan_digest,
+                   actor_ref=actor, subnet_ref=subnet, capability=granted)
 
 
 def list_trials(application_id: str, *, limit: int = 50, offset: int = 0,
@@ -5209,20 +5232,21 @@ def apply_operation(
         required_capability="applications.apply",
     )
     if operation_id.startswith("applifecycle."):
-        return apply_lifecycle_operation(operation_id, plan_digest=plan_digest, actor_ref=actor,
+        result = apply_lifecycle_operation(operation_id, plan_digest=plan_digest, actor_ref=actor,
             subnet_ref=subnet, capability=granted, idempotency_key=key)
-    result = (
-        _service()
-        .apply_operation(
-            operation_id,
-            plan_digest=plan_digest,
-            idempotency_key=key,
-            actor_ref=actor,
-            subnet_ref=subnet,
-            capability=granted,
+    else:
+        result = (
+            _service()
+            .apply_operation(
+                operation_id,
+                plan_digest=plan_digest,
+                idempotency_key=key,
+                actor_ref=actor,
+                subnet_ref=subnet,
+                capability=granted,
+            )
+            .to_dict()
         )
-        .to_dict()
-    )
     kind = str(result.get("kind") or "").strip()
     application_id = str(result.get("application_id") or "").strip()
     if (
@@ -5326,9 +5350,12 @@ __all__ = [
     "get_runtime_selection",
     "get_runtime_revisions",
     "get_lifecycle",
+    "get_lifecycle_for_source",
+    "list_lifecycle_operations",
     "plan_lifecycle",
     "apply_lifecycle_operation",
     "cancel_operation",
+    "recover_core_operation",
     "list_trials",
     "poll_lifecycle_events",
     "prepare_local_trial",
