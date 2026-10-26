@@ -25,7 +25,8 @@ try {
   await context.addInitScript(({ token, subnet, hub }) => {
     if (location.href === 'about:blank') return
     for (const [key, value] of Object.entries({ adaos_local_hub_url: hub, adaos_local_hub_token: token,
-      adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: 'en' })) localStorage.setItem(key, value)
+      adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: 'en',
+      'adaos.runtime_debug': '1' })) localStorage.setItem(key, value)
   }, { token, subnet, hub })
   const mcp = async (tool, args, dryRun = true) => {
     const response = await context.request.post(`${hub}/api/admin/root_mcp/call`, {
@@ -60,6 +61,10 @@ try {
         const observed = value.response?.result?.lifecycle
         if (observed) row.lifecycleResults.push({ application: observed.application_id,
           version: observed.runtime?.version, admission: observed.runtime?.admission })
+        const operation = value.response?.result?.operation
+        if (operation) (row.operationResults ||= []).push({ tool: request.tool_id,
+          operationId: operation.operation_id, status: operation.status,
+          recoveryReason: operation.recovery_reason })
         const error = value.response?.error || value.error || value.detail
         if (error) row.errors.push(safe(`${request.tool_id}: ${typeof error === 'string' ? error : JSON.stringify(error)}`))
       } catch {}
@@ -69,6 +74,7 @@ try {
       const { lifecycle } = await mcp('applications.lifecycle.show', { application_id: test.application, webspace_id: input.host })
       if (lifecycle?.runtime?.version !== test.version) throw new Error('Selected Core version differs from qualified package')
       row.core = { version: lifecycle.runtime.version, admission: lifecycle.runtime.admission,
+        releaseDigest: lifecycle.runtime.release_digest,
         candidate: lifecycle.candidate.status, admissionKind: lifecycle.runtime.admission_kind, schema: lifecycle.schema }
       row.stage = 'mount'
       const response = await context.request.post(`${hub}/api/node/yjs/webspaces/${input.host}/scenario`, {
@@ -84,13 +90,25 @@ try {
         return Boolean(element && window.ng?.getComponent(element)?.actions?.handle)
       }, undefined, { timeout: 120_000 })
       await expect.poll(async () => {
-        const response = await context.request.get(`${hub}/api/node/yjs/webspaces/${input.host}/materialization?include_runtime=0&verify_live=1`, {
-          headers: { 'X-AdaOS-Token': token }, timeout: 30_000 })
-        const state = await response.json()
-        return state.materialization?.ready && !state.materialization?.stale && state.materialization?.current_scenario === test.scenario
+        try {
+          const response = await context.request.get(`${hub}/api/node/yjs/webspaces/${input.host}/materialization?include_runtime=0&verify_live=1`, {
+            headers: { 'X-AdaOS-Token': token }, timeout: 30_000 })
+          const state = await response.json()
+          return state.materialization?.ready && !state.materialization?.stale && state.materialization?.current_scenario === test.scenario
+        } catch {
+          // A reconnect/reset is not readiness; keep polling this read-only
+          // observation within the existing overall bound. Never retry apply.
+          return false
+        }
       }, { timeout: 180_000, intervals: [500, 1000, 2000] }).toBe(true)
       const marker = { applications: 'catalog-tabs', web_desktop: 'primary-nav', adaos_builder: 'design-workbench-header' }[test.application]
       await expect(page.locator(`[data-webui-widget-id="${marker}"]`).filter({ visible: true })).toBeVisible({ timeout: 90_000 })
+      row.stage = 'client-authority'
+      await page.waitForFunction(({ scenario, digest }) => {
+        const root = window.ng?.getComponent(document.querySelector('app-root'))
+        const snapshot = root?.ydoc?.getRenderMaterializationSnapshot?.()
+        return snapshot?.currentScenario === scenario && snapshot?.applicationReleaseDigest === digest
+      }, { scenario: test.scenario, digest: lifecycle.runtime.release_digest }, { timeout: 90_000 })
       row.stage = 'core-modal'
       await page.evaluate(async ({ application, marker }) => {
         const host = [...document.querySelectorAll(`[data-webui-widget-id="${marker}"]`)]
@@ -99,10 +117,17 @@ try {
           .map(element => window.ng.getComponent(element))
           .find(component => component?.actions?.handle && component?.state?.getSnapshot)
         if (!component) throw new Error('Active page action scope is unavailable')
-        await component.actions.handle({ type: 'updateState', params: { lifecycleApplicationId: application,
-          selectedApplicationId: application, selectedProjectKind: 'project', selectedProjectId: application } })
-        await component.actions.handle({ type: 'openModal', params: { modalId: 'core-application-lifecycle',
-          statePatch: { lifecycleApplicationId: application, coreLifecyclePlan: {}, coreWriteLossAcknowledged: false } } })
+        // A debug API invocation originates outside Angular. Run the real
+        // public action handlers in the same zone as an actual widget click;
+        // otherwise HTTP results arrive but async-pipe rendering may not tick.
+        const zone = window.ng.getComponent(document.querySelector('app-root'))?.zone
+        if (!zone?.run) throw new Error('Client action zone is unavailable')
+        await zone.run(async () => {
+          await component.actions.handle({ type: 'updateState', params: { lifecycleApplicationId: application,
+            selectedApplicationId: application, selectedProjectKind: 'project', selectedProjectId: application } })
+          await component.actions.handle({ type: 'openModal', params: { modalId: 'core-application-lifecycle',
+            statePatch: { lifecycleApplicationId: application, coreLifecyclePlan: {}, coreWriteLossAcknowledged: false } } })
+        })
       }, { ...test, marker })
       const identity = page.locator('[data-webui-widget-id="core-lifecycle-identity"]').filter({ visible: true })
       await expect(identity).toBeVisible({ timeout: 90_000 })
@@ -146,6 +171,37 @@ try {
       row.dom = await page.evaluate(() => ({ path: location.pathname, ng: Boolean(window.ng),
         customElements: [...new Set([...document.querySelectorAll('*')].map(e => e.tagName.toLowerCase()).filter(t => t.includes('-')))].slice(0, 35) }))
       row.identity = await page.locator('[data-webui-widget-id="core-lifecycle-identity"]').filter({ visible: true }).first().innerText().catch(() => '')
+      row.identityDiagnostics = await page.evaluate(async () => {
+        const hosts = [...document.querySelectorAll('[data-webui-widget-id="core-lifecycle-identity"]')]
+        return await Promise.all(hosts.map(async host => {
+          const detail = [host, ...host.querySelectorAll('*')].map(element => window.ng?.getComponent(element))
+            .find(component => component?.widget?.id === 'core-lifecycle-identity' && component?.data$)
+          const observed = detail ? await new Promise(resolve => {
+            let subscription
+            const timeout = setTimeout(() => { subscription?.unsubscribe(); resolve({ timeout: true }) }, 1500)
+            subscription = detail.data$.subscribe({ next: value => {
+              clearTimeout(timeout); queueMicrotask(() => subscription?.unsubscribe())
+              resolve({ application: value?.application_id, version: value?.runtime?.version,
+                type: typeof value, keys: value && typeof value === 'object' ? Object.keys(value).slice(0, 8) : [] })
+            }, error: () => { clearTimeout(timeout); resolve({ error: true }) },
+              complete: () => { clearTimeout(timeout); resolve({ completed: true }) } })
+          }) : null
+          const data = detail?.data
+          const key = data?.apiDataSourceIdentity?.(data?.mcpApiDataSource?.(detail.widget.dataSource), data.state.getSnapshot())
+          const last = data?.runtimeDataSourceLastValue?.get(key)?.value?.response?.result?.lifecycle
+          return { visible: host.getClientRects().length > 0, htmlLength: host.innerHTML.length,
+            tag: host.tagName, detail: Boolean(detail), fields: detail?.widget?.inputs?.fields?.length,
+            stateOnly: detail?.stateOnly, scope: detail?.state?.getActiveScope?.(),
+            application: detail?.state?.getSnapshot?.()?.lifecycleApplicationId,
+            startPolicy: detail?.widget?.dataSource?.startPolicy,
+            renderScope: data?.runtimeReadScope?.(), dataStateScope: data?.state?.getActiveScope?.(),
+            sameState: detail?.state === data?.state, readStatus: data?.runtimeDataSourceStatuses?.get(key)?.value,
+            last: last ? { application: last.application_id, version: last.runtime?.version } : null,
+            backoff: data?.adaos?.getRoutedHubHttpBackoffRemainingMs?.(),
+            cancelled: data?.runtimeDebug?.getSnapshot?.().filter(event => event.kind === 'page_data.runtime_read_cancelled').slice(-6),
+            deferredBinding: data?.load?.toString?.().includes('widgetScope'), observed }
+        }))
+      }).catch(() => [])
     }
     report.cases.push(row)
     console.log(JSON.stringify(row))
