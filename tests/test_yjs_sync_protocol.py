@@ -26,10 +26,24 @@ def test_foreign_compacted_room_vector_never_reaches_native_diff_encoder():
     with server.begin_transaction() as txn:
         server.get_map("ui").set(txn, "scenario", "current")
     update, mode = encode_server_sync_update(server, Y.encode_state_vector(old_room))
-    assert mode == "foreign_generation_full"
+    assert mode == "sanitized_diff"
     browser = Y.YDoc()
     Y.apply_update(browser, update)
     assert browser.get_map("ui").get("scenario") == "current"
+
+
+def test_retained_foreign_clocks_do_not_force_periodic_full_replays():
+    server, browser = Y.YDoc(), Y.YDoc()
+    with server.begin_transaction() as txn:
+        server.get_map("data").set(txn, "large", "x" * 200_000)
+    with browser.begin_transaction() as txn:
+        browser.get_map("local").set(txn, "old", True)
+    Y.apply_update(browser, Y.encode_state_as_update(server))
+    for _ in range(3):
+        update, mode = encode_server_sync_update(server, Y.encode_state_vector(browser))
+        assert mode == "sanitized_diff"
+        assert len(update) < 100
+        Y.apply_update(browser, update)
 
 
 @pytest.mark.parametrize("value", [b"", b"\x80", b"\x01\x01", b"\x00\x00", b"\xff" * 20])

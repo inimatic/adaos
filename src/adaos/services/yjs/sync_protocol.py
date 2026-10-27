@@ -39,7 +39,9 @@ def encode_server_sync_update(ydoc: Any, client_vector: bytes) -> tuple[bytes, s
     """Use a diff only for clocks belonging to the current server document.
 
     Foreign or future clocks can panic older yrs encoders after compaction.
-    They require a full bootstrap. Equal vectors still need the delete set:
+    Sanitize foreign entries before native encoding: an old client may retain
+    them indefinitely, so their presence must not force repeated full replays.
+    Equal vectors still need the delete set:
     deletions do not advance a Yjs state vector, so an empty fabricated update
     would lose deletes. Let yrs encode that small diff as well.
     """
@@ -51,6 +53,21 @@ def encode_server_sync_update(ydoc: Any, client_vector: bytes) -> tuple[bytes, s
         server = decode_state_vector(server_vector)
     except ValueError:
         return Y.encode_state_as_update(ydoc), "invalid_vector_full"
-    if any(client_id not in server or clock > server[client_id] for client_id, clock in client.items()):
+    if any(clock > server[client_id] for client_id, clock in client.items() if client_id in server):
         return Y.encode_state_as_update(ydoc), "foreign_generation_full"
+    if any(client_id not in server for client_id in client):
+        known = {client_id: clock for client_id, clock in client.items() if client_id in server}
+        encoded = bytearray()
+
+        def uint(number: int) -> None:
+            while number > 127:
+                encoded.append((number & 127) | 128)
+                number >>= 7
+            encoded.append(number)
+
+        uint(len(known))
+        for client_id, clock in known.items():
+            uint(client_id)
+            uint(clock)
+        return Y.encode_state_as_update(ydoc, bytes(encoded)), "sanitized_diff"
     return Y.encode_state_as_update(ydoc, client_vector), "diff"
