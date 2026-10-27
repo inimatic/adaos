@@ -430,6 +430,8 @@ def _materialization_http_cache_identity(rebuild: Mapping[str, Any]) -> str:
             rebuild.get("status"),
             rebuild.get("pending"),
             resolver.get("materialization_cache_key"),
+            resolver.get("input_fingerprint"),
+            resolver.get("core_fingerprint"),
         )
     )
 

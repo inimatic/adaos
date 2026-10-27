@@ -28,6 +28,24 @@ from adaos.services.io_web.desktop import WebDesktopInstalled, WebDesktopSnapsho
 from adaos.services.scenario import webspace_runtime as webspace_runtime_module
 
 
+def test_materialization_snapshot_cache_identity_tracks_fresh_source_fingerprint() -> None:
+    base = {
+        "scenario_id": "builder",
+        "status": "ready",
+        "pending": False,
+        "resolver": {
+            "input_fingerprint": "source-v1",
+            "core_fingerprint": "core-v1",
+        },
+    }
+    changed = copy.deepcopy(base)
+    changed["resolver"]["input_fingerprint"] = "source-v2"
+
+    assert node_api_module._materialization_http_cache_identity(base) != (
+        node_api_module._materialization_http_cache_identity(changed)
+    )
+
+
 async def _awaitable(value):
     return value
 
