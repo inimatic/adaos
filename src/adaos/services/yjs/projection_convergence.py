@@ -1,0 +1,75 @@
+"""Core-owned, bounded receipts for delivered application projections."""
+
+from __future__ import annotations
+
+import copy
+import threading
+import time
+from collections import OrderedDict
+from typing import Any, Mapping
+
+_lock = threading.RLock()
+_projections: OrderedDict[str, dict[str, Any]] = OrderedDict()
+_repairs: OrderedDict[tuple[str, str, str], float] = OrderedDict()
+_MAX_WEBSPACES = 256
+_MAX_CLIENTS = 32
+
+
+def publish(webspace: str, contract: Mapping[str, Any]) -> None:
+    generation = str(contract.get("generation") or "")
+    if not generation:
+        return
+    with _lock:
+        previous = _projections.get(webspace, {})
+        clients = previous.get("clients", {}) if previous.get("generation") == generation else {}
+        _projections[webspace] = {
+            "generation": generation,
+            "scenario_id": contract.get("scenario_id"),
+            "payload_hash": contract.get("payload_hash"),
+            "navigation_id": contract.get("navigation_id"),
+            "identity": dict(contract.get("identity") or {}),
+            "published_at": previous.get("published_at", time.time()) if previous.get("generation") == generation else time.time(),
+            "clients": clients,
+        }
+        _projections.move_to_end(webspace)
+        while len(_projections) > _MAX_WEBSPACES:
+            _projections.popitem(last=False)
+
+
+def acknowledge(webspace: str, client: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
+    with _lock:
+        current = _projections.get(webspace)
+        if not current:
+            return {"ok": False, "error": "projection_not_published"}
+        for key in ("generation", "scenario_id", "payload_hash"):
+            if not current.get(key) or receipt.get(key) != current[key]:
+                return {"ok": False, "error": "projection_identity_mismatch", "generation": current["generation"]}
+        if receipt.get("complete") is not True:
+            return {"ok": False, "error": "projection_incomplete"}
+        clients = current["clients"]
+        clients[client[:256]] = {"state": "applied", "applied_at": time.time(), "generation": current["generation"]}
+        while len(clients) > _MAX_CLIENTS:
+            clients.pop(next(iter(clients)))
+        return {"ok": True, "state": "applied", "generation": current["generation"]}
+
+
+def snapshot(webspace: str) -> dict[str, Any]:
+    with _lock:
+        value = copy.deepcopy(_projections.get(webspace, {}))
+    value["state"] = "applied" if value.get("clients") else "awaiting_client" if value else "unpublished"
+    return value
+
+
+def admit_repair(webspace: str, client: str, generation: str) -> bool:
+    """Permit one recovery per client/generation in a bounded failure window."""
+    key = (webspace, client[:256], generation[:256])
+    now = time.monotonic()
+    with _lock:
+        previous = _repairs.get(key)
+        if previous is not None and now - previous < 120.0:
+            return False
+        _repairs[key] = now
+        _repairs.move_to_end(key)
+        while len(_repairs) > 1024:
+            _repairs.popitem(last=False)
+    return True

@@ -2146,20 +2146,13 @@ class DiagnosticYRoom(YRoom):
                             sync_type == int(YSyncMessageType.SYNC_STEP1)
                             and _YROOM_SERVER_AUTHORITATIVE_FULL_STEP2
                         ):
-                            # Do not ask yrs to encode a diff against an
-                            # untrusted/stale browser state vector. A reconnecting
-                            # browser can legitimately hold a vector from a room
-                            # generation that has since been compacted. yrs 0.12
-                            # assumes every requested clock has a local block and
-                            # panics in Store::write_blocks_from when that
-                            # assumption is false, taking every transport in the
-                            # shared room down with it. Sending the full current
-                            # update is protocol-correct and idempotent on the
-                            # browser; the document is bounded and this path only
-                            # runs during sync/reconnect.
-                            import y_py as Y  # pylint: disable=import-outside-toplevel
+                            # STEP1 also arrives on the provider's periodic
+                            # resync. Validate clocks before entering yrs: foreign
+                            # generations require bootstrap, current clocks get
+                            # only the missing diff (including its delete set).
+                            from adaos.services.yjs.sync_protocol import encode_server_sync_update
 
-                            update = Y.encode_state_as_update(self.ydoc)
+                            update, sync_mode = encode_server_sync_update(self.ydoc, inbound_payload or b"\x00")
                             await websocket.send(create_sync_step2_message(update))
                             authoritative_step2_sent = True
                             if authoritative_one_way_handshake:
@@ -2169,12 +2162,13 @@ class DiagnosticYRoom(YRoom):
                                 # mutation and must not be mistaken for stale
                                 # bootstrap state.
                                 initial_native_update_pending = False
-                            self.log.debug(
-                                "sent server-authoritative full SYNC_STEP2 "
-                                "webspace=%s endpoint=%s bytes=%s",
+                            _ylog.debug(
+                                "sent server-authoritative SYNC_STEP2 "
+                                "webspace=%s endpoint=%s bytes=%s mode=%s",
                                 self._diag_room_id(),
                                 getattr(websocket, "path", None),
                                 len(update or b""),
+                                sync_mode,
                             )
                             continue
                         if (
@@ -9524,6 +9518,8 @@ class FastAPIWebsocketAdapter:
         self._path = path
         self._first_message_timeout_s = _YWS_FIRST_MESSAGE_TIMEOUT_S
         self._first_message_received = False
+        self.close_code: int | None = None
+        self.close_reason = ""
 
     @property
     def path(self) -> str:
@@ -9577,6 +9573,8 @@ class FastAPIWebsocketAdapter:
                     continue
                 continue
             if msg_type == "websocket.disconnect":
+                self.close_code = msg.get("code")
+                self.close_reason = str(msg.get("reason") or "")[:240]
                 raise RuntimeError("websocket disconnected")
             raise RuntimeError(f"unexpected websocket event: {msg_type}")
 
@@ -10183,12 +10181,12 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         close_code = None
         close_reason = ""
         try:
-            raw_code = getattr(websocket, "close_code", None)
+            raw_code = getattr(adapter, "close_code", None) or getattr(websocket, "close_code", None)
             close_code = int(raw_code) if raw_code is not None else None
         except Exception:
             close_code = None
         try:
-            close_reason = str(getattr(websocket, "close_reason", "") or "").strip()
+            close_reason = str(getattr(adapter, "close_reason", "") or getattr(websocket, "close_reason", "") or "").strip()
         except Exception:
             close_reason = ""
         _remember_yws_attempt(attempt_id, "closed", close_code=close_code, close_reason=close_reason)
@@ -10451,6 +10449,17 @@ async def process_events_command(
         if error is not None:
             msg["error"] = error
         await send_response(msg)
+
+    if kind == "desktop.projection.ack":
+        from adaos.services.yjs.projection_convergence import acknowledge
+
+        target_webspace = _coerce_gateway_webspace_id(payload.get("webspace_id") or webspace_id)
+        page_id = str(payload.get("browser_page_id") or "")[:128]
+        receipt = acknowledge(target_webspace, f"{device_id}:{page_id}", payload)
+        _ylog.info("projection application ack webspace=%s device=%s generation=%s state=%s error=%s",
+                   target_webspace, device_id, payload.get("generation"), receipt.get("state"), receipt.get("error"))
+        await _ack(bool(receipt.get("ok")), data=receipt, error=receipt.get("error"))
+        return None
 
     if kind == "device.register":
         register_started = time.perf_counter()

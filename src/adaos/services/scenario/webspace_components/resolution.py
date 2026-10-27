@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -1140,6 +1141,26 @@ class WebspaceResolutionService:
             fallback_fingerprints = operations.resolved_output_branch_fingerprints(resolved)
             for path, fingerprint in fallback_fingerprints.items():
                 resolved_branch_fingerprints.setdefault(path, fingerprint)
+        # A generation covers the server projection, not unrelated presence or
+        # collaborative edits. Reuse it on idempotent same-payload rebuilds.
+        identity = operations.coerce_dict(materialization_contract.get("identity") or {})
+        payload_hash = operations.fingerprint_json_like({
+            "scenario_id": resolved.scenario_id,
+            "identity": identity,
+            "branches": {key: value for key, value in resolved_branch_fingerprints.items()
+                         if key not in {"runtime.environment", "runtime.materialization"}},
+        })
+        previous_contract = operations.coerce_dict(runtime_map.get("materialization") or {})
+        generation = (previous_contract.get("generation")
+                      if previous_contract.get("payload_hash") == payload_hash else None)
+        materialization_contract = dict(materialization_contract) | {
+            "generation": generation or uuid.uuid4().hex,
+            "payload_hash": payload_hash,
+            "navigation_id": expected_request_id or materialization_contract.get("navigation_id"),
+            "complete": True,
+        }
+        runtime_environment["materialization"] = materialization_contract
+        effective_inputs.metadata["materialization"] = materialization_contract
         resolved_branch_fingerprints["runtime.environment"] = operations.fingerprint_json_like(runtime_environment)
         # Keep a server-owned copy outside the browser-owned atomic
         # ``runtime.environment`` value. A stale tab can replace the whole
@@ -1567,6 +1588,11 @@ class WebspaceResolutionService:
             )
         if not materialization_status_per_phase:
             _update_materialization_snapshot("interactive")
+
+        if not failed_paths and not defaults_failed:
+            from adaos.services.yjs.projection_convergence import publish
+
+            publish(webspace_id, materialization_contract)
 
         runtime._last_apply_summary = {
             "branch_count": len(target_paths),

@@ -1635,6 +1635,7 @@ def test_node_yjs_webspace_materialization_state_endpoint_returns_lightweight_sn
 
     result = asyncio.run(node_api_module.node_yjs_webspace_materialization_state("default"))
 
+    assert result.pop("convergence")["state"] == "unpublished"
     assert result == {
         "ok": True,
         "accepted": True,

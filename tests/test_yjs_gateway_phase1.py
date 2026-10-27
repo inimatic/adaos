@@ -5122,6 +5122,7 @@ def test_accept_websocket_returns_false_when_handshake_already_closed() -> None:
 def test_events_ws_treats_receive_before_accept_runtimeerror_as_disconnect() -> None:
     class _FakeClosedWebSocket:
         query_params: dict[str, str] = {}
+        headers: dict[str, str] = {}
         scope = {"client": ("127.0.0.1", 9347)}
         accepted = False
 
@@ -5161,6 +5162,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
 
     class _FakeEventsWebSocket:
         query_params: dict[str, str] = {}
+        headers: dict[str, str] = {}
         scope = {"client": ("127.0.0.1", 9348)}
         accepted = False
 

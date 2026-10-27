@@ -4017,6 +4017,8 @@ class WebspaceMaterializationRepairRequest(BaseModel):
     missing_branches: list[str] = Field(default_factory=list, max_length=32)
     request_id: str | None = Field(default=None, max_length=256)
     request_source: str | None = Field(default=None, max_length=256)
+    client_id: str | None = Field(default=None, max_length=256)
+    generation: str | None = Field(default=None, max_length=256)
 
 
 class WebspaceYjsProjectionRequest(BaseModel):
@@ -6245,6 +6247,8 @@ async def node_yjs_webspace_materialization_state(
         verify_live=verify_live,
         recover_persisted=not verify_live,
     )
+    from adaos.services.yjs.projection_convergence import snapshot as convergence_snapshot
+
     result = {
         "ok": True,
         "accepted": True,
@@ -6252,6 +6256,7 @@ async def node_yjs_webspace_materialization_state(
         "materialization": materialization,
         "rebuild": rebuild,
         "live_verification": bool(verify_live),
+        "convergence": convergence_snapshot(target_webspace_id),
     }
     if include_runtime:
         result["runtime"] = yjs_sync_runtime_snapshot(
@@ -6618,6 +6623,14 @@ async def node_yjs_webspace_materialization_repair(
         webspace_id=target_webspace_id,
         scenario_id=authoritative_scenario or None,
     )
+    from adaos.services.yjs.projection_convergence import admit_repair, snapshot as convergence_snapshot
+
+    convergence = convergence_snapshot(target_webspace_id)
+    generation = str(convergence.get("generation") or payload.generation or authoritative_scenario)
+    client_id = str(payload.client_id or request.headers.get("X-AdaOS-Device-Id") or "legacy_browser")
+    if not admit_repair(target_webspace_id, client_id, generation):
+        return {"ok": False, "accepted": False, "error": "projection_repair_circuit_open",
+                "webspace_id": target_webspace_id, "convergence": convergence}
     repair, coalesced = await _coalesced_materialization_repair(
         target_webspace_id,
         materialized_payload=materialized_payload,
@@ -6636,6 +6649,8 @@ async def node_yjs_webspace_materialization_repair(
         "transport_connections_closed": int(repair.get("closed_connections") or 0),
         "full_state_update": bool(repair.get("force_full_state_update")),
         "coalesced": bool(coalesced),
+        "convergence": convergence_snapshot(target_webspace_id),
+        "application_confirmed": False,
         "full_state_update_bytes": int(materialized_apply.get("full_state_update_bytes") or 0),
         "direct_client_broadcast_count": int(materialized_apply.get("direct_client_broadcast_count") or 0),
         "direct_client_broadcast_failed": int(materialized_apply.get("direct_client_broadcast_failed") or 0),

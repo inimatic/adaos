@@ -588,12 +588,12 @@ async def _run_reconciler(webspace_id: str) -> None:
                     not refresh_all
                     and fingerprint_hints_complete
                     and fingerprint_hints
-                    and registry.fingerprints_match(
+                    and await asyncio.to_thread(registry.fingerprints_match,
                         fingerprint_hints,
                         webspace_id=webspace_id,
                     )
                 ):
-                    snapshot = registry.get(webspace_id=webspace_id)
+                    snapshot = await asyncio.to_thread(registry.get, webspace_id=webspace_id)
                     snapshot_mode = "fingerprint_hit"
                 else:
                     snapshot = await asyncio.to_thread(
