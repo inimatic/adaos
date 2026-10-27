@@ -63,7 +63,11 @@ def _decorator_call(value: ast.expr) -> ast.Call | None:
 
 
 def inspect_handler_activation(path: Path) -> HandlerActivationProfile:
-    return inspect_handler_activation_source(Path(path).read_bytes(), filename=str(path))
+    # Builder/compiler evidence describes the canonical package payload. Git
+    # autocrlf and Windows write_text must not emit an assessment that becomes
+    # stale solely because the package builder normalizes text to LF.
+    source = Path(path).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return inspect_handler_activation_source(source, filename=str(path))
 
 
 def inspect_handler_activation_source(

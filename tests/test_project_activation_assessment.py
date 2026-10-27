@@ -72,6 +72,21 @@ def test_legacy_unassessed_skill_remains_buildable(tmp_path):
     assert build(root, tmp_path).plan.release.project_id == "example"
 
 
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_builder_producer_and_new_release_gate_agree_on_packaged_handler_bytes(tmp_path, newline):
+    from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
+
+    root, _ = workspace(tmp_path, source=HANDLER.replace(b"\n", newline), assessment=False)
+    changed = {"skills/worker/handlers/main.py"}
+    receipts = LocalSkillFactoryWorker._record_changed_skill_activation(root, changed_paths=changed)
+    assert receipts[0]["changed"] is True
+    checks, errors = [], []
+    LocalSkillFactoryWorker._validate_changed_skill_activation(
+        root, checks, errors, changed_paths=changed)
+    assert errors == [] and checks[0]["ok"] is True
+    assert build(root, tmp_path).plan.release.project_id == "example"
+
+
 @pytest.mark.parametrize("change", ["handler", "digest", "classification", "policy", "absent-handler"])
 def test_new_release_rejects_stale_assessment_before_persisting_packages_or_release(tmp_path, change):
     root, manifest = workspace(tmp_path)
