@@ -77,3 +77,23 @@ def test_configured_targets_only_and_errors_are_redacted(tmp_path, monkeypatch):
     assert len(value['targets']) == 3
     assert all(row['state'] == 'unknown' for row in value['targets'])
     assert 'sensitive' not in json.dumps(value)
+
+
+def test_background_owner_fails_closed_without_selected_runtime(tmp_path):
+    ctx = SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: tmp_path),
+        skill_ctx=SimpleNamespace(get=lambda: SimpleNamespace(name='infra_ops_skill', path=tmp_path / 'source')))
+    assert observation.observer_owner_is_current(ctx) is False
+
+
+def test_background_owner_stops_after_slot_switch(tmp_path):
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+    environment = SkillRuntimeEnvironment(skills_root=tmp_path, skill_name='infra_ops_skill')
+    environment.runtime_root.mkdir(parents=True)
+    environment.record_active_selection('0.1.0', 'A')
+    source = environment.build_slot_paths('0.1.0', 'A').src_dir / 'skills/infra_ops_skill'
+    source.mkdir(parents=True)
+    ctx = SimpleNamespace(paths=SimpleNamespace(skills_dir=lambda: tmp_path),
+        skill_ctx=SimpleNamespace(get=lambda: SimpleNamespace(name='infra_ops_skill', path=source)))
+    assert observation.observer_owner_is_current(ctx) is True
+    environment.record_active_selection('0.1.0', 'B')
+    assert observation.observer_owner_is_current(ctx) is False

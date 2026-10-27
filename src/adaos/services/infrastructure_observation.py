@@ -136,7 +136,8 @@ def read_inventory(ctx: Any, *, use_cache=True) -> dict:
         # Recheck admission before every cache read; revocation must be immediate.
         now = time.time()
         cached = _CACHE.get(key)
-        if use_cache and cached and now - cached[0] < 30:
+        if use_cache and cached and now - cached[0] < 30 and all(
+            not row.get('fresh') or now - row['observed_at'] <= 300 for row in cached[1]['targets']):
             return deepcopy(cached[1])
         admitted = config.get("targets", {})
         if set(admitted) != set(TARGETS):
@@ -156,3 +157,18 @@ def read_inventory(ctx: Any, *, use_cache=True) -> dict:
         result = {"schema": "adaos.infrastructure.inventory.v1", "checked_at": time.time(), "targets": rows}
         _CACHE[key] = (time.time(), result)
         return deepcopy(result)
+
+
+def observer_owner_is_current(ctx: Any) -> bool:
+    """Stop retained background handlers after deactivation or A/B replacement."""
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+    current = ctx.skill_ctx.get()
+    if current is None:
+        return False
+    environment = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=current.name)
+    selection = environment.read_runtime_selection()
+    version, slot = selection.get('version'), selection.get('slot')
+    if not version or slot not in ('A', 'B') or environment.read_deactivation().get('deactivated'):
+        return False
+    source = environment.build_slot_paths(version, slot).src_dir / 'skills' / current.name
+    return source.resolve() == Path(current.path).resolve()
