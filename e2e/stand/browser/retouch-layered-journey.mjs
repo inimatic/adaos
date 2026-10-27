@@ -9,7 +9,7 @@ const expect = baseExpect.configure({timeout:30000}), env=process.env
 const layout=env.ADAOS_E2E_LAYOUT, variant=env.ADAOS_E2E_RETOUCH_VARIANT||'exact'
 if(!['wide','compact'].includes(layout)||!['exact','edited'].includes(variant)) throw Error('Explicit registered case required')
 const root=path.resolve(env.ADAOS_E2E_RETOUCH_FIXTURE), output=path.resolve(env.ADAOS_E2E_OUTPUT)
-if(!root.startsWith(path.resolve('.tmp')+path.sep)||!output.startsWith(path.resolve('e2e/artifacts')+path.sep)) throw Error('Owned test paths required')
+if(!root.startsWith((await fs.realpath('.tmp'))+path.sep)||!output.startsWith((await fs.realpath('e2e/artifacts'))+path.sep)) throw Error('Owned test paths required')
 const endpoint=JSON.parse(await fs.readFile(path.join(root,'fixture-endpoint.json'),'utf8'))
 const marker=JSON.parse(await fs.readFile(path.join(root,'owned-fixture.json'),'utf8'))
 if(!marker.test||marker.source_digest!==endpoint.source_digest) throw Error('Fixture ownership drift')

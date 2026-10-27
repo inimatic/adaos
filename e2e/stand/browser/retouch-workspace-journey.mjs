@@ -13,7 +13,7 @@ const variant = env.ADAOS_E2E_RETOUCH_VARIANT || 'exact'
 if (!['wide', 'compact'].includes(layout)) throw Error('Explicit wide/compact layout required')
 if (!['exact', 'edited'].includes(variant)) throw Error('Unknown refusal retry variant')
 const fixtureRoot = path.resolve(env.ADAOS_E2E_RETOUCH_FIXTURE)
-const scratch = path.resolve('.tmp') + path.sep
+const scratch = (await fs.realpath('.tmp')) + path.sep
 if (!fixtureRoot.startsWith(scratch)) throw Error('Owned fixture must be under repository .tmp')
 const endpoint = JSON.parse(await fs.readFile(path.join(fixtureRoot, 'fixture-endpoint.json'), 'utf8'))
 const marker = JSON.parse(await fs.readFile(path.join(fixtureRoot, 'owned-fixture.json'), 'utf8'))
@@ -30,7 +30,7 @@ for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo',
   ...(env.ADAOS_E2E_SPACE_KIND === 'development' ? { space_kind: 'development' } : {}) })) clientUrl.searchParams.set(key, value)
 const token = env.ADAOS_E2E_HUB_TOKEN
 const output = path.resolve(env.ADAOS_E2E_OUTPUT)
-if (!token || !output.startsWith(path.resolve('e2e/artifacts') + path.sep)) throw Error('Explicit local token and E2E artifact output required')
+if (!token || !output.startsWith((await fs.realpath('e2e/artifacts')) + path.sep)) throw Error('Explicit local token and E2E artifact output required')
 await fs.mkdir(output, { recursive: true })
 const hash = value => 'sha256:' + crypto.createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex')
 const fixture = async (pathname, options = {}) => {
