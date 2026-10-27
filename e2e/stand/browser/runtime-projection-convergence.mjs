@@ -122,6 +122,7 @@ async function switchTo(scenario,index){
   throw new Error('production_page_action_service_missing')
  },{webspace,scenario})
  await waitFor(scenario)
+ await page.locator('ada-desktop [data-webui-widget-id]:visible').first().waitFor({state:'visible',timeout:3000})
  if(scenario==='builder'){
   await page.waitForFunction(()=>{
    const desktop=window.ng.getComponent(document.querySelector('ada-desktop'))
