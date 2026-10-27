@@ -13,7 +13,7 @@ const transitions=Number(process.env.ADAOS_E2E_TRANSITIONS || 50)
 const idleSeconds=Number(process.env.ADAOS_E2E_IDLE_SECONDS || 900)
 const output=path.resolve(process.env.ADAOS_E2E_ARTIFACT_DIR || 'e2e/artifacts/runtime-projection-convergence')
 await fs.mkdir(output,{recursive:true})
-const report={startedAt:new Date().toISOString(),webspace,cases,transitions:[],errors:[],readFailures:[],sockets:[],hubLatencyMs:[],snapshotRequests:0,repairRequests:0,httpNavigationRequests:0}
+const report={startedAt:new Date().toISOString(),webspace,cases,transitions:[],errors:[],readFailures:[],sockets:[],hubLatencyMs:[],snapshotRequests:0,repairRequests:0,httpNavigationRequests:0,httpNavigationCalls:[]}
 const browser=await chromium.launch({headless:true})
 const context=await browser.newContext({viewport:{width:1440,height:960},serviceWorkers:'block'})
 await context.addInitScript(({api,token,webspace,subnet})=>{
@@ -58,7 +58,11 @@ page.on('request',request=>{
  const url=new URL(request.url())
  if(url.pathname.endsWith('/materialization/snapshot'))report.snapshotRequests++
  if(url.pathname.endsWith('/materialization/repair'))report.repairRequests++
- if(url.pathname.endsWith('/scenario') && request.method()==='POST')report.httpNavigationRequests++
+ if(url.pathname.endsWith('/scenario') && request.method()==='POST'){
+  report.httpNavigationRequests++
+  const body=request.postDataJSON() || {}
+  report.httpNavigationCalls.push({at:Date.now(),path:url.pathname,scenario:body.scenario_id,navigationId:body.navigation_id})
+ }
 })
 page.on('response',async response=>{
  if(response.status()<400 || !new URL(response.url()).pathname.endsWith('/tools/call'))return
@@ -135,6 +139,26 @@ async function checkDeclaredStateUrl(){
  report.declaredStateUrl={stateKey:proof.stateKey,queryKey:proof.queryKey,passed:true}
  await page.evaluate(proof=>window.ng.getComponent(document.querySelector('ada-desktop')).pageState.set(proof.stateKey,proof.previous),proof)
 }
+async function checkPendingStateUrl(){
+ const proof=await page.evaluate(()=>{
+  const desktop=window.ng.getComponent(document.querySelector('ada-desktop'))
+  const app=window.ng.getComponent(document.querySelector('app-root'))
+  const binding=desktop.browserNavigationBindings().find(b=>/search|filter|settings/i.test(b.queryKey) && b.history!=='ephemeral')
+  if(!binding)throw new Error('declared pending-state URL binding missing')
+  const previous=desktop.pageState.get(binding.stateKey)
+  const before=location.href
+  const transaction=app.navigationLocation.beginTransaction({scenario_id:'web_desktop'},'replace')
+  desktop.pageState.set(binding.stateKey,'codex-pending-state')
+  const unchanged=location.href===before
+  transaction.commit()
+  const applied=new URL(location.href).searchParams.get(binding.queryKey)==='codex-pending-state'
+  desktop.pageState.set(binding.stateKey,previous)
+  return {unchanged,applied,stateKey:binding.stateKey,queryKey:binding.queryKey}
+ })
+ assert.equal(proof.unchanged,true,'pending PageState prematurely rewrote the address bar')
+ assert.equal(proof.applied,true,'destination PageState was lost at transaction commit')
+ report.pendingStateUrl=proof
+}
 async function validateProjectionSamples(){
  const samples=await page.evaluate(()=>window.__projectionSamples)
  const allowed=new Set(cases.map(c=>c.scenario_id))
@@ -188,6 +212,7 @@ try{
  await waitFor(rapid.target)
  await page.evaluate(()=>{window.__expectedProjectionTransition=null})
  report.rapidNavigation=rapid
+ await checkPendingStateUrl()
  // Explicit provider disconnect/reconnect exercises production recovery without
  // restarting Core, touching another tab, or replaying a business operation.
  const recoveryStarted=Date.now()
