@@ -559,8 +559,7 @@ def test_explicit_legacy_cbs_bridge_allows_shared_owner_adoption(
     ]
 
 
-@pytest.mark.parametrize("refresh_times_out", [False, True])
-def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup, monkeypatch, refresh_times_out):
+def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup, monkeypatch):
     from adaos.sdk.builder import applications, workflow
     from adaos.sdk.developer import projects
     from adaos.services.component_updates import ComponentUpdateService
@@ -609,15 +608,12 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
         assert notice["candidate"]["id"] == "candidate-sample"
         assert notice["candidate"]["release_digest"] == new.release_digest
         refreshes.append(value)
-        if refresh_times_out and len(refreshes) == 1:
-            from requests import ReadTimeout
-            raise ReadTimeout("private transport details must not enter the receipt")
-        return {"ok": True}
+        raise AssertionError('Committed placement must enqueue Core materialization, not call nested HTTP')
     monkeypatch.setattr(applications, "refresh_placement", refresh)
     result = applications.place_local_trial("candidate-sample", webspace_id="desktop", actor_ref="user:owner")
     assert result["ok"] and result["data_transition"]["completed"]
-    assert result["runtime_refresh"]["pending"] is refresh_times_out
-    assert result["runtime_refresh"]["ok"] is not refresh_times_out
+    assert result["runtime_refresh"]["pending"] is True
+    assert result["runtime_refresh"]["ok"] is False
     assert "private transport details" not in str(result["runtime_refresh"])
     assert result["home"]["pinned"] is True
     assert service.store.get_installation("sample").installed_release_digest == old.release_digest
@@ -646,7 +642,7 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
     assert not service.list_models()[0]["use_prerelease"]
     assert bind_local_data_lifecycle(owner, runtime, new).stable_digest == old.release_digest
     assert promote_with_local_data(owner, "candidate-sample", publish)["ok"]
-    assert len(calls) == 1 and refreshes == ["desktop", "desktop"]
+    assert len(calls) == 1 and refreshes == []
     assert home_projections == [
         ("sample", {"webspace_id": "desktop"}),
         ("sample", {"webspace_id": "desktop"}),

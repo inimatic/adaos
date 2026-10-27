@@ -670,44 +670,22 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
         capability="applications.develop")
     if result.get("status") != "superseded_runtime_selection":
         result["home"] = _sync_local_trial_home(application.application_id, webspace_id=webspace_id)
-        # Preserve the existing synchronous refresh signature while Core also
-        # retains an independent, restart-safe derived-materialization request.
-        result["runtime_refresh"] = _refresh_application_placements(application.application_id)
+        result["runtime_refresh"] = _refresh_application_placements(application.application_id, webspace_id=webspace_id)
     return result
 
 
-def _refresh_application_placements(application_id: str) -> dict[str, Any]:
-    from requests import ConnectionError, Timeout
-
+def _refresh_application_placements(application_id: str, *, webspace_id: str = "desktop") -> dict[str, Any]:
     from adaos.services.component_updates import ComponentUpdateService
-
-    rooms = sorted({item.webspace_id for item in _application_service().store.list_runtime_selections()
-                    if item.application_id == application_id})
+    from adaos.services.applications.materialization import request_materialization
     updates = ComponentUpdateService(state_dir=_state_dir())
     # Page metadata must observe the selected release before materialization.
     # Opening the notifications panel is not a prerequisite for Beta acceptance.
-    for room in rooms:
-        updates.reconcile_local_trials(room, application_id=application_id)
-    # The channel/data transition is already committed. A missing HTTP
-    # acknowledgement cannot undo it and must not invite a second migration.
-    # Keep local reconciliation/authorization failures strict; only transport
-    # failures become an explicit, retryable derived-UI refresh observation.
-    refreshed = {}
-    for room in rooms:
-        try:
-            refreshed[room] = refresh_placement(room)
-        except (ConnectionError, Timeout) as exc:
-            refreshed[room] = {
-                "ok": False,
-                "status": "refresh_unconfirmed",
-                "error_type": type(exc).__name__,
-                "retryable": True,
-                "retry_operation": "applications.refresh_placement",
-                "webspace_id": room,
-            }
-    ready = all(item.get("ok") is True for item in refreshed.values())
-    return {"ok": ready, "status": "refreshed" if ready else "refresh_pending",
-            "pending": not ready, "webspaces": refreshed}
+    updates.reconcile_local_trials(webspace_id, application_id=application_id)
+    # A committed cutover is acknowledged immediately. Core's durable queue
+    # converges all placements and prioritizes the caller. Synchronous nested
+    # HTTP over offline rooms could return "Trial retained" AFTER Workspace
+    # commit, and tied publication latency to the number of historical rooms.
+    return request_materialization(_ctx(), application_id, webspace_ids=(webspace_id,))
 
 
 def abort_local_trial_preparation(candidate_id: str, *, release_digest: str, actor_ref: str) -> dict[str, Any]:
@@ -1045,7 +1023,7 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
                 and (item.get("result_ref") or {}).get("id") == candidate_id):
                 state = workflow.record_project_placement("scenario", scenario_id, {**item, "status": "detached"},
                     expected_generation=int(state["generation"]))["workflow"]
-    refresh = _refresh_application_placements(application_id)
+    refresh = _refresh_application_placements(application_id, webspace_id=webspace_id)
     return {**adopted, "workflow": state, "runtime_refresh": refresh}
 
 

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from adaos.apps.api.auth import require_token
 from adaos.services.applications.access import ApplicationAccessError
 from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+from adaos.services.artifact_pipeline.activation import ActivationError
 from adaos.services.component_updates import ComponentUpdateService
 
 
@@ -248,3 +249,8 @@ def accept_component_trial(notice_id: str, body: ComponentTrialAcceptRequest,
         return _acceptance_receipt(result)
     except (ApplicationAccessError, ValueError, FileNotFoundError, RuntimeChannelConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActivationError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "application_workspace_acceptance_stopped", "retryable": False,
+            "notice_id": notice_id, "next_action": "observe_core_lifecycle",
+        }) from exc

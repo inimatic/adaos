@@ -8,6 +8,7 @@ const token=process.env.ADAOS_E2E_HUB_TOKEN, webspace=process.env.ADAOS_E2E_WEBS
 const subnet=process.env.ADAOS_E2E_SUBNET_ID
 const selections=JSON.parse(process.env.ADAOS_E2E_RUNTIME_SELECTIONS || '[]')
 const requireInitial=process.env.ADAOS_E2E_REQUIRE_INITIAL_OBSERVATION!=='0'
+const expectWorkspaceChat=process.env.ADAOS_E2E_EXPECT_WORKSPACE_CHAT==='1'
 const provider=selections.find(item=>item.application_id==='subscription_status')
 assert.ok(token && webspace?.startsWith('desktop-codex-') && provider,
  'isolated host with the real shared provider selection required')
@@ -71,6 +72,24 @@ try{
  console.log(JSON.stringify({phase:'chat-data-ready',durationMs:report.chatReadyMs}))
  assert.equal(report.chat.error,'','native Chat data failed to load')
  assert.ok(report.chat.managementApplication,'Chat did not expose the Core connection manager')
+ if(expectWorkspaceChat){
+  assert.ok(report.chat.connected && report.chat.planEnabled,'Workspace Chat lost the Core account binding')
+  await page.evaluate(async()=>window.ng.getComponent(document.querySelector('app-root')).onClickScenarioChangelog())
+  await page.waitForFunction(()=>{
+   const app=window.ng.getComponent(document.querySelector('app-root'))
+   const item=app.componentUpdates.find(item=>item.component?.id==='context_chat')
+   return item?.transition?.workspace_committed && item.transition?.projection_ready
+  },null,{timeout:45000})
+  report.workspaceNotice=await page.evaluate(()=>{
+   const app=window.ng.getComponent(document.querySelector('app-root'))
+   const item=app.componentUpdates.find(item=>item.component?.id==='context_chat')
+   return {stage:item.stage,status:item.status,transition:item.transition,
+    acceptanceOffered:app.canAcceptComponentUpdate(item)}
+  })
+  assert.equal(report.workspaceNotice.stage,'stable')
+  assert.equal(report.workspaceNotice.acceptanceOffered,false,'Workspace notice still offers acceptance')
+  await page.evaluate(async()=>window.ng.getComponent(document.querySelector('app-root')).closeComponentUpdatesPanel())
+ }
  report.modalDefinitions=await page.evaluate(()=>{
   const node=window.ng.getComponent(document.querySelector('app-root')).ydoc
   const definitions=node.toJSON(node.getPath('ui/application/modals')) || {}
