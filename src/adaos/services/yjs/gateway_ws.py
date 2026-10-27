@@ -7416,10 +7416,9 @@ def _room_current_scenario(ydoc: Any) -> str | None:
 def _room_materialized_scenario(ydoc: Any) -> str | None:
     try:
         runtime_map = ydoc.get_map("runtime")
-        environment = runtime_map.get("environment")
-        materialization = _room_branch_get(environment, "materialization")
+        materialization = runtime_map.get("materialization")
         if not _room_branch_is_mapping(materialization):
-            materialization = runtime_map.get("materialization")
+            materialization = _room_branch_get(runtime_map.get("environment"), "materialization")
         return _room_optional_token(_room_branch_get(materialization, "scenario_id"))
     except Exception:
         return None
@@ -7908,6 +7907,11 @@ async def _apply_room_materialized_payload(
         # an already-connected browser can merge and re-emit its stale selector
         # between the atomic materialization commit and the old post-apply
         # lease publication.
+        navigation_id = str(payload.get("navigation_id") or "").strip()
+        if navigation_id:
+            from adaos.services.scenario.webspace_runtime import _raise_if_rebuild_request_superseded
+
+            _raise_if_rebuild_request_superseded(webspace_id, navigation_id)
         if payload_scenario:
             note_authoritative_current_scenario(
                 webspace_id,
@@ -7954,6 +7958,8 @@ async def _apply_room_materialized_payload(
                     }
                     if "scenario_switch" in str(reason or "").lower():
                         apply_kwargs["replace_changed_branches"] = True
+                    if navigation_id:
+                        apply_kwargs["expected_request_id"] = navigation_id
                     runtime.apply_materialized_payload_to_doc(
                         ydoc,
                         webspace_id,
@@ -8311,6 +8317,7 @@ def _apply_materialized_payload_detached_sync(
                     payload,
                     materialization_identity=materialization_identity,
                     verify_branch_fingerprints="scenario_switch" in str(reason or "").lower(),
+                    **({"expected_request_id": str(payload["navigation_id"])} if payload.get("navigation_id") else {}),
                 )
             phase_timings_ms["branch_apply"] = _elapsed_ms_since(stage_started)
 
@@ -9011,8 +9018,20 @@ async def _ensure_room_effective_materialized(
         authoritative_scenario = seed_scenario
     current_scenario = _room_current_scenario(ydoc)
     expected_scenario = authoritative_scenario or seed_scenario or current_scenario or "web_desktop"
+    projection_contract = _room_branch_get(ydoc.get_map("runtime"), "materialization")
+    if not _room_branch_is_mapping(projection_contract):
+        projection_contract = _room_branch_get(
+            _room_branch_get(ydoc.get_map("runtime"), "environment"), "materialization"
+        )
+    projection_generation_ready = bool(
+        _room_branch_get(projection_contract, "generation")
+        and _room_branch_get(projection_contract, "payload_hash")
+        and _room_branch_get(projection_contract, "complete") is True
+        and _room_branch_get(projection_contract, "scenario_id") == expected_scenario
+    )
     if (
         str((seed_result or {}).get("mode") or "").strip() == "persisted_effective_state"
+        and projection_generation_ready
         and bool((seed_result or {}).get("persisted_effective_state_ready"))
         and current_scenario == expected_scenario
         and seed_scenario == expected_scenario
@@ -9040,8 +9059,11 @@ async def _ensure_room_effective_materialized(
                     "room_effective_validation": "trusted_persisted_marker",
                 }
             )
+        from adaos.services.yjs.projection_convergence import publish
+
+        publish(webspace_id, dict(_room_branch_items(projection_contract)))
         return False
-    if _room_effective_branches_ready(ydoc) and (
+    if projection_generation_ready and _room_effective_branches_ready(ydoc) and (
         not expected_scenario or current_scenario == expected_scenario
     ):
         ready_result = await _finalize_materialized_room_bootstrap(
@@ -9061,6 +9083,9 @@ async def _ensure_room_effective_materialized(
                     "room_bootstrap_marker_persisted": bool(ready_result.get("persisted")),
                 }
             )
+        from adaos.services.yjs.projection_convergence import publish
+
+        publish(webspace_id, dict(_room_branch_items(projection_contract)))
         return False
 
     # A scenario transition normally resolved its immutable materialized
@@ -11248,6 +11273,7 @@ async def process_events_command(
                     wait_for_rebuild=wait_for_rebuild,
                     request_source="gateway_ws.desktop.scenario.set",
                     request_client=str(client_label or "").strip() or None,
+                    **({"request_id": str(payload["navigation_id"])[:256]} if payload.get("navigation_id") else {}),
                 )
                 await _ack(bool(result.get("accepted", result.get("ok", True))), data=result)
             except Exception as exc:

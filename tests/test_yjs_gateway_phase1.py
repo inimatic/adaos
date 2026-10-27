@@ -3703,6 +3703,9 @@ def test_room_bootstrap_reuses_matching_persisted_effective_state(monkeypatch) -
             {
                 "materialization": {
                     "scenario_id": "web_desktop",
+                    "generation": "persisted-generation",
+                    "payload_hash": "persisted-hash",
+                    "complete": True,
                     "required_branches": required_branches,
                 }
             },
@@ -3794,6 +3797,9 @@ def test_room_bootstrap_accepts_bootstrap_validated_persisted_state(monkeypatch)
             {
                 "materialization": {
                     "scenario_id": "builder",
+                    "generation": "persisted-generation",
+                    "payload_hash": "persisted-hash",
+                    "complete": True,
                     "required_branches": ["ui.application", "data.catalog"],
                 }
             },

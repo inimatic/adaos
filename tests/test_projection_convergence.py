@@ -47,3 +47,16 @@ def test_repair_circuit_is_scoped_to_client_and_generation():
     assert not convergence.admit_repair("desktop", "a", "g1")
     assert convergence.admit_repair("desktop", "b", "g1")
     assert convergence.admit_repair("desktop", "a", "g2")
+
+
+def test_obsolete_read_is_fenced_without_cancelling_a_business_operation():
+    from fastapi import HTTPException
+    from adaos.apps.api.tool_bridge import ToolCall, _reject_obsolete_projection_read
+
+    convergence.publish("desktop", contract("new"))
+    body = ToolCall(tool="example:read", context={"webspace_id": "desktop", "projection_generation": "old"})
+    with pytest.raises(HTTPException) as failure:
+        _reject_obsolete_projection_read(body, mutating=False)
+    assert failure.value.status_code == 409
+    assert failure.value.detail["code"] == "obsolete_projection_read"
+    _reject_obsolete_projection_read(body, mutating=True)

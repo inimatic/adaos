@@ -3505,6 +3505,24 @@ def _reject_unavailable_trial_execution(body: ToolCall, ctx: AgentContext) -> No
     })
 
 
+def _reject_obsolete_projection_read(body: ToolCall, *, mutating: bool) -> None:
+    # The read classification comes from the admitted manifest. A navigation
+    # hint must never cancel an independently running business operation.
+    context = _mapping(body.context)
+    generation = str(context.get("projection_generation") or "").strip()
+    webspace = str(context.get("webspace_id") or "").strip()
+    if mutating or not generation or not webspace:
+        return
+    from adaos.services.yjs.projection_convergence import snapshot
+
+    current = snapshot(webspace)
+    if current.get("generation") and generation != current["generation"]:
+        raise HTTPException(status_code=409, detail={
+            "code": "obsolete_projection_read", "retryable": False,
+            "requested_generation": generation, "current_generation": current["generation"],
+        })
+
+
 async def _call_tool_impl(
     body: ToolCall,
     request: Request,
@@ -3811,6 +3829,7 @@ async def _call_tool_impl(
                 local_timings["run_tool_ms"] = (time.perf_counter() - stage_started) * 1000.0
 
         def _run_local_tool() -> Any:
+            _reject_obsolete_projection_read(body, mutating=mutating_call)
             guard_required = mutating_call or _workspace_runtime_guard_required(
                 ctx,
                 skill_name,
@@ -3825,6 +3844,7 @@ async def _call_tool_impl(
                 return _run_local_tool_unlocked()
 
         result = await anyio.to_thread.run_sync(_run_local_tool)
+        _reject_obsolete_projection_read(body, mutating=mutating_call)
         took_ms = (time.perf_counter() - started_at) * 1000.0
         total_ms = (time.perf_counter() - call_started_at) * 1000.0
         admission_ms = sum(

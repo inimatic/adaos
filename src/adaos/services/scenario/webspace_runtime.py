@@ -4028,6 +4028,7 @@ def _scenario_switch_materialization_identity(
                 "runtime_authority": runtime_authority_fingerprint(
                     Path(ctx.paths.state_dir())
                 ),
+                "desktop_overlay": describe_webspace_overlay_state(target_webspace),
             }
         )
         phases_ms["desktop_catalog"] = _elapsed_ms(phase_started)

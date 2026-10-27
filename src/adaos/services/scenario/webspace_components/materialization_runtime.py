@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import time
+import hashlib
+import json
 from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict
 from .materialization import capture_cpu_timings
+
+
+def payload_cache_identity(identity: Mapping[str, Any] | None, override: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Scope immutable content overrides by their bytes and execution authority."""
+    if not isinstance(identity, Mapping) or not identity.get("key_hash"):
+        return dict(identity) if isinstance(identity, Mapping) else None
+    if not override:
+        return dict(identity)
+    content = json.dumps(override, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return dict(identity) | {"key_hash": f"{identity['key_hash']}:{digest}"}
 
 
 @asynccontextmanager
@@ -95,15 +108,22 @@ class WebspaceMaterializationService:
             if isinstance(materialization_identity, Mapping)
             else ""
         )
+        # Application activation supplies exact scenario bytes as an override.
+        # Those bytes are cacheable when paired with a content/policy identity;
+        # bypassing the cache here rebuilt every catalog on every app switch.
         cache_eligible = bool(
-            not scenario_content_override
+            (not scenario_content_override or identity_key)
             and (not skill_source_mode or identity_key)
         )
+        cache_identity = await run_observed_cpu(
+            "cache_content_identity", payload_cache_identity,
+            materialization_identity, scenario_content_override,
+        ) if scenario_content_override and identity_key else materialization_identity
         worker_result = None
         cache_lookup_started = time.perf_counter()
         if cache_eligible:
             worker_result = operations.get_cached_materialized_worker_result(
-                materialization_identity,
+                cache_identity,
                 cache_mode="payload_only",
                 require_snapshot=False,
             )
@@ -136,7 +156,7 @@ class WebspaceMaterializationService:
                 ydoc_timings["materialization_cache_miss"] = 0.0
                 if cache_eligible:
                     operations.remember_materialized_worker_result(
-                        materialization_identity,
+                        cache_identity,
                         worker_result,
                         cache_mode="payload_only",
                         require_snapshot=False,
@@ -318,7 +338,7 @@ class WebspaceMaterializationService:
         runtime._last_rebuild_ydoc_timings_ms = operations.finalize_timing_map(ydoc_timings, started_at=materialize_started)
         if cache_eligible:
             operations.remember_materialized_worker_result(
-                materialization_identity,
+                cache_identity,
                 {
                     "materialized_payload": payload,
                     "rebuild_timings_ms": runtime._last_rebuild_timings_ms,

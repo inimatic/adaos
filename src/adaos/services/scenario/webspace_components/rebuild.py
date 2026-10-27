@@ -609,6 +609,8 @@ class WebspaceRebuildService:
             if isinstance(raw_materialized_payload, Mapping)
             else None
         )
+        if materialized_payload and request_id and requested_action == "scenario_switch_rebuild":
+            materialized_payload["navigation_id"] = request_id
         live_room_refresh_result: dict[str, Any] | None = None
 
         should_refresh_live_room = (
