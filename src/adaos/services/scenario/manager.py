@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import asyncio
 import logging
 import re, os, json
 from pathlib import Path
@@ -551,7 +552,12 @@ class ScenarioManager:
         """
         target_webspace = webspace_id or default_webspace_id()
         self.caps.require("core", "scenarios.manage")
-        ui_section, registry_section, catalog_section, data_section = self._ensure_yjs_payload(scenario_id, space=space)
+        # Package lookup, archive extraction and JSON normalization do not own
+        # a YDoc. Keep them off the channel loop; only projection enters the
+        # owner-bound document session below.
+        ui_section, registry_section, catalog_section, data_section = await asyncio.to_thread(
+            self._ensure_yjs_payload, scenario_id, space=space,
+        )
 
         async with _scenario_manager_async_write_meta():
             async with async_get_ydoc(target_webspace) as ydoc:

@@ -197,6 +197,21 @@ try{
   await page.goForward();await waitFor(report.transitions.at(-1).scenario)
   report.history='passed'
  }
+ // A new publication of the same Application must retire reads, not widgets.
+ const sameScenario=report.transitions.at(-1)?.scenario || 'web_desktop'
+ const previousGeneration=(await read()).materialization.projectionGeneration
+ await switchTo(sameScenario,'same-scenario-noop')
+ assert.equal((await read()).materialization.projectionGeneration,previousGeneration,'already-current navigation unexpectedly rebuilt the page')
+ const reloadAccepted=await page.evaluate(async webspace=>
+  window.ng.getComponent(document.querySelector('ada-desktop')).pageActions.handle({type:'callHost',target:'desktop.webspace.reload',
+   params:{webspace_id:webspace,recreate_room:false}}),webspace)
+ assert.equal(reloadAccepted,true,'same-page reload was not accepted')
+ await page.waitForFunction(previous=>{
+  const live=window.ng.getComponent(document.querySelector('app-root')).ydoc.getMaterializationSnapshot()
+  return live.ready && live.projectionGeneration!==previous
+ },previousGeneration,{timeout:60000})
+ await waitFor(sameScenario)
+ report.sameScenarioRefresh={scenario:sameScenario,passed:true}
  const rapid=await page.evaluate(async webspace=>{
   const app=window.ng.getComponent(document.querySelector('app-root'))
   const actions=window.ng.getComponent(document.querySelector('ada-desktop')).pageActions
@@ -263,6 +278,7 @@ try{
  report.performance.hubPingMaxMs=pings.at(-1)
  assert.ok(report.performance.maxMs<30000,'a normal projection exceeded the interactive convergence budget')
  assert.ok(report.performance.hubPingP95Ms<1000,'owner responsiveness P95 exceeded one second')
+ await page.screenshot({path:path.join(output,'accepted.png')})
 }catch(error){
  report.errors.push(String(error.stack || error).slice(0,3000))
  report.failure=await read().catch(()=>null)

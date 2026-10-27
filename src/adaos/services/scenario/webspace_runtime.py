@@ -8411,7 +8411,8 @@ async def reload_webspace_from_scenario(
 
     requested_action = "reset" if str(action or "").strip().lower() == "reset" else "reload"
     state, scenario_id, scenario_resolution = await _resolve_reload_scenario_target(webspace_id, scenario_id)
-    scenario_id, scenario_resolution, preflight = _preflight_validated_scenario(
+    scenario_id, scenario_resolution, preflight = await asyncio.to_thread(
+        _preflight_validated_scenario,
         scenario_id,
         source_mode=state.source_mode,
         resolution=scenario_resolution,
@@ -8697,7 +8698,8 @@ async def go_home_webspace(webspace_id: str, *, wait_for_rebuild: bool = False) 
     if not webspace_id:
         raise ValueError("webspace_id is required")
     state = await describe_webspace_operational_state(webspace_id)
-    scenario_id, scenario_resolution, preflight = _preflight_validated_scenario(
+    scenario_id, scenario_resolution, preflight = await asyncio.to_thread(
+        _preflight_validated_scenario,
         state.effective_home_scenario,
         source_mode=state.source_mode,
         resolution="manifest_home",
