@@ -456,15 +456,17 @@ class WebspaceRebuildService:
                 rebuild_coro = runtime.resolve_materialized_payload_async(webspace_id, **payload_rebuild_kwargs)
             else:
                 rebuild_coro = runtime.rebuild_webspace_async(webspace_id, **rebuild_kwargs)
-            if rebuild_timeout_s is not None:
-                timeout_cm = getattr(asyncio, "timeout", None)
-                if callable(timeout_cm):
-                    async with timeout_cm(rebuild_timeout_s):
-                        entry = await rebuild_coro
+            from .materialization import materialization_request_priority
+            with materialization_request_priority(request_id):
+                if rebuild_timeout_s is not None:
+                    timeout_cm = getattr(asyncio, "timeout", None)
+                    if callable(timeout_cm):
+                        async with timeout_cm(rebuild_timeout_s):
+                            entry = await rebuild_coro
+                    else:
+                        entry = await asyncio.wait_for(rebuild_coro, timeout=rebuild_timeout_s)
                 else:
-                    entry = await asyncio.wait_for(rebuild_coro, timeout=rebuild_timeout_s)
-            else:
-                entry = await rebuild_coro
+                    entry = await rebuild_coro
             operations.record_timing(timings_ms, "semantic_rebuild", stage_started)
             operations.log.info(
                 "finished semantic rebuild core webspace=%s action=%s scenario=%s live_room_requested=%s publish_live_room=%s prefer_live_room=%s payload_only=%s semantic_ms=%.3f ydoc_timings=%s semantic_timings=%s",

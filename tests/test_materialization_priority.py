@@ -5,7 +5,7 @@ import threading
 import pytest
 
 from adaos.services.scenario.webspace_components.materialization import (
-    MaterializationExecutorOwner, _MaterializationQueue, capture_cpu_timings,
+    MaterializationExecutorOwner, _MaterializationQueue, capture_cpu_timings, materialization_request_priority,
 )
 
 
@@ -110,3 +110,36 @@ def test_obsolete_waiters_do_not_consume_the_capacity_of_latest_navigation():
             assert latest.result(5) == "latest"
         finally:
             gate.set(); queue.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_unprofiled_and_profiled_calls_inherit_only_their_admitted_priority():
+    owner = MaterializationExecutorOwner()
+    gate, started = threading.Event(), threading.Event()
+    order, observations = [], {}
+    def call(label, block=False):
+        order.append(label)
+        if block:
+            started.set(); assert gate.wait(5)
+        return label
+    async def legacy():
+        with materialization_request_priority("nav:legacy"):
+            # The phased legacy entry point has no timing wrapper here.
+            return await owner.run_cpu(call, "legacy", max_workers=1, oneshot=False)
+    active = asyncio.create_task(owner.run_cpu(call, "active", True, max_workers=1, oneshot=False))
+    try:
+        assert await asyncio.to_thread(started.wait, 3)
+        background = asyncio.create_task(owner.run_cpu(call, "background", max_workers=1, oneshot=False))
+        await asyncio.sleep(0)
+        navigation = asyncio.create_task(legacy()); await asyncio.sleep(0)
+        gate.set(); await asyncio.gather(active, background, navigation)
+        assert order == ["active", "legacy", "background"]
+        with materialization_request_priority("nav:profiled"):
+            with capture_cpu_timings(observations, "legacy"):
+                await owner.run_cpu(lambda: None, max_workers=1, oneshot=False)
+        with capture_cpu_timings(observations, "background"):
+            await owner.run_cpu(lambda: None, max_workers=1, oneshot=False)
+        assert observations["legacy.interactive"] == 1
+        assert observations["background.interactive"] == 0
+    finally:
+        gate.set(); owner.shutdown()

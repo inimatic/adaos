@@ -22,6 +22,17 @@ from typing import Any
 _CPU_TIMING_SCOPE: ContextVar[tuple[dict[str, float], str, bool] | None] = ContextVar(
     "materialization_cpu_timing_scope", default=None,
 )
+_INTERACTIVE_MATERIALIZATION: ContextVar[bool] = ContextVar("interactive_materialization", default=False)
+
+
+@contextmanager
+def materialization_request_priority(request_id: str | None):
+    """Carry admission priority across both modern and phased legacy paths."""
+    token = _INTERACTIVE_MATERIALIZATION.set(str(request_id or "").startswith("nav:"))
+    try:
+        yield
+    finally:
+        _INTERACTIVE_MATERIALIZATION.reset(token)
 
 
 def source_preparation_timings(external_inputs: Any) -> dict[str, float]:
@@ -39,9 +50,10 @@ def source_preparation_timings(external_inputs: Any) -> dict[str, float]:
 
 
 @contextmanager
-def capture_cpu_timings(timings: dict[str, float], stage: str, *, interactive: bool = False):
+def capture_cpu_timings(timings: dict[str, float], stage: str, *, interactive: bool | None = None):
     """Observe one task without changing function arguments or YDoc ownership."""
-    token = _CPU_TIMING_SCOPE.set((timings, stage, bool(interactive)))
+    priority = _INTERACTIVE_MATERIALIZATION.get() if interactive is None else bool(interactive)
+    token = _CPU_TIMING_SCOPE.set((timings, stage, priority))
     try:
         yield
     finally:
@@ -197,7 +209,8 @@ class MaterializationExecutorOwner:
         if scope is None:
             if oneshot:
                 return call()
-            return await asyncio.wrap_future(self._submit(call, max_workers=max_workers, interactive=False))
+            return await asyncio.wrap_future(self._submit(call, max_workers=max_workers,
+                interactive=_INTERACTIVE_MATERIALIZATION.get()))
 
         submitted = time.perf_counter()
         # Only monotonic timestamps cross threads; the sink is written on the
