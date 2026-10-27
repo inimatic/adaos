@@ -65,6 +65,17 @@ class ProjectCompositionNotFound(ProjectCompositionError):
     """Raised when a Project does not exist in the active DEV snapshot."""
 
 
+class ProjectOwnershipAmbiguous(ProjectCompositionError):
+    """A component read must not silently select one of several owners."""
+
+    code = "project_component_ownership_ambiguous"
+
+    def __init__(self, component_ref: str, project_ids: Sequence[str]):
+        self.component_ref = component_ref
+        self.project_ids = tuple(project_ids)
+        super().__init__(f"component {component_ref} is owned by multiple local Projects")
+
+
 def _now() -> str:
     return (
         datetime.now(timezone.utc)
@@ -1210,9 +1221,7 @@ def project_for_component(
     if not matches:
         return None
     if len(matches) > 1:
-        raise ProjectCompositionError(
-            f"component {component_ref} is owned by multiple local Projects"
-        )
+        raise ProjectOwnershipAmbiguous(component_ref, [str(item.get("id") or "") for item in matches])
     return matches[0]
 
 

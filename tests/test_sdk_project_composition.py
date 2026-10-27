@@ -1835,3 +1835,11 @@ def test_development_session_rejects_non_owned_write_target(
             primary_targets=["skill:shared_dependency"],
             prohibited_actions=["No execution"],
         )
+
+def test_ambiguous_ownership_has_a_typed_reason_and_never_selects_an_owner(monkeypatch):
+    monkeypatch.setattr(compositions, "_ensure_registry_projection", lambda: SimpleNamespace(
+        project_for_component=lambda ref: [{"id": "one"}, {"id": "two"}]))
+    with pytest.raises(compositions.ProjectCompositionError) as caught:
+        compositions.project_for_component("scenario:builder")
+    assert caught.value.code == "project_component_ownership_ambiguous"
+    assert caught.value.project_ids == ("one", "two")

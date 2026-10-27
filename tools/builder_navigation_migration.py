@@ -72,6 +72,35 @@ def upgrade_observation_source(source: str) -> str:
     return source.replace(old, new, 1)
 
 
+def upgrade_ownership_source(source: str) -> str:
+    old = '    composition = compositions.get(project_id) if kind == "project" else compositions.project_for_component(f"{kind}:{project_id}")'
+    new = '''    ownership = {"status": "resolved"}
+    try:
+        composition = compositions.get(project_id) if kind == "project" else compositions.project_for_component(f"{kind}:{project_id}")
+    except compositions.ProjectCompositionError as exc:
+        if getattr(exc, "code", "") != "project_component_ownership_ambiguous":
+            raise
+        composition = None
+        ownership = {"status": "ambiguous", "component_ref": f"{kind}:{project_id}",
+                     "project_ids": list(getattr(exc, "project_ids", ())),
+                     "explanation": "Select an explicit Project: this component has several owners."}
+        # Reads remain available. Do not select an arbitrary owner or offer
+        # new commands in an ambiguous scope; existing executions are untouched.
+        project = {key: False if key.startswith("can_") else value for key, value in project.items()}
+        commands = {key: False for key in commands}'''
+    if new in source:
+        return source
+    if source.count(old) != 1:
+        raise ValueError("Unknown Builder ownership source; refusing a broad rewrite")
+    source = source.replace(old, new, 1)
+    source = source.replace('    summary_state = process_state\n',
+        '    summary_state = "ownership_ambiguous" if ownership["status"] == "ambiguous" else process_state\n'
+        '    if ownership["status"] == "ambiguous":\n        current["summary"] = ownership["explanation"]\n', 1)
+    source = source.replace('    payload = {**project, "title": title, "current": current, "phase": phase,',
+        '    payload = {**project, "ownership": ownership, "title": title, "current": current, "phase": phase,', 1)
+    return source
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-workspace", type=Path, required=True)
@@ -93,7 +122,7 @@ def main() -> None:
         manifest["ui"] = deepcopy(ui["ui"])
     manifest["version"] = args.scenario_version
     handler = control / "handlers/main.py"
-    source = upgrade_observation_source(upgrade_catalog_source(handler.read_text(encoding="utf-8-sig")))
+    source = upgrade_ownership_source(upgrade_observation_source(upgrade_catalog_source(handler.read_text(encoding="utf-8-sig"))))
     version_files = [(scenario / "scenario.yaml", args.scenario_version),
         (control / "skill.yaml", args.control_version),
         (root / "projects/adaos_builder/project.yaml", args.application_version)]

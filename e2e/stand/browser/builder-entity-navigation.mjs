@@ -7,7 +7,7 @@ const token=process.env.ADAOS_E2E_HUB_TOKEN
 const webspace=process.env.ADAOS_E2E_WEBSPACE
 const expectedRelease=process.env.ADAOS_E2E_RELEASE
 assert.ok(token && webspace?.startsWith('desktop-codex-') && expectedRelease)
-const output=path.resolve('e2e/artifacts/builder/navigation-20261027')
+const output=path.resolve(process.env.ADAOS_E2E_ARTIFACT_DIR || 'e2e/artifacts/builder/navigation-20261027')
 await fs.mkdir(output,{recursive:true})
 const report={errors:[],requests:[],samples:[],startedAt:new Date().toISOString()}
 const browser=await chromium.launch({headless:true})

@@ -74,6 +74,8 @@ page.on('response',async response=>{
   const generation=request?.context?.projection_generation || null
   const current=await page.evaluate(()=>window.ng?.getComponent(document.querySelector('app-root'))?.ydoc?.getMaterializationSnapshot?.().projectionGeneration).catch(()=>null)
   report.readFailures.push({tool:request?.tool,status:response.status(),code:detail.code || detail.error || 'unknown',generation,currentGeneration:current,
+   message:String(detail.message || detail.reason || '').slice(0,500),
+   objectType:request?.arguments?.object_type,objectId:request?.arguments?.object_id,
    applicationId:request?.context?.application_id,releaseDigest:request?.context?.application_release_digest,scenario:request?.context?.scenario_id,
    contextWebspace:request?.context?.webspace_id})
  }catch{}
@@ -356,7 +358,7 @@ try{
  assert.equal(report.sockets.length,report.beforeIdle.sockets,'YWS reconnected while idle')
  assert.equal(report.sockets.reduce((n,s)=>n+s.largeStep2,0),report.beforeIdle.largeStep2,'idle replayed a full projection')
  report.samples=await validateProjectionSamples()
- assert.equal(report.readFailures.filter(f=>f.code==='tool_intent_mismatch'&&f.generation&&f.generation===f.currentGeneration).length,0,
+ assert.equal(report.readFailures.filter(f=>['tool_intent_mismatch','trial_execution_failed'].includes(f.code)&&f.generation&&f.generation===f.currentGeneration).length,0,
   'current widgets used an obsolete tool/SDK authority')
  report.final=await read()
  const durations=report.transitions.map(x=>x.durationMs).sort((a,b)=>a-b)
