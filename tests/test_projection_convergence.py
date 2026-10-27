@@ -71,3 +71,30 @@ def test_obsolete_read_is_fenced_without_cancelling_a_business_operation():
     assert failure.value.status_code == 409
     assert failure.value.detail["code"] == "obsolete_projection_read"
     _reject_obsolete_projection_read(body, mutating=True)
+
+
+def test_partial_branch_failure_cannot_publish_a_complete_generation(monkeypatch):
+    import y_py as Y
+    from types import SimpleNamespace
+    from adaos.services.scenario import webspace_runtime as runtime_module
+
+    resolved = runtime_module.WebspaceResolverOutputs(
+        webspace_id="isolated-apply-failure", scenario_id="applications", source_mode="workspace",
+        application={"desktop": {"pageSchema": {"id": "applications", "widgets": []}}},
+        catalog={"apps": [], "widgets": []}, registry={}, installed={"apps": [], "widgets": []},
+        desktop={}, webio={}, routing={}, skill_decls=[])
+    payload = runtime_module._resolved_outputs_to_materialized_payload(resolved)
+    replace = runtime_module._replace_map_value
+
+    def fail_catalog(y_map, txn, key, value):
+        if key == "catalog":
+            raise ValueError("injected_branch_failure")
+        return replace(y_map, txn, key, value)
+
+    monkeypatch.setattr(runtime_module, "_replace_map_value", fail_catalog)
+    doc = Y.YDoc()
+    runtime = runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
+    with pytest.raises(ValueError, match="injected_branch_failure"):
+        runtime.apply_materialized_payload_to_doc(doc, "isolated-apply-failure", payload, replace_changed_branches=True)
+    assert doc.get_map("runtime").get("materialization")["complete"] is False
+    assert convergence.snapshot("isolated-apply-failure")["state"] == "unpublished"

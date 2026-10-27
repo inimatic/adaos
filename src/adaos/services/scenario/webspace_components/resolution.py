@@ -1560,19 +1560,34 @@ class WebspaceResolutionService:
             combined_started = time.perf_counter()
             with ydoc.begin_transaction() as txn:
                 transaction_total += 1
-                _apply_phase(
-                    "structure",
-                    structure_specs,
-                    apply_defaults=True,
-                    flush_fingerprints=False,
-                    shared_txn=txn,
-                )
-                _apply_phase(
-                    "interactive",
-                    interactive_specs,
-                    flush_fingerprints=True,
-                    shared_txn=txn,
-                )
+                def mark_projection_incomplete() -> None:
+                    # Yjs transactions commit even when a Python branch raises.
+                    # Publish the failure marker in that same transaction, never
+                    # a complete generation over partially applied branches.
+                    materialization_contract["complete"] = False
+                    runtime_environment["materialization"] = materialization_contract
+                    operations.set_map_value_if_changed(runtime_map, txn, "materialization", materialization_contract)
+                    operations.set_map_value_if_changed(runtime_map, txn, "environment", runtime_environment)
+                    operations.write_effective_branch_fingerprints(registry_map, txn,
+                        current=effective_branch_fingerprints, updates={
+                            "runtime.materialization": operations.fingerprint_json_like(materialization_contract),
+                            "runtime.environment": operations.fingerprint_json_like(runtime_environment),
+                        })
+
+                try:
+                    _apply_phase(
+                        "structure", structure_specs, apply_defaults=True,
+                        flush_fingerprints=False, shared_txn=txn,
+                    )
+                    _apply_phase(
+                        "interactive", interactive_specs,
+                        flush_fingerprints=True, shared_txn=txn,
+                    )
+                except BaseException:
+                    mark_projection_incomplete()
+                    raise
+                if failed_paths or defaults_failed:
+                    mark_projection_incomplete()
             phase_timings_ms["apply_combined_transaction"] = operations.elapsed_ms(combined_started)
         else:
             _apply_phase(
