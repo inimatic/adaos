@@ -732,6 +732,11 @@ class BuilderWorkbenchService:
         incoming = self.relationships.get_incoming(token)
         if incoming is not None:
             return token if incoming.purpose == BUILDER_SELF_HOST else incoming.source_webspace_id
+        direct = _read_json(self.binding_path(token))
+        if str(direct.get("source_webspace_id") or "").strip() == token:
+            # A known explicit host does not need a reverse migration scan
+            # through every unrelated legacy binding on each SDK read.
+            return token
         if self.relationships.get_outgoing(token) is not None:
             # A registered host is already canonical. Legacy binding scans
             # are migration compatibility, not part of every admitted read.
@@ -2504,7 +2509,9 @@ def _schedule_projection_publish(
     *,
     preview_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    source_id = service.resolve_source_webspace_id(source_webspace_id)
+    # All callers pass the canonical host returned by the owner service.
+    # Scheduling must not perform reverse-lookup/filesystem work on the owner.
+    source_id = safe_source_webspace_id(source_webspace_id)
     _PROJECTION_PENDING[source_id] = {
         "preview_state": dict(preview_state or {}),
     }
@@ -2557,7 +2564,7 @@ async def _on_builder_context_selected(evt: Any) -> None:
     if not source_webspace_id or not object_type or not object_id:
         return
     service = BuilderWorkbenchService()
-    await asyncio.to_thread(
+    binding = await asyncio.to_thread(
         service.set_selected_project,
         source_webspace_id=source_webspace_id,
         object_type=object_type,
@@ -2566,7 +2573,7 @@ async def _on_builder_context_selected(evt: Any) -> None:
         description=str(payload.get("description") or "").strip() or None,
         persist_projection=False,
     )
-    _schedule_projection_publish(service, source_webspace_id)
+    _schedule_projection_publish(service, str(binding["source_webspace_id"]))
 
 
 @subscribe("desktop.webspace.reloaded")
@@ -2599,14 +2606,14 @@ async def _on_builder_source_webspace_reloaded(evt: Any) -> None:
     # their tool metadata, so deferring the claim until the first action can
     # incorrectly resolve ``dev1-dev`` back to ``dev1`` and overwrite the
     # Builder itself instead of allocating ``dev1-dev-dev`` for its project.
-    source_webspace_id = service.resolve_action_source_webspace_id(
+    source_webspace_id = await asyncio.to_thread(service.resolve_action_source_webspace_id,
         source_webspace_id,
         current_scenario_id=scenario_id,
     )
     # Entity restoration is a small, separate readiness boundary. Heavy context
     # inspection must not make the UI display another project's seed first.
     await service.publish_selection_projection(source_webspace_id)
-    if not service.binding_path(source_webspace_id).is_file():
+    if not await asyncio.to_thread(service.binding_path(source_webspace_id).is_file):
         return
     _schedule_projection_publish(service, source_webspace_id)
 

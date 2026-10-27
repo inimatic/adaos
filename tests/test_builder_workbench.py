@@ -1858,3 +1858,42 @@ async def test_slow_context_projection_cannot_restore_an_obsolete_project(monkey
     monkeypatch.setattr(BuilderWorkbenchService, "runtime_projection", slow_projection)
     result = await service.publish_projection("desktop")
     assert result == {"ok": False, "reason": "selection_superseded", "published_webspaces": []}
+
+
+def test_known_unregistered_source_does_not_scan_unrelated_legacy_bindings(monkeypatch, tmp_path):
+    import adaos.services.builder.workbench as module
+
+    registry = SimpleNamespace(get_incoming=lambda _: None,
+        get_outgoing=lambda _: pytest.fail("explicit source needs no outgoing lookup"))
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state", relationship_registry=registry)
+    known = service.binding_path("known-host")
+
+    def read(path):
+        assert path == known, "known source must not scan unrelated bindings"
+        return {"source_webspace_id": "known-host"}
+
+    monkeypatch.setattr(module, "_read_json", read)
+    assert service.resolve_source_webspace_id("known-host") == "known-host"
+    registry.get_incoming = lambda _: SimpleNamespace(purpose=module.BUILDER_PROJECT_PREVIEW, source_webspace_id="parent")
+    assert service.resolve_source_webspace_id("known-host") == "parent", "relationship authority still wins over a binding"
+
+
+@pytest.mark.asyncio
+async def test_context_selection_schedules_the_canonical_host_returned_by_the_worker(monkeypatch, tmp_path):
+    import threading
+    import adaos.services.builder.workbench as module
+
+    owner_thread = threading.get_ident()
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    threads, scheduled = [], []
+
+    def select(_self, **_kwargs):
+        threads.append(threading.get_ident())
+        return {"source_webspace_id": "canonical-host"}
+
+    monkeypatch.setattr(BuilderWorkbenchService, "set_selected_project", select)
+    monkeypatch.setattr(module, "BuilderWorkbenchService", lambda: service)
+    monkeypatch.setattr(module, "_schedule_projection_publish", lambda _service, source: scheduled.append(source))
+    await module._on_builder_context_selected({"webspace_id": "preview-alias", "object_type": "scenario", "object_id": "project"})
+    assert scheduled == ["canonical-host"]
+    assert threads and threads[0] != owner_thread
