@@ -18,6 +18,7 @@ from adaos.domain.project_events import (
     BUILDER_PREVIEW_TRANSITIONED,
 )
 from adaos.sdk.core.decorators import subscribe
+from adaos.services.agent_context import get_ctx
 from adaos.services.builder.preview_reconciler import BuilderPreviewReconciler
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.webspace_id import coerce_webspace_id
@@ -324,6 +325,22 @@ def _dev_owner_project_scope(component_ref: str) -> dict[str, str]:
     if not token.startswith(("skill:", "scenario:")):
         return {}
     try:
+        from adaos.services.application_registry_projection import ApplicationRegistryProjection
+
+        registry = ApplicationRegistryProjection(current_state_dir())
+        projects_root = Path(get_ctx().paths.dev_projects_dir())
+        if registry.development_projects_ready(projects_root, require_trusted_runtime_start=True):
+            # This is a read-only context hint, not repair/materialization
+            # admission. Use Core's owned-component query projection rather
+            # than parsing every DEV manifest alongside an interactive read.
+            projects = registry.project_for_component(token)
+            if len(projects) != 1:
+                return {}
+            project_id = str(projects[0].get("id") or "").strip()
+            return {"project_id": project_id, "project_ref": f"project:{project_id}"} if project_id else {}
+    except Exception:
+        pass
+    try:
         from adaos.services.builder.workspace import BuilderWorkspaceService
 
         kind, artifact_id = token.split(":", 1)
@@ -335,7 +352,7 @@ def _dev_owner_project_scope(component_ref: str) -> dict[str, str]:
         return {}
     if not isinstance(project, Mapping):
         return {}
-    project_id = str(project.get("id") or "").strip()
+    project_id = str(project.get("project_id") or project.get("id") or "").strip()
     if not project_id:
         return {}
     return {"project_id": project_id, "project_ref": f"project:{project_id}"}

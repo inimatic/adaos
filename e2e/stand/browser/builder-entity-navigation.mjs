@@ -62,6 +62,7 @@ try{
  await waitProject('natural_retouch')
  report.restoredProjectMs=Date.now()-started
  report.samples=await page.evaluate(()=>window.__builderEntitySamples)
+ report.restoredTitle=report.samples.at(-1).title
  assert.ok(report.samples.every(sample=>sample.project==='natural_retouch'),'another seed project was rendered before restoration')
  assert.ok(report.samples.every(sample=>sample.title && sample.title!=='Builder'),'the visible header rendered another project seed')
  const opened=Date.now()
@@ -72,14 +73,18 @@ try{
  report.pickerMs=Date.now()-opened
  report.picker={visibleRows:await picker.locator('tbody tr').count()}
  await page.screenshot({path:path.join(output,'project-picker.png')})
- assert.ok(report.pickerMs<10000,`interactive picker exceeded 10 seconds: ${report.pickerMs}`)
  // Exercise the real row action, including its asynchronous preview selection.
+ report.restoredTitle=await page.evaluate(()=>window.ng.getComponent(document.querySelector('ada-desktop')).pageState.getSnapshot().applicationTitle)
  await picker.locator('input[type="search"]').fill('adaos_builder')
+ const selectedAt=Date.now()
  await picker.locator('tr[data-record-id="project:adaos_builder"]').click({timeout:30000})
  await waitProject('adaos_builder')
+ report.rowSelectionMs=Date.now()-selectedAt
  report.rowSelection='passed'
  const selectedEffects=report.requests.filter(request=>request.intent!=='read').length
  await page.goBack();await waitProject('natural_retouch')
+ const restoredTitle=await page.evaluate(()=>window.ng.getComponent(document.querySelector('ada-desktop')).pageState.getSnapshot().applicationTitle)
+ assert.equal(restoredTitle,report.restoredTitle,'history restored the entity id but retained another entity header')
  await page.waitForTimeout(5000);await waitProject('natural_retouch')
  await page.goForward();await waitProject('adaos_builder')
  assert.equal(report.requests.filter(request=>request.intent!=='read').length,selectedEffects,'history replayed the selected-row effect')
@@ -101,6 +106,7 @@ try{
  report.history='passed'
  report.finalUrl=page.url()
  await page.screenshot({path:path.join(output,'entity-navigation.png')})
+ assert.ok(report.pickerMs<10000,`interactive picker exceeded 10 seconds: ${report.pickerMs}`)
 }catch(error){
  report.errors.push(String(error.stack||error))
  report.body=(await page.locator('body').innerText().catch(()=>'' )).slice(0,1200)

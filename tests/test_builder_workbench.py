@@ -30,6 +30,23 @@ class _PointWebspaces:
         return next((item for item in self.list(mode="mixed") if item.id == webspace_id), None)
 
 
+@pytest.mark.parametrize("owners,expected", [([], {}), ([{"id": "retouch"}],
+    {"project_id": "retouch", "project_ref": "project:retouch"}),
+    ([{"id": "first"}, {"id": "second"}], {})])
+def test_context_owner_uses_trusted_core_projection_without_scanning_sources(tmp_path, monkeypatch, owners, expected):
+    from adaos.services.builder import workbench
+    from adaos.services.application_registry_projection import ApplicationRegistryProjection
+    from adaos.services.builder.workspace import BuilderWorkspaceService
+
+    monkeypatch.setattr(workbench, "get_ctx", lambda: SimpleNamespace(
+        paths=SimpleNamespace(dev_projects_dir=lambda: tmp_path / "projects")))
+    monkeypatch.setattr(workbench, "current_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(ApplicationRegistryProjection, "development_projects_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(ApplicationRegistryProjection, "project_for_component", lambda _self, ref: owners)
+    monkeypatch.setattr(BuilderWorkspaceService, "from_context", lambda: pytest.fail("unexpected full source ownership scan"))
+    assert workbench._dev_owner_project_scope("scenario:natural_retouch") == expected
+
+
 @pytest.fixture(autouse=True)
 def registered_builder_host():
     from adaos.services.workspaces import index

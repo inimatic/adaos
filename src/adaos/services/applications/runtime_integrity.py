@@ -106,8 +106,7 @@ def runtime_slot_observation(skills_root: Path, skill_id: str) -> dict[str, Any]
     declaration = source / "skill.yaml"
     actual_version = version
     if declaration.is_file():
-        import yaml
-        actual_version = str((yaml.safe_load(declaration.read_text(encoding="utf-8-sig")) or {}).get("version") or "")
+        actual_version = str((load_safe_yaml(declaration.read_text(encoding="utf-8-sig")) or {}).get("version") or "")
     deactivation = env.read_deactivation() or {}
     return {"version": actual_version, "package_digest": info.get("package_digest"),
             "package_manifest_digest": info.get("package_manifest_digest"),
