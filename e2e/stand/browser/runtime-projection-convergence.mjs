@@ -405,6 +405,8 @@ try{
  report.samples=await validateProjectionSamples()
  assert.equal(report.readFailures.filter(f=>['tool_intent_mismatch','trial_execution_failed','application_context_ambiguous','application_context_invalid','application_runtime_inactive','trial_runtime_unavailable'].includes(f.code)&&f.generation&&f.generation===f.currentGeneration).length,0,
   'current widgets used an obsolete tool/SDK authority')
+ assert.equal(report.readFailures.filter(f=>f.code!=='obsolete_projection_read' || f.status!==409 || !f.generation || f.generation===f.currentGeneration).length,0,
+  'an SDK read failed for a reason other than an obsolete projection')
  report.final=await read()
  const durations=report.transitions.filter(x=>typeof x.index==='number').map(x=>x.durationMs).sort((a,b)=>a-b)
  assert.equal(durations.length,transitions,'the requested semantic transition cohort is incomplete')
