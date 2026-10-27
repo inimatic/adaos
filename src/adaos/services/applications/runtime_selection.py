@@ -149,10 +149,16 @@ def selected_application(
         if authority_index is None or authority_index[0] != fingerprint:
             store = ApplicationStore(state_dir)
             mutable: dict[tuple[str, str, str], list[object]] = {}
+            components_by_release = {}
             for selection in store.list_runtime_selections():
-                release = store.get_release(selection.application_id, selection.release_digest)
+                release_key = (selection.application_id, selection.release_digest)
+                components = components_by_release.get(release_key)
+                if components is None:
+                    release = store.get_release(*release_key)
+                    components = tuple(release.project_release.components)
+                    components_by_release[release_key] = components
                 selection_webspace = str(selection.webspace_id or "").strip()
-                for component in release.project_release.components:
+                for component in components:
                     component_kind = str(component.kind or "").strip()
                     artifact_id = str(component.artifact_id or "").strip()
                     if not component_kind or not artifact_id:
@@ -252,11 +258,21 @@ def _selected_trial_uncached(ctx: AgentContext, webspace_id: str, kind: str, com
     matches = []
     seen = set()
     for selection in store.list_runtime_selections():
-        if selection.runtime_root_ref == "workspace" or selection.application_id in seen:
+        identity = (selection.application_id, selection.release_digest)
+        if selection.runtime_root_ref == "workspace" or identity in seen:
+            continue
+        # The same channel is projected into many rooms. Reject unrelated
+        # packages using verified membership metadata before cloning a release,
+        # and visit each release once even when it does not own this component.
+        # The old loop cloned every unrelated release once PER room and held
+        # the global selection lock throughout desktop-list validation.
+        seen.add(identity)
+        membership = getattr(store, 'release_has_component', None)
+        if callable(membership) and not membership(selection.application_id,
+                selection.release_digest, kind=kind, artifact_id=component_id):
             continue
         release = store.get_release(selection.application_id, selection.release_digest)
         if any(item.kind == kind and item.artifact_id == component_id for item in release.project_release.components):
-            seen.add(selection.application_id)
             candidate = selection.runtime_root_ref.removeprefix("trial:")
             if release.accepted_candidate_id != candidate:
                 raise TrialRuntimeUnavailable("RuntimeSelection does not match its release Candidate")

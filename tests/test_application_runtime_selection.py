@@ -4,6 +4,32 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.applications import runtime_selection
 
 
+def test_trial_lookup_visits_each_release_once_without_cloning_unrelated_packages(tmp_path, monkeypatch):
+    rows = [SimpleNamespace(application_id='unrelated', release_digest='other', runtime_root_ref='trial:other')
+            for _ in range(40)]
+    rows += [SimpleNamespace(application_id='provider', release_digest='exact', runtime_root_ref='trial:candidate')
+             for _ in range(10)]
+    memberships, copies = [], []
+
+    def membership(app, digest, **_kwargs):
+        memberships.append((app, digest))
+        return app == 'provider'
+
+    def release(app, _digest):
+        copies.append(app)
+        assert app == 'provider', 'Unrelated immutable releases must not be cloned'
+        return SimpleNamespace(accepted_candidate_id='candidate', project_release=SimpleNamespace(
+            components=[SimpleNamespace(kind='skill', artifact_id='provider_skill')]))
+
+    store = SimpleNamespace(list_runtime_selections=lambda: rows, release_has_component=membership, get_release=release)
+    monkeypatch.setattr(runtime_selection, 'ApplicationStore', lambda _path: store)
+    monkeypatch.setattr(runtime_selection.NativeTrialRuntime, 'resolve', lambda _ctx, *identity: identity)
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+    assert runtime_selection._selected_trial_uncached(ctx, '', 'skill', 'provider_skill') == ('candidate', 'exact')
+    assert memberships == [('unrelated', 'other'), ('provider', 'exact')]
+    assert copies == ['provider']
+
+
 def test_exact_selection_fingerprint_does_not_treat_stable_workspace_as_trial(
     tmp_path, monkeypatch
 ) -> None:
