@@ -233,8 +233,11 @@ try{
  }
  // Browser history uses the production resolver, with no replayed business action.
  if(transitions>1){
-  const previous=report.transitions.at(-2).scenario
-  await page.goBack();await waitFor(previous)
+  // A declared page parameter is also a legitimate history entry. Check
+  // the scenario actually addressed by Back, not an assumed loop index.
+  await page.goBack()
+  const previous=new URL(page.url()).searchParams.get('scenario_id')
+  await waitFor(previous)
   await page.goForward();await waitFor(report.transitions.at(-1).scenario)
   report.history='passed'
  }
@@ -327,6 +330,12 @@ try{
  await page.screenshot({path:path.join(output,'accepted.png')})
 }catch(error){
  report.errors.push(String(error.stack || error).slice(0,3000))
+ try{
+  const response=await fetch(api+'/api/node/yjs/webspaces/'+encodeURIComponent(webspace)+'/materialization',{
+   headers:{'X-AdaOS-Token':token},signal:AbortSignal.timeout(10000)})
+  const metadata=await response.json()
+  report.coreFailure={rebuild:metadata.rebuild,convergence:metadata.convergence}
+ }catch{}
  report.failure=await read().catch(()=>null)
  report.samples=await page.evaluate(()=>window.__projectionSamples).catch(()=>[])
  report.diagnostics=await page.evaluate(()=>JSON.parse(localStorage.getItem('adaos.runtime_debug.logs.v1') || '[]')).catch(()=>[])

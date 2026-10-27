@@ -10,6 +10,33 @@ from adaos.apps.api.auth import require_token
 from adaos.services.builder.project_catalog import BuilderProjectCatalogService
 
 
+def test_project_activity_is_a_single_authorized_batch_over_owned_components(monkeypatch, tmp_path):
+    import adaos.services.builder.project_catalog as module
+
+    projects, scenarios, skills = (tmp_path / name for name in ("projects", "scenarios", "skills"))
+    for path in (projects, scenarios, skills):
+        path.mkdir()
+    records = [(projects / name, projects / name / "project.yaml", {"id": name,
+        "components": {"owned": [{"ref": "scenario:shared"}],
+            "dependencies": [{"ref": "skill:must-not-inspect"}]}}) for name in ("one", "two")]
+    monkeypatch.setattr(BuilderProjectCatalogService, "_project_registry", lambda *_: records)
+    reads = []
+
+    def summary(root):
+        reads.append(root)
+        return {"archived": False, "updated_at": "2026-10-27T09:30:00Z" if root == scenarios / "shared" else None,
+            "builder_llm_model": None}
+
+    monkeypatch.setattr(module, "_prompt_summary", summary)
+    service = BuilderProjectCatalogService(skills_root=skills, scenarios_root=scenarios,
+        projects_root=projects, state_dir=tmp_path / "state")
+    items = service.list_projects(kind="project")
+    assert len(items) == 2
+    assert {item["updated"] for item in items} == {"2026-10-27T09:30:00Z"}
+    assert reads.count(scenarios / "shared") == 1
+    assert not any(path.name == "must-not-inspect" for path in reads)
+
+
 def test_project_catalog_reads_only_manifest_and_prompt_summary(
     monkeypatch, tmp_path: Path
 ) -> None:

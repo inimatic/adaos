@@ -4,6 +4,7 @@ import json
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -175,6 +176,17 @@ def _prompt_summary(root: Path) -> dict[str, Any]:
     }
 
 
+def _latest_activity(values: list[Any]) -> str | None:
+    timestamps = []
+    for value in values:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        timestamps.append(parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed)
+    return max(timestamps).astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z") if timestamps else None
+
+
 @dataclass(slots=True)
 class BuilderProjectCatalogService:
     skills_root: Path
@@ -246,6 +258,7 @@ class BuilderProjectCatalogService:
         preview_id = self._preview_webspace_id(webspace_id)
 
         items: list[dict[str, Any]] = []
+        component_activity: dict[str, Any] = {}
         for current_kind in kinds:
             if current_kind == "project":
                 parent = self.projects_root
@@ -302,6 +315,20 @@ class BuilderProjectCatalogService:
                     for item in components.get("dependencies") or []
                     if isinstance(item, Mapping)
                 ]
+                activity = [state["updated_at"], manifest.get("created_at")]
+                if current_kind == "project":
+                    # One governed catalog read owns this bounded batch. Avoid
+                    # re-entering the authoring SDK/access check for every
+                    # component in the application's row-formatting loop.
+                    for component in owned:
+                        ref = str(component.get("ref") or "")
+                        component_kind, _, component_id = ref.partition(":")
+                        if component_kind not in {"scenario", "skill"} or not component_id or any(separator in component_id for separator in ("/", "\\", ":")) or component_id in {".", ".."}:
+                            continue
+                        if ref not in component_activity:
+                            parent_root = self.scenarios_root if component_kind == "scenario" else self.skills_root
+                            component_activity[ref] = _prompt_summary(parent_root / component_id)["updated_at"]
+                        activity.append(component_activity[ref])
                 primary = next(
                     (item for item in owned if str(item.get("role") or "") == "primary"),
                     owned[0] if owned else None,
@@ -341,7 +368,7 @@ class BuilderProjectCatalogService:
                     "sync_i18n": {
                         "key": "builder.project_sync.current" if current else "builder.project_sync.available_dev"
                     },
-                    "updated": state["updated_at"] or "DEV",
+                    "updated": (_latest_activity(activity) if current_kind == "project" else state["updated_at"]) or "DEV",
                     "current": current,
                     "archived": archived,
                     "builder_llm_model": state["builder_llm_model"],
