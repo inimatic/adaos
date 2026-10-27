@@ -117,13 +117,31 @@ class ChatGPTAccount:
         if not store.setting('vault_id'):
             store.set_setting('vault_id', store.setting('host_id'))
         self.vault = vault or KeyringVault('adaos-ai:' + store.setting('vault_id'), store.root/'connection.enc')
-        self.http = http or httpx.Client(timeout=httpx.Timeout(45, connect=15), follow_redirects=False)
+        self._http = http
+        self._http_lock = threading.Lock()
         self.lock = threading.RLock()
         self.pending = None
         self.error = ''
         self._models = (0, [])
         self.probe = {'status': 'idle'}
         self.generation = store.setting('generation', 0)
+
+    @property
+    def http(self):
+        # Local account/bridge observations do not need a network transport.
+        # In particular, do not load TLS stores and proxy transports while
+        # starting an unrelated native UI service. Keep normal verified TLS
+        # and environment proxy behavior when network access is requested.
+        if self._http is None:
+            with self._http_lock:
+                if self._http is None:
+                    self._http = httpx.Client(timeout=httpx.Timeout(45, connect=15), follow_redirects=False)
+        return self._http
+
+    @http.setter
+    def http(self, value):
+        with self._http_lock:
+            self._http = value
 
     def status(self):
         try:

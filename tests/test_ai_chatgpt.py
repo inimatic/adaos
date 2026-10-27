@@ -20,6 +20,46 @@ class Vault:
     def clear(self): self.data = None
 
 
+def test_local_account_observation_does_not_construct_an_http_transport(tmp_path, monkeypatch):
+    from adaos.services.ai import chatgpt
+    constructed = []
+    client = object()
+    def factory(**kwargs):
+        constructed.append(kwargs)
+        return client
+    monkeypatch.setattr(chatgpt.httpx, 'Client', factory)
+    account = ChatGPTAccount(Store(tmp_path), Vault())
+    assert account.status()['connected'] is False
+    assert not constructed
+    assert account.http is account.http is client
+    assert len(constructed) == 1
+    assert constructed[0]['follow_redirects'] is False
+    assert 'verify' not in constructed[0] and 'trust_env' not in constructed[0]
+
+
+def test_concurrent_first_network_access_constructs_one_transport(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from adaos.services.ai import chatgpt
+    entered, release = threading.Event(), threading.Event()
+    constructed = []
+    client = object()
+    def factory(**kwargs):
+        constructed.append(True)
+        entered.set()
+        assert release.wait(5)
+        return client
+    monkeypatch.setattr(chatgpt.httpx, 'Client', factory)
+    account = ChatGPTAccount(Store(tmp_path), Vault())
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = [executor.submit(lambda: account.http) for _ in range(6)]
+        try:
+            assert entered.wait(2)
+        finally:
+            release.set()
+        assert all(future.result(timeout=2) is client for future in futures)
+    assert constructed == [True]
+
+
 def test_web_search_is_opt_in_and_persists_safe_citations(tmp_path):
     seen, citations = [], []
     output = 'Fresh fact [1]'
