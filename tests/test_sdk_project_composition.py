@@ -1344,6 +1344,31 @@ def test_development_session_preserves_explicit_token_metric_and_independent_lim
                                     execution_budget={**budget,"max_billable_tokens":0})
 
 
+def test_owner_application_binding_selects_declared_targets_without_foreign_origin(project_space):
+    _skill(project_space["skills"], "owner_skill")
+    _skill(project_space["skills"], "secondary_skill")
+    project = _project("owner_application", "owner_skill")
+    project["components"]["owned"].append({"ref": "skill:secondary_skill", "role": "supporting"})
+    compositions.create(project)
+    for identity in ("initial-context", "expanded-context"):
+        development_sessions.create("owner_application", session_id=identity)
+        development_sessions.bind(identity, "desktop")
+        for selected in ("project:owner_application", "skill:owner_skill"):
+            result = development_sessions.binding_for_selection("desktop", selected)
+            assert result["session"]["session_id"] == identity
+        assert development_sessions.binding_for_selection("desktop", "skill:secondary_skill") is None
+
+
+def test_owner_binding_does_not_implicitly_admit_external_component_context(project_space):
+    _skill(project_space["skills"], "owner_skill")
+    _skill(project_space["skills"], "foreign_skill")
+    compositions.create(_project("owner_application", "owner_skill"))
+    development_sessions.create("owner_application", session_id="external-context",
+        context_members=[{"ref": "skill:foreign_skill", "relation": "dependency"}])
+    development_sessions.bind("external-context", "desktop")
+    assert development_sessions.binding_for_selection("desktop", "skill:owner_skill") is None
+
+
 def test_development_session_separates_write_targets_and_readonly_context(
     project_space, tmp_path: Path
 ) -> None:

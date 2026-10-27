@@ -239,8 +239,6 @@ def binding_for_selection(
         else {}
     )
     initiator_ref = str(development.get("initiator_ref") or "").strip()
-    if not initiator_ref:
-        return None
     try:
         session = get(str(binding.get("session_id") or ""))
     except DevelopmentSessionError:
@@ -255,8 +253,28 @@ def binding_for_selection(
         for item in session.get("context_members") or []
         if isinstance(item, Mapping)
     }
-    if initiator_ref not in context_refs:
-        return None
+    if initiator_ref:
+        if initiator_ref not in context_refs:
+            return None
+    else:
+        # Owner-created applications need no external initiating component.
+        # An explicit host binding is executable only within its declared
+        # owned targets; it must not recover a foreign initiator's authority
+        # after that project's development metadata has been removed.
+        owned_refs = {
+            str(item.get("ref") or "").strip()
+            for item in (project.get("components") or {}).get("owned") or []
+            if isinstance(item, Mapping)
+        }
+        target_refs = {
+            str(item.get("ref") or "").strip()
+            for items in (session.get("targets") or {}).values()
+            for item in items
+            if isinstance(item, Mapping)
+        }
+        if (context_refs - owned_refs or not target_refs
+                or (selected != project_ref and selected not in target_refs)):
+            return None
     return {
         "binding": binding,
         "session": session,
