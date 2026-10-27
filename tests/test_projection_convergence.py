@@ -10,6 +10,7 @@ def isolated_receipts(monkeypatch):
     monkeypatch.setattr(convergence, "_projections", OrderedDict())
     monkeypatch.setattr(convergence, "_repairs", OrderedDict())
     monkeypatch.setattr(convergence, "_navigations", OrderedDict())
+    monkeypatch.setattr(convergence, "_navigation_requests", OrderedDict())
 
 
 def contract(generation="g1"):
@@ -55,6 +56,7 @@ def test_new_navigation_fences_the_old_one_before_rebuild_status_changes():
 
     convergence.claim_navigation("isolated", "nav:first")
     convergence.claim_navigation("isolated", "nav:second")
+    assert convergence.claim_navigation("isolated", "nav:first") is False
     with pytest.raises(_StaleRebuildRequestError):
         _raise_if_rebuild_request_superseded("isolated", "nav:first")
     assert convergence.navigation_is_current("isolated", "nav:second")
@@ -98,3 +100,25 @@ def test_partial_branch_failure_cannot_publish_a_complete_generation(monkeypatch
         runtime.apply_materialized_payload_to_doc(doc, "isolated-apply-failure", payload, replace_changed_branches=True)
     assert doc.get_map("runtime").get("materialization")["complete"] is False
     assert convergence.snapshot("isolated-apply-failure")["state"] == "unpublished"
+
+
+def test_phased_default_reconciliation_releases_generation_only_in_the_final_transaction():
+    import y_py as Y
+    from types import SimpleNamespace
+    from adaos.services.scenario import webspace_runtime as runtime_module
+
+    resolved = runtime_module.WebspaceResolverOutputs(
+        webspace_id="isolated-phased", scenario_id="applications", source_mode="workspace",
+        application={"desktop": {"pageSchema": {"id": "applications", "widgets": []}}},
+        catalog={"apps": [], "widgets": []}, registry={}, installed={"apps": [], "widgets": []},
+        desktop={}, webio={}, routing={}, skill_decls=[])
+    doc, browser = Y.YDoc(), Y.YDoc()
+    updates = []
+    doc.observe_after_transaction(lambda event: updates.append(bytes(event.get_update())))
+    runtime_module.WebspaceScenarioRuntime(SimpleNamespace())._apply_resolved_state_in_doc(doc, "isolated-phased", resolved)
+    nonempty = [update for update in updates if len(update) > 2]
+    assert len(nonempty) == 2
+    Y.apply_update(browser, nonempty[0])
+    assert browser.get_map("runtime").get("materialization")["complete"] is False
+    Y.apply_update(browser, nonempty[1])
+    assert browser.get_map("runtime").get("materialization")["complete"] is True

@@ -1157,7 +1157,7 @@ class WebspaceResolutionService:
             "generation": generation or uuid.uuid4().hex,
             "payload_hash": payload_hash,
             "navigation_id": expected_request_id or materialization_contract.get("navigation_id") or previous_contract.get("navigation_id"),
-            "complete": True,
+            "complete": bool(single_transaction or (generation and previous_contract.get("complete") is True)),
         }
         runtime_environment["materialization"] = materialization_contract
         effective_inputs.metadata["materialization"] = materialization_contract
@@ -1460,6 +1460,19 @@ class WebspaceResolutionService:
                         fingerprint_updates=phase_fingerprint_updates,
                         ignore_errors=ignore_errors,
                     )
+                if name == "interactive" and not single_transaction and not failed_paths and not defaults_failed and not materialization_contract["complete"]:
+                    # Legacy same-scenario/default reconciliation remains phased
+                    # for yrs compatibility. Only the final transaction releases
+                    # the render/ACK barrier for a newly published generation.
+                    materialization_contract["complete"] = True
+                    runtime_environment["materialization"] = materialization_contract
+                    operations.set_map_value_if_changed(runtime_map, txn, "materialization", materialization_contract)
+                    operations.set_map_value_if_changed(runtime_map, txn, "environment", runtime_environment)
+                    for path, value in (("runtime.materialization", materialization_contract), ("runtime.environment", runtime_environment)):
+                        fingerprint = operations.fingerprint_json_like(value)
+                        resolved_branch_fingerprints[path] = fingerprint
+                        effective_branch_fingerprints[path] = fingerprint
+                        pending_fingerprint_updates[path] = fingerprint
                 if flush_fingerprints and pending_fingerprint_updates:
                     operations.write_effective_branch_fingerprints(
                         registry_map,
@@ -1549,6 +1562,10 @@ class WebspaceResolutionService:
                 False,
             ),
         )
+        if not single_transaction and not materialization_contract["complete"]:
+            # Fence even a structure-branch failure before it can expose a
+            # partly replaced application under the previous complete marker.
+            structure_specs = (*structure_specs[2:], *structure_specs[:2])
         interactive_specs = (
             ("data.catalog", data_map, "catalog", resolved.catalog, False),
             ("data.installed", data_map, "installed", resolved.installed, False),

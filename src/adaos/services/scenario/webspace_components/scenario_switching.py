@@ -262,8 +262,8 @@ class WebspaceScenarioSwitchingService:
         request_client = request.request_client
         from adaos.services.yjs.projection_convergence import claim_navigation, navigation_is_current
 
-        if request_id:
-            claim_navigation(webspace_id, request_id)
+        if request_id and not claim_navigation(webspace_id, request_id):
+            raise RuntimeError("navigation_superseded")
 
         def assert_current_navigation() -> None:
             if request_id and not navigation_is_current(webspace_id, request_id):

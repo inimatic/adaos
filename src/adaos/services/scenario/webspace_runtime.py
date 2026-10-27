@@ -5902,7 +5902,7 @@ class WebspaceScenarioRuntime:
         resolved_branch_fingerprints_override: Mapping[str, Any] | None = None,
         previous_branch_fingerprints_override: Mapping[str, Any] | None = None,
         expected_request_id: str | None = None,
-        single_transaction: bool = True,
+        single_transaction: bool = False,
         materialization_status_per_phase: bool = True,
         force_selector_write: bool = False,
         verify_branch_fingerprints: bool = False,

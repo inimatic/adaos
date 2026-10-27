@@ -12,17 +12,26 @@ _lock = threading.RLock()
 _projections: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _repairs: OrderedDict[tuple[str, str, str], float] = OrderedDict()
 _navigations: OrderedDict[str, str] = OrderedDict()
+_navigation_requests: OrderedDict[tuple[str, str], None] = OrderedDict()
 _MAX_WEBSPACES = 256
 _MAX_CLIENTS = 32
 
 
-def claim_navigation(webspace: str, request_id: str) -> None:
+def claim_navigation(webspace: str, request_id: str) -> bool:
     """Fence at admission, before asynchronous identity or source resolution."""
     with _lock:
+        key = (webspace, request_id)
+        if key in _navigation_requests and _navigations.get(webspace) != request_id:
+            return False
+        _navigation_requests[key] = None
+        _navigation_requests.move_to_end(key)
+        while len(_navigation_requests) > 1024:
+            _navigation_requests.popitem(last=False)
         _navigations[webspace] = request_id
         _navigations.move_to_end(webspace)
         while len(_navigations) > _MAX_WEBSPACES:
             _navigations.popitem(last=False)
+        return True
 
 
 def navigation_is_current(webspace: str, request_id: str) -> bool:

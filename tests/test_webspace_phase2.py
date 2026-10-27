@@ -7162,10 +7162,10 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
     assert first_summary["changed_branches"] == 9
     assert first_summary["unchanged_branches"] == 0
     assert first_summary["changed_paths"] == [
-        "ui.application",
-        "registry.merged",
         "runtime.environment",
         "runtime.materialization",
+        "ui.application",
+        "registry.merged",
         "data.catalog",
         "data.installed",
         "data.desktop",
@@ -7173,10 +7173,10 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
         "data.routing",
     ]
     assert first_summary["phases"]["structure"]["changed_paths"] == [
-        "ui.application",
-        "registry.merged",
         "runtime.environment",
         "runtime.materialization",
+        "ui.application",
+        "registry.merged",
     ]
     assert first_summary["phases"]["interactive"]["changed_paths"] == [
         "data.catalog",
@@ -7188,7 +7188,7 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
     assert second_summary["changed_branches"] == 0
     assert second_summary["unchanged_branches"] == 9
     assert second_summary["failed_branches"] == 0
-    assert second_summary["transaction_total"] == 1
+    assert second_summary["transaction_total"] == 2
     assert second_summary["changed_paths"] == []
     assert second_summary["phases"]["structure"]["unchanged_branches"] == 4
     assert second_summary["phases"]["interactive"]["unchanged_branches"] == 5
@@ -7203,7 +7203,7 @@ def test_phase5_apply_summary_reports_changed_and_unchanged_top_level_branches()
     assert fake_state["ui"].set_count == 2
     assert fake_state["data"].set_count == 5
     assert fake_state["registry"].set_count == 2
-    assert fake_doc.transaction_count == 2
+    assert fake_doc.transaction_count == 4
     assert "runtime_meta" in fake_state["registry"]
 
 

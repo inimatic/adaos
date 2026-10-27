@@ -3995,6 +3995,7 @@ class WebspaceYjsActionRequest(BaseModel):
     requested_id: str | None = None
     title: str | None = None
     request_id: str | None = None
+    navigation_id: str | None = Field(default=None, max_length=256)
     request_source: str | None = None
 
 
@@ -7226,7 +7227,7 @@ async def node_yjs_switch_scenario(
         or "api.node.yjs.switch_scenario"
     )
     request_id = (
-        str(payload.request_id or "").strip()
+        str(payload.navigation_id or payload.request_id or "").strip()
         or str(request.headers.get("x-request-id") or request.headers.get("x-trace-id") or "").strip()
         or None
     )
