@@ -2066,6 +2066,9 @@ class DiagnosticYRoom(YRoom):
             # recovery path below.
             initial_native_update_pending = True
             authoritative_step2_sent = False
+            from adaos.services.yjs.sync_protocol import SyncReplayBudget
+
+            replay_budget = SyncReplayBudget()
             try:
                 async for message in websocket:
                     skip = False
@@ -2153,6 +2156,12 @@ class DiagnosticYRoom(YRoom):
                             from adaos.services.yjs.sync_protocol import encode_server_sync_update
 
                             update, sync_mode = encode_server_sync_update(self.ydoc, inbound_payload or b"\x00")
+                            if not replay_budget.admit(sync_mode):
+                                _ylog.warning("yws projection replay circuit open webspace=%s mode=%s", self._diag_room_id(), sync_mode)
+                                close = getattr(websocket, "close", None)
+                                if callable(close):
+                                    await close(1013, "yws_guard_projection_generation_mismatch")
+                                break
                             await websocket.send(create_sync_step2_message(update))
                             authoritative_step2_sent = True
                             if authoritative_one_way_handshake:
@@ -4372,6 +4381,8 @@ def _remember_yws_attempt(
     *,
     close_code: int | None = None,
     close_reason: str | None = None,
+    close_initiator: str | None = None,
+    close_cause: str | None = None,
 ) -> None:
     token = str(attempt_id or "").strip()
     if not token:
@@ -4386,6 +4397,8 @@ def _remember_yws_attempt(
             _YWS_ATTEMPT_DIAG["last_close_at"] = now
             _YWS_ATTEMPT_DIAG["last_close_code"] = close_code
             _YWS_ATTEMPT_DIAG["last_close_reason"] = str(close_reason or "").strip()[:160]
+            _YWS_ATTEMPT_DIAG["last_close_initiator"] = close_initiator or "unknown"
+            _YWS_ATTEMPT_DIAG["last_close_cause"] = close_cause or "unspecified"
         elif state == "guard_reject":
             _YWS_ATTEMPT_DIAG["last_guard_reject_attempt_id"] = token
         elif state == "room_timeout":
@@ -9545,10 +9558,17 @@ class FastAPIWebsocketAdapter:
         self._first_message_received = False
         self.close_code: int | None = None
         self.close_reason = ""
+        self.close_initiator = "unknown"
+        self.close_cause = "serve_completed"
 
     @property
     def path(self) -> str:
         return self._path
+
+    async def close(self, code: int, reason: str) -> None:
+        self.close_code, self.close_reason = code, reason
+        self.close_initiator, self.close_cause = "server", reason
+        await self._ws.close(code=code, reason=reason)
 
     def __aiter__(self):
         return self
@@ -9581,6 +9601,8 @@ class FastAPIWebsocketAdapter:
                 else:
                     msg = await self._ws.receive()
             except asyncio.TimeoutError as exc:
+                self.close_initiator = "server"
+                self.close_cause = "first_message_timeout"
                 raise RuntimeError("websocket first message timeout") from exc
             msg_type = msg.get("type")
             if msg_type == "websocket.receive":
@@ -9600,6 +9622,8 @@ class FastAPIWebsocketAdapter:
             if msg_type == "websocket.disconnect":
                 self.close_code = msg.get("code")
                 self.close_reason = str(msg.get("reason") or "")[:240]
+                self.close_initiator = "peer"
+                self.close_cause = "disconnect_frame"
                 raise RuntimeError("websocket disconnected")
             raise RuntimeError(f"unexpected websocket event: {msg_type}")
 
@@ -10140,9 +10164,14 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     )
     try:
         await room_ref.serve(adapter)
+    except asyncio.CancelledError:
+        adapter.close_initiator = "server"
+        adapter.close_cause = "serve_cancelled"
+        raise
     except RuntimeError:
         return
     except Exception:
+        adapter.close_cause = "serve_error"
         _ylog.debug(
             "yws room serve ended with error webspace=%s dev=%s attempt=%s",
             webspace_id,
@@ -10214,8 +10243,11 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             close_reason = str(getattr(adapter, "close_reason", "") or getattr(websocket, "close_reason", "") or "").strip()
         except Exception:
             close_reason = ""
-        _remember_yws_attempt(attempt_id, "closed", close_code=close_code, close_reason=close_reason)
-        _ylog.info("yws connection closed webspace=%s dev=%s attempt=%s client_attempt=%s code=%s reason=%s", webspace_id, dev_id, attempt_id, client_attempt_id or None, close_code, close_reason)
+        initiator = getattr(adapter, "close_initiator", "unknown")
+        cause = getattr(adapter, "close_cause", "unspecified")
+        _remember_yws_attempt(attempt_id, "closed", close_code=close_code, close_reason=close_reason,
+                              close_initiator=initiator, close_cause=cause)
+        _ylog.info("yws connection closed webspace=%s dev=%s attempt=%s client_attempt=%s code=%s reason=%s initiator=%s cause=%s lifetime_s=%.3f", webspace_id, dev_id, attempt_id, client_attempt_id or None, close_code, close_reason, initiator, cause, yws_lifetime_s)
         if _ws_trace_enabled():
             try:
                 _ylog.info(

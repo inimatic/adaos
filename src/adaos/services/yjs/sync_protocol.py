@@ -5,6 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 
+class SyncReplayBudget:
+    """A mismatched connection gets one full replay, never a replay loop."""
+
+    def __init__(self) -> None:
+        self.full_replays = 0
+
+    def admit(self, mode: str) -> bool:
+        if not mode.endswith("_full"):
+            return True
+        self.full_replays += 1
+        return self.full_replays <= 1
+
+
 def decode_state_vector(value: bytes) -> dict[int, int]:
     offset = 0
 

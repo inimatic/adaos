@@ -2,6 +2,38 @@ import pytest
 import y_py as Y
 
 from adaos.services.yjs.sync_protocol import decode_state_vector, encode_server_sync_update
+from adaos.services.yjs.sync_protocol import SyncReplayBudget
+
+
+def test_generation_mismatch_full_replay_is_bounded_per_connection():
+    budget = SyncReplayBudget()
+    assert budget.admit("foreign_generation_full")
+    assert budget.admit("diff")
+    assert budget.admit("sanitized_diff")
+    assert not budget.admit("foreign_generation_full")
+    assert not budget.admit("invalid_vector_full")
+
+
+@pytest.mark.asyncio
+async def test_adapter_records_peer_and_server_close_causes():
+    from types import SimpleNamespace
+    from adaos.services.yjs.gateway_ws import FastAPIWebsocketAdapter
+
+    async def receive():
+        return {"type": "websocket.disconnect", "code": 1001, "reason": "test_navigation"}
+
+    closed = []
+
+    async def close(**kwargs):
+        closed.append(kwargs)
+
+    adapter = FastAPIWebsocketAdapter(SimpleNamespace(receive=receive, close=close), "/yws/isolated")
+    with pytest.raises(RuntimeError, match="disconnected"):
+        await adapter.recv()
+    assert (adapter.close_code, adapter.close_initiator, adapter.close_cause) == (1001, "peer", "disconnect_frame")
+    await adapter.close(1013, "yws_guard_projection_generation_mismatch")
+    assert adapter.close_initiator == "server"
+    assert closed == [{"code": 1013, "reason": "yws_guard_projection_generation_mismatch"}]
 
 
 def test_same_generation_resync_is_small_and_delivers_deletions():
